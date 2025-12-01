@@ -47,6 +47,8 @@ import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
 import { sessionLogService } from './sessionLogService';
+import { parseConstraints } from '../lib/queryDSL';
+import { normalizeToUK, formatDateUK, parseUKDate } from '../lib/dateFormat';
 
 /**
  * Format edge identifier in human-readable form for logging
@@ -493,10 +495,23 @@ class DataOperationsService {
     graph: Graph | null;
     setGraph: (graph: Graph | null) => void;
     setAutoUpdating?: (updating: boolean) => void;
-    window?: DateRange; // Optional: if provided, aggregate daily data for this window
-    targetSlice?: string; // Optional: DSL for specific slice (default '' = uncontexted)
+    window?: DateRange; // DEPRECATED: Window is now parsed from targetSlice DSL
+    targetSlice?: string; // DSL containing window and context (e.g., "window(1-Dec-25:7-Dec-25).context(geo=UK)")
   }): Promise<void> {
-    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window, targetSlice = '' } = options;
+    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '' } = options;
+    
+    // Parse window from targetSlice DSL if not explicitly provided
+    // This ensures single source of truth - DSL contains both window and context
+    let window = explicitWindow;
+    if (!window && targetSlice) {
+      const parsed = parseConstraints(targetSlice);
+      if (parsed.window?.start && parsed.window?.end) {
+        window = {
+          start: parsed.window.start,
+          end: parsed.window.end,
+        };
+      }
+    }
     
     // Start session log
     const logOpId = sessionLogService.startOperation(
@@ -814,44 +829,104 @@ class DataOperationsService {
               return aDate.localeCompare(bDate); // Oldest first, so when we process in order, newer overwrites older
             });
             
+            // Check if we're aggregating across MULTIPLE slices (contextAny query)
+            // In that case, we SUM values across different slices. Within SAME slice, newer overwrites older.
+            // 
+            // CRITICAL: Detect from QUERY, not from data - data might have empty/incorrect sliceDSL
+            const { hasContextAny } = await import('./sliceIsolation');
+            const isContextAnyQuery = hasContextAny(targetSlice);
+            
+            // Also check data for multiple unique slices (fallback detection)
+            const uniqueSlices = new Set(sortedValues.map(v => v.sliceDSL || ''));
+            const isMultiSliceAggregation = isContextAnyQuery || uniqueSlices.size > 1;
+            
+            if (isMultiSliceAggregation) {
+              console.log(`[DataOperationsService] Multi-slice aggregation detected: ${isContextAnyQuery ? 'contextAny query' : 'multiple unique slices in data'}`, {
+                targetSlice,
+                uniqueSlices: Array.from(uniqueSlices),
+              });
+            }
+            
+            // Track which slice contributed to each date (for multi-slice: sum; for same-slice: overwrite)
+            // For contextAny queries: each VALUE ENTRY represents a different slice, even if sliceDSL is empty
+            const dateSliceMap: Map<string, Set<string>> = new Map();
+            
             for (let entryIdx = 0; entryIdx < sortedValues.length; entryIdx++) {
               const value = sortedValues[entryIdx];
+              const valueSlice = value.sliceDSL || '';
+              
+              // For contextAny queries, use entry index as slice ID (each entry = different slice)
+              // For regular queries, use sliceDSL (empty means single slice)
+              const sliceIdentifier = isContextAnyQuery 
+                ? `entry-${entryIdx}:${valueSlice}`  // Each entry is a distinct slice
+                : valueSlice;                        // Traditional: use sliceDSL
+              
               if (value.n_daily && value.k_daily && value.dates) {
                 const entryWindow = `${normalizeDate(value.window_from || '')} to ${normalizeDate(value.window_to || '')}`;
                 let entryDatesInWindow = 0;
                 
                 for (let i = 0; i < value.dates.length; i++) {
                   const date = normalizeDate(value.dates[i]);
-                  // Only add if date is within window and not already added (or overwrite if newer)
+                  // Only add if date is within window
                   if (isDateInRange(date, normalizedWindow)) {
                     entryDatesInWindow++;
-                    // If date already exists, overwrite with newer data (later in array = newer)
                     const existingIndex = allTimeSeries.findIndex(p => normalizeDate(p.date) === date);
+                    
                     if (existingIndex >= 0) {
-                      // Overwrite existing entry
-                      const oldN = allTimeSeries[existingIndex].n;
-                      allTimeSeries[existingIndex] = {
-                        date: value.dates[i],
-                        n: value.n_daily[i],
-                        k: value.k_daily[i],
-                        p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
-                      };
-                      console.log(`[DataOperationsService] Entry ${entryIdx}: Overwrote ${date} (n: ${oldN} → ${value.n_daily[i]})`);
+                      // Date already exists - check if same slice (overwrite) or different slice (sum)
+                      const existingSlices = dateSliceMap.get(date) || new Set();
+                      
+                      if (isMultiSliceAggregation && !existingSlices.has(sliceIdentifier)) {
+                        // Different slice in multi-slice aggregation: SUM
+                        const oldN = allTimeSeries[existingIndex].n;
+                        const oldK = allTimeSeries[existingIndex].k;
+                        const newN = oldN + value.n_daily[i];
+                        const newK = oldK + value.k_daily[i];
+                        allTimeSeries[existingIndex] = {
+                          date: value.dates[i],
+                          n: newN,
+                          k: newK,
+                          p: newN > 0 ? newK / newN : 0,
+                        };
+                        existingSlices.add(sliceIdentifier);
+                        dateSliceMap.set(date, existingSlices);
+                        console.log(`[DataOperationsService] Entry ${entryIdx} [${valueSlice || 'no-slice'}]: SUMMED ${date} (n: ${oldN} + ${value.n_daily[i]} = ${newN})`);
+                      } else {
+                        // Same slice or single-slice: overwrite (newer data)
+                        const oldN = allTimeSeries[existingIndex].n;
+                        allTimeSeries[existingIndex] = {
+                          date: value.dates[i],
+                          n: value.n_daily[i],
+                          k: value.k_daily[i],
+                          p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
+                        };
+                        console.log(`[DataOperationsService] Entry ${entryIdx} [${valueSlice || 'no-slice'}]: Overwrote ${date} (n: ${oldN} → ${value.n_daily[i]})`);
+                      }
                     } else {
-                      // Add new entry
+                      // New date - add entry
                       allTimeSeries.push({
                         date: value.dates[i],
                         n: value.n_daily[i],
                         k: value.k_daily[i],
                         p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
                       });
-                      console.log(`[DataOperationsService] Entry ${entryIdx}: Added ${date} (n: ${value.n_daily[i]})`);
+                      const sliceSet = new Set([sliceIdentifier]);
+                      dateSliceMap.set(date, sliceSet);
+                      console.log(`[DataOperationsService] Entry ${entryIdx} [${valueSlice || 'no-slice'}]: Added ${date} (n: ${value.n_daily[i]})`);
                     }
                   }
                 }
                 
-                console.log(`[DataOperationsService] Entry ${entryIdx}: window=${entryWindow}, datesInWindow=${entryDatesInWindow}/${value.dates.length}`);
+                console.log(`[DataOperationsService] Entry ${entryIdx} [${valueSlice || 'no-slice'}]: window=${entryWindow}, datesInWindow=${entryDatesInWindow}/${value.dates.length}`);
               }
+            }
+            
+            if (isMultiSliceAggregation) {
+              console.log(`[DataOperationsService] Multi-slice aggregation completed:`, {
+                isContextAnyQuery,
+                entriesProcessed: sortedValues.length,
+                uniqueSlicesFromData: Array.from(uniqueSlices),
+              });
             }
             
             console.log('[DataOperationsService] Combined time series:', {
@@ -907,8 +982,8 @@ class DataOperationsService {
               stdev: enhanced.stdev,
               n: enhanced.n,
               k: enhanced.k,
-              window_from: window.start,
-              window_to: window.end,
+              window_from: normalizeToUK(window.start),
+              window_to: normalizeToUK(window.end),
               data_source: {
                 type: latestValueWithSource?.data_source?.type || 'file',
                 retrieved_at: new Date().toISOString(),
@@ -950,6 +1025,23 @@ class DataOperationsService {
               missingAtEnd: aggregation.missing_at_end,
               hasMiddleGaps: aggregation.has_middle_gaps,
             });
+            
+            // Add session log child with aggregation details
+            const slicesSummary = isMultiSliceAggregation 
+              ? `${uniqueSlices.size} slices` 
+              : (Array.from(uniqueSlices)[0] || 'uncontexted');
+            sessionLogService.addChild(logOpId, 'info', 'AGGREGATION_RESULT',
+              `Aggregated ${allTimeSeries.length} days from ${slicesSummary}: n=${enhanced.n}, k=${enhanced.k}, p=${(enhanced.mean * 100).toFixed(1)}%`,
+              `Window: ${normalizeToUK(window.start)} to ${normalizeToUK(window.end)}`,
+              { 
+                slices: Array.from(uniqueSlices),
+                n: enhanced.n, 
+                k: enhanced.k, 
+                mean: enhanced.mean,
+                daysAggregated: allTimeSeries.length,
+                isMultiSlice: isMultiSliceAggregation,
+              }
+            );
             
             if (aggregation.days_missing > 0) {
               // Missing data detected - this is expected when filtering to latest signature
@@ -2258,7 +2350,7 @@ class DataOperationsService {
         queryPayload = {};  // Empty DSL is fine
         
       } else if (targetId && graph) {
-        // Parameters: build DSL from edge query
+        // Parameters: build DSL from edge query (graph available)
         const targetEdge = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
         
         // CRITICAL: For conditional_p fetches, use the conditional entry's query, not the base edge query
@@ -2473,6 +2565,70 @@ class DataOperationsService {
             }
           }
         }
+      } else if (objectType === 'parameter' && objectId && !graph) {
+        // FALLBACK: No graph available, try to read query from parameter file
+        // This enables standalone parameter file usage without the graph
+        // NOTE: This path has limitations - it requires the query string to reference
+        // node IDs that match event IDs (or event files to exist for lookup)
+        const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
+        const fileQuery = paramFile?.data?.query;
+        
+        if (fileQuery && typeof fileQuery === 'string' && fileQuery.trim()) {
+          console.log('[DataOps] No graph available, using query from parameter file:', fileQuery);
+          sessionLogService.addChild(logOpId, 'info', 'QUERY_FROM_FILE',
+            'Using query from parameter file (no graph available)',
+            `Query: ${fileQuery}`,
+            { fileId: `parameter-${objectId}`, query: fileQuery });
+          
+          try {
+            const { parseDSL } = await import('../lib/queryDSL');
+            const parsedQuery = parseDSL(fileQuery);
+            
+            // Build a minimal query payload from the parsed query
+            // This assumes node IDs in query can be resolved via eventLoader
+            if (parsedQuery.from && parsedQuery.to) {
+              const eventLoader = async (eventId: string) => {
+                const file = fileRegistry.getFile(`event-${eventId}`);
+                if (file?.data) {
+                  return file.data;
+                }
+                // Fallback: use ID as event name
+                return { id: eventId, name: eventId, provider_event_names: {} };
+              };
+              
+              // Load event data for from/to nodes
+              const fromEvent = await eventLoader(parsedQuery.from);
+              const toEvent = await eventLoader(parsedQuery.to);
+              
+              // Build query payload without full graph
+              queryPayload = {
+                from: fromEvent?.provider_event_names?.[connectionProvider || 'amplitude'] || parsedQuery.from,
+                to: toEvent?.provider_event_names?.[connectionProvider || 'amplitude'] || parsedQuery.to,
+              };
+              
+              // Add visited events if any
+              if (parsedQuery.visited?.length) {
+                const visitedEvents = await Promise.all(
+                  parsedQuery.visited.map(async (v: string) => {
+                    const ev = await eventLoader(v);
+                    return ev?.provider_event_names?.[connectionProvider || 'amplitude'] || v;
+                  })
+                );
+                queryPayload.visited = visitedEvents;
+              }
+              
+              console.log('[DataOps] Built query payload from file query:', queryPayload);
+            }
+          } catch (error) {
+            console.warn('[DataOps] Failed to build query from parameter file:', error);
+            sessionLogService.addChild(logOpId, 'warning', 'QUERY_PARSE_FAILED',
+              `Could not parse query from file: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        } else {
+          console.warn('[DataOps] No graph and no query in parameter file - cannot determine fetch query');
+          sessionLogService.addChild(logOpId, 'warning', 'NO_QUERY_SOURCE',
+            'No graph available and parameter file has no query - fetch may fail');
+        }
       }
       
       // 4b. Detect upstream conditions OR explicit n_query, and prepare base query for n
@@ -2487,12 +2643,24 @@ class DataOperationsService {
       
       // Check for explicit n_query on edge (used when 'from' node shares an event with siblings
       // and n can't be derived by simply stripping upstream conditions)
+      // n_query is mastered on edge but also copied to param file for standalone use
       const nQueryEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
       let nQueryString: string | undefined = undefined;  // Keep the original n_query string for excludes/composite processing
       let nQueryIsComposite = false;  // Track if n_query needs composite execution
       
-      if (nQueryEdge?.n_query && typeof nQueryEdge.n_query === 'string' && nQueryEdge.n_query.trim()) {
-        explicitNQuery = nQueryEdge.n_query.trim();
+      // First try edge (master), then fall back to param file (for standalone use without graph)
+      let nQuerySource: string | undefined = nQueryEdge?.n_query;
+      if (!nQuerySource && objectType === 'parameter') {
+        // Try to get n_query from parameter file if edge doesn't have it
+        const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
+        if (paramFile?.data?.n_query && typeof paramFile.data.n_query === 'string') {
+          nQuerySource = paramFile.data.n_query;
+          console.log('[DataOps:DUAL_QUERY] Using n_query from parameter file (edge not available):', nQuerySource);
+        }
+      }
+      
+      if (nQuerySource && typeof nQuerySource === 'string' && nQuerySource.trim()) {
+        explicitNQuery = nQuerySource.trim();
         nQueryString = explicitNQuery;
         needsDualQuery = true;
         console.log('[DataOps:DUAL_QUERY] Detected explicit n_query on edge:', explicitNQuery);
@@ -2526,18 +2694,8 @@ class DataOperationsService {
         try {
           console.log('[DataOps:DUAL_QUERY] Building DSL from explicit n_query');
           
-          // Import buildDslFromEdge for n_query processing
-          const { buildDslFromEdge: buildDslFromEdgeForNQuery } = await import('../lib/das/buildDslFromEdge');
-          
-          // Build an edge-like object with the n_query as its query
-          // Use the potentially-compiled nQueryString (with minus/plus if excludes were compiled)
-          const nQueryEdgeData = {
-            ...nQueryEdge,
-            query: nQueryString || explicitNQuery,  // Use compiled version if available
-          };
-          
           // Determine connection provider for event name mapping
-          const connectionProvider = connectionName?.includes('amplitude') 
+          const nQueryConnectionProvider = connectionName?.includes('amplitude') 
             ? 'amplitude' 
             : connectionName?.includes('sheets') 
               ? 'sheets' 
@@ -2546,7 +2704,7 @@ class DataOperationsService {
                 : undefined;
           
           // Load events for n_query
-          const eventLoader = async (eventId: string) => {
+          const nQueryEventLoader = async (eventId: string) => {
             const fileId = `event-${eventId}`;
             const file = fileRegistry.getFile(fileId);
             if (file && file.data) {
@@ -2575,14 +2733,56 @@ class DataOperationsService {
             console.warn('[DataOps:DUAL_QUERY] Failed to parse n_query constraints:', error);
           }
           
-          // Build DSL from n_query
-          const nQueryResult = await buildDslFromEdgeForNQuery(
-            nQueryEdgeData,
-            graph,
-            connectionProvider,
-            eventLoader,
-            nQueryConstraints
-          );
+          let nQueryResult: any;
+          
+          if (graph) {
+            // Full path with graph available - use buildDslFromEdge
+            const { buildDslFromEdge: buildDslFromEdgeForNQuery } = await import('../lib/das/buildDslFromEdge');
+            
+            // Build an edge-like object with the n_query as its query
+            // Use the potentially-compiled nQueryString (with minus/plus if excludes were compiled)
+            const nQueryEdgeData = {
+              ...nQueryEdge,
+              query: nQueryString || explicitNQuery,  // Use compiled version if available
+            };
+            
+            nQueryResult = await buildDslFromEdgeForNQuery(
+              nQueryEdgeData,
+              graph,
+              nQueryConnectionProvider,
+              nQueryEventLoader,
+              nQueryConstraints
+            );
+          } else {
+            // Fallback: No graph available, build simplified payload from n_query string
+            console.log('[DataOps:DUAL_QUERY] No graph available, building n_query payload from string');
+            const { parseDSL } = await import('../lib/queryDSL');
+            const parsedNQuery = parseDSL(nQueryString || explicitNQuery);
+            
+            if (parsedNQuery.from && parsedNQuery.to) {
+              const fromEvent = await nQueryEventLoader(parsedNQuery.from);
+              const toEvent = await nQueryEventLoader(parsedNQuery.to);
+              
+              const nQueryPayload: any = {
+                from: fromEvent?.provider_event_names?.[nQueryConnectionProvider || 'amplitude'] || parsedNQuery.from,
+                to: toEvent?.provider_event_names?.[nQueryConnectionProvider || 'amplitude'] || parsedNQuery.to,
+              };
+              
+              if (parsedNQuery.visited?.length) {
+                const visitedEvents = await Promise.all(
+                  parsedNQuery.visited.map(async (v: string) => {
+                    const ev = await nQueryEventLoader(v);
+                    return ev?.provider_event_names?.[nQueryConnectionProvider || 'amplitude'] || v;
+                  })
+                );
+                nQueryPayload.visited = visitedEvents;
+              }
+              
+              nQueryResult = { queryPayload: nQueryPayload, eventDefinitions: {} };
+            } else {
+              throw new Error('n_query must have from() and to()');
+            }
+          }
           
           baseQueryPayload = nQueryResult.queryPayload;
           
@@ -2636,10 +2836,11 @@ class DataOperationsService {
       }
       
       // 5. Check for incremental fetch opportunities (if dailyMode and parameter file exists)
-      // Determine default window first
-      const now = new Date();
-      const sevenDaysAgo = new Date(now);
-      sevenDaysAgo.setDate(now.getDate() - 7);
+      // Determine default window first - aligned to date boundaries
+      // Normalize 'now' to current local date at UTC midnight to prevent timezone drift
+      const nowDate = parseUKDate(formatDateUK(new Date()));
+      const sevenDaysAgoDate = new Date(nowDate);
+      sevenDaysAgoDate.setUTCDate(nowDate.getUTCDate() - 7);
       
       // CRITICAL: Use window dates from DSL object if available (already ISO format from buildDslFromEdge)
       // This is the authoritative source - buildDslFromEdge has already parsed and normalized the window
@@ -2652,10 +2853,10 @@ class DataOperationsService {
         };
         console.log('[DataOps] Using window from DSL object:', requestedWindow);
       } else {
-        // No window in DSL, use default last 7 days
+        // No window in DSL, use default last 7 days (aligned to date boundaries)
         requestedWindow = {
-          start: sevenDaysAgo.toISOString(),
-          end: now.toISOString()
+          start: sevenDaysAgoDate.toISOString(),
+          end: nowDate.toISOString()
         };
         console.log('[DataOps] No window in DSL, using default last 7 days:', requestedWindow);
       }
@@ -3513,11 +3714,11 @@ class DataOperationsService {
                   mean: 0,
                   n: 0,
                   k: 0,
-                  dates,
+                  dates: dates.map(d => normalizeToUK(d)),
                   n_daily: dates.map(() => 0),
                   k_daily: dates.map(() => 0),
-                  window_from: fetchWindow.start,
-                  window_to: fetchWindow.end,
+                  window_from: normalizeToUK(fetchWindow.start),
+                  window_to: normalizeToUK(fetchWindow.end),
                   sliceDSL, // CRITICAL: Tag with context so isolateSlice finds it
                   data_source: {
                     type: 'amplitude',
@@ -3544,13 +3745,41 @@ class DataOperationsService {
             const updatedFileData = structuredClone(paramFile.data);
             updatedFileData.values = existingValues;
             
-            // CRITICAL: Push graph's query string to parameter file (graph is master for queries)
+            // CRITICAL: Push graph's query strings to parameter file (graph is master for queries)
             // This is the ONE place where graph→file update happens (when fetching from source)
+            // Both query and n_query follow the same pattern: mastered on edge, copied to file
             if (queryString) {
               updatedFileData.query = queryString;
+              // Also copy query_overridden flag from edge
+              if (targetEdge?.query_overridden !== undefined) {
+                updatedFileData.query_overridden = targetEdge.query_overridden;
+              }
               console.log('[DataOperationsService] Updated parameter file query from graph:', {
                 paramId: objectId,
-                query: queryString
+                query: queryString,
+                query_overridden: targetEdge?.query_overridden
+              });
+            }
+            
+            // Also push n_query if present (same pattern as query - edge is master, file is copy)
+            // This allows the parameter file to be used independently without the graph
+            if (explicitNQuery) {
+              updatedFileData.n_query = explicitNQuery;
+              // Also copy n_query_overridden flag
+              if (nQueryEdge?.n_query_overridden !== undefined) {
+                updatedFileData.n_query_overridden = nQueryEdge.n_query_overridden;
+              }
+              console.log('[DataOperationsService] Updated parameter file n_query from graph:', {
+                paramId: objectId,
+                n_query: explicitNQuery,
+                n_query_overridden: nQueryEdge?.n_query_overridden
+              });
+            } else if (updatedFileData.n_query && !nQueryEdge?.n_query) {
+              // Edge no longer has n_query but file still does - remove it
+              delete updatedFileData.n_query;
+              delete updatedFileData.n_query_overridden;
+              console.log('[DataOperationsService] Removed stale n_query from parameter file:', {
+                paramId: objectId
               });
             }
             
@@ -3615,7 +3844,7 @@ class DataOperationsService {
           
           // Create new schedule entry
           const newSchedule = {
-            window_from: new Date().toISOString(),
+            window_from: normalizeToUK(new Date().toISOString()),
             window_to: null,
             variants,
             // Capture provenance on the schedule itself (case file history)

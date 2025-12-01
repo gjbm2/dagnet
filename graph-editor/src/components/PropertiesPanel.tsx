@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
+import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { roundTo4DP } from '@/utils/rounding';
 import ProbabilityInput from './ProbabilityInput';
@@ -118,6 +119,13 @@ export default function PropertiesPanel({
   const { graph, setGraph, saveHistoryState } = useGraphStore();
   const { tabs, operations: tabOps } = useTabContext();
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
+  
+  // Centralized fetch hook for file operations
+  const { fetchItem } = useFetchData({
+    graph,
+    setGraph: setGraph as (graph: any) => void,
+    currentDSL: graph?.currentQueryDSL || '',
+  });
   
   // Get tab-specific what-if analysis state
   const myTab = tabs.find(t => t.id === tabId);
@@ -760,14 +768,9 @@ export default function PropertiesPanel({
     const paramId = edge?.[paramSlot]?.id;
     if (!paramId || !selectedEdgeId) return;
     
-    await dataOperationsService.getParameterFromFile({
-      paramId,
-      edgeId: selectedEdgeId,
-      graph,
-      setGraph: setGraph as (graph: any) => void,
-      targetSlice: graph?.currentQueryDSL || '', // Match context from WindowSelector
-    });
-  }, [selectedEdge, selectedEdgeId, graph, setGraph]);
+    const item = createFetchItem('parameter', paramId, selectedEdgeId, { paramSlot });
+    await fetchItem(item, { mode: 'from-file' });
+  }, [selectedEdge, selectedEdgeId, fetchItem]);
 
   // Helper: PUSH edge parameter to file  
   const pushEdgeParam = useCallback(async (paramSlot: 'p' | 'cost_gbp' | 'cost_time') => {
@@ -2563,20 +2566,34 @@ export default function PropertiesPanel({
                     
                     {/* Optional N Query (for denominator when it differs from k query) */}
                     <div style={{ marginTop: '16px' }}>
-                      <label style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: '6px',
-                        fontSize: '13px', 
-                        fontWeight: 500, 
-                        color: '#374151',
-                        marginBottom: '6px'
-                      }}>
-                        N Query (optional)
+                    <AutomatableField
+                      label="N Query (optional)"
+                      labelExtra={
                         <span title="Explicit query for n (denominator) when it differs from the main query. Use when the 'from' node shares an event with other nodes and n can't be derived by stripping conditions.">
                           <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
                         </span>
-                      </label>
+                      }
+                      layout="label-above"
+                      value={localEdgeNQuery}
+                      overridden={(selectedEdge as any)?.n_query_overridden || false}
+                      onClearOverride={() => {
+                        setLocalEdgeNQuery('');
+                        if (!graph || !selectedEdgeId) return;
+                        const next = structuredClone(graph);
+                        const edgeIndex = next.edges.findIndex((e: any) => 
+                          e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        );
+                        if (edgeIndex >= 0) {
+                          delete (next.edges[edgeIndex] as any).n_query;
+                          delete (next.edges[edgeIndex] as any).n_query_overridden;
+                          if (next.metadata) {
+                            next.metadata.updated_at = new Date().toISOString();
+                          }
+                          setGraph(next);
+                          saveHistoryState(`Clear edge n_query`, undefined, selectedEdgeId || undefined);
+                        }
+                      }}
+                    >
                       <QueryExpressionEditor
                         value={localEdgeNQuery}
                         onChange={(newNQuery) => {
@@ -2594,8 +2611,10 @@ export default function PropertiesPanel({
                               // Set n_query or remove if empty
                               if (currentValue.trim()) {
                                 (next.edges[edgeIndex] as any).n_query = currentValue;
+                                (next.edges[edgeIndex] as any).n_query_overridden = true; // Mark as manually edited
                               } else {
                                 delete (next.edges[edgeIndex] as any).n_query;
+                                delete (next.edges[edgeIndex] as any).n_query_overridden;
                               }
                               if (next.metadata) {
                                 next.metadata.updated_at = new Date().toISOString();
@@ -2610,8 +2629,9 @@ export default function PropertiesPanel({
                         placeholder="from(A).to(B) — leave empty to auto-derive"
                         height="60px"
                       />
+                    </AutomatableField>
                     </div>
-                            </div>
+                  </div>
                 </CollapsibleSection>
 
                 {/* Conditional Probabilities */}

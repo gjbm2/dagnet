@@ -1,5 +1,5 @@
 {
-  "ui:order": ["id", "name", "type", "query", "query_overridden", "connection", "connection_string", "value", "values", "metadata"],
+  "ui:order": ["id", "name", "type", "query", "query_overridden", "n_query", "n_query_overridden", "connection", "connection_string", "value", "values", "metadata"],
   "id": {
     "ui:description": ""
   },
@@ -15,6 +15,13 @@
     "ui:help": "DSL: from(node-id).to(node-id)"
   },
   "query_overridden": {
+    "ui:description": ""
+  },
+  "n_query": {
+    "ui:description": "",
+    "ui:help": "Optional: explicit query for n (denominator) when it differs from k query"
+  },
+  "n_query_overridden": {
     "ui:description": ""
   },
   "connection": {

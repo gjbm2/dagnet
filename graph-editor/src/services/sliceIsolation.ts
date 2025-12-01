@@ -5,7 +5,35 @@
  * Prevents accidental cross-slice aggregation (data corruption risk).
  */
 
-import { parseConstraints } from '../lib/queryDSL';
+import { parseConstraints, type ParsedConstraints } from '../lib/queryDSL';
+
+/**
+ * Expand contextAny into individual context slice identifiers.
+ * 
+ * contextAny(channel:google,channel:influencer) expands to:
+ *   ['context(channel:google)', 'context(channel:influencer)']
+ * 
+ * @param parsed - Parsed constraints object
+ * @returns Array of individual context slice identifiers
+ */
+export function expandContextAny(parsed: ParsedConstraints): string[] {
+  const parts: string[] = [];
+  for (const ctxAny of parsed.contextAny) {
+    for (const pair of ctxAny.pairs) {
+      parts.push(`context(${pair.key}:${pair.value})`);
+    }
+  }
+  return parts.sort();
+}
+
+/**
+ * Check if a DSL string contains contextAny (multi-slice query).
+ */
+export function hasContextAny(dsl: string): boolean {
+  if (!dsl || !dsl.trim()) return false;
+  const parsed = parseConstraints(dsl);
+  return parsed.contextAny.length > 0;
+}
 
 /**
  * Extract just the context/case dimensions from a DSL string, ignoring window.
@@ -14,6 +42,9 @@ import { parseConstraints } from '../lib/queryDSL';
  * But targetSlice from UI often includes window (e.g., 'context(channel:google).window(1-Oct-25:1-Oct-25)').
  * 
  * This function extracts just the context/case parts for matching.
+ * 
+ * NOTE: For contextAny queries, use expandContextAny() instead - this function
+ * returns a SINGLE slice identifier, not suitable for multi-slice matching.
  * 
  * @param dsl - Full DSL string (may include window)
  * @returns Normalized slice identifier (context/case only, no window)
@@ -43,6 +74,8 @@ export function extractSliceDimensions(dsl: string): string {
   // Note: We intentionally EXCLUDE window - it's not a slice dimension
   // Window is used for temporal filtering, not slice identification
   
+  // Note: contextAny is NOT included here - use expandContextAny() for multi-slice queries
+  
   return parts.join('.');
 }
 
@@ -55,6 +88,11 @@ export function extractSliceDimensions(dsl: string): string {
  * - Query may be: targetSlice = 'context(channel:google).window(1-Oct-25:1-Oct-25)'
  * - Match: YES (window is ignored for slice matching)
  * 
+ * For contextAny queries (multi-slice):
+ * - Query: targetSlice = 'contextAny(channel:google,channel:influencer).window(...)'
+ * - Matches: sliceDSL = 'context(channel:google)' OR 'context(channel:influencer)'
+ * - Returns values from ALL matching component slices
+ * 
  * @param values - All parameter values
  * @param targetSlice - DSL string identifying which slice to isolate (empty string = uncontexted)
  * @returns Values matching the target slice
@@ -64,6 +102,30 @@ export function isolateSlice<T extends { sliceDSL?: string }>(
   values: T[],
   targetSlice: string
 ): T[] {
+  const parsed = parseConstraints(targetSlice);
+  
+  // Handle contextAny: match ANY of the component slices
+  if (parsed.contextAny.length > 0) {
+    const expandedSlices = expandContextAny(parsed);
+    
+    // Also include any explicit context() dimensions
+    if (parsed.context.length > 0) {
+      const explicitContexts = parsed.context
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(({key, value}) => `context(${key}:${value})`);
+      expandedSlices.push(...explicitContexts);
+    }
+    
+    // Match values where sliceDSL is ANY of the expanded slices
+    const matched = values.filter(v => {
+      const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
+      return expandedSlices.includes(valueSlice);
+    });
+    
+    return matched;
+  }
+  
+  // Standard path: single slice matching
   // Extract just the slice dimensions (context/case), ignoring window
   const normalizedTarget = extractSliceDimensions(targetSlice);
   

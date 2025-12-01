@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
 import { LogFileService } from '../../services/logFileService';
 import { sessionLogService } from '../../services/sessionLogService';
+import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import './Modal.css';
@@ -152,6 +153,21 @@ export function BatchOperationsModal({
   useEffect(() => {
     graphRef.current = graph;
   }, [graph]);
+  
+  // CRITICAL: Wrap setGraph to also update graphRef
+  // This ensures rebalancing works correctly across iterations
+  const setGraphWithRef = useCallback((newGraph: GraphData | null) => {
+    graphRef.current = newGraph;
+    setGraph(newGraph);
+  }, [setGraph]);
+  
+  // Centralized fetch hook - uses refs for batch operations
+  // Supports all fetch modes: 'versioned', 'direct', 'from-file'
+  const { fetchItem } = useFetchData({
+    graph: () => graphRef.current as any,  // Getter for fresh graph in batch ops
+    setGraph: setGraphWithRef,
+    currentDSL: getEffectiveDSL,  // Getter for fresh DSL
+  });
 
   // Collect all items from graph (without filtering by operation type)
   const allItems = useMemo(() => {
@@ -400,13 +416,6 @@ export function BatchOperationsModal({
     
     // Reset abort flag at start
     abortRef.current = false;
-    
-    // CRITICAL: Wrap setGraph to also update graphRef
-    // This ensures rebalancing works correctly across iterations
-    const setGraphWithRef = (newGraph: GraphData | null) => {
-      graphRef.current = newGraph;
-      setGraph(newGraph);
-    };
 
     for (let i = 0; i < selectedBatchItems.length; i++) {
       // Check for abort request
@@ -432,147 +441,36 @@ export function BatchOperationsModal({
         let error: string | undefined;
         let details: string | undefined; // Store operation details for logging
 
-        if (operationType === 'get-from-files') {
-          if (item.type === 'parameter') {
-            // Get edge before operation to compare
-            // CRITICAL: Use graphRef.current for latest state
-            const edgeBefore = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
-            const paramBefore = edgeBefore?.[item.paramSlot || 'p'];
-            
-            await dataOperationsService.getParameterFromFile({
-              paramId: item.objectId,
-              edgeId: item.targetId,
-              graph: graphRef.current,
-              setGraph: setGraphWithRef,
-              window: window || undefined,
-              targetSlice: graphRef.current?.currentQueryDSL || '' // Match context from WindowSelector
-            });
-            
-            // Get edge after operation to extract details
-            const edgeAfter = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
-            const paramAfter = edgeAfter?.[item.paramSlot || 'p'];
-            
-            if (paramAfter) {
-              const evidence = paramAfter.evidence;
-              const parts: string[] = [];
-              if (evidence?.n !== undefined) parts.push(`n=${evidence.n}`);
-              if (evidence?.k !== undefined) parts.push(`k=${evidence.k}`);
-              if (evidence?.window_from && evidence?.window_to) {
-                const from = new Date(evidence.window_from).toISOString().split('T')[0];
-                const to = new Date(evidence.window_to).toISOString().split('T')[0];
-                parts.push(`window=${from} to ${to}`);
-              }
-              if (evidence?.source) parts.push(`source=${evidence.source}`);
-              if (paramAfter.mean !== undefined) parts.push(`p=${(paramAfter.mean * 100).toFixed(2)}%`);
-              
-              details = parts.length > 0 ? ` → ${parts.join(', ')}` : '';
-            }
-            
-            success = true;
-          } else if (item.type === 'case') {
-            await dataOperationsService.getCaseFromFile({
-              caseId: item.objectId,
-              nodeId: item.targetId,
-              graph: graphRef.current,
-              setGraph: setGraphWithRef
-            });
-            success = true;
-          } else if (item.type === 'node') {
-            await dataOperationsService.getNodeFromFile({
-              nodeId: item.objectId,
-              graph: graphRef.current,
-              setGraph: setGraphWithRef
-            });
-            success = true;
+        // Map operation type to fetch mode
+        const getFetchMode = (): FetchMode | null => {
+          switch (operationType) {
+            case 'get-from-files': return 'from-file';
+            case 'get-from-sources': return 'versioned';
+            case 'get-from-sources-direct': return 'direct';
+            default: return null;
           }
-        } else if (operationType === 'get-from-sources') {
-          if (item.type === 'parameter') {
-            // Get edge before operation
-            const edgeBefore = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
-            const paramBefore = edgeBefore?.[item.paramSlot || 'p'];
-            
-            await dataOperationsService.getFromSource({
-              objectType: 'parameter',
-              objectId: item.objectId,
-              targetId: item.targetId,
-              graph: graphRef.current,
-              setGraph: setGraphWithRef,
+        };
+        
+        const fetchMode = getFetchMode();
+        
+        if (fetchMode && (item.type === 'parameter' || item.type === 'case' || item.type === 'node')) {
+          // Use centralized fetch hook for all fetch operations
+          const fetchItemData = createFetchItem(
+            item.type,
+            item.objectId,
+            item.targetId,
+            {
               paramSlot: item.paramSlot,
-              bustCache,
-              currentDSL: getEffectiveDSL()
-            });
-            
-            // Get edge after operation to extract details
-            const edgeAfter = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
-            const paramAfter = edgeAfter?.[item.paramSlot || 'p'];
-            
-            if (paramAfter) {
-              const evidence = paramAfter.evidence;
-              const parts: string[] = [];
-              if (evidence?.n !== undefined) parts.push(`n=${evidence.n}`);
-              if (evidence?.k !== undefined) parts.push(`k=${evidence.k}`);
-              if (evidence?.window_from && evidence?.window_to) {
-                const from = new Date(evidence.window_from).toISOString().split('T')[0];
-                const to = new Date(evidence.window_to).toISOString().split('T')[0];
-                parts.push(`window=${from} to ${to}`);
-              }
-              if (evidence?.source) parts.push(`source=${evidence.source}`);
-              if (paramAfter.mean !== undefined) parts.push(`p=${(paramAfter.mean * 100).toFixed(2)}%`);
-              
-              details = parts.length > 0 ? ` → ${parts.join(', ')}` : '';
+              conditionalIndex: item.conditionalIndex,
+              name: item.name,
             }
-            
-            success = true;
-          } else if (item.type === 'case') {
-            await dataOperationsService.getFromSource({
-              objectType: 'case',
-              objectId: item.objectId,
-              targetId: item.targetId,
-              graph: graphRef.current,
-              setGraph: setGraphWithRef,
-              currentDSL: getEffectiveDSL()
-            });
-            success = true;
-          }
-        } else if (operationType === 'get-from-sources-direct') {
-          if (item.type === 'parameter') {
-            // Get edge before operation
-            const edgeBefore = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
-            const paramBefore = edgeBefore?.[item.paramSlot || 'p'];
-            
-            await dataOperationsService.getFromSourceDirect({
-              objectType: 'parameter',
-              objectId: '',
-              targetId: item.targetId,
-              graph: graphRef.current,
-              setGraph: setGraphWithRef,
-              paramSlot: item.paramSlot,
-              dailyMode: false,
-              bustCache,
-              currentDSL: getEffectiveDSL()
-            });
-            
-            // Get edge after operation to extract details
-            const edgeAfter = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
-            const paramAfter = edgeAfter?.[item.paramSlot || 'p'];
-            
-            if (paramAfter) {
-              const evidence = paramAfter.evidence;
-              const parts: string[] = [];
-              if (evidence?.n !== undefined) parts.push(`n=${evidence.n}`);
-              if (evidence?.k !== undefined) parts.push(`k=${evidence.k}`);
-              if (evidence?.window_from && evidence?.window_to) {
-                const from = new Date(evidence.window_from).toISOString().split('T')[0];
-                const to = new Date(evidence.window_to).toISOString().split('T')[0];
-                parts.push(`window=${from} to ${to}`);
-              }
-              if (evidence?.source) parts.push(`source=${evidence.source}`);
-              if (paramAfter.mean !== undefined) parts.push(`p=${(paramAfter.mean * 100).toFixed(2)}%`);
-              
-              details = parts.length > 0 ? ` → ${parts.join(', ')}` : '';
-            }
-            
-            success = true;
+          );
+          
+          const result = await fetchItem(fetchItemData, { mode: fetchMode, bustCache });
+          success = result.success;
+          details = result.details ? ` → ${result.details}` : '';
+          if (result.error) {
+            error = result.error.message;
           }
         } else if (operationType === 'put-to-files') {
           if (item.type === 'parameter') {

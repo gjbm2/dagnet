@@ -33,14 +33,6 @@ export function MenuBarComponent() {
 
   return (
     <div className="menu-bar">
-      <div 
-        className="dagnet-brand" 
-        onClick={handleBrandClick}
-        title={`Dagnet v${APP_VERSION}`}
-      >
-        <img src="/dagnet-icon.png" alt="" className="dagnet-logo" />
-        <span>Dagnet</span>
-      </div>
       <Menubar.Root className="menubar-root">
         <FileMenu />
         <EditMenu />
@@ -50,6 +42,14 @@ export function MenuBarComponent() {
         <RepositoryMenu />
         <HelpMenu />
       </Menubar.Root>
+      <div 
+        className="dagnet-brand" 
+        onClick={handleBrandClick}
+        title={`Dagnet v${APP_VERSION}`}
+      >
+        <img src="/dagnet-icon.png" alt="" className="dagnet-logo" />
+        <span>Dagnet</span>
+      </div>
     </div>
   );
 }

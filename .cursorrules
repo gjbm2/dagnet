@@ -1,5 +1,16 @@
 # DagNet Development Guidelines for AI Assistants
 
+## Language and Formatting Standards
+
+### UK English
+- Use UK spellings throughout: colour, behaviour, centre, organisation, realise, analyse, etc.
+- Exception: Code identifiers may use US spelling if that's the existing convention in external APIs
+
+### Date Format
+- **ALWAYS** use `d-MMM-yy` format: `1-Dec-25`, `15-Jan-24`, `7-Mar-26`
+- Never use `YYYY-MM-DD` (ISO) or `MM/DD/YYYY` (US) in UI, logs, or file storage
+- **Only exception**: External API boundaries may require ISO format - convert immediately after receipt
+
 ## Core Principles
 
 ### 1. NO LOGIC IN UI/MENU FILES
@@ -81,8 +92,8 @@ When modifying functionality:
 
 1. **Update existing tests** - Don't leave tests broken or outdated
 2. **Add new tests** - For new functionality or bug fixes
-3. **Run tests** - Verify changes don't break existing functionality
-4. **Check integration tests** - Ensure end-to-end flows still work
+3. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
+4. **Check integration tests** - Only if changes affect integration points
 
 Test files are in:
 - `graph-editor/src/services/__tests__/` - Service integration tests
@@ -326,6 +337,39 @@ Before submitting changes:
    - Ensure dialogs show same information
    - Verify all file operations update IndexedDB
 
+### Adding New Fields or Features - FULL IMPACT ASSESSMENT
+
+**CRITICAL**: When adding a new field (e.g., `n_query`), you MUST check ALL places where similar fields are handled.
+
+**Required checklist for new fields:**
+- [ ] **TypeScript types** (`src/types/index.ts`) - Add to relevant interfaces
+- [ ] **Python Pydantic models** (`lib/graph_types.py`) - Add to relevant models
+- [ ] **YAML schemas** (`public/param-schemas/`) - Add field definitions
+- [ ] **Service types** (`src/services/*Service.ts`) - Add to any service-specific interfaces
+- [ ] **UI components** - PropertiesPanel, editors that display/edit the field
+- [ ] **UpdateManager** - If field contains node references, update on node ID rename
+- [ ] **Services** - Storage, retrieval, sync logic (dataOperationsService, etc.)
+- [ ] **Override patterns** - If field has `_overridden` companion, mirror the pattern
+
+**Finding companion fields**: When adding `new_field`, search for similar fields like `query`:
+```bash
+grep -r "query_overridden\|\.query\b" --include="*.ts" --include="*.tsx" --include="*.py" --include="*.yaml"
+```
+Then ensure `new_field` follows the SAME patterns in ALL the same places.
+
+**Common patterns that must be mirrored:**
+- `field` + `field_overridden` pair (mastered on graph, copied to file)
+- UpdateManager node ID replacement for query strings
+- PropertiesPanel display/edit with blur-to-save pattern
+- Service layer push to file + fallback from file
+
+**Test coverage for new fields:**
+- [ ] Check existing tests in `src/services/__tests__/` that test similar fields
+- [ ] Add tests for storage/retrieval of the new field
+- [ ] Add tests for override behavior if applicable
+- [ ] Add tests for UpdateManager node ID replacement if field contains node references
+- [ ] Run ONLY the relevant tests (not full suite) to verify no regressions
+
 ## Key Lessons from Recent Bugs
 
 1. **Index files were being built in wrong locations**
@@ -346,10 +390,18 @@ Before submitting changes:
 ## Testing and Build Guidelines
 
 ### Running Tests
+**CRITICAL: Only run RELEVANT tests, not the full suite.**
+
+- **Default behavior**: Run only tests related to files you changed
+  - Use `npm test -- --run --testNamePattern="PatternHere"` for specific tests
+  - Use `npm test -- --run path/to/specific.test.ts` for specific file
+- **Full suite**: Only run when user explicitly asks OR when changes are pervasive (e.g., core type changes)
+- **Never run all tests** just to "verify" - it wastes time
+
 When asked to "run tests":
-- **Frontend**: Run `npm test` (Vitest)
-- **Python**: Run `pytest tests/` (from `graph-editor/` directory with venv activated)
-- Run BOTH unless context clearly indicates one or the other
+- **Frontend**: Run `npm test` with appropriate filter (Vitest)
+- **Python**: Run `pytest tests/specific_test.py` or `pytest -k "pattern"` 
+- Run BOTH only if changes affect both frontend and Python
 
 ### Building
 - **DO NOT** run `npm run build` unless explicitly instructed

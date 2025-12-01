@@ -21,6 +21,7 @@ import { getAllDataSections, type DataOperationSection } from './DataOperationsS
 import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
 import { useClearDataFile } from '../hooks/useClearDataFile';
+import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import toast from 'react-hot-toast';
 
 interface EdgeContextMenuProps {
@@ -176,18 +177,22 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   // Get all data operation sections using single source of truth
   const dataOperationSections = getAllDataSections(null, edgeId, graph);
   
+  // Centralized fetch hook - all fetch operations go through this
+  const { fetchItem } = useFetchData({
+    graph,
+    setGraph,
+    currentDSL: graph?.currentQueryDSL || '',
+  });
+  
   // Generic section-based handlers for data operations
   const handleSectionGetFromFile = (section: DataOperationSection) => {
-    // Delegate to dataOperationsService
-    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
-      dataOperationsService.getParameterFromFile({
-        paramId: section.objectId,
-        edgeId: section.targetId,
-        graph,
-        setGraph,
-        targetSlice: graph?.currentQueryDSL || '', // Match context from WindowSelector
-      });
-    });
+    const item = createFetchItem(
+      'parameter',
+      section.objectId,
+      section.targetId,
+      { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
+    );
+    fetchItem(item, { mode: 'from-file' });
   };
 
   const handleSectionPutToFile = (section: DataOperationSection) => {
@@ -202,34 +207,23 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   };
 
   const handleSectionGetFromSourceDirect = (section: DataOperationSection) => {
-    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
-      dataOperationsService.getFromSourceDirect({
-        objectType: 'parameter',
-        objectId: section.objectId,
-        targetId: section.targetId,
-        graph,
-        setGraph,
-        paramSlot: section.paramSlot,
-        conditionalIndex: section.conditionalIndex,
-        dailyMode: false,
-        currentDSL: graph?.currentQueryDSL || '',
-      });
-    });
+    const item = createFetchItem(
+      'parameter',
+      section.objectId,
+      section.targetId,
+      { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
+    );
+    fetchItem(item, { mode: 'direct' });
   };
 
   const handleSectionGetFromSource = (section: DataOperationSection) => {
-    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
-      dataOperationsService.getFromSource({
-        objectType: 'parameter',
-        objectId: section.objectId,
-        targetId: section.targetId,
-        graph,
-        setGraph,
-        paramSlot: section.paramSlot,
-        conditionalIndex: section.conditionalIndex,
-        currentDSL: graph?.currentQueryDSL || '', // Pass DSL for correct window/context
-      });
-    });
+    const item = createFetchItem(
+      'parameter',
+      section.objectId,
+      section.targetId,
+      { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
+    );
+    fetchItem(item, { mode: 'versioned' });
   };
   
   const handleSectionClearCache = (section: DataOperationSection) => {

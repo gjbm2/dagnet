@@ -52,7 +52,7 @@ properties:
     properties:
       version:
         type: string
-        pattern: '^\\d+\\.\\d+\\.\\d+$'
+        pattern: '^\d+\.\d+\.\d+$'
         description: "Index format version"
       
       updated_at:

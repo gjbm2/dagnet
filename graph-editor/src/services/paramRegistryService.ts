@@ -78,6 +78,11 @@ export interface Parameter {
   name: string;
   type: 'probability' | 'cost_gbp' | 'cost_time';
   values: ParameterValue[];
+  // Query strings - mastered on graph edge, copied here for standalone use
+  query?: string; // Main query DSL (e.g., "from(A).to(B).visited(C)")
+  query_overridden?: boolean; // If true, query was manually edited
+  n_query?: string; // Optional: explicit query for n (denominator) when it differs from k query
+  n_query_overridden?: boolean; // If true, n_query was manually edited
   metadata: {
     description: string;
     units?: string;

@@ -406,6 +406,82 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
       
       expect(result.graph.edges[0].p.query).toBe('event.value > 0');
     });
+    
+    it('should replace node id in edge n_query strings', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'checkout' },
+          { uuid: 'node-b', id: 'payment' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            from: 'checkout',
+            to: 'payment',
+            query: 'from(checkout).to(payment).visited(cart)',
+            n_query: 'from(cart).to(checkout)',
+            p: { mean: 0.5 },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'order');
+      
+      // Both query and n_query should be updated
+      expect(result.graph.edges[0].query).toBe('from(order).to(payment).visited(cart)');
+      expect(result.graph.edges[0].n_query).toBe('from(cart).to(order)');
+    });
+    
+    it('should replace node id in edge-level parameter n_query', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'signup' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            from: 'start',
+            to: 'signup',
+            p: { 
+              mean: 0.5,
+              n_query: 'from(landing).to(signup)'  // n_query on probability param
+            },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'registration');
+      
+      expect(result.graph.edges[0].p.n_query).toBe('from(landing).to(registration)');
+    });
+    
+    it('should replace node id in cost_gbp and cost_time n_query', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-a', id: 'checkout' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            from: 'cart',
+            to: 'checkout',
+            cost_gbp: { 
+              mean: 100,
+              n_query: 'from(browse).to(checkout)'
+            },
+            cost_time: { 
+              mean: 120,
+              n_query: 'from(browse).to(checkout)'
+            },
+          },
+        ],
+      };
+      
+      const result = updateManager.renameNodeId(graph, 'node-a', 'payment');
+      
+      expect(result.graph.edges[0].cost_gbp.n_query).toBe('from(browse).to(payment)');
+      expect(result.graph.edges[0].cost_time.n_query).toBe('from(browse).to(payment)');
+    });
   });
   
   // ============================================================
