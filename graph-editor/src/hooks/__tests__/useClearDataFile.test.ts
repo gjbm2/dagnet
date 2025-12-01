@@ -165,12 +165,12 @@ describe('useClearDataFile', () => {
       });
       
       expect(clearResult.success).toBe(true);
-      expect(clearResult.clearedCount).toBe(1); // 2 values - 1 remaining = 1 cleared
+      expect(clearResult.clearedCount).toBe(2); // Both values cleared
       
       expect(fileRegistry.updateFile).toHaveBeenCalledWith('parameter-test', {
         id: 'test',
         name: 'Test Parameter',
-        values: [{ mean: 0.75 }], // Only first mean kept
+        values: [], // Fully cleared - no stub entries that cause aggregation issues
         metadata: { description: 'Test' }
       });
     });

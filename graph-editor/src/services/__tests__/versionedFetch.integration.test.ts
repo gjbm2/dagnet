@@ -359,17 +359,24 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
       
       const requestedWindow = { start: '2025-10-01', end: '2025-10-03' };
       
-      // BUG TEST: If we DON'T pass targetSlice with contexted data, it throws
-      // This is the correct behavior - you can't query uncontexted when data has contexts
-      expect(() => calculateIncrementalFetch(
+      // When file has ONLY contexted data and query is uncontexted,
+      // calculateIncrementalFetch uses MECE aggregation: a date is covered
+      // only if ALL contexted slices have it.
+      const resultUncontexted = calculateIncrementalFetch(
         paramFileData, 
         requestedWindow, 
         undefined, 
         false,
-        '' // Empty targetSlice - should throw when file has contexts
-      )).toThrow('Slice isolation error');
+        '' // Empty targetSlice = MECE aggregation
+      );
       
-      // CORRECT TEST: With targetSlice='context(channel:google)', only Oct 2 exists
+      // With MECE: Oct 2 is covered (both facebook + google have it)
+      // Oct 1 and Oct 3 are missing (google doesn't have them)
+      expect(resultUncontexted.existingDates.has('2-Oct-25')).toBe(true);
+      expect(resultUncontexted.missingDates).toContain('1-Oct-25');
+      expect(resultUncontexted.missingDates).toContain('3-Oct-25');
+      
+      // Single context query: With targetSlice='context(channel:google)', only Oct 2 exists
       const resultWithSlice = calculateIncrementalFetch(
         paramFileData, 
         requestedWindow, 

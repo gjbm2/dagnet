@@ -1075,10 +1075,11 @@ describe('Multi-Slice Retrieval and Caching E2E (Real Production Code)', () => {
         const edge = updatedGraph.edges?.find((e: any) => e.uuid === 'edge-uuid-1');
         if (edge?.p?.evidence) {
           expect(edge.p.evidence.n).toBe(1809);
-          // k is sum of k_daily across all slices: 81 + 816 + 63 + 1 + 0 + 1 (rounding) = 962
-          expect(edge.p.evidence.k).toBe(962);
+          // k is sum of k_daily across all slices: 81 + 816 + 63 + 1 + 0 = 961
+          // (Previously had +1 rounding from weighted mean derivation - now we use actual k)
+          expect(edge.p.evidence.k).toBe(961);
           // Mean should be k/n
-          expect(edge.p.mean).toBeCloseTo(962 / 1809, 2);
+          expect(edge.p.mean).toBeCloseTo(961 / 1809, 2);
         }
       }
     });

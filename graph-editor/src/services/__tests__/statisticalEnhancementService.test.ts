@@ -200,6 +200,71 @@ describe('StatisticalEnhancementService', () => {
 
       expect(result.metadata.data_points).toBe(10);
     });
+
+    it('should use simple mean (k/n) and preserve k as actual observed count', async () => {
+      // This test validates two critical fixes:
+      // 1. k must be preserved as the actual observed success count, not derived from any estimate
+      // 2. mean must be the simple mean (k/n), not a weighted mean that can be distorted
+      //
+      // Background: Inverse-variance weighting was causing issues because:
+      // - Days with p=0 (weekends, data lag) aren't "estimates of 0%" - they're outliers
+      // - These days got massive weight: n/0.01 = 100×n when p=0
+      // - This distorted the weighted mean (e.g., actual 56% → weighted 16%)
+      //
+      // FIX: Use simple mean (k/n) which is the CORRECT observed conversion rate
+      const raw: RawAggregation = {
+        method: 'naive',
+        n: 645,
+        k: 361,
+        mean: 361 / 645, // 0.5596...
+        stdev: Math.sqrt((361/645) * (1 - 361/645) / 645),
+        raw_data: [
+          // High volume days with LOW conversion (would have dominated weighted average)
+          { date: '2024-11-01', n: 83, k: 0, p: 0 },
+          { date: '2024-11-02', n: 52, k: 40, p: 0.769 },
+          { date: '2024-11-03', n: 47, k: 35, p: 0.745 },
+          { date: '2024-11-04', n: 41, k: 33, p: 0.805 },
+          { date: '2024-11-05', n: 40, k: 27, p: 0.675 },
+          { date: '2024-11-06', n: 38, k: 4, p: 0.105 },  // Low conversion
+          { date: '2024-11-07', n: 36, k: 28, p: 0.778 },
+          { date: '2024-11-08', n: 33, k: 25, p: 0.758 },
+          { date: '2024-11-09', n: 32, k: 30, p: 0.938 },
+          { date: '2024-11-10', n: 32, k: 15, p: 0.469 },
+          // More days...
+          { date: '2024-11-11', n: 28, k: 0, p: 0 },
+          { date: '2024-11-12', n: 25, k: 18, p: 0.72 },
+          { date: '2024-11-13', n: 25, k: 17, p: 0.68 },
+          { date: '2024-11-14', n: 23, k: 22, p: 0.957 },
+          { date: '2024-11-15', n: 22, k: 16, p: 0.727 },
+          { date: '2024-11-16', n: 20, k: 16, p: 0.8 },
+          { date: '2024-11-17', n: 19, k: 13, p: 0.684 },
+          { date: '2024-11-18', n: 18, k: 0, p: 0 },
+          { date: '2024-11-19', n: 17, k: 11, p: 0.647 },
+          { date: '2024-11-20', n: 14, k: 11, p: 0.786 },
+        ],
+        window: { start: '2024-11-01', end: '2024-11-20' } as DateRange,
+        days_included: 20,
+        days_missing: 0,
+        missing_dates: [],
+        gaps: [],
+        missing_at_start: false,
+        missing_at_end: false,
+        has_middle_gaps: false,
+      };
+
+      const result = await statisticalEnhancementService.enhance(raw);
+
+      // CRITICAL: k must be the actual observed count (361), NOT derived from any estimate
+      expect(result.k).toBe(361);
+      expect(result.n).toBe(645);
+      
+      // CRITICAL: mean must be the simple mean (k/n), NOT a weighted mean
+      // Simple mean: 361/645 = 0.5596... ≈ 0.56 (rounded to 3 decimal places)
+      expect(result.mean).toBeCloseTo(0.56, 2);
+      
+      // Verify k was NOT recalculated from mean (k should equal mean * n since mean = k/n)
+      expect(result.k).toBe(Math.round(result.mean * result.n));
+    });
   });
 });
 

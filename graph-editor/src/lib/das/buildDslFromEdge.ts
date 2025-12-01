@@ -848,8 +848,12 @@ function resolveWindowDates(window: { start?: string; end?: string }): { startDa
   }
   
   let endDate: Date | undefined;
-  if (!window.end) {
-    // No end specified - default to 'now' (normalized to date boundary)
+  if (window.end === undefined) {
+    // Explicitly undefined - truly open-ended window (e.g., from parseConstraints("-30d:"))
+    // Leave undefined to preserve open-ended semantics
+    endDate = undefined;
+  } else if (window.end === '') {
+    // Empty string - means "default to now" (e.g., from UI with empty end field)
     endDate = now;
   } else if (window.end.match(/^-?\d+[dwmy]$/)) {
     endDate = applyRelativeOffset(now, window.end);
