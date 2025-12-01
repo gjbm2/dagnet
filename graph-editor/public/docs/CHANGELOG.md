@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.3b
+**Released:** December 01, 2025
+
+Fetch logic bug fixes
+
+---
+
 ## Version 0.99.1b
 **Released:** December 01, 2025
 
