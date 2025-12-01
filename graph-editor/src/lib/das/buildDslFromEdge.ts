@@ -16,7 +16,7 @@
 import { parseDSL, type ParsedConstraints } from '../queryDSL';
 import { contextRegistry } from '../../services/contextRegistry';
 import { querySignatureService } from '../../services/querySignatureService';
-import { parseUKDate } from '../dateFormat';
+import { parseUKDate, formatDateUK } from '../dateFormat';
 
 export interface EventFilter {
   property: string;
@@ -823,7 +823,10 @@ async function buildComputedOtherFilter(
  * @returns Resolved start and end dates (end may be undefined for open-ended windows)
  */
 function resolveWindowDates(window: { start?: string; end?: string }): { startDate?: Date; endDate?: Date } {
-  const now = new Date();
+  // Normalize 'now' to current local date at UTC midnight
+  // This ensures relative offsets align to date boundaries and prevents timezone drifts
+  // Example: Local "Dec 8 14:00" -> "8-Dec-25" -> "2025-12-08T00:00:00.000Z"
+  const now = parseUKDate(formatDateUK(new Date()));
   
   // DEBUG: Log input
   console.log('[resolveWindowDates] Input:', window);
@@ -846,8 +849,8 @@ function resolveWindowDates(window: { start?: string; end?: string }): { startDa
   
   let endDate: Date | undefined;
   if (!window.end) {
-    // No end specified - open-ended (query to "now")
-    endDate = undefined;
+    // No end specified - default to 'now' (normalized to date boundary)
+    endDate = now;
   } else if (window.end.match(/^-?\d+[dwmy]$/)) {
     endDate = applyRelativeOffset(now, window.end);
   } else {

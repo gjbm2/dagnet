@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileRegistry } from '../contexts/TabContext';
+import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import './LightningMenu.css';
 
 interface DataOperationsMenuProps {
@@ -171,31 +172,24 @@ export function DataOperationsMenu({
     actualFileExists = !!file;
   }
   
-  // Handlers (same as LightningMenu)
+  // Centralized fetch hook - all fetch operations go through this
+  const { fetchItem } = useFetchData({
+    graph,
+    setGraph,
+    currentDSL: graph?.currentQueryDSL || '',
+  });
+  
+  // Handlers (same as LightningMenu, now using centralized hook)
   const handleGetFromFile = () => {
     if (onClose) onClose();
-    if (objectType === 'parameter') {
-      dataOperationsService.getParameterFromFile({ 
-        paramId: objectId, 
-        edgeId: targetId,
-        graph,
-        setGraph,
-        targetSlice: graph?.currentQueryDSL || '', // Match context from WindowSelector
-      });
-    } else if (objectType === 'case') {
-      dataOperationsService.getCaseFromFile({ 
-        caseId: objectId, 
-        nodeId: targetId,
-        graph,
-        setGraph
-      });
-    } else if (objectType === 'node') {
-      dataOperationsService.getNodeFromFile({ 
-        nodeId: objectId,
-        graph,
-        setGraph
-      });
-    }
+    if (objectType === 'event') return;
+    const item = createFetchItem(
+      objectType as 'parameter' | 'case' | 'node',
+      objectId,
+      targetId || '',
+      { paramSlot, conditionalIndex }
+    );
+    fetchItem(item, { mode: 'from-file' });
   };
   
   const handlePutToFile = () => {
@@ -225,19 +219,14 @@ export function DataOperationsMenu({
   
   const handleGetFromSource = () => {
     if (onClose) onClose();
-    if (objectType === 'event') {
-      // Events don't support external data connections
-      return;
-    }
-    dataOperationsService.getFromSource({ 
-      objectType: objectType as 'parameter' | 'case' | 'node', 
-      objectId, 
-      targetId,
-      graph,
-      setGraph,
-      paramSlot,
-      currentDSL: graph?.currentQueryDSL || '',
-    });
+    if (objectType === 'event') return;
+    const item = createFetchItem(
+      objectType as 'parameter' | 'case' | 'node',
+      objectId,
+      targetId || '',
+      { paramSlot, conditionalIndex }
+    );
+    fetchItem(item, { mode: 'versioned' });
   };
   
   const handleClearCache = () => {
@@ -247,24 +236,14 @@ export function DataOperationsMenu({
   
   const handleGetFromSourceDirect = () => {
     if (onClose) onClose();
-    if (objectType === 'event') {
-      // Events don't support external data connections
-      return;
-    }
-    // CRITICAL: "Get from Source (direct)" should ALWAYS use dailyMode: false
-    // This applies the result directly to the graph WITHOUT saving to a file
-    // Even if a parameter file exists, "direct" mode bypasses it entirely
-    dataOperationsService.getFromSourceDirect({ 
-      objectType: objectType as 'parameter' | 'case' | 'node', 
-      objectId, 
-      targetId, 
-      graph, 
-      setGraph,
-      paramSlot,
-      conditionalIndex,
-      dailyMode: false, // Direct mode: no file save; service decides caching
-      currentDSL: graph?.currentQueryDSL || '',
-    });
+    if (objectType === 'event') return;
+    const item = createFetchItem(
+      objectType as 'parameter' | 'case' | 'node',
+      objectId,
+      targetId || '',
+      { paramSlot, conditionalIndex }
+    );
+    fetchItem(item, { mode: 'direct' });
   };
   
   const handleConnectionSettings = () => {

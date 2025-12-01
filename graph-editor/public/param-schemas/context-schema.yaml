@@ -125,7 +125,7 @@ properties:
             
             version:
               type: string
-              pattern: '^\\d+\\.\\d+\\.\\d+$'
+              pattern: '^\d+\.\d+\.\d+$'
               description: "Semantic version of this context definition"
             
             status:
@@ -174,7 +174,7 @@ properties:
     properties:
       version:
         type: string
-        pattern: '^\\d+\\.\\d+\\.\\d+$'
+        pattern: '^\d+\.\d+\.\d+$'
         description: "Semantic version of this contexts file"
       
       created_at:

@@ -378,11 +378,11 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
         'context(channel:google)'
       );
       
-      // Should need fetch for Oct 1 and Oct 3
+      // Should need fetch for Oct 1 and Oct 3 (dates now in UK format)
       expect(resultWithSlice.needsFetch).toBe(true);
-      expect(resultWithSlice.missingDates).toContain('2025-10-01');
-      expect(resultWithSlice.missingDates).toContain('2025-10-03');
-      expect(resultWithSlice.missingDates).not.toContain('2025-10-02'); // Oct 2 exists
+      expect(resultWithSlice.missingDates).toContain('1-Oct-25');
+      expect(resultWithSlice.missingDates).toContain('3-Oct-25');
+      expect(resultWithSlice.missingDates).not.toContain('2-Oct-25'); // Oct 2 exists
     });
     
     it('should NOT count dates from other contexts as existing', () => {
@@ -411,12 +411,261 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
         'context(channel:google)' // Looking for google data
       );
       
-      // ALL dates should be missing (because there's no google data)
+      // ALL dates should be missing (because there's no google data) - dates in UK format
       expect(result.needsFetch).toBe(true);
       expect(result.daysAvailable).toBe(0);
-      expect(result.missingDates).toContain('2025-10-01');
-      expect(result.missingDates).toContain('2025-10-02');
-      expect(result.missingDates).toContain('2025-10-03');
+      expect(result.missingDates).toContain('1-Oct-25');
+      expect(result.missingDates).toContain('2-Oct-25');
+      expect(result.missingDates).toContain('3-Oct-25');
+    });
+  });
+  
+  describe('Bug: contextAny should check ALL component slices have data', () => {
+    // When using contextAny(channel:google,channel:influencer), the cache check
+    // should verify ALL component slices have data, not just that SOME do.
+    
+    it('should recognize all data as cached when all contextAny slices have data', () => {
+      // Simulate data from batch fetch with window(-7d:-1d).context(channel)
+      const paramFileData = {
+        values: [
+          {
+            sliceDSL: 'context(channel:google)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [20, 23, 10, 16, 19, 24, 13],
+            k_daily: [9, 12, 8, 12, 12, 17, 11],
+            mean: 0.648, n: 125, k: 81,
+          },
+          {
+            sliceDSL: 'context(channel:influencer)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [143, 64, 43, 201, 553, 537, 25],
+            k_daily: [68, 40, 20, 117, 270, 286, 15],
+            mean: 0.52, n: 1566, k: 816,
+          },
+          {
+            sliceDSL: 'context(channel:paid-social)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [15, 1, 3, 13, 23, 38, 23],
+            k_daily: [6, 1, 2, 8, 13, 19, 14],
+            mean: 0.54, n: 116, k: 63,
+          },
+          {
+            sliceDSL: 'context(channel:referral)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [1, 0, 1, 0, 0, 0, 0],
+            k_daily: [0, 0, 1, 0, 0, 0, 0],
+            mean: 0.5, n: 2, k: 1,
+          },
+          {
+            sliceDSL: 'context(channel:pr)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [0, 0, 0, 0, 0, 0, 0],
+            k_daily: [0, 0, 0, 0, 0, 0, 0],
+            mean: 0, n: 0, k: 0,
+          },
+          {
+            sliceDSL: 'context(channel:other)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [40, 16, 135, 50, 45, 63, 32],
+            k_daily: [20, 10, 60, 27, 27, 34, 21],
+            mean: 0.52, n: 381, k: 199,
+          },
+        ]
+      };
+      
+      const requestedWindow = { start: '24-Nov-25', end: '30-Nov-25' };
+      
+      // User enters: contextAny(channel:google,channel:influencer,channel:paid-social,channel:referral,channel:pr)
+      // This should find ALL slices have data for all 7 days
+      const result = calculateIncrementalFetch(
+        paramFileData, 
+        requestedWindow, 
+        undefined, 
+        false,
+        'contextAny(channel:google,channel:influencer,channel:paid-social,channel:referral,channel:pr).window(24-Nov-25:30-Nov-25)'
+      );
+      
+      // All data exists - should NOT need fetch
+      expect(result.needsFetch).toBe(false);
+      expect(result.daysAvailable).toBe(7);
+      expect(result.missingDates).toHaveLength(0);
+    });
+    
+    it('should require fetch when one contextAny slice is missing a date', () => {
+      // Same as above but google is missing 30-Nov-25
+      const paramFileData = {
+        values: [
+          {
+            sliceDSL: 'context(channel:google)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25'], // Missing 30-Nov-25!
+            n_daily: [20, 23, 10, 16, 19, 24],
+            k_daily: [9, 12, 8, 12, 12, 17],
+            mean: 0.648, n: 112, k: 70,
+          },
+          {
+            sliceDSL: 'context(channel:influencer)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [143, 64, 43, 201, 553, 537, 25],
+            k_daily: [68, 40, 20, 117, 270, 286, 15],
+            mean: 0.52, n: 1566, k: 816,
+          },
+        ]
+      };
+      
+      const requestedWindow = { start: '24-Nov-25', end: '30-Nov-25' };
+      
+      const result = calculateIncrementalFetch(
+        paramFileData, 
+        requestedWindow, 
+        undefined, 
+        false,
+        'contextAny(channel:google,channel:influencer).window(24-Nov-25:30-Nov-25)'
+      );
+      
+      // 30-Nov-25 is missing from google slice, so fetch IS required
+      expect(result.needsFetch).toBe(true);
+      expect(result.missingDates).toContain('30-Nov-25');
+      expect(result.daysAvailable).toBe(6); // Only 6 days have complete coverage
+    });
+    
+    it('should require fetch when one entire contextAny slice is missing', () => {
+      // google exists but influencer doesn't exist at all
+      const paramFileData = {
+        values: [
+          {
+            sliceDSL: 'context(channel:google)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25'],
+            n_daily: [20, 23, 10],
+            k_daily: [9, 12, 8],
+            mean: 0.648, n: 53, k: 29,
+          },
+          // No influencer data at all!
+        ]
+      };
+      
+      const requestedWindow = { start: '24-Nov-25', end: '26-Nov-25' };
+      
+      const result = calculateIncrementalFetch(
+        paramFileData, 
+        requestedWindow, 
+        undefined, 
+        false,
+        'contextAny(channel:google,channel:influencer).window(24-Nov-25:26-Nov-25)'
+      );
+      
+      // influencer is completely missing, so ALL dates need fetch
+      expect(result.needsFetch).toBe(true);
+      expect(result.daysAvailable).toBe(0); // No dates have complete coverage across both slices
+      expect(result.missingDates).toHaveLength(3);
+    });
+  });
+  
+  describe('Bug: Uncontexted query should use MECE aggregation when file has contexted data', () => {
+    // When pinned DSL fetches with context(channel) and current query is just window(),
+    // the coverage check should recognize data exists via MECE aggregation.
+    
+    it('should NOT require fetch when query has no context but MECE contexted data exists', () => {
+      // Simulating: pinned = window(-7d:-1d).context(channel) fetched all 6 slices
+      // Then user's current query = window(24-Nov-25:30-Nov-25) with NO context
+      const paramFileData = {
+        values: [
+          {
+            sliceDSL: 'context(channel:google)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [20, 23, 10, 16, 19, 24, 13],
+            k_daily: [9, 12, 8, 12, 12, 17, 11],
+            mean: 0.648, n: 125, k: 81,
+          },
+          {
+            sliceDSL: 'context(channel:influencer)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [143, 64, 43, 201, 553, 537, 25],
+            k_daily: [68, 40, 20, 117, 270, 286, 15],
+            mean: 0.52, n: 1566, k: 816,
+          },
+          {
+            sliceDSL: 'context(channel:paid-social)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [15, 1, 3, 13, 23, 38, 23],
+            k_daily: [6, 1, 2, 8, 13, 19, 14],
+            mean: 0.54, n: 116, k: 63,
+          },
+          {
+            sliceDSL: 'context(channel:referral)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [1, 0, 1, 0, 0, 0, 0],
+            k_daily: [0, 0, 1, 0, 0, 0, 0],
+            mean: 0.5, n: 2, k: 1,
+          },
+          {
+            sliceDSL: 'context(channel:pr)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [0, 0, 0, 0, 0, 0, 0],
+            k_daily: [0, 0, 0, 0, 0, 0, 0],
+            mean: 0, n: 0, k: 0,
+          },
+          {
+            sliceDSL: 'context(channel:other)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [40, 16, 135, 50, 45, 63, 32],
+            k_daily: [20, 10, 60, 27, 27, 34, 21],
+            mean: 0.52, n: 381, k: 199,
+          },
+        ]
+      };
+      
+      const requestedWindow = { start: '24-Nov-25', end: '30-Nov-25' };
+      
+      // Query with ONLY window, NO context - should use MECE aggregation
+      const result = calculateIncrementalFetch(
+        paramFileData, 
+        requestedWindow, 
+        undefined, 
+        false,
+        'window(24-Nov-25:30-Nov-25)'  // NO context!
+      );
+      
+      // All 6 slices have all 7 days → MECE aggregation should find full coverage
+      expect(result.needsFetch).toBe(false);
+      expect(result.daysAvailable).toBe(7);
+      expect(result.missingDates).toHaveLength(0);
+    });
+    
+    it('should require fetch when MECE data is incomplete (one slice missing a date)', () => {
+      // Same as above but google is missing 30-Nov-25
+      const paramFileData = {
+        values: [
+          {
+            sliceDSL: 'context(channel:google)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25'], // Missing 30-Nov-25!
+            n_daily: [20, 23, 10, 16, 19, 24],
+            k_daily: [9, 12, 8, 12, 12, 17],
+            mean: 0.648, n: 112, k: 70,
+          },
+          {
+            sliceDSL: 'context(channel:other)',
+            dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
+            n_daily: [40, 16, 135, 50, 45, 63, 32],
+            k_daily: [20, 10, 60, 27, 27, 34, 21],
+            mean: 0.52, n: 381, k: 199,
+          },
+        ]
+      };
+      
+      const requestedWindow = { start: '24-Nov-25', end: '30-Nov-25' };
+      
+      const result = calculateIncrementalFetch(
+        paramFileData, 
+        requestedWindow, 
+        undefined, 
+        false,
+        'window(24-Nov-25:30-Nov-25)'  // NO context
+      );
+      
+      // google is missing 30-Nov-25, so MECE is incomplete
+      expect(result.needsFetch).toBe(true);
+      expect(result.missingDates).toContain('30-Nov-25');
+      expect(result.daysAvailable).toBe(6);
     });
   });
 });

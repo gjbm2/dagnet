@@ -176,23 +176,35 @@
               "upsert": {
                 "type": "object",
                 "description": "Map computed variables to graph update paths",
-                "required": ["mappings"],
+                "required": ["mode", "writes"],
                 "additionalProperties": false,
                 "properties": {
-                  "mappings": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["merge", "replace"],
+                    "description": "Update mode: merge or replace"
+                  },
+                  "writes": {
                     "type": "array",
                     "description": "Array of value-to-path mappings",
                     "items": {
                       "type": "object",
-                      "required": ["from", "to"],
+                      "required": ["target", "value"],
+                      "additionalProperties": false,
                       "properties": {
-                        "from": {
+                        "target": {
                           "type": "string",
-                          "description": "Variable name from transform phase"
+                          "description": "JSON Pointer template to target location in graph"
                         },
-                        "to": {
-                          "type": "string",
-                          "description": "JSON Pointer to target location in graph"
+                        "value": {
+                          "description": "Value template or literal to write",
+                          "oneOf": [
+                            { "type": "string" },
+                            { "type": "number" },
+                            { "type": "boolean" },
+                            { "type": "object" },
+                            { "type": "null" }
+                          ]
                         }
                       }
                     }

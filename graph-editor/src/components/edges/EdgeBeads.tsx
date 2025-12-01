@@ -419,8 +419,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             result.push({ text: String(node), colour: defaultTextColour });
           } else if (React.isValidElement(node)) {
             if (node.type === 'span') {
-              // Use the span's colour, but ensure it's bright (never black) and lighten it
-              let colour = node.props.style?.colour || defaultTextColour;
+              // Use the span's color, but ensure it's bright (never black) and lighten it
+              let colour = node.props.style?.color || defaultTextColour;
               // Never use black - convert to white
               if (colour === '#000000' || colour === 'black' || colour === '#374151') {
                 colour = '#FFFFFF';

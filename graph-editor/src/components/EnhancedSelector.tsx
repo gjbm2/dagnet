@@ -12,6 +12,7 @@ import { useSelectionContext } from './editors/GraphEditor';
 import { ItemBase } from '../hooks/useItemFiltering';
 import { LightningMenu } from './LightningMenu';
 import { fileOperationsService } from '../services/fileOperationsService';
+import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import './EnhancedSelector.css';
 
 interface EnhancedSelectorProps {
@@ -99,6 +100,13 @@ export function EnhancedSelector({
   const { tabs, operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
   const { graph, setGraph, setAutoUpdating, window } = useGraphStore();
+  
+  // Centralized fetch hook for auto-get operations
+  const { fetchItem } = useFetchData({
+    graph: graph as any,
+    setGraph: setGraph as any,
+    currentDSL: (graph as any)?.currentQueryDSL || '',
+  });
   
   const [inputValue, setInputValue] = useState(value);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -353,34 +361,13 @@ export function EnhancedSelector({
       // Trigger the get operation asynchronously (don't block the selection)
       setTimeout(async () => {
         try {
-          const { dataOperationsService } = await import('../services/dataOperationsService');
-          
-          if (type === 'parameter') {
-            await dataOperationsService.getParameterFromFile({
-              paramId: item.id,           // Semantic ID → finds parameter-{id}.yaml
-              edgeId: targetInstanceUuid, // UUID → finds which edge instance to update
-              graph: graph as any,
-              setGraph: setGraph as any,
-              setAutoUpdating: setAutoUpdating,
-              targetSlice: (graph as any)?.currentQueryDSL || '', // Match context from WindowSelector
-            });
-          } else if (type === 'case') {
-            await dataOperationsService.getCaseFromFile({
-              caseId: item.id,            // Semantic ID → finds case-{id}.yaml
-              nodeId: targetInstanceUuid, // UUID → finds which node instance to update
-              graph: graph as any,
-              setGraph: setGraph as any,
-              setAutoUpdating: setAutoUpdating
-            });
-          } else if (type === 'node') {
-            await dataOperationsService.getNodeFromFile({
-              nodeId: item.id,                 // Semantic ID → finds node-{id}.yaml
-              targetNodeUuid: targetInstanceUuid, // UUID → finds which node instance to update
-              graph: graph as any,
-              setGraph: setGraph as any,
-              setAutoUpdating: setAutoUpdating
-            });
-          }
+          const fetchItemData = createFetchItem(
+            type as 'parameter' | 'case' | 'node',
+            item.id,
+            targetInstanceUuid,
+            { paramSlot, conditionalIndex }
+          );
+          await fetchItem(fetchItemData, { mode: 'from-file', setAutoUpdating });
         } catch (error) {
           console.error('[EnhancedSelector] Auto-get failed:', error);
           // Don't show toast - user didn't explicitly request this, so silent failure is OK

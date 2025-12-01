@@ -9,7 +9,7 @@ additionalProperties: false
 properties:
   version:
     type: string
-    pattern: '^\\d+\\.\\d+\\.\\d+$'
+    pattern: '^\d+\.\d+\.\d+$'
     description: "Semantic version of the contexts index"
   
   created_at:
@@ -68,7 +68,7 @@ properties:
         
         version:
           type: string
-          pattern: '^\\d+\\.\\d+\\.\\d+$'
+          pattern: '^\d+\.\d+\.\d+$'
           description: "Version of the context definition"
         
         usage_count:

@@ -133,6 +133,51 @@ describe('Slice Isolation', () => {
       expect(result).toHaveLength(1);
       expect(result[0].n).toBe(100);  // The uncontexted one
     });
+    
+    it('should handle contextAny - matching multiple slices', () => {
+      // contextAny is a multi-slice query - should match ANY of the component slices
+      const values = [
+        { sliceDSL: 'context(channel:google)', n: 100, k: 15, dates: ['24-Nov-25'] },
+        { sliceDSL: 'context(channel:influencer)', n: 80, k: 12, dates: ['24-Nov-25'] },
+        { sliceDSL: 'context(channel:other)', n: 20, k: 2, dates: ['24-Nov-25'] }
+      ];
+      
+      // contextAny should return values from ALL mentioned slices
+      const result = isolateSlice(values, 'contextAny(channel:google,channel:influencer).window(24-Nov-25:30-Nov-25)');
+      
+      expect(result).toHaveLength(2);
+      expect(result.map(v => v.sliceDSL).sort()).toEqual([
+        'context(channel:google)',
+        'context(channel:influencer)'
+      ]);
+    });
+    
+    it('should handle contextAny with 5 slices (real-world case)', () => {
+      // Simulating the actual scenario from the bug report
+      const values = [
+        { sliceDSL: 'context(channel:google)', dates: ['24-Nov-25', '25-Nov-25'] },
+        { sliceDSL: 'context(channel:influencer)', dates: ['24-Nov-25', '25-Nov-25'] },
+        { sliceDSL: 'context(channel:paid-social)', dates: ['24-Nov-25', '25-Nov-25'] },
+        { sliceDSL: 'context(channel:referral)', dates: ['24-Nov-25', '25-Nov-25'] },
+        { sliceDSL: 'context(channel:pr)', dates: ['24-Nov-25', '25-Nov-25'] },
+        { sliceDSL: 'context(channel:other)', dates: ['24-Nov-25', '25-Nov-25'] }  // Not in query
+      ];
+      
+      const result = isolateSlice(
+        values, 
+        'contextAny(channel:google,channel:influencer,channel:paid-social,channel:referral,channel:pr).window(24-Nov-25:30-Nov-25)'
+      );
+      
+      // Should match 5 slices (not "other")
+      expect(result).toHaveLength(5);
+      expect(result.map(v => v.sliceDSL).sort()).toEqual([
+        'context(channel:google)',
+        'context(channel:influencer)',
+        'context(channel:paid-social)',
+        'context(channel:pr)',
+        'context(channel:referral)'
+      ]);
+    });
   });
 });
 

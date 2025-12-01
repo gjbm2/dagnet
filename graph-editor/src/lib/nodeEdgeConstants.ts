@@ -117,7 +117,7 @@ export const CHEVRON_SPACING = 120;
 export const CHEVRON_SPEED = 20;
 
 /** Chevron angle ratio - controls how pointy the chevron is (0.3 = shallow, 1.0 = steep) */
-export const CHEVRON_ANGLE_RATIO = 0.6;
+export const CHEVRON_ANGLE_RATIO = 0.75;
 
 /** Chevron length as multiple of edge width (1.0 = same as edge width, 2.0 = twice as long) */
 export const CHEVRON_LENGTH_RATIO = .4;

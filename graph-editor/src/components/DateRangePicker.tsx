@@ -6,11 +6,22 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { DateRangePicker as ReactDateRangePicker, Range } from 'react-date-range';
-import { format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 import { Calendar } from 'lucide-react';
 import 'react-date-range/dist/styles.css';
 import 'react-date-range/dist/theme/default.css';
 import './DateRangePicker.css';
+import { isUKDate, parseUKDate, formatDateUK, isISODate } from '../lib/dateFormat';
+
+// Parse date string in either UK (d-MMM-yy) or ISO (YYYY-MM-DD) format
+function parseFlexibleDate(dateStr: string): Date {
+  if (!dateStr) return new Date();
+  if (isUKDate(dateStr)) {
+    return parseUKDate(dateStr);
+  }
+  // Handle ISO format
+  return new Date(dateStr);
+}
 
 export interface DateRangePickerProps {
   startDate: string;
@@ -34,22 +45,22 @@ export function DateRangePicker({
   
   // Convert string dates to Date objects for react-date-range
   const [range, setRange] = useState<Range>({
-    startDate: startDate ? parseISO(startDate) : new Date(),
-    endDate: endDate ? parseISO(endDate) : new Date(),
+    startDate: startDate ? parseFlexibleDate(startDate) : new Date(),
+    endDate: endDate ? parseFlexibleDate(endDate) : new Date(),
     key: 'selection',
   });
 
   // Update range when props change
   useEffect(() => {
     setRange({
-      startDate: startDate ? parseISO(startDate) : new Date(),
-      endDate: endDate ? parseISO(endDate) : new Date(),
+      startDate: startDate ? parseFlexibleDate(startDate) : new Date(),
+      endDate: endDate ? parseFlexibleDate(endDate) : new Date(),
       key: 'selection',
     });
   }, [startDate, endDate]);
 
-  const minDateObj = minDate ? parseISO(minDate) : undefined;
-  const maxDateObj = maxDate ? parseISO(maxDate) : undefined;
+  const minDateObj = minDate ? parseFlexibleDate(minDate) : undefined;
+  const maxDateObj = maxDate ? parseFlexibleDate(maxDate) : undefined;
 
   // Close on outside click
   useEffect(() => {
@@ -70,17 +81,17 @@ export function DateRangePicker({
     setRange(selection);
     
     if (selection.startDate && selection.endDate) {
-      // Both dates selected - update immediately
+      // Both dates selected - output in UK format (d-MMM-yy)
       onChange(
-        format(selection.startDate, 'yyyy-MM-dd'),
-        format(selection.endDate, 'yyyy-MM-dd')
+        formatDateUK(selection.startDate),
+        formatDateUK(selection.endDate)
       );
       setIsOpen(false);
     }
   };
 
   const displayText = startDate && endDate
-    ? `${format(parseISO(startDate), 'MMM d, yyyy')} - ${format(parseISO(endDate), 'MMM d, yyyy')}`
+    ? `${format(parseFlexibleDate(startDate), 'MMM d, yyyy')} - ${format(parseFlexibleDate(endDate), 'MMM d, yyyy')}`
     : 'Select date range';
 
   return (

@@ -15,13 +15,14 @@ import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
 import { FileText } from 'lucide-react';
 import { parseConstraints } from '../lib/queryDSL';
-import { formatDateUK, parseUKDate } from '../lib/dateFormat';
+import { formatDateUK } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
 import './WindowSelector.css';
 import { ContextValueSelector } from './ContextValueSelector';
 import { contextRegistry } from '../services/contextRegistry';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { PinnedQueryModal } from './modals/PinnedQueryModal';
+import { useFetchData, fetchWithToast, createFetchItem, type FetchItem } from '../hooks/useFetchData';
 
 interface BatchItem {
   id: string;
@@ -34,7 +35,7 @@ interface BatchItem {
 
 // Phase 3: Coverage cache - memoize coverage check results per window
 interface CoverageCacheEntry {
-  windowKey: string; // Normalized window string
+  dslKey: string; // DSL string (contains window + context)
   hasMissingData: boolean;
   hasAnyConnection: boolean;
   paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'cost_time' }>;
@@ -43,11 +44,6 @@ interface CoverageCacheEntry {
 
 // Module-level cache (scoped to component instance via ref)
 const coverageCache = new Map<string, CoverageCacheEntry>();
-
-// Helper to create cache key from normalized window
-function getWindowKey(window: DateRange): string {
-  return `${window.start}|${window.end}`;
-}
 
 // Helper to create a simple hash of graph structure (edges/nodes IDs)
 function getGraphHash(graph: any): string {
@@ -67,6 +63,29 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // Use getState() in callbacks to avoid stale closure issues
   const getLatestGraph = () => (graphStore as any).getState?.()?.graph ?? graph;
   const { tabs, operations } = useTabContext();
+  
+  // CRITICAL: These refs must be defined BEFORE useFetchData hook since it uses them
+  const isInitialMountRef = useRef(true);
+  const isAggregatingRef = useRef(false); // Track if we're currently aggregating to prevent loops
+  const lastAggregatedDSLRef = useRef<string | null>(null); // Track DSL (single source of truth for change detection)
+  const graphRef = useRef<typeof graph>(graph); // Track graph to avoid dependency loop
+  const prevDSLRef = useRef<string | null>(null); // Track previous DSL for shimmer trigger
+  
+  // Centralized fetch hook - uses refs for batch operations
+  // The ref-based setGraph prevents effect re-triggering during auto-aggregation
+  const { fetchItem, fetchItems, getItemsNeedingFetch } = useFetchData({
+    graph: () => graphRef.current,  // Getter for fresh state during batch
+    setGraph: (g) => {
+      if (g) {
+        graphRef.current = g;  // Update ref immediately
+        // Only trigger real setGraph if not in batch mode
+        if (!isAggregatingRef.current) {
+          setGraph(g);
+        }
+      }
+    },
+    currentDSL: () => graph?.currentQueryDSL || '',  // Getter for fresh DSL
+  });
   const [needsFetch, setNeedsFetch] = useState(false);
   const [isCheckingCoverage, setIsCheckingCoverage] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
@@ -90,8 +109,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     const defaultStart = new Date();
     defaultStart.setDate(defaultEnd.getDate() - 7);
     return {
-      start: defaultStart.toISOString().split('T')[0],
-      end: defaultEnd.toISOString().split('T')[0]
+      start: formatDateUK(defaultStart),
+      end: formatDateUK(defaultEnd)
     };
   }, []);
   
@@ -283,13 +302,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
   }, [showContextDropdown, showingAllContexts, graph?.dataInterestsDSL]);
   
-  const isInitialMountRef = useRef(true);
-  const isAggregatingRef = useRef(false); // Track if we're currently aggregating to prevent loops
-  const lastAggregatedWindowRef = useRef<DateRange | null>(null); // Track lastAggregatedWindow to avoid dependency loop
-  const lastAggregatedDSLRef = useRef<string | null>(null); // Track lastAggregatedDSL (context+window) to detect context changes
-  const graphRef = useRef<typeof graph>(graph); // Track graph to avoid dependency loop
-  const prevWindowRef = useRef<string | null>(null); // Track previous window for shimmer trigger
-  
   // Close context dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -314,17 +326,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     graphRef.current = graph;
   }, [graph]);
   
+  // Sync lastAggregatedDSL from persisted state on load
   useEffect(() => {
-    if (lastAggregatedWindow) {
-      const normalized = {
-        start: lastAggregatedWindow.start.includes('T') ? lastAggregatedWindow.start : `${lastAggregatedWindow.start}T00:00:00Z`,
-        end: lastAggregatedWindow.end.includes('T') ? lastAggregatedWindow.end : `${lastAggregatedWindow.end}T23:59:59Z`,
-      };
-      lastAggregatedWindowRef.current = normalized;
-    } else {
-      lastAggregatedWindowRef.current = null;
+    if (!lastAggregatedWindow) {
       lastAggregatedDSLRef.current = null;
     }
+    // Note: lastAggregatedDSLRef is set directly when aggregation happens
   }, [lastAggregatedWindow]);
   
   // Handle button appearance/disappearance animations
@@ -348,46 +355,28 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
   }, [needsFetch, showButton]);
   
-  // Trigger shimmer whenever window changes and fetch is required
+  // Trigger shimmer whenever DSL changes and fetch is required
   useEffect(() => {
-    if (!window) {
-      prevWindowRef.current = null;
+    const currentDSL = graph?.currentQueryDSL || '';
+    if (!currentDSL) {
+      prevDSLRef.current = null;
       return;
     }
     
-    const windowKey = `${window.start}|${window.end}`;
-    const windowChanged = windowKey !== prevWindowRef.current;
+    const dslChanged = currentDSL !== prevDSLRef.current;
     
     // Update ref
-    prevWindowRef.current = windowKey;
+    prevDSLRef.current = currentDSL;
     
-    // If window changed and button is visible and fetch is required, trigger shimmer
-    if (windowChanged && needsFetch && showButton) {
+    // If DSL changed and button is visible and fetch is required, trigger shimmer
+    if (dslChanged && needsFetch && showButton) {
       setShowShimmer(false); // Reset first
       setTimeout(() => {
         setShowShimmer(true);
         setTimeout(() => setShowShimmer(false), 600);
       }, 50);
     }
-  }, [window, needsFetch, showButton]);
-  
-  // Helper to compare windows (normalized to ISO timestamps)
-  const windowsMatch = (w1: DateRange | null, w2: DateRange | null): boolean => {
-    if (!w1 || !w2) return false;
-    // Normalize start dates to T00:00:00Z and end dates to T23:59:59Z
-    const normalizeStart = (d: string) => d.includes('T') ? d : (d.includes('Z') ? d : `${d}T00:00:00Z`);
-    const normalizeEnd = (d: string) => {
-      if (d.includes('T')) {
-        // If already has time, check if it's end-of-day (23:59:59)
-        if (d.includes('23:59:59')) return d;
-        // Otherwise, replace time with 23:59:59
-        return d.replace(/T\d{2}:\d{2}:\d{2}/, 'T23:59:59').replace(/T\d{2}:\d{2}:\d{2}\.\d{3}/, 'T23:59:59');
-      }
-      if (d.includes('Z')) return d.replace(/T\d{2}:\d{2}:\d{2}/, 'T23:59:59').replace(/T\d{2}:\d{2}:\d{2}\.\d{3}/, 'T23:59:59');
-      return `${d}T23:59:59Z`;
-    };
-    return normalizeStart(w1.start) === normalizeStart(w2.start) && normalizeEnd(w1.end) === normalizeEnd(w2.end);
-  };
+  }, [graph?.currentQueryDSL, needsFetch, showButton]);
   
   // Show if graph has any edges with parameter files (for windowed aggregation)
   // This includes both external connections and file-based parameters
@@ -439,86 +428,64 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         return;
       }
       
-      // Normalize window dates to ISO timestamps for comparison (define once, use everywhere)
-      const normalizedWindow: DateRange = {
-        start: currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`,
-        end: currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`,
-      };
-      
-      // Use ref value for comparison (avoids dependency loop)
-      const normalizedLastAggregated: DateRange | null = lastAggregatedWindowRef.current;
-      // Use DSL built from authoritative state (window + context)
+      // Use DSL as single source of truth (contains both window and context)
       const currentDSL = dslFromState;
       const lastDSL = lastAggregatedDSLRef.current || '';
       
-      // If current window matches last aggregated window AND DSL matches, no action needed
-      // (Context change should trigger re-aggregation even if window is the same)
-      if (windowsMatch(normalizedWindow, normalizedLastAggregated) && currentDSL === lastDSL) {
+      // DSL contains everything - if it matches, nothing has changed
+      if (currentDSL && currentDSL === lastDSL) {
         setNeedsFetch(false);
         return;
       }
       
-      // Log when context changed but window didn't
-      if (windowsMatch(normalizedWindow, normalizedLastAggregated) && currentDSL !== lastDSL) {
-        console.log('[WindowSelector] Context changed (window same), triggering coverage check:', {
+      // Log what changed
+      if (lastDSL && currentDSL !== lastDSL) {
+        console.log('[WindowSelector] DSL changed, triggering coverage check:', {
           currentDSL,
           lastDSL
         });
       }
       
-      // Window differs from last aggregated - check coverage
+      // DSL differs from last aggregated - check coverage
       setIsCheckingCoverage(true);
       
-      // Phase 3: Check cache first
-      // CRITICAL: Cache key must include DSL (context) - not just window!
-      // Otherwise changing context reuses wrong cached data
-      const windowKey = getWindowKey(normalizedWindow);
+      // Cache key uses DSL (contains window + context) and graph hash
       const currentGraphHash = getGraphHash(currentGraph);
-      const dslKey = dslFromState || ''; // Include context in cache key
-      const cacheKey = `${windowKey}|${currentGraphHash}|${dslKey}`;
+      const cacheKey = `${dslFromState}|${currentGraphHash}`;
       const cachedResult = coverageCache.get(cacheKey);
       
       // If cache hit and graph hash matches, use cached result
       if (cachedResult && cachedResult.graphHash === currentGraphHash) {
-        console.log(`[WindowSelector] Using cached coverage result for window:`, normalizedWindow);
+        console.log(`[WindowSelector] Using cached coverage result for DSL:`, dslFromState);
         setNeedsFetch(cachedResult.hasAnyConnection && cachedResult.hasMissingData);
         
         // If we have params to aggregate and no missing data, trigger aggregation
         if (cachedResult.paramsToAggregate.length > 0 && !cachedResult.hasMissingData) {
-          // Reuse aggregation logic from below
+          // Use hook for auto-aggregation (one code path)
           isAggregatingRef.current = true;
-          lastAggregatedWindowRef.current = normalizedWindow;
           lastAggregatedDSLRef.current = dslFromState;
           
           try {
-            let updatedGraph = currentGraph;
-            for (const { paramId, edgeId, slot } of cachedResult.paramsToAggregate) {
-              try {
-                await dataOperationsService.getParameterFromFile({
-                  paramId,
-                  edgeId,
-                  graph: updatedGraph,
-                  setGraph: (g) => { if (g) updatedGraph = g; },
-                  window: normalizedWindow,
-                  targetSlice: dslFromState, // Pass context filter to isolateSlice
-                });
-              } catch (error) {
-                console.error(`[WindowSelector] Failed to aggregate param ${paramId}:`, error);
-              }
-            }
+            // Build FetchItems from paramsToAggregate
+            const items = cachedResult.paramsToAggregate.map(({ paramId, edgeId, slot }) =>
+              createFetchItem('parameter', paramId, edgeId, { paramSlot: slot })
+            );
             
-            if (updatedGraph !== currentGraph) {
-              graphRef.current = updatedGraph;
+            // Use hook's fetchItems with from-file mode (no API call)
+            await fetchItems(items, { mode: 'from-file' });
+            
+            // Apply accumulated changes (ref was updated by setGraph callback)
+            const updatedGraph = graphRef.current;
+            if (updatedGraph && updatedGraph !== currentGraph) {
               setGraph(updatedGraph);
             }
             
             setTimeout(() => {
-              setLastAggregatedWindow(normalizedWindow);
+              setLastAggregatedWindow(currentWindow); // Store in UK format
               isAggregatingRef.current = false;
             }, 0);
           } catch (error) {
             isAggregatingRef.current = false;
-            lastAggregatedWindowRef.current = null;
             lastAggregatedDSLRef.current = null;
             throw error;
           }
@@ -531,7 +498,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       }
       
       // Cache miss - compute coverage
-      console.log(`[WindowSelector] Computing coverage check for window:`, normalizedWindow);
+      console.log(`[WindowSelector] Computing coverage check for DSL:`, dslFromState);
       
       try {
         let hasMissingData = false;
@@ -565,7 +532,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               if (paramFile?.data) {
                 const incrementalResult = calculateIncrementalFetch(
                   paramFile.data,
-                  normalizedWindow,
+                  currentWindow, // Pass UK format dates - function handles normalization
                   undefined, // querySignature
                   false, // bustCache
                   currentGraph.currentQueryDSL || '' // targetSlice
@@ -574,7 +541,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 // Strict: if ANY days are missing, require fetch
                 if (incrementalResult.needsFetch) {
                   console.log(`[WindowSelector] Param ${paramId} (${slot}) needs fetch:`, {
-                    window: normalizedWindow,
+                    dsl: dslFromState,
                     totalDays: incrementalResult.totalDays,
                     daysAvailable: incrementalResult.daysAvailable,
                     daysToFetch: incrementalResult.daysToFetch,
@@ -592,15 +559,15 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   }
                 }
               } else {
-                // No file exists - check if we've already fetched for this window
+                // No file exists - check if we've already fetched for this DSL
                 // For direct connections, we can't verify data existence, so we check
-                // if the current window matches the last aggregated window
-                const normalizedLastAggregated = lastAggregatedWindowRef.current;
-                if (!normalizedLastAggregated || !windowsMatch(normalizedWindow, normalizedLastAggregated)) {
-                  // Window doesn't match last aggregated - need to fetch
+                // if the current DSL matches the last aggregated DSL
+                const lastDSL = lastAggregatedDSLRef.current;
+                if (!lastDSL || dslFromState !== lastDSL) {
+                  // DSL doesn't match last aggregated - need to fetch
                   hasMissingData = true;
                 }
-                // If window matches last aggregated, assume data exists (don't set hasMissingData)
+                // If DSL matches last aggregated, assume data exists (don't set hasMissingData)
               }
             }
           }
@@ -617,13 +584,13 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               if (hasConnection) {
                 hasAnyConnection = true;
                 if (!caseFile) {
-                  // Has connection but no file - check if we've already fetched for this window
-                  const normalizedLastAggregated = lastAggregatedWindowRef.current;
-                  if (!normalizedLastAggregated || !windowsMatch(normalizedWindow, normalizedLastAggregated)) {
-                    // Window doesn't match last aggregated - need to fetch
+                  // Has connection but no file - check if we've already fetched for this DSL
+                  const lastDSL = lastAggregatedDSLRef.current;
+                  if (!lastDSL || dslFromState !== lastDSL) {
+                    // DSL doesn't match last aggregated - need to fetch
                     hasMissingData = true;
                   }
-                  // If window matches last aggregated, assume data exists (don't set hasMissingData)
+                  // If DSL matches last aggregated, assume data exists (don't set hasMissingData)
                 }
               }
             }
@@ -635,64 +602,45 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         
         // Phase 3: Cache the computed result
         const cacheEntry: CoverageCacheEntry = {
-          windowKey,
+          dslKey: dslFromState,
           hasMissingData,
           hasAnyConnection,
           paramsToAggregate: [...paramsToAggregate], // Copy array
           graphHash: currentGraphHash,
         };
         coverageCache.set(cacheKey, cacheEntry);
-        console.log(`[WindowSelector] Cached coverage result for window:`, normalizedWindow);
+        console.log(`[WindowSelector] Cached coverage result for DSL:`, dslFromState);
         
         // Auto-aggregate parameters that have all data for this window
         if (paramsToAggregate.length > 0 && !hasMissingData) {
-          console.log(`[WindowSelector] Auto-aggregating ${paramsToAggregate.length} parameters for window:`, normalizedWindow);
+          console.log(`[WindowSelector] Auto-aggregating ${paramsToAggregate.length} parameters via hook for DSL:`, dslFromState);
           
           // Set flag to prevent re-triggering during aggregation
           isAggregatingRef.current = true;
-          
-          // Update refs IMMEDIATELY to prevent any re-triggering from setGraph calls
-          lastAggregatedWindowRef.current = normalizedWindow;
           lastAggregatedDSLRef.current = dslFromState;
           
           try {
-            // Batch all graph updates - collect them and apply once at the end
-            let updatedGraph = currentGraph;
+            // Build FetchItems from paramsToAggregate
+            const items = paramsToAggregate.map(({ paramId, edgeId, slot }) =>
+              createFetchItem('parameter', paramId, edgeId, { paramSlot: slot })
+            );
             
-            for (const { paramId, edgeId, slot } of paramsToAggregate) {
-              try {
-                // Use a local setGraph that accumulates changes without triggering the effect
-                await dataOperationsService.getParameterFromFile({
-                  paramId,
-                  edgeId,
-                  graph: updatedGraph,
-                  setGraph: (g) => {
-                    if (g) updatedGraph = g;
-                  },
-                  window: normalizedWindow,
-                  targetSlice: dslFromState, // Pass context filter to isolateSlice
-                });
-              } catch (error) {
-                console.error(`[WindowSelector] Failed to aggregate param ${paramId}:`, error);
-              }
-            }
+            // Use hook's fetchItems with from-file mode (no API call)
+            await fetchItems(items, { mode: 'from-file' });
             
-            // Apply all graph updates at once (only if graph actually changed)
-            // Update ref immediately to prevent re-triggering
-            if (updatedGraph !== currentGraph) {
-              graphRef.current = updatedGraph;
+            // Apply all accumulated changes at once
+            const updatedGraph = graphRef.current;
+            if (updatedGraph && updatedGraph !== currentGraph) {
               setGraph(updatedGraph);
             }
             
             // Update state (deferred to prevent re-triggering)
             setTimeout(() => {
-              setLastAggregatedWindow(normalizedWindow);
+              setLastAggregatedWindow(currentWindow); // Store in UK format
               isAggregatingRef.current = false;
             }, 0);
           } catch (error) {
             isAggregatingRef.current = false;
-            // Reset refs on error
-            lastAggregatedWindowRef.current = null;
             lastAggregatedDSLRef.current = null;
             throw error;
           }
@@ -751,43 +699,43 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   };
   
   const handlePreset = (days: number | 'today') => {
-    const end = new Date();
-    const start = new Date();
+    const today = new Date();
     
     if (days === 'today') {
       // Today only (start and end are same day)
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
-    } else {
-      // Last N days (excluding today - end on yesterday)
-      // This ensures we only request data that's likely to be available
-      end.setDate(end.getDate() - 1); // Yesterday
-      start.setDate(end.getDate() - (days - 1));
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
+      const todayStr = formatDateUK(today);
+      const newWindow: DateRange = { start: todayStr, end: todayStr };
+      
+      // Skip if window unchanged
+      if (window && window.start === todayStr && window.end === todayStr) {
+        console.log(`[WindowSelector] Preset today skipped (window unchanged)`);
+        return;
+      }
+      
+      console.log('[WindowSelector] Preset today:', todayStr);
+      setWindow?.(newWindow);
+      return;
     }
     
-    const startStr = start.toISOString().split('T')[0];
-    const endStr = end.toISOString().split('T')[0];
+    // Last N days (excluding today - end on yesterday)
+    const end = new Date(today);
+    end.setDate(end.getDate() - 1); // Yesterday
     
+    // Clone end and subtract days for start
+    const start = new Date(end);
+    start.setDate(start.getDate() - (days - 1));
+    
+    const startStr = formatDateUK(start);
+    const endStr = formatDateUK(end);
     const newWindow: DateRange = { start: startStr, end: endStr };
     
-    // Phase 3: Early short-circuit - skip if functionally same
-    if (windowsMatch(newWindow, window)) {
-      console.log(`[WindowSelector] Preset ${days} days skipped (window unchanged):`, {
-        start: startStr,
-        end: endStr,
-        currentWindow: window
-      });
-      return; // No-op: window is functionally the same
+    // Skip if window unchanged
+    if (window && window.start === startStr && window.end === endStr) {
+      console.log(`[WindowSelector] Preset ${days} days skipped (window unchanged)`);
+      return;
     }
     
-    console.log(`[WindowSelector] Preset ${days} days:`, {
-      start: startStr,
-      end: endStr,
-      today: new Date().toISOString().split('T')[0],
-      includesToday: endStr === new Date().toISOString().split('T')[0],
-    });
+    console.log(`[WindowSelector] Preset ${days} days:`, { start: startStr, end: endStr });
     
     // IMPORTANT: Update BOTH window state and graph.currentQueryDSL
     updateWindowAndDSL(startStr, endStr);
@@ -798,13 +746,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     if (!window) return null;
     
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = formatDateUK(today);
     
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(0, 0, 0, 0);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    const yesterdayStr = formatDateUK(yesterday);
     
     // Check if it's "today" preset (start and end are same day, and it's today)
     if (window.start === window.end && window.start === todayStr) {
@@ -814,24 +760,21 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     // Check if it's "7d" preset (end is yesterday, start is 7 days before)
     const sevenDaysAgo = new Date(yesterday);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-    const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
-    if (window.end === yesterdayStr && window.start === sevenDaysAgoStr) {
+    if (window.end === yesterdayStr && window.start === formatDateUK(sevenDaysAgo)) {
       return 7;
     }
     
     // Check if it's "30d" preset (end is yesterday, start is 30 days before)
     const thirtyDaysAgo = new Date(yesterday);
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-    const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
-    if (window.end === yesterdayStr && window.start === thirtyDaysAgoStr) {
+    if (window.end === yesterdayStr && window.start === formatDateUK(thirtyDaysAgo)) {
       return 30;
     }
     
     // Check if it's "90d" preset (end is yesterday, start is 90 days before)
     const ninetyDaysAgo = new Date(yesterday);
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 89);
-    const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().split('T')[0];
-    if (window.end === yesterdayStr && window.start === ninetyDaysAgoStr) {
+    if (window.end === yesterdayStr && window.start === formatDateUK(ninetyDaysAgo)) {
       return 90;
     }
     
@@ -845,10 +788,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     if (!graph || !needsFetch) return [];
     
     const items: BatchItem[] = [];
-    const normalizedWindow: DateRange = {
-      start: currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`,
-      end: currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`,
-    };
+    const currentDSL = graph?.currentQueryDSL || '';
     
     // Collect parameters that need fetching
     if (graph.edges) {
@@ -870,26 +810,22 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           
           if (!hasConnection) continue;
           
-          // Check if this parameter needs fetching for the window
+          // Check if this parameter needs fetching for the DSL
           let needsFetchForThis = false;
           if (!paramFile?.data) {
-            // No file exists - check if we've already fetched for this window
-            // For direct connections, we can't verify data existence, so we check
-            // if the current window matches the last aggregated window
-            const normalizedLastAggregated = lastAggregatedWindowRef.current;
-            if (!normalizedLastAggregated || !windowsMatch(normalizedWindow, normalizedLastAggregated)) {
-              // Window doesn't match last aggregated - need to fetch
+            // No file exists - check if we've already fetched for this DSL
+            const lastDSL = lastAggregatedDSLRef.current;
+            if (!lastDSL || currentDSL !== lastDSL) {
               needsFetchForThis = true;
             }
-            // If window matches last aggregated, assume data exists (don't set needsFetchForThis)
           } else {
-            // File exists - check if data is missing for this window
+            // File exists - check if data is missing (pass UK format, function normalizes)
             const incrementalResult = calculateIncrementalFetch(
               paramFile.data,
-              normalizedWindow,
+              currentWindow,
               undefined, // querySignature
               false, // bustCache  
-              graph?.currentQueryDSL || '' // targetSlice
+              currentDSL // targetSlice
             );
             needsFetchForThis = incrementalResult.needsFetch;
           }
@@ -938,90 +874,41 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     
     setIsFetching(true);
     
-    const normalizedWindow: DateRange = {
-      start: currentWindow.start.includes('T') ? currentWindow.start : `${currentWindow.start}T00:00:00Z`,
-      end: currentWindow.end.includes('T') ? currentWindow.end : `${currentWindow.end}T23:59:59Z`,
-    };
-    
-    // Show progress toast
-    const progressToastId = toast.loading(
-      `Fetching 0/${batchItemsToFetch.length}...`,
-      { duration: Infinity }
-    );
-    
-    let successCount = 0;
-    let errorCount = 0;
-    
     try {
-      for (let i = 0; i < batchItemsToFetch.length; i++) {
-        const item = batchItemsToFetch[i];
-        
-        // Update progress toast
-        toast.loading(
-          `Fetching ${i + 1}/${batchItemsToFetch.length}: ${item.name}`,
-          { id: progressToastId, duration: Infinity }
-        );
-        
-        try {
-          if (item.type === 'parameter') {
-            const effectiveDSL = graph?.currentQueryDSL || '';
-            await dataOperationsService.getFromSource({
-              objectType: 'parameter',
-              objectId: item.objectId,
-              targetId: item.targetId,
-              graph,
-              setGraph: (g) => {
-                if (g) setGraph(g);
-              },
-              paramSlot: item.paramSlot,
-              currentDSL: effectiveDSL,  // CRITICAL: Pass DSL so fetch uses correct window
-              targetSlice: effectiveDSL  // CRITICAL: Pass DSL so file loading uses correct slice
-            });
-            successCount++;
-          } else if (item.type === 'case') {
-            await dataOperationsService.getFromSource({
-              objectType: 'case',
-              objectId: item.objectId,
-              targetId: item.targetId,
-              graph,
-              setGraph: (g) => {
-                if (g) setGraph(g);
-              },
-              currentDSL: graph?.currentQueryDSL || '',  // CRITICAL: Pass DSL for cases too
-            });
-            successCount++;
+      // Convert BatchItem to FetchItem (filter out 'node' type which isn't used here)
+      const fetchItemsList: FetchItem[] = batchItemsToFetch
+        .filter(item => item.type === 'parameter' || item.type === 'case')
+        .map(item => ({
+          id: item.id,
+          type: item.type as 'parameter' | 'case',
+          name: item.name,
+          objectId: item.objectId,
+          targetId: item.targetId,
+          paramSlot: item.paramSlot,
+        }));
+      
+      // Use centralized fetch hook with toast notifications
+      const results = await fetchWithToast(
+        () => fetchItems(fetchItemsList, {
+          onProgress: (current, total) => {
+            // Progress is handled by fetchWithToast
           }
-        } catch (error) {
-          console.error(`[WindowSelector] Failed to fetch ${item.name}:`, error);
-          errorCount++;
-        }
-      }
+        }),
+        fetchItemsList.length
+      );
       
-      // Dismiss progress toast
-      toast.dismiss(progressToastId);
+      const successCount = results.filter(r => r.success).length;
       
-      // Show summary
+      // Update lastAggregatedWindow after successful fetch (store in UK format)
       if (successCount > 0) {
-        toast.success(
-          `✓ Fetched ${successCount} item${successCount > 1 ? 's' : ''}${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
-          { duration: 3000 }
-        );
-      } else if (errorCount > 0) {
-        toast.error(`Failed to fetch ${errorCount} item${errorCount > 1 ? 's' : ''}`);
-      }
-      
-      // Re-check coverage after fetch
-      // Update lastAggregatedWindow after successful fetch
-      if (successCount > 0) {
-        setLastAggregatedWindow(normalizedWindow);
+        setLastAggregatedWindow(currentWindow);
+        lastAggregatedDSLRef.current = graph?.currentQueryDSL || '';
       }
       
       // Trigger coverage check by updating window (will detect if still needs fetch)
       setWindow({ ...window! });
     } catch (error) {
-      toast.dismiss(progressToastId);
       console.error('[WindowSelector] Batch fetch failed:', error);
-      toast.error('Failed to fetch data');
     } finally {
       setIsFetching(false);
     }
@@ -1070,7 +957,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           startDate={startDate}
           endDate={endDate}
           onChange={handleDateRangeChange}
-          maxDate={new Date().toISOString().split('T')[0]}
+          maxDate={formatDateUK(new Date())}
         />
         
         {/* Context area: chips + add button - wrapped together to prevent line break between them */}
@@ -1296,19 +1183,13 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 }
                 
                 // Also update window state separately for DateRangePicker
+                // DSL already uses UK format dates, so we can use them directly
                 const parsed = parseConstraints(finalDSL);
                 if (parsed.window && setWindow) {
-                  try {
-                    const startDate = parsed.window.start 
-                      ? parseUKDate(parsed.window.start).toISOString().split('T')[0]
-                      : window?.start || '';
-                    const endDate = parsed.window.end
-                      ? parseUKDate(parsed.window.end).toISOString().split('T')[0]
-                      : window?.end || '';
-                    setWindow({ start: startDate, end: endDate });
-                  } catch (err) {
-                    console.error('Failed to parse window dates:', err);
-                  }
+                  setWindow({
+                    start: parsed.window.start || window?.start || '',
+                    end: parsed.window.end || window?.end || '',
+                  });
                 }
               }}
               graph={graph}
