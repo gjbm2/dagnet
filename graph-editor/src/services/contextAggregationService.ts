@@ -11,6 +11,38 @@ import type { DateRange } from '../types';
 import { contextRegistry } from './contextRegistry';
 import { isolateSlice } from './sliceIsolation';
 import { parseConstraints, normalizeConstraintString } from '../lib/queryDSL';
+import { mergeParameterTimeSeries } from './timeSeriesUtils';
+
+/**
+ * Aggregate n/k from multiple value entries, deduplicating by date.
+ * 
+ * CRITICAL: When multiple value entries have overlapping dates (e.g., from
+ * successive fetches), we must NOT sum the entry-level n/k fields directly
+ * as that would double-count. Instead, merge the daily data and sum that.
+ * 
+ * For entries without daily data, fall back to entry-level n/k.
+ */
+function aggregateValuesWithDedup(values: ParameterValue[]): { n: number; k: number } {
+  // Separate entries with daily data from those without
+  const withDaily = values.filter(v => v.dates?.length && v.n_daily?.length && v.k_daily?.length);
+  const withoutDaily = values.filter(v => !v.dates?.length || !v.n_daily?.length || !v.k_daily?.length);
+  
+  // Merge daily data from all entries (deduplicates by date - later entries win)
+  const mergedTimeSeries = mergeParameterTimeSeries(...withDaily);
+  
+  // Sum from merged daily data
+  const dailyN = mergedTimeSeries.reduce((sum, p) => sum + p.n, 0);
+  const dailyK = mergedTimeSeries.reduce((sum, p) => sum + p.k, 0);
+  
+  // Sum from entries without daily data (can't deduplicate, just sum)
+  const nonDailyN = withoutDaily.reduce((sum, v) => sum + (v.n || 0), 0);
+  const nonDailyK = withoutDaily.reduce((sum, v) => sum + (v.k || 0), 0);
+  
+  return {
+    n: dailyN + nonDailyN,
+    k: dailyK + nonDailyK
+  };
+}
 
 export type ContextCombination = Record<string, string>;
 
@@ -256,11 +288,10 @@ export async function aggregateWindowsWithContexts(
       };
     }
     
-    // Aggregate values for this slice
-    const totalN = sliceValues.reduce((sum, v) => sum + (v.n || 0), 0);
-    const totalK = sliceValues.reduce((sum, v) => sum + (v.k || 0), 0);
+    // Aggregate values for this slice (with deduplication for overlapping dates)
+    const { n: totalN, k: totalK } = aggregateValuesWithDedup(sliceValues);
     const mean = totalN > 0 ? totalK / totalN : 0;
-    const stdev = Math.sqrt(mean * (1 - mean) / totalN);
+    const stdev = totalN > 0 ? Math.sqrt(mean * (1 - mean) / totalN) : 0;
     
     return {
       status: 'complete',
@@ -279,10 +310,9 @@ export async function aggregateWindowsWithContexts(
     if (contextedValues.length === 0) {
       // No contexted data, use uncontexted
       const uncontextedValues = isolateSlice(allValues, '');
-      const totalN = uncontextedValues.reduce((sum, v) => sum + (v.n || 0), 0);
-      const totalK = uncontextedValues.reduce((sum, v) => sum + (v.k || 0), 0);
+      const { n: totalN, k: totalK } = aggregateValuesWithDedup(uncontextedValues);
       const mean = totalN > 0 ? totalK / totalN : 0;
-      const stdev = Math.sqrt(mean * (1 - mean) / totalN);
+      const stdev = totalN > 0 ? Math.sqrt(mean * (1 - mean) / totalN) : 0;
       
       return {
         status: 'complete',
@@ -307,10 +337,9 @@ export async function aggregateWindowsWithContexts(
       if (!seenCombos.has(comboKey)) {
         seenCombos.add(comboKey);
         
-        // Get all values for this combo
+        // Get all values for this combo (with deduplication for overlapping dates)
         const comboValues = isolateSlice(allValues, buildContextDSL(combo));
-        const n = comboValues.reduce((sum, v) => sum + (v.n || 0), 0);
-        const k = comboValues.reduce((sum, v) => sum + (v.k || 0), 0);
+        const { n, k } = aggregateValuesWithDedup(comboValues);
         
         perContextResults.push({ n, k, contextCombo: combo });
       }

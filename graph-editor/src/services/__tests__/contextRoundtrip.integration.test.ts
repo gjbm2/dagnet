@@ -140,6 +140,83 @@ describe('Context Roundtrip Integration Tests', () => {
       expect(metaIsolated.length).toBe(1);
       expect(metaIsolated[0].n).toBe(200);
     });
+
+    it('CRITICAL: overlapping dates should be DEDUPLICATED (new data wins)', () => {
+      // BUG: Old implementation APPENDED data, causing double-counting
+      // FIX: New implementation MERGES by date, with new data overwriting old
+      
+      // 1. Initial data: Oct 1-2 with n=100, k=15 per day
+      const initialData = mergeTimeSeriesIntoParameter(
+        [],
+        [
+          { date: '2025-10-01', n: 100, k: 15, p: 0.15 },
+          { date: '2025-10-02', n: 100, k: 15, p: 0.15 },
+        ],
+        { start: '2025-10-01T00:00:00.000Z', end: '2025-10-02T23:59:59.000Z' },
+        'sig1', {}, 'q1', 'amplitude',
+        '' // uncontexted
+      );
+      
+      expect(initialData.length).toBe(1);
+      expect(initialData[0].n).toBe(200); // 100 + 100
+      
+      // 2. Re-fetch same dates with DIFFERENT values (simulating updated API data)
+      // This should REPLACE the old values, not append
+      const updatedData = mergeTimeSeriesIntoParameter(
+        initialData,
+        [
+          { date: '2025-10-01', n: 150, k: 20, p: 0.133 },  // CHANGED values
+          { date: '2025-10-02', n: 150, k: 25, p: 0.167 },  // CHANGED values
+        ],
+        { start: '2025-10-01T00:00:00.000Z', end: '2025-10-02T23:59:59.000Z' },
+        'sig2', {}, 'q1', 'amplitude',
+        '' // same slice
+      );
+      
+      // CRITICAL: Should still be 1 value entry (merged, not appended)
+      expect(updatedData.length).toBe(1);
+      
+      // Values should be the NEW values, not old + new
+      expect(updatedData[0].n).toBe(300); // 150 + 150 (new values)
+      expect(updatedData[0].k).toBe(45);  // 20 + 25 (new values)
+      
+      // NOT the buggy behavior:
+      // expect(updatedData[0].n).toBe(400); // 200 + 200 (old + new = WRONG!)
+    });
+
+    it('CRITICAL: partial overlap should merge correctly', () => {
+      // Existing data: Oct 1-2
+      const existingData = mergeTimeSeriesIntoParameter(
+        [],
+        [
+          { date: '2025-10-01', n: 100, k: 10, p: 0.10 },
+          { date: '2025-10-02', n: 100, k: 10, p: 0.10 },
+        ],
+        { start: '2025-10-01T00:00:00.000Z', end: '2025-10-02T23:59:59.000Z' },
+        'sig1', {}, 'q1', 'amplitude', ''
+      );
+      
+      // New data: Oct 2-3 (Oct 2 overlaps, Oct 3 is new)
+      const mergedData = mergeTimeSeriesIntoParameter(
+        existingData,
+        [
+          { date: '2025-10-02', n: 150, k: 20, p: 0.133 },  // Overlaps - should replace
+          { date: '2025-10-03', n: 200, k: 30, p: 0.15 },   // New - should add
+        ],
+        { start: '2025-10-02T00:00:00.000Z', end: '2025-10-03T23:59:59.000Z' },
+        'sig2', {}, 'q1', 'amplitude', ''
+      );
+      
+      // Should have 1 merged entry with 3 dates
+      expect(mergedData.length).toBe(1);
+      expect(mergedData[0].dates?.length).toBe(3);
+      
+      // n values: Oct 1 (old: 100) + Oct 2 (new: 150) + Oct 3 (new: 200) = 450
+      expect(mergedData[0].n).toBe(450);
+      
+      // k values: Oct 1 (old: 10) + Oct 2 (new: 20) + Oct 3 (new: 30) = 60
+      expect(mergedData[0].k).toBe(60);
+    });
   });
 
   describe('extractSliceDimensions', () => {
@@ -289,48 +366,56 @@ describe('Context Roundtrip Integration Tests', () => {
       expect(googleResult.missingDates.length).toBe(0); // Nothing missing
     });
 
-    it('CRITICAL: uncontexted query on contexted-only file should throw (safety)', () => {
+    it('CRITICAL: uncontexted query on contexted-only file uses MECE aggregation', () => {
+      // When file has ONLY contexted data but query is uncontexted,
+      // calculateIncrementalFetch uses MECE aggregation: a date is "existing"
+      // only if it exists in ALL contexted slices.
       const paramFile = {
         values: [
           {
             sliceDSL: 'context(channel:google)',
-            dates: ['2025-10-01'],
+            dates: ['1-Oct-25'],  // UK format as stored
             n_daily: [100],
             k_daily: [15],
           }
         ]
       };
       
-      // Uncontexted query on contexted-only file should throw
-      // This is a safety check to prevent accidentally mixing contexts
-      expect(() => calculateIncrementalFetch(
+      // Uses MECE aggregation since file has ONLY contexted data
+      const result = calculateIncrementalFetch(
         paramFile as any,
         { start: '2025-10-01T00:00:00.000Z', end: '2025-10-01T23:59:59.000Z' },
         undefined, // querySignature
         false, // bustCache
         '' // Empty targetSlice = uncontexted
-      )).toThrow('Slice isolation error');
+      );
+      
+      // With only one slice (google), MECE considers dates covered if google has them
+      expect(result.existingDates.size).toBe(1);  // Oct 1 exists in google = covered
+      expect(result.missingDates.length).toBe(0); // Nothing missing
     });
 
     it('should work with mixed contexted and uncontexted data', () => {
+      // Use UK date format as stored in real parameter files
       const paramFile = {
         values: [
           {
             sliceDSL: '', // Uncontexted data
-            dates: ['2025-10-01'],
+            dates: ['1-Oct-25'],
             n_daily: [50],
             k_daily: [5],
           },
           {
             sliceDSL: 'context(channel:google)',
-            dates: ['2025-10-01', '2025-10-02'],
+            dates: ['1-Oct-25', '2-Oct-25'],
             n_daily: [100, 110],
             k_daily: [15, 17],
           }
         ]
       };
       
-      // Uncontexted query should find uncontexted data only
+      // Uncontexted query on mixed data: should use UNCONTEXTED data only
+      // (not MECE aggregate from contexted data)
       const uncontextedResult = calculateIncrementalFetch(
         paramFile as any,
         { start: '2025-10-01T00:00:00.000Z', end: '2025-10-02T23:59:59.000Z' },
@@ -339,10 +424,10 @@ describe('Context Roundtrip Integration Tests', () => {
         '' // Empty targetSlice = uncontexted
       );
       
-      expect(uncontextedResult.existingDates.size).toBe(1); // Only Oct 1
-      expect(uncontextedResult.missingDates.length).toBe(1); // Oct 2 missing
+      expect(uncontextedResult.existingDates.size).toBe(1); // Only Oct 1 (from uncontexted)
+      expect(uncontextedResult.missingDates.length).toBe(1); // Oct 2 missing (not in uncontexted)
       
-      // Contexted query should find contexted data only
+      // Contexted query should find contexted data only (direct slice match)
       const googleResult = calculateIncrementalFetch(
         paramFile as any,
         { start: '2025-10-01T00:00:00.000Z', end: '2025-10-02T23:59:59.000Z' },

@@ -16,7 +16,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
-import { calculateIncrementalFetch } from '../services/windowAggregationService';
+import { calculateIncrementalFetch, parseDate } from '../services/windowAggregationService';
 import { fileRegistry } from '../contexts/TabContext';
 import type { Graph, DateRange } from '../types';
 import toast from 'react-hot-toast';
@@ -108,9 +108,17 @@ export interface UseFetchDataReturn {
 // ============================================================================
 
 function normalizeWindow(window: DateRange): DateRange {
+  // Helper: Convert any date format (UK or ISO) to proper ISO format with time suffix
+  // CRITICAL: UK dates like "1-Nov-25" must become "2025-11-01T00:00:00Z", not "1-Nov-25T00:00:00Z"
+  const toISOWithTime = (dateStr: string, endOfDay: boolean): string => {
+    if (dateStr.includes('T')) return dateStr;
+    const isoDate = parseDate(dateStr).toISOString().split('T')[0];
+    return endOfDay ? `${isoDate}T23:59:59Z` : `${isoDate}T00:00:00Z`;
+  };
+  
   return {
-    start: window.start.includes('T') ? window.start : `${window.start}T00:00:00Z`,
-    end: window.end.includes('T') ? window.end : `${window.end}T23:59:59Z`,
+    start: toISOWithTime(window.start, false),
+    end: toISOWithTime(window.end, true),
   };
 }
 
@@ -346,7 +354,8 @@ export function useFetchData(options: UseFetchDataOptions): UseFetchDataReturn {
           });
         }
       } else if (mode === 'direct') {
-        // ===== DIRECT: Fetch from source without aggregation =====
+        // ===== DIRECT: Fetch from source → graph (NO file write, NO aggregation) =====
+        // This is the TRUE "direct" path: API response goes straight to graph
         if (item.type === 'node') {
           // Nodes don't have external API sources - fall back to from-file
           await dataOperationsService.getNodeFromFile({
@@ -365,7 +374,7 @@ export function useFetchData(options: UseFetchDataOptions): UseFetchDataReturn {
             setGraph,
             paramSlot: item.paramSlot,
             conditionalIndex: item.conditionalIndex,
-            dailyMode: true,  // Direct = daily mode (no aggregation)
+            writeToFile: false,  // FALSE = direct mode (API → graph, no file roundtrip)
             bustCache: fetchOptions?.bustCache,
             versionedCase: fetchOptions?.versionedCase,
             currentDSL: currentDSL,

@@ -423,8 +423,12 @@ export async function computeQuerySignature(
  * Helper function to apply field changes to a target object
  * Handles nested field paths (e.g., "p.mean")
  * Handles array append syntax (e.g., "values[]")
+ * Handles array index syntax (e.g., "values[0]")
  */
 function applyChanges(target: any, changes: Array<{ field: string; newValue: any }>): void {
+  // Regex to match array access: fieldName[index] or fieldName[]
+  const arrayAccessRegex = /^(.+)\[(\d*)\]$/;
+  
   for (const change of changes) {
     console.log('[applyChanges] Applying change:', {
       field: change.field,
@@ -438,16 +442,25 @@ function applyChanges(target: any, changes: Array<{ field: string; newValue: any
     // Navigate to the nested object
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
+      const arrayMatch = part.match(arrayAccessRegex);
       
-      // Handle array append syntax: "field[]"
-      if (part.endsWith('[]')) {
-        const arrayName = part.slice(0, -2); // Remove "[]"
+      if (arrayMatch) {
+        const [, arrayName, indexStr] = arrayMatch;
         if (!obj[arrayName]) {
           console.log(`[applyChanges] Creating new array at ${arrayName}`);
           obj[arrayName] = [];
         }
-        // Don't navigate into the array; we'll append to it at the end
-        obj = obj[arrayName];
+        if (indexStr === '') {
+          // Empty brackets - don't navigate into array for intermediate paths
+          obj = obj[arrayName];
+        } else {
+          // Specific index - navigate to that element
+          const index = parseInt(indexStr, 10);
+          if (!obj[arrayName][index]) {
+            obj[arrayName][index] = {};
+          }
+          obj = obj[arrayName][index];
+        }
       } else {
         if (!obj[part]) {
           console.log(`[applyChanges] Creating new object at ${part}`);
@@ -459,15 +472,25 @@ function applyChanges(target: any, changes: Array<{ field: string; newValue: any
     
     // Set the final value
     const finalPart = parts[parts.length - 1];
-    if (finalPart.endsWith('[]')) {
-      // Array append: push the new value
-      const arrayName = finalPart.slice(0, -2);
+    const finalArrayMatch = finalPart.match(arrayAccessRegex);
+    
+    if (finalArrayMatch) {
+      const [, arrayName, indexStr] = finalArrayMatch;
       if (!obj[arrayName]) {
         console.log(`[applyChanges] Creating new array at ${arrayName}`);
         obj[arrayName] = [];
       }
-      console.log(`[applyChanges] Appending to array ${arrayName}`);
-      obj[arrayName].push(change.newValue);
+      
+      if (indexStr === '') {
+        // Array append: push the new value
+        console.log(`[applyChanges] Appending to array ${arrayName}`);
+        obj[arrayName].push(change.newValue);
+      } else {
+        // Array index: set at specific position
+        const index = parseInt(indexStr, 10);
+        console.log(`[applyChanges] Setting array ${arrayName}[${index}]`);
+        obj[arrayName][index] = change.newValue;
+      }
     } else {
       // Regular field set
       obj[finalPart] = change.newValue;
@@ -1967,7 +1990,7 @@ class DataOperationsService {
     try {
       if (objectType === 'parameter') {
         // Parameters: fetch daily data, append to values[], update graph
-        // getFromSourceDirect with dailyMode=true handles the full flow:
+        // getFromSourceDirect with writeToFile=true handles the full flow:
         // - Fetches data from source OR skips if cached
         // - Writes time-series to parameter file
         // - Calls getParameterFromFile internally to update graph
@@ -1980,7 +2003,7 @@ class DataOperationsService {
           setGraph: trackingSetGraph,
           paramSlot,
           conditionalIndex,
-          dailyMode: true, // Internal: write daily time-series into file when provider supports it
+          writeToFile: true, // Internal: write daily time-series into file when provider supports it
           bustCache,       // Pass through bust cache flag
           currentDSL,
           targetSlice,
@@ -2004,7 +2027,7 @@ class DataOperationsService {
           targetId,
           graph: currentGraph,
           setGraph: trackingSetGraph,
-          dailyMode: false, // Cases do not use daily time-series; this is a single snapshot
+          writeToFile: false, // Cases do not use daily time-series; this is a single snapshot
           versionedCase: true, // Signal to append schedule to case file instead of direct graph apply
           bustCache: false,
           currentDSL,
@@ -2176,7 +2199,7 @@ class DataOperationsService {
   /**
    * Get data from external source → graph (direct, not versioned)
    * 
-   * If window is provided and daily mode is enabled, fetches daily time-series data
+   * If window is provided and writeToFile mode is enabled, fetches daily time-series data
    * and stores it in the parameter file (if objectType is 'parameter').
    */
   async getFromSourceDirect(options: {
@@ -2188,7 +2211,7 @@ class DataOperationsService {
     // For direct parameter references (no param file)
     paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
     conditionalIndex?: number;
-    dailyMode?: boolean;      // INTERNAL: for parameters, whether to write daily time-series into file
+    writeToFile?: boolean;    // Whether to persist time-series to parameter file (versioned path) vs direct to graph
     bustCache?: boolean;      // If true, ignore existing dates and re-fetch everything
     // For cases: distinguish direct vs versioned/schedule-based path
     versionedCase?: boolean;  // If true AND objectType==='case', append schedule to case file instead of direct graph update
@@ -2203,7 +2226,7 @@ class DataOperationsService {
         setGraph,
         paramSlot,
         conditionalIndex,
-        dailyMode,
+        writeToFile,
         bustCache,
         versionedCase,
         currentDSL,
@@ -2237,7 +2260,7 @@ class DataOperationsService {
     const logOpId = sessionLogService.startOperation(
       'info',
       'data-fetch',
-      dailyMode ? 'DATA_FETCH_VERSIONED' : 'DATA_FETCH_DIRECT',
+      writeToFile ? 'DATA_FETCH_VERSIONED' : 'DATA_FETCH_DIRECT',
       `Fetching ${objectType}: ${entityLabel}`,
       { 
         fileId: objectId ? `${objectType}-${objectId}` : undefined, 
@@ -2868,7 +2891,7 @@ class DataOperationsService {
         });
       }
       
-      // 5. Check for incremental fetch opportunities (if dailyMode and parameter file exists)
+      // 5. Check for incremental fetch opportunities (if writeToFile and parameter file exists)
       // Determine default window first - aligned to date boundaries
       // Normalize 'now' to current local date at UTC midnight to prevent timezone drift
       const nowDate = parseUKDate(formatDateUK(new Date()));
@@ -2900,19 +2923,19 @@ class DataOperationsService {
       
       // CRITICAL: ALWAYS compute query signature when writing to parameter files
       // (we only write for parameter objects in versioned/source-via-file pathway)
-      if (objectType === 'parameter' && dailyMode) {
+      if (objectType === 'parameter' && writeToFile) {
         const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
         querySignature = await computeQuerySignature(queryPayload, connectionName, graph, targetEdge);
         console.log('[DataOperationsService] Computed query signature for storage:', {
           signature: querySignature?.substring(0, 16) + '...',
-          dailyMode,
+          writeToFile,
           objectType
         });
       }
       
       // IMPORTANT: Only check for incremental fetch if bustCache is NOT set and we are
       // in the versioned parameter pathway (source→file→graph).
-      const shouldCheckIncrementalFetch = dailyMode && !bustCache && objectType === 'parameter' && objectId;
+      const shouldCheckIncrementalFetch = writeToFile && !bustCache && objectType === 'parameter' && objectId;
       
       if (shouldCheckIncrementalFetch) {
         const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
@@ -3032,7 +3055,7 @@ class DataOperationsService {
           toast.loading(`Fetching data from source...`, { id: 'das-fetch' });
         }
       } else {
-        // Not daily mode or no parameter file - use requested window
+        // Not writeToFile mode or no parameter file - use requested window
         actualFetchWindows = [requestedWindow];
         toast.loading(`Fetching data from source...`, { id: 'das-fetch' });
       }
@@ -3112,7 +3135,7 @@ class DataOperationsService {
       // Capture query info for storage (same for all gaps)
       // CRITICAL: Store the DSL STRING (from graph edge), not the DSL object
       // The DSL object has provider event names; we want the original query string
-      if (dailyMode && objectType === 'parameter') {
+      if (writeToFile && objectType === 'parameter') {
         queryParamsForStorage = queryString || queryPayload; // Use query string first, fall back to DSL object
         fullQueryForStorage = queryString || JSON.stringify(queryPayload);
       }
@@ -3289,7 +3312,7 @@ class DataOperationsService {
             }
             
             // Extract results based on pathway: for parameters we collect time-series
-            if (dailyMode && objectType === 'parameter') {
+            if (writeToFile && objectType === 'parameter') {
               // CRITICAL: Extract time-series data from composite result
               if (combined.evidence?.time_series && Array.isArray(combined.evidence.time_series)) {
                 let timeSeries = combined.evidence.time_series;
@@ -3318,7 +3341,7 @@ class DataOperationsService {
                 return;
               }
             } else {
-              // Non-daily mode: use aggregated results (with potentially overridden n)
+              // Non-writeToFile mode: use aggregated results (with potentially overridden n)
               updateData = {
                 mean: finalP,
                 n: finalN,
@@ -3376,8 +3399,8 @@ class DataOperationsService {
             `Base query gives total at 'from', conditioned query gives conversions via upstream path`
           );
           
-          // Combine time-series data if in daily mode
-          if (dailyMode && objectType === 'parameter') {
+          // Combine time-series data if in writeToFile mode
+          if (writeToFile && objectType === 'parameter') {
             const condTimeSeries = Array.isArray(condRaw?.time_series) ? condRaw.time_series : [];
             
             // Build a map of date → {base_n, cond_k} for combining
@@ -3422,7 +3445,7 @@ class DataOperationsService {
             
             allTimeSeriesData.push(...combinedTimeSeries);
           } else {
-            // Non-daily mode: use combined aggregates
+            // Non-writeToFile mode: use combined aggregates
             updateData = {
               mean: combinedP,
               n: combinedN,
@@ -3519,7 +3542,7 @@ class DataOperationsService {
           }
         
           // Collect time-series data for versioned parameters when time_series is present
-          if (dailyMode && objectType === 'parameter' && result.raw?.time_series) {
+          if (writeToFile && objectType === 'parameter' && result.raw?.time_series) {
             // Ensure time_series is an array before spreading
             const timeSeries = result.raw.time_series;
             if (Array.isArray(timeSeries)) {
@@ -3535,9 +3558,9 @@ class DataOperationsService {
             }
           }
           
-          // Parse the updates to extract values for simple queries (use latest result for non-daily mode)
+          // Parse the updates to extract values for simple queries (use latest result for non-writeToFile mode)
           // UpdateManager now expects schema terminology: mean, n, k (not external API terminology)
-          if (!dailyMode) {
+          if (!writeToFile) {
             // Special handling for Sheets: interpret scalar_value / param_pack using the
             // canonical ParamPackDSLService engine and scoping.
             if (connectionName?.includes('sheets')) {
@@ -3648,12 +3671,12 @@ class DataOperationsService {
       // Show success message after all gaps are fetched (for non-daily/direct pulls)
       if (actualFetchWindows.length > 1) {
         toast.success(`✓ Fetched all ${actualFetchWindows.length} gaps`, { id: 'das-fetch' });
-      } else if (!dailyMode) {
+      } else if (!writeToFile) {
         toast.success(`Fetched data from source`, { id: 'das-fetch' });
       }
       
       // Add data_source metadata for direct external connections (graph-level provenance)
-      if (!dailyMode) {
+      if (!writeToFile) {
         updateData.data_source = {
           type: connectionName?.includes('amplitude')
             ? 'amplitude'
@@ -3669,7 +3692,7 @@ class DataOperationsService {
       // For cases (Statsig, etc.), extract variants from raw transformed data
       // Adapters expose variant weights as `variants_update` (or `variants`) in transform output.
       // For Sheets, variants are extracted from param_pack above and stored in updateData.variants.
-      if (objectType === 'case' && !dailyMode && lastResultRaw && !connectionName?.includes('sheets')) {
+      if (objectType === 'case' && !writeToFile && lastResultRaw && !connectionName?.includes('sheets')) {
         console.log('[DataOperationsService] Extracting case variants from raw data', {
           rawKeys: Object.keys(lastResultRaw),
           hasVariantsUpdate: !!(lastResultRaw as any).variants_update,
@@ -3683,9 +3706,9 @@ class DataOperationsService {
         }
       }
       
-      // 6a. If dailyMode is true, write data to files
+      // 6a. If writeToFile is true, write data to files
       // For parameters: write time-series data (or "no data" marker if API returned empty)
-      if (dailyMode && objectType === 'parameter' && objectId) {
+      if (writeToFile && objectType === 'parameter' && objectId) {
         try {
           // Get parameter file (re-read to get latest state)
           let paramFile = fileRegistry.getFile(`parameter-${objectId}`);
@@ -3835,7 +3858,7 @@ class DataOperationsService {
       // 6a-cont. ALWAYS load from file after fetch attempt (even if no new data)
       // This ensures the graph shows cached data for the requested window/context
       // even when the API returns empty results for this specific slice/date
-      if (dailyMode && objectType === 'parameter' && objectId && graph && setGraph && targetId) {
+      if (writeToFile && objectType === 'parameter' && objectId && graph && setGraph && targetId) {
         console.log('[DataOperationsService] Loading parameter data from file into graph (post-fetch)', {
           currentDSL,
           targetSliceToPass: currentDSL || '',
@@ -3853,7 +3876,7 @@ class DataOperationsService {
       }
       
       // 6b. For versioned case fetches: write schedule entry to case file
-      // NOTE: Controlled by versionedCase flag, NOT dailyMode (dailyMode is parameter-specific and for parameters only)
+      // NOTE: Controlled by versionedCase flag, NOT writeToFile (writeToFile is parameter-specific and for parameters only)
       if (versionedCase && objectType === 'case' && objectId && lastResultRaw) {
         try {
           const caseFileId = `case-${objectId}`;
@@ -3910,7 +3933,7 @@ class DataOperationsService {
         }
       }
       
-      if (!dailyMode) {
+      if (!writeToFile) {
         console.log('Extracted data from DAS (using schema terminology):', updateData);
         
         // Calculate stdev and enhance stats if we have n and k (same codepath as file pulls)
@@ -3970,10 +3993,10 @@ class DataOperationsService {
         }
       }
       
-      // 7. Apply directly to graph (only if NOT in dailyMode)
-      // When dailyMode is true, the versioned path (getFromSource) will update the graph
+      // 7. Apply directly to graph (only if NOT in writeToFile)
+      // When writeToFile is true, the versioned path (getFromSource) will update the graph
       // via getParameterFromFile after the file is updated
-      if (!dailyMode && objectType === 'parameter') {
+      if (!writeToFile && objectType === 'parameter') {
         if (!targetId || !graph || !setGraph) {
           console.error('[DataOperationsService] Cannot apply to graph: missing context', {
             targetId, hasGraph: !!graph, hasSetGraph: !!setGraph
@@ -4096,15 +4119,15 @@ class DataOperationsService {
           toast('No changes to apply', { icon: 'ℹ️' });
         }
       } else {
-        // In dailyMode, we've already updated the parameter file - graph will be updated by getFromSource via getParameterFromFile
+        // In writeToFile, we've already updated the parameter file - graph will be updated by getFromSource via getParameterFromFile
         console.log(
-          '[DataOperationsService] Skipping direct graph update for parameters (dailyMode=true, versioned path will handle it)'
+          '[DataOperationsService] Skipping direct graph update for parameters (writeToFile=true, versioned path will handle it)'
         );
       }
       
       // 8. For cases in direct mode: Apply variants directly to graph nodes (no case file)
       // (External → Graph Case Node: see Mapping 7 in SCHEMA_FIELD_MAPPINGS.md)
-      if (objectType === 'case' && !dailyMode && !versionedCase && graph && setGraph && targetId) {
+      if (objectType === 'case' && !writeToFile && !versionedCase && graph && setGraph && targetId) {
         if (!updateData.variants) {
           console.warn('[DataOperationsService] No variants data to apply to case node');
           sessionLogService.endOperation(logOpId, 'warning', 'No variants data to apply to case node');

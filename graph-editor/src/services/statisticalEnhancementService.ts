@@ -128,66 +128,36 @@ export class InverseVarianceEnhancer implements StatisticalEnhancer {
       };
     }
 
-    // Inverse-variance weighting: weight each day by its precision
-    // Variance of binomial proportion: Var(p_i) = p_i(1-p_i)/n_i
-    // Precision (inverse variance): 1/Var(p_i) = n_i / (p_i(1-p_i))
-    // Weight = precision = n_i / (p_i(1-p_i))
+    // CRITICAL: Use simple mean (k/n) as the primary calculation.
+    // 
+    // Inverse-variance weighting was causing issues because:
+    // 1. Days with p=0 (e.g., weekends, data lag) aren't "estimates of 0%" - they're outliers
+    // 2. These days get massive weight: n/0.01 = 100×n when p=0
+    // 3. This distorts the weighted mean (e.g., 56% actual → 16% weighted)
+    //
+    // The simple mean (k/n) is the CORRECT observed conversion rate over the period.
+    // For funnel data, each day's data is not an independent "estimate" to combine -
+    // it's actual observed data, and the aggregate is simply total_k / total_n.
     
-    let weightedSum = 0;
-    let weightSum = 0;
+    // Use simple mean: this is the actual observed conversion rate
+    const simpleMean = raw.n > 0 ? raw.k / raw.n : 0;
+    const finalMean = Math.round(simpleMean * 1000) / 1000; // Round to 3 decimal places
     
-    // Use a larger epsilon to prevent extreme weights when p≈0 or p≈1
-    // A variance floor of 0.01 (equivalent to p=0.1 or p=0.9) prevents any single
-    // point from dominating the weighted average too much
-    const minVariance = 0.01;
-
-    for (const point of raw.raw_data) {
-      if (point.n > 0) {
-        const p_i = point.p;
-        
-        // Clamp variance to prevent extreme weights for p≈0 or p≈1
-        // Raw variance = p(1-p), clamped to at least minVariance
-        const variance = Math.max(p_i * (1 - p_i), minVariance);
-        
-        // Weight = precision = n / variance = n / (p(1-p))
-        // Now capped at n / 0.01 = 100×n maximum
-        const weight = point.n / variance;
-        
-        weightedSum += weight * p_i;
-        weightSum += weight;
-      }
-    }
-
-    // Weighted mean probability, rounded to 3 decimal places
-    const weightedMean = weightSum > 0 ? Math.round((weightedSum / weightSum) * 1000) / 1000 : raw.mean;
+    // CRITICAL: k is the actual observed success count - it's EVIDENCE, not an estimate.
+    // We preserve raw.k (the sum of all k_daily values).
+    // Users need to see actual observed k, not a derived value.
     
-    // Debug: check if weighted mean differs significantly from simple mean
-    if (Math.abs(weightedMean - raw.mean) > 0.1) {
-      console.warn('[InverseVarianceEnhancer] Weighted mean differs from simple mean by >10%:', {
-        simpleMean: raw.mean,
-        weightedMean,
-        totalN: raw.n,
-        totalK: raw.k,
-        dataPoints: raw.raw_data?.length,
-        extremePoints: raw.raw_data?.filter(p => p.p < 0.05 || p.p > 0.95).length || 0,
-      });
-    }
-    
-    // Recompute k from weighted mean and total n
-    // This preserves the relationship k = p × n
-    const weightedK = Math.round(weightedMean * raw.n);
-    
-    // Recalculate stdev using weighted mean
-    const weightedStdev = raw.n > 0 
-      ? Math.sqrt((weightedMean * (1 - weightedMean)) / raw.n)
+    // Recalculate stdev using simple mean
+    const finalStdev = raw.n > 0 
+      ? Math.sqrt((finalMean * (1 - finalMean)) / raw.n)
       : 0;
 
     return {
       method: 'inverse-variance',
       n: raw.n,
-      k: weightedK,
-      mean: weightedMean,
-      stdev: weightedStdev,
+      k: raw.k,  // PRESERVE actual observed k
+      mean: finalMean,  // Use simple mean (k/n) - the actual observed conversion rate
+      stdev: finalStdev,
       confidence_interval: null,
       trend: null,
       metadata: {

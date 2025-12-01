@@ -712,12 +712,13 @@ export function calculateIncrementalFetch(
       });
     } else {
       // Standard path: single slice
-      // BUT first check if query has no context but file has contexted data
-      // In that case, we need MECE aggregation across all slices
+      // Check if query has no context but file has ONLY contexted data (no uncontexted)
+      // In that case, we need MECE aggregation across all contexted slices
       const normalizedTarget = extractSliceDimensions(targetSlice);
       const hasContextedData = paramFileData.values.some(v => v.sliceDSL && v.sliceDSL !== '');
+      const hasUncontextedData = paramFileData.values.some(v => !v.sliceDSL || v.sliceDSL === '');
       
-      if (normalizedTarget === '' && hasContextedData) {
+      if (normalizedTarget === '' && hasContextedData && !hasUncontextedData) {
         // Query has no context, but file has contexted data
         // Extract all unique slices from the file and check ALL have data (MECE aggregation)
         const uniqueSlices = new Set<string>();
@@ -827,8 +828,17 @@ export function calculateIncrementalFetch(
   let fetchWindow: DateRange | null = null;
   
   if (missingDates.length > 0) {
-    // Sort missing dates
-    const sortedMissing = [...missingDates].sort();
+    // Sort missing dates CHRONOLOGICALLY (not lexicographically!)
+    // UK dates like "1-Nov-25", "10-Nov-25", "2-Nov-25" must be sorted by actual date
+    const sortedMissing = [...missingDates].sort((a, b) => 
+      parseDate(a).getTime() - parseDate(b).getTime()
+    );
+    
+    // Helper: Convert UK format date (e.g., "1-Nov-25") to ISO format (e.g., "2025-11-01")
+    // This is critical because the DAS adapter pre-request scripts expect ISO format dates
+    const toISODate = (ukDate: string): string => {
+      return parseDate(ukDate).toISOString().split('T')[0];
+    };
     
     // Group into contiguous gaps
     let gapStart = sortedMissing[0];
@@ -846,9 +856,10 @@ export function calculateIncrementalFetch(
         gapEnd = sortedMissing[i];
       } else {
         // Gap ended - save it and start a new one
+        // CRITICAL: Convert to ISO format for DAS adapter compatibility
         fetchWindows.push({
-          start: gapStart + 'T00:00:00Z',
-          end: gapEnd + 'T23:59:59Z',
+          start: toISODate(gapStart) + 'T00:00:00Z',
+          end: toISODate(gapEnd) + 'T23:59:59Z',
         });
         gapStart = sortedMissing[i];
         gapEnd = gapStart;
@@ -856,15 +867,17 @@ export function calculateIncrementalFetch(
     }
     
     // Don't forget the last gap
+    // CRITICAL: Convert to ISO format for DAS adapter compatibility
     fetchWindows.push({
-      start: gapStart + 'T00:00:00Z',
-      end: gapEnd + 'T23:59:59Z',
+      start: toISODate(gapStart) + 'T00:00:00Z',
+      end: toISODate(gapEnd) + 'T23:59:59Z',
     });
     
     // For backward compatibility, also provide single combined window
+    // CRITICAL: Convert to ISO format for DAS adapter compatibility
     fetchWindow = {
-      start: sortedMissing[0] + 'T00:00:00Z',
-      end: sortedMissing[sortedMissing.length - 1] + 'T23:59:59Z',
+      start: toISODate(sortedMissing[0]) + 'T00:00:00Z',
+      end: toISODate(sortedMissing[sortedMissing.length - 1]) + 'T23:59:59Z',
     };
   }
 
@@ -909,33 +922,84 @@ export function mergeTimeSeriesIntoParameter(
     return existingValues;
   }
 
-  // Extract dates, n_daily, k_daily from new time-series
-  // CRITICAL: Normalize dates to UK format (d-mmm-yy) for consistent storage
-  const dates = newTimeSeries.map(point => normalizeToUK(point.date));
-  const n_daily = newTimeSeries.map(point => point.n);
-  const k_daily = newTimeSeries.map(point => point.k);
-
-  // Calculate aggregate totals for this new entry
+  const normalizedSlice = sliceDSL || '';
+  
+  // Separate existing values: same slice (to be merged) vs other slices (preserved as-is)
+  const sameSliceValues = existingValues.filter(v => (v.sliceDSL || '') === normalizedSlice);
+  const otherSliceValues = existingValues.filter(v => (v.sliceDSL || '') !== normalizedSlice);
+  
+  // Extract existing daily data for the SAME slice
+  const existingDailyData: Array<{ date: string; n: number; k: number }> = [];
+  for (const v of sameSliceValues) {
+    if (v.dates && v.n_daily && v.k_daily) {
+      for (let i = 0; i < v.dates.length; i++) {
+        existingDailyData.push({
+          date: normalizeToUK(v.dates[i]),
+          n: v.n_daily[i] ?? 0,
+          k: v.k_daily[i] ?? 0,
+        });
+      }
+    }
+  }
+  
+  // Merge with new data: use a Map so new data OVERWRITES existing for same date
+  const dateMap = new Map<string, { n: number; k: number }>();
+  
+  // Add existing data first
+  for (const point of existingDailyData) {
+    dateMap.set(point.date, { n: point.n, k: point.k });
+  }
+  
+  // Add new data (OVERWRITES existing for same date)
+  for (const point of newTimeSeries) {
+    const normalizedDate = normalizeToUK(point.date);
+    dateMap.set(normalizedDate, { n: point.n, k: point.k });
+  }
+  
+  // Convert back to arrays, sorted chronologically
+  const mergedEntries = Array.from(dateMap.entries())
+    .sort((a, b) => parseDate(a[0]).getTime() - parseDate(b[0]).getTime());
+  
+  const dates = mergedEntries.map(([d]) => d);
+  const n_daily = mergedEntries.map(([, v]) => v.n);
+  const k_daily = mergedEntries.map(([, v]) => v.k);
+  
+  // Calculate aggregate totals for merged data
   const totalN = n_daily.reduce((sum, n) => sum + n, 0);
   const totalK = k_daily.reduce((sum, k) => sum + k, 0);
   // Round mean to 3 decimal places
   const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
+  
+  // Determine window: union of existing and new windows
+  const allWindowStarts = [
+    ...sameSliceValues.filter(v => v.window_from).map(v => parseDate(v.window_from!)),
+    parseDate(newWindow.start)
+  ];
+  const allWindowEnds = [
+    ...sameSliceValues.filter(v => v.window_to).map(v => parseDate(v.window_to!)),
+    parseDate(newWindow.end)
+  ];
+  const mergedWindowFrom = allWindowStarts.length > 0 
+    ? normalizeToUK(new Date(Math.min(...allWindowStarts.map(d => d.getTime()))).toISOString())
+    : normalizeToUK(newWindow.start);
+  const mergedWindowTo = allWindowEnds.length > 0
+    ? normalizeToUK(new Date(Math.max(...allWindowEnds.map(d => d.getTime()))).toISOString())
+    : normalizeToUK(newWindow.end);
 
-  // Create NEW value entry with only the new days
-  // Window dates also normalized to UK format
-  const newValue: ParameterValue = {
+  // Create SINGLE merged value entry (replaces all previous entries for this slice)
+  const mergedValue: ParameterValue = {
     mean,
     n: totalN,
     k: totalK,
     n_daily,
     k_daily,
     dates,
-    window_from: normalizeToUK(newWindow.start),
-    window_to: normalizeToUK(newWindow.end),
+    window_from: mergedWindowFrom,
+    window_to: mergedWindowTo,
     query_signature: newQuerySignature,
     // CRITICAL: sliceDSL enables isolateSlice to find this value entry
     // Without this, contexted data would be invisible to queries!
-    sliceDSL: sliceDSL || '',
+    sliceDSL: normalizedSlice,
     data_source: {
       type: dataSourceType || 'api',
       retrieved_at: new Date().toISOString(),
@@ -944,8 +1008,7 @@ export function mergeTimeSeriesIntoParameter(
     },
   };
 
-  // Append the new value entry (don't merge with existing)
-  // Window aggregator will aggregate across multiple entries
-  return [...existingValues, newValue];
+  // Return: other slices preserved + single merged entry for this slice
+  return [...otherSliceValues, mergedValue];
 }
 

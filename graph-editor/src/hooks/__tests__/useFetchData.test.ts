@@ -110,7 +110,8 @@ describe('useFetchData', () => {
       );
     });
 
-    it('direct mode calls getFromSourceDirect for parameter', async () => {
+    it('direct mode calls getFromSourceDirect for parameter with writeToFile=false', async () => {
+      // CRITICAL: "direct" mode should NOT write to file - it goes API → graph directly
       const { result } = renderHook(() => useFetchData({
         graph: mockGraph as any,
         setGraph: mockSetGraph,
@@ -128,7 +129,7 @@ describe('useFetchData', () => {
           objectType: 'parameter',
           objectId: 'my-param',
           targetId: 'edge-1',
-          dailyMode: true,
+          writeToFile: false,  // FALSE = truly direct (no file roundtrip)
         })
       );
     });

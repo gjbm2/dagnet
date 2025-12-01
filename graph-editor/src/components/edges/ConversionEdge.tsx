@@ -418,10 +418,9 @@ export default function ConversionEdge({
     // Calculate the actual probability mass flowing through this edge
     // This is the same logic used in calculateEdgeWidth for global-mass mode
     if (graph?.nodes && graph?.edges) {
-      // Find the start node
-      const startNode = graph.nodes.find((n: any) => 
-        n.entry?.is_start === true || (n.entry?.entry_weight || 0) > 0
-      );
+      // Find the start node - PRIORITIZE is_start=true over entry_weight>0
+      const startNode = graph.nodes.find((n: any) => n.entry?.is_start === true) 
+        || graph.nodes.find((n: any) => (n.entry?.entry_weight || 0) > 0);
       
       if (startNode) {
         // Calculate residual probability at the source node
