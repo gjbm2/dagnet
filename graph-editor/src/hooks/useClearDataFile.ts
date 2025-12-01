@@ -55,8 +55,15 @@ export function useClearDataFile() {
       const hasValues = values.length > 0 && values.some((v: any) => 
         v.n !== undefined || v.k !== undefined || v.data_source || v.n_daily || v.k_daily
       );
-      hasDataToClear = hasValues;
-      dataDescription = `${values.length} value${values.length !== 1 ? 's' : ''}`;
+      
+      // Also check for malformed 'values[N]' properties from buggy serialization
+      const malformedKeys = Object.keys(file.data || {}).filter(k => /^values\[\d+\]$/.test(k));
+      const hasMalformedData = malformedKeys.length > 0;
+      
+      hasDataToClear = hasValues || hasMalformedData;
+      dataDescription = hasMalformedData 
+        ? `${values.length} value${values.length !== 1 ? 's' : ''} + ${malformedKeys.length} malformed entries`
+        : `${values.length} value${values.length !== 1 ? 's' : ''}`;
     } else if (type === 'case') {
       const schedules = file.data?.case?.schedules || [];
       hasDataToClear = schedules.length > 0;
@@ -89,13 +96,23 @@ export function useClearDataFile() {
       let clearedCount = 0;
 
       if (type === 'parameter') {
-        // Clear values array but keep one minimal entry to maintain schema validity
-        const updatedData = {
-          ...file.data,
-          values: [{ mean: file.data?.values?.[0]?.mean ?? 0 }] // Keep just the mean from first value
-        };
+        // Clear values array completely - empty array is valid schema
+        // Also remove any malformed 'values[N]' properties from buggy serialization
+        const updatedData = { ...file.data };
+        updatedData.values = [];  // Fully clear - no stub entries that cause aggregation issues
+        
+        // Clean up malformed properties like 'values[0]', 'values[1]', etc.
+        // These were created by a bug in applyChanges that treated 'values[0]' as a literal key
+        for (const key of Object.keys(updatedData)) {
+          if (/^values\[\d+\]$/.test(key)) {
+            console.log(`[useClearDataFile] Removing malformed property: ${key}`);
+            delete updatedData[key];
+            clearedCount++;
+          }
+        }
+        
         await fileRegistry.updateFile(fileId, updatedData);
-        clearedCount = (file.data?.values?.length || 1) - 1;
+        clearedCount += file.data?.values?.length || 0;
       } else if (type === 'case') {
         // Clear schedules but keep structure
         const updatedData = {

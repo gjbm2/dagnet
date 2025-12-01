@@ -4,74 +4,437 @@ nodes:
     label: Household created
     absorbing: false
     entry:
-      is_start: true
+      is_start: false
       entry_weight: 1
     layout:
-      x: -804
-      'y': -204
+      x: -1186
+      'y': -166
     description: ''
     label_overridden: true
     event_id: household-created
     event_id_overridden: true
-    images:
-      - image_id: household-created-img
-        caption: Dagnet time
-        file_extension: png
-        caption_overridden: false
   - uuid: addb99b6-5773-482c-a437-4661c8433ff7
     id: abandonned-before-delegation
     label: abandonned-before-delegation
     absorbing: false
     layout:
-      x: -302
-      'y': -47
+      x: -685
+      'y': -89
     description: ''
   - uuid: 16974652-b532-41ee-b4d5-a3ef5381591d
     id: household-delegated
     label: household-delegated
     absorbing: false
     layout:
-      x: -524
-      'y': -351
+      x: -932
+      'y': -224
     description: ''
     event_id: household-delegated
+    event_id_overridden: true
+  - uuid: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    id: gave-bds-in-onboarding
+    label: Gave bds in onboarding
+    absorbing: false
+    layout:
+      x: -291
+      'y': -500
+    images: []
+    url: ''
+    url_overridden: true
+    event_id: gave-bds-in-onboarding
     event_id_overridden: true
   - uuid: 2810b6a8-7a7a-477d-b504-8714a8f22b68
     id: saw-wa-details-page
     label: Saw wa details page
     absorbing: false
     layout:
-      x: -11
-      'y': -339
+      x: -725
+      'y': -289
     event_id: saw-wa-details-page
     event_id_overridden: true
+  - uuid: 5788d308-a7a9-49ce-a755-07491315a603
+    id: viewed-coffee-screen
+    label: Viewed coffee screen
+    absorbing: false
+    layout:
+      x: -509
+      'y': -424
+    event_id: viewed-coffee-screen
+    event_id_overridden: true
+  - uuid: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    id: viewed-dashboard
+    label: Viewed dashboard
+    absorbing: false
+    layout:
+      x: -128
+      'y': -321
+    event_id: viewed-dashboard
+    event_id_overridden: true
+  - uuid: dab4f352-b997-4f58-a24f-6fae0b8c82d3
+    id: dropped-out-without-bds
+    label: Dropped out without bds
+    absorbing: true
+    layout:
+      x: -287
+      'y': -63
+  - uuid: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    id: gave-bds-after-onboarding
+    label: Gave bds after onboarding
+    absorbing: false
+    layout:
+      x: -111
+      'y': -93
+    event_id: gave-bds-after-onboarding
+    event_id_overridden: true
+  - uuid: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    id: switch-registered
+    label: Switch registered
+    absorbing: false
+    layout:
+      x: 537
+      'y': -506
+    event_id: switch-registered
+    event_id_overridden: true
+  - uuid: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    id: recommendation-with-BDOs
+    label: Recommendation with BDOs
+    absorbing: false
+    layout:
+      x: 242
+      'y': -515
+    url: ''
+    url_overridden: true
+    event_id: recommendation-offered-bds
+    event_id_overridden: true
+  - uuid: 496ea177-7049-41a3-8fa7-d8ead43a842b
+    id: recommendation-calling-for-bds
+    label: Recommendation calling for bds
+    absorbing: false
+    layout:
+      x: 245
+      'y': -329
+    event_id: recommendation-offered-no-bdos
+    event_id_overridden: true
+  - uuid: 30aabc44-e448-4359-b0d0-338a231edb92
+    id: switch-success
+    label: Switch success
+    absorbing: true
+    layout:
+      x: 720
+      'y': -574
+    event_id: switch-success
+    event_id_overridden: true
+    label_overridden: true
+  - uuid: e5cd8923-f466-4535-8451-ed78566757e4
+    id: not-sent-recommendation
+    label: Not sent recommendation
+    absorbing: true
+    layout:
+      x: 255
+      'y': 15
+  - uuid: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    id: post-recommendation-failure
+    label: Post recommendation failure
+    absorbing: true
+    layout:
+      x: 545
+      'y': -226
+  - uuid: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
+    id: post-registration-failure
+    label: Post registration failure
+    absorbing: true
+    layout:
+      x: 716
+      'y': -425
+  - uuid: b9194789-0714-4273-b1c0-9fd2aa8b97fa
+    id: recommendation-retention
+    label: Recommendation retention
+    absorbing: false
+    layout:
+      x: 281
+      'y': -92
+    event_id: recommendation-offered-retention
+    images: []
+    event_id_overridden: true
+  - uuid: c7620524-c88b-4afd-a012-fb9f1d46a14a
+    id: eon-customer
+    label: Eon customer
+    absorbing: false
+    layout:
+      x: -1402
+      'y': -264
+    event_id: eon-customer
+    event_id_overridden: true
+  - uuid: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
+    id: non-eon-customer
+    label: Non eon customer
+    absorbing: false
+    layout:
+      x: -1369
+      'y': -167
+    event_id: non-
+    event_id_overridden: true
+  - uuid: 3af310f0-53d7-417e-86b0-32bdb2667a47
+    id: Question-answered
+    label: Question answered
+    absorbing: false
+    layout:
+      x: -1613
+      'y': -142
+    event_id: question-answered
+    event_id_overridden: true
+    entry:
+      is_start: true
 edges:
-  - uuid: household-created-to-household-delegated
-    id: household-created-to-household-delegated
-    from: 86469c9f-2f83-49ca-a154-589231be5511
-    to: 16974652-b532-41ee-b4d5-a3ef5381591d
+  - uuid: af23535c-192b-48d1-8386-132b0f5079f3
+    id: saw-wa-details-page-to-dropped-out-without-bds
+    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
+    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.565
+      mean: 0.347
+    query: from(saw-wa-details-page).to(dropped-out-without-bds).minus(viewed-coffee-screen)
+    description: ''
+    query_overridden: false
+  - uuid: 12ab4626-08c7-4496-a4a0-03b9538dbc92
+    id: abandonned-before-delegation-to-dropped-out-without-bds
+    from: addb99b6-5773-482c-a437-4661c8433ff7
+    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 1
+    query: from(abandonned-before-delegation).to(dropped-out-without-bds)
+    description: ''
+  - uuid: 7a9ddce3-f401-49ad-abb1-ebec1bd27010
+    id: viewed-dashboard-to-recommendation-calling-for-bds
+    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    to: 496ea177-7049-41a3-8fa7-d8ead43a842b
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.54
+      id: dashboard-to-rec-from-non-bdos
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.012382783747337808
       evidence:
-        'n': 370
-        k: 209
-        window_from: '2025-09-30T23:00:00.000Z'
-        window_to: '2025-09-30T23:00:00.000Z'
-        retrieved_at: '2025-11-29T09:52:52.420Z'
+        window_from: 1-Nov-25
         source: amplitude
-        full_query: from(household-created).to(household-delegated)
+        'n': 1620
+        k: 875
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:05.275Z'
+        full_query: from(viewed-dashboard).to(recommendation-calling-for-bds)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-29T09:52:52.420Z'
-        query: from(household-created).to(household-delegated)
-        full_query: from(household-created).to(household-delegated)
-      connection: amplitude-prod
-      id: household-delegation-rate
-      stdev: 0.025773179019219897
-    query: from(household-created).to(household-delegated)
+        retrieved_at: '2025-12-01T17:33:05.275Z'
+        query: from(viewed-dashboard).to(recommendation-calling-for-bds)
+        full_query: from(viewed-dashboard).to(recommendation-calling-for-bds)
+    query: from(viewed-dashboard).to(recommendation-calling-for-bds)
     description: ''
+    query_overridden: true
+    n_query: from(household-created).to(viewed-dashboard)
+  - uuid: d7bf4100-18db-4afa-b0c8-2e8c5d72a1f1
+    id: viewed-coffee-screen-to-gave-bds-in-onboarding-after-onboarding
+    from: 5788d308-a7a9-49ce-a755-07491315a603
+    to: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.021
+      stdev: 0.00434696902518092
+      id: gave-bds-after-onboarding
+      evidence:
+        window_from: 1-Nov-25
+        source: amplitude
+        'n': 1088
+        k: 23
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:08.587Z'
+        full_query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:08.587Z'
+        query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
+        full_query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
+      connection: amplitude-prod
+      connection_overridden: true
+    query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
+    description: ''
+  - uuid: 586b4354-5293-4961-b63f-8b0f31e756f1
+    id: saw-wa-details-page-to-gave-bds-in-onboarding-after-onboarding
+    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
+    to: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.014
+      id: gave-bds-after-wa
+      connection: amplitude-prod
+      connection_overridden: true
+      evidence:
+        window_from: 1-Nov-25
+        source: amplitude
+        'n': 2305
+        k: 32
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:11.582Z'
+        full_query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:11.582Z'
+        query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
+        full_query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
+      stdev: 0.0024471861746781327
+    description: ''
+    query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
+  - uuid: df61ee70-5722-4198-8a2d-d03686e4af0c
+    id: bffebc85-8e08-4844-b9ac-81af93d1e5d2->e5cd8923-f466-4535-8451-ed78566757e4
+    from: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    to: e5cd8923-f466-4535-8451-ed78566757e4
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.945
+    query: from(gave-bds-after-onboarding).to(not-sent-recommendation)
+    description: ''
+  - uuid: 2a2f9f24-9bf5-4e77-9061-ab677b7ab5d7
+    id: recommendation-calling-for-bds-to-post-recommendation-failure
+    from: 496ea177-7049-41a3-8fa7-d8ead43a842b
+    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.972
+    query: from(recommendation-calling-for-bds).to(post-recommendation-failure)
+    description: ''
+  - uuid: 532a304a-c435-4ea5-aa6a-44714b40adab
+    id: switch-registered-to-post-registration-failure
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.819
+    query: from(switch-registered).to(post-registration-failure)
+    description: ''
+  - uuid: c4c63403-5e62-4a22-b84c-8b55f06290f9
+    id: saw-wa-details-page-to-viewed-dashboard
+    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
+    to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.41
+      stdev: 0.010244304274330977
+      evidence:
+        'n': 2305
+        k: 945
+        window_from: 1-Nov-25
+        retrieved_at: '2025-12-01T17:33:14.729Z'
+        source: amplitude
+        full_query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
+        window_to: 30-Nov-25
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:14.729Z'
+        query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
+        full_query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
+      connection: amplitude-prod
+      id: wa-to-dashboard
+    query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
+    description: ''
+    query_overridden: true
+  - uuid: 76e0e0f8-133d-4065-9fab-56480063d9c9
+    id: viewed-coffee-screen-to-gave-bds-in-onboarding
+    from: 5788d308-a7a9-49ce-a755-07491315a603
+    to: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.42
+      stdev: 0.026
+      id: coffee-to-bds
+      connection: amplitude-prod
+      connection_overridden: true
+      evidence:
+        'n': 355
+        k: 149
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-11-28T21:24:02.718Z'
+        query:
+          from: viewed-coffee-screen
+          to: gave-bds-in-onboarding
+          context: []
+          case: []
+          start: '2025-11-02T00:00:00.000Z'
+          end: '2025-11-08T00:00:00.000Z'
+          query_params: >-
+            e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20251102&end=20251108&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+          from_step_index: 0
+          to_step_index: 1
+        full_query: >-
+          {"from":"viewed-coffee-screen","to":"gave-bds-in-onboarding","context":[],"case":[],"start":"2025-11-02T00:00:00.000Z","end":"2025-11-08T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20251102&end=20251108&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+    query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
+    description: ''
+  - uuid: bb6380f3-6e5f-4734-aa90-99a8a7ec3444
+    id: gave-bds-in-onboarding-to-recommendation-with-BDOs
+    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.015
+      id: bdos-to-recommendation
+      evidence:
+        window_from: 1-Nov-25
+        source: amplitude
+        'n': 559
+        k: 8
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:20.106Z'
+        full_query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:20.106Z'
+        query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
+        full_query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.00514112118243894
+    query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
+    description: ''
+    query_overridden: false
+  - uuid: c20c9bd4-0b4e-4042-8d54-30cb3f0c02f0
+    id: 2810b6a8-7a7a-477d-b504-8714a8f22b68->5788d308-a7a9-49ce-a755-07491315a603
+    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
+    to: 5788d308-a7a9-49ce-a755-07491315a603
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.229
+      id: wa-to-coffee
+      stdev: 0.008752043455221325
+      evidence:
+        'n': 2305
+        k: 528
+        window_from: 1-Nov-25
+        retrieved_at: '2025-12-01T17:33:22.414Z'
+        source: amplitude
+        full_query: from(saw-wa-details-page).to(viewed-coffee-screen)
+        window_to: 30-Nov-25
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:22.414Z'
+        query: from(saw-wa-details-page).to(viewed-coffee-screen)
+        full_query: from(saw-wa-details-page).to(viewed-coffee-screen)
+      connection: amplitude-prod
+    query: from(saw-wa-details-page).to(viewed-coffee-screen)
+    description: ''
+    query_overridden: false
   - uuid: household-created-to-abandonned-before-delegation
     id: 86469c9f-2f83-49ca-a154-589231be5511->addb99b6-5773-482c-a437-4661c8433ff7
     from: 86469c9f-2f83-49ca-a154-589231be5511
@@ -79,60 +442,454 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.495
+      mean: 0.45
     query: from(household-created).to(abandonned-before-delegation).minus(household-delegated)
     description: ''
-  - uuid: bef7823b-2daa-4dd5-977d-b08e57993e44
+  - uuid: 41b26675-c962-4cb6-be4d-55804d22b480
+    id: a2ae8ea8-30a3-43db-b12c-43ad71bdaead->7515449a-4743-43fb-8fc0-66b9575c5b0c
+    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.97
+      stdev: 0.007215070691303096
+      id: bdos-to-dashboard
+      connection: amplitude-prod
+      connection_overridden: true
+      evidence:
+        'n': 559
+        k: 542
+        window_from: 1-Nov-25
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:24.717Z'
+        source: amplitude
+        full_query: from(gave-bds-in-onboarding).to(viewed-dashboard)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:24.717Z'
+        query: from(gave-bds-in-onboarding).to(viewed-dashboard)
+        full_query: from(gave-bds-in-onboarding).to(viewed-dashboard)
+    query: from(gave-bds-in-onboarding).to(viewed-dashboard)
+    description: ''
+  - uuid: 25ab4406-51d2-4852-a373-5d656c4a295f
+    id: 496ea177-7049-41a3-8fa7-d8ead43a842b->22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    from: 496ea177-7049-41a3-8fa7-d8ead43a842b
+    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.028
+      id: calling-for-bds-to-registration
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.004276718669803423
+      evidence:
+        window_from: 1-Nov-25
+        source: amplitude
+        'n': 1488
+        k: 42
+        retrieved_at: '2025-12-01T17:33:26.735Z'
+        full_query: from(recommendation-calling-for-bds).to(switch-registered)
+        window_to: 30-Nov-25
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:26.735Z'
+        query: from(recommendation-calling-for-bds).to(switch-registered)
+        full_query: from(recommendation-calling-for-bds).to(switch-registered)
+    query: from(recommendation-calling-for-bds).to(switch-registered)
+    description: ''
+    query_overridden: true
+  - uuid: c95cbd37-c1f6-4f91-a66c-f7b2410c0dd2
+    id: recommendation-retention-to-post-recommendation-failure
+    from: b9194789-0714-4273-b1c0-9fd2aa8b97fa
+    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.971
+    query: from(recommendation-retention).to(post-recommendation-failure)
+    description: ''
+  - uuid: 6839050f-fa16-4862-82f7-2f1b76ed4e68
+    id: recommendation-with-BDOs-to-post-recommendation-failure
+    from: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.917
+    query: from(recommendation-with-BDOs).to(post-recommendation-failure)
+    description: ''
+  - uuid: f575cbcc-b1d3-4e20-8fa3-bb19b706a496
+    id: recommendation-with-BDOs-to-switch-registered
+    from: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.083
+      id: rec-with-bdos-to-registration
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.01454026975143324
+      evidence:
+        window_from: 1-Nov-25
+        source: amplitude
+        'n': 360
+        k: 30
+        retrieved_at: '2025-12-01T17:33:30.626Z'
+        full_query: from(recommendation-with-BDOs).to(switch-registered).visited(gave-bds-in-onboarding)
+        window_to: 30-Nov-25
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:30.626Z'
+        query: from(recommendation-with-BDOs).to(switch-registered).visited(gave-bds-in-onboarding)
+        full_query: from(recommendation-with-BDOs).to(switch-registered).visited(gave-bds-in-onboarding)
+      mean_overridden: false
+    query: from(recommendation-with-BDOs).to(switch-registered).visited(gave-bds-in-onboarding)
+    description: ''
+    query_overridden: true
+    n_query: from(household-created).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
+  - uuid: 370dce1d-3a36-4109-9711-204c301478c8
+    id: switch-registered-to-switch-success
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 30aabc44-e448-4359-b0d0-338a231edb92
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.181
+      stdev: 0.01686795278313435
+      id: registration-to-success
+      evidence:
+        window_from: 1-Nov-25
+        source: amplitude
+        'n': 521
+        k: 94
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:33.266Z'
+        full_query: from(switch-registered).to(switch-success)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:33.266Z'
+        query: from(switch-registered).to(switch-success)
+        full_query: from(switch-registered).to(switch-success)
+      connection: amplitude-prod
+      connection_overridden: true
+    query: from(switch-registered).to(switch-success)
+    description: ''
+  - uuid: 153e467f-754c-4fcd-96ef-d25edcee6716
+    id: viewed-dashboard-to-recommendation-with-BDOs
+    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 1.071
+      id: dashboard-to-rec-from-bdos
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: .nan
+      evidence:
+        'n': 1620
+        k: 1735
+        window_from: 1-Nov-25
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:35.958Z'
+        source: amplitude
+        full_query: >-
+          from(viewed-dashboard).to(recommendation-with-BDOs).visitedAny(gave-bds-in-onboarding,gave-bds-after-onboarding)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:35.958Z'
+        query: >-
+          from(viewed-dashboard).to(recommendation-with-BDOs).visitedAny(gave-bds-in-onboarding,gave-bds-after-onboarding)
+        full_query: >-
+          from(viewed-dashboard).to(recommendation-with-BDOs).visitedAny(gave-bds-in-onboarding,gave-bds-after-onboarding)
+      mean_overridden: false
+    query: from(viewed-dashboard).to(recommendation-with-BDOs).visitedAny(gave-bds-in-onboarding,gave-bds-after-onboarding)
+    description: ''
+    query_overridden: true
+    n_query: from(household-created).to(viewed-dashboard)
+  - uuid: 4db126ba-018f-4448-924c-56723f57a54f
     id: household-delegated-to-saw-wa-details-page
     from: 16974652-b532-41ee-b4d5-a3ef5381591d
     to: 2810b6a8-7a7a-477d-b504-8714a8f22b68
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.932
+      mean: 0.922
       id: delegation-to-wa-details
       connection: amplitude-prod
       connection_overridden: true
-      stdev: 0.005
+      stdev: 0.005333646483422628
       evidence:
-        'n': 3066
-        k: 2856
+        'n': 2528
+        k: 2331
+        window_from: 1-Nov-25
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:38.526Z'
+        source: amplitude
+        full_query: from(household-delegated).to(saw-wa-details-page)
       data_source:
         type: amplitude
-        retrieved_at: '2025-11-28T20:21:39.816Z'
+        retrieved_at: '2025-12-01T17:33:38.526Z'
+        query: from(household-delegated).to(saw-wa-details-page)
+        full_query: from(household-delegated).to(saw-wa-details-page)
+    description: ''
+    query: from(household-delegated).to(saw-wa-details-page)
+  - uuid: fcc2cbac-c5d9-4659-8947-97e2b4b09216
+    id: Question-answered-to-eon-customer
+    from: 3af310f0-53d7-417e-86b0-32bdb2667a47
+    to: c7620524-c88b-4afd-a012-fb9f1d46a14a
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.1
+      id: eon-customers
+      stdev: 0.0034179296351233165
+      evidence:
+        window_from: 1-Nov-25
+        source: amplitude
+        'n': 7704
+        k: 770
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:42.244Z'
+        full_query: from(Question-answered).to(eon-customer)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:42.244Z'
+        query: from(Question-answered).to(eon-customer)
+        full_query: from(Question-answered).to(eon-customer)
+      connection: amplitude-prod
+      connection_overridden: true
+    query: from(Question-answered).to(eon-customer)
+    description: ''
+  - uuid: 22a14108-f330-4f44-900e-f74417264e63
+    id: Question-answered-to-non-eon-customer
+    from: 3af310f0-53d7-417e-86b0-32bdb2667a47
+    to: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.899
+      connection_overridden: true
+      stdev: 0.001
+      evidence:
+        'n': 3174
+        k: 3158
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T13:29:47.425Z'
         query:
-          from: household-delegated
-          to: saw-wa-details-page
+          from: question-answered
+          to: HH-created-Q-answered
+          exclude:
+            - eon-customer
           context: []
           case: []
-          start: '2025-10-28T00:00:00.000Z'
-          end: '2025-11-14T00:00:00.000Z'
+          start: '2025-11-20T00:00:00.000Z'
+          end: '2025-11-27T00:00:00.000Z'
           query_params: >-
-            e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251028&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
+            e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&start=20251120&end=20251127&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
           from_step_index: 0
           to_step_index: 1
         full_query: >-
-          {"from":"household-delegated","to":"saw-wa-details-page","context":[],"case":[],"start":"2025-10-28T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20WhatsApp%20details%20%2Fonboarding%2FwhatsApp-details%20Page%22%7D&start=20251028&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(household-delegated).to(saw-wa-details-page)
+          {"from":"question-answered","to":"HH-created-Q-answered","exclude":["eon-customer"],"context":[],"case":[],"start":"2025-11-20T00:00:00.000Z","end":"2025-11-27T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&start=20251120&end=20251127&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+    query: from(Question-answered).to(non-eon-customer)
+    description: ''
+    query_overridden: true
+  - uuid: e543f861-9b37-482b-b12a-a2aca8cf488d
+    id: non-eon-customer-to-household-created
+    from: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
+    to: 86469c9f-2f83-49ca-a154-589231be5511
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 1
+    query: from(non-eon-customer).to(household-created)
+    description: ''
+  - uuid: d00a4122-5f98-4c50-8cfe-7318b846ca0b
+    id: eon-customer-to-household-created
+    from: c7620524-c88b-4afd-a012-fb9f1d46a14a
+    to: 86469c9f-2f83-49ca-a154-589231be5511
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 1
+    query: from(eon-customer).to(household-created)
+    description: ''
+  - uuid: 3d0a0757-8224-4cf0-a841-4ad17cd48d91
+    id: household-created-to-household-delegated
+    from: 86469c9f-2f83-49ca-a154-589231be5511
+    to: 16974652-b532-41ee-b4d5-a3ef5381591d
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.55
+      id: household-delegation-rate
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.007685649771522327
+      evidence:
+        'n': 4190
+        k: 2305
+        window_from: 1-Nov-25
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:45.378Z'
+        source: amplitude
+        full_query: from(household-created).to(household-delegated)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:45.378Z'
+        query: from(household-created).to(household-delegated)
+        full_query: from(household-created).to(household-delegated)
+    query: from(household-created).to(household-delegated)
+    description: ''
+  - uuid: c5d8870f-ad07-49a2-ac9d-86af8383a66b
+    id: viewed-dashboard-to-recommendation-retention
+    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    to: b9194789-0714-4273-b1c0-9fd2aa8b97fa
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.029
+      id: retention-rec-to-registration
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.004169184424492649
+      evidence:
+        'n': 1620
+        k: 47
+        window_from: 1-Nov-25
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:47.867Z'
+        source: amplitude
+        full_query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:47.867Z'
+        query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
+        full_query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
+    query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
+    description: ''
+    query_overridden: true
+    n_query: from(household-created).to(viewed-dashboard)
+  - uuid: 30758ce0-bcd5-487a-8800-953b65d89006
+    id: Question-answered-to-abandonned-before-delegation
+    from: 3af310f0-53d7-417e-86b0-32bdb2667a47
+    to: addb99b6-5773-482c-a437-4661c8433ff7
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.001
+    query: from(Question-answered).to(abandonned-before-delegation).minus(household-created)
     description: ''
   - uuid: b42d2d10-e1dc-4933-809b-d26f0d77d491
-    id: household-delegated-to-abandonned-before-delegation
+    id: 16974652-b532-41ee-b4d5-a3ef5381591d->addb99b6-5773-482c-a437-4661c8433ff7
     from: 16974652-b532-41ee-b4d5-a3ef5381591d
     to: addb99b6-5773-482c-a437-4661c8433ff7
-    fromHandle: bottom-out
-    toHandle: top
+    fromHandle: right-out
+    toHandle: left
     p:
-      mean: 0.068
+      mean: 0.078
     query: from(household-delegated).to(abandonned-before-delegation)
     description: ''
+  - uuid: 7f41cc52-1d06-4d99-9e13-30aa643ce0b9
+    id: 5788d308-a7a9-49ce-a755-07491315a603->dab4f352-b997-4f58-a24f-6fae0b8c82d3
+    from: 5788d308-a7a9-49ce-a755-07491315a603
+    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.559
+    query: from(viewed-coffee-screen).to(dropped-out-without-bds)
+    description: ''
+  - uuid: edfc1ffc-8e03-4996-8f61-00f78b2ed3bb
+    id: a2ae8ea8-30a3-43db-b12c-43ad71bdaead->e5cd8923-f466-4535-8451-ed78566757e4
+    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    to: e5cd8923-f466-4535-8451-ed78566757e4
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.015
+    query: from(gave-bds-in-onboarding).to(not-sent-recommendation).minus(viewed-dashboard)
+    description: ''
+  - uuid: c38b4315-7815-47b7-8aae-a87d1506490e
+    id: bffebc85-8e08-4844-b9ac-81af93d1e5d2->bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    from: bffebc85-8e08-4844-b9ac-81af93d1e5d2
+    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.055
+      connection: amplitude-prod
+      connection_overridden: true
+      id: post-onboarding-bds-to-rec
+      stdev: 0.014716062652761437
+      evidence:
+        'n': 240
+        k: 13
+        window_from: 1-Nov-25
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:50.086Z'
+        source: amplitude
+        full_query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:50.086Z'
+        query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
+        full_query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
+    query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
+    description: ''
+    query_overridden: true
+  - uuid: 2e25fd40-2c84-4b14-af19-6a61220ddbcd
+    id: 7515449a-4743-43fb-8fc0-66b9575c5b0c->e5cd8923-f466-4535-8451-ed78566757e4
+    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
+    to: e5cd8923-f466-4535-8451-ed78566757e4
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0
+    query: from(viewed-dashboard).to(not-sent-recommendation)
+    description: ''
+  - uuid: f50c3a38-9369-4da1-8221-27cf65b6cabc
+    id: b9194789-0714-4273-b1c0-9fd2aa8b97fa->22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    from: b9194789-0714-4273-b1c0-9fd2aa8b97fa
+    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.029
+      id: retention-rec-to-registration
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.004169184424492649
+      evidence:
+        'n': 1620
+        k: 47
+        window_from: 1-Nov-25
+        source: amplitude
+        window_to: 30-Nov-25
+        retrieved_at: '2025-12-01T17:33:52.615Z'
+        full_query: from(recommendation-retention).to(switch-registered).visited(eon-customer)
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-01T17:33:52.615Z'
+        query: from(recommendation-retention).to(switch-registered).visited(eon-customer)
+        full_query: from(recommendation-retention).to(switch-registered).visited(eon-customer)
+      mean_overridden: false
+    query: from(recommendation-retention).to(switch-registered).visited(eon-customer)
+    description: ''
+    query_overridden: true
+    n_query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
 policies:
   default_outcome: success
 metadata:
   name: conversion-flow-v0-ezra
   description: ''
   created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-11-29T09:52:53.188Z'
+  updated_at: '2025-12-01T17:33:52.641Z'
   version: 1.0.0
   updated: '2025-11-25T18:25:17.542Z'
-currentQueryDSL: context(channel:google).window(1-Oct-25:1-Oct-25)
-dataInterestsDSL: window(1-oct-25:1-oct-25).context(channel)
+currentQueryDSL: window(1-Nov-25:15-Nov-25)
+dataInterestsDSL: window(-30d:-1d).context(channel)

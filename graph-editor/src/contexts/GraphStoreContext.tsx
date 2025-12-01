@@ -3,6 +3,7 @@ import { create, StoreApi, UseBoundStore } from 'zustand';
 import type { GraphData } from '../types';
 import { useTabContext, fileRegistry } from './TabContext';
 import { db } from '../db/appDatabase';
+import { parseDate } from '../services/windowAggregationService';
 
 /**
  * DateRange normalization and equality
@@ -13,10 +14,12 @@ type DateRange = { start: string; end: string } | null;
 function normalizeDateRange(window: DateRange): DateRange {
   if (!window) return null;
   
-  // Normalize start to T00:00:00Z and end to T23:59:59Z
+  // Helper: Convert any date format (UK or ISO) to proper ISO format with time suffix
+  // CRITICAL: UK dates like "1-Nov-25" must become "2025-11-01T00:00:00Z", not "1-Nov-25T00:00:00Z"
   const normalizeStart = (d: string) => {
     if (d.includes('T')) return d;
-    return `${d}T00:00:00Z`;
+    const isoDate = parseDate(d).toISOString().split('T')[0];
+    return `${isoDate}T00:00:00Z`;
   };
   
   const normalizeEnd = (d: string) => {
@@ -26,7 +29,8 @@ function normalizeDateRange(window: DateRange): DateRange {
       // Replace time with 23:59:59
       return d.replace(/T\d{2}:\d{2}:\d{2}(\.\d{3})?/, 'T23:59:59').replace(/T\d{2}:\d{2}:\d{2}\.\d{3}/, 'T23:59:59');
     }
-    return `${d}T23:59:59Z`;
+    const isoDate = parseDate(d).toISOString().split('T')[0];
+    return `${isoDate}T23:59:59Z`;
   };
   
   return {

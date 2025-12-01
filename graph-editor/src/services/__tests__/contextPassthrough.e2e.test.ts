@@ -435,7 +435,7 @@ describe('Known Bugs / Edge Cases', () => {
       targetId: 'node-uuid',
       graph: { currentQueryDSL: 'context(channel:google).window(1-Oct-25:31-Oct-25)' },
       setGraph: () => {},
-      dailyMode: false
+      writeToFile: false
       // MISSING: currentDSL parameter!
     };
     
@@ -454,7 +454,7 @@ describe('Known Bugs / Edge Cases', () => {
       targetId: 'edge-uuid',
       graph: {},
       setGraph: () => {},
-      dailyMode: false,
+      writeToFile: false,
       bustCache: false,
       currentDSL: getEffectiveDSL()
     };

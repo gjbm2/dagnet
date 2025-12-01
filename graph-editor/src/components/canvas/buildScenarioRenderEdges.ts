@@ -116,7 +116,10 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
   const rfNodes = nodes;
   const rfEdges = baseEdges;
-  const startNode = rfNodes.find((n: any) => n.data?.entry?.is_start === true || (n.data?.entry?.entry_weight || 0) > 0);
+  // Find start node: PRIORITIZE is_start=true over entry_weight>0
+  // First check for explicit is_start=true, then fall back to entry_weight>0
+  const startNode = rfNodes.find((n: any) => n.data?.entry?.is_start === true) 
+    || rfNodes.find((n: any) => (n.data?.entry?.entry_weight || 0) > 0);
   const startNodeId = startNode?.id || null;
 
   // Helper: build residual probability calculator for a given prob resolver
