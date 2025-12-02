@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
 import { ChevronRight, FileText, TrendingUp, Coins, Clock, Package, LucideIcon } from 'lucide-react';
+import { WhereUsedService } from '../../services/whereUsedService';
 import '../../styles/file-state-indicators.css';
 
 /**
@@ -40,6 +41,124 @@ interface ObjectTypeSectionProps {
   onIndexClick?: () => void;
   indexIsDirty?: boolean;
   groupBySubCategories?: boolean;
+}
+
+// Cache for where-used tooltips to avoid repeated fetches
+const tooltipCache = new Map<string, string>();
+
+/**
+ * Navigator Item Component
+ * 
+ * Renders a single navigator item with hover tooltip showing where it's used.
+ * Fetches "where used" info on hover with debounce.
+ */
+interface NavigatorItemProps {
+  entry: NavigatorEntry;
+  isActive: boolean;
+  tabCount: number;
+  onClick: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}
+
+function NavigatorItem({ entry, isActive, tabCount, onClick, onContextMenu }: NavigatorItemProps) {
+  const [tooltip, setTooltip] = useState<string | null>(null);
+  const [isHovering, setIsHovering] = useState(false);
+  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const fetchedRef = useRef(false);
+  
+  const fileId = `${entry.type}-${entry.id}`;
+  
+  // Generate base tooltip (status info)
+  const baseTooltip = entry.isOrphan 
+    ? `⚠️ Orphan file (not in index)\n\n${entry.name}` 
+    : entry.isLocal 
+      ? `${entry.name} (local only)` 
+      : entry.name;
+  
+  // Fetch where-used info on hover
+  const fetchWhereUsed = useCallback(async () => {
+    // Check cache first
+    if (tooltipCache.has(fileId)) {
+      setTooltip(tooltipCache.get(fileId)!);
+      return;
+    }
+    
+    // Skip for files that don't make sense (graphs aren't typically referenced)
+    if (entry.type === 'graph') {
+      const graphTooltip = `${entry.name}\n\n(Graphs are not referenced by other files)`;
+      tooltipCache.set(fileId, graphTooltip);
+      setTooltip(graphTooltip);
+      return;
+    }
+    
+    try {
+      const summary = await WhereUsedService.getTooltipSummary(fileId);
+      tooltipCache.set(fileId, summary.tooltip);
+      setTooltip(summary.tooltip);
+    } catch {
+      // Silently fail - just show base tooltip
+    }
+  }, [fileId, entry.name, entry.type]);
+  
+  const handleMouseEnter = useCallback(() => {
+    setIsHovering(true);
+    
+    // Debounce the fetch - wait 300ms before fetching
+    if (!fetchedRef.current) {
+      hoverTimeoutRef.current = setTimeout(() => {
+        fetchWhereUsed();
+        fetchedRef.current = true;
+      }, 300);
+    }
+  }, [fetchWhereUsed]);
+  
+  const handleMouseLeave = useCallback(() => {
+    setIsHovering(false);
+    
+    // Cancel pending fetch if user leaves quickly
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+  }, []);
+  
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+      }
+    };
+  }, []);
+  
+  // Use cached/fetched tooltip if available, otherwise base tooltip
+  const displayTooltip = tooltip || baseTooltip;
+  
+  return (
+    <div
+      className={`navigator-item ${isActive ? 'active' : ''}`}
+      onClick={onClick}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu(e);
+      }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      title={displayTooltip}
+    >
+      <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
+        {entry.name}
+      </span>
+      
+      <span className="navigator-item-status">
+        {tabCount > 1 && <span className="tab-count" title={`${tabCount} tabs open`}>{tabCount}</span>}
+        {!entry.hasFile && entry.inIndex && <span className="file-badge create" title="Create file">[create]</span>}
+        {entry.isOrphan && <span className="file-badge orphan" title="Orphan file (not in index)">⚠️</span>}
+        {entry.isLocal && entry.hasFile && <span className="file-badge local">local</span>}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -312,30 +431,18 @@ export function ObjectTypeSection({
                         const isActive = activeFileId === entryFileId;
                         
                         return (
-                          <div
+                          <NavigatorItem
                             key={`${entry.type}-${entry.id}`}
-                            className={`navigator-item ${isActive ? 'active' : ''}`}
+                            entry={entry}
+                            isActive={isActive}
+                            tabCount={tabCount}
                             onClick={() => onEntryClick(entry)}
                             onContextMenu={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
                               if (onEntryContextMenu) {
                                 onEntryContextMenu(entry, e.clientX, e.clientY);
                               }
                             }}
-                            title={entry.isOrphan ? '⚠️ Orphan file (not in index)' : entry.isLocal ? `${entry.name} (local only)` : entry.name}
-                          >
-                            <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
-                              {entry.name}
-                            </span>
-                            
-                            <span className="navigator-item-status">
-                              {tabCount > 1 && <span className="tab-count" title={`${tabCount} tabs open`}>{tabCount}</span>}
-                              {!entry.hasFile && entry.inIndex && <span className="file-badge create" title="Create file">[create]</span>}
-                              {entry.isOrphan && <span className="file-badge orphan" title="Orphan file (not in index)">⚠️</span>}
-                              {entry.isLocal && entry.hasFile && <span className="file-badge local">local</span>}
-                            </span>
-                          </div>
+                          />
                         );
                       })}
                     </div>
@@ -351,30 +458,18 @@ export function ObjectTypeSection({
               const isActive = activeFileId === entryFileId;
               
               return (
-                <div
+                <NavigatorItem
                   key={`${entry.type}-${entry.id}`}
-                  className={`navigator-item ${isActive ? 'active' : ''}`}
+                  entry={entry}
+                  isActive={isActive}
+                  tabCount={tabCount}
                   onClick={() => onEntryClick(entry)}
                   onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
                     if (onEntryContextMenu) {
                       onEntryContextMenu(entry, e.clientX, e.clientY);
                     }
                   }}
-                  title={entry.isOrphan ? '⚠️ Orphan file (not in index)' : entry.isLocal ? `${entry.name} (local only)` : entry.name}
-                >
-                  <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
-                    {entry.name}
-                  </span>
-                  
-                  <span className="navigator-item-status">
-                    {tabCount > 1 && <span className="tab-count" title={`${tabCount} tabs open`}>{tabCount}</span>}
-                    {!entry.hasFile && entry.inIndex && <span className="file-badge create" title="Create file">[create]</span>}
-                    {entry.isOrphan && <span className="file-badge orphan" title="Orphan file (not in index)">⚠️</span>}
-                    {entry.isLocal && entry.hasFile && <span className="file-badge local">local</span>}
-                  </span>
-                </div>
+                />
               );
             })
           )}

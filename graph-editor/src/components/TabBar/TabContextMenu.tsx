@@ -5,6 +5,7 @@ import { usePullFile } from '../../hooks/usePullFile';
 import { usePullAll } from '../../hooks/usePullAll';
 import { useRenameFile } from '../../hooks/useRenameFile';
 import { useViewHistory } from '../../hooks/useViewHistory';
+import { useWhereUsed } from '../../hooks/useWhereUsed';
 import { RenameModal } from '../RenameModal';
 import { HistoryModal } from '../modals/HistoryModal';
 import './TabBar.css';
@@ -64,6 +65,9 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
     history,
     currentContent
   } = useViewHistory(tab?.fileId);
+
+  // Where used hook
+  const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(tab?.fileId);
 
   if (!tab) return <>{children}</>;
 
@@ -196,6 +200,16 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
               onSelect={showHistoryModal}
             >
               View History
+            </DropdownMenu.Item>
+          )}
+
+          {canSearchWhereUsed && (
+            <DropdownMenu.Item 
+              className="tab-context-item" 
+              onSelect={findWhereUsed}
+              disabled={isSearchingWhereUsed}
+            >
+              {isSearchingWhereUsed ? 'Searching...' : 'Where Used...'}
             </DropdownMenu.Item>
           )}
 
