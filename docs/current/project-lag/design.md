@@ -2,7 +2,7 @@
 
 **Status:** Design Draft  
 **Created:** 1-Dec-25  
-**Last Updated:** 1-Dec-25  
+**Last Updated:** 2-Dec-25  
 
 ---
 
@@ -136,6 +136,11 @@ interface GraphEdge {
 interface LatencyConfig {
   /** Whether to track latency for this edge */
   track: boolean;
+  
+  /** Maturity threshold in days - cohorts younger than this are "immature"
+   *  Default: 30 days (per-edge setting)
+   */
+  maturity_days?: number;  // Default: 30
   
   /** Censor time in days - ignore conversions after this lag */
   censor_days?: number;  // Default: 14 or 28 depending on edge type
@@ -651,11 +656,15 @@ When both layers overlap, offset stripes combine to appear SOLID.
 - Ratio immediately visible: wide solid core = high maturity coverage
 
 **Implementation in `ConversionEdge.tsx`:** 
-- Both layers use same stripe width (e.g., 4px)
+- Stripe angle: **45°** (opposite direction from existing "partial display" stripes)
+- Stripe width: Match existing stripe width in partial display logic
+- Stripe colour: **Unchanged** from current edge colour
 - Inner layer: stripe offset = 0
-- Outer layer: stripe offset = 2px (half stripe width)
+- Outer layer: stripe offset = half stripe width
 - Where both present: visual interference creates solid appearance
 - Where only outer present: stripes visible = forecast region
+
+**Reference:** Existing partial display stripe logic in `ConversionEdge.tsx` — use same width/styling but opposite angle.
 
 ### 7.2 Edge Data Model for Rendering
 
@@ -678,6 +687,67 @@ interface EdgeLatencyDisplay {
   k_forecast: number;        // Projected total conversions
 }
 ```
+
+### 7.3 View Preferences: Maturity Split Toggle
+
+A view preference controls whether the mature/forecast split is visualised:
+
+| Setting | Value |
+|---------|-------|
+| Name | `showMaturitySplit` |
+| Default | **On** |
+| Scope | **Per-tab** (not per-graph, not global) |
+| Location | ViewMenu + Tools side panel (shared hook) |
+
+When **off**, edges render with standard solid appearance (no stripe layers).
+
+### 7.4 Edge Bead: Latency Display
+
+A new bead displays latency information on edges with `latency.track: true`:
+
+| Property | Value |
+|----------|-------|
+| Position | **Right-aligned** on edge (new bead position) |
+| Format | **"13d (75%)"** — median lag + maturity coverage |
+| Show when | `latency.track === true` AND `median_lag_days > 0` |
+| Colour | Standard bead styling (no new colour) |
+
+**Completeness** = `maturity_coverage` = `mature_n / total_n` (as defined in §7.2).
+
+### 7.5 Window Selector: Cohort Mode UI
+
+The WindowSelector supports both `window()` and `cohort()` modes:
+
+| Property | Value |
+|----------|-------|
+| Default mode | **Cohort** (in all cases) |
+| Mode selector | Dropdown in WindowSelector component |
+| Icons | `<Timer>` (Lucide) = cohort, `<TimerOff>` (Lucide) = window |
+| Icon location | Left of date selector AND on context chip |
+| Chip behaviour | Shows dropdown allowing mode switch |
+
+**Visual indicators:**
+- Cohort mode: Timer icon + "cohort(start:end)" in DSL
+- Window mode: TimerOff icon + "window(start:end)" in DSL
+
+### 7.6 Tooltips: Interim Approach
+
+Full tooltip redesign is **deferred**. For now:
+- Append latency text to existing tooltip content
+- Format: "Lag: 13d | Maturity: 75%"
+
+Future tooltip cleanup tracked in `/TODO.md`.
+
+### 7.7 Properties Panel: Latency Settings
+
+Latency configuration appears **within the Probability param section** of edge properties (not a separate section):
+
+| Field | Type | Maps to |
+|-------|------|---------|
+| Calculate Latency | Boolean toggle | `edge.latency.track` |
+| Cut-off Time | String input (e.g., "30d") | `edge.latency.maturity_days` |
+
+**Note:** These are configuration settings, not read-only displays. Derived values (maturity_coverage, median_lag_days) are shown via edge bead and tooltip.
 
 ---
 
@@ -899,8 +969,16 @@ values:
 
 | File | Current Role | Change Required |
 |------|--------------|-----------------|
-| `src/contexts/ScenariosContext.tsx` | Manages scenario state | Handle latency in scenario params |
-| `src/types/scenarios.ts` | Scenario type definitions | Add latency to `EdgeParamDiff` |
+| `src/contexts/ScenariosContext.tsx` | Manages scenario state | No change needed for latency |
+| `src/types/scenarios.ts` | Scenario type definitions | No change needed for latency |
+
+**Clarification:** Latency configuration (`latency.track`, `latency.maturity_days`) is a **graph topology setting**, not a scenario parameter. It is NOT overridable per-scenario.
+
+What IS scenario-visible (read-only):
+- `p.evidence.maturity_coverage` — affects edge width split rendering
+- `p.evidence.median_lag_days` — affects bead display
+
+These are derived values computed from data, not configurable scenario overrides.
 
 ### 9.3 Data Flow: Cohort Mode
 
