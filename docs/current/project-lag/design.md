@@ -144,9 +144,15 @@ interface LatencyConfig {
   
   /** Censor time in days - ignore conversions after this lag */
   censor_days?: number;  // Default: 14 or 28 depending on edge type
+
+  /** Recency half-life (days) for weighting cohorts when fitting forecast model.
+   *  Phase 1 heuristic: favour more recent mature cohorts when updating p_mean,
+   *  but retain enough history for stability. Optional; not user-exposed initially.
+   */
+  recency_half_life_days?: number;  // Default: 30 (if omitted)
   
   /** Inferred distribution parameters
-   *  Phase 0: empirical (just pmf from data)
+   *  Phase 0: empirical summaries only
    *  Phase 1+: parametric fit (lognormal/weibull) for forecasting
    */
   distribution?: {
@@ -168,51 +174,105 @@ interface LatencyConfig {
 }
 ```
 
-### 3.2 Parameter File Additions
+### 3.2 Parameter File Additions (Phase 0: A‑anchored cohort evidence)
 
-For edges with latency tracking, parameter files gain:
+For edges with `latency.track: true`, parameter files store **A‑anchored per‑cohort evidence** plus a small set of edge‑level latency summaries. The structure is derived from the 3‑step Amplitude funnel \(A→X→Y\) and is intentionally human‑readable.
 
 ```yaml
-# parameter-{edge-id}.yaml
-id: edge-signup-to-purchase
-name: Signup to Purchase
-type: probability  # unchanged
+# parameter-{edge-id}.yaml  (example: A=HouseholdCreated, X=SwitchRegistered, Y=SwitchSuccess)
+id: switch-registered-to-success
+name: Switch Registered → Success
+type: probability
+source: amplitude:funnel
+
+latency:
+  track: true
+  maturity_days: 30                 # Per-edge setting (see §3.1)
 
 values:
-  - mean: 0.45
-    stdev: 0.02
-    n: 1765
-    k: 794
-    
-    # Daily data (existing)
-    n_daily: [270, 186, 539, ...]
-    k_daily: [161, 121, 306, ...]
-    dates: [3-Nov-25, 4-Nov-25, 5-Nov-25, ...]
-    
-    # NEW: Cohort maturation data (for latency inference)
-    cohort_dailies:
-      - cohort_date: 3-Nov-25
-        lags: [0, 1, 2, 3, 4, 5, 6, 7]  # Days since cohort entry
-        n: 270                          # Cohort size
-        k_by_lag: [42, 85, 112, 131, 145, 152, 158, 161]  # Cumulative k
-      - cohort_date: 4-Nov-25
-        lags: [0, 1, 2, 3, 4, 5, 6]
-        n: 186
-        k_by_lag: [28, 54, 78, 95, 108, 116, 121]
-      # ... more cohorts
+  - label: Cohorts 1-Sep-25 to 30-Nov-25
+    query_date: 2-Dec-25           # When this data was fetched
+    conversion_window_days: 45     # Amplitude cs parameter in days (right-censor longstop)
 
-    # NEW: Inferred latency parameters
+    totals:
+      n: 1450                      # Total X→Y cohort n across all A-cohorts in window
+      k: 1021                      # Total X→Y converters
+
+    # Edge-level latency summary for X→Y
     latency:
-      family: lognormal
-      mu: 0.8          # log(median) ≈ exp(0.8) ≈ 2.2 days
-      sigma: 0.6       # shape parameter
-      median_days: 2.2
-      p90_days: 5.8    # 90th percentile
-      censor_days: 14  # Truncation point
-      
-    window_from: 3-Nov-25T00:00:00Z
-    window_to: 17-Nov-25T00:00:00Z  # Cohort window end
+      median_days: 6.0             # Weighted median X→Y lag from dayMedianTransTimes
+      mean_days: 7.0               # Weighted mean X→Y lag from dayAvgTransTimes
+      completeness: 1.0            # See §5.0.1 (latency.completeness)
+      histogram:                   # Coarsened daily histogram (0–10d, then 10+ catch-all)
+        total_converters: 1021
+        bins:
+          - day: 3
+            count: 2
+          - day: 6
+            count: 716
+          - day: 7
+            count: 206
+          - day: 8
+            count: 42
+          - day: 9
+            count: 55
+          - day_range: [10, 45]
+            count: 0               # Example only; real data uses Amplitude histogram
+
+    # Per-cohort evidence, anchored on A-entry date (HouseholdCreated)
+    cohort_data:
+      - date: 1-Sep-25             # d-MMM-yy format, per repo convention
+        anchor_n: 575              # Users who entered A on this date
+        anchor_median_lag: 14.8    # A→X median lag in days (from dayMedianTransTimes step 1)
+        anchor_mean_lag: 15.9      # A→X mean lag in days (from dayAvgTransTimes step 1)
+
+        n: 21                      # Users from this A-cohort who reached X (SwitchRegistered)
+        k: 19                      # Users from this A-cohort who reached Y (SwitchSuccess)
+        median_lag: 6.0            # X→Y median lag in days (step 2)
+        mean_lag: 6.2              # X→Y mean lag in days (step 2)
+
+      - date: 2-Sep-25
+        anchor_n: 217
+        anchor_median_lag: 16.2
+        anchor_mean_lag: 16.2
+        n: 7
+        k: 4
+        median_lag: 6.0
+        mean_lag: 6.0
+
+      # ... one row per A-anchored cohort date ...
+
+    # Optional upstream (A→X) summary for convolution and diagnostics
+    anchor_latency:
+      median_days: 11.4            # Overall A→X median lag
+      mean_days: 12.3              # Overall A→X mean lag
+      histogram:                   # Coarsened A→X histogram (same scheme as above)
+        total_converters: 1450
+        bins:
+          - day: 3
+            count: 1
+          - day: 4
+            count: 6
+          - day: 5
+            count: 37
+          - day: 6
+            count: 59
+          - day: 7
+            count: 85
+          - day: 8
+            count: 78
+          - day: 9
+            count: 155
+          - day_range: [10, 45]
+            count: 1029
 ```
+
+**Notes:**
+
+- `cohort_data.date` is always an **A‑entry (anchor) date**, not an X‑entry date. This makes `cohort(anchor, ...)` queries trivial: we just slice rows by date and aggregate `n`/`k`.
+- `anchor_n` is used both for A→X diagnostics and for any future A→Y convolution logic. It is **not** required to answer X→Y cohort queries on evidence.
+- The **forecast baseline** for X→Y is derived from `latency.median_days`, `latency.mean_days` and (optionally) the `histogram` and will be refined by Phase 1 inference logic (§5).
+- The same pattern applies for any edge \(X→Y\): we store X→Y evidence and (optionally) the upstream A→X lag information relevant for that edge.
 
 ### 3.3 Renaming: cost_time → labour_cost
 
@@ -321,6 +381,69 @@ Date             n     k       p   MedianDays   Status
 
 **We have everything:** Day-by-day tracking, per-cohort latency, mature/immature split. No additional data needed.
 
+### 4.6 Dual-Slice Retrieval for Latency Edges
+
+**Problem:** For latency-tracked edges, `window()` and `cohort()` have fundamentally different semantics:
+
+| Query | Semantics | Data Source |
+|-------|-----------|-------------|
+| `cohort(-90d:-60d)` | Users who entered **A** (anchor) in that range; what happened to them on X→Y? | A-anchored 3-step funnel |
+| `window(-7d:)` | Events where **X** occurred in the last 7 days; what's the X→Y rate? | X-anchored 2-step funnel |
+
+If we only have A-anchored data, answering `window(-7d:)` requires convolving A-cohorts with the A→X lag distribution — which is model-heavy and loses the "raw recent events" intuition users expect.
+
+**Solution: Dual-slice ingestion for latency edges.**
+
+When the pinned DSL (e.g., `or(window(-7d:), cohort(-90d:)).context(channel)`) contains **both** `window()` and `cohort()` clauses, and the edge has `latency.track=true`:
+
+1. **Cohort slice** (A-anchored):
+   - Fetch 3-step funnel `[A → X → Y]` for the cohort range.
+   - Store as `cohort_data` + `latency` + `anchor_latency` (as per §3.2).
+   - Used for `cohort(...)` queries and for building the edge-level model (p*, lag CDF).
+
+2. **Window slice** (X-anchored):
+   - Fetch 2-step funnel `[X → Y]` for the window range.
+   - Store as `window_data` (simple `dates`, `n_daily`, `k_daily` arrays).
+   - Used for `window(...)` queries — gives "raw recent events" at this edge.
+
+Both slices are stored in the **same param file**, distinguished by `sliceDSL`:
+
+```yaml
+values:
+  # A-anchored cohort slice
+  - sliceDSL: 'cohort(-90d:).context(channel:google)'
+    query_date: '2-Dec-25'
+    totals: { n: 1450, k: 1021 }
+    latency: { median_days: 6.0, mean_days: 7.0, completeness: 1.0 }
+    cohort_data: [ ... per-A-date rows ... ]
+    anchor_latency: { ... }
+
+  # X-anchored window slice (recent)
+  - sliceDSL: 'window(-7d:).context(channel:google)'
+    query_date: '2-Dec-25'
+    totals: { n: 120, k: 8 }
+    window_data:
+      dates: [ '25-Nov-25', '26-Nov-25', ... ]
+      n_daily: [ 18, 22, ... ]
+      k_daily: [ 1, 2, ... ]
+```
+
+**Query resolution:**
+
+| Query | Edge has `latency.track=true`? | Resolution |
+|-------|-------------------------------|------------|
+| `cohort(...)` | Yes | Use `cohort_data` (A-anchored); slice by A-date, aggregate n/k |
+| `cohort(...)` | No | Treat as `window()` (existing logic) |
+| `window(...)` | Yes, and `window_data` exists | Use `window_data` (X-anchored); slice by X-date |
+| `window(...)` | Yes, but no `window_data` | Fall back to model-based convolution from `cohort_data` + lag CDF |
+| `window(...)` | No | Existing `window()` logic (n_daily/k_daily by event date) |
+
+**Implications:**
+
+- **Pinned DSL design matters:** To get both cohort and window views for a latency edge, the pinned DSL must include both `cohort(...)` and `window(...)` clauses (e.g., `or(window(-30d:), cohort(-90d:))`).
+- **Amplitude query count:** For latency edges with dual slices, we make two Amplitude calls per context slice (one 3-step, one 2-step). This is acceptable given the distinct use cases.
+- **Non-latency edges are unchanged:** `cohort()` on a non-latency edge is just an alias for `window()`.
+
 ---
 
 ## 5. Inference Engine
@@ -378,7 +501,7 @@ def compute_edge_probability_with_forecast(
         
         # Immature cohorts: observed + forecast
         'immature_n': immature_n,
-        'immature_k_observed': immature_k,         # What we've seen so far
+        'immature_k_observed': immature_k,          # What we've seen so far
         'immature_k_forecast': immature_forecast_k, # What we expect eventually
         
         # Combined
@@ -387,7 +510,8 @@ def compute_edge_probability_with_forecast(
         'total_k_forecast': mature_k + immature_forecast_k,
         
         # Coverage: how much of our window is mature?
-        'maturity_coverage': mature_n / total_n if total_n > 0 else 0
+        # (Phase 0 approximation; see §5.0.1 for the refined latency.completeness definition.)
+        'completeness': mature_n / total_n if total_n > 0 else 0
     }
 ```
 
@@ -459,9 +583,209 @@ This gives us a quick latency estimate without needing maturation curves.
 - No per-cohort maturation curve (just final p)
 - Latency estimate is aggregate, not per-cohort
 
+#### 5.0.1 Edge-Level Summary Stats (MVP, pre-Bayes)
+
+Before full survival modelling, we expose a small set of **edge-level latency stats** derived from Amplitude:
+
+1. **Typical lag (`latency.median_days`)**
+   - Definition: weighted median time-to-convert (days) across all cohorts in the parameter window.
+   - Computation: as in `estimate_latency_from_amplitude()` above:
+     - Use `dayMedianTransTimes.series[i][1]` as per-cohort medians (ms).
+     - Weight by `k_i` from `dayFunnels.series[i] = [n_i, k_i]`.
+     - Ignore cohorts with `k_i = 0` or `median_ms <= 0`.
+
+2. **Completeness / maturity progress (`latency.completeness`)**
+   - Intuition: \"How far along are the current cohorts, relative to the typical lag?\"  
+   - For each cohort \(i\):
+     - Age in days: \(a_i = (\text{query\_date} - \text{cohort\_date}_i)\).
+     - Typical lag: \(T_{\text{med}} = \text{latency.median\_days}\).
+     - Define per-cohort progress:
+       \[
+       \text{progress}_i = \min\left(1,\ \frac{a_i}{T_{\text{med}}}\right)
+       \]
+   - Let \(n_i\) be the cohort size from `dayFunnels.series[i][0]`. Define:
+     \[
+     \text{latency.completeness} = \frac{\sum_i n_i \cdot \text{progress}_i}{\sum_i n_i}
+     \]
+   - Properties:
+     - 0 if all cohorts are brand new.
+     - 1 if all cohorts are at least one median-lag old.
+     - Smooth 0–1 measure that does not depend on an arbitrary age threshold.
+
+3. **Sample context**
+   - We re-use existing `n`/`k` from parameter values for context:
+     - `n = \sum_i n_i`
+     - `k = \sum_i k_i`
+   - UI can grey-out latency displays when `n` and/or `k` are very small.
+
+#### 5.0.2 Evidence vs Forecast Policy (Phase 1)
+
+Phase 1 introduces a clearer separation between **evidence** and **forecasting** for each latency‑tracked edge:
+
+1. **Ingestion-time triage**
+   - For each cohort row \(i\) in `cohort_data` at ingestion date \(T_{\text{ingest}}\):
+     - Compute age: \(a_i = T_{\text{ingest}} - \text{cohort\_date}_i\).
+     - Mark cohort as **mature enough for model fitting** if:
+       - \(a_i \ge \text{latency.median\_days} + \delta\) (e.g. \(\delta = 0\)–7 days), and
+       - \(a_i \le W_{\max}\) (e.g. 90–120 days) to avoid using very old data where behaviour may have drifted.
+   - Only these mature cohorts contribute to the **forecast baseline** parameters for the edge.
+
+2. **Recency-weighted model fitting**
+   - Within the “mature but not ancient” set, we favour more recent cohorts when estimating the long‑run \(p_\star\) for X→Y:
+     - For each mature cohort \(i\), define a recency weight \(w_i\), e.g. exponential:
+       \[
+       w_i = \exp\left(-\frac{T_{\text{ingest}} - t_i}{H}\right)
+       \]
+       where \(t_i\) is the cohort date and \(H\) is `latency.recency_half_life_days` (default ~30).
+     - Estimate the **mature baseline probability**:
+       \[
+       p_\star = \frac{\sum_i w_i k_i}{\sum_i w_i n_i}
+       \]
+   - Guard against sparsity by requiring an effective sample size to exceed a minimum (e.g. 500–1000 users):
+     \[
+     N_{\text{eff}} = \frac{(\sum_i w_i n_i)^2}{\sum_i w_i^2 n_i}
+     \]
+     If \(N_{\text{eff}}\) is too small, widen \(W_{\max}\) or blend with a weaker long‑history prior.
+
+3. **Query-time mixing of evidence and forecast**
+   - For a query like `e.x-y.p.mean` under `cohort(-21d:)` at date \(T\):
+     - Slice `cohort_data` rows whose A‑entry dates are in the requested window.
+     - For each cohort \(i\) in the slice:
+       - Keep observed conversions \(k_i\) as **hard evidence**.
+       - Compute current age \(a_i = T - \text{cohort\_date}_i\).
+       - Use the edge‑level lag CDF \(F(t)\) (from `latency.median_days` / histogram) to estimate what fraction of the eventual conversions should already have appeared at age \(a_i\).
+       - Use \(p_\star\) and \(F(t)\) to **forecast the unobserved tail** for that cohort (without discarding early conversions that have already happened).
+   - Aggregate across cohorts in the window:
+     - Forecasted \(p_{\text{window}}\) is a cohort‑size‑weighted average of each cohort’s evidence+forecast estimate.
+     - Window‑specific **completeness** is:
+       \[
+       \text{completeness}_{\text{window}} = \frac{\sum_i n_i \cdot \text{progress}_i}{\sum_i n_i}
+       \]
+       with \(\text{progress}_i\) defined as in §5.0.1.
+
+4. **Bayesian upgrade (future)**
+   - Phase 1 treats \(p_\star\) and \(F(t)\) as re‑estimated at ingestion time from mature cohorts only.
+   - A future Bayesian enhancement would allow **immature cohorts to slowly update the model parameters** as well, by giving them a smaller maturity‑weighted contribution to the posterior for \(p_\star\) and the lag parameters.
+
+#### 5.0.3 Draft Formulas for Forecasting (Phase 1)
+
+The following are **draft formulas** for the Phase 1 forecasting logic. These require validation and refinement before implementation.
+
+##### A. Per-Cohort Tail Forecasting
+
+For an immature cohort \(i\) with:
+- \(n_i\) users entered on cohort date
+- \(k_i\) observed conversions so far
+- Age \(a_i\) days since entry
+- Edge lag CDF \(F(t)\) (probability of conversion by lag \(t\), given eventual conversion)
+- Mature baseline probability \(p_\star\)
+
+**The forecasted total conversions for cohort \(i\):**
+
+\[
+\hat{k}_i = k_i + (n_i - k_i) \cdot p_\star \cdot \frac{1 - F(a_i)}{1 - p_\star \cdot F(a_i)}
+\]
+
+**Derivation:**
+- Of the \(n_i - k_i\) users who haven't converted yet:
+  - Some will eventually convert (the "tail")
+  - Some will never convert
+- The probability that a user who hasn't converted by age \(a_i\) will eventually convert is:
+  \[
+  P(\text{convert} \mid \text{not yet converted by } a_i) = \frac{p_\star \cdot (1 - F(a_i))}{1 - p_\star \cdot F(a_i)}
+  \]
+- This uses Bayes' rule: not having converted by \(a_i\) could be because (a) you're a non-converter, or (b) you're a converter but slow.
+
+**Simplified approximation (when \(p_\star \cdot F(a_i) \ll 1\)):**
+
+\[
+\hat{k}_i \approx k_i + (n_i - k_i) \cdot p_\star \cdot (1 - F(a_i))
+\]
+
+##### B. Window Probability from Cohort Data (Convolution Fallback)
+
+When `window(t1:t2)` is requested for a latency edge but only A-anchored `cohort_data` is available, we need to **convolve** to find which A-cohorts contribute X-events in the window.
+
+Let:
+- \(g(s)\) = A→X lag PDF (from `anchor_latency.histogram`)
+- \(h(t)\) = X→Y lag PDF (from `latency.histogram`)
+- \(n_d\) = users entering A on date \(d\) (from `cohort_data[d].anchor_n`)
+
+**Users starting X in window \([t_1, t_2]\):**
+
+For each A-cohort date \(d\):
+\[
+n_{X,d}^{[t_1,t_2]} = n_d \cdot p_{A \to X} \cdot \int_{t_1 - d}^{t_2 - d} g(s) \, ds
+\]
+
+where the integral is the probability that A→X lag falls in the range that places the X-event within the window.
+
+**Total X-starters in window:**
+\[
+N_X^{[t_1,t_2]} = \sum_d n_{X,d}^{[t_1,t_2]}
+\]
+
+**Conversions (X→Y) from these:**
+\[
+K_Y^{[t_1,t_2]} = \sum_d n_{X,d}^{[t_1,t_2]} \cdot p_{X \to Y} \cdot F_{X \to Y}(\text{age}_d)
+\]
+
+where \(\text{age}_d = T_{\text{query}} - (d + \mathbb{E}[g])\) is the approximate age of the X-event.
+
+**Note:** This is approximate because:
+- We're using expected A→X lag rather than the full distribution
+- Histogram data is coarse (especially beyond 10 days)
+- For better accuracy, use the X-anchored `window_data` slice when available (§4.6)
+
+##### C. Aggregated Window Probability
+
+For a `window(t1:t2)` query with X-anchored `window_data` available:
+
+\[
+p_{\text{window}} = \frac{\sum_{d \in [t_1, t_2]} k_d}{\sum_{d \in [t_1, t_2]} n_d}
+\]
+
+where \(n_d\) and \(k_d\) are from `window_data.n_daily` and `window_data.k_daily`.
+
+**With forecast for immature days:**
+
+\[
+p_{\text{window}}^{\text{forecast}} = \frac{\sum_d (k_d + \hat{k}_d^{\text{tail}})}{\sum_d n_d}
+\]
+
+where \(\hat{k}_d^{\text{tail}}\) is the forecasted tail from formula A above.
+
+##### D. Completeness for a Query Window
+
+For any query (cohort or window), the **completeness** indicates how much is evidence vs forecast:
+
+\[
+\text{completeness}_{\text{query}} = \frac{\sum_d n_d \cdot \min(1, a_d / T_{\text{med}})}{\sum_d n_d}
+\]
+
+where:
+- \(a_d\) = age of cohort/event on date \(d\)
+- \(T_{\text{med}}\) = `latency.median_days` for the edge
+- Sum is over all dates in the query window
+
+##### E. Summary of Key Formulas
+
+| Formula | Purpose | Inputs | Output |
+|---------|---------|--------|--------|
+| \(p_\star = \frac{\sum_i w_i k_i}{\sum_i w_i n_i}\) | Mature baseline probability | Mature cohorts, recency weights | Long-run conversion rate |
+| \(w_i = \exp(-\frac{T - t_i}{H})\) | Recency weight | Cohort date \(t_i\), half-life \(H\) | Weight for cohort \(i\) |
+| \(N_{\text{eff}} = \frac{(\sum w_i n_i)^2}{\sum w_i^2 n_i}\) | Effective sample size | Weighted cohorts | Sample size guard |
+| \(\hat{k}_i = k_i + (n_i - k_i) \cdot p_\star \cdot \frac{1 - F(a_i)}{1 - p_\star F(a_i)}\) | Per-cohort forecast | Observed k, age, lag CDF | Forecasted conversions |
+| \(\text{completeness} = \frac{\sum n_i \cdot \min(1, a_i/T_{\text{med}})}{\sum n_i}\) | Maturity progress | Cohort ages, median lag | 0–1 progress measure |
+
+**Status:** These formulas are **draft** and require validation. In particular:
+- The tail forecasting formula (A) assumes the lag CDF \(F(t)\) is well-estimated from histogram/median data.
+- The convolution fallback (B) is approximate; prefer X-anchored `window_data` when available.
+- The effective sample size formula uses the standard weighted variance adjustment.
+
 ---
 
-### 5.1 Fitting Lag Distributions (Phase 1)
+### 5.1 Fitting Lag Distributions (Phase 1+)
 
 For each latency-tracked edge, we fit a survival model:
 
@@ -677,9 +1001,7 @@ interface EdgeLatencyDisplay {
   p_mature: number;          // mature_p (same value, but based on mature evidence)
   
   // For layer widths
-  n_mature: number;          // Sample size from mature cohorts
-  n_total: number;           // Total sample size (mature + immature)
-  maturity_coverage: number; // n_mature / n_total (0-1)
+  completeness: number;      // 0-1 maturity progress (see §5.0.1)
   
   // For tooltips / properties panel
   median_lag_days?: number;  // From dayMedianTransTimes
@@ -708,11 +1030,9 @@ A new bead displays latency information on edges with `latency.track: true`:
 | Property | Value |
 |----------|-------|
 | Position | **Right-aligned** on edge (new bead position) |
-| Format | **"13d (75%)"** — median lag + maturity coverage |
+| Format | **"13d (75%)"** — median lag + completeness (see §5.0.1) |
 | Show when | `latency.track === true` AND `median_lag_days > 0` |
 | Colour | Standard bead styling (no new colour) |
-
-**Completeness** = `maturity_coverage` = `mature_n / total_n` (as defined in §7.2).
 
 ### 7.5 Window Selector: Cohort Mode UI
 
@@ -1083,6 +1403,162 @@ ConversionEdge renders with two layers
 
 ---
 
+## 10. Testing Strategy
+
+### 10.1 Test Coverage Requirements
+
+The dual-slice retrieval architecture introduces significant complexity that requires comprehensive test coverage across multiple dimensions.
+
+#### A. DSL Parsing Tests (`queryDSL.test.ts`)
+
+| Test Case | Input | Expected Output |
+|-----------|-------|-----------------|
+| Parse `cohort()` with relative dates | `cohort(-90d:-30d)` | `{ cohort: { start: '-90d', end: '-30d' } }` |
+| Parse `cohort()` with absolute dates | `cohort(1-Sep-25:30-Nov-25)` | `{ cohort: { start: '1-Sep-25', end: '30-Nov-25' } }` |
+| Parse `cohort()` with anchor | `cohort(household-created,-90d:)` | `{ cohort: { anchor: 'household-created', start: '-90d', end: '' } }` |
+| Parse mixed `window()` and `cohort()` | `window(-7d:).cohort(-90d:)` | Both parsed; last wins or error? |
+| Normalise `cohort()` to canonical form | `cohort( -90d : -30d )` | `cohort(-90d:-30d)` |
+
+#### B. DSL Explosion Tests (`dslExplosion.test.ts`)
+
+| Test Case | Input | Expected Atomic Slices |
+|-----------|-------|------------------------|
+| Compound with `cohort()` | `or(cohort(-90d:), window(-7d:)).context(channel)` | Cartesian product of cohort/window × context values |
+| Nested OR with `cohort()` | `or(cohort(-90d:-60d), cohort(-60d:-30d))` | Two separate cohort slices |
+| `cohort()` with context expansion | `cohort(-90d:).context(channel)` | One slice per channel value |
+
+#### C. Ingestion Logic Tests (`dataOperationsService.test.ts`)
+
+| Test Case | Edge Config | Pinned DSL | Expected Behaviour |
+|-----------|-------------|------------|-------------------|
+| Latency edge, cohort only | `latency.track: true` | `cohort(-90d:)` | 3-step A-anchored fetch; store `cohort_data` |
+| Latency edge, window only | `latency.track: true` | `window(-7d:)` | 2-step X-anchored fetch; store `window_data` |
+| Latency edge, dual slice | `latency.track: true` | `or(cohort(-90d:), window(-7d:))` | Both fetches; both data blocks stored |
+| Non-latency edge, cohort | `latency.track: false` | `cohort(-90d:)` | Treat as `window()`; standard fetch |
+| Latency edge, no anchor defined | `latency.track: true`, no `anchor.node_id` | `cohort(-90d:)` | Error or fallback to graph START node |
+
+#### D. Window Aggregation Tests (`windowAggregationService.test.ts`)
+
+| Test Case | Query | Data Available | Expected Resolution |
+|-----------|-------|----------------|---------------------|
+| `cohort()` on latency edge | `cohort(-60d:-30d)` | `cohort_data` present | Slice rows by A-date; return `Σk/Σn` |
+| `window()` on latency edge, window_data exists | `window(-7d:)` | `window_data` present | Use X-anchored data directly |
+| `window()` on latency edge, no window_data | `window(-7d:)` | Only `cohort_data` | Convolution fallback (or error?) |
+| `cohort()` on non-latency edge | `cohort(-60d:-30d)` | Standard `n_daily/k_daily` | Treat as `window()` |
+| Mixed query types | `cohort(-90d:)` then `window(-7d:)` | Both data blocks | Correct routing per query type |
+
+#### E. Forecasting Logic Tests (`forecastService.test.ts` — new)
+
+| Test Case | Inputs | Expected Output |
+|-----------|--------|-----------------|
+| Fully mature cohort | Age > median_days, observed k | `forecast_k = k` (no tail) |
+| Fully immature cohort | Age = 0, k = 0 | `forecast_k = n * p_star` |
+| Partially mature cohort | Age = median_days/2, some k | `forecast_k = k + tail` per formula A |
+| Zero observed conversions | k = 0, age > 0 | Still forecasts tail based on p_star |
+| Edge case: p_star = 0 | No mature conversions | Fallback to prior or error |
+| Edge case: p_star = 1 | All mature users convert | `forecast_k = n` |
+
+#### F. Completeness Calculation Tests
+
+| Test Case | Cohort Ages | Median Days | Expected Completeness |
+|-----------|-------------|-------------|----------------------|
+| All mature | [60, 45, 30] | 30 | 1.0 |
+| All immature | [5, 3, 1] | 30 | ~0.1 |
+| Mixed | [60, 30, 7, 2] | 30 | Weighted average |
+| Zero median (edge case) | [10, 5] | 0 | 1.0 (or error?) |
+| Single cohort | [15] | 30 | 0.5 |
+
+#### G. Recency Weighting Tests
+
+| Test Case | Cohort Dates | Half-life | Expected Weights |
+|-----------|--------------|-----------|------------------|
+| All same age | [T-30, T-30, T-30] | 30 | Equal weights |
+| Exponential decay | [T-60, T-30, T-0] | 30 | [0.135, 0.368, 1.0] (approx) |
+| Very old cohort | [T-180] | 30 | Near-zero weight |
+| Half-life = infinity | Any | ∞ | Equal weights |
+
+#### H. Effective Sample Size Tests
+
+| Test Case | Weights | n_i | Expected N_eff |
+|-----------|---------|-----|----------------|
+| Equal weights | [1, 1, 1] | [100, 100, 100] | 300 |
+| One dominant | [1, 0.01, 0.01] | [100, 100, 100] | ~102 |
+| All zero except one | [1, 0, 0] | [100, 100, 100] | 100 |
+
+### 10.2 Integration Test Scenarios
+
+These tests verify end-to-end behaviour across the full pipeline.
+
+#### Scenario 1: Fresh Latency Edge Setup
+1. Create edge with `latency.track: true`, `maturity_days: 30`
+2. Set pinned DSL to `or(cohort(-90d:), window(-7d:)).context(channel:google)`
+3. Trigger data fetch
+4. **Verify:** Both `cohort_data` and `window_data` blocks present in param file
+5. **Verify:** `latency.completeness` calculated correctly
+
+#### Scenario 2: Cohort Query on Mature Data
+1. Load param file with 90 days of `cohort_data`, all cohorts >30 days old
+2. Execute `cohort(-60d:-30d)` query
+3. **Verify:** Returns `p = Σk/Σn` for sliced rows
+4. **Verify:** `completeness = 1.0`
+
+#### Scenario 3: Cohort Query on Mixed Maturity
+1. Load param file with 90 days of `cohort_data`, some cohorts <30 days old
+2. Execute `cohort(-21d:)` query
+3. **Verify:** Returns forecasted `p` using formula A
+4. **Verify:** `completeness < 1.0`
+
+#### Scenario 4: Window Query with X-Anchored Data
+1. Load param file with `window_data` for last 7 days
+2. Execute `window(-7d:)` query
+3. **Verify:** Uses `window_data.n_daily/k_daily` directly
+4. **Verify:** Does NOT use convolution
+
+#### Scenario 5: Window Query Fallback to Convolution
+1. Load param file with only `cohort_data` (no `window_data`)
+2. Execute `window(-7d:)` query
+3. **Verify:** Convolution fallback triggered
+4. **Verify:** Warning/flag indicates approximate result
+
+#### Scenario 6: Non-Latency Edge with cohort() Query
+1. Load param file for edge with `latency.track: false`
+2. Execute `cohort(-30d:)` query
+3. **Verify:** Treated as `window(-30d:)`
+4. **Verify:** Standard aggregation logic used
+
+### 10.3 Edge Cases and Error Handling
+
+| Edge Case | Expected Behaviour |
+|-----------|-------------------|
+| `cohort()` query but no `cohort_data` in param | Error: "Cohort data not available for this edge" |
+| `window()` query on latency edge, no data at all | Error: "No data available for window query" |
+| Negative `maturity_days` | Validation error at edge config time |
+| `completeness` > 1.0 calculated | Clamp to 1.0 |
+| Empty cohort window (no rows match) | Return `p = null`, `n = 0`, `k = 0` |
+| Anchor node doesn't exist in graph | Error at fetch time |
+| Histogram with zero total converters | Skip histogram-based calculations |
+
+### 10.4 Performance Tests
+
+| Test | Threshold | Notes |
+|------|-----------|-------|
+| Parse 1000 DSL strings | < 100ms | Ensure parsing is fast |
+| Aggregate 90 days of cohort_data | < 50ms | Typical query size |
+| Convolution fallback (90 cohorts × 45-day lag) | < 200ms | Acceptable for fallback |
+| Effective sample size calculation | < 10ms | Simple sum operations |
+
+### 10.5 Mock Data Requirements
+
+Tests will require mock Amplitude responses and param files covering:
+
+1. **Short-lag edge** (median ~5 days): Histogram is reliable
+2. **Long-lag edge** (median ~15 days): Histogram catch-all dominates
+3. **Mixed maturity** param file: Some cohorts mature, some immature
+4. **Sparse data** param file: Low n/k, tests sparsity guards
+5. **Time-varying p**: Different p_star across time periods (for drift detection tests)
+
+---
+
 ## 11. Open Questions
 
 ### 9.1 Amplitude API Considerations
@@ -1110,7 +1586,34 @@ ConversionEdge renders with two layers
 
 ---
 
-## Appendix A: Amplitude Response Reference
+## Appendix A: Amplitude Data Quality Notes
+
+### A.1 Histogram vs Median Reliability
+
+**Important limitation:** Amplitude's `stepTransTimeDistribution` histogram provides hourly-granularity bins only up to ~10 days, after which all conversions are lumped into a single catch-all bucket (e.g., `10d–45d`).
+
+**Empirical verification (2-Dec-25):**
+
+| Edge | Amplitude `medianTransTimes` | Histogram-derived median | Notes |
+|------|------------------------------|--------------------------|-------|
+| X→Y (6-day edge) | 6.02 days | 6.04 days | ✅ Match — histogram is reliable |
+| A→X (11-day edge) | 11.4 days | 20.3 days | ❌ Mismatch — histogram catch-all distorts |
+
+The A→X discrepancy occurs because 71% of converters (1029/1450) fall into the `10–45d` catch-all bucket. If Amplitude computed the median from this coarse histogram, it would land around ~20 days. The fact that `medianTransTimes` reports ~11.4 days indicates **Amplitude computes medians from fine-grained per-user event times**, not from the exposed histogram.
+
+**Implications for DAGNet:**
+
+1. **For edges with median lag ≤10 days:** The histogram provides useful shape information; medians and histogram are consistent.
+2. **For edges with median lag >10 days:** Rely primarily on `medianTransTimes` and `dayMedianTransTimes`; the histogram tail is too coarse for shape inference.
+3. **For distribution fitting (future Bayesian work):** Use medians as the primary constraint; histogram provides only rough body shape.
+
+### A.2 Conversion Window (`cs`) Parameter
+
+The `cs` parameter (conversion seconds) controls how long users have to convert. We use 45 days (3,888,000 seconds) to capture long-lag edges. This is the right-censoring boundary — any conversion after 45 days is excluded from both histogram and median calculations.
+
+---
+
+## Appendix B: Amplitude Response Reference
 
 Key fields from `amplitude_response.json`:
 
