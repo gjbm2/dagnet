@@ -8,9 +8,9 @@ These models match the official JSON schema exactly for validation
 of all Python graph operations.
 """
 
-from typing import List, Dict, Any, Optional, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Dict, Any, Optional, Literal, Union
 from datetime import datetime
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 # ============================================================================
@@ -21,11 +21,19 @@ class Evidence(BaseModel):
     """Observations from data sources (n/k for probabilities)."""
     n: Optional[int] = Field(None, ge=0, description="Sample size (total trials)")
     k: Optional[int] = Field(None, ge=0, description="Number of successes")
-    window_from: Optional[datetime] = Field(None, description="Time window start")
-    window_to: Optional[datetime] = Field(None, description="Time window end")
-    retrieved_at: Optional[datetime] = Field(None, description="When this data was retrieved")
-    source: Optional[Literal["amplitude", "sheets", "manual", "computed", "api"]] = None
+    window_from: Optional[str] = Field(None, description="Time window start (UK format: d-MMM-yy or ISO)")
+    window_to: Optional[str] = Field(None, description="Time window end (UK format: d-MMM-yy or ISO)")
+    retrieved_at: Optional[str] = Field(None, description="When this data was retrieved (UK format or ISO)")
+    source: Optional[str] = Field(None, description="Connection name used for this retrieval")
     query: Optional[Dict[str, Any]] = Field(None, description="Query that produced this data")
+    
+    @field_validator('window_from', 'window_to', 'retrieved_at', mode='before')
+    @classmethod
+    def convert_datetime_to_str(cls, v):
+        """Accept both datetime and str, convert datetime to ISO string."""
+        if isinstance(v, datetime):
+            return v.isoformat()
+        return v
 
 
 class DataSource(BaseModel):
@@ -175,7 +183,7 @@ class Edge(BaseModel):
     from_node: str = Field(..., alias='from', min_length=1, description="Source node uuid or id")
     to: str = Field(..., min_length=1, description="Target node uuid or id")
     fromHandle: Optional[Literal["left", "right", "top", "bottom", "left-out", "right-out", "top-out", "bottom-out"]] = None
-    toHandle: Optional[Literal["left", "right", "top", "bottom"]] = None
+    toHandle: Optional[Literal["left", "right", "top", "bottom", "left-out", "right-out", "top-out", "bottom-out"]] = None
     label: Optional[str] = Field(None, max_length=256)
     label_overridden: bool = Field(False, description="If true, label was manually edited")
     description: Optional[str] = None
@@ -208,11 +216,19 @@ class Policies(BaseModel):
 class Metadata(BaseModel):
     """Graph metadata."""
     version: str = Field(..., pattern=r"^\d+\.\d+\.\d+$")
-    created_at: datetime
-    updated_at: Optional[datetime] = None
+    created_at: str = Field(..., description="Creation timestamp (UK format or ISO)")
+    updated_at: Optional[str] = Field(None, description="Last update timestamp (UK format or ISO)")
     author: Optional[str] = Field(None, max_length=256)
     description: Optional[str] = None
     tags: Optional[List[str]] = None
+    
+    @field_validator('created_at', 'updated_at', mode='before')
+    @classmethod
+    def convert_datetime_to_str(cls, v):
+        """Accept both datetime and str, convert datetime to ISO string."""
+        if isinstance(v, datetime):
+            return v.isoformat()
+        return v
 
 
 class Graph(BaseModel):
