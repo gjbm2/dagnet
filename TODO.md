@@ -48,13 +48,7 @@ Reproduce the issue and share the console outpu
 
 - Tooltip Redesign (Future)
 
-## Project-latency
-
-- Use Amplitude time data properly
-- Convolve time onto p params
-- Re-name cost_time as cost_labour & use accordingly
-- Upgrade runner
-- Distinguish between eventwindow() and cohortwindow() [aka window()]
+## Project-lag
 
 ### Edge cases to consider
 - upstream visited() calls to Amplitude need to query on the right cohort window for the edges we actually care about NOT the upstream start window
@@ -297,6 +291,7 @@ Could use Web Worker for true background execution:
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- Check we load right querydsl on graph load
 - Missing terminal node type on node file
 - Keyboard short cuts, generally
 - Clean up dead / misleading menu items
