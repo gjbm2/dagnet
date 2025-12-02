@@ -10,6 +10,7 @@ import { useRenameFile } from '../../hooks/useRenameFile';
 import { useViewHistory } from '../../hooks/useViewHistory';
 import { useIntegrityCheck } from '../../hooks/useIntegrityCheck';
 import { useFileAudit } from '../../hooks/useFileAudit';
+import { useWhereUsed } from '../../hooks/useWhereUsed';
 import { HistoryModal } from '../modals/HistoryModal';
 import { db } from '../../db/appDatabase';
 import { encodeStateToUrl } from '../../lib/shareUrl';
@@ -85,6 +86,9 @@ export function FileMenu() {
   
   // File audit hook
   const { runAudit: runFileAudit, isAuditing: isFileAuditing } = useFileAudit();
+  
+  // Where used hook
+  const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(activeTab?.fileId);
   
   // Get isDirty state for active tab
   const activeFile = activeTab ? fileRegistry.getFile(activeTab.fileId) : null;
@@ -636,6 +640,14 @@ export function FileMenu() {
               disabled={isIntegrityChecking}
             >
               {isIntegrityChecking ? 'Checking...' : 'Check Integrity...'}
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={findWhereUsed}
+              disabled={!canSearchWhereUsed || isSearchingWhereUsed}
+            >
+              {isSearchingWhereUsed ? 'Searching...' : 'Where Used...'}
             </Menubar.Item>
 
             <Menubar.Item 
