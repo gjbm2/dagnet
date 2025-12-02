@@ -439,6 +439,30 @@ export type OldName = NewName;
 export interface NewName { ... }
 ```
 
+## Documentation Standards
+
+### Implementation Plans
+**CRITICAL**: Implementation plans are PROSE ONLY.
+
+- ❌ **NEVER** include code snippets, code examples, or pseudo-code in implementation plans
+- ❌ **NEVER** include test code, mock setups, or assertions in implementation plans
+- ✅ **DO** describe WHAT to test in plain English
+- ✅ **DO** list test scenarios as bullet points without code
+- ✅ **DO** reference design document sections by name/number
+
+Implementation plans should contain:
+- File paths and what changes are needed (described in words)
+- Test file paths and what scenarios to cover (described in words)
+- Cross-references to design documents
+- Dependencies between implementation phases
+
+Implementation plans should NOT contain:
+- TypeScript/JavaScript code blocks
+- Test assertions or expect() statements
+- Mock setups or fixture definitions
+- Function signatures or interfaces
+- Any code syntax whatsoever
+
 ## Remember
 
 > "Menus are access points. Services are logic. Tests are proof."
