@@ -182,13 +182,14 @@ export function useFetchData(options: UseFetchDataOptions): UseFetchDataReturn {
   }, [graphOrGetter]);
   
   // Helper to resolve DSL
+  // CRITICAL: NEVER fall back to graph.currentQueryDSL - it's only for historic record!
+  // The caller MUST provide the authoritative DSL from graphStore.currentDSL
   const getDSL = useCallback((): string => {
     const dsl = typeof dslOrGetter === 'function' ? dslOrGetter() : dslOrGetter;
     if (dsl && dsl.trim()) return dsl;
-    const g = getGraph();
-    if (g?.currentQueryDSL && g.currentQueryDSL.trim()) return g.currentQueryDSL;
+    // Only fall back to default DSL if nothing provided - NEVER read from graph
     return getDefaultDSL();
-  }, [dslOrGetter, getGraph]);
+  }, [dslOrGetter]);
   
   // For render-time access (e.g., display in UI)
   const graph = getGraph();

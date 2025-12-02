@@ -20,7 +20,6 @@ interface AllSlicesModalProps {
   onClose: () => void;
   graph: GraphData | null;
   setGraph: (graph: GraphData | null) => void;
-  window?: { start: string; end: string } | null;
 }
 
 interface SliceItem {
@@ -41,8 +40,7 @@ export function AllSlicesModal({
   isOpen,
   onClose,
   graph,
-  setGraph,
-  window
+  setGraph
 }: AllSlicesModalProps) {
   const [slices, setSlices] = useState<SliceItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -185,6 +183,9 @@ export function AllSlicesModal({
 
           let sliceSuccess = 0;
           let sliceErrors = 0;
+          
+          // NOTE: Rate limiting is now handled centrally by rateLimiter service in dataOperationsService
+          // No need for throttling here - the service layer handles it
 
           // Process each parameter/case for this slice
           for (let itemIdx = 0; itemIdx < batchItems.length; itemIdx++) {
@@ -236,6 +237,7 @@ export function AllSlicesModal({
                 }
                 sliceSuccess++;
               }
+              // NOTE: Rate limiting is handled by rateLimiter service in dataOperationsService
             } catch (err) {
               const errorMessage = err instanceof Error ? err.message : String(err);
               sessionLogService.addChild(
@@ -246,6 +248,7 @@ export function AllSlicesModal({
                 errorMessage
               );
               sliceErrors++;
+              // NOTE: Rate limit backoff is handled by rateLimiter service in dataOperationsService
             }
           }
 
@@ -290,10 +293,12 @@ export function AllSlicesModal({
         }
       );
 
-      // Dismiss progress toast and show summary
+      // Dismiss progress toast and show summary with appropriate icon
       toast.dismiss(progressToastId);
-      if (totalErrors > 0) {
-        toast.success(`Completed: ${totalSuccess} succeeded, ${totalErrors} failed`);
+      if (totalErrors > 0 && totalSuccess === 0) {
+        toast.error(`All ${totalErrors} operations failed`);
+      } else if (totalErrors > 0) {
+        toast(`Completed: ${totalSuccess} succeeded, ${totalErrors} failed`, { icon: '⚠️', duration: 4000 });
       } else {
         toast.success(`All ${totalSuccess} operations completed successfully`);
       }

@@ -59,7 +59,7 @@ interface WindowSelectorProps {
 
 export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const graphStore = useGraphStore();
-  const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow } = graphStore;
+  const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow, setCurrentDSL } = graphStore;
   // Use getState() in callbacks to avoid stale closure issues
   const getLatestGraph = () => (graphStore as any).getState?.()?.graph ?? graph;
   const { tabs, operations } = useTabContext();
@@ -73,6 +73,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   
   // Centralized fetch hook - uses refs for batch operations
   // The ref-based setGraph prevents effect re-triggering during auto-aggregation
+  // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
   const { fetchItem, fetchItems, getItemsNeedingFetch } = useFetchData({
     graph: () => graphRef.current,  // Getter for fresh state during batch
     setGraph: (g) => {
@@ -84,7 +85,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         }
       }
     },
-    currentDSL: () => graph?.currentQueryDSL || '',  // Getter for fresh DSL
+    currentDSL: () => (graphStore as any).getState?.()?.currentDSL || '',  // AUTHORITATIVE DSL from graphStore
   });
   const [needsFetch, setNeedsFetch] = useState(false);
   const [isCheckingCoverage, setIsCheckingCoverage] = useState(false);
@@ -122,18 +123,29 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
   }, [window, setWindow, defaultWindowDates]);
   
-  // Initialize currentQueryDSL with default window if not set
+  // Initialize DSL with default window if not set
+  // Sets BOTH authoritative DSL (graphStore.currentDSL) AND historic record (graph.currentQueryDSL)
   const isInitializedRef = useRef(false);
   useEffect(() => {
-    if (graph && !graph.currentQueryDSL && !isInitializedRef.current && setGraph) {
+    // Check if authoritative DSL needs initialization
+    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
+    
+    if (graph && !authoritativeDSL && !isInitializedRef.current) {
       // Use window from store if set, otherwise use defaults
       const windowToUse = window || defaultWindowDates;
       const defaultDSL = `window(${formatDateUK(windowToUse.start)}:${formatDateUK(windowToUse.end)})`;
-      console.log('[WindowSelector] Initializing default DSL:', defaultDSL);
-      setGraph({ ...graph, currentQueryDSL: defaultDSL });
+      console.log('[WindowSelector] Initializing AUTHORITATIVE DSL:', defaultDSL);
+      
+      // Set AUTHORITATIVE DSL on graphStore
+      setCurrentDSL(defaultDSL);
+      
+      // Also set historic record on graph (not used for queries!)
+      if (setGraph) {
+        setGraph({ ...graph, currentQueryDSL: defaultDSL });
+      }
       isInitializedRef.current = true;
     }
-  }, [graph, window, setGraph, defaultWindowDates]); // Dependencies
+  }, [graph, window, setGraph, setCurrentDSL, defaultWindowDates, graphStore]); // Dependencies
   
   // Parse current context values and key from currentQueryDSL
   const currentContextValues = useMemo(() => {
@@ -356,17 +368,18 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   }, [needsFetch, showButton]);
   
   // Trigger shimmer whenever DSL changes and fetch is required
+  // Use authoritative DSL from graphStore for consistency
   useEffect(() => {
-    const currentDSL = graph?.currentQueryDSL || '';
-    if (!currentDSL) {
+    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
+    if (!authoritativeDSL) {
       prevDSLRef.current = null;
       return;
     }
     
-    const dslChanged = currentDSL !== prevDSLRef.current;
+    const dslChanged = authoritativeDSL !== prevDSLRef.current;
     
     // Update ref
-    prevDSLRef.current = currentDSL;
+    prevDSLRef.current = authoritativeDSL;
     
     // If DSL changed and button is visible and fetch is required, trigger shimmer
     if (dslChanged && needsFetch && showButton) {
@@ -661,35 +674,38 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     return () => clearTimeout(timeoutId);
   }, [currentWindow, window, setGraph, setLastAggregatedWindow, graph?.currentQueryDSL]); // Added currentQueryDSL to trigger check when context changes
   
-  // Helper: Update both window state and currentQueryDSL
+  // Helper: Update window state, currentQueryDSL (historic), AND authoritative DSL
   const updateWindowAndDSL = (start: string, end: string) => {
     setWindow({ start, end });
     
     // Use getLatestGraph() to avoid stale closure
     const currentGraph = getLatestGraph();
     
-    // Update currentQueryDSL with new window
+    // Build context part from current graph (context is still stored on graph)
+    const parsed = parseConstraints(currentGraph?.currentQueryDSL || '');
+    
+    const contextParts: string[] = [];
+    for (const ctx of parsed.context) {
+      contextParts.push(`context(${ctx.key}:${ctx.value})`);
+    }
+    for (const ctxAny of parsed.contextAny) {
+      const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
+      contextParts.push(`contextAny(${pairs})`);
+    }
+    
+    // Build window part with d-MMM-yy format
+    const windowPart = `window(${formatDateUK(start)}:${formatDateUK(end)})`;
+    
+    // Combine
+    const newDSL = contextParts.length > 0 
+      ? `${contextParts.join('.')}.${windowPart}`
+      : windowPart;
+    
+    // CRITICAL: Update AUTHORITATIVE DSL on graphStore (for all fetch operations)
+    setCurrentDSL(newDSL);
+    
+    // Also update graph.currentQueryDSL for historic record (NOT for live queries!)
     if (setGraph && currentGraph) {
-      const parsed = parseConstraints(currentGraph.currentQueryDSL || '');
-      
-      // Build context part
-      const contextParts: string[] = [];
-      for (const ctx of parsed.context) {
-        contextParts.push(`context(${ctx.key}:${ctx.value})`);
-      }
-      for (const ctxAny of parsed.contextAny) {
-        const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
-        contextParts.push(`contextAny(${pairs})`);
-      }
-      
-      // Build window part with d-MMM-yy format
-      const windowPart = `window(${formatDateUK(start)}:${formatDateUK(end)})`;
-      
-      // Combine
-      const newDSL = contextParts.length > 0 
-        ? `${contextParts.join('.')}.${windowPart}`
-        : windowPart;
-      
       setGraph({ ...currentGraph, currentQueryDSL: newDSL });
     }
   };
@@ -788,7 +804,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     if (!graph || !needsFetch) return [];
     
     const items: BatchItem[] = [];
-    const currentDSL = graph?.currentQueryDSL || '';
+    // Use authoritative DSL from graphStore
+    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
     
     // Collect parameters that need fetching
     if (graph.edges) {
@@ -815,7 +832,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           if (!paramFile?.data) {
             // No file exists - check if we've already fetched for this DSL
             const lastDSL = lastAggregatedDSLRef.current;
-            if (!lastDSL || currentDSL !== lastDSL) {
+            if (!lastDSL || authoritativeDSL !== lastDSL) {
               needsFetchForThis = true;
             }
           } else {
@@ -825,7 +842,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               currentWindow,
               undefined, // querySignature
               false, // bustCache  
-              currentDSL // targetSlice
+              authoritativeDSL // targetSlice - uses authoritative DSL from graphStore
             );
             needsFetchForThis = incrementalResult.needsFetch;
           }
@@ -902,7 +919,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       // Update lastAggregatedWindow after successful fetch (store in UK format)
       if (successCount > 0) {
         setLastAggregatedWindow(currentWindow);
-        lastAggregatedDSLRef.current = graph?.currentQueryDSL || '';
+        // Use authoritative DSL from graphStore for tracking what we aggregated
+        lastAggregatedDSLRef.current = (graphStore as any).getState?.()?.currentDSL || '';
       }
       
       // Trigger coverage check by updating window (will detect if still needs fetch)
@@ -1016,6 +1034,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   }
                   
                   const fullDSL = [newContextParts.join('.'), windowPart].filter(p => p).join('.');
+                  
+                  // CRITICAL: Update AUTHORITATIVE DSL on graphStore
+                  setCurrentDSL(fullDSL || '');
+                  
+                  // Also update historic record (NOT for live queries!)
                   setGraph({ ...currentGraph, currentQueryDSL: fullDSL || undefined });
                 }}
                 graph={graph}
@@ -1114,6 +1137,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   // Combine
                   const newDSL = [contextPart, windowPart].filter(p => p).join('.');
                   
+                  // CRITICAL: Update AUTHORITATIVE DSL on graphStore
+                  setCurrentDSL(newDSL || '');
+                  
+                  // Also update historic record (NOT for live queries!)
                   setGraph({ ...currentGraph, currentQueryDSL: newDSL || undefined });
                   
                   if (allSelected && isMECE) {
@@ -1177,7 +1204,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 // During editing, just let it update (don't persist yet)
               }}
               onBlur={(finalDSL) => {
-                // On blur, persist the full DSL
+                // CRITICAL: Update AUTHORITATIVE DSL on graphStore
+                setCurrentDSL(finalDSL || '');
+                
+                // Also update historic record (NOT for live queries!)
                 if (setGraph && graph) {
                   setGraph({ ...graph, currentQueryDSL: finalDSL });
                 }

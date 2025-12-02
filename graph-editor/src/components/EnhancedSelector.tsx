@@ -99,13 +99,14 @@ export function EnhancedSelector({
   const { operations: navOps } = useNavigatorContext();
   const { tabs, operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
-  const { graph, setGraph, setAutoUpdating, window } = useGraphStore();
+  const { graph, setGraph, setAutoUpdating, currentDSL } = useGraphStore();
   
   // Centralized fetch hook for auto-get operations
+  // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
   const { fetchItem } = useFetchData({
     graph: graph as any,
     setGraph: setGraph as any,
-    currentDSL: (graph as any)?.currentQueryDSL || '',
+    currentDSL,  // AUTHORITATIVE DSL from graphStore
   });
   
   const [inputValue, setInputValue] = useState(value);
@@ -268,7 +269,6 @@ export function EnhancedSelector({
         let left = rect.left;
         
         // Ensure dropdown stays within viewport horizontally
-        // Use globalThis to avoid shadowing the window prop from useGraphStore
         const viewportWidth = globalThis.innerWidth;
         if (left + dropdownWidth > viewportWidth - 20) {
           left = viewportWidth - dropdownWidth - 20; // 20px margin from right edge
@@ -650,7 +650,7 @@ export function EnhancedSelector({
               setGraph={setGraph}
                 paramSlot={paramSlot}
                 conditionalIndex={conditionalIndex}
-              window={window}
+              currentDSL={currentDSL}
             />
             ) : null;
           })()}

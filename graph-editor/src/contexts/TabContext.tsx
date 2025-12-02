@@ -1349,13 +1349,15 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       data = { error: 'Failed to load file' };
     }
     
+    // Use the item's source if available, otherwise use 'local' as fallback
+    // Note: Files created with 'local' will be updated when workspace loads
     const file = await fileRegistry.getOrCreateFile(
       fileId,
       item.type,
       existingFile?.source || {
-        repository: 'local',
+        repository: (item as any).repository || 'local',
         path: item.path,
-        branch: 'main'
+        branch: (item as any).branch || 'main'
       },
       data
     );

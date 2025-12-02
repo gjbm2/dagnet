@@ -26,7 +26,8 @@ interface LightningMenuProps {
   // For direct parameter references (no param file)
   paramSlot?: 'p' | 'cost_gbp' | 'cost_time'; // Which parameter on edge
   conditionalIndex?: number; // Which conditional_p in array
-  window?: { start: string; end: string } | null; // Window selector state
+  /** AUTHORITATIVE DSL from graphStore - the SINGLE source of truth */
+  currentDSL: string;
 }
 
 export const LightningMenu: React.FC<LightningMenuProps> = ({
@@ -38,7 +39,7 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   setGraph,
   paramSlot,
   conditionalIndex,
-  window
+  currentDSL
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
@@ -64,7 +65,6 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         const actualLeft = left - menuWidth;
         
         // Constrain horizontally (menu is right-aligned to button)
-        // Use globalThis to avoid shadowing from window prop
         if (actualLeft < 20) {
           // Not enough space on left, position to right of button instead
           left = rect.left;
@@ -104,7 +104,6 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
       const actualLeft = left - menuWidth;
       
       // Constrain horizontally (menu is right-aligned to button)
-      // Use globalThis to avoid shadowing from window prop
       if (actualLeft < 20) {
         // Not enough space on left, position to right of button instead
         left = rect.left;
@@ -166,7 +165,7 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         setGraph={setGraph}
         paramSlot={paramSlot}
         conditionalIndex={conditionalIndex}
-        window={window}
+        currentDSL={currentDSL}
         mode="dropdown"
         showConnectionSettings={true}
         showSyncStatus={true}

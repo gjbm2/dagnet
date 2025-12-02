@@ -93,6 +93,105 @@ function AppShellContent() {
     };
   }, [dialogOps]);
 
+  // DIAGNOSTIC: Track keyboard events and find what's blocking them
+  useEffect(() => {
+    let keyEventCount = 0;
+    let preventDefaultCallStack: string | null = null;
+    
+    // Monkey-patch preventDefault to capture WHO is calling it on keyboard events
+    const originalPreventDefault = Event.prototype.preventDefault;
+    Event.prototype.preventDefault = function(this: Event) {
+      if (this.type === 'keydown' || this.type === 'keypress' || this.type === 'keyup') {
+        preventDefaultCallStack = new Error().stack || 'No stack available';
+      }
+      return originalPreventDefault.call(this);
+    };
+    
+    const handleKeyDiagnostic = (e: KeyboardEvent) => {
+      keyEventCount++;
+      preventDefaultCallStack = null; // Reset before event propagates
+      
+      // Use setTimeout to check AFTER all handlers have run
+      setTimeout(() => {
+        const target = e.target as HTMLElement;
+        const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+        const activeEl = document.activeElement as HTMLElement;
+        
+        // Log if:
+        // 1. It's a printable character to an input
+        // 2. defaultPrevented is true (something blocked it!)
+        // 3. Every 20th event
+        if ((isInput && e.key.length === 1) || e.defaultPrevented || keyEventCount % 20 === 1) {
+          console.log('[KEYBOARD DIAGNOSTIC]', {
+            key: e.key,
+            code: e.code,
+            targetTag: target.tagName,
+            targetClass: target.className?.slice?.(0, 50),
+            activeElementTag: activeEl?.tagName,
+            defaultPrevented: e.defaultPrevented,
+            blockedBy: e.defaultPrevented ? preventDefaultCallStack : null,
+          });
+          
+          // If something blocked a printable character to an input, this is the bug!
+          if (e.defaultPrevented && isInput && e.key.length === 1) {
+            console.error('🚨 KEYBOARD BUG DETECTED! Something blocked input. Stack:', preventDefaultCallStack);
+          }
+        }
+      }, 0);
+    };
+    
+    // Use capture phase (first) to see events before anything else
+    document.addEventListener('keydown', handleKeyDiagnostic, true);
+    
+    // Also add a bubble phase listener (last) to see final state
+    const handleKeyDiagnosticBubble = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+      
+      // If it's a printable char to input and was prevented, log it
+      if (e.defaultPrevented && isInput && e.key.length === 1) {
+        console.error('🚨 [BUBBLE] Key was blocked:', e.key, 'Stack:', preventDefaultCallStack);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDiagnosticBubble, false);
+    
+    // Debug helper - call window.debugKeyboard() when keyboard stops working
+    (window as any).debugKeyboard = () => {
+      const activeEl = document.activeElement as HTMLElement;
+      const listeners = (window as any).getEventListeners?.(document) || 'Chrome DevTools only';
+      
+      console.log('=== KEYBOARD DEBUG INFO ===');
+      console.log('Active element:', {
+        tag: activeEl?.tagName,
+        id: activeEl?.id,
+        class: activeEl?.className,
+        tabIndex: activeEl?.tabIndex,
+      });
+      console.log('Document keydown listeners:', listeners?.keydown?.length || 'unknown');
+      console.log('Window keydown listeners:', (window as any).getEventListeners?.(window)?.keydown?.length || 'unknown');
+      
+      // Test: create a test input and see if it works
+      const testInput = document.createElement('input');
+      testInput.style.cssText = 'position:fixed;top:10px;left:10px;z-index:99999;padding:10px;font-size:16px;';
+      testInput.placeholder = 'TYPE HERE TO TEST';
+      testInput.id = 'keyboard-debug-test-input';
+      document.body.appendChild(testInput);
+      testInput.focus();
+      console.log('Test input created and focused. Try typing in it.');
+      console.log('If typing works in test input but not app inputs, the issue is in React rendering.');
+      console.log('If typing fails in test input too, something is blocking at document level.');
+      console.log('Remove with: document.getElementById("keyboard-debug-test-input").remove()');
+      console.log('===========================');
+    };
+    
+    return () => {
+      Event.prototype.preventDefault = originalPreventDefault;
+      document.removeEventListener('keydown', handleKeyDiagnostic, true);
+      document.removeEventListener('keydown', handleKeyDiagnosticBubble, false);
+      delete (window as any).debugKeyboard;
+    };
+  }, []);
+
   // Init-from-secret modal state
   const [showInitCredsModal, setShowInitCredsModal] = useState(false);
   const [initSecret, setInitSecret] = useState('');

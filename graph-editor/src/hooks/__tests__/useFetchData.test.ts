@@ -352,16 +352,16 @@ describe('useFetchData', () => {
   });
 
   describe('DSL fallback', () => {
-    it('falls back to graph.currentQueryDSL if currentDSL is empty', async () => {
+    it('falls back to default DSL if currentDSL is empty (NEVER reads from graph.currentQueryDSL)', async () => {
       const graphWithDSL = {
         ...mockGraph,
-        currentQueryDSL: 'window(1-Dec-25:7-Dec-25).context(geo=US)',
+        currentQueryDSL: 'window(1-Dec-25:7-Dec-25).context(geo=US)', // This should be IGNORED
       };
       
       const { result } = renderHook(() => useFetchData({
         graph: graphWithDSL as any,
         setGraph: mockSetGraph,
-        currentDSL: '', // Empty DSL
+        currentDSL: '', // Empty DSL - should fall back to default, NOT graph.currentQueryDSL
       }));
       
       const item = createFetchItem('parameter', 'my-param', 'edge-1');
@@ -370,9 +370,11 @@ describe('useFetchData', () => {
         await result.current.fetchItem(item, { mode: 'versioned' });
       });
       
+      // Should use default DSL (last 7 days), NOT the graph.currentQueryDSL
+      // graph.currentQueryDSL is ONLY for historic record, NEVER for live queries
       expect(dataOperationsService.getFromSource).toHaveBeenCalledWith(
         expect.objectContaining({
-          currentDSL: 'window(1-Dec-25:7-Dec-25).context(geo=US)',
+          currentDSL: expect.stringMatching(/^window\(\d{1,2}-\w{3}-\d{2}:\d{1,2}-\w{3}-\d{2}\)$/), // Default window format
         })
       );
     });

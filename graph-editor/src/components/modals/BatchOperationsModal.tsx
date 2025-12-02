@@ -43,7 +43,11 @@ interface BatchOperationsModalProps {
   operationType?: BatchOperationType; // Optional - can be selected in modal
   graph: GraphData | null;
   setGraph: (graph: GraphData | null) => void;
-  window?: { start: string; end: string } | null;
+  /**
+   * AUTHORITATIVE DSL from graphStore - the SINGLE source of truth.
+   * This MUST be passed from the parent that has access to graphStore.
+   */
+  currentDSL: string;
 }
 
 interface OperationResult {
@@ -69,7 +73,7 @@ export function BatchOperationsModal({
   operationType: initialOperationType,
   graph,
   setGraph,
-  window: windowProp
+  currentDSL
 }: BatchOperationsModalProps) {
   const { operations } = useTabContext();
   const [selectedOperationType, setSelectedOperationType] = useState<BatchOperationType>(
@@ -83,57 +87,14 @@ export function BatchOperationsModal({
   const [results, setResults] = useState<OperationResult[]>([]);
   const [logContent, setLogContent] = useState<string>('');
   
-  // IMPORTANT: Fall back to graph's window if prop not provided
-  // This handles cases where the DataMenu's graphStore is stale (e.g., wrong active tab)
-  const window = windowProp || (graph as any)?.window || null;
+  // Track DSL in ref for batch operations
+  const currentDSLRef = useRef(currentDSL);
+  useEffect(() => {
+    currentDSLRef.current = currentDSL;
+  }, [currentDSL]);
   
   // DEBUG: Log what we received
-  console.log('[BatchOperationsModal] Window props:', {
-    windowProp,
-    graphWindow: (graph as any)?.window,
-    resolvedWindow: window,
-    graphCurrentQueryDSL: graph?.currentQueryDSL
-  });
-  
-  // Build effective DSL with window - ensures fetch operations use the WindowSelector dates
-  // ALWAYS prefer the window prop from WindowSelector over stale graph.currentQueryDSL
-  const getEffectiveDSL = () => {
-    // Format date to d-MMM-yy for DSL
-    const formatDate = (dateStr: string) => {
-      const d = new Date(dateStr);
-      const day = d.getDate();
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const month = months[d.getMonth()];
-      const year = String(d.getFullYear()).slice(-2);
-      return `${day}-${month}-${year}`;
-    };
-    
-    // PRIORITY 1: Use window prop from WindowSelector (most current source of truth)
-    if (window?.start && window?.end) {
-      // CRITICAL: Use COLON separator, not comma - matches parseConstraints regex
-      const windowDSL = `window(${formatDate(window.start)}:${formatDate(window.end)})`;
-      console.log('[BatchOperationsModal] Using window prop for DSL:', windowDSL, 'window:', window);
-      
-      // Check if graph.currentQueryDSL has OTHER constraints (context, etc.) we should preserve
-      const graphDSL = graphRef.current?.currentQueryDSL || '';
-      if (graphDSL) {
-        // Extract non-window parts from graphDSL (context, etc.)
-        const nonWindowParts = graphDSL.split('.').filter(part => !part.startsWith('window('));
-        if (nonWindowParts.length > 0) {
-          const combined = [...nonWindowParts, windowDSL].join('.');
-          console.log('[BatchOperationsModal] Combined DSL with context:', combined);
-          return combined;
-        }
-      }
-      
-      return windowDSL;
-    }
-    
-    // FALLBACK: Use graph's currentQueryDSL if window prop not available
-    const graphDSL = graphRef.current?.currentQueryDSL || '';
-    console.log('[BatchOperationsModal] Using graph DSL (no window prop):', graphDSL);
-    return graphDSL;
-  };
+  console.log('[BatchOperationsModal] Props:', { currentDSL });
   
   // CRITICAL: Use ref to track latest graph state during batch operations
   // Without this, rebalancing doesn't work because each iteration uses stale graph
@@ -163,10 +124,11 @@ export function BatchOperationsModal({
   
   // Centralized fetch hook - uses refs for batch operations
   // Supports all fetch modes: 'versioned', 'direct', 'from-file'
+  // CRITICAL: Uses AUTHORITATIVE DSL passed from parent (graphStore.currentDSL)
   const { fetchItem } = useFetchData({
     graph: () => graphRef.current as any,  // Getter for fresh graph in batch ops
     setGraph: setGraphWithRef,
-    currentDSL: getEffectiveDSL,  // Getter for fresh DSL
+    currentDSL: () => currentDSLRef.current,  // AUTHORITATIVE DSL from graphStore (via prop)
   });
 
   // Collect all items from graph (without filtering by operation type)
@@ -417,6 +379,9 @@ export function BatchOperationsModal({
     // Reset abort flag at start
     abortRef.current = false;
 
+    // NOTE: Rate limiting is now handled centrally by rateLimiter service in dataOperationsService
+    // No need for throttling here - the service layer handles it
+    
     for (let i = 0; i < selectedBatchItems.length; i++) {
       // Check for abort request
       if (abortRef.current) {
@@ -472,6 +437,7 @@ export function BatchOperationsModal({
           if (result.error) {
             error = result.error.message;
           }
+          // NOTE: Rate limiting is handled by rateLimiter service in dataOperationsService
         } else if (operationType === 'put-to-files') {
           if (item.type === 'parameter') {
             await dataOperationsService.putParameterToFile({
@@ -603,17 +569,25 @@ export function BatchOperationsModal({
     }
 
     // Show summary toast (suppress if logging to file, or show brief summary)
+    // Use appropriate toast type based on results
+    const getToastFn = () => {
+      if (errorCount > 0 && successCount === 0) return toast.error;
+      if (errorCount > 0) return (msg: string, opts?: any) => toast(msg, { ...opts, icon: '⚠️' });
+      return toast.success;
+    };
+    const toastFn = getToastFn();
+    
     if (!createLog) {
       const summaryParts: string[] = [];
       if (successCount > 0) summaryParts.push(`${successCount} updated`);
       if (skippedCount > 0) summaryParts.push(`${skippedCount} skipped`);
       if (errorCount > 0) summaryParts.push(`${errorCount} failed`);
       
-      toast.success(
+      toastFn(
         summaryParts.length > 0 
           ? summaryParts.join(', ')
           : 'Batch operation complete',
-        { duration: 3000 }
+        { duration: 4000 }
       );
     } else {
       // Brief summary even when logging
@@ -622,11 +596,11 @@ export function BatchOperationsModal({
       if (skippedCount > 0) summaryParts.push(`${skippedCount} skipped (overridden)`);
       if (errorCount > 0) summaryParts.push(`${errorCount} failed`);
       
-      toast.success(
+      toastFn(
         summaryParts.length > 0 
           ? summaryParts.join(', ')
           : 'Complete - see log file',
-        { duration: 2000 }
+        { duration: 3000 }
       );
     }
 

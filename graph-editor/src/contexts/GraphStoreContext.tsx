@@ -71,6 +71,15 @@ export interface GraphStore {
   lastAggregatedWindow: { start: string; end: string } | null;
   setLastAggregatedWindow: (window: { start: string; end: string } | null) => void;
   
+  /**
+   * AUTHORITATIVE current query DSL for ALL fetch operations.
+   * This is the SINGLE SOURCE OF TRUTH - maintained by WindowSelector.
+   * NEVER read from graph.currentQueryDSL for live queries!
+   * graph.currentQueryDSL is ONLY for historical record.
+   */
+  currentDSL: string;
+  setCurrentDSL: (dsl: string) => void;
+  
   // History
   history: GraphData[];
   historyIndex: number;
@@ -115,6 +124,13 @@ export function createGraphStore(): GraphStoreHook {
     lastAggregatedWindow: null,
     setLastAggregatedWindow: (lastAggregatedWindow: { start: string; end: string } | null) => {
       set({ lastAggregatedWindow });
+    },
+    
+    // AUTHORITATIVE current DSL - maintained by WindowSelector
+    // This is the SINGLE source of truth for all fetch operations
+    currentDSL: '',
+    setCurrentDSL: (currentDSL: string) => {
+      set({ currentDSL });
     },
     
     // History management
