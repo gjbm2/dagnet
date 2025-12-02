@@ -35,9 +35,8 @@ export function DataMenu() {
   const graphFile = activeTab && isGraphTab ? fileRegistry.getFile(activeTab.fileId) : null;
   const graphFromFile = graphFile?.data as GraphData | undefined;
   
-  // Get graph store for window state and setGraph
+  // Get graph store for currentDSL and setGraph
   const graphStore = activeTab && isGraphTab ? getGraphStore(activeTab.fileId) : null;
-  const windowState = graphStore?.getState().window || null;
   
   // Subscribe to graph store changes so we get updates when dataInterestsDSL changes
   const [graphFromStore, setGraphFromStore] = useState<GraphData | null>(
@@ -75,10 +74,11 @@ export function DataMenu() {
   }, [graphStore, activeTab]);
   
   // Centralized fetch hook - all fetch operations go through this
+  // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
   const { fetchItem } = useFetchData({
     graph: graph as any,
     setGraph: handleSetGraph as any,
-    currentDSL: graph?.currentQueryDSL || '',
+    currentDSL: () => graphStore?.getState().currentDSL || '',  // AUTHORITATIVE DSL from graphStore
   });
   
   // Track selection state (will be wired up later)
@@ -666,7 +666,7 @@ export function DataMenu() {
         operationType={batchOperationType}
         graph={graph || null}
         setGraph={handleSetGraph}
-        window={windowState}
+        currentDSL={graphStore?.getState().currentDSL || ''}
       />
     )}
     
@@ -677,7 +677,6 @@ export function DataMenu() {
         onClose={closeAllSlicesModal}
         graph={graph || null}
         setGraph={handleSetGraph}
-        window={windowState}
       />
     )}
     

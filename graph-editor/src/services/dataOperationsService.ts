@@ -49,6 +49,7 @@ import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
 import { sessionLogService } from './sessionLogService';
 import { parseConstraints } from '../lib/queryDSL';
 import { normalizeToUK, formatDateUK, parseUKDate } from '../lib/dateFormat';
+import { rateLimiter } from './rateLimiter';
 
 /**
  * Format edge identifier in human-readable form for logging
@@ -2480,13 +2481,14 @@ class DataOperationsService {
               };
               
               // Parse and merge constraints from graph-level and edge-specific queries
-              // Priority: currentDSL param > graph.currentQueryDSL (for dynamic scenarios)
+              // CRITICAL: currentDSL MUST be provided from graphStore.currentDSL (authoritative)
+              // NEVER fall back to graph.currentQueryDSL - it's only for historic record!
               let constraints;
               try {
                 const { parseConstraints } = await import('../lib/queryDSL');
                 
-                // Use explicit currentDSL if provided, otherwise fall back to graph.currentQueryDSL
-                const effectiveDSL = currentDSL || graph?.currentQueryDSL || '';
+                // currentDSL is AUTHORITATIVE - from graphStore.currentDSL
+                const effectiveDSL = currentDSL || '';
                 
                 // Parse graph-level constraints (from WindowSelector or scenario)
                 const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
@@ -2505,7 +2507,6 @@ class DataOperationsService {
                 
                 console.log('[DataOps] Merged constraints:', {
                   currentDSL,
-                  graphDSL: graph?.currentQueryDSL,
                   effectiveDSL,
                   edgeQuery: effectiveQuery,
                   graphConstraints,
@@ -2577,13 +2578,14 @@ class DataOperationsService {
               };
               
               // Parse and merge constraints from graph-level and edge-specific queries (fallback path)
-              // Use currentDSL if provided, otherwise fall back to graph.currentQueryDSL
+              // CRITICAL: currentDSL MUST be provided from graphStore.currentDSL (authoritative)
+              // NEVER fall back to graph.currentQueryDSL - it's only for historic record!
               let constraints;
               try {
                 const { parseConstraints } = await import('../lib/queryDSL');
                 
-                // Use explicit currentDSL if provided (priority), otherwise graph.currentQueryDSL
-                const effectiveDSL = currentDSL || graph?.currentQueryDSL || '';
+                // currentDSL is AUTHORITATIVE - from graphStore.currentDSL
+                const effectiveDSL = currentDSL || '';
                 const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
                 
                 // Parse edge-specific constraints
@@ -2600,7 +2602,6 @@ class DataOperationsService {
                 
                 console.log('[DataOps] Merged constraints (fallback):', {
                   currentDSL,
-                  graphDSL: graph?.currentQueryDSL,
                   effectiveDSL,
                   edgeQuery: targetEdge.query,
                   merged: constraints
@@ -2775,11 +2776,13 @@ class DataOperationsService {
           };
           
           // Parse constraints for n_query (same as main query)
-          // Use currentDSL if provided, otherwise fall back to graph.currentQueryDSL
+          // CRITICAL: currentDSL MUST be provided from graphStore.currentDSL (authoritative)
+          // NEVER fall back to graph.currentQueryDSL - it's only for historic record!
           let nQueryConstraints;
           try {
             const { parseConstraints } = await import('../lib/queryDSL');
-            const effectiveDSL = currentDSL || graph?.currentQueryDSL || '';
+            // currentDSL is AUTHORITATIVE - from graphStore.currentDSL
+            const effectiveDSL = currentDSL || '';
             const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
             const nQueryEdgeConstraints = parseConstraints(explicitNQuery);
             
@@ -3159,6 +3162,12 @@ class DataOperationsService {
       for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
         const fetchWindow = actualFetchWindows[gapIndex];
         
+        // Rate limit before making API calls to external providers
+        // This centralizes throttling for Amplitude and other rate-limited APIs
+        if (connectionName) {
+          await rateLimiter.waitForRateLimit(connectionName);
+        }
+        
         if (actualFetchWindows.length > 1) {
           toast.loading(
             `Fetching gap ${gapIndex + 1}/${actualFetchWindows.length} (${normalizeDate(fetchWindow.start)} to ${normalizeDate(fetchWindow.end)})`,
@@ -3210,9 +3219,18 @@ class DataOperationsService {
               });
             } catch (error) {
               console.error('[DataOps:DUAL_QUERY:COMPOSITE] n_query composite execution failed:', error);
-              toast.error(`n_query composite query failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: 'das-fetch' });
+              // Report rate limit errors to rate limiter for backoff
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              if (connectionName && rateLimiter.isRateLimitError(errorMsg)) {
+                rateLimiter.reportRateLimitError(connectionName, errorMsg);
+              }
+              toast.error(`n_query composite query failed: ${errorMsg}`, { id: 'das-fetch' });
               sessionLogService.endOperation(logOpId, 'error', `n_query composite query failed: ${error}`);
               return;
+            }
+            // Report success to reset rate limiter backoff
+            if (connectionName) {
+              rateLimiter.reportSuccess(connectionName);
             }
           } else {
             // Simple n_query - direct execution
@@ -3226,9 +3244,17 @@ class DataOperationsService {
             
             if (!baseResult.success) {
               console.error('[DataOps:DUAL_QUERY] Base query failed:', baseResult.error);
+              // Report rate limit errors to rate limiter for backoff
+              if (connectionName && rateLimiter.isRateLimitError(baseResult.error)) {
+                rateLimiter.reportRateLimitError(connectionName, baseResult.error);
+              }
               toast.error(`Base query failed: ${baseResult.error}`, { id: 'das-fetch' });
               sessionLogService.endOperation(logOpId, 'error', `Base query failed: ${baseResult.error}`);
               return;
+            }
+            // Report success to reset rate limiter backoff
+            if (connectionName) {
+              rateLimiter.reportSuccess(connectionName);
             }
             
             baseRaw = baseResult.raw as any;
@@ -3355,9 +3381,18 @@ class DataOperationsService {
             }
             
           } catch (error) {
-            toast.error(`Composite query failed for gap ${gapIndex + 1}: ${error instanceof Error ? error.message : String(error)}`, { id: 'das-fetch' });
-            sessionLogService.endOperation(logOpId, 'error', `Composite query failed: ${error instanceof Error ? error.message : String(error)}`);
+            // Report rate limit errors to rate limiter for backoff
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            if (connectionName && rateLimiter.isRateLimitError(errorMsg)) {
+              rateLimiter.reportRateLimitError(connectionName, errorMsg);
+            }
+            toast.error(`Composite query failed for gap ${gapIndex + 1}: ${errorMsg}`, { id: 'das-fetch' });
+            sessionLogService.endOperation(logOpId, 'error', `Composite query failed: ${errorMsg}`);
             return;
+          }
+          // Report success to reset rate limiter backoff
+          if (connectionName) {
+            rateLimiter.reportSuccess(connectionName);
           }
           
         } else if (needsDualQuery && baseQueryPayload) {
@@ -3374,9 +3409,17 @@ class DataOperationsService {
           
           if (!condResult.success) {
             console.error('[DataOps:DUAL_QUERY] Conditioned query failed:', condResult.error);
+            // Report rate limit errors to rate limiter for backoff
+            if (connectionName && rateLimiter.isRateLimitError(condResult.error)) {
+              rateLimiter.reportRateLimitError(connectionName, condResult.error);
+            }
             toast.error(`Conditioned query failed: ${condResult.error}`, { id: 'das-fetch' });
             sessionLogService.endOperation(logOpId, 'error', `Conditioned query failed: ${condResult.error}`);
             return;
+          }
+          // Report success to reset rate limiter backoff
+          if (connectionName) {
+            rateLimiter.reportSuccess(connectionName);
           }
           
           const condRaw = condResult.raw as any;
@@ -3491,11 +3534,21 @@ class DataOperationsService {
               window: fetchWindow,
             });
             
+            // Report rate limit errors to rate limiter for backoff
+            if (connectionName && rateLimiter.isRateLimitError(result.error)) {
+              rateLimiter.reportRateLimitError(connectionName, result.error);
+            }
+            
             // Show user-friendly message in toast
             const userMessage = result.error || 'Failed to fetch data from source';
             toast.error(`${userMessage} (gap ${gapIndex + 1}/${actualFetchWindows.length})`, { id: 'das-fetch' });
             sessionLogService.endOperation(logOpId, 'error', `API call failed: ${userMessage}`);
             return;
+          }
+          
+          // Report success to reset rate limiter backoff
+          if (connectionName) {
+            rateLimiter.reportSuccess(connectionName);
           }
           
           console.log(`[DataOperationsService] DAS result for gap ${gapIndex + 1}:`, {

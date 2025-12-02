@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
@@ -61,9 +61,16 @@ export function NavigatorContent() {
     nodes: [],
     events: []
   });
+  
+  // Track a unique load ID to prevent race conditions
+  const loadIdRef = useRef(0);
+  const [isRegistryLoading, setIsRegistryLoading] = useState(true);
 
   // Load registry items from central service
   useEffect(() => {
+    const currentLoadId = ++loadIdRef.current;
+    setIsRegistryLoading(true);
+    
     const loadAllItems = async () => {
       try {
         const [parameters, contexts, cases, nodes, events] = await Promise.all([
@@ -74,9 +81,17 @@ export function NavigatorContent() {
           registryService.getEvents(tabs)
         ]);
         
-        setRegistryItems({ parameters, contexts, cases, nodes, events });
+        // Only update state if this is still the latest load request
+        // This prevents race conditions where old loads overwrite newer data
+        if (currentLoadId === loadIdRef.current) {
+          setRegistryItems({ parameters, contexts, cases, nodes, events });
+          setIsRegistryLoading(false);
+        }
       } catch (error) {
         console.error('Failed to load registry items:', error);
+        if (currentLoadId === loadIdRef.current) {
+          setIsRegistryLoading(false);
+        }
       }
     };
     
@@ -433,6 +448,7 @@ export function NavigatorContent() {
         ) : (
           <>
             <ObjectTypeSection
+              key={`graphs-${groupedEntries.graph.map(e => e.id).join(',')}`}
               title="Graphs"
               icon={getObjectTypeTheme('graph').icon}
               entries={groupedEntries.graph}
@@ -451,6 +467,7 @@ export function NavigatorContent() {
             />
 
             <ObjectTypeSection
+              key={`parameters-${groupedEntries.parameter.map(e => e.id).join(',')}`}
               title="Parameters"
               icon={getObjectTypeTheme('parameter').icon}
               entries={groupedEntries.parameter}
@@ -472,6 +489,7 @@ export function NavigatorContent() {
             />
 
             <ObjectTypeSection
+              key={`contexts-${groupedEntries.context.map(e => e.id).join(',')}`}
               title="Contexts"
               icon={getObjectTypeTheme('context').icon}
               entries={groupedEntries.context}
@@ -492,6 +510,7 @@ export function NavigatorContent() {
             />
 
             <ObjectTypeSection
+              key={`cases-${groupedEntries.case.map(e => e.id).join(',')}`}
               title="Cases"
               icon={getObjectTypeTheme('case').icon}
               entries={groupedEntries.case}
@@ -512,6 +531,7 @@ export function NavigatorContent() {
             />
 
             <ObjectTypeSection
+              key={`nodes-${groupedEntries.node.map(e => e.id).join(',')}`}
               title="Nodes"
               icon={getObjectTypeTheme('node').icon}
               entries={groupedEntries.node}
@@ -532,6 +552,7 @@ export function NavigatorContent() {
             />
 
             <ObjectTypeSection
+              key={`events-${groupedEntries.event.map(e => e.id).join(',')}`}
               title="Events"
               icon={getObjectTypeTheme('event').icon}
               entries={groupedEntries.event}

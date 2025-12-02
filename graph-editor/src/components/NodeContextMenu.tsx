@@ -20,6 +20,7 @@ import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 
 interface NodeContextMenuProps {
   x: number;
@@ -138,11 +139,15 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   const dataOperationSections = getAllDataSections(nodeId, null, graph);
   const hasAnyFile = dataOperationSections.length > 0;
 
+  // Get authoritative DSL from graphStore
+  const { currentDSL } = useGraphStore();
+
   // Centralized fetch hook - all fetch operations go through this
+  // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
   const { fetchItem } = useFetchData({
     graph,
     setGraph,
-    currentDSL: graph?.currentQueryDSL || '',
+    currentDSL,  // AUTHORITATIVE DSL from graphStore
   });
 
   const handleGetNodeFromFile = () => {

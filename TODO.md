@@ -1,6 +1,31 @@
 # TODO
 
-- /home/reg/dev/dagnet/docs/current/data-fetch-refactoring-proposal.md
+## Keyboard jamming issue
+
+Now when the bug happens:
+Try to type - if something is calling preventDefault, you'll see:
+   🚨 KEYBOARD BUG DETECTED! Something blocked input. Stack: [stack trace showing WHO blocked it]
+Run window.debugKeyboard() - this creates a raw HTML test input at the top of the screen:
+If you CAN type in the test input but NOT in app inputs → React rendering issue
+If you CANNOT type in test input either → something blocking at document level
+The stack trace will show exactly which file/function called preventDefault.
+
+When the keyboard stops working:
+Open browser DevTools Console
+Try pressing any key - you should see [KEYBOARD DIAGNOSTIC] logs showing where events are going
+Run window.debugKeyboard() in console - this will show:
+What element currently has focus
+Any potential blocking overlays
+Z-index elements
+The diagnostic logs will show:
+targetTag / activeElementTag - what element is receiving/holding keyboard focus
+defaultPrevented - if something is blocking the event
+isInput - whether an input should be receiving the keystroke
+This will help identify whether:
+Events are reaching the document (if no logs → something outside React is blocking)
+Events are going to wrong element (if logs show unexpected activeElementTag)
+Something is calling preventDefault (if defaultPrevented: true)
+Reproduce the issue and share the console outpu
 
 ## What-If Compositing Centralization (REFACTOR)
 
@@ -32,6 +57,69 @@
 ### Edge cases to consider
 - upstream visited() calls to Amplitude need to query on the right cohort window for the edges we actually care about NOT the upstream start window
 
+
+## Background Fetch Queue (DESIGN SKETCH)
+
+**Problem:** Batch fetch operations (Get All for Slice, All Slices) block the UI for minutes due to rate limiting (3s between Amplitude API calls). With 20 items, that's 1+ minute of blocked modal.
+
+**Solution:** Background fetch queue with non-blocking progress.
+
+### Architecture Sketch
+
+```
+FetchQueueService (singleton)
+├── queue: FetchJob[]           // Pending jobs
+├── currentJob: FetchJob | null // Currently executing
+├── state: 'idle' | 'running' | 'paused'
+└── Events: progress, complete, error, cancelled
+
+FetchJob = {
+  id: string
+  items: FetchItem[]           // What to fetch
+  options: { bustCache, slice, ... }
+  progress: { done: number, total: number, errors: number }
+  onProgress?: (job) => void
+  onComplete?: (job) => void
+}
+```
+
+### UI Changes
+
+1. **Modals submit & close immediately**
+   - "Get All for Slice" → submits job → closes modal
+   - Shows toast: "Fetching 20 items in background..."
+
+2. **Progress indicator (non-blocking)**
+   - Small floating widget in corner (like download manager)
+   - Shows: "Fetching: 5/20 (2 errors) [Cancel]"
+   - Expandable to see item-by-item progress
+   - Can be minimised
+
+3. **Toast notifications**
+   - On complete: "✓ Fetched 18/20 items (2 failed)"
+   - On rate limit: "⏳ Rate limited, waiting 30s..."
+   - Clickable to expand progress widget
+
+### Implementation Steps
+
+1. Create `FetchQueueService` with job queue management
+2. Integrate with existing `rateLimiter` service
+3. Create `FetchProgressWidget` component (floating, draggable)
+4. Update `BatchOperationsModal` to submit jobs, not execute inline
+5. Update `AllSlicesModal` similarly
+6. Add cancel/pause capability
+
+### Alternative: Worker Thread
+
+Could use Web Worker for true background execution:
+- Pro: Completely non-blocking, survives tab changes
+- Con: Complex (serialisation, IDB access from worker, etc.)
+- Decision: Start with main-thread queue, upgrade to Worker if needed
+
+**Priority:** Medium - Annoying UX but not blocking
+**Effort:** ~8-12 hours
+
+---
 
 ## Extra bugs
 
@@ -135,7 +223,7 @@
 - systematically review that DELETE graph changes  go through UpdateManager
 
 ### Analytics / Model Fitting (Future)
-- add moving arrow effect, speed of animation scale on log lag
+- speed of chevron animation scale on log lag
 
 ### Medium 
 - Hooks for every menu item; clear up menus in general, they're a mess....
@@ -207,6 +295,7 @@
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- Missing terminal node type on node file
 - Keyboard short cuts, generally
 - Clean up dead / misleading menu items
 - add '?' icons to components, which link to relevant help docs 

@@ -1,895 +1,3105 @@
-nodes:
-  - uuid: 86469c9f-2f83-49ca-a154-589231be5511
-    id: household-created
-    label: Household created
-    absorbing: false
-    entry:
-      is_start: false
-      entry_weight: 1
-    layout:
-      x: -1186
-      'y': -166
-    description: ''
-    label_overridden: true
-    event_id: household-created
-    event_id_overridden: true
-  - uuid: addb99b6-5773-482c-a437-4661c8433ff7
-    id: abandonned-before-delegation
-    label: abandonned-before-delegation
-    absorbing: false
-    layout:
-      x: -685
-      'y': -89
-    description: ''
-  - uuid: 16974652-b532-41ee-b4d5-a3ef5381591d
-    id: household-delegated
-    label: household-delegated
-    absorbing: false
-    layout:
-      x: -932
-      'y': -224
-    description: ''
-    event_id: household-delegated
-    event_id_overridden: true
-  - uuid: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    id: gave-bds-in-onboarding
-    label: Gave bds in onboarding
-    absorbing: false
-    layout:
-      x: -291
-      'y': -500
-    images: []
-    url: ''
-    url_overridden: true
-    event_id: gave-bds-in-onboarding
-    event_id_overridden: true
-  - uuid: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    id: saw-wa-details-page
-    label: Saw wa details page
-    absorbing: false
-    layout:
-      x: -725
-      'y': -289
-    event_id: saw-wa-details-page
-    event_id_overridden: true
-  - uuid: 5788d308-a7a9-49ce-a755-07491315a603
-    id: viewed-coffee-screen
-    label: Viewed coffee screen
-    absorbing: false
-    layout:
-      x: -509
-      'y': -424
-    event_id: viewed-coffee-screen
-    event_id_overridden: true
-  - uuid: 7515449a-4743-43fb-8fc0-66b9575c5b0c
-    id: viewed-dashboard
-    label: Viewed dashboard
-    absorbing: false
-    layout:
-      x: -128
-      'y': -321
-    event_id: viewed-dashboard
-    event_id_overridden: true
-  - uuid: dab4f352-b997-4f58-a24f-6fae0b8c82d3
-    id: dropped-out-without-bds
-    label: Dropped out without bds
-    absorbing: true
-    layout:
-      x: -287
-      'y': -63
-  - uuid: bffebc85-8e08-4844-b9ac-81af93d1e5d2
-    id: gave-bds-after-onboarding
-    label: Gave bds after onboarding
-    absorbing: false
-    layout:
-      x: -111
-      'y': -93
-    event_id: gave-bds-after-onboarding
-    event_id_overridden: true
-  - uuid: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    id: switch-registered
-    label: Switch registered
-    absorbing: false
-    layout:
-      x: 537
-      'y': -506
-    event_id: switch-registered
-    event_id_overridden: true
-  - uuid: bff4f41c-6052-49fa-a443-6443b5f9bbb8
-    id: recommendation-with-BDOs
-    label: Recommendation with BDOs
-    absorbing: false
-    layout:
-      x: 242
-      'y': -515
-    url: ''
-    url_overridden: true
-    event_id: recommendation-offered-bds
-    event_id_overridden: true
-  - uuid: 496ea177-7049-41a3-8fa7-d8ead43a842b
-    id: recommendation-calling-for-bds
-    label: Recommendation calling for bds
-    absorbing: false
-    layout:
-      x: 245
-      'y': -329
-    event_id: recommendation-offered-no-bdos
-    event_id_overridden: true
-  - uuid: 30aabc44-e448-4359-b0d0-338a231edb92
-    id: switch-success
-    label: Switch success
-    absorbing: true
-    layout:
-      x: 720
-      'y': -574
-    event_id: switch-success
-    event_id_overridden: true
-    label_overridden: true
-  - uuid: e5cd8923-f466-4535-8451-ed78566757e4
-    id: not-sent-recommendation
-    label: Not sent recommendation
-    absorbing: true
-    layout:
-      x: 255
-      'y': 15
-  - uuid: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
-    id: post-recommendation-failure
-    label: Post recommendation failure
-    absorbing: true
-    layout:
-      x: 545
-      'y': -226
-  - uuid: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
-    id: post-registration-failure
-    label: Post registration failure
-    absorbing: true
-    layout:
-      x: 716
-      'y': -425
-  - uuid: b9194789-0714-4273-b1c0-9fd2aa8b97fa
-    id: recommendation-retention
-    label: Recommendation retention
-    absorbing: false
-    layout:
-      x: 281
-      'y': -92
-    event_id: recommendation-offered-retention
-    images: []
-    event_id_overridden: true
-  - uuid: c7620524-c88b-4afd-a012-fb9f1d46a14a
-    id: eon-customer
-    label: Eon customer
-    absorbing: false
-    layout:
-      x: -1402
-      'y': -264
-    event_id: eon-customer
-    event_id_overridden: true
-  - uuid: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
-    id: non-eon-customer
-    label: Non eon customer
-    absorbing: false
-    layout:
-      x: -1369
-      'y': -167
-    event_id: non-
-    event_id_overridden: true
-  - uuid: 3af310f0-53d7-417e-86b0-32bdb2667a47
-    id: Question-answered
-    label: Question answered
-    absorbing: false
-    layout:
-      x: -1613
-      'y': -142
-    event_id: question-answered
-    event_id_overridden: true
-    entry:
-      is_start: true
-edges:
-  - uuid: af23535c-192b-48d1-8386-132b0f5079f3
-    id: saw-wa-details-page-to-dropped-out-without-bds
-    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.347
-    query: from(saw-wa-details-page).to(dropped-out-without-bds).minus(viewed-coffee-screen)
-    description: ''
-    query_overridden: false
-  - uuid: 12ab4626-08c7-4496-a4a0-03b9538dbc92
-    id: abandonned-before-delegation-to-dropped-out-without-bds
-    from: addb99b6-5773-482c-a437-4661c8433ff7
-    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 1
-    query: from(abandonned-before-delegation).to(dropped-out-without-bds)
-    description: ''
-  - uuid: 7a9ddce3-f401-49ad-abb1-ebec1bd27010
-    id: viewed-dashboard-to-recommendation-calling-for-bds
-    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
-    to: 496ea177-7049-41a3-8fa7-d8ead43a842b
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.54
-      id: dashboard-to-rec-from-non-bdos
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.012382783747337808
-      evidence:
-        window_from: 1-Nov-25
-        source: amplitude
-        'n': 1620
-        k: 875
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:05.275Z'
-        full_query: from(viewed-dashboard).to(recommendation-calling-for-bds)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:05.275Z'
-        query: from(viewed-dashboard).to(recommendation-calling-for-bds)
-        full_query: from(viewed-dashboard).to(recommendation-calling-for-bds)
-    query: from(viewed-dashboard).to(recommendation-calling-for-bds)
-    description: ''
-    query_overridden: true
-    n_query: from(household-created).to(viewed-dashboard)
-  - uuid: d7bf4100-18db-4afa-b0c8-2e8c5d72a1f1
-    id: viewed-coffee-screen-to-gave-bds-in-onboarding-after-onboarding
-    from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: bffebc85-8e08-4844-b9ac-81af93d1e5d2
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.021
-      stdev: 0.00434696902518092
-      id: gave-bds-after-onboarding
-      evidence:
-        window_from: 1-Nov-25
-        source: amplitude
-        'n': 1088
-        k: 23
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:08.587Z'
-        full_query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:08.587Z'
-        query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
-        full_query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
-      connection: amplitude-prod
-      connection_overridden: true
-    query: from(viewed-coffee-screen).to(gave-bds-after-onboarding)
-    description: ''
-  - uuid: 586b4354-5293-4961-b63f-8b0f31e756f1
-    id: saw-wa-details-page-to-gave-bds-in-onboarding-after-onboarding
-    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    to: bffebc85-8e08-4844-b9ac-81af93d1e5d2
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.014
-      id: gave-bds-after-wa
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        window_from: 1-Nov-25
-        source: amplitude
-        'n': 2305
-        k: 32
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:11.582Z'
-        full_query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:11.582Z'
-        query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
-        full_query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
-      stdev: 0.0024471861746781327
-    description: ''
-    query: from(saw-wa-details-page).to(gave-bds-after-onboarding).minus(viewed-coffee-screen)
-  - uuid: df61ee70-5722-4198-8a2d-d03686e4af0c
-    id: bffebc85-8e08-4844-b9ac-81af93d1e5d2->e5cd8923-f466-4535-8451-ed78566757e4
-    from: bffebc85-8e08-4844-b9ac-81af93d1e5d2
-    to: e5cd8923-f466-4535-8451-ed78566757e4
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.945
-    query: from(gave-bds-after-onboarding).to(not-sent-recommendation)
-    description: ''
-  - uuid: 2a2f9f24-9bf5-4e77-9061-ab677b7ab5d7
-    id: recommendation-calling-for-bds-to-post-recommendation-failure
-    from: 496ea177-7049-41a3-8fa7-d8ead43a842b
-    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.972
-    query: from(recommendation-calling-for-bds).to(post-recommendation-failure)
-    description: ''
-  - uuid: 532a304a-c435-4ea5-aa6a-44714b40adab
-    id: switch-registered-to-post-registration-failure
-    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    to: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.819
-    query: from(switch-registered).to(post-registration-failure)
-    description: ''
-  - uuid: c4c63403-5e62-4a22-b84c-8b55f06290f9
-    id: saw-wa-details-page-to-viewed-dashboard
-    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.41
-      stdev: 0.010244304274330977
-      evidence:
-        'n': 2305
-        k: 945
-        window_from: 1-Nov-25
-        retrieved_at: '2025-12-01T17:33:14.729Z'
-        source: amplitude
-        full_query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
-        window_to: 30-Nov-25
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:14.729Z'
-        query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
-        full_query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
-      connection: amplitude-prod
-      id: wa-to-dashboard
-    query: from(saw-wa-details-page).to(viewed-dashboard).minus(gave-bds-in-onboarding)
-    description: ''
-    query_overridden: true
-  - uuid: 76e0e0f8-133d-4065-9fab-56480063d9c9
-    id: viewed-coffee-screen-to-gave-bds-in-onboarding
-    from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.42
-      stdev: 0.026
-      id: coffee-to-bds
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        'n': 355
-        k: 149
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-11-28T21:24:02.718Z'
-        query:
-          from: viewed-coffee-screen
-          to: gave-bds-in-onboarding
-          context: []
-          case: []
-          start: '2025-11-02T00:00:00.000Z'
-          end: '2025-11-08T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20251102&end=20251108&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"viewed-coffee-screen","to":"gave-bds-in-onboarding","context":[],"case":[],"start":"2025-11-02T00:00:00.000Z","end":"2025-11-08T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%7D&start=20251102&end=20251108&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
-    description: ''
-  - uuid: bb6380f3-6e5f-4734-aa90-99a8a7ec3444
-    id: gave-bds-in-onboarding-to-recommendation-with-BDOs
-    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.015
-      id: bdos-to-recommendation
-      evidence:
-        window_from: 1-Nov-25
-        source: amplitude
-        'n': 559
-        k: 8
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:20.106Z'
-        full_query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:20.106Z'
-        query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
-        full_query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.00514112118243894
-    query: from(gave-bds-in-onboarding).to(recommendation-with-BDOs).minus(viewed-dashboard)
-    description: ''
-    query_overridden: false
-  - uuid: c20c9bd4-0b4e-4042-8d54-30cb3f0c02f0
-    id: 2810b6a8-7a7a-477d-b504-8714a8f22b68->5788d308-a7a9-49ce-a755-07491315a603
-    from: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    to: 5788d308-a7a9-49ce-a755-07491315a603
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.229
-      id: wa-to-coffee
-      stdev: 0.008752043455221325
-      evidence:
-        'n': 2305
-        k: 528
-        window_from: 1-Nov-25
-        retrieved_at: '2025-12-01T17:33:22.414Z'
-        source: amplitude
-        full_query: from(saw-wa-details-page).to(viewed-coffee-screen)
-        window_to: 30-Nov-25
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:22.414Z'
-        query: from(saw-wa-details-page).to(viewed-coffee-screen)
-        full_query: from(saw-wa-details-page).to(viewed-coffee-screen)
-      connection: amplitude-prod
-    query: from(saw-wa-details-page).to(viewed-coffee-screen)
-    description: ''
-    query_overridden: false
-  - uuid: household-created-to-abandonned-before-delegation
-    id: 86469c9f-2f83-49ca-a154-589231be5511->addb99b6-5773-482c-a437-4661c8433ff7
-    from: 86469c9f-2f83-49ca-a154-589231be5511
-    to: addb99b6-5773-482c-a437-4661c8433ff7
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.45
-    query: from(household-created).to(abandonned-before-delegation).minus(household-delegated)
-    description: ''
-  - uuid: 41b26675-c962-4cb6-be4d-55804d22b480
-    id: a2ae8ea8-30a3-43db-b12c-43ad71bdaead->7515449a-4743-43fb-8fc0-66b9575c5b0c
-    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    to: 7515449a-4743-43fb-8fc0-66b9575c5b0c
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.97
-      stdev: 0.007215070691303096
-      id: bdos-to-dashboard
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        'n': 559
-        k: 542
-        window_from: 1-Nov-25
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:24.717Z'
-        source: amplitude
-        full_query: from(gave-bds-in-onboarding).to(viewed-dashboard)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:24.717Z'
-        query: from(gave-bds-in-onboarding).to(viewed-dashboard)
-        full_query: from(gave-bds-in-onboarding).to(viewed-dashboard)
-    query: from(gave-bds-in-onboarding).to(viewed-dashboard)
-    description: ''
-  - uuid: 25ab4406-51d2-4852-a373-5d656c4a295f
-    id: 496ea177-7049-41a3-8fa7-d8ead43a842b->22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    from: 496ea177-7049-41a3-8fa7-d8ead43a842b
-    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.028
-      id: calling-for-bds-to-registration
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.004276718669803423
-      evidence:
-        window_from: 1-Nov-25
-        source: amplitude
-        'n': 1488
-        k: 42
-        retrieved_at: '2025-12-01T17:33:26.735Z'
-        full_query: from(recommendation-calling-for-bds).to(switch-registered)
-        window_to: 30-Nov-25
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:26.735Z'
-        query: from(recommendation-calling-for-bds).to(switch-registered)
-        full_query: from(recommendation-calling-for-bds).to(switch-registered)
-    query: from(recommendation-calling-for-bds).to(switch-registered)
-    description: ''
-    query_overridden: true
-  - uuid: c95cbd37-c1f6-4f91-a66c-f7b2410c0dd2
-    id: recommendation-retention-to-post-recommendation-failure
-    from: b9194789-0714-4273-b1c0-9fd2aa8b97fa
-    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.971
-    query: from(recommendation-retention).to(post-recommendation-failure)
-    description: ''
-  - uuid: 6839050f-fa16-4862-82f7-2f1b76ed4e68
-    id: recommendation-with-BDOs-to-post-recommendation-failure
-    from: bff4f41c-6052-49fa-a443-6443b5f9bbb8
-    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.917
-    query: from(recommendation-with-BDOs).to(post-recommendation-failure)
-    description: ''
-  - uuid: f575cbcc-b1d3-4e20-8fa3-bb19b706a496
-    id: recommendation-with-BDOs-to-switch-registered
-    from: bff4f41c-6052-49fa-a443-6443b5f9bbb8
-    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.083
-      id: rec-with-bdos-to-registration
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.01454026975143324
-      evidence:
-        window_from: 1-Nov-25
-        source: amplitude
-        'n': 360
-        k: 30
-        retrieved_at: '2025-12-01T17:33:30.626Z'
-        full_query: from(recommendation-with-BDOs).to(switch-registered).visited(gave-bds-in-onboarding)
-        window_to: 30-Nov-25
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:30.626Z'
-        query: from(recommendation-with-BDOs).to(switch-registered).visited(gave-bds-in-onboarding)
-        full_query: from(recommendation-with-BDOs).to(switch-registered).visited(gave-bds-in-onboarding)
-      mean_overridden: false
-    query: from(recommendation-with-BDOs).to(switch-registered).visited(gave-bds-in-onboarding)
-    description: ''
-    query_overridden: true
-    n_query: from(household-created).to(recommendation-with-BDOs).visited(gave-bds-in-onboarding)
-  - uuid: 370dce1d-3a36-4109-9711-204c301478c8
-    id: switch-registered-to-switch-success
-    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    to: 30aabc44-e448-4359-b0d0-338a231edb92
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.181
-      stdev: 0.01686795278313435
-      id: registration-to-success
-      evidence:
-        window_from: 1-Nov-25
-        source: amplitude
-        'n': 521
-        k: 94
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:33.266Z'
-        full_query: from(switch-registered).to(switch-success)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:33.266Z'
-        query: from(switch-registered).to(switch-success)
-        full_query: from(switch-registered).to(switch-success)
-      connection: amplitude-prod
-      connection_overridden: true
-    query: from(switch-registered).to(switch-success)
-    description: ''
-  - uuid: 153e467f-754c-4fcd-96ef-d25edcee6716
-    id: viewed-dashboard-to-recommendation-with-BDOs
-    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
-    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 1.071
-      id: dashboard-to-rec-from-bdos
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: .nan
-      evidence:
-        'n': 1620
-        k: 1735
-        window_from: 1-Nov-25
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:35.958Z'
-        source: amplitude
-        full_query: >-
-          from(viewed-dashboard).to(recommendation-with-BDOs).visitedAny(gave-bds-in-onboarding,gave-bds-after-onboarding)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:35.958Z'
-        query: >-
-          from(viewed-dashboard).to(recommendation-with-BDOs).visitedAny(gave-bds-in-onboarding,gave-bds-after-onboarding)
-        full_query: >-
-          from(viewed-dashboard).to(recommendation-with-BDOs).visitedAny(gave-bds-in-onboarding,gave-bds-after-onboarding)
-      mean_overridden: false
-    query: from(viewed-dashboard).to(recommendation-with-BDOs).visitedAny(gave-bds-in-onboarding,gave-bds-after-onboarding)
-    description: ''
-    query_overridden: true
-    n_query: from(household-created).to(viewed-dashboard)
-  - uuid: 4db126ba-018f-4448-924c-56723f57a54f
-    id: household-delegated-to-saw-wa-details-page
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: 2810b6a8-7a7a-477d-b504-8714a8f22b68
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.922
-      id: delegation-to-wa-details
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.005333646483422628
-      evidence:
-        'n': 2528
-        k: 2331
-        window_from: 1-Nov-25
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:38.526Z'
-        source: amplitude
-        full_query: from(household-delegated).to(saw-wa-details-page)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:38.526Z'
-        query: from(household-delegated).to(saw-wa-details-page)
-        full_query: from(household-delegated).to(saw-wa-details-page)
-    description: ''
-    query: from(household-delegated).to(saw-wa-details-page)
-  - uuid: fcc2cbac-c5d9-4659-8947-97e2b4b09216
-    id: Question-answered-to-eon-customer
-    from: 3af310f0-53d7-417e-86b0-32bdb2667a47
-    to: c7620524-c88b-4afd-a012-fb9f1d46a14a
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.1
-      id: eon-customers
-      stdev: 0.0034179296351233165
-      evidence:
-        window_from: 1-Nov-25
-        source: amplitude
-        'n': 7704
-        k: 770
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:42.244Z'
-        full_query: from(Question-answered).to(eon-customer)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:42.244Z'
-        query: from(Question-answered).to(eon-customer)
-        full_query: from(Question-answered).to(eon-customer)
-      connection: amplitude-prod
-      connection_overridden: true
-    query: from(Question-answered).to(eon-customer)
-    description: ''
-  - uuid: 22a14108-f330-4f44-900e-f74417264e63
-    id: Question-answered-to-non-eon-customer
-    from: 3af310f0-53d7-417e-86b0-32bdb2667a47
-    to: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.899
-      connection_overridden: true
-      stdev: 0.001
-      evidence:
-        'n': 3174
-        k: 3158
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T13:29:47.425Z'
-        query:
-          from: question-answered
-          to: HH-created-Q-answered
-          exclude:
-            - eon-customer
-          context: []
-          case: []
-          start: '2025-11-20T00:00:00.000Z'
-          end: '2025-11-27T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&start=20251120&end=20251127&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"question-answered","to":"HH-created-Q-answered","exclude":["eon-customer"],"context":[],"case":[],"start":"2025-11-20T00:00:00.000Z","end":"2025-11-27T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&start=20251120&end=20251127&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(Question-answered).to(non-eon-customer)
-    description: ''
-    query_overridden: true
-  - uuid: e543f861-9b37-482b-b12a-a2aca8cf488d
-    id: non-eon-customer-to-household-created
-    from: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
-    to: 86469c9f-2f83-49ca-a154-589231be5511
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 1
-    query: from(non-eon-customer).to(household-created)
-    description: ''
-  - uuid: d00a4122-5f98-4c50-8cfe-7318b846ca0b
-    id: eon-customer-to-household-created
-    from: c7620524-c88b-4afd-a012-fb9f1d46a14a
-    to: 86469c9f-2f83-49ca-a154-589231be5511
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 1
-    query: from(eon-customer).to(household-created)
-    description: ''
-  - uuid: 3d0a0757-8224-4cf0-a841-4ad17cd48d91
-    id: household-created-to-household-delegated
-    from: 86469c9f-2f83-49ca-a154-589231be5511
-    to: 16974652-b532-41ee-b4d5-a3ef5381591d
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.55
-      id: household-delegation-rate
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.007685649771522327
-      evidence:
-        'n': 4190
-        k: 2305
-        window_from: 1-Nov-25
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:45.378Z'
-        source: amplitude
-        full_query: from(household-created).to(household-delegated)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:45.378Z'
-        query: from(household-created).to(household-delegated)
-        full_query: from(household-created).to(household-delegated)
-    query: from(household-created).to(household-delegated)
-    description: ''
-  - uuid: c5d8870f-ad07-49a2-ac9d-86af8383a66b
-    id: viewed-dashboard-to-recommendation-retention
-    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
-    to: b9194789-0714-4273-b1c0-9fd2aa8b97fa
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.029
-      id: retention-rec-to-registration
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.004169184424492649
-      evidence:
-        'n': 1620
-        k: 47
-        window_from: 1-Nov-25
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:47.867Z'
-        source: amplitude
-        full_query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:47.867Z'
-        query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
-        full_query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
-    query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
-    description: ''
-    query_overridden: true
-    n_query: from(household-created).to(viewed-dashboard)
-  - uuid: 30758ce0-bcd5-487a-8800-953b65d89006
-    id: Question-answered-to-abandonned-before-delegation
-    from: 3af310f0-53d7-417e-86b0-32bdb2667a47
-    to: addb99b6-5773-482c-a437-4661c8433ff7
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.001
-    query: from(Question-answered).to(abandonned-before-delegation).minus(household-created)
-    description: ''
-  - uuid: b42d2d10-e1dc-4933-809b-d26f0d77d491
-    id: 16974652-b532-41ee-b4d5-a3ef5381591d->addb99b6-5773-482c-a437-4661c8433ff7
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: addb99b6-5773-482c-a437-4661c8433ff7
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.078
-    query: from(household-delegated).to(abandonned-before-delegation)
-    description: ''
-  - uuid: 7f41cc52-1d06-4d99-9e13-30aa643ce0b9
-    id: 5788d308-a7a9-49ce-a755-07491315a603->dab4f352-b997-4f58-a24f-6fae0b8c82d3
-    from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: dab4f352-b997-4f58-a24f-6fae0b8c82d3
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.559
-    query: from(viewed-coffee-screen).to(dropped-out-without-bds)
-    description: ''
-  - uuid: edfc1ffc-8e03-4996-8f61-00f78b2ed3bb
-    id: a2ae8ea8-30a3-43db-b12c-43ad71bdaead->e5cd8923-f466-4535-8451-ed78566757e4
-    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    to: e5cd8923-f466-4535-8451-ed78566757e4
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.015
-    query: from(gave-bds-in-onboarding).to(not-sent-recommendation).minus(viewed-dashboard)
-    description: ''
-  - uuid: c38b4315-7815-47b7-8aae-a87d1506490e
-    id: bffebc85-8e08-4844-b9ac-81af93d1e5d2->bff4f41c-6052-49fa-a443-6443b5f9bbb8
-    from: bffebc85-8e08-4844-b9ac-81af93d1e5d2
-    to: bff4f41c-6052-49fa-a443-6443b5f9bbb8
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.055
-      connection: amplitude-prod
-      connection_overridden: true
-      id: post-onboarding-bds-to-rec
-      stdev: 0.014716062652761437
-      evidence:
-        'n': 240
-        k: 13
-        window_from: 1-Nov-25
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:50.086Z'
-        source: amplitude
-        full_query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:50.086Z'
-        query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
-        full_query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
-    query: from(gave-bds-after-onboarding).to(recommendation-with-BDOs)
-    description: ''
-    query_overridden: true
-  - uuid: 2e25fd40-2c84-4b14-af19-6a61220ddbcd
-    id: 7515449a-4743-43fb-8fc0-66b9575c5b0c->e5cd8923-f466-4535-8451-ed78566757e4
-    from: 7515449a-4743-43fb-8fc0-66b9575c5b0c
-    to: e5cd8923-f466-4535-8451-ed78566757e4
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0
-    query: from(viewed-dashboard).to(not-sent-recommendation)
-    description: ''
-  - uuid: f50c3a38-9369-4da1-8221-27cf65b6cabc
-    id: b9194789-0714-4273-b1c0-9fd2aa8b97fa->22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    from: b9194789-0714-4273-b1c0-9fd2aa8b97fa
-    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.029
-      id: retention-rec-to-registration
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.004169184424492649
-      evidence:
-        'n': 1620
-        k: 47
-        window_from: 1-Nov-25
-        source: amplitude
-        window_to: 30-Nov-25
-        retrieved_at: '2025-12-01T17:33:52.615Z'
-        full_query: from(recommendation-retention).to(switch-registered).visited(eon-customer)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-01T17:33:52.615Z'
-        query: from(recommendation-retention).to(switch-registered).visited(eon-customer)
-        full_query: from(recommendation-retention).to(switch-registered).visited(eon-customer)
-      mean_overridden: false
-    query: from(recommendation-retention).to(switch-registered).visited(eon-customer)
-    description: ''
-    query_overridden: true
-    n_query: from(viewed-dashboard).to(recommendation-retention).visited(eon-customer)
-policies:
-  default_outcome: success
-metadata:
-  name: conversion-flow-v0-ezra
-  description: ''
-  created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-12-01T17:33:52.641Z'
-  version: 1.0.0
-  updated: '2025-11-25T18:25:17.542Z'
-currentQueryDSL: window(1-Nov-25:15-Nov-25)
-dataInterestsDSL: window(-30d:-1d).context(channel)
+[
+  {
+    "id": "log-1764635941267-620",
+    "timestamp": "2025-12-02T00:39:01.267Z",
+    "level": "success",
+    "category": "data-fetch",
+    "operation": "DATA_FETCH_DIRECT",
+    "message": "Completed: switch-registered → switch-success (registration-to-success)",
+    "context": {
+      "fileId": "parameter-registration-to-success",
+      "fileType": "parameter",
+      "targetId": "370dce1d-3a36-4109-9711-204c301478c8",
+      "sourceType": "amplitude-prod",
+      "duration": 1240.300000011921
+    },
+    "children": [
+      {
+        "id": "log-1764635941268-621",
+        "timestamp": "2025-12-02T00:39:01.268Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "CONNECTION",
+        "message": "Using connection: amplitude-prod",
+        "details": "Config: {}...",
+        "context": {
+          "sourceType": "amplitude-prod"
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635941286-622",
+        "timestamp": "2025-12-02T00:39:01.286Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "QUERY_BUILT",
+        "message": "Query: from(switch-registered).to(switch-success)",
+        "details": "Window: 3-Sep-25 to 1-Dec-25",
+        "context": {
+          "edgeQuery": "from(switch-registered).to(switch-success)",
+          "resolvedWindow": "3-Sep-25 to 1-Dec-25",
+          "isConditional": false
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942467-623",
+        "timestamp": "2025-12-02T00:39:02.467Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_INIT",
+        "message": "Starting execution for connection: amplitude-prod",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-624",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_LOAD_CONNECTION",
+        "message": "Loading connection: amplitude-prod",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-625",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_LOAD_CONNECTION",
+        "message": "Connection loaded",
+        "context": {
+          "name": "amplitude-prod",
+          "provider": "amplitude"
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-626",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_LOAD_CREDENTIALS",
+        "message": "Loading credentials for credsRef: amplitude",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-627",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_LOAD_CREDENTIALS",
+        "message": "Generated Basic Auth token for Amplitude",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-628",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_LOAD_CREDENTIALS",
+        "message": "Credentials loaded",
+        "context": {
+          "hasCredentials": true
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-629",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_CONTEXT",
+        "message": "Execution context built",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-630",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_PRE_REQUEST",
+        "message": "Executing pre-request transformation script",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-631",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_PRE_REQUEST",
+        "message": "Script returned value",
+        "context": {
+          "result": {
+            "from": "switch-registered",
+            "to": "switch-success",
+            "context": [],
+            "case": [],
+            "start": "2025-09-03T00:00:00.000Z",
+            "end": "2025-12-01T00:00:00.000Z",
+            "query_params": "e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20250903&end=20251201&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D",
+            "from_step_index": 0,
+            "to_step_index": 1
+          }
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-632",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_PRE_REQUEST",
+        "message": "Script execution completed successfully",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-633",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_PRE_REQUEST",
+        "message": "Pre-request transformation complete",
+        "context": {
+          "queryPayloadKeys": [
+            "from",
+            "to",
+            "context",
+            "case",
+            "start",
+            "end",
+            "query_params",
+            "from_step_index",
+            "to_step_index"
+          ],
+          "funnel_from": "switch-registered",
+          "funnel_to": "switch-success",
+          "from_step_index": 0,
+          "to_step_index": 1
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-634",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_REQUEST",
+        "message": "Building HTTP request",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-635",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_REQUEST",
+        "message": "HTTP request built",
+        "context": {
+          "url": "https://amplitude.com/api/2/funnels?e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20250903&end=20251201&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D",
+          "method": "GET",
+          "headers": {
+            "Authorization": "***REDACTED***"
+          }
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-636",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_EXECUTE_REQUEST",
+        "message": "Executing GET https://amplitude.com/api/2/funnels?e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20250903&end=20251201&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-637",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_EXECUTE_REQUEST",
+        "message": "Response received with status 200",
+        "context": {
+          "status": 200,
+          "bodyPreview": "{\"data\":[{\"avgTransTimes\":[965350060,965350060],\"cumulative\":[1,0.0655367231638418],\"cumulativeRaw\":[1770,116],\"dayFunnels\":{\"xValues\":[\"2025-09-03\",\"2025-09-04\",\"2025-09-05\",\"2025-09-06\",\"2025-09-07\",\"2025-09-08\",\"2025-09-09\",\"2025-09-10\",\"2025-09-11\",\"2025-09-12\",\"2025-09-13\",\"2025-09-14\",\"2025-09-15\",\"2025-09-16\",\"2025-09-17\",\"2025-09-18\",\"2025-09-19\",\"2025-09-20\",\"2025-09-21\",\"2025-09-22\",\"2025-09-23\",\"2025-09-24\",\"2025-09-25\",\"2025-09-26\",\"2025-09-27\",\"2025-09-28\",\"2025-09-29\",\"2025-09-30\",\"2025-10-01\",\"2025-10-02\",\"2025-10-03\",\"2025-10-04\",\"2025-10-05\",\"2025-10-06\",\"2025-10-07\",\"2025-10-08\",\"2025-10-09\",\"2025-10-10\",\"2025-10-11\",\"2025-10-12\",\"2025-10-13\",\"2025-10-14\",\"2025-10-15\",\"2025-10-16\",\"2025-10-17\",\"2025-10-18\",\"2025-10-19\",\"2025-10-20\",\"2025-10-21\",\"2025-10-22\",\"2025-10-23\",\"2025-10-24\",\"2025-10-25\",\"2025-10-26\",\"2025-10-27\",\"2025-10-28\",\"2025-10-29\",\"2025-10-30\",\"2025-10-31\",\"2025-11-01\",\"2025-11-02\",\"2025-11-03\",\"2025-11-04\",\"2025-11-05\",\"2025-11-06\",\"2025-11-07\",\"2025-..."
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-638",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_EXTRACT_DATA",
+        "message": "Extracted 3 variables",
+        "context": {
+          "from_count": 1770,
+          "to_count": 116,
+          "day_funnels": {
+            "xValues": [
+              "2025-09-03",
+              "2025-09-04",
+              "2025-09-05",
+              "2025-09-06",
+              "2025-09-07",
+              "2025-09-08",
+              "2025-09-09",
+              "2025-09-10",
+              "2025-09-11",
+              "2025-09-12",
+              "2025-09-13",
+              "2025-09-14",
+              "2025-09-15",
+              "2025-09-16",
+              "2025-09-17",
+              "2025-09-18",
+              "2025-09-19",
+              "2025-09-20",
+              "2025-09-21",
+              "2025-09-22",
+              "2025-09-23",
+              "2025-09-24",
+              "2025-09-25",
+              "2025-09-26",
+              "2025-09-27",
+              "2025-09-28",
+              "2025-09-29",
+              "2025-09-30",
+              "2025-10-01",
+              "2025-10-02",
+              "2025-10-03",
+              "2025-10-04",
+              "2025-10-05",
+              "2025-10-06",
+              "2025-10-07",
+              "2025-10-08",
+              "2025-10-09",
+              "2025-10-10",
+              "2025-10-11",
+              "2025-10-12",
+              "2025-10-13",
+              "2025-10-14",
+              "2025-10-15",
+              "2025-10-16",
+              "2025-10-17",
+              "2025-10-18",
+              "2025-10-19",
+              "2025-10-20",
+              "2025-10-21",
+              "2025-10-22",
+              "2025-10-23",
+              "2025-10-24",
+              "2025-10-25",
+              "2025-10-26",
+              "2025-10-27",
+              "2025-10-28",
+              "2025-10-29",
+              "2025-10-30",
+              "2025-10-31",
+              "2025-11-01",
+              "2025-11-02",
+              "2025-11-03",
+              "2025-11-04",
+              "2025-11-05",
+              "2025-11-06",
+              "2025-11-07",
+              "2025-11-08",
+              "2025-11-09",
+              "2025-11-10",
+              "2025-11-11",
+              "2025-11-12",
+              "2025-11-13",
+              "2025-11-14",
+              "2025-11-15",
+              "2025-11-16",
+              "2025-11-17",
+              "2025-11-18",
+              "2025-11-19",
+              "2025-11-20",
+              "2025-11-21",
+              "2025-11-22",
+              "2025-11-23",
+              "2025-11-24",
+              "2025-11-25",
+              "2025-11-26",
+              "2025-11-27",
+              "2025-11-28",
+              "2025-11-29",
+              "2025-11-30",
+              "2025-12-01"
+            ],
+            "series": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                0
+              ],
+              [
+                19,
+                2
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                31,
+                2
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                19,
+                3
+              ],
+              [
+                6,
+                0
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                21,
+                1
+              ],
+              [
+                11,
+                1
+              ],
+              [
+                3,
+                0
+              ],
+              [
+                12,
+                0
+              ],
+              [
+                16,
+                1
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                26,
+                3
+              ],
+              [
+                9,
+                1
+              ],
+              [
+                17,
+                4
+              ],
+              [
+                10,
+                1
+              ],
+              [
+                22,
+                2
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                21,
+                0
+              ],
+              [
+                14,
+                0
+              ],
+              [
+                16,
+                1
+              ],
+              [
+                32,
+                0
+              ],
+              [
+                14,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                47,
+                3
+              ],
+              [
+                35,
+                0
+              ],
+              [
+                69,
+                3
+              ],
+              [
+                16,
+                2
+              ],
+              [
+                34,
+                3
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                100,
+                5
+              ],
+              [
+                67,
+                6
+              ],
+              [
+                34,
+                5
+              ],
+              [
+                26,
+                3
+              ],
+              [
+                54,
+                2
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                42,
+                1
+              ],
+              [
+                17,
+                1
+              ],
+              [
+                12,
+                1
+              ],
+              [
+                31,
+                3
+              ],
+              [
+                61,
+                4
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                83,
+                4
+              ],
+              [
+                11,
+                1
+              ],
+              [
+                47,
+                8
+              ],
+              [
+                30,
+                3
+              ],
+              [
+                45,
+                7
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                32,
+                5
+              ],
+              [
+                22,
+                1
+              ],
+              [
+                52,
+                6
+              ],
+              [
+                25,
+                3
+              ],
+              [
+                36,
+                2
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                17,
+                2
+              ],
+              [
+                20,
+                1
+              ],
+              [
+                25,
+                4
+              ],
+              [
+                33,
+                5
+              ],
+              [
+                23,
+                1
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                40,
+                4
+              ],
+              [
+                14,
+                0
+              ],
+              [
+                19,
+                0
+              ],
+              [
+                47,
+                2
+              ],
+              [
+                41,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                32,
+                1
+              ],
+              [
+                38,
+                0
+              ],
+              [
+                83,
+                3
+              ],
+              [
+                28,
+                0
+              ],
+              [
+                18,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                55,
+                0
+              ]
+            ],
+            "formattedXValues": [
+              "Sep 03",
+              "Sep 04",
+              "Sep 05",
+              "Sep 06",
+              "Sep 07",
+              "Sep 08",
+              "Sep 09",
+              "Sep 10",
+              "Sep 11",
+              "Sep 12",
+              "Sep 13",
+              "Sep 14",
+              "Sep 15",
+              "Sep 16",
+              "Sep 17",
+              "Sep 18",
+              "Sep 19",
+              "Sep 20",
+              "Sep 21",
+              "Sep 22",
+              "Sep 23",
+              "Sep 24",
+              "Sep 25",
+              "Sep 26",
+              "Sep 27",
+              "Sep 28",
+              "Sep 29",
+              "Sep 30",
+              "Oct 01",
+              "Oct 02",
+              "Oct 03",
+              "Oct 04",
+              "Oct 05",
+              "Oct 06",
+              "Oct 07",
+              "Oct 08",
+              "Oct 09",
+              "Oct 10",
+              "Oct 11",
+              "Oct 12",
+              "Oct 13",
+              "Oct 14",
+              "Oct 15",
+              "Oct 16",
+              "Oct 17",
+              "Oct 18",
+              "Oct 19",
+              "Oct 20",
+              "Oct 21",
+              "Oct 22",
+              "Oct 23",
+              "Oct 24",
+              "Oct 25",
+              "Oct 26",
+              "Oct 27",
+              "Oct 28",
+              "Oct 29",
+              "Oct 30",
+              "Oct 31",
+              "Nov 01",
+              "Nov 02",
+              "Nov 03",
+              "Nov 04",
+              "Nov 05",
+              "Nov 06",
+              "Nov 07",
+              "Nov 08",
+              "Nov 09",
+              "Nov 10",
+              "Nov 11",
+              "Nov 12",
+              "Nov 13",
+              "Nov 14",
+              "Nov 15",
+              "Nov 16",
+              "Nov 17",
+              "Nov 18",
+              "Nov 19",
+              "Nov 20",
+              "Nov 21",
+              "Nov 22",
+              "Nov 23",
+              "Nov 24",
+              "Nov 25",
+              "Nov 26",
+              "Nov 27",
+              "Nov 28",
+              "Nov 29",
+              "Nov 30",
+              "Dec 01"
+            ]
+          },
+          "_debug_from_step_index": 0,
+          "_debug_to_step_index": 1,
+          "_debug_cumulativeRaw": [
+            1770,
+            116
+          ],
+          "_debug_from_count_at_index": 1770,
+          "_debug_to_count_at_index": 116
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-639",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_TRANSFORM_DATA",
+        "message": "Transformed data",
+        "context": {
+          "from_count": 1770,
+          "to_count": 116,
+          "day_funnels": {
+            "xValues": [
+              "2025-09-03",
+              "2025-09-04",
+              "2025-09-05",
+              "2025-09-06",
+              "2025-09-07",
+              "2025-09-08",
+              "2025-09-09",
+              "2025-09-10",
+              "2025-09-11",
+              "2025-09-12",
+              "2025-09-13",
+              "2025-09-14",
+              "2025-09-15",
+              "2025-09-16",
+              "2025-09-17",
+              "2025-09-18",
+              "2025-09-19",
+              "2025-09-20",
+              "2025-09-21",
+              "2025-09-22",
+              "2025-09-23",
+              "2025-09-24",
+              "2025-09-25",
+              "2025-09-26",
+              "2025-09-27",
+              "2025-09-28",
+              "2025-09-29",
+              "2025-09-30",
+              "2025-10-01",
+              "2025-10-02",
+              "2025-10-03",
+              "2025-10-04",
+              "2025-10-05",
+              "2025-10-06",
+              "2025-10-07",
+              "2025-10-08",
+              "2025-10-09",
+              "2025-10-10",
+              "2025-10-11",
+              "2025-10-12",
+              "2025-10-13",
+              "2025-10-14",
+              "2025-10-15",
+              "2025-10-16",
+              "2025-10-17",
+              "2025-10-18",
+              "2025-10-19",
+              "2025-10-20",
+              "2025-10-21",
+              "2025-10-22",
+              "2025-10-23",
+              "2025-10-24",
+              "2025-10-25",
+              "2025-10-26",
+              "2025-10-27",
+              "2025-10-28",
+              "2025-10-29",
+              "2025-10-30",
+              "2025-10-31",
+              "2025-11-01",
+              "2025-11-02",
+              "2025-11-03",
+              "2025-11-04",
+              "2025-11-05",
+              "2025-11-06",
+              "2025-11-07",
+              "2025-11-08",
+              "2025-11-09",
+              "2025-11-10",
+              "2025-11-11",
+              "2025-11-12",
+              "2025-11-13",
+              "2025-11-14",
+              "2025-11-15",
+              "2025-11-16",
+              "2025-11-17",
+              "2025-11-18",
+              "2025-11-19",
+              "2025-11-20",
+              "2025-11-21",
+              "2025-11-22",
+              "2025-11-23",
+              "2025-11-24",
+              "2025-11-25",
+              "2025-11-26",
+              "2025-11-27",
+              "2025-11-28",
+              "2025-11-29",
+              "2025-11-30",
+              "2025-12-01"
+            ],
+            "series": [
+              [
+                0,
+                0
+              ],
+              [
+                1,
+                0
+              ],
+              [
+                19,
+                2
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                31,
+                2
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                19,
+                3
+              ],
+              [
+                6,
+                0
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                21,
+                1
+              ],
+              [
+                11,
+                1
+              ],
+              [
+                3,
+                0
+              ],
+              [
+                12,
+                0
+              ],
+              [
+                16,
+                1
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                26,
+                3
+              ],
+              [
+                9,
+                1
+              ],
+              [
+                17,
+                4
+              ],
+              [
+                10,
+                1
+              ],
+              [
+                22,
+                2
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                21,
+                0
+              ],
+              [
+                14,
+                0
+              ],
+              [
+                16,
+                1
+              ],
+              [
+                32,
+                0
+              ],
+              [
+                14,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                47,
+                3
+              ],
+              [
+                35,
+                0
+              ],
+              [
+                69,
+                3
+              ],
+              [
+                16,
+                2
+              ],
+              [
+                34,
+                3
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                100,
+                5
+              ],
+              [
+                67,
+                6
+              ],
+              [
+                34,
+                5
+              ],
+              [
+                26,
+                3
+              ],
+              [
+                54,
+                2
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                42,
+                1
+              ],
+              [
+                17,
+                1
+              ],
+              [
+                12,
+                1
+              ],
+              [
+                31,
+                3
+              ],
+              [
+                61,
+                4
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                83,
+                4
+              ],
+              [
+                11,
+                1
+              ],
+              [
+                47,
+                8
+              ],
+              [
+                30,
+                3
+              ],
+              [
+                45,
+                7
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                32,
+                5
+              ],
+              [
+                22,
+                1
+              ],
+              [
+                52,
+                6
+              ],
+              [
+                25,
+                3
+              ],
+              [
+                36,
+                2
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                17,
+                2
+              ],
+              [
+                20,
+                1
+              ],
+              [
+                25,
+                4
+              ],
+              [
+                33,
+                5
+              ],
+              [
+                23,
+                1
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                40,
+                4
+              ],
+              [
+                14,
+                0
+              ],
+              [
+                19,
+                0
+              ],
+              [
+                47,
+                2
+              ],
+              [
+                41,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                32,
+                1
+              ],
+              [
+                38,
+                0
+              ],
+              [
+                83,
+                3
+              ],
+              [
+                28,
+                0
+              ],
+              [
+                18,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                55,
+                0
+              ]
+            ],
+            "formattedXValues": [
+              "Sep 03",
+              "Sep 04",
+              "Sep 05",
+              "Sep 06",
+              "Sep 07",
+              "Sep 08",
+              "Sep 09",
+              "Sep 10",
+              "Sep 11",
+              "Sep 12",
+              "Sep 13",
+              "Sep 14",
+              "Sep 15",
+              "Sep 16",
+              "Sep 17",
+              "Sep 18",
+              "Sep 19",
+              "Sep 20",
+              "Sep 21",
+              "Sep 22",
+              "Sep 23",
+              "Sep 24",
+              "Sep 25",
+              "Sep 26",
+              "Sep 27",
+              "Sep 28",
+              "Sep 29",
+              "Sep 30",
+              "Oct 01",
+              "Oct 02",
+              "Oct 03",
+              "Oct 04",
+              "Oct 05",
+              "Oct 06",
+              "Oct 07",
+              "Oct 08",
+              "Oct 09",
+              "Oct 10",
+              "Oct 11",
+              "Oct 12",
+              "Oct 13",
+              "Oct 14",
+              "Oct 15",
+              "Oct 16",
+              "Oct 17",
+              "Oct 18",
+              "Oct 19",
+              "Oct 20",
+              "Oct 21",
+              "Oct 22",
+              "Oct 23",
+              "Oct 24",
+              "Oct 25",
+              "Oct 26",
+              "Oct 27",
+              "Oct 28",
+              "Oct 29",
+              "Oct 30",
+              "Oct 31",
+              "Nov 01",
+              "Nov 02",
+              "Nov 03",
+              "Nov 04",
+              "Nov 05",
+              "Nov 06",
+              "Nov 07",
+              "Nov 08",
+              "Nov 09",
+              "Nov 10",
+              "Nov 11",
+              "Nov 12",
+              "Nov 13",
+              "Nov 14",
+              "Nov 15",
+              "Nov 16",
+              "Nov 17",
+              "Nov 18",
+              "Nov 19",
+              "Nov 20",
+              "Nov 21",
+              "Nov 22",
+              "Nov 23",
+              "Nov 24",
+              "Nov 25",
+              "Nov 26",
+              "Nov 27",
+              "Nov 28",
+              "Nov 29",
+              "Nov 30",
+              "Dec 01"
+            ]
+          },
+          "mode": "daily",
+          "time_series": [
+            {
+              "date": "2025-09-03",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-04",
+              "n": 1,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-05",
+              "n": 19,
+              "k": 2,
+              "p": 0.10526315789473684
+            },
+            {
+              "date": "2025-09-06",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-07",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-08",
+              "n": 31,
+              "k": 2,
+              "p": 0.06451612903225806
+            },
+            {
+              "date": "2025-09-09",
+              "n": 6,
+              "k": 1,
+              "p": 0.16666666666666666
+            },
+            {
+              "date": "2025-09-10",
+              "n": 19,
+              "k": 3,
+              "p": 0.15789473684210525
+            },
+            {
+              "date": "2025-09-11",
+              "n": 6,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-12",
+              "n": 9,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-13",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-14",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-15",
+              "n": 21,
+              "k": 1,
+              "p": 0.047619047619047616
+            },
+            {
+              "date": "2025-09-16",
+              "n": 11,
+              "k": 1,
+              "p": 0.09090909090909091
+            },
+            {
+              "date": "2025-09-17",
+              "n": 3,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-18",
+              "n": 12,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-19",
+              "n": 16,
+              "k": 1,
+              "p": 0.0625
+            },
+            {
+              "date": "2025-09-20",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-21",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-22",
+              "n": 26,
+              "k": 3,
+              "p": 0.11538461538461539
+            },
+            {
+              "date": "2025-09-23",
+              "n": 9,
+              "k": 1,
+              "p": 0.1111111111111111
+            },
+            {
+              "date": "2025-09-24",
+              "n": 17,
+              "k": 4,
+              "p": 0.23529411764705882
+            },
+            {
+              "date": "2025-09-25",
+              "n": 10,
+              "k": 1,
+              "p": 0.1
+            },
+            {
+              "date": "2025-09-26",
+              "n": 22,
+              "k": 2,
+              "p": 0.09090909090909091
+            },
+            {
+              "date": "2025-09-27",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-28",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-29",
+              "n": 21,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-30",
+              "n": 14,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-10-01",
+              "n": 16,
+              "k": 1,
+              "p": 0.0625
+            },
+            {
+              "date": "2025-10-02",
+              "n": 32,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-10-03",
+              "n": 14,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-10-04",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-05",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-06",
+              "n": 47,
+              "k": 3,
+              "p": 0.06382978723404255
+            },
+            {
+              "date": "2025-10-07",
+              "n": 35,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-10-08",
+              "n": 69,
+              "k": 3,
+              "p": 0.043478260869565216
+            },
+            {
+              "date": "2025-10-09",
+              "n": 16,
+              "k": 2,
+              "p": 0.125
+            },
+            {
+              "date": "2025-10-10",
+              "n": 34,
+              "k": 3,
+              "p": 0.08823529411764706
+            },
+            {
+              "date": "2025-10-11",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-12",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-13",
+              "n": 100,
+              "k": 5,
+              "p": 0.05
+            },
+            {
+              "date": "2025-10-14",
+              "n": 67,
+              "k": 6,
+              "p": 0.08955223880597014
+            },
+            {
+              "date": "2025-10-15",
+              "n": 34,
+              "k": 5,
+              "p": 0.14705882352941177
+            },
+            {
+              "date": "2025-10-16",
+              "n": 26,
+              "k": 3,
+              "p": 0.11538461538461539
+            },
+            {
+              "date": "2025-10-17",
+              "n": 54,
+              "k": 2,
+              "p": 0.037037037037037035
+            },
+            {
+              "date": "2025-10-18",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-19",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-20",
+              "n": 42,
+              "k": 1,
+              "p": 0.023809523809523808
+            },
+            {
+              "date": "2025-10-21",
+              "n": 17,
+              "k": 1,
+              "p": 0.058823529411764705
+            },
+            {
+              "date": "2025-10-22",
+              "n": 12,
+              "k": 1,
+              "p": 0.08333333333333333
+            },
+            {
+              "date": "2025-10-23",
+              "n": 31,
+              "k": 3,
+              "p": 0.0967741935483871
+            },
+            {
+              "date": "2025-10-24",
+              "n": 61,
+              "k": 4,
+              "p": 0.06557377049180328
+            },
+            {
+              "date": "2025-10-25",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-26",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-27",
+              "n": 83,
+              "k": 4,
+              "p": 0.04819277108433735
+            },
+            {
+              "date": "2025-10-28",
+              "n": 11,
+              "k": 1,
+              "p": 0.09090909090909091
+            },
+            {
+              "date": "2025-10-29",
+              "n": 47,
+              "k": 8,
+              "p": 0.1702127659574468
+            },
+            {
+              "date": "2025-10-30",
+              "n": 30,
+              "k": 3,
+              "p": 0.1
+            },
+            {
+              "date": "2025-10-31",
+              "n": 45,
+              "k": 7,
+              "p": 0.15555555555555556
+            },
+            {
+              "date": "2025-11-01",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-02",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-03",
+              "n": 32,
+              "k": 5,
+              "p": 0.15625
+            },
+            {
+              "date": "2025-11-04",
+              "n": 22,
+              "k": 1,
+              "p": 0.045454545454545456
+            },
+            {
+              "date": "2025-11-05",
+              "n": 52,
+              "k": 6,
+              "p": 0.11538461538461539
+            },
+            {
+              "date": "2025-11-06",
+              "n": 25,
+              "k": 3,
+              "p": 0.12
+            },
+            {
+              "date": "2025-11-07",
+              "n": 36,
+              "k": 2,
+              "p": 0.05555555555555555
+            },
+            {
+              "date": "2025-11-08",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-09",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-10",
+              "n": 17,
+              "k": 2,
+              "p": 0.11764705882352941
+            },
+            {
+              "date": "2025-11-11",
+              "n": 20,
+              "k": 1,
+              "p": 0.05
+            },
+            {
+              "date": "2025-11-12",
+              "n": 25,
+              "k": 4,
+              "p": 0.16
+            },
+            {
+              "date": "2025-11-13",
+              "n": 33,
+              "k": 5,
+              "p": 0.15151515151515152
+            },
+            {
+              "date": "2025-11-14",
+              "n": 23,
+              "k": 1,
+              "p": 0.043478260869565216
+            },
+            {
+              "date": "2025-11-15",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-16",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-17",
+              "n": 40,
+              "k": 4,
+              "p": 0.1
+            },
+            {
+              "date": "2025-11-18",
+              "n": 14,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-19",
+              "n": 19,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-20",
+              "n": 47,
+              "k": 2,
+              "p": 0.0425531914893617
+            },
+            {
+              "date": "2025-11-21",
+              "n": 41,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-22",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-23",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-24",
+              "n": 32,
+              "k": 1,
+              "p": 0.03125
+            },
+            {
+              "date": "2025-11-25",
+              "n": 38,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-26",
+              "n": 83,
+              "k": 3,
+              "p": 0.03614457831325301
+            },
+            {
+              "date": "2025-11-27",
+              "n": 28,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-28",
+              "n": 18,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-29",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-30",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-12-01",
+              "n": 55,
+              "k": 0,
+              "p": 0
+            }
+          ],
+          "n": 1770,
+          "k": 116,
+          "p_mean": 0.0655367231638418
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-640",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_TRANSFORM_DATA",
+        "message": "Daily mode debug:",
+        "context": {
+          "mode": "daily",
+          "hasDayFunnels": true,
+          "dayFunnelsKeys": [
+            "xValues",
+            "series",
+            "formattedXValues"
+          ],
+          "dayFunnelsType": "object",
+          "dayFunnelsSeries": [
+            [
+              0,
+              0
+            ],
+            [
+              1,
+              0
+            ],
+            [
+              19,
+              2
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              31,
+              2
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              19,
+              3
+            ],
+            [
+              6,
+              0
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              21,
+              1
+            ],
+            [
+              11,
+              1
+            ],
+            [
+              3,
+              0
+            ],
+            [
+              12,
+              0
+            ],
+            [
+              16,
+              1
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              26,
+              3
+            ],
+            [
+              9,
+              1
+            ],
+            [
+              17,
+              4
+            ],
+            [
+              10,
+              1
+            ],
+            [
+              22,
+              2
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              21,
+              0
+            ],
+            [
+              14,
+              0
+            ],
+            [
+              16,
+              1
+            ],
+            [
+              32,
+              0
+            ],
+            [
+              14,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              47,
+              3
+            ],
+            [
+              35,
+              0
+            ],
+            [
+              69,
+              3
+            ],
+            [
+              16,
+              2
+            ],
+            [
+              34,
+              3
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              100,
+              5
+            ],
+            [
+              67,
+              6
+            ],
+            [
+              34,
+              5
+            ],
+            [
+              26,
+              3
+            ],
+            [
+              54,
+              2
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              42,
+              1
+            ],
+            [
+              17,
+              1
+            ],
+            [
+              12,
+              1
+            ],
+            [
+              31,
+              3
+            ],
+            [
+              61,
+              4
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              83,
+              4
+            ],
+            [
+              11,
+              1
+            ],
+            [
+              47,
+              8
+            ],
+            [
+              30,
+              3
+            ],
+            [
+              45,
+              7
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              32,
+              5
+            ],
+            [
+              22,
+              1
+            ],
+            [
+              52,
+              6
+            ],
+            [
+              25,
+              3
+            ],
+            [
+              36,
+              2
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              17,
+              2
+            ],
+            [
+              20,
+              1
+            ],
+            [
+              25,
+              4
+            ],
+            [
+              33,
+              5
+            ],
+            [
+              23,
+              1
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              40,
+              4
+            ],
+            [
+              14,
+              0
+            ],
+            [
+              19,
+              0
+            ],
+            [
+              47,
+              2
+            ],
+            [
+              41,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              32,
+              1
+            ],
+            [
+              38,
+              0
+            ],
+            [
+              83,
+              3
+            ],
+            [
+              28,
+              0
+            ],
+            [
+              18,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              55,
+              0
+            ]
+          ],
+          "dayFunnelsXValues": [
+            "2025-09-03",
+            "2025-09-04",
+            "2025-09-05",
+            "2025-09-06",
+            "2025-09-07",
+            "2025-09-08",
+            "2025-09-09",
+            "2025-09-10",
+            "2025-09-11",
+            "2025-09-12",
+            "2025-09-13",
+            "2025-09-14",
+            "2025-09-15",
+            "2025-09-16",
+            "2025-09-17",
+            "2025-09-18",
+            "2025-09-19",
+            "2025-09-20",
+            "2025-09-21",
+            "2025-09-22",
+            "2025-09-23",
+            "2025-09-24",
+            "2025-09-25",
+            "2025-09-26",
+            "2025-09-27",
+            "2025-09-28",
+            "2025-09-29",
+            "2025-09-30",
+            "2025-10-01",
+            "2025-10-02",
+            "2025-10-03",
+            "2025-10-04",
+            "2025-10-05",
+            "2025-10-06",
+            "2025-10-07",
+            "2025-10-08",
+            "2025-10-09",
+            "2025-10-10",
+            "2025-10-11",
+            "2025-10-12",
+            "2025-10-13",
+            "2025-10-14",
+            "2025-10-15",
+            "2025-10-16",
+            "2025-10-17",
+            "2025-10-18",
+            "2025-10-19",
+            "2025-10-20",
+            "2025-10-21",
+            "2025-10-22",
+            "2025-10-23",
+            "2025-10-24",
+            "2025-10-25",
+            "2025-10-26",
+            "2025-10-27",
+            "2025-10-28",
+            "2025-10-29",
+            "2025-10-30",
+            "2025-10-31",
+            "2025-11-01",
+            "2025-11-02",
+            "2025-11-03",
+            "2025-11-04",
+            "2025-11-05",
+            "2025-11-06",
+            "2025-11-07",
+            "2025-11-08",
+            "2025-11-09",
+            "2025-11-10",
+            "2025-11-11",
+            "2025-11-12",
+            "2025-11-13",
+            "2025-11-14",
+            "2025-11-15",
+            "2025-11-16",
+            "2025-11-17",
+            "2025-11-18",
+            "2025-11-19",
+            "2025-11-20",
+            "2025-11-21",
+            "2025-11-22",
+            "2025-11-23",
+            "2025-11-24",
+            "2025-11-25",
+            "2025-11-26",
+            "2025-11-27",
+            "2025-11-28",
+            "2025-11-29",
+            "2025-11-30",
+            "2025-12-01"
+          ],
+          "timeSeriesLength": 90,
+          "timeSeries": [
+            {
+              "date": "2025-09-03",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-04",
+              "n": 1,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-05",
+              "n": 19,
+              "k": 2,
+              "p": 0.10526315789473684
+            },
+            {
+              "date": "2025-09-06",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-07",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-08",
+              "n": 31,
+              "k": 2,
+              "p": 0.06451612903225806
+            },
+            {
+              "date": "2025-09-09",
+              "n": 6,
+              "k": 1,
+              "p": 0.16666666666666666
+            },
+            {
+              "date": "2025-09-10",
+              "n": 19,
+              "k": 3,
+              "p": 0.15789473684210525
+            },
+            {
+              "date": "2025-09-11",
+              "n": 6,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-12",
+              "n": 9,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-13",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-14",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-15",
+              "n": 21,
+              "k": 1,
+              "p": 0.047619047619047616
+            },
+            {
+              "date": "2025-09-16",
+              "n": 11,
+              "k": 1,
+              "p": 0.09090909090909091
+            },
+            {
+              "date": "2025-09-17",
+              "n": 3,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-18",
+              "n": 12,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-19",
+              "n": 16,
+              "k": 1,
+              "p": 0.0625
+            },
+            {
+              "date": "2025-09-20",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-21",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-22",
+              "n": 26,
+              "k": 3,
+              "p": 0.11538461538461539
+            },
+            {
+              "date": "2025-09-23",
+              "n": 9,
+              "k": 1,
+              "p": 0.1111111111111111
+            },
+            {
+              "date": "2025-09-24",
+              "n": 17,
+              "k": 4,
+              "p": 0.23529411764705882
+            },
+            {
+              "date": "2025-09-25",
+              "n": 10,
+              "k": 1,
+              "p": 0.1
+            },
+            {
+              "date": "2025-09-26",
+              "n": 22,
+              "k": 2,
+              "p": 0.09090909090909091
+            },
+            {
+              "date": "2025-09-27",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-28",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-09-29",
+              "n": 21,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-09-30",
+              "n": 14,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-10-01",
+              "n": 16,
+              "k": 1,
+              "p": 0.0625
+            },
+            {
+              "date": "2025-10-02",
+              "n": 32,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-10-03",
+              "n": 14,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-10-04",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-05",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-06",
+              "n": 47,
+              "k": 3,
+              "p": 0.06382978723404255
+            },
+            {
+              "date": "2025-10-07",
+              "n": 35,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-10-08",
+              "n": 69,
+              "k": 3,
+              "p": 0.043478260869565216
+            },
+            {
+              "date": "2025-10-09",
+              "n": 16,
+              "k": 2,
+              "p": 0.125
+            },
+            {
+              "date": "2025-10-10",
+              "n": 34,
+              "k": 3,
+              "p": 0.08823529411764706
+            },
+            {
+              "date": "2025-10-11",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-12",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-13",
+              "n": 100,
+              "k": 5,
+              "p": 0.05
+            },
+            {
+              "date": "2025-10-14",
+              "n": 67,
+              "k": 6,
+              "p": 0.08955223880597014
+            },
+            {
+              "date": "2025-10-15",
+              "n": 34,
+              "k": 5,
+              "p": 0.14705882352941177
+            },
+            {
+              "date": "2025-10-16",
+              "n": 26,
+              "k": 3,
+              "p": 0.11538461538461539
+            },
+            {
+              "date": "2025-10-17",
+              "n": 54,
+              "k": 2,
+              "p": 0.037037037037037035
+            },
+            {
+              "date": "2025-10-18",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-19",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-20",
+              "n": 42,
+              "k": 1,
+              "p": 0.023809523809523808
+            },
+            {
+              "date": "2025-10-21",
+              "n": 17,
+              "k": 1,
+              "p": 0.058823529411764705
+            },
+            {
+              "date": "2025-10-22",
+              "n": 12,
+              "k": 1,
+              "p": 0.08333333333333333
+            },
+            {
+              "date": "2025-10-23",
+              "n": 31,
+              "k": 3,
+              "p": 0.0967741935483871
+            },
+            {
+              "date": "2025-10-24",
+              "n": 61,
+              "k": 4,
+              "p": 0.06557377049180328
+            },
+            {
+              "date": "2025-10-25",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-26",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-10-27",
+              "n": 83,
+              "k": 4,
+              "p": 0.04819277108433735
+            },
+            {
+              "date": "2025-10-28",
+              "n": 11,
+              "k": 1,
+              "p": 0.09090909090909091
+            },
+            {
+              "date": "2025-10-29",
+              "n": 47,
+              "k": 8,
+              "p": 0.1702127659574468
+            },
+            {
+              "date": "2025-10-30",
+              "n": 30,
+              "k": 3,
+              "p": 0.1
+            },
+            {
+              "date": "2025-10-31",
+              "n": 45,
+              "k": 7,
+              "p": 0.15555555555555556
+            },
+            {
+              "date": "2025-11-01",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-02",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-03",
+              "n": 32,
+              "k": 5,
+              "p": 0.15625
+            },
+            {
+              "date": "2025-11-04",
+              "n": 22,
+              "k": 1,
+              "p": 0.045454545454545456
+            },
+            {
+              "date": "2025-11-05",
+              "n": 52,
+              "k": 6,
+              "p": 0.11538461538461539
+            },
+            {
+              "date": "2025-11-06",
+              "n": 25,
+              "k": 3,
+              "p": 0.12
+            },
+            {
+              "date": "2025-11-07",
+              "n": 36,
+              "k": 2,
+              "p": 0.05555555555555555
+            },
+            {
+              "date": "2025-11-08",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-09",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-10",
+              "n": 17,
+              "k": 2,
+              "p": 0.11764705882352941
+            },
+            {
+              "date": "2025-11-11",
+              "n": 20,
+              "k": 1,
+              "p": 0.05
+            },
+            {
+              "date": "2025-11-12",
+              "n": 25,
+              "k": 4,
+              "p": 0.16
+            },
+            {
+              "date": "2025-11-13",
+              "n": 33,
+              "k": 5,
+              "p": 0.15151515151515152
+            },
+            {
+              "date": "2025-11-14",
+              "n": 23,
+              "k": 1,
+              "p": 0.043478260869565216
+            },
+            {
+              "date": "2025-11-15",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-16",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-17",
+              "n": 40,
+              "k": 4,
+              "p": 0.1
+            },
+            {
+              "date": "2025-11-18",
+              "n": 14,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-19",
+              "n": 19,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-20",
+              "n": 47,
+              "k": 2,
+              "p": 0.0425531914893617
+            },
+            {
+              "date": "2025-11-21",
+              "n": 41,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-22",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-23",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-24",
+              "n": 32,
+              "k": 1,
+              "p": 0.03125
+            },
+            {
+              "date": "2025-11-25",
+              "n": 38,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-26",
+              "n": 83,
+              "k": 3,
+              "p": 0.03614457831325301
+            },
+            {
+              "date": "2025-11-27",
+              "n": 28,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-28",
+              "n": 18,
+              "k": 0,
+              "p": 0
+            },
+            {
+              "date": "2025-11-29",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-11-30",
+              "n": 0,
+              "k": 0,
+              "p": null
+            },
+            {
+              "date": "2025-12-01",
+              "n": 55,
+              "k": 0,
+              "p": 0
+            }
+          ]
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-641",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_UPDATES",
+        "message": "Building updates with merged context",
+        "context": {
+          "dataKeys": [
+            "from_count",
+            "to_count",
+            "day_funnels",
+            "mode",
+            "time_series",
+            "n",
+            "k",
+            "p_mean"
+          ],
+          "contextKeys": [
+            "queryPayload",
+            "connection",
+            "credentials",
+            "window",
+            "context",
+            "connection_string",
+            "edgeId",
+            "caseId",
+            "parameterId",
+            "extractedVars",
+            "eventDefinitions"
+          ],
+          "mergedKeys": [
+            "queryPayload",
+            "connection",
+            "credentials",
+            "window",
+            "context",
+            "connection_string",
+            "edgeId",
+            "caseId",
+            "parameterId",
+            "extractedVars",
+            "eventDefinitions",
+            "from_count",
+            "to_count",
+            "day_funnels",
+            "mode",
+            "time_series",
+            "n",
+            "k",
+            "p_mean"
+          ],
+          "sampleData": {
+            "p_mean": 0.0655367231638418,
+            "n": 1770,
+            "k": 116
+          }
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-642",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_UPDATES",
+        "message": "Interpolating value template: {{p_mean}}",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-643",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_UPDATES",
+        "message": "Interpolated result: \"0.0655367231638418\"",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-644",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_UPDATES",
+        "message": "Interpolating value template: {{n}}",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-645",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_UPDATES",
+        "message": "Interpolated result: \"1770\"",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-646",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_UPDATES",
+        "message": "Interpolating value template: {{k}}",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-647",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_UPDATES",
+        "message": "Interpolated result: \"116\"",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-648",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_BUILD_UPDATES",
+        "message": "Generated 3 updates",
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-649",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "info",
+        "category": "data-fetch",
+        "operation": "DAS_COMPLETE",
+        "message": "Execution completed successfully",
+        "context": {
+          "updateCount": 3
+        },
+        "parentId": "log-1764635941267-620"
+      },
+      {
+        "id": "log-1764635942468-650",
+        "timestamp": "2025-12-02T00:39:02.468Z",
+        "level": "success",
+        "category": "data-fetch",
+        "operation": "API_RESPONSE",
+        "message": "Received: 90 days of daily data, n=1770, k=116, p=6.55%",
+        "details": "Window: 3-Sep-25 to 1-Dec-25",
+        "context": {
+          "rowCount": 90,
+          "aggregates": {
+            "n": 1770,
+            "k": 116,
+            "p": 0.0655367231638418
+          }
+        },
+        "parentId": "log-1764635941267-620"
+      }
+    ],
+    "expanded": false
+  },
+  {
+    "id": "log-1764635942471-651",
+    "timestamp": "2025-12-02T00:39:02.471Z",
+    "level": "info",
+    "category": "data-fetch",
+    "operation": "EXTERNAL_TO_GRAPH_PARAMETER",
+    "message": "Fetching parameter data from external source",
+    "details": "Source: external source",
+    "context": {
+      "sourceType": "external",
+      "sourceId": "external source",
+      "targetId": "370dce1d-3a36-4109-9711-204c301478c8",
+      "fileType": "parameter"
+    }
+  },
+  {
+    "id": "log-1764635942478-652",
+    "timestamp": "2025-12-02T00:39:02.478Z",
+    "level": "success",
+    "category": "data-fetch",
+    "operation": "EXTERNAL_TO_GRAPH_PARAMETER_SUCCESS",
+    "message": "Updated graph from external parameter source",
+    "details": "1 field(s) updated",
+    "context": {
+      "sourceId": "external source",
+      "targetId": "370dce1d-3a36-4109-9711-204c301478c8",
+      "fileType": "parameter"
+    }
+  }
+]

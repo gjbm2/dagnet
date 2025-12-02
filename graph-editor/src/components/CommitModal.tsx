@@ -456,8 +456,20 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
             </label>
             <textarea
               value={commitMessage}
-              onChange={(e) => setCommitMessage(e.target.value)}
+              onChange={(e) => {
+                console.log('[CommitModal] onChange:', e.target.value);
+                setCommitMessage(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                console.log('[CommitModal] onKeyDown:', e.key, 'defaultPrevented:', e.defaultPrevented);
+              }}
+              onInput={(e) => {
+                console.log('[CommitModal] onInput:', (e.target as HTMLTextAreaElement).value);
+              }}
+              onFocus={() => console.log('[CommitModal] textarea focused')}
+              onBlur={() => console.log('[CommitModal] textarea blurred')}
               placeholder="Enter commit message..."
+              className="commit-modal-textarea"
               style={{
                 width: '100%',
                 padding: '8px',

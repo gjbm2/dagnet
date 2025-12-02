@@ -16,6 +16,7 @@ import { ImageHoverPreview } from '../ImageHoverPreview';
 import { ImageLoupeView } from '../ImageLoupeView';
 import { ImageUploadModal } from '../ImageUploadModal';
 import { imageOperationsService } from '../../services/imageOperationsService';
+import { useCtrlKeyState } from '../../hooks/useCtrlKeyState';
 import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE, CONVEX_HANDLE_OFFSET_MULTIPLIER, CONCAVE_HANDLE_OFFSET_MULTIPLIER, FLAT_HANDLE_OFFSET_MULTIPLIER } from '@/lib/nodeEdgeConstants';
 
 interface ConversionNodeData {
@@ -235,38 +236,9 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   
   // Check for conditional probability conservation errors with debouncing to prevent flashing during CTRL+drag
   const [debouncedValidation, setDebouncedValidation] = useState<any>(null);
-  const [isActiveDrag, setIsActiveDrag] = useState(false);
   
-  // Track CTRL+drag state to prevent validation during active operations
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Control' && e.ctrlKey) {
-        setIsActiveDrag(true);
-      }
-    };
-    
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Control') {
-        // Delay clearing the drag state to allow for rapid CTRL+drag operations
-        setTimeout(() => setIsActiveDrag(false), 300);
-      }
-    };
-    
-    const handleMouseUp = () => {
-      // Clear drag state when mouse is released
-      setTimeout(() => setIsActiveDrag(false), 300);
-    };
-    
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
-    document.addEventListener('mouseup', handleMouseUp);
-    
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('keyup', handleKeyUp);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, []);
+  // Use shared CTRL key state (single global listener, not per-node)
+  const isActiveDrag = useCtrlKeyState();
   
   useEffect(() => {
     if (!graph) {
