@@ -12,11 +12,13 @@ import React from 'react';
 import { 
   DatabaseZap, 
   TrendingUpDown, 
-  Folders
+  Folders,
+  FileText
 } from 'lucide-react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileRegistry } from '../contexts/TabContext';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
+import { useOpenFile } from '../hooks/useOpenFile';
 import './LightningMenu.css';
 
 interface DataOperationsMenuProps {
@@ -184,6 +186,9 @@ export function DataOperationsMenu({
     currentDSL,  // AUTHORITATIVE DSL from graphStore (via prop)
   });
   
+  // Open file hook
+  const { openFile } = useOpenFile();
+  
   // Handlers (same as LightningMenu, now using centralized hook)
   const handleGetFromFile = () => {
     if (onClose) onClose();
@@ -267,6 +272,11 @@ export function DataOperationsMenu({
     dataOperationsService.openSyncStatus(objectType as 'parameter' | 'case' | 'node', objectId);
   };
   
+  const handleOpenFile = () => {
+    if (onClose) onClose();
+    openFile(objectType, objectId);
+  };
+  
   // Determine CSS class based on mode
   const menuClassName = mode === 'dropdown' 
     ? 'lightning-menu-dropdown' 
@@ -282,6 +292,23 @@ export function DataOperationsMenu({
   
   return (
     <div className={menuClassName}>
+      {/* Open file - only show if file exists */}
+      {actualFileExists && (
+        <button
+          className={itemClassName}
+          onClick={handleOpenFile}
+          title="Open file in editor"
+        >
+          <span>Open file</span>
+          <div className={pathwayClassName}>
+            <FileText size={12} />
+          </div>
+        </button>
+      )}
+      
+      {/* Divider after Open file (only if file exists) */}
+      {actualFileExists && mode === 'dropdown' && <div className="lightning-menu-divider" />}
+      
       {/* Get from File → Graph - only show if file ACTUALLY exists (computed locally, not from prop) */}
       {actualFileExists && (
       <button

@@ -22,6 +22,7 @@ import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
+import { useOpenFile } from '../hooks/useOpenFile';
 import toast from 'react-hot-toast';
 
 interface EdgeContextMenuProps {
@@ -242,6 +243,9 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   // Clear data file hook
   const { clearDataFile } = useClearDataFile();
   
+  // Open file hook
+  const { openFile } = useOpenFile();
+  
   const handleSectionClearDataFile = async (section: DataOperationSection) => {
     if (section.objectType !== 'parameter' && section.objectType !== 'case') {
       // Only parameters and cases have data to clear
@@ -251,6 +255,13 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       ? `parameter-${section.objectId}` 
       : `case-${section.objectId}`;
     await clearDataFile(fileId);
+    onClose();
+  };
+  
+  const handleSectionOpenFile = (section: DataOperationSection) => {
+    // Open the file associated with this data section
+    const type = section.objectType as 'parameter' | 'case' | 'node' | 'context' | 'event';
+    openFile(type, section.objectId);
     onClose();
   };
   
@@ -620,6 +631,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onGetFromSourceDirect={handleSectionGetFromSourceDirect}
               onClearCache={handleSectionClearCache}
               onClearDataFile={handleSectionClearDataFile}
+              onOpenFile={handleSectionOpenFile}
             />
           ))}
         </>

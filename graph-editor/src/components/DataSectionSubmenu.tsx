@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { ChevronRight, Database, DatabaseZap, Folders, TrendingUpDown, X, Trash2 } from 'lucide-react';
+import { ChevronRight, Database, DatabaseZap, Folders, TrendingUpDown, X, Trash2, FileText } from 'lucide-react';
 import type { DataOperationSection } from './DataOperationsSections';
 
 interface DataSectionSubmenuProps {
@@ -22,6 +22,7 @@ interface DataSectionSubmenuProps {
   onGetFromSourceDirect: (section: DataOperationSection) => void;
   onClearCache: (section: DataOperationSection) => void;
   onClearDataFile: (section: DataOperationSection) => void;
+  onOpenFile: (section: DataOperationSection) => void;
 }
 
 export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
@@ -37,6 +38,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
   onGetFromSourceDirect,
   onClearCache,
   onClearDataFile,
+  onOpenFile,
 }) => {
   return (
     <div
@@ -79,6 +81,29 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           onMouseEnter={onSubmenuContentEnter}
           onMouseLeave={onSubmenuContentLeave}
         >
+          {/* Open file */}
+          <div
+            onClick={() => onOpenFile(section)}
+            style={{
+              padding: '6px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              borderRadius: '2px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '16px'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          >
+            <span>Open file</span>
+            <FileText size={12} style={{ color: '#666' }} />
+          </div>
+          
+          {/* Divider after Open file */}
+          <div style={{ height: '1px', background: '#eee', margin: '6px 0' }} />
+          
           {/* Get from Source (direct) */}
           {section.operations.getFromSourceDirect && (
             <div
