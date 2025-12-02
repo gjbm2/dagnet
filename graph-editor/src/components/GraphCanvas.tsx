@@ -275,6 +275,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const [shouldReroute, setShouldReroute] = useState(0);
   const [forceReroute, setForceReroute] = useState(false); // Force re-route once (for layout)
   const skipNextRerouteRef = useRef(false); // Skip next auto-reroute after manual reconnection
+  const prevAutoRerouteRef = useRef<boolean | undefined>(undefined); // Track previous autoReroute state to detect actual changes
   
   // Auto-layout state
   const [layoutDirection, setLayoutDirection] = useState<'LR' | 'RL' | 'TB' | 'BT'>('LR');
@@ -1012,22 +1013,25 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // Graph→ReactFlow sync will pick up the edge handle changes via the fast path
   }, [autoReroute, forceReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
   
-  // Reset position tracking and perform immediate re-route when autoReroute is toggled ON
+  // Reset position tracking and perform immediate re-route when autoReroute is actually toggled ON
+  // Only react when the value actually changes, not on initial load
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC4: Auto re-route toggled:`, autoReroute);
+    const prev = prevAutoRerouteRef.current;
+    prevAutoRerouteRef.current = autoReroute;
+    
+    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC4: Auto re-route:`, autoReroute, `(prev: ${prev})`);
+    
     if (autoReroute) {
       // Initialize position tracking when enabling
-      console.log('Initializing position tracking and performing immediate re-route');
       const initialPositions: { [nodeId: string]: { x: number; y: number } } = {};
       nodes.forEach(node => {
         initialPositions[node.id] = { x: node.position.x, y: node.position.y };
       });
       lastNodePositionsRef.current = initialPositions;
       
-      // Perform immediate re-route when toggling on (with a small delay to ensure state is ready)
-      console.log('Triggering immediate re-route on toggle');
-      if (graph && nodes.length > 0 && edges.length > 0) {
-        // Use setTimeout to break out of the render cycle
+      // Only perform immediate re-route if this is an actual toggle (not initial load)
+      if (prev !== undefined && prev !== autoReroute && graph && nodes.length > 0 && edges.length > 0) {
+        console.log('Triggering immediate re-route on toggle');
         setTimeout(() => {
           performImmediateReroute();
         }, 50);
@@ -2341,10 +2345,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     };
   }, [edges, useSankeyView, setNodes]);
 
-  // Force re-route when Sankey view is toggled (to re-assign faces for L/R only constraint)
+  // Force re-route when Sankey view is actually toggled (to re-assign faces for L/R only constraint)
+  // Only react when the value actually changes, not on initial load
   useEffect(() => {
+    const prev = prevSankeyViewRef.current;
+    prevSankeyViewRef.current = useSankeyView;
+    
+    // Skip if this is the first render (prev is undefined) or value hasn't changed
+    if (prev === undefined || prev === useSankeyView) {
+      return;
+    }
+    
     if (edges.length > 0) {
-      console.log(`[Sankey] View toggled to ${useSankeyView}, forcing re-route`);
+      console.log(`[Sankey] View toggled from ${prev} to ${useSankeyView}, forcing re-route`);
       setForceReroute(true);
     }
   }, [useSankeyView, edges.length]);

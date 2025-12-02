@@ -20,6 +20,7 @@ import { usePullAll } from '../hooks/usePullAll';
 import { useRenameFile } from '../hooks/useRenameFile';
 import { useViewHistory } from '../hooks/useViewHistory';
 import { useClearDataFile } from '../hooks/useClearDataFile';
+import { useWhereUsed } from '../hooks/useWhereUsed';
 import { HistoryModal } from './modals/HistoryModal';
 
 interface NavigatorItemContextMenuProps {
@@ -78,6 +79,9 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   const { clearDataFile, canClearData } = useClearDataFile();
   const hasDataToClear = fileId ? canClearData(fileId) : false;
   const isDataFile = item.type === 'parameter' || item.type === 'case';
+
+  // Where used hook
+  const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(fileId);
 
   // Commit modal state
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
@@ -223,6 +227,18 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
       });
     }
     
+    // Where Used - find all references to this file
+    if (canSearchWhereUsed) {
+      items.push({
+        label: isSearchingWhereUsed ? 'Searching...' : 'Where Used...',
+        onClick: async () => {
+          await findWhereUsed();
+          onClose();
+        },
+        disabled: isSearchingWhereUsed
+      });
+    }
+    
     // Clear data file (only for parameter/case files with data)
     if (isDataFile) {
       items.push({
@@ -309,7 +325,7 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     });
     
     return items;
-  }, [item, openTabs, operations, canRename, showRenameModal, canPull, pullFile, pullAll, fileId, canViewHistory, showHistoryModal, isDataFile, hasDataToClear, clearDataFile]);
+  }, [item, openTabs, operations, canRename, showRenameModal, canPull, pullFile, pullAll, fileId, canViewHistory, showHistoryModal, isDataFile, hasDataToClear, clearDataFile, canSearchWhereUsed, isSearchingWhereUsed, findWhereUsed]);
 
   const handleCreateFile = async (name: string, type: ObjectType) => {
     await fileOperationsService.createFile(name, type, {

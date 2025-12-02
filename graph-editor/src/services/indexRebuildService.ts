@@ -8,7 +8,7 @@ import { sessionLogService } from './sessionLogService';
 interface RebuildResult {
   fileId: string;
   type: ObjectType;
-  action: 'ok' | 'added' | 'updated' | 'error' | 'skipped';
+  action: 'ok' | 'added' | 'updated' | 'error' | 'skipped' | 'warning';
   message: string;
 }
 
@@ -193,14 +193,39 @@ export class IndexRebuildService {
     
     const itemId = file.data.id;
     
+    // Extract expected ID from fileId (strip workspace prefix and type prefix)
+    // fileId format: "repo-branch-type-name" or "type-name"
+    const repository = file.source?.repository || 'local';
+    const branch = file.source?.branch || 'main';
+    const workspacePrefix = `${repository}-${branch}-`;
+    const typePrefix = `${type}-`;
+    
+    let expectedIdFromFilename = fileId;
+    // Strip workspace prefix if present
+    if (expectedIdFromFilename.startsWith(workspacePrefix)) {
+      expectedIdFromFilename = expectedIdFromFilename.substring(workspacePrefix.length);
+    }
+    // Strip type prefix
+    if (expectedIdFromFilename.startsWith(typePrefix)) {
+      expectedIdFromFilename = expectedIdFromFilename.substring(typePrefix.length);
+    }
+    
+    // Warn if file.data.id doesn't match the filename-derived ID
+    // This causes orphan issues because registry lookup uses filename, but index uses file.data.id
+    if (itemId !== expectedIdFromFilename) {
+      return {
+        fileId,
+        type,
+        action: 'warning',
+        message: `ID mismatch: file contains id="${itemId}" but filename suggests "${expectedIdFromFilename}". Update the file's id field to match the filename.`
+      };
+    }
+    
     // Load or create index file
     const indexFileId = `${type}-index`;
     const arrayKey = `${type}s` as 'parameters' | 'contexts' | 'cases' | 'nodes' | 'events';
     
-    // Determine workspace prefix from file's fileId
-    const repository = file.source?.repository || 'local';
-    const branch = file.source?.branch || 'main';
-    const workspacePrefix = `${repository}-${branch}-`;
+    // Determine IDB index file ID (repository, branch, workspacePrefix already defined above)
     const idbIndexFileId = file.fileId.startsWith(workspacePrefix)
       ? `${workspacePrefix}${indexFileId}`  // Use workspace prefix for IDB
       : indexFileId;  // No prefix for local files
@@ -402,6 +427,7 @@ export class IndexRebuildService {
       added: results.filter(r => r.action === 'added').length,
       updated: results.filter(r => r.action === 'updated').length,
       skipped: results.filter(r => r.action === 'skipped').length,
+      warning: results.filter(r => r.action === 'warning').length,
       error: results.filter(r => r.action === 'error').length
     };
     
@@ -413,6 +439,7 @@ export class IndexRebuildService {
       'Added to Index': results.filter(r => r.action === 'added'),
       'Updated in Index': results.filter(r => r.action === 'updated'),
       'Already in Index': results.filter(r => r.action === 'ok'),
+      'Warnings (ID Mismatch)': results.filter(r => r.action === 'warning'),
       'Skipped': results.filter(r => r.action === 'skipped'),
       'Errors': results.filter(r => r.action === 'error')
     };
@@ -426,6 +453,7 @@ export class IndexRebuildService {
           ok: '✓',
           added: '✓',
           updated: '✓',
+          warning: '⚠',
           skipped: '⊘',
           error: '✗'
         }[result.action];
@@ -439,6 +467,7 @@ export class IndexRebuildService {
     lines.push(`  ✓ Already in index: ${counts.ok}`);
     lines.push(`  ✓ Added to index: ${counts.added}`);
     lines.push(`  ✓ Updated in index: ${counts.updated}`);
+    lines.push(`  ⚠ Warnings (ID mismatch): ${counts.warning}`);
     lines.push(`  ⊘ Skipped: ${counts.skipped}`);
     lines.push(`  ✗ Errors: ${counts.error}`);
     lines.push('');
