@@ -105,7 +105,7 @@
               "additionalProperties": false,
               "properties": {
                 "source": { "type": "string", "description": "Connection name used for this fetch" },
-                "fetched_at": { "type": "string", "format": "date-time", "description": "ISO timestamp of fetch" },
+                "fetched_at": { "type": "string", "description": "Timestamp of fetch (UK format or ISO)" },
                 "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from case file" },
                 "full_query": { "type": "string", "description": "Complete query string used for this fetch (case_id + environment + any filters). Example: case(checkout_test).env(production)" },
                 "variants": {
@@ -213,7 +213,7 @@
         },
         "toHandle": {
           "type": "string", 
-          "enum": ["left", "right", "top", "bottom"],
+          "enum": ["left", "right", "top", "bottom", "left-out", "right-out", "top-out", "bottom-out"],
           "description": "Handle on target node where edge terminates"
         },
         "label": { "type": "string", "maxLength": 256, "description": "Edge label (auto-derived from upstream/downstream nodes unless overridden)" },
@@ -281,9 +281,9 @@
           "properties": {
             "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials) - required for probability data with observations" },
             "k": { "type": "integer", "minimum": 0, "description": "Number of successes - optional, can be derived from n × mean" },
-            "window_from": { "type": "string", "format": "date-time", "description": "Time window start - required when source provides observation period" },
-            "window_to": { "type": "string", "format": "date-time", "description": "Time window end - optional, defines explicit period boundary" },
-            "retrieved_at": { "type": "string", "format": "date-time", "description": "When this data was retrieved from source" },
+            "window_from": { "type": "string", "description": "Time window start (UK format d-MMM-yy or ISO)" },
+            "window_to": { "type": "string", "description": "Time window end (UK format d-MMM-yy or ISO)" },
+            "retrieved_at": { "type": "string", "description": "When this data was retrieved from source (UK format or ISO)" },
             "source": { "type": "string", "description": "Connection name used for this retrieval" },
             "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from parameter file" },
             "full_query": { "type": "string", "description": "Complete DSL query string used for this fetch (includes base query + window + context). Example: from(checkout).to(purchase).window(2025-01-01:2025-01-31).context(device:mobile)" },
@@ -319,9 +319,9 @@
           "properties": {
             "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials) - required for cost data with observations" },
             "k": { "type": "integer", "minimum": 0, "description": "Number of successes/observations - optional" },
-            "window_from": { "type": "string", "format": "date-time", "description": "Time window start - required when source provides observation period" },
-            "window_to": { "type": "string", "format": "date-time", "description": "Time window end - optional, defines explicit period boundary" },
-            "retrieved_at": { "type": "string", "format": "date-time", "description": "When this data was retrieved from source" },
+            "window_from": { "type": "string", "description": "Time window start (UK format d-MMM-yy or ISO)" },
+            "window_to": { "type": "string", "description": "Time window end (UK format d-MMM-yy or ISO)" },
+            "retrieved_at": { "type": "string", "description": "When this data was retrieved from source (UK format or ISO)" },
             "source": { "type": "string", "description": "Connection name used for this retrieval" },
             "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from parameter file" },
             "full_query": { "type": "string", "description": "Complete DSL query string used for this fetch (includes base query + window + context)" },
@@ -480,8 +480,8 @@
       "additionalProperties": false,
       "properties": {
         "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
-        "created_at": { "type": "string", "format": "date-time" },
-        "updated_at": { "type": "string", "format": "date-time" },
+        "created_at": { "type": "string", "description": "Creation timestamp (UK format or ISO)" },
+        "updated_at": { "type": "string", "description": "Last update timestamp (UK format or ISO)" },
         "author": { "type": "string", "maxLength": 256 },
         "description": { "type": "string" },
         "tags": {

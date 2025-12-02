@@ -533,6 +533,105 @@ describe('Schema / TypeScript Types Consistency', () => {
       expect(edge.n_query).toBeDefined();
       expect(edge.n_query_overridden).toBeDefined();
     });
+    
+    it('toHandle and fromHandle should both include -out variants', () => {
+      // This test catches the bug where toHandle was missing -out variants
+      const edgeDef = schema.$defs?.Edge || schema.definitions?.Edge;
+      const edgeProps = edgeDef?.properties || {};
+      
+      const expectedHandles = ['left', 'right', 'top', 'bottom', 'left-out', 'right-out', 'top-out', 'bottom-out'];
+      
+      const fromHandleEnum = edgeProps.fromHandle?.enum || [];
+      const toHandleEnum = edgeProps.toHandle?.enum || [];
+      
+      // Both should have all 8 values
+      expect(fromHandleEnum).toHaveLength(8);
+      expect(toHandleEnum).toHaveLength(8);
+      
+      for (const handle of expectedHandles) {
+        expect(fromHandleEnum).toContain(handle);
+        expect(toHandleEnum).toContain(handle);
+      }
+    });
+    
+    it('date fields should NOT require ISO date-time format (UK format allowed)', () => {
+      // This test catches the bug where date fields required ISO format
+      // but we use UK format (d-MMM-yy) in file storage per repo rules
+      
+      // Check Evidence date fields
+      const probParamDef = schema.$defs?.ProbabilityParam || {};
+      const evidenceProps = probParamDef.properties?.evidence?.properties || {};
+      
+      // These fields should be type: string WITHOUT format: date-time
+      for (const field of ['window_from', 'window_to', 'retrieved_at']) {
+        const fieldDef = evidenceProps[field] || {};
+        expect(fieldDef.type).toBe('string');
+        expect(fieldDef.format).not.toBe('date-time'); // Should NOT require ISO format
+      }
+      
+      // Check Metadata date fields
+      const metadataDef = schema.$defs?.Metadata || {};
+      const metadataProps = metadataDef.properties || {};
+      
+      for (const field of ['created_at', 'updated_at']) {
+        const fieldDef = metadataProps[field] || {};
+        expect(fieldDef.type).toBe('string');
+        expect(fieldDef.format).not.toBe('date-time'); // Should NOT require ISO format
+      }
+    });
+    
+    it('should validate graph with UK format dates', () => {
+      // This test verifies UK date format is actually accepted
+      // Use fresh AJV instance to avoid "schema already exists" caching issue
+      const freshAjv = new Ajv({ allErrors: true, strict: false, allowUnionTypes: true });
+      addFormats(freshAjv);
+      const schemaForValidation = { ...schema };
+      delete schemaForValidation.$schema;
+      delete schemaForValidation.$id;
+      const validate = freshAjv.compile(schemaForValidation);
+      
+      const graphWithUKDates = {
+        nodes: [{
+          uuid: '123e4567-e89b-12d3-a456-426614174000',
+          id: 'checkout',
+          label: 'Checkout'
+        }, {
+          uuid: '223e4567-e89b-12d3-a456-426614174001',
+          id: 'purchase',
+          label: 'Purchase'
+        }],
+        edges: [{
+          uuid: '323e4567-e89b-12d3-a456-426614174002',
+          from: 'checkout',
+          to: 'purchase',
+          toHandle: 'left-out', // Test -out variant
+          p: {
+            mean: 0.5,
+            evidence: {
+              n: 100,
+              k: 50,
+              window_from: '24-Nov-25',  // UK format
+              window_to: '30-Nov-25',    // UK format
+              retrieved_at: '1-Dec-25',  // UK format
+              source: 'amplitude-prod'
+            }
+          }
+        }],
+        policies: { default_outcome: 'success' },
+        metadata: {
+          version: '1.0.0',
+          created_at: '1-Dec-25',  // UK format
+          updated_at: '2-Dec-25'   // UK format
+        }
+      };
+      
+      const valid = validate(graphWithUKDates);
+      if (!valid) {
+        console.error('UK date validation errors:', validate.errors);
+      }
+      expect(validate.errors).toBeNull();
+      expect(valid).toBe(true);
+    });
   });
   
   describe('Cross-schema consistency', () => {
