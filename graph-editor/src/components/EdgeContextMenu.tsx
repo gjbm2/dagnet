@@ -52,7 +52,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
-  const { window } = useGraphStore();
+  const graphStore = useGraphStore();
+  const { window, currentDSL } = graphStore;
   const viewPrefs = useViewPreferencesContext();
 
   // Calculate constrained position on mount
@@ -178,10 +179,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const dataOperationSections = getAllDataSections(null, edgeId, graph);
   
   // Centralized fetch hook - all fetch operations go through this
+  // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
   const { fetchItem } = useFetchData({
     graph,
     setGraph,
-    currentDSL: graph?.currentQueryDSL || '',
+    currentDSL,  // AUTHORITATIVE DSL from graphStore
   });
   
   // Generic section-based handlers for data operations

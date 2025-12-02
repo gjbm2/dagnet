@@ -1026,13 +1026,18 @@ class FileOperationsService {
       if (!indexFile) {
         console.log(`FileOperationsService: Creating index file ${indexFileId}`);
         const indexData = this.createEmptyIndex(file.type);
+        
+        // Use the file's source if available, otherwise use 'local' as fallback
+        const repository = file.source?.repository || 'local';
+        const branch = file.source?.branch || 'main';
+        
         indexFile = await fileRegistry.getOrCreateFile(
           indexFileId,
           file.type,
           {
-            repository: file.source?.repository || 'local',
+            repository,
             path: `${pluralKey}-index.yaml`,
-            branch: file.source?.branch || 'main'
+            branch
           },
           indexData
         );

@@ -31,7 +31,11 @@ interface DataOperationsMenuProps {
   // Context
   graph: any;
   setGraph: (graph: any) => void;
-  window?: { start: string; end: string } | null;
+  /**
+   * AUTHORITATIVE DSL from graphStore - the SINGLE source of truth.
+   * This MUST be passed from the parent that has access to graphStore.
+   */
+  currentDSL: string;
   
   // Display mode
   mode: 'dropdown' | 'submenu';
@@ -59,7 +63,7 @@ export function DataOperationsMenu({
   conditionalIndex,
   graph,
   setGraph,
-  window,
+  currentDSL,
   mode,
   showConnectionSettings = true,
   showSyncStatus = true,
@@ -173,10 +177,11 @@ export function DataOperationsMenu({
   }
   
   // Centralized fetch hook - all fetch operations go through this
+  // CRITICAL: Uses AUTHORITATIVE DSL passed from parent (graphStore.currentDSL)
   const { fetchItem } = useFetchData({
     graph,
     setGraph,
-    currentDSL: graph?.currentQueryDSL || '',
+    currentDSL,  // AUTHORITATIVE DSL from graphStore (via prop)
   });
   
   // Handlers (same as LightningMenu, now using centralized hook)

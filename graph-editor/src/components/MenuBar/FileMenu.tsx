@@ -9,6 +9,7 @@ import { usePullAll } from '../../hooks/usePullAll';
 import { useRenameFile } from '../../hooks/useRenameFile';
 import { useViewHistory } from '../../hooks/useViewHistory';
 import { useIntegrityCheck } from '../../hooks/useIntegrityCheck';
+import { useFileAudit } from '../../hooks/useFileAudit';
 import { HistoryModal } from '../modals/HistoryModal';
 import { db } from '../../db/appDatabase';
 import { encodeStateToUrl } from '../../lib/shareUrl';
@@ -81,6 +82,9 @@ export function FileMenu() {
   
   // Integrity check hook
   const { runCheck: runIntegrityCheck, isChecking: isIntegrityChecking } = useIntegrityCheck();
+  
+  // File audit hook
+  const { runAudit: runFileAudit, isAuditing: isFileAuditing } = useFileAudit();
   
   // Get isDirty state for active tab
   const activeFile = activeTab ? fileRegistry.getFile(activeTab.fileId) : null;
@@ -617,6 +621,14 @@ export function FileMenu() {
             </Menubar.Item>
 
             <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={runFileAudit}
+              disabled={isFileAuditing}
+            >
+              {isFileAuditing ? 'Auditing...' : 'Audit Files...'}
+            </Menubar.Item>
 
             <Menubar.Item 
               className="menubar-item" 

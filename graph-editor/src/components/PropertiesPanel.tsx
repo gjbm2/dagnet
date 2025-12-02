@@ -116,15 +116,16 @@ export default function PropertiesPanel({
   onSelectedEdgeChange,
   tabId
 }: PropertiesPanelProps) {
-  const { graph, setGraph, saveHistoryState } = useGraphStore();
+  const { graph, setGraph, saveHistoryState, currentDSL } = useGraphStore();
   const { tabs, operations: tabOps } = useTabContext();
   const { snapValue, shouldAutoRebalance, scheduleRebalance, handleMouseDown } = useSnapToSlider();
   
   // Centralized fetch hook for file operations
+  // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
   const { fetchItem } = useFetchData({
     graph,
     setGraph: setGraph as (graph: any) => void,
-    currentDSL: graph?.currentQueryDSL || '',
+    currentDSL,  // AUTHORITATIVE DSL from graphStore
   });
   
   // Get tab-specific what-if analysis state
