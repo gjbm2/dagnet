@@ -1,0 +1,792 @@
+# Auto-generated from axy_funnel_2025.json
+# Step index: 2
+# Generated: 2025-12-02T17:51:02.813436
+
+id: switch-registered-to-success
+name: Switch Registered → Success
+type: probability
+source: amplitude:funnel
+description: Probability and latency of switch success after registration.
+latency:
+  track: true
+  maturity_days: 30
+anchor:
+  node_id: household-created
+  description: Graph node used as cohort anchor (resolved to event at query time)
+values:
+- label: Cohorts 1-Sep-25 to 30-Nov-25
+  query_date: 2-Dec-25
+  conversion_window_days: 45
+  totals:
+    n: 1450
+    k: 1021
+  latency:
+    median_days: 6.0
+    mean_days: 7.0
+    completeness: 1.0
+    histogram:
+      total_converters: 1021
+      bins:
+      - day: 3
+        count: 2
+      - day: 6
+        count: 716
+      - day: 7
+        count: 206
+      - day: 8
+        count: 42
+      - day: 9
+        count: 55
+  cohort_data:
+  - date: 1-Sep-25
+    anchor_n: 575
+    anchor_median_lag: 14.8
+    anchor_mean_lag: 15.9
+    n: 21
+    k: 19
+    median_lag: 6.0
+    mean_lag: 6.2
+  - date: 2-Sep-25
+    anchor_n: 217
+    anchor_median_lag: 16.2
+    anchor_mean_lag: 16.2
+    n: 7
+    k: 4
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 3-Sep-25
+    anchor_n: 318
+    anchor_median_lag: 17.5
+    anchor_mean_lag: 18.3
+    n: 12
+    k: 10
+    median_lag: 6.0
+    mean_lag: 5.9
+  - date: 4-Sep-25
+    anchor_n: 198
+    anchor_median_lag: 16.0
+    anchor_mean_lag: 14.6
+    n: 4
+    k: 4
+    median_lag: 6.5
+    mean_lag: 6.5
+  - date: 5-Sep-25
+    anchor_n: 106
+    anchor_median_lag: 12.1
+    anchor_mean_lag: 11.9
+    n: 3
+    k: 2
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 6-Sep-25
+    anchor_n: 5
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 7-Sep-25
+    anchor_n: 5
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 8-Sep-25
+    anchor_n: 105
+    anchor_median_lag: 13.8
+    anchor_mean_lag: 13.8
+    n: 1
+    k: 1
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 9-Sep-25
+    anchor_n: 219
+    anchor_median_lag: 13.2
+    anchor_mean_lag: 14.4
+    n: 11
+    k: 9
+    median_lag: 7.0
+    mean_lag: 8.9
+  - date: 10-Sep-25
+    anchor_n: 361
+    anchor_median_lag: 14.5
+    anchor_mean_lag: 16.2
+    n: 22
+    k: 18
+    median_lag: 6.0
+    mean_lag: 7.3
+  - date: 11-Sep-25
+    anchor_n: 248
+    anchor_median_lag: 13.4
+    anchor_mean_lag: 12.5
+    n: 14
+    k: 11
+    median_lag: 6.8
+    mean_lag: 6.7
+  - date: 12-Sep-25
+    anchor_n: 44
+    anchor_median_lag: 12.3
+    anchor_mean_lag: 12.3
+    n: 1
+    k: 1
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 13-Sep-25
+    anchor_n: 5
+    anchor_median_lag: 28.4
+    anchor_mean_lag: 28.4
+    n: 2
+    k: 1
+    median_lag: 7.1
+    mean_lag: 7.1
+  - date: 14-Sep-25
+    anchor_n: 4
+    anchor_median_lag: 9.3
+    anchor_mean_lag: 9.3
+    n: 1
+    k: 1
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 15-Sep-25
+    anchor_n: 30
+    anchor_median_lag: 13.6
+    anchor_mean_lag: 13.1
+    n: 3
+    k: 3
+    median_lag: 7.0
+    mean_lag: 6.7
+  - date: 16-Sep-25
+    anchor_n: 630
+    anchor_median_lag: 15.8
+    anchor_mean_lag: 16.9
+    n: 33
+    k: 20
+    median_lag: 7.0
+    mean_lag: 8.1
+  - date: 17-Sep-25
+    anchor_n: 323
+    anchor_median_lag: 13.8
+    anchor_mean_lag: 15.9
+    n: 10
+    k: 7
+    median_lag: 6.7
+    mean_lag: 10.7
+  - date: 18-Sep-25
+    anchor_n: 459
+    anchor_median_lag: 13.4
+    anchor_mean_lag: 13.2
+    n: 21
+    k: 15
+    median_lag: 6.7
+    mean_lag: 6.7
+  - date: 19-Sep-25
+    anchor_n: 125
+    anchor_median_lag: 15.8
+    anchor_mean_lag: 17.0
+    n: 4
+    k: 3
+    median_lag: 7.0
+    mean_lag: 8.0
+  - date: 20-Sep-25
+    anchor_n: 16
+    anchor_median_lag: 20.5
+    anchor_mean_lag: 20.5
+    n: 2
+    k: 2
+    median_lag: 6.5
+    mean_lag: 6.5
+  - date: 21-Sep-25
+    anchor_n: 499
+    anchor_median_lag: 14.9
+    anchor_mean_lag: 15.3
+    n: 42
+    k: 39
+    median_lag: 6.7
+    mean_lag: 7.1
+  - date: 22-Sep-25
+    anchor_n: 117
+    anchor_median_lag: 16.0
+    anchor_mean_lag: 15.4
+    n: 10
+    k: 10
+    median_lag: 6.1
+    mean_lag: 6.8
+  - date: 23-Sep-25
+    anchor_n: 97
+    anchor_median_lag: 14.8
+    anchor_mean_lag: 16.5
+    n: 3
+    k: 1
+    median_lag: 19.0
+    mean_lag: 19.0
+  - date: 24-Sep-25
+    anchor_n: 338
+    anchor_median_lag: 13.5
+    anchor_mean_lag: 13.7
+    n: 21
+    k: 19
+    median_lag: 6.0
+    mean_lag: 6.3
+  - date: 25-Sep-25
+    anchor_n: 848
+    anchor_median_lag: 13.0
+    anchor_mean_lag: 14.1
+    n: 70
+    k: 58
+    median_lag: 6.0
+    mean_lag: 6.3
+  - date: 26-Sep-25
+    anchor_n: 186
+    anchor_median_lag: 13.4
+    anchor_mean_lag: 13.4
+    n: 13
+    k: 10
+    median_lag: 6.0
+    mean_lag: 6.6
+  - date: 27-Sep-25
+    anchor_n: 23
+    anchor_median_lag: 15.9
+    anchor_mean_lag: 15.9
+    n: 3
+    k: 3
+    median_lag: 7.8
+    mean_lag: 7.2
+  - date: 28-Sep-25
+    anchor_n: 539
+    anchor_median_lag: 14.5
+    anchor_mean_lag: 14.2
+    n: 27
+    k: 17
+    median_lag: 6.8
+    mean_lag: 6.9
+  - date: 29-Sep-25
+    anchor_n: 811
+    anchor_median_lag: 13.8
+    anchor_mean_lag: 13.4
+    n: 49
+    k: 39
+    median_lag: 6.0
+    mean_lag: 7.0
+  - date: 30-Sep-25
+    anchor_n: 367
+    anchor_median_lag: 13.7
+    anchor_mean_lag: 15.1
+    n: 23
+    k: 20
+    median_lag: 6.0
+    mean_lag: 6.5
+  - date: 1-Oct-25
+    anchor_n: 248
+    anchor_median_lag: 12.9
+    anchor_mean_lag: 12.5
+    n: 27
+    k: 24
+    median_lag: 6.0
+    mean_lag: 6.3
+  - date: 2-Oct-25
+    anchor_n: 1175
+    anchor_median_lag: 11.5
+    anchor_mean_lag: 12.5
+    n: 74
+    k: 55
+    median_lag: 6.8
+    mean_lag: 7.0
+  - date: 3-Oct-25
+    anchor_n: 1334
+    anchor_median_lag: 12.1
+    anchor_mean_lag: 13.2
+    n: 67
+    k: 53
+    median_lag: 6.0
+    mean_lag: 7.1
+  - date: 4-Oct-25
+    anchor_n: 91
+    anchor_median_lag: 12.1
+    anchor_mean_lag: 12.8
+    n: 6
+    k: 6
+    median_lag: 6.0
+    mean_lag: 6.3
+  - date: 5-Oct-25
+    anchor_n: 9
+    anchor_median_lag: 11.8
+    anchor_mean_lag: 11.8
+    n: 2
+    k: 2
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 6-Oct-25
+    anchor_n: 43
+    anchor_median_lag: 10.6
+    anchor_mean_lag: 10.5
+    n: 3
+    k: 3
+    median_lag: 6.0
+    mean_lag: 6.3
+  - date: 7-Oct-25
+    anchor_n: 159
+    anchor_median_lag: 12.7
+    anchor_mean_lag: 15.3
+    n: 10
+    k: 8
+    median_lag: 6.0
+    mean_lag: 6.7
+  - date: 8-Oct-25
+    anchor_n: 277
+    anchor_median_lag: 9.0
+    anchor_mean_lag: 11.2
+    n: 18
+    k: 16
+    median_lag: 6.4
+    mean_lag: 6.6
+  - date: 9-Oct-25
+    anchor_n: 153
+    anchor_median_lag: 8.3
+    anchor_mean_lag: 8.8
+    n: 5
+    k: 4
+    median_lag: 6.0
+    mean_lag: 6.2
+  - date: 10-Oct-25
+    anchor_n: 188
+    anchor_median_lag: 10.6
+    anchor_mean_lag: 13.6
+    n: 8
+    k: 6
+    median_lag: 7.3
+    mean_lag: 7.0
+  - date: 11-Oct-25
+    anchor_n: 140
+    anchor_median_lag: 12.4
+    anchor_mean_lag: 14.5
+    n: 8
+    k: 6
+    median_lag: 6.0
+    mean_lag: 6.3
+  - date: 12-Oct-25
+    anchor_n: 356
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 10.3
+    n: 15
+    k: 9
+    median_lag: 7.8
+    mean_lag: 7.0
+  - date: 13-Oct-25
+    anchor_n: 1148
+    anchor_median_lag: 10.0
+    anchor_mean_lag: 11.6
+    n: 67
+    k: 55
+    median_lag: 6.8
+    mean_lag: 7.4
+  - date: 14-Oct-25
+    anchor_n: 352
+    anchor_median_lag: 10.3
+    anchor_mean_lag: 14.6
+    n: 16
+    k: 13
+    median_lag: 6.0
+    mean_lag: 8.2
+  - date: 15-Oct-25
+    anchor_n: 783
+    anchor_median_lag: 12.0
+    anchor_mean_lag: 13.0
+    n: 49
+    k: 38
+    median_lag: 6.0
+    mean_lag: 8.3
+  - date: 16-Oct-25
+    anchor_n: 612
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 12.6
+    n: 35
+    k: 22
+    median_lag: 7.1
+    mean_lag: 8.0
+  - date: 17-Oct-25
+    anchor_n: 561
+    anchor_median_lag: 9.6
+    anchor_mean_lag: 9.4
+    n: 29
+    k: 23
+    median_lag: 6.2
+    mean_lag: 6.5
+  - date: 18-Oct-25
+    anchor_n: 211
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 10.6
+    n: 11
+    k: 11
+    median_lag: 6.1
+    mean_lag: 8.6
+  - date: 19-Oct-25
+    anchor_n: 130
+    anchor_median_lag: 11.7
+    anchor_mean_lag: 14.9
+    n: 7
+    k: 4
+    median_lag: 7.1
+    mean_lag: 7.8
+  - date: 20-Oct-25
+    anchor_n: 102
+    anchor_median_lag: 13.3
+    anchor_mean_lag: 13.3
+    n: 2
+    k: 2
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 21-Oct-25
+    anchor_n: 289
+    anchor_median_lag: 9.6
+    anchor_mean_lag: 10.4
+    n: 20
+    k: 15
+    median_lag: 6.0
+    mean_lag: 7.1
+  - date: 22-Oct-25
+    anchor_n: 504
+    anchor_median_lag: 9.0
+    anchor_mean_lag: 11.4
+    n: 24
+    k: 21
+    median_lag: 6.0
+    mean_lag: 6.3
+  - date: 23-Oct-25
+    anchor_n: 126
+    anchor_median_lag: 14.1
+    anchor_mean_lag: 16.1
+    n: 4
+    k: 1
+    median_lag: 14.0
+    mean_lag: 14.0
+  - date: 24-Oct-25
+    anchor_n: 46
+    anchor_median_lag: 11.3
+    anchor_mean_lag: 11.3
+    n: 2
+    k: 2
+    median_lag: 7.5
+    mean_lag: 7.5
+  - date: 25-Oct-25
+    anchor_n: 159
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 11.5
+    n: 9
+    k: 6
+    median_lag: 6.4
+    mean_lag: 7.1
+  - date: 26-Oct-25
+    anchor_n: 585
+    anchor_median_lag: 9.9
+    anchor_mean_lag: 9.6
+    n: 20
+    k: 16
+    median_lag: 6.0
+    mean_lag: 6.9
+  - date: 27-Oct-25
+    anchor_n: 502
+    anchor_median_lag: 9.0
+    anchor_mean_lag: 10.2
+    n: 39
+    k: 29
+    median_lag: 6.4
+    mean_lag: 7.0
+  - date: 28-Oct-25
+    anchor_n: 354
+    anchor_median_lag: 9.1
+    anchor_mean_lag: 10.6
+    n: 32
+    k: 20
+    median_lag: 6.0
+    mean_lag: 6.8
+  - date: 29-Oct-25
+    anchor_n: 67
+    anchor_median_lag: 12.1
+    anchor_mean_lag: 12.3
+    n: 3
+    k: 1
+    median_lag: 10.9
+    mean_lag: 10.9
+  - date: 30-Oct-25
+    anchor_n: 248
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 11.9
+    n: 9
+    k: 5
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 31-Oct-25
+    anchor_n: 136
+    anchor_median_lag: 8.7
+    anchor_mean_lag: 8.6
+    n: 6
+    k: 4
+    median_lag: 7.2
+    mean_lag: 6.6
+  - date: 1-Nov-25
+    anchor_n: 249
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 12.1
+    n: 22
+    k: 14
+    median_lag: 6.0
+    mean_lag: 6.4
+  - date: 2-Nov-25
+    anchor_n: 232
+    anchor_median_lag: 10.6
+    anchor_mean_lag: 12.9
+    n: 21
+    k: 16
+    median_lag: 7.4
+    mean_lag: 7.3
+  - date: 3-Nov-25
+    anchor_n: 277
+    anchor_median_lag: 9.2
+    anchor_mean_lag: 10.3
+    n: 12
+    k: 9
+    median_lag: 6.7
+    mean_lag: 7.4
+  - date: 4-Nov-25
+    anchor_n: 192
+    anchor_median_lag: 10.0
+    anchor_mean_lag: 10.8
+    n: 21
+    k: 21
+    median_lag: 6.0
+    mean_lag: 7.0
+  - date: 5-Nov-25
+    anchor_n: 539
+    anchor_median_lag: 11.7
+    anchor_mean_lag: 11.4
+    n: 23
+    k: 16
+    median_lag: 6.0
+    mean_lag: 6.6
+  - date: 6-Nov-25
+    anchor_n: 143
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 11.7
+    n: 8
+    k: 5
+    median_lag: 6.0
+    mean_lag: 6.4
+  - date: 7-Nov-25
+    anchor_n: 112
+    anchor_median_lag: 11.2
+    anchor_mean_lag: 11.2
+    n: 2
+    k: 1
+    median_lag: 9.0
+    mean_lag: 9.0
+  - date: 8-Nov-25
+    anchor_n: 63
+    anchor_median_lag: 12.0
+    anchor_mean_lag: 12.4
+    n: 3
+    k: 2
+    median_lag: 7.0
+    mean_lag: 7.0
+  - date: 9-Nov-25
+    anchor_n: 95
+    anchor_median_lag: 8.6
+    anchor_mean_lag: 9.4
+    n: 5
+    k: 3
+    median_lag: 7.9
+    mean_lag: 7.9
+  - date: 10-Nov-25
+    anchor_n: 420
+    anchor_median_lag: 9.9
+    anchor_mean_lag: 9.5
+    n: 34
+    k: 22
+    median_lag: 6.8
+    mean_lag: 7.0
+  - date: 11-Nov-25
+    anchor_n: 256
+    anchor_median_lag: 9.7
+    anchor_mean_lag: 9.8
+    n: 22
+    k: 16
+    median_lag: 6.0
+    mean_lag: 6.7
+  - date: 12-Nov-25
+    anchor_n: 224
+    anchor_median_lag: 7.9
+    anchor_mean_lag: 8.7
+    n: 5
+    k: 3
+    median_lag: 6.9
+    mean_lag: 6.6
+  - date: 13-Nov-25
+    anchor_n: 512
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 10.4
+    n: 25
+    k: 12
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 14-Nov-25
+    anchor_n: 1277
+    anchor_median_lag: 11.2
+    anchor_mean_lag: 10.4
+    n: 57
+    k: 30
+    median_lag: 6.0
+    mean_lag: 6.1
+  - date: 15-Nov-25
+    anchor_n: 782
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 10.3
+    n: 44
+    k: 19
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 16-Nov-25
+    anchor_n: 215
+    anchor_median_lag: 9.4
+    anchor_mean_lag: 9.0
+    n: 7
+    k: 4
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 17-Nov-25
+    anchor_n: 138
+    anchor_median_lag: 8.3
+    anchor_mean_lag: 8.6
+    n: 5
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 18-Nov-25
+    anchor_n: 179
+    anchor_median_lag: 9.3
+    anchor_mean_lag: 9.8
+    n: 4
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 19-Nov-25
+    anchor_n: 650
+    anchor_median_lag: 7.2
+    anchor_mean_lag: 7.4
+    n: 28
+    k: 1
+    median_lag: 6.0
+    mean_lag: 6.0
+  - date: 20-Nov-25
+    anchor_n: 492
+    anchor_median_lag: 11.0
+    anchor_mean_lag: 9.5
+    n: 21
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 21-Nov-25
+    anchor_n: 301
+    anchor_median_lag: 10.0
+    anchor_mean_lag: 8.9
+    n: 19
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 22-Nov-25
+    anchor_n: 83
+    anchor_median_lag: 5.4
+    anchor_mean_lag: 5.4
+    n: 1
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 23-Nov-25
+    anchor_n: 87
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 24-Nov-25
+    anchor_n: 204
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 25-Nov-25
+    anchor_n: 100
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 26-Nov-25
+    anchor_n: 187
+    anchor_median_lag: 5.4
+    anchor_mean_lag: 5.4
+    n: 1
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 27-Nov-25
+    anchor_n: 269
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 28-Nov-25
+    anchor_n: 623
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 29-Nov-25
+    anchor_n: 624
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  - date: 30-Nov-25
+    anchor_n: 71
+    anchor_median_lag: null
+    anchor_mean_lag: null
+    n: 0
+    k: 0
+    median_lag: null
+    mean_lag: null
+  anchor_latency:
+    median_days: 11.4
+    mean_days: 12.3
+    histogram:
+      total_converters: 1450
+      bins:
+      - day: 3
+        count: 1
+      - day: 4
+        count: 6
+      - day: 5
+        count: 37
+      - day: 6
+        count: 59
+      - day: 7
+        count: 85
+      - day: 8
+        count: 78
+      - day: 9
+        count: 155
+      - day_range:
+        - 10
+        - 45
+        count: 1029
