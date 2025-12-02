@@ -9,7 +9,8 @@ import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import type { BatchOperationType } from '../modals/BatchOperationsModal';
 import { getAllDataSections, type DataOperationSection } from '../DataOperationsSections';
-import { Database, DatabaseZap, Folders, TrendingUpDown, Trash2 } from 'lucide-react';
+import { Database, DatabaseZap, Folders, TrendingUpDown, Trash2, FileText } from 'lucide-react';
+import { useOpenFile } from '../../hooks/useOpenFile';
 import { RemoveOverridesMenubarItem } from '../RemoveOverridesMenuItem';
 import { useClearDataFile } from '../../hooks/useClearDataFile';
 import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
@@ -329,6 +330,9 @@ export function DataMenu() {
   // Clear data file hook
   const { clearDataFile, clearDataFiles, canClearData } = useClearDataFile();
   
+  // Open file hook
+  const { openFile } = useOpenFile();
+  
   const handleSectionClearDataFile = async (section: DataOperationSection) => {
     if (section.objectType !== 'parameter' && section.objectType !== 'case') {
       // Only parameters and cases have data to clear
@@ -338,6 +342,12 @@ export function DataMenu() {
       ? `parameter-${section.objectId}` 
       : `case-${section.objectId}`;
     await clearDataFile(fileId);
+  };
+  
+  const handleSectionOpenFile = (section: DataOperationSection) => {
+    // Open the file associated with this data section
+    const type = section.objectType as 'parameter' | 'case' | 'node' | 'context' | 'event';
+    openFile(type, section.objectId);
   };
   
   // Get all data operation sections using single source of truth
@@ -492,6 +502,7 @@ export function DataMenu() {
               <Menubar.Sub key={section.id}>
                 <Menubar.SubTrigger className="menubar-item">
                   {section.label}
+                  <div className="menubar-right-slot">›</div>
                 </Menubar.SubTrigger>
                 <Menubar.SubContent 
                   className="menubar-submenu-content"
@@ -505,6 +516,25 @@ export function DataMenu() {
                     zIndex: 99999
                   }}
                 >
+                  {/* Open file - only show if file exists */}
+                  {section.hasFile && (
+                    <Menubar.Item 
+                      className="menubar-item"
+                      onSelect={() => handleSectionOpenFile(section)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px'
+                      }}
+                    >
+                      <span>Open file</span>
+                      <FileText size={12} style={{ color: '#666' }} />
+                    </Menubar.Item>
+                  )}
+                  {section.hasFile && (
+                    <Menubar.Separator className="menubar-separator" style={{ margin: '4px 0' }} />
+                  )}
                   {section.operations.getFromSourceDirect && (
                     <Menubar.Item 
                       className="menubar-item"
