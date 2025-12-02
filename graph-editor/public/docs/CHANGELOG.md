@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.5b
+**Released:** December 02, 2025
+
+Lots of further data retrieval fixes; sketch of lag convolution
+
+---
+
 ## Version 0.99.3b
 **Released:** December 01, 2025
 
