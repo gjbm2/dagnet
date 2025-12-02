@@ -46,6 +46,8 @@ Reproduce the issue and share the console outpu
 
 **Docs:** See `docs/current/refactor/GRAPH_CANVAS_ARCHITECTURE.md` for full analysis
 
+- Tooltip Redesign (Future)
+
 ## Project-latency
 
 - Use Amplitude time data properly
