@@ -20,6 +20,7 @@ import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
+import { useOpenFile } from '../hooks/useOpenFile';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 
 interface NodeContextMenuProps {
@@ -265,6 +266,9 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   // Clear data file hook
   const { clearDataFile } = useClearDataFile();
   
+  // Open file hook
+  const { openFile } = useOpenFile();
+  
   const handleSectionClearDataFile = async (section: DataOperationSection) => {
     if (section.objectType !== 'parameter' && section.objectType !== 'case') {
       // Only parameters and cases have data to clear
@@ -274,6 +278,13 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       ? `parameter-${section.objectId}` 
       : `case-${section.objectId}`;
     await clearDataFile(fileId);
+    onClose();
+  };
+  
+  const handleSectionOpenFile = (section: DataOperationSection) => {
+    // Open the file associated with this data section
+    const type = section.objectType as 'parameter' | 'case' | 'node' | 'context' | 'event';
+    openFile(type, section.objectId);
     onClose();
   };
   
@@ -505,6 +516,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
               onGetFromSourceDirect={handleSectionGetFromSourceDirect}
               onClearCache={handleSectionClearCache}
               onClearDataFile={handleSectionClearDataFile}
+              onOpenFile={handleSectionOpenFile}
             />
           ))}
         </>

@@ -13,6 +13,7 @@ import { ItemBase } from '../hooks/useItemFiltering';
 import { LightningMenu } from './LightningMenu';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
+import { useOpenFile } from '../hooks/useOpenFile';
 import './EnhancedSelector.css';
 
 interface EnhancedSelectorProps {
@@ -108,6 +109,9 @@ export function EnhancedSelector({
     setGraph: setGraph as any,
     currentDSL,  // AUTHORITATIVE DSL from graphStore
   });
+  
+  // Open file hook - provides default behavior for plug icon
+  const { openFile } = useOpenFile();
   
   const [inputValue, setInputValue] = useState(value);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -551,17 +555,23 @@ export function EnhancedSelector({
               // so it doesn't immediately re-activate the current graph tab.
               e.stopPropagation();
               e.preventDefault();
-              if (isConnected && onOpenConnected) {
-                onOpenConnected();
+              if (isConnected) {
+                // Use custom handler if provided, otherwise use default hook
+                if (onOpenConnected) {
+                  onOpenConnected();
+                } else if (inputValue) {
+                  // Default: open file using hook
+                  openFile(type, inputValue);
+                }
               }
             }}
-            disabled={!isConnected || !onOpenConnected}
+            disabled={!isConnected}
             title={isConnected ? "Open connected item" : "Not connected"}
             style={{
               background: 'none',
               border: 'none',
               padding: '0 8px',
-              cursor: isConnected && onOpenConnected ? 'pointer' : 'default',
+              cursor: isConnected ? 'pointer' : 'default',
               display: 'flex',
               alignItems: 'center'
             }}
