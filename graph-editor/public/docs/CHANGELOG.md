@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.8b
+**Released:** December 02, 2025
+
+Fixed py Schema issues which was preventing query generation
+
+---
+
 ## Version 0.99.6b
 **Released:** December 02, 2025
 
