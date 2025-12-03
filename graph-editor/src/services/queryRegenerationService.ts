@@ -37,6 +37,23 @@ function parseSyntheticId(paramId: string): { uuid: string; field: string } | nu
 }
 
 /**
+ * Resolve node UUID to human-readable ID
+ */
+function resolveNodeId(graph: Graph, uuidOrId: string): string {
+  const node = graph.nodes.find(n => n.uuid === uuidOrId || n.id === uuidOrId);
+  return node?.id || uuidOrId;  // Fall back to UUID if not found
+}
+
+/**
+ * Format edge location with human-readable node IDs
+ */
+function formatEdgeLocation(graph: Graph, edge: { from: string; to: string }, suffix?: string): string {
+  const fromId = resolveNodeId(graph, edge.from);
+  const toId = resolveNodeId(graph, edge.to);
+  return suffix ? `edge ${fromId}->${toId} ${suffix}` : `edge ${fromId}->${toId}`;
+}
+
+/**
  * Apply regenerated query to graph (handles both real and synthetic IDs)
  */
 function applyQueryToGraph(
@@ -57,7 +74,7 @@ function applyQueryToGraph(
     if (field === 'p' && edge) {
       // Base probability query (stored on edge, not edge.p)
       edge.query = newQuery;
-      return { applied: true, location: `edge ${edge.from}->${edge.to}` };
+      return { applied: true, location: formatEdgeLocation(graph, edge) };
     }
     
     if (field.startsWith('conditional_p[') && edge) {
@@ -67,7 +84,7 @@ function applyQueryToGraph(
         const idx = parseInt(match[1]);
         if (edge.conditional_p && edge.conditional_p[idx]) {
           edge.conditional_p[idx].query = newQuery;
-          return { applied: true, location: `edge ${edge.from}->${edge.to} conditional[${idx}]` };
+          return { applied: true, location: formatEdgeLocation(graph, edge, `conditional[${idx}]`) };
         }
       }
     }
@@ -75,14 +92,14 @@ function applyQueryToGraph(
     if (field === 'cost_gbp' && edge) {
       if (edge.cost_gbp) {
         (edge.cost_gbp as any).query = newQuery;
-        return { applied: true, location: `edge ${edge.from}->${edge.to} cost_gbp` };
+        return { applied: true, location: formatEdgeLocation(graph, edge, 'cost_gbp') };
       }
     }
     
     if (field === 'cost_time' && edge) {
       if (edge.cost_time) {
         (edge.cost_time as any).query = newQuery;
-        return { applied: true, location: `edge ${edge.from}->${edge.to} cost_time` };
+        return { applied: true, location: formatEdgeLocation(graph, edge, 'cost_time') };
       }
     }
     
@@ -100,7 +117,7 @@ function applyQueryToGraph(
       // Check base p
       if (edge.p?.id === paramId) {
         edge.query = newQuery;
-        return { applied: true, location: `edge ${edge.from}->${edge.to}` };
+        return { applied: true, location: formatEdgeLocation(graph, edge) };
       }
       
       // Check conditional_p
@@ -108,7 +125,7 @@ function applyQueryToGraph(
         for (let i = 0; i < edge.conditional_p.length; i++) {
           if (edge.conditional_p[i].p?.id === paramId) {
             edge.conditional_p[i].query = newQuery;
-            return { applied: true, location: `edge ${edge.from}->${edge.to} conditional[${i}]` };
+            return { applied: true, location: formatEdgeLocation(graph, edge, `conditional[${i}]`) };
           }
         }
       }
@@ -118,7 +135,7 @@ function applyQueryToGraph(
         if (edge.cost_gbp) {
           (edge.cost_gbp as any).query = newQuery;
         }
-        return { applied: true, location: `edge ${edge.from}->${edge.to} cost_gbp` };
+        return { applied: true, location: formatEdgeLocation(graph, edge, 'cost_gbp') };
       }
       
       // Check cost_time
@@ -126,7 +143,7 @@ function applyQueryToGraph(
         if (edge.cost_time) {
           (edge.cost_time as any).query = newQuery;
         }
-        return { applied: true, location: `edge ${edge.from}->${edge.to} cost_time` };
+        return { applied: true, location: formatEdgeLocation(graph, edge, 'cost_time') };
       }
     }
     
@@ -375,6 +392,14 @@ export class QueryRegenerationService {
       
       // Skip if query hasn't changed
       if (currentQuery === param.query) {
+        skipped++;
+        continue;
+      }
+      
+      // Skip if query is manually overridden (user edits should be preserved)
+      const isOverridden = this.isQueryOverridden(graph, param.paramId);
+      if (isOverridden) {
+        console.log(`[QueryRegeneration] Skipping overridden query: ${param.paramId}`);
         skipped++;
         continue;
       }

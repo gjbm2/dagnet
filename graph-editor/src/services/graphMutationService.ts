@@ -214,6 +214,12 @@ class GraphMutationService {
     console.log('🎬 [GraphMutation] Setting isAutoUpdating = true');
     options?.setAutoUpdating?.(true);
     
+    // Helper to resolve node UUID to human-readable ID
+    const resolveNodeId = (uuidOrId: string): string => {
+      const node = graph.nodes.find(n => n.uuid === uuidOrId || n.id === uuidOrId);
+      return node?.id || uuidOrId;
+    };
+    
     // Start hierarchical log operation for MSMDC
     const logOpId = sessionLogService.startOperation(
       'info',
@@ -222,7 +228,7 @@ class GraphMutationService {
       `Query regeneration starting (${graph.nodes.length} nodes, ${graph.edges.length} edges)`,
       {
         nodesAffected: graph.nodes.map(n => n.id || n.uuid),
-        edgesAffected: graph.edges.map(e => `${e.from}→${e.to}`)
+        edgesAffected: graph.edges.map(e => `${resolveNodeId(e.from)}→${resolveNodeId(e.to)}`)
       }
     );
     
@@ -284,8 +290,8 @@ class GraphMutationService {
           `Location: ${param.location}`,
           {
             paramId: param.paramId,
-            valuesBefore: { query: param.oldQuery?.substring(0, 50) },
-            valuesAfter: { query: param.newQuery?.substring(0, 50) }
+            valuesBefore: { query: param.oldQuery },
+            valuesAfter: { query: param.newQuery }
           }
         );
       }
