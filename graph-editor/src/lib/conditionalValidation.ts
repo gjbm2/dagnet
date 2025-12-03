@@ -14,6 +14,28 @@ import { getVisitedNodeIds } from './queryDSL';
 const PROB_SUM_TOLERANCE = 0.001;
 
 /**
+ * Helper to check if a node reference (UUID or human-readable ID) matches a node
+ * edge.from/to can be either UUID or human-readable ID for legacy compatibility
+ */
+function nodeRefMatches(ref: string, node: GraphNode): boolean {
+  return ref === node.uuid || ref === node.id;
+}
+
+/**
+ * Helper to get outgoing edges from a node (handles both UUID and ID in edge.from)
+ */
+function getOutgoingEdges(node: GraphNode, edges: GraphEdge[]): GraphEdge[] {
+  return edges.filter(e => nodeRefMatches(e.from, node));
+}
+
+/**
+ * Helper to get incoming edges to a node (handles both UUID and ID in edge.to)
+ */
+function getIncomingEdges(node: GraphNode, edges: GraphEdge[]): GraphEdge[] {
+  return edges.filter(e => nodeRefMatches(e.to, node));
+}
+
+/**
  * Validate conditional probabilities in the graph
  * Checks that probabilities sum to 1.0 for each possible condition state
  */
@@ -23,7 +45,7 @@ export function validateConditionalProbabilities(graph: Graph): ValidationResult
 
   // For each node
   for (const node of graph.nodes) {
-    const outgoingEdges = graph.edges.filter(e => e.from === node.id);
+    const outgoingEdges = getOutgoingEdges(node, graph.edges);
     
     if (outgoingEdges.length === 0) continue;
 
@@ -286,25 +308,35 @@ function calculateConditionalProbabilitySum(
 /**
  * Check if targetNode is upstream of sourceNode
  * Uses simple reachability check (BFS)
+ * Handles edge.from/to being either UUID or human-readable ID
  */
 function isUpstream(targetNodeId: string, sourceNodeId: string, graph: Graph): boolean {
+  // Find the source node first
+  const sourceNode = graph.nodes.find(n => n.uuid === sourceNodeId || n.id === sourceNodeId);
+  if (!sourceNode) return false;
+  
   const visited = new Set<string>();
-  const queue: string[] = [sourceNodeId];
+  const queue: GraphNode[] = [sourceNode];
   
   while (queue.length > 0) {
-    const currentId = queue.shift()!;
+    const currentNode = queue.shift()!;
+    const currentKey = currentNode.uuid || currentNode.id;
     
-    if (visited.has(currentId)) continue;
-    visited.add(currentId);
+    if (visited.has(currentKey)) continue;
+    visited.add(currentKey);
     
-    // Find incoming edges to current node
-    const incomingEdges = graph.edges.filter(e => e.to === currentId);
+    // Find incoming edges to current node (handles both UUID and ID)
+    const incomingEdges = getIncomingEdges(currentNode, graph.edges);
     
     for (const edge of incomingEdges) {
-      if (edge.from === targetNodeId) {
+      // Check if the source of this edge is the target we're looking for
+      const fromNode = graph.nodes.find(n => nodeRefMatches(edge.from, n));
+      if (fromNode && (fromNode.uuid === targetNodeId || fromNode.id === targetNodeId)) {
         return true; // Found path from target to source (target is upstream)
       }
-      queue.push(edge.from);
+      if (fromNode) {
+        queue.push(fromNode);
+      }
     }
   }
   
@@ -341,19 +373,24 @@ function checkCircularDependencies(graph: Graph): ValidationError[] {
 
 /**
  * Check if there's a circular dependency between nodes
+ * Handles edge.from/to being either UUID or human-readable ID
  */
 function hasCircularDependency(
-  fromNode: string,
+  fromNodeRef: string,
   targetNode: string,
   originalNode: string,
   graph: Graph,
   visited: Set<string>
 ): boolean {
-  if (visited.has(fromNode)) return false;
-  visited.add(fromNode);
+  if (visited.has(fromNodeRef)) return false;
+  visited.add(fromNodeRef);
   
-  // Find outgoing edges from current node
-  const outgoingEdges = graph.edges.filter(e => e.from === fromNode);
+  // Find the current node
+  const currentNode = graph.nodes.find(n => n.uuid === fromNodeRef || n.id === fromNodeRef);
+  if (!currentNode) return false;
+  
+  // Find outgoing edges from current node (handles both UUID and ID)
+  const outgoingEdges = getOutgoingEdges(currentNode, graph.edges);
   
   for (const edge of outgoingEdges) {
     // If edge has condition depending on original node, this is a problem
@@ -365,13 +402,18 @@ function hasCircularDependency(
       }
     }
     
+    // Find the target node of this edge
+    const toNode = graph.nodes.find(n => nodeRefMatches(edge.to, n));
+    if (!toNode) continue;
+    
     // If we reached the target node, check for dependency
-    if (edge.to === targetNode) {
+    if (toNode.uuid === targetNode || toNode.id === targetNode) {
       return true;
     }
     
     // Recurse to next node
-    if (hasCircularDependency(edge.to, targetNode, originalNode, graph, visited)) {
+    const toNodeRef = toNode.uuid || toNode.id;
+    if (hasCircularDependency(toNodeRef, targetNode, originalNode, graph, visited)) {
       return true;
     }
   }
@@ -381,31 +423,39 @@ function hasCircularDependency(
 
 /**
  * Get upstream nodes for a given edge (for condition selector)
+ * Handles edge.from/to being either UUID or human-readable ID
  */
-export function getUpstreamNodes(edgeFromNodeId: string, graph: Graph): GraphNode[] {
-  const upstreamNodeIds = new Set<string>();
+export function getUpstreamNodes(edgeFromNodeRef: string, graph: Graph): GraphNode[] {
+  const upstreamNodes = new Set<GraphNode>();
   const visited = new Set<string>();
-  const queue: string[] = [edgeFromNodeId];
+  
+  // Find the starting node
+  const startNode = graph.nodes.find(n => n.uuid === edgeFromNodeRef || n.id === edgeFromNodeRef);
+  if (!startNode) return [];
+  
+  const queue: GraphNode[] = [startNode];
   
   while (queue.length > 0) {
-    const currentId = queue.shift()!;
+    const currentNode = queue.shift()!;
+    const currentKey = currentNode.uuid || currentNode.id;
     
-    if (visited.has(currentId)) continue;
-    visited.add(currentId);
+    if (visited.has(currentKey)) continue;
+    visited.add(currentKey);
     
-    // Find incoming edges
-    const incomingEdges = graph.edges.filter(e => e.to === currentId);
+    // Find incoming edges (handles both UUID and ID in edge.to)
+    const incomingEdges = getIncomingEdges(currentNode, graph.edges);
     
     for (const edge of incomingEdges) {
-      upstreamNodeIds.add(edge.from);
-      queue.push(edge.from);
+      // Find the source node
+      const fromNode = graph.nodes.find(n => nodeRefMatches(edge.from, n));
+      if (fromNode) {
+        upstreamNodes.add(fromNode);
+        queue.push(fromNode);
+      }
     }
   }
   
-  // Convert IDs to nodes
-  return Array.from(upstreamNodeIds)
-    .map(id => graph.nodes.find(n => n.id === id))
-    .filter(Boolean) as GraphNode[];
+  return Array.from(upstreamNodes);
 }
 
 /**

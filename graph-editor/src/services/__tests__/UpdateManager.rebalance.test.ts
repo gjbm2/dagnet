@@ -601,6 +601,262 @@ describe('UpdateManager - Rebalancing', () => {
       const total = result.graph.nodes[0].case.variants.reduce((sum: number, v: any) => sum + v.weight, 0);
       expect(total).toBeCloseTo(1.0, 10);
     });
+
+    it('should respect weight_overridden without force (forceRebalance=false)', () => {
+      const graph = {
+        nodes: [
+          { 
+            uuid: 'case-node-1',
+            type: 'case',
+            case: {
+              variants: [
+                { name: 'control', weight: 0.5 },
+                { name: 'treatment-a', weight: 0.3, weight_overridden: true },  // Should NOT change
+                { name: 'treatment-b', weight: 0.2 }
+              ]
+            }
+          }
+        ],
+        edges: []
+      };
+      
+      // Change control to 0.6
+      const graphWithChange = structuredClone(graph);
+      graphWithChange.nodes[0].case.variants[0].weight = 0.6;
+      
+      // Non-force rebalance
+      const result = updateManager.rebalanceVariantWeights(graphWithChange, 'case-node-1', 0, false);
+      
+      // Origin preserved at 0.6
+      expect(result.graph.nodes[0].case.variants[0].weight).toBe(0.6);
+      
+      // Overridden treatment-a stays at 0.3
+      expect(result.graph.nodes[0].case.variants[1].weight).toBe(0.3);
+      expect(result.graph.nodes[0].case.variants[1].weight_overridden).toBe(true);
+      
+      // treatment-b gets remaining: 1.0 - 0.6 - 0.3 = 0.1
+      expect(result.graph.nodes[0].case.variants[2].weight).toBeCloseTo(0.1, 10);
+      
+      // Report overridden count
+      expect(result.overriddenCount).toBe(1);
+    });
+
+    it('should handle 2-variant rebalance (simple A/B test)', () => {
+      const graph = {
+        nodes: [
+          { 
+            uuid: 'case-node-1',
+            type: 'case',
+            case: {
+              variants: [
+                { name: 'control', weight: 0.5 },
+                { name: 'treatment', weight: 0.5 }
+              ]
+            }
+          }
+        ],
+        edges: []
+      };
+      
+      // Change control to 0.7
+      const graphWithChange = structuredClone(graph);
+      graphWithChange.nodes[0].case.variants[0].weight = 0.7;
+      
+      const result = updateManager.rebalanceVariantWeights(graphWithChange, 'case-node-1', 0, true);
+      
+      expect(result.graph.nodes[0].case.variants[0].weight).toBe(0.7);
+      expect(result.graph.nodes[0].case.variants[1].weight).toBeCloseTo(0.3, 10);
+      
+      // PMF sums to 1.0
+      const total = result.graph.nodes[0].case.variants.reduce((sum: number, v: any) => sum + v.weight, 0);
+      expect(total).toBeCloseTo(1.0, 10);
+    });
+
+    it('should handle origin at 0%', () => {
+      const graph = {
+        nodes: [
+          { 
+            uuid: 'case-node-1',
+            type: 'case',
+            case: {
+              variants: [
+                { name: 'control', weight: 0.5 },
+                { name: 'treatment-a', weight: 0.3 },
+                { name: 'treatment-b', weight: 0.2 }
+              ]
+            }
+          }
+        ],
+        edges: []
+      };
+      
+      // Set control to 0
+      const graphWithChange = structuredClone(graph);
+      graphWithChange.nodes[0].case.variants[0].weight = 0;
+      
+      const result = updateManager.rebalanceVariantWeights(graphWithChange, 'case-node-1', 0, true);
+      
+      // Origin stays at 0
+      expect(result.graph.nodes[0].case.variants[0].weight).toBe(0);
+      
+      // Others get remaining 1.0, split 3:2
+      expect(result.graph.nodes[0].case.variants[1].weight).toBeCloseTo(0.6, 10);
+      expect(result.graph.nodes[0].case.variants[2].weight).toBeCloseTo(0.4, 10);
+      
+      // PMF sums to 1.0
+      const total = result.graph.nodes[0].case.variants.reduce((sum: number, v: any) => sum + v.weight, 0);
+      expect(total).toBeCloseTo(1.0, 10);
+    });
+
+    it('should handle origin at 100%', () => {
+      const graph = {
+        nodes: [
+          { 
+            uuid: 'case-node-1',
+            type: 'case',
+            case: {
+              variants: [
+                { name: 'control', weight: 0.5 },
+                { name: 'treatment-a', weight: 0.3 },
+                { name: 'treatment-b', weight: 0.2 }
+              ]
+            }
+          }
+        ],
+        edges: []
+      };
+      
+      // Set control to 1.0 (100%)
+      const graphWithChange = structuredClone(graph);
+      graphWithChange.nodes[0].case.variants[0].weight = 1.0;
+      
+      const result = updateManager.rebalanceVariantWeights(graphWithChange, 'case-node-1', 0, true);
+      
+      // Origin stays at 1.0
+      expect(result.graph.nodes[0].case.variants[0].weight).toBe(1.0);
+      
+      // Others get 0
+      expect(result.graph.nodes[0].case.variants[1].weight).toBe(0);
+      expect(result.graph.nodes[0].case.variants[2].weight).toBe(0);
+      
+      // PMF sums to 1.0
+      const total = result.graph.nodes[0].case.variants.reduce((sum: number, v: any) => sum + v.weight, 0);
+      expect(total).toBeCloseTo(1.0, 10);
+    });
+
+    it('should handle all other variants having weight_overridden (skip rebalance)', () => {
+      const graph = {
+        nodes: [
+          { 
+            uuid: 'case-node-1',
+            type: 'case',
+            case: {
+              variants: [
+                { name: 'control', weight: 0.5 },
+                { name: 'treatment-a', weight: 0.3, weight_overridden: true },
+                { name: 'treatment-b', weight: 0.2, weight_overridden: true }
+              ]
+            }
+          }
+        ],
+        edges: []
+      };
+      
+      // Change control to 0.6 (but others are all overridden)
+      const graphWithChange = structuredClone(graph);
+      graphWithChange.nodes[0].case.variants[0].weight = 0.6;
+      
+      const result = updateManager.rebalanceVariantWeights(graphWithChange, 'case-node-1', 0, false);
+      
+      // Origin at 0.6
+      expect(result.graph.nodes[0].case.variants[0].weight).toBe(0.6);
+      
+      // Others unchanged (all overridden)
+      expect(result.graph.nodes[0].case.variants[1].weight).toBe(0.3);
+      expect(result.graph.nodes[0].case.variants[2].weight).toBe(0.2);
+      
+      // Report both as overridden
+      expect(result.overriddenCount).toBe(2);
+      
+      // Note: PMF will NOT sum to 1.0 in this case (1.1) - this is expected
+      // when user overrides cause invalid state
+    });
+
+    it('should handle case node not found', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'other-node', type: 'normal' }
+        ],
+        edges: []
+      };
+      
+      const result = updateManager.rebalanceVariantWeights(graph, 'nonexistent-case', 0, true);
+      
+      // Should return unchanged graph
+      expect(result.graph).toEqual(graph);
+      expect(result.overriddenCount).toBe(0);
+    });
+
+    it('should handle invalid variant index', () => {
+      const graph = {
+        nodes: [
+          { 
+            uuid: 'case-node-1',
+            type: 'case',
+            case: {
+              variants: [
+                { name: 'control', weight: 0.5 },
+                { name: 'treatment', weight: 0.5 }
+              ]
+            }
+          }
+        ],
+        edges: []
+      };
+      
+      // Invalid index (out of bounds)
+      const result = updateManager.rebalanceVariantWeights(graph, 'case-node-1', 99, true);
+      
+      // Should return unchanged graph
+      expect(result.graph.nodes[0].case.variants[0].weight).toBe(0.5);
+      expect(result.graph.nodes[0].case.variants[1].weight).toBe(0.5);
+    });
+
+    it('should maintain precision for small weights', () => {
+      const graph = {
+        nodes: [
+          { 
+            uuid: 'case-node-1',
+            type: 'case',
+            case: {
+              variants: [
+                { name: 'control', weight: 0.01 },
+                { name: 'treatment-a', weight: 0.495 },
+                { name: 'treatment-b', weight: 0.495 }
+              ]
+            }
+          }
+        ],
+        edges: []
+      };
+      
+      // Change control to 0.02
+      const graphWithChange = structuredClone(graph);
+      graphWithChange.nodes[0].case.variants[0].weight = 0.02;
+      
+      const result = updateManager.rebalanceVariantWeights(graphWithChange, 'case-node-1', 0, true);
+      
+      // Origin at 0.02
+      expect(result.graph.nodes[0].case.variants[0].weight).toBe(0.02);
+      
+      // Others split 0.98 equally (0.49 each)
+      expect(result.graph.nodes[0].case.variants[1].weight).toBeCloseTo(0.49, 10);
+      expect(result.graph.nodes[0].case.variants[2].weight).toBeCloseTo(0.49, 10);
+      
+      // PMF sums to 1.0
+      const total = result.graph.nodes[0].case.variants.reduce((sum: number, v: any) => sum + v.weight, 0);
+      expect(total).toBeCloseTo(1.0, 10);
+    });
   });
 });
 

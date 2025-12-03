@@ -4,6 +4,7 @@ import EdgeScalingControl from '../EdgeScalingControl';
 import { Layout, Maximize2, Eye, Wrench } from 'lucide-react';
 import './ToolsPanel.css';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
+import { useSankeyView } from '../../hooks/useSankeyView';
 
 interface ToolsPanelProps {
   // Layout tools
@@ -34,6 +35,10 @@ export default function ToolsPanel({
   hideHeader = false
 }: ToolsPanelProps) {
   const viewPrefs = useViewPreferencesContext();
+  
+  // Use centralised hook for Sankey view toggle
+  const { useSankeyView: isSankeyView, setUseSankeyView } = useSankeyView();
+  
   if (!viewPrefs) {
     // Should never happen since ToolsPanel is always inside GraphEditor with provider
     console.error('ToolsPanel: ViewPreferencesContext not available');
@@ -44,13 +49,11 @@ export default function ToolsPanel({
     useUniformScaling,
     massGenerosity,
     autoReroute,
-    useSankeyView,
     confidenceIntervalLevel,
     animateFlow,
     setUseUniformScaling,
     setMassGenerosity,
     setAutoReroute,
-    setUseSankeyView,
     setConfidenceIntervalLevel,
     setAnimateFlow
   } = viewPrefs;
@@ -68,7 +71,7 @@ export default function ToolsPanel({
           <label className="tool-checkbox">
             <input
               type="checkbox"
-              checked={useSankeyView}
+              checked={isSankeyView}
               onChange={(e) => setUseSankeyView(e.target.checked)}
             />
             <span>Sankey View</span>
@@ -83,7 +86,7 @@ export default function ToolsPanel({
             <span>Animate Flow</span>
           </label>
           
-          {useSankeyView ? (
+          {isSankeyView ? (
             <button 
               onClick={() => onSankeyLayout?.()} 
               className="tool-button"

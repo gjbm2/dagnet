@@ -63,7 +63,9 @@ import {
   createTestParameterFile,
   createTestCaseFile,
   createTestNodeFile,
-  createTestGraph 
+  createTestGraph,
+  createTestEdgeWithConditionalP,
+  createTestConditionalParameterFile
 } from './helpers/testFixtures';
 
 describe('DataOperationsService Integration Tests', () => {
@@ -241,6 +243,616 @@ describe('DataOperationsService Integration Tests', () => {
       expect(latestValue).not.toHaveProperty('n');
       expect(latestValue).not.toHaveProperty('k');
       expect(latestValue).not.toHaveProperty('window_to');
+    });
+  });
+
+  // ============================================================
+  // CONDITIONAL PROBABILITY PARAMETERS (PARITY WITH edge.p)
+  // ============================================================
+
+  describe('Conditional Probability Parameter Roundtrips', () => {
+    /**
+     * PARITY PRINCIPLE: conditional_p MUST behave identically to edge.p
+     * in all file management, data operations, and scenarios.
+     * 
+     * The ONLY differences are:
+     * - conditional_p uses conditionalIndex to target specific entries
+     * - conditional_p entries have a `condition` string (e.g., "visited(promo)")
+     * - n_query is not yet implemented for conditional_p
+     */
+
+    it('conditional_p[0]: graph → file → graph preserves all fields', async () => {
+      // Setup edge with conditional_p array
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [
+          {
+            condition: 'visited(promo)',
+            p: {
+              id: 'cond-param-0',
+              mean: 0.65,
+              stdev: 0.04,
+              distribution: 'beta'
+            }
+          }
+        ]
+      });
+
+      const paramFile = createTestConditionalParameterFile({
+        id: 'cond-param-0',
+        type: 'conditional_probability',
+        values: []
+      });
+
+      // Register file
+      await fileRegistry.registerFile('parameter-cond-param-0', paramFile);
+
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Step 1: Put to file (targeting conditionalIndex: 0)
+      await dataOperationsService.putParameterToFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      const fileAfterPut = fileRegistry.getFile('parameter-cond-param-0')!;
+      const latestValue = fileAfterPut.data.values[fileAfterPut.data.values.length - 1];
+
+      // Verify put added correct data with provenance
+      expect(latestValue).toMatchObject({
+        mean: 0.65,
+        stdev: 0.04,
+        distribution: 'beta',
+        window_from: expect.stringMatching(/\d{4}-\d{2}-\d{2}T/),
+        data_source: {
+          type: 'manual',
+          edited_at: expect.stringMatching(/\d{4}-\d{2}-\d{2}T/)
+        }
+      });
+
+      // Step 2: Get back from file (targeting conditionalIndex: 0)
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      // Verify setGraph was called with updated conditional_p
+      expect(setGraph).toHaveBeenCalled();
+      const updatedGraph = setGraph.mock.calls[setGraph.mock.calls.length - 1][0];
+      const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
+
+      // Verify conditional_p[0].p was updated correctly
+      expect(updatedEdge.conditional_p[0].p).toMatchObject({
+        mean: 0.65,
+        stdev: 0.04,
+        distribution: 'beta',
+        id: 'cond-param-0'  // Connection preserved
+      });
+
+      // Verify condition is preserved
+      expect(updatedEdge.conditional_p[0].condition).toBe('visited(promo)');
+    });
+
+    it('conditional_p[1]: second entry in array roundtrips correctly', async () => {
+      // Setup edge with multiple conditional_p entries
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [
+          {
+            condition: 'visited(promo)',
+            p: { id: 'cond-param-0', mean: 0.65, stdev: 0.04, distribution: 'beta' }
+          },
+          {
+            condition: 'visited(checkout)',
+            p: { id: 'cond-param-1', mean: 0.45, stdev: 0.03, distribution: 'beta' }
+          }
+        ]
+      });
+
+      const paramFile = createTestConditionalParameterFile({
+        id: 'cond-param-1',
+        type: 'conditional_probability',
+        values: []
+      });
+
+      await fileRegistry.registerFile('parameter-cond-param-1', paramFile);
+
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Put conditional_p[1] to file
+      await dataOperationsService.putParameterToFile({
+        paramId: 'cond-param-1',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 1  // Second entry
+      });
+
+      const fileAfterPut = fileRegistry.getFile('parameter-cond-param-1')!;
+      const latestValue = fileAfterPut.data.values[fileAfterPut.data.values.length - 1];
+
+      // Verify correct entry was written (0.45, not 0.65)
+      expect(latestValue.mean).toBe(0.45);
+      expect(latestValue.stdev).toBe(0.03);
+
+      // Get back from file
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-1',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 1
+      });
+
+      const updatedGraph = setGraph.mock.calls[setGraph.mock.calls.length - 1][0];
+      const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
+
+      // Verify conditional_p[1].p was updated, not [0]
+      expect(updatedEdge.conditional_p[1].p.mean).toBe(0.45);
+      expect(updatedEdge.conditional_p[1].condition).toBe('visited(checkout)');
+      
+      // Verify conditional_p[0] is unchanged
+      expect(updatedEdge.conditional_p[0].p.mean).toBe(0.65);
+    });
+
+    it('conditional_p with locked flag survives roundtrip', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: {
+            id: 'locked-cond-param',
+            mean: 0.55,
+            stdev: 0.04,
+            distribution: 'beta',
+            locked: true
+          }
+        }]
+      });
+
+      const paramFile = createTestConditionalParameterFile({
+        id: 'locked-cond-param',
+        type: 'conditional_probability',
+        values: []
+      });
+
+      await fileRegistry.registerFile('parameter-locked-cond-param', paramFile);
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Put
+      await dataOperationsService.putParameterToFile({
+        paramId: 'locked-cond-param',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      // Get back
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'locked-cond-param',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      const updatedGraph = setGraph.mock.calls[setGraph.mock.calls.length - 1][0];
+      const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
+
+      expect(updatedEdge.conditional_p[0].p.locked).toBe(true);
+    });
+
+    it('conditional_p stale evidence data is NOT written to file', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: {
+            id: 'no-stale-cond',
+            mean: 0.45,
+            stdev: 0.03,
+            distribution: 'beta',
+            // Stale evidence from previous "get"
+            evidence: {
+              n: 6000,
+              k: 2700,
+              window_from: '2025-01-01T00:00:00Z',
+              window_to: '2025-01-31T23:59:59Z'
+            }
+          }
+        }]
+      });
+
+      const paramFile = createTestConditionalParameterFile({
+        id: 'no-stale-cond',
+        type: 'conditional_probability',
+        values: []
+      });
+
+      await fileRegistry.registerFile('parameter-no-stale-cond', paramFile);
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      await dataOperationsService.putParameterToFile({
+        paramId: 'no-stale-cond',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      const fileAfterPut = fileRegistry.getFile('parameter-no-stale-cond');
+      const latestValue = fileAfterPut!.data.values[fileAfterPut!.data.values.length - 1];
+
+      expect(latestValue.mean).toBe(0.45);
+      expect(latestValue).not.toHaveProperty('n');
+      expect(latestValue).not.toHaveProperty('k');
+      expect(latestValue).not.toHaveProperty('window_to');
+    });
+
+    it('conditional_p id preserved after multiple gets', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'my-cond-param', mean: 0.5, stdev: 0.05, distribution: 'beta' }
+        }]
+      });
+
+      const paramFile = createTestConditionalParameterFile({
+        id: 'my-cond-param',
+        values: [{ mean: 0.55, stdev: 0.04, distribution: 'beta', window_from: '2025-01-01T00:00:00Z' }]
+      });
+
+      await fileRegistry.registerFile('parameter-my-cond-param', paramFile);
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // First get
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'my-cond-param',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      let updatedGraph = setGraph.mock.calls[0][0];
+      let updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
+      expect(updatedEdge.conditional_p[0].p.id).toBe('my-cond-param');
+
+      // Update file
+      paramFile.values.push({ mean: 0.60, stdev: 0.03, distribution: 'beta', window_from: '2025-02-01T00:00:00Z' });
+      await fileRegistry.updateFile('parameter-my-cond-param', paramFile);
+
+      // Second get
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'my-cond-param',
+        edgeId: 'edge-1',
+        graph: updatedGraph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      updatedGraph = setGraph.mock.calls[1][0];
+      updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
+
+      expect(updatedEdge.conditional_p[0].p.id).toBe('my-cond-param');  // Still preserved
+      expect(updatedEdge.conditional_p[0].p.mean).toBe(0.60);  // Updated value
+    });
+  });
+
+  describe('Conditional Probability values[latest] Resolution', () => {
+    it('finds most recent conditional_p by window_from, not array order', async () => {
+      const paramFile = createTestConditionalParameterFile({
+        id: 'cond-latest',
+        type: 'conditional_probability',
+        values: [
+          { mean: 0.42, window_from: '2025-01-01T00:00:00Z' },
+          { mean: 0.45, window_from: '2025-02-01T00:00:00Z' },
+          { mean: 0.30, window_from: '2025-03-01T00:00:00Z' },  // ← Most recent
+          { mean: 0.35, window_from: '2025-01-15T00:00:00Z' }   // ← Added later but older
+        ]
+      });
+
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'cond-latest' }
+        }]
+      });
+
+      await fileRegistry.registerFile('parameter-cond-latest', paramFile);
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-latest',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      const updatedGraph = setGraph.mock.calls[0][0];
+      const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
+
+      // Should get 2025-03-01 entry (mean: 0.30), not last in array
+      expect(updatedEdge.conditional_p[0].p.mean).toBe(0.30);
+    });
+
+    it('after put, new conditional_p entry becomes latest', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'cond-new-latest', mean: 0.50, stdev: 0.05, distribution: 'beta' }
+        }]
+      });
+
+      const paramFile = createTestConditionalParameterFile({
+        id: 'cond-new-latest',
+        type: 'conditional_probability',
+        values: [
+          { mean: 0.42, window_from: '2025-01-01T00:00:00Z' },
+          { mean: 0.45, window_from: '2025-02-01T00:00:00Z' }
+        ]
+      });
+
+      await fileRegistry.registerFile('parameter-cond-new-latest', paramFile);
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Put new value
+      await dataOperationsService.putParameterToFile({
+        paramId: 'cond-new-latest',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      // Get back - should retrieve the newly added value
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-new-latest',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      const updatedGraph = setGraph.mock.calls[setGraph.mock.calls.length - 1][0];
+      const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
+
+      expect(updatedEdge.conditional_p[0].p.mean).toBe(0.50);  // Our new value
+    });
+  });
+
+  describe('Conditional Probability Error Conditions', () => {
+    it('missing conditionalIndex gracefully falls back to edge.p', async () => {
+      // When conditionalIndex is NOT provided, operations target edge.p
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        p: { id: 'base-param', mean: 0.5, stdev: 0.05, distribution: 'beta' },
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'cond-param', mean: 0.65, stdev: 0.04, distribution: 'beta' }
+        }]
+      });
+
+      const paramFile = createTestParameterFile({
+        id: 'base-param',
+        type: 'probability',
+        values: [{ mean: 0.55, stdev: 0.04, distribution: 'beta', window_from: '2025-01-01T00:00:00Z' }]
+      });
+
+      await fileRegistry.registerFile('parameter-base-param', paramFile);
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Get WITHOUT conditionalIndex - should update edge.p, not conditional_p
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'base-param',
+        edgeId: 'edge-1',
+        graph,
+        setGraph
+        // NO conditionalIndex
+      });
+
+      const updatedGraph = setGraph.mock.calls[0][0];
+      const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
+
+      // edge.p should be updated
+      expect(updatedEdge.p.mean).toBe(0.55);
+      // conditional_p should be unchanged
+      expect(updatedEdge.conditional_p[0].p.mean).toBe(0.65);
+    });
+
+    it('invalid conditionalIndex does not crash', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'cond-param', mean: 0.65, stdev: 0.04, distribution: 'beta' }
+        }]
+      });
+
+      const paramFile = createTestConditionalParameterFile({
+        id: 'cond-param',
+        values: [{ mean: 0.55, window_from: '2025-01-01T00:00:00Z' }]
+      });
+
+      await fileRegistry.registerFile('parameter-cond-param', paramFile);
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Try to get conditionalIndex: 5 (out of bounds) - should not throw
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 5  // Invalid - only index 0 exists
+      });
+
+      // setGraph should not be called on error
+      expect(setGraph).not.toHaveBeenCalled();
+    });
+
+    it('edge with no conditional_p array does not crash when conditionalIndex provided', async () => {
+      // Edge WITHOUT conditional_p
+      const edge = createTestEdge({
+        uuid: 'edge-1',
+        p: { id: 'test-param', mean: 0.5, stdev: 0.05, distribution: 'beta' }
+        // NO conditional_p array
+      });
+
+      const paramFile = createTestParameterFile({
+        id: 'test-param',
+        values: [{ mean: 0.55, window_from: '2025-01-01T00:00:00Z' }]
+      });
+
+      await fileRegistry.registerFile('parameter-test-param', paramFile);
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Try to get with conditionalIndex even though edge has no conditional_p
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'test-param',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      // Should not crash, setGraph not called on error
+      expect(setGraph).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Multi-Conditional Edge Operations', () => {
+    it('only specified conditional_p entry is written (no cross-contamination)', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [
+          {
+            condition: 'visited(promo)',
+            p: { id: 'cond-param-a', mean: 0.65, stdev: 0.04, distribution: 'beta' }
+          },
+          {
+            condition: 'visited(checkout)',
+            p: { id: 'cond-param-b', mean: 0.45, stdev: 0.03, distribution: 'beta' }
+          }
+        ]
+      });
+
+      // Create two separate parameter files
+      await fileRegistry.registerFile('parameter-cond-param-a', createTestConditionalParameterFile({
+        id: 'cond-param-a',
+        values: []
+      }));
+
+      await fileRegistry.registerFile('parameter-cond-param-b', createTestConditionalParameterFile({
+        id: 'cond-param-b',
+        values: []
+      }));
+
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Put only conditional_p[0]
+      await dataOperationsService.putParameterToFile({
+        paramId: 'cond-param-a',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      const fileA = fileRegistry.getFile('parameter-cond-param-a');
+      const latestA = fileA!.data.values[fileA!.data.values.length - 1];
+      expect(latestA.mean).toBe(0.65);
+
+      // Put only conditional_p[1]
+      await dataOperationsService.putParameterToFile({
+        paramId: 'cond-param-b',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 1
+      });
+
+      const fileB = fileRegistry.getFile('parameter-cond-param-b');
+      const latestB = fileB!.data.values[fileB!.data.values.length - 1];
+      expect(latestB.mean).toBe(0.45);
+
+      // Verify no cross-contamination
+      const allAValues = fileA!.data.values.map((v: any) => v.mean);
+      expect(allAValues).not.toContain(0.45);
+
+      const allBValues = fileB!.data.values.map((v: any) => v.mean);
+      expect(allBValues).not.toContain(0.65);
+    });
+
+    it('can put/get edge.p and conditional_p independently', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        p: { id: 'base-param', mean: 0.5, stdev: 0.05, distribution: 'beta' },
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'cond-param', mean: 0.65, stdev: 0.04, distribution: 'beta' }
+        }]
+      });
+
+      // Create both files
+      await fileRegistry.registerFile('parameter-base-param', createTestParameterFile({
+        id: 'base-param',
+        type: 'probability',
+        values: []
+      }));
+
+      await fileRegistry.registerFile('parameter-cond-param', createTestConditionalParameterFile({
+        id: 'cond-param',
+        values: []
+      }));
+
+      const graph = createTestGraph({ edges: [edge] });
+      const setGraph = vi.fn();
+
+      // Put edge.p (no conditionalIndex)
+      await dataOperationsService.putParameterToFile({
+        paramId: 'base-param',
+        edgeId: 'edge-1',
+        graph,
+        setGraph
+      });
+
+      // Put conditional_p[0] (with conditionalIndex)
+      await dataOperationsService.putParameterToFile({
+        paramId: 'cond-param',
+        edgeId: 'edge-1',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+
+      // Verify both files have correct data
+      const baseFile = fileRegistry.getFile('parameter-base-param');
+      expect(baseFile!.data.values[baseFile!.data.values.length - 1].mean).toBe(0.5);
+
+      const condFile = fileRegistry.getFile('parameter-cond-param');
+      expect(condFile!.data.values[condFile!.data.values.length - 1].mean).toBe(0.65);
     });
   });
 

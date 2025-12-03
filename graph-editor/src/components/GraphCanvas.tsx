@@ -1404,12 +1404,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // The isSyncingRef flag should only prevent ReactFlow->Graph sync, not Graph->ReactFlow sync
     
     const graphJson = JSON.stringify(graph);
-    if (graphJson === lastSyncedGraphRef.current) {
+    const sankeyModeChanged = prevSankeyViewRef.current !== useSankeyView;
+    
+    // Skip if graph unchanged AND Sankey mode unchanged
+    // (Sankey mode changes require full rebuild even if graph is the same)
+    if (graphJson === lastSyncedGraphRef.current && !sankeyModeChanged) {
       return;
     }
     lastSyncedGraphRef.current = graphJson;
     
-    console.log('🔄 Graph→ReactFlow sync triggered');
+    console.log('🔄 Graph→ReactFlow sync triggered', sankeyModeChanged ? '(Sankey mode changed)' : '');
     console.log('  Graph edges (UUIDs):', graph.edges?.map((e: any) => e.uuid));
     console.log('  ReactFlow edges (UUIDs):', edges.map(e => e.id));
     
@@ -1509,8 +1513,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return hasChanges;
     });
     
-    // Check if Sankey mode changed (requires full rebuild for node sizing and edge routing)
-    const sankeyModeChanged = prevSankeyViewRef.current !== useSankeyView;
+    // Update Sankey mode ref (sankeyModeChanged was already calculated at top of useEffect)
     if (sankeyModeChanged) {
       console.log('  🎨 Sankey mode changed:', prevSankeyViewRef.current, '->', useSankeyView);
       prevSankeyViewRef.current = useSankeyView;
@@ -1693,19 +1696,41 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                 }
               });
               
-              // Build incoming edges map
+              // Helper to resolve node reference (UUID, truncated UUID, or human-readable ID) to full UUID
+              const resolveToUuid = (ref: string): string => {
+                // Try exact match on UUID or human-readable ID first
+                let node = graph.nodes?.find((n: any) => n.uuid === ref || n.id === ref);
+                if (node) return node.uuid;
+                
+                // Fallback: check if ref is a truncated UUID prefix (e.g., first 8 chars)
+                node = graph.nodes?.find((n: any) => n.uuid?.startsWith(ref));
+                return node?.uuid || ref; // Return UUID if found, otherwise return original
+              };
+              
+              // Build incoming edges map - keyed by UUID (resolving any human-readable IDs)
               const incomingEdges = new Map<string, Array<any>>();
               graph.edges?.forEach((edge: any) => {
-                if (!incomingEdges.has(edge.to)) {
-                  incomingEdges.set(edge.to, []);
+                const toUuid = resolveToUuid(edge.to);
+                if (!incomingEdges.has(toUuid)) {
+                  incomingEdges.set(toUuid, []);
                 }
-                incomingEdges.get(edge.to)!.push(edge);
+                incomingEdges.get(toUuid)!.push(edge);
               });
               
               // Topological sort to calculate mass
               const processed = new Set<string>();
               let iterations = 0;
               const maxIterations = graph.nodes?.length * 3 || 100;
+              
+              // Initialize: Add ALL start nodes to processed BEFORE the loop
+              // This fixes ordering issues when start nodes appear after other nodes in the array
+              graph.nodes?.forEach((node: any) => {
+                if (node.entry?.is_start) {
+                  const nodeId = node.uuid || node.id;
+                  processed.add(nodeId);
+                  flowMass.set(nodeId, 1);
+                }
+              });
               
               while (processed.size < (graph.nodes?.length || 0) && iterations < maxIterations) {
                 iterations++;
@@ -1714,18 +1739,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                 graph.nodes?.forEach((node: any) => {
                   const nodeId = node.uuid || node.id;
                   
-                  if (processed.has(nodeId) || node.entry?.is_start) {
-                    if (node.entry?.is_start) processed.add(nodeId);
+                  // Skip already processed nodes (including start nodes initialized above)
+                  if (processed.has(nodeId)) {
                     return;
                   }
                   
                   const incoming = incomingEdges.get(nodeId) || [];
-                  const allIncomingProcessed = incoming.every((edge: any) => processed.has(edge.from));
+                  // Resolve edge.from to UUID for checking processed status
+                  const allIncomingProcessed = incoming.every((edge: any) => processed.has(resolveToUuid(edge.from)));
                   
                   if (allIncomingProcessed && incoming.length > 0) {
                     let totalMass = 0;
                     incoming.forEach((edge: any) => {
-                      const sourceMass = flowMass.get(edge.from) || 0;
+                      // Resolve edge.from to UUID for flowMass lookup
+                      const fromUuid = resolveToUuid(edge.from);
+                      const sourceMass = flowMass.get(fromUuid) || 0;
                       const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
                       let effectiveProb = 0;
                       
@@ -1910,20 +1938,41 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           }
         });
         
-        // Build incoming edges map
+        // Helper to resolve node reference (UUID, truncated UUID, or human-readable ID) to full UUID
+        const resolveToUuid = (ref: string): string => {
+          // Try exact match on UUID or human-readable ID first
+          let node = graph.nodes?.find((n: any) => n.uuid === ref || n.id === ref);
+          if (node) return node.uuid;
+          
+          // Fallback: check if ref is a truncated UUID prefix (e.g., first 8 chars)
+          node = graph.nodes?.find((n: any) => n.uuid?.startsWith(ref));
+          return node?.uuid || ref; // Return UUID if found, otherwise return original
+        };
+        
+        // Build incoming edges map - keyed by UUID (resolving any human-readable IDs)
         const incomingEdges = new Map<string, Array<any>>();
         graph.edges?.forEach((edge: any) => {
-          const to = edge.to;
-          if (!incomingEdges.has(to)) {
-            incomingEdges.set(to, []);
+          const toUuid = resolveToUuid(edge.to);
+          if (!incomingEdges.has(toUuid)) {
+            incomingEdges.set(toUuid, []);
           }
-          incomingEdges.get(to)!.push(edge);
+          incomingEdges.get(toUuid)!.push(edge);
         });
         
         // Topological sort: process nodes in dependency order
         const processed = new Set<string>();
         let iterations = 0;
         const maxIterations = graph.nodes?.length * 3 || 100;
+        
+        // Initialize: Add ALL start nodes to processed BEFORE the loop
+        // This fixes ordering issues when start nodes appear after other nodes in the array
+        graph.nodes?.forEach((node: any) => {
+          if (node.entry?.is_start) {
+            const nodeId = node.uuid || node.id;
+            processed.add(nodeId);
+            flowMass.set(nodeId, 1);
+          }
+        });
         
         while (processed.size < (graph.nodes?.length || 0) && iterations < maxIterations) {
           iterations++;
@@ -1932,19 +1981,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           graph.nodes?.forEach((node: any) => {
             const nodeId = node.uuid || node.id;
             
-            if (processed.has(nodeId) || node.entry?.is_start) {
-              if (node.entry?.is_start) processed.add(nodeId);
+            // Skip already processed nodes (including start nodes initialized above)
+            if (processed.has(nodeId)) {
               return;
             }
             
             const incoming = incomingEdges.get(nodeId) || [];
-            const allIncomingProcessed = incoming.every((edge: any) => processed.has(edge.from));
+            // Resolve edge.from to UUID for checking processed status
+            const allIncomingProcessed = incoming.every((edge: any) => processed.has(resolveToUuid(edge.from)));
             
             if (allIncomingProcessed && incoming.length > 0) {
               let totalMass = 0;
               incoming.forEach((edge: any) => {
-                const from = edge.from;
-                const sourceMass = flowMass.get(from) || 0;
+                // Resolve edge.from to UUID for flowMass lookup
+                const fromUuid = resolveToUuid(edge.from);
+                const sourceMass = flowMass.get(fromUuid) || 0;
                 
                 const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
                 let effectiveProb = 0;
@@ -1997,31 +2048,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         if (layerId === 'current') {
           currentLayerMaxMass = Math.max(...Array.from(flowMass.values()), 0.001);
         }
-        
-        console.log(`[Sankey] Layer ${layerId} flow mass (ALL nodes):`, 
-          Array.from(flowMass.entries()).map(([id, mass]) => {
-            const node = graph.nodes?.find((n: any) => n.uuid === id || n.id === id);
-            return { label: node?.label || id, id, mass: mass.toFixed(3) };
-          }));
       }
       
-      console.log('[Sankey] Maximum flow mass per node (across all layers):', 
-        Array.from(maxFlowMassPerNode.entries()).map(([id, mass]) => {
-          const node = graph.nodes?.find((n: any) => n.uuid === id || n.id === id);
-          return { label: node?.label || id, maxMass: mass.toFixed(3) };
-        }));
-      
-      // Normalize using current layer's max mass only
-      console.log('[Sankey] Normalization max mass (current layer only):', currentLayerMaxMass);
-      
       // Apply heights to nodes using MAX mass across layers, normalized by current layer max
-      console.log('[Sankey] ReactFlow nodes to size:', nodesWithSelection.map(n => ({ id: n.id, label: n.data?.label })));
       nodesWithSelection = nodesWithSelection.map(node => {
         const mass = maxFlowMassPerNode.get(node.id) || 0;
         const normalizedMass = mass / currentLayerMaxMass;
         const height = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, normalizedMass * MAX_NODE_HEIGHT));
-        
-        console.log(`[Sankey] Node ${node.data?.label} (reactflow id: ${node.id}): mass=${mass.toFixed(3)}, normalized=${normalizedMass.toFixed(3)}, height=${height.toFixed(0)}`);
         
         return {
           ...node,

@@ -225,6 +225,157 @@ describe('sheetsContextFallback', () => {
   });
 
   // ===========================================
+  // CONDITIONAL PROBABILITY HRN Tests (PARITY)
+  // ===========================================
+
+  describe('conditional_p HRN resolution (PARITY)', () => {
+    /**
+     * PARITY PRINCIPLE: conditional_p HRNs MUST be resolved
+     * identically to edge.p HRNs for Sheets integration.
+     */
+    
+    it('should resolve conditional_p HRN with exact match', () => {
+      // conditional_p uses visited(condition) in HRN format
+      const hrn = 'e.edge-1.visited(promo).p.mean';
+      const paramPack = {
+        'e.edge-1.visited(promo).p.mean': 0.65,
+        'e.edge-1.p.mean': 0.50
+      };
+      
+      const result = resolveSheetParameter(hrn, paramPack, 'fallback');
+      
+      expect(result.value).toBe(0.65);  // Should get conditional value
+      expect(result.usedFallback).toBe(false);
+    });
+    
+    it('should resolve conditional_p HRN with context overlay', () => {
+      const hrn = 'e.edge-1.visited(promo).context(channel:google).p.mean';
+      const paramPack = {
+        'e.edge-1.visited(promo).context(channel:google).p.mean': 0.70,
+        'e.edge-1.visited(promo).p.mean': 0.65,
+        'e.edge-1.p.mean': 0.50
+      };
+      
+      const result = resolveSheetParameter(hrn, paramPack, 'fallback');
+      
+      expect(result.value).toBe(0.70);  // Should get exact match
+      expect(result.usedFallback).toBe(false);
+    });
+    
+    it('should fallback from contexted conditional_p to uncontexted conditional_p', () => {
+      const hrn = 'e.edge-1.visited(promo).context(channel:google).p.mean';
+      const paramPack = {
+        'e.edge-1.visited(promo).p.mean': 0.65  // Only uncontexted conditional exists
+      };
+      
+      const result = resolveSheetParameter(hrn, paramPack, 'fallback');
+      
+      expect(result.value).toBe(0.65);  // Fallback to uncontexted conditional
+      expect(result.usedFallback).toBe(true);
+      expect(result.warning).toContain('visited(promo)');
+    });
+    
+    it('should NOT fallback conditional_p to base edge.p', () => {
+      // This is important: conditional_p should NOT fall back to edge.p
+      // They are different parameters
+      const hrn = 'e.edge-1.visited(promo).p.mean';
+      const paramPack = {
+        'e.edge-1.p.mean': 0.50  // Only base edge.p exists
+        // No visited(promo) entry
+      };
+      
+      const result = resolveSheetParameter(hrn, paramPack, 'fallback');
+      
+      // Should NOT return base value since visited(promo) is preserved
+      expect(result.value).toBeNull();
+    });
+    
+    it('should resolve multiple conditional_p entries independently', () => {
+      const paramPack = {
+        'e.edge-1.visited(promo).p.mean': 0.65,
+        'e.edge-1.visited(checkout).p.mean': 0.45,
+        'e.edge-1.p.mean': 0.50
+      };
+      
+      // Each conditional should resolve independently
+      const result1 = resolveSheetParameter('e.edge-1.visited(promo).p.mean', paramPack, 'fallback');
+      const result2 = resolveSheetParameter('e.edge-1.visited(checkout).p.mean', paramPack, 'fallback');
+      const result3 = resolveSheetParameter('e.edge-1.p.mean', paramPack, 'fallback');
+      
+      expect(result1.value).toBe(0.65);
+      expect(result2.value).toBe(0.45);
+      expect(result3.value).toBe(0.50);
+    });
+    
+    it('should handle conditional_p stdev and other fields', () => {
+      const paramPack = {
+        'e.edge-1.visited(promo).p.mean': 0.65,
+        'e.edge-1.visited(promo).p.stdev': 0.04,
+        'e.edge-1.visited(promo).p.n': 1000,
+        'e.edge-1.visited(promo).p.k': 650
+      };
+      
+      const meanResult = resolveSheetParameter('e.edge-1.visited(promo).p.mean', paramPack, 'fallback');
+      const stdevResult = resolveSheetParameter('e.edge-1.visited(promo).p.stdev', paramPack, 'fallback');
+      const nResult = resolveSheetParameter('e.edge-1.visited(promo).p.n', paramPack, 'fallback');
+      const kResult = resolveSheetParameter('e.edge-1.visited(promo).p.k', paramPack, 'fallback');
+      
+      expect(meanResult.value).toBe(0.65);
+      expect(stdevResult.value).toBe(0.04);
+      expect(nResult.value).toBe(1000);
+      expect(kResult.value).toBe(650);
+    });
+    
+    it('should handle conditional_p with window constraints', () => {
+      const hrn = 'e.edge-1.visited(promo).window(-30d:).p.mean';
+      const paramPack = {
+        'e.edge-1.visited(promo).p.mean': 0.65  // Only unwindowed exists
+      };
+      
+      const result = resolveSheetParameter(hrn, paramPack, 'fallback');
+      
+      expect(result.value).toBe(0.65);
+      expect(result.usedFallback).toBe(true);
+      expect(result.warning).toContain('window(-30d:)');
+    });
+  });
+
+  describe('removeContextFromHRN with conditional_p', () => {
+    
+    it('should preserve visited() when stripping context', () => {
+      const hrn = 'e.edge-1.visited(promo).context(channel:google).p.mean';
+      const stripped = removeContextFromHRN(hrn);
+      
+      expect(stripped).toBe('e.edge-1.visited(promo).p.mean');
+      expect(stripped).toContain('visited(promo)');  // Preserved
+    });
+    
+    it('should preserve visited() when stripping window', () => {
+      const hrn = 'e.edge-1.visited(promo).window(-30d:).p.mean';
+      const stripped = removeContextFromHRN(hrn);
+      
+      expect(stripped).toBe('e.edge-1.visited(promo).p.mean');
+    });
+    
+    it('should preserve multiple visited() constraints', () => {
+      const hrn = 'e.edge-1.visited(a).visited(b).context(channel:google).p.mean';
+      const stripped = removeContextFromHRN(hrn);
+      
+      expect(stripped).toBe('e.edge-1.visited(a).visited(b).p.mean');
+    });
+    
+    it('should handle complex conditional_p HRN with all constraint types', () => {
+      const hrn = 'e.edge-1.visited(promo).context(channel:google).window(-30d:).p.mean';
+      const stripped = removeContextFromHRN(hrn);
+      
+      expect(stripped).toBe('e.edge-1.visited(promo).p.mean');
+      expect(stripped).not.toContain('context');
+      expect(stripped).not.toContain('window');
+      expect(stripped).toContain('visited(promo)');
+    });
+  });
+
+  // ===========================================
   // Warning Message Tests
   // ===========================================
 
