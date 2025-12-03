@@ -784,7 +784,8 @@ export class UpdateManager {
     
     // AUTO-REBALANCE: After parameter update from file pull, rebalance siblings
     // This applies to "Get from file" - if p(A>B) gets updated, auto-compute p(A>C)
-    if (result.success && subDest === 'parameter' && !options.validateOnly) {
+    // NOTE: Set flag even when validateOnly=true, because caller uses this to decide rebalancing
+    if (result.success && subDest === 'parameter') {
       // Check if p.mean was actually updated
       const pMeanUpdated = result.changes?.some(change => change.field === 'p.mean');
       if (pMeanUpdated) {
@@ -797,7 +798,8 @@ export class UpdateManager {
     
     // AUTO-REBALANCE: After case variant update from file, rebalance variants
     // This applies to "Get from Source" (versioned) - if treatment weight changes from file, rebalance control weight
-    if (result.success && subDest === 'case' && !options.validateOnly) {
+    // NOTE: Set flag even when validateOnly=true, because caller uses this to decide rebalancing
+    if (result.success && subDest === 'case') {
       // Check if case.variants was actually updated
       const variantsUpdated = result.changes?.some(change => change.field === 'case.variants');
       if (variantsUpdated) {
@@ -828,7 +830,8 @@ export class UpdateManager {
     
     // AUTO-REBALANCE: After parameter update from external source, rebalance siblings
     // This applies to DAS (Amplitude, etc.) - if p(A>B) gets data, auto-compute p(A>C)
-    if (result.success && subDest === 'parameter' && !options.validateOnly) {
+    // NOTE: Set flag even when validateOnly=true, because caller uses this to decide rebalancing
+    if (result.success && subDest === 'parameter') {
       // Check if p.mean was actually updated
       const pMeanUpdated = result.changes?.some(change => change.field === 'p.mean');
       if (pMeanUpdated) {
@@ -841,7 +844,8 @@ export class UpdateManager {
     
     // AUTO-REBALANCE: After case variant update from external source, rebalance variants
     // This applies to Statsig - if treatment weight changes, rebalance control weight
-    if (result.success && subDest === 'case' && !options.validateOnly) {
+    // NOTE: Set flag even when validateOnly=true, because caller uses this to decide rebalancing
+    if (result.success && subDest === 'case') {
       // Check if case.variants was actually updated
       const variantsUpdated = result.changes?.some(change => change.field === 'case.variants');
       if (variantsUpdated) {
