@@ -8,10 +8,11 @@ import { DataMenu } from './DataMenu';
 import { RepositoryMenu } from './RepositoryMenu';
 import { HelpMenu } from './HelpMenu';
 import { useTabContext } from '../../contexts/TabContext';
+import packageJson from '../../../package.json';
 import './MenuBar.css';
 
-// Import version from package.json
-const APP_VERSION = '0.98.6-beta';
+// Version from package.json - single source of truth
+const APP_VERSION = packageJson.version;
 
 /**
  * Application Menu Bar
