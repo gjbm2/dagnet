@@ -113,7 +113,6 @@ export interface TabState {
     jsonOpen?: boolean;
     selectedNodeId?: string | null;
     selectedEdgeId?: string | null;
-    selectionTimestamp?: number; // Timestamp of last selection event (to force re-selection/centering)
     // What-if analysis state (per-tab, not per-file)
     whatIfAnalysis?: any;
     caseOverrides?: Record<string, string>; // nodeId -> variantName (legacy, will be converted to whatIfDSL)
