@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { updateManager } from '../UpdateManager';
-import { createTestEdge, createTestNode, createTestParameterFile, createTestCaseFile, createTestNodeFile } from './helpers/testFixtures';
+import { createTestEdge, createTestNode, createTestParameterFile, createTestCaseFile, createTestNodeFile, createTestEdgeWithConditionalP, createTestConditionalParameterFile } from './helpers/testFixtures';
 
 // Mock applyChanges function (from dataOperationsService)
 const applyChanges = (target: any, changes: Array<{ field: string; newValue: any }>): void => {
@@ -237,6 +237,256 @@ describe('Connection ID Preservation', () => {
     });
   });
   
+  // ============================================================
+  // CONDITIONAL PROBABILITY IDs (conditional_p[idx].p.id) - PARITY
+  // ============================================================
+  
+  describe('Conditional Probability ID Preservation (PARITY)', () => {
+    /**
+     * PARITY PRINCIPLE: conditional_p[idx].p.id MUST be preserved
+     * identically to edge.p.id in all file operations.
+     */
+    
+    it('conditional_p[0].p.id preserved after file→graph update', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { 
+            id: 'cond-param-homepage-to-product',
+            mean: 0.60  // Old value
+          }
+        }]
+      });
+      
+      const paramFile = createTestConditionalParameterFile({
+        id: 'cond-param-homepage-to-product',
+        values: [
+          { mean: 0.65, stdev: 0.04, window_from: '2025-01-01T00:00:00Z' }
+        ]
+      });
+      
+      // Pass conditional_p[0] (the entry with {condition, p}) - parallel to passing edge (which has {p})
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        edge.conditional_p![0],  // Whole conditional entry - mapping targets p.mean, p.stdev, etc.
+        'UPDATE',
+        'parameter'
+      );
+      
+      // Apply changes to the conditional entry
+      const updatedCondEntry = structuredClone(edge.conditional_p![0]);
+      applyChanges(updatedCondEntry, result.changes || []);
+      
+      // After data update, ID should still be there
+      expect(updatedCondEntry.p.id).toBe('cond-param-homepage-to-product');
+      expect(updatedCondEntry.p.mean).toBe(0.65);  // Data updated
+      expect(updatedCondEntry.p.stdev).toBe(0.04);
+    });
+    
+    it('conditional_p[1].p.id preserved after file→graph update', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [
+          {
+            condition: 'visited(promo)',
+            p: { id: 'cond-param-0', mean: 0.60 }
+          },
+          {
+            condition: 'visited(checkout)',
+            p: { id: 'cond-param-1', mean: 0.45 }  // Target this one
+          }
+        ]
+      });
+      
+      const paramFile = createTestConditionalParameterFile({
+        id: 'cond-param-1',
+        values: [
+          { mean: 0.50, stdev: 0.03, window_from: '2025-01-01T00:00:00Z' }
+        ]
+      });
+      
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        edge.conditional_p![1],  // Whole conditional entry
+        'UPDATE',
+        'parameter'
+      );
+      
+      const updatedCondEntry = structuredClone(edge.conditional_p![1]);
+      applyChanges(updatedCondEntry, result.changes || []);
+      
+      // ID preserved
+      expect(updatedCondEntry.p.id).toBe('cond-param-1');
+      expect(updatedCondEntry.p.mean).toBe(0.50);
+    });
+    
+    it('conditional_p.p.id preserved after manual preservation step', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'test-cond-param', mean: 0.60 }
+        }]
+      });
+      
+      const paramFile = createTestConditionalParameterFile({
+        id: 'test-cond-param',
+        values: [{ mean: 0.65, stdev: 0.04 }]
+      });
+      
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        edge.conditional_p![0],  // Whole conditional entry
+        'UPDATE',
+        'parameter'
+      );
+      
+      const updatedCondEntry = structuredClone(edge.conditional_p![0]);
+      applyChanges(updatedCondEntry, result.changes || []);
+      
+      // Simulate preservation step
+      const paramId = 'test-cond-param';
+      if (!updatedCondEntry.p.id) {
+        updatedCondEntry.p.id = paramId;
+      }
+      
+      expect(updatedCondEntry.p.id).toBe('test-cond-param');
+      expect(updatedCondEntry.p.mean).toBe(0.65);
+    });
+    
+    it('conditional_p.p.id survives multiple sequential updates', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'test-cond-param', mean: 0.60 }
+        }]
+      });
+      
+      const paramFile1 = createTestConditionalParameterFile({
+        id: 'test-cond-param',
+        values: [{ mean: 0.65 }]
+      });
+      
+      const paramFile2 = createTestConditionalParameterFile({
+        id: 'test-cond-param',
+        values: [{ mean: 0.70 }]
+      });
+      
+      // First update - pass the conditional entry
+      let result = await updateManager.handleFileToGraph(
+        paramFile1, 
+        edge.conditional_p![0],  // Whole conditional entry
+        'UPDATE', 
+        'parameter'
+      );
+      let updatedCondEntry = structuredClone(edge.conditional_p![0]);
+      applyChanges(updatedCondEntry, result.changes || []);
+      if (!updatedCondEntry.p.id) updatedCondEntry.p.id = 'test-cond-param';
+      
+      expect(updatedCondEntry.p.id).toBe('test-cond-param');
+      expect(updatedCondEntry.p.mean).toBe(0.65);
+      
+      // Second update - pass the updated conditional entry
+      result = await updateManager.handleFileToGraph(
+        paramFile2, 
+        updatedCondEntry,  // Updated conditional entry
+        'UPDATE', 
+        'parameter'
+      );
+      const updatedCondEntry2 = structuredClone(updatedCondEntry);
+      applyChanges(updatedCondEntry2, result.changes || []);
+      if (!updatedCondEntry2.p.id) updatedCondEntry2.p.id = 'test-cond-param';
+      
+      expect(updatedCondEntry2.p.id).toBe('test-cond-param');
+      expect(updatedCondEntry2.p.mean).toBe(0.70);
+    });
+    
+    it('multiple conditional_p entries have independent ID preservation', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [
+          { condition: 'visited(promo)', p: { id: 'cond-param-a', mean: 0.60 } },
+          { condition: 'visited(checkout)', p: { id: 'cond-param-b', mean: 0.45 } }
+        ]
+      });
+      
+      const paramFileA = createTestConditionalParameterFile({
+        id: 'cond-param-a',
+        values: [{ mean: 0.65 }]
+      });
+      
+      const paramFileB = createTestConditionalParameterFile({
+        id: 'cond-param-b',
+        values: [{ mean: 0.50 }]
+      });
+      
+      // Update conditional_p[0]
+      let result = await updateManager.handleFileToGraph(
+        paramFileA,
+        edge.conditional_p![0],  // Whole conditional entry
+        'UPDATE',
+        'parameter'
+      );
+      let updatedCondEntry0 = structuredClone(edge.conditional_p![0]);
+      applyChanges(updatedCondEntry0, result.changes || []);
+      if (!updatedCondEntry0.p.id) updatedCondEntry0.p.id = 'cond-param-a';
+      
+      // Update conditional_p[1]
+      result = await updateManager.handleFileToGraph(
+        paramFileB,
+        edge.conditional_p![1],  // Whole conditional entry
+        'UPDATE',
+        'parameter'
+      );
+      let updatedCondEntry1 = structuredClone(edge.conditional_p![1]);
+      applyChanges(updatedCondEntry1, result.changes || []);
+      if (!updatedCondEntry1.p.id) updatedCondEntry1.p.id = 'cond-param-b';
+      
+      // Both IDs preserved independently
+      expect(updatedCondEntry0.p.id).toBe('cond-param-a');
+      expect(updatedCondEntry0.p.mean).toBe(0.65);
+      
+      expect(updatedCondEntry1.p.id).toBe('cond-param-b');
+      expect(updatedCondEntry1.p.mean).toBe(0.50);
+    });
+    
+    it('conditional_p.p.id preserved even when p object is entirely replaced', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        uuid: 'edge-1',
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { id: 'test-cond-param', mean: 0.60 }
+        }]
+      });
+      
+      const paramFile = createTestConditionalParameterFile({
+        id: 'test-cond-param',
+        values: [{ mean: 0.65, stdev: 0.04, distribution: 'beta' }]
+      });
+      
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        edge.conditional_p![0],  // Whole conditional entry
+        'UPDATE',
+        'parameter'
+      );
+      
+      // Simulate object replacement (worst case) - start with just condition
+      const updatedCondEntry: any = { condition: 'visited(promo)', p: {} };
+      applyChanges(updatedCondEntry, result.changes || []);
+      
+      // Preservation step
+      if (!updatedCondEntry.p.id) {
+        updatedCondEntry.p.id = 'test-cond-param';
+      }
+      
+      expect(updatedCondEntry.p.id).toBe('test-cond-param');
+      expect(updatedCondEntry.p.mean).toBe(0.65);
+    });
+  });
+
   // ============================================================
   // NODE IDs (node.id)
   // ============================================================

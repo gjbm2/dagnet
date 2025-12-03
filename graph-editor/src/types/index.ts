@@ -421,7 +421,20 @@ export interface ProbabilityParam {
   connection?: string; // Connection name from connections.yaml
   connection_string?: string; // JSON blob of provider-specific settings
   query?: any; // Query object for data retrieval (DSL query: from/to/visited/etc)
-  evidence?: Evidence; // Observations from data sources
+  evidence?: Evidence; // Observations from data sources (n, k, window, etc.)
+  data_source?: { // Provenance information
+    type: 'sheets' | 'api' | 'file' | 'manual' | 'calculated' | 'analytics' | 'amplitude' | 'statsig' | 'optimizely';
+    url?: string;
+    notes?: string;
+    retrieved_at?: string;
+    edited_at?: string;
+    author?: string;
+    query?: any;
+    full_query?: string;
+    debug_trace?: string;
+    no_data?: boolean;
+    experiment_id?: string;
+  };
 }
 
 export interface CostParam {

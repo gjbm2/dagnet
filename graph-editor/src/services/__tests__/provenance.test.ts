@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { updateManager } from '../UpdateManager';
-import { createTestEdge, createTestNode, createTestParameterFile, createTestCaseFile } from './helpers/testFixtures';
+import { createTestEdge, createTestNode, createTestParameterFile, createTestCaseFile, createTestEdgeWithConditionalP, createTestConditionalParameterFile } from './helpers/testFixtures';
 
 describe('Provenance Tracking', () => {
   
@@ -197,6 +197,196 @@ describe('Provenance Tracking', () => {
     });
   });
   
+  // ============================================================
+  // CONDITIONAL PROBABILITY PROVENANCE (PARITY)
+  // ============================================================
+  
+  describe('Conditional Probability Provenance (PARITY)', () => {
+    /**
+     * PARITY PRINCIPLE: conditional_p MUST have identical provenance
+     * tracking to edge.p - data_source, no stale evidence, etc.
+     */
+    
+    it('manual conditional_p edit includes data_source', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { mean: 0.65, stdev: 0.04, distribution: 'beta' }
+        }]
+      });
+      
+      const fileData = createTestConditionalParameterFile({ values: [] });
+      
+      // Wrap in { p: ... } to match the structure UpdateManager expects
+      // (same pattern used in dataOperationsService.putParameterToFile)
+      const result = await updateManager.handleGraphToFile(
+        { p: edge.conditional_p![0].p },
+        fileData,
+        'APPEND',
+        'parameter',
+        { interactive: true, validateOnly: true }
+      );
+      
+      expect(result.success).toBe(true);
+      expect(result.changes).toHaveLength(1);
+      expect(result.changes![0].newValue).toMatchObject({
+        mean: 0.65,
+        stdev: 0.04,
+        distribution: 'beta',
+        window_from: expect.stringMatching(/\d{4}-\d{2}-\d{2}T/),
+        data_source: {
+          type: 'manual',
+          edited_at: expect.stringMatching(/\d{4}-\d{2}-\d{2}T/)
+        }
+      });
+    });
+    
+    it('conditional_p does not include n/k from stale evidence', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: {
+            mean: 0.65,
+            stdev: 0.04,
+            distribution: 'beta',
+            // Stale evidence from previous "get"
+            evidence: {
+              n: 7000,
+              k: 4550,
+              window_from: '2025-01-01T00:00:00Z',
+              window_to: '2025-01-31T23:59:59Z'
+            }
+          }
+        }]
+      });
+      
+      const fileData = createTestConditionalParameterFile({ values: [] });
+      
+      const result = await updateManager.handleGraphToFile(
+        { p: edge.conditional_p![0].p },
+        fileData,
+        'APPEND',
+        'parameter',
+        { interactive: true, validateOnly: true }
+      );
+      
+      const newValue = result.changes![0].newValue;
+      
+      expect(newValue).not.toHaveProperty('n');
+      expect(newValue).not.toHaveProperty('k');
+      expect(newValue).not.toHaveProperty('window_to');
+      expect(newValue.mean).toBe(0.65);
+    });
+    
+    it('conditional_p[0] and conditional_p[1] have independent provenance', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        conditional_p: [
+          { condition: 'visited(promo)', p: { mean: 0.65, stdev: 0.04, distribution: 'beta' } },
+          { condition: 'visited(checkout)', p: { mean: 0.45, stdev: 0.03, distribution: 'beta' } }
+        ]
+      });
+      
+      const fileData0 = createTestConditionalParameterFile({ id: 'cond-0', values: [] });
+      const fileData1 = createTestConditionalParameterFile({ id: 'cond-1', values: [] });
+      
+      // Put conditional_p[0]
+      const result0 = await updateManager.handleGraphToFile(
+        { p: edge.conditional_p![0].p },
+        fileData0,
+        'APPEND',
+        'parameter',
+        { interactive: true, validateOnly: true }
+      );
+      
+      // Put conditional_p[1]
+      const result1 = await updateManager.handleGraphToFile(
+        { p: edge.conditional_p![1].p },
+        fileData1,
+        'APPEND',
+        'parameter',
+        { interactive: true, validateOnly: true }
+      );
+      
+      // Both should have independent data_source
+      expect(result0.changes![0].newValue.mean).toBe(0.65);
+      expect(result0.changes![0].newValue.data_source.type).toBe('manual');
+      
+      expect(result1.changes![0].newValue.mean).toBe(0.45);
+      expect(result1.changes![0].newValue.data_source.type).toBe('manual');
+    });
+    
+    it('conditional_p only includes fields that are actually set', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { mean: 0.65 }  // No stdev or distribution
+        }]
+      });
+      
+      const fileData = createTestConditionalParameterFile({ values: [] });
+      
+      const result = await updateManager.handleGraphToFile(
+        { p: edge.conditional_p![0].p },
+        fileData,
+        'APPEND',
+        'parameter',
+        { interactive: true, validateOnly: true }
+      );
+      
+      const newValue = result.changes![0].newValue;
+      
+      expect(newValue.mean).toBe(0.65);
+      expect(newValue).toHaveProperty('window_from');
+      expect(newValue).toHaveProperty('data_source');
+      
+      // These were not set, so should not be included
+      expect(newValue).not.toHaveProperty('stdev');
+      expect(newValue).not.toHaveProperty('locked');
+    });
+    
+    it('conditional_p includes stdev when explicitly set', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { mean: 0.65, stdev: 0.04 }
+        }]
+      });
+      
+      const fileData = createTestConditionalParameterFile({ values: [] });
+      
+      const result = await updateManager.handleGraphToFile(
+        { p: edge.conditional_p![0].p },
+        fileData,
+        'APPEND',
+        'parameter',
+        { interactive: true, validateOnly: true }
+      );
+      
+      expect(result.changes![0].newValue).toHaveProperty('stdev', 0.04);
+    });
+    
+    it('conditional_p includes distribution when set', async () => {
+      const edge = createTestEdgeWithConditionalP({
+        conditional_p: [{
+          condition: 'visited(promo)',
+          p: { mean: 0.65, stdev: 0.04, distribution: 'beta' }
+        }]
+      });
+      
+      const fileData = createTestConditionalParameterFile({ values: [] });
+      
+      const result = await updateManager.handleGraphToFile(
+        { p: edge.conditional_p![0].p },
+        fileData,
+        'APPEND',
+        'parameter',
+        { interactive: true, validateOnly: true }
+      );
+      
+      expect(result.changes![0].newValue).toHaveProperty('distribution', 'beta');
+    });
+  });
+
   // ============================================================
   // CASE PROVENANCE
   // ============================================================

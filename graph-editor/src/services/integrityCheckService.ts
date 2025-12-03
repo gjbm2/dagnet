@@ -1208,6 +1208,8 @@ export class IntegrityCheckService {
       }
       
       // From/To validation
+      // Note: edge.from/to should use UUIDs per GraphEdge type definition, but some legacy
+      // graphs may use human-readable IDs. We validate both but warn about non-UUID usage.
       if (!edge.from) {
         issues.push({
           fileId: graphFileId,
@@ -1218,19 +1220,39 @@ export class IntegrityCheckService {
           message: 'Edge missing "from" node reference',
           edgeUuid: edge.uuid
         });
-      } else if (!nodeUuids.has(edge.from)) {
-        issues.push({
-          fileId: graphFileId,
-          type: 'graph',
-          severity: 'error',
-          category: 'graph-structure',
-          field: `edges[${i}].from`,
-          message: `Edge references non-existent source node`,
-          details: `UUID: ${edge.from.substring(0, 8)}...`,
-          edgeUuid: edge.uuid
-        });
       } else {
-        connectedNodes.add(edge.from);
+        const fromIsUuid = nodeUuids.has(edge.from);
+        const fromIsHumanId = nodeHumanIds.has(edge.from);
+        
+        if (!fromIsUuid && !fromIsHumanId) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'error',
+            category: 'graph-structure',
+            field: `edges[${i}].from`,
+            message: `Edge references non-existent source node`,
+            details: `Reference: ${edge.from.substring(0, 20)}...`,
+            edgeUuid: edge.uuid
+          });
+        } else if (fromIsHumanId && !fromIsUuid) {
+          // edge.from uses human-readable ID instead of UUID - this is bad practice
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'warning',
+            category: 'graph-structure',
+            field: `edges[${i}].from`,
+            message: `Edge "from" uses human-readable ID "${edge.from}" instead of UUID`,
+            suggestion: 'Edge from/to fields should use node UUIDs for consistency',
+            edgeUuid: edge.uuid
+          });
+          // Find the node and add its UUID to connectedNodes
+          const sourceNode = nodes.find(n => n.id === edge.from);
+          if (sourceNode?.uuid) connectedNodes.add(sourceNode.uuid);
+        } else {
+          connectedNodes.add(edge.from);
+        }
       }
       
       if (!edge.to) {
@@ -1243,19 +1265,39 @@ export class IntegrityCheckService {
           message: 'Edge missing "to" node reference',
           edgeUuid: edge.uuid
         });
-      } else if (!nodeUuids.has(edge.to)) {
-        issues.push({
-          fileId: graphFileId,
-          type: 'graph',
-          severity: 'error',
-          category: 'graph-structure',
-          field: `edges[${i}].to`,
-          message: `Edge references non-existent target node`,
-          details: `UUID: ${edge.to.substring(0, 8)}...`,
-          edgeUuid: edge.uuid
-        });
       } else {
-        connectedNodes.add(edge.to);
+        const toIsUuid = nodeUuids.has(edge.to);
+        const toIsHumanId = nodeHumanIds.has(edge.to);
+        
+        if (!toIsUuid && !toIsHumanId) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'error',
+            category: 'graph-structure',
+            field: `edges[${i}].to`,
+            message: `Edge references non-existent target node`,
+            details: `Reference: ${edge.to.substring(0, 20)}...`,
+            edgeUuid: edge.uuid
+          });
+        } else if (toIsHumanId && !toIsUuid) {
+          // edge.to uses human-readable ID instead of UUID - this is bad practice
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'warning',
+            category: 'graph-structure',
+            field: `edges[${i}].to`,
+            message: `Edge "to" uses human-readable ID "${edge.to}" instead of UUID`,
+            suggestion: 'Edge from/to fields should use node UUIDs for consistency',
+            edgeUuid: edge.uuid
+          });
+          // Find the node and add its UUID to connectedNodes
+          const targetNode = nodes.find(n => n.id === edge.to);
+          if (targetNode?.uuid) connectedNodes.add(targetNode.uuid);
+        } else {
+          connectedNodes.add(edge.to);
+        }
       }
       
       // Self-loops

@@ -549,8 +549,9 @@ class DataOperationsService {
     window?: DateRange; // DEPRECATED: Window is now parsed from targetSlice DSL
     targetSlice?: string; // DSL containing window and context (e.g., "window(1-Dec-25:7-Dec-25).context(geo=UK)")
     suppressSignatureWarning?: boolean; // If true, don't show warning about different query signatures (e.g., after bust cache)
+    conditionalIndex?: number; // For conditional_p entries - which index to update
   }): Promise<void> {
-    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '', suppressSignatureWarning = false } = options;
+    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '', suppressSignatureWarning = false, conditionalIndex } = options;
     
     // Parse window from targetSlice DSL if not explicitly provided
     // This ensures single source of truth - DSL contains both window and context
@@ -1186,12 +1187,14 @@ class DataOperationsService {
       }
       
       // Call UpdateManager to transform data
+      // Use validateOnly: true to get changes without mutating targetEdge in place
+      // (we apply changes ourselves to nextGraph after cloning)
       const result = await updateManager.handleFileToGraph(
         aggregatedData,    // source (parameter file data, possibly aggregated)
-        targetEdge,        // target (graph edge)
+        targetEdge,        // target (graph edge) - used for override checks, not mutated
         'UPDATE',          // operation
         'parameter',       // sub-destination
-        { interactive: true }  // show modals for conflicts
+        { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
       );
       
       if (!result.success) {
@@ -1212,11 +1215,63 @@ class DataOperationsService {
         edgeId,
         edgeIndex,
         'edge.p': JSON.stringify(nextGraph.edges[edgeIndex]?.p),
-        changes: JSON.stringify(result.changes)
+        changes: JSON.stringify(result.changes),
+        conditionalIndex
       });
       
       if (edgeIndex >= 0 && result.changes) {
-        // Apply changes to the edge
+        // ===== CONDITIONAL_P HANDLING =====
+        // For conditional parameters, redirect p.* changes to conditional_p[idx].p.*
+        if (conditionalIndex !== undefined) {
+          // Validate conditional_p entry exists
+          if (!nextGraph.edges[edgeIndex].conditional_p?.[conditionalIndex]) {
+            console.error('[DataOperationsService] conditional_p entry not found for getParameterFromFile', {
+              conditionalIndex,
+              conditionalPLength: nextGraph.edges[edgeIndex].conditional_p?.length
+            });
+            toast.error(`Conditional entry [${conditionalIndex}] not found on edge`);
+            sessionLogService.endOperation(logOpId, 'error', `Conditional entry [${conditionalIndex}] not found`);
+            return;
+          }
+          
+          // Ensure conditional_p[idx].p exists
+          if (!nextGraph.edges[edgeIndex].conditional_p[conditionalIndex].p) {
+            nextGraph.edges[edgeIndex].conditional_p[conditionalIndex].p = {};
+          }
+          
+          // Remap changes from p.* to conditional_p[idx].p.*
+          const remappedChanges = result.changes.map((change: { field: string; newValue: any }) => {
+            if (change.field.startsWith('p.')) {
+              return {
+                ...change,
+                field: `conditional_p.${conditionalIndex}.${change.field}`
+              };
+            }
+            return change;
+          });
+          
+          console.log('[DataOperationsService] Remapped changes for conditional_p:', {
+            original: result.changes,
+            remapped: remappedChanges,
+            conditionalIndex
+          });
+          
+          // Apply remapped changes
+          applyChanges(nextGraph.edges[edgeIndex], remappedChanges);
+          
+          // Update metadata and save
+          if (nextGraph.metadata) {
+            nextGraph.metadata.updated_at = new Date().toISOString();
+          }
+          
+          setGraph(nextGraph);
+          toast.success(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml`, { duration: 2000 });
+          sessionLogService.endOperation(logOpId, 'success', `Updated conditional_p[${conditionalIndex}] from ${paramId}.yaml`);
+          return; // Done - skip the base edge path below
+        }
+        // ===== END CONDITIONAL_P HANDLING =====
+        
+        // Apply changes to the edge (base p slot)
         applyChanges(nextGraph.edges[edgeIndex], result.changes);
         
         console.log('[DataOperationsService] AFTER applyChanges:', {
@@ -1322,12 +1377,14 @@ class DataOperationsService {
     edgeId?: string;
     graph: Graph | null;
     setGraph: (graph: Graph | null) => void;
+    conditionalIndex?: number; // For conditional_p entries - which index to write from
   }): Promise<void> {
-    const { paramId, edgeId, graph } = options;
+    const { paramId, edgeId, graph, conditionalIndex } = options;
     
     console.log('[DataOperationsService] putParameterToFile CALLED:', {
       paramId,
       edgeId,
+      conditionalIndex,
       timestamp: new Date().toISOString()
     });
     
@@ -1382,9 +1439,39 @@ class DataOperationsService {
         toast.success(`Created new parameter file: ${paramId}`);
       }
       // Determine which parameter slot this file corresponds to
-      // (an edge can have p, cost_gbp, AND cost_time - we only want to write ONE)
+      // (an edge can have p, cost_gbp, cost_time, AND conditional_p[] - we only want to write ONE)
       let filteredEdge: any = { ...sourceEdge };
-      if (sourceEdge.p?.id === paramId) {
+      
+      // ===== CONDITIONAL_P HANDLING =====
+      // For conditional parameters, extract data from conditional_p[conditionalIndex].p
+      if (conditionalIndex !== undefined) {
+        const condEntry = sourceEdge.conditional_p?.[conditionalIndex];
+        if (!condEntry?.p) {
+          toast.error(`Conditional entry [${conditionalIndex}] not found on edge`);
+          return;
+        }
+        
+        // Verify this conditional entry is connected to the paramId
+        if (condEntry.p.id !== paramId) {
+          // Also check if paramId matches when creating new file
+          console.log('[DataOperationsService] putParameterToFile conditional_p - ID mismatch or new file:', {
+            condPId: condEntry.p.id,
+            paramId,
+            isNewFile
+          });
+        }
+        
+        // Create a filtered edge with just the conditional probability data
+        // We present it as { p: ... } so UpdateManager handles it correctly
+        filteredEdge = { p: condEntry.p };
+        console.log('[DataOperationsService] putParameterToFile - using conditional_p data:', {
+          conditionalIndex,
+          condition: condEntry.condition,
+          pData: condEntry.p
+        });
+      }
+      // ===== END CONDITIONAL_P HANDLING =====
+      else if (sourceEdge.p?.id === paramId) {
         // Writing probability parameter - keep only p field
         filteredEdge = { p: sourceEdge.p };
       } else if (sourceEdge.cost_gbp?.id === paramId) {
@@ -3124,7 +3211,8 @@ class DataOperationsService {
           graph,
           setGraph,
           window: requestedWindow,
-          targetSlice: currentDSL || '' // Pass the DSL to ensure correct constraints
+          targetSlice: currentDSL || '', // Pass the DSL to ensure correct constraints
+          conditionalIndex, // Pass through for conditional_p handling
         });
         return;
       }
@@ -3995,6 +4083,7 @@ class DataOperationsService {
           requestedWindow,
           hadNewData: allTimeSeriesData.length > 0,
           bustCache,
+          conditionalIndex,
         });
         await this.getParameterFromFile({
           paramId: objectId,
@@ -4004,6 +4093,7 @@ class DataOperationsService {
           window: requestedWindow, // Aggregate across the full requested window
           targetSlice: currentDSL || '', // Pass the DSL to ensure correct constraints
           suppressSignatureWarning: bustCache, // Don't warn about signature mismatch when busting cache
+          conditionalIndex, // Pass through for conditional_p handling
         });
       }
       
@@ -4148,6 +4238,103 @@ class DataOperationsService {
           sessionLogService.endOperation(logOpId, 'error', 'Target edge not found in graph');
           return;
         }
+        
+        // ===== CONDITIONAL_P HANDLING =====
+        // For conditional parameters, apply data directly to conditional_p[conditionalIndex]
+        // rather than going through UpdateManager (which only knows about edge.p)
+        if (conditionalIndex !== undefined) {
+          console.log('[DataOperationsService] Applying to conditional_p:', {
+            conditionalIndex,
+            updateData,
+            hasConditionalP: !!targetEdge.conditional_p,
+            conditionalPLength: targetEdge.conditional_p?.length
+          });
+          
+          // Validate conditional_p entry exists
+          if (!targetEdge.conditional_p?.[conditionalIndex]) {
+            console.error('[DataOperationsService] conditional_p entry not found', {
+              conditionalIndex,
+              conditionalPLength: targetEdge.conditional_p?.length
+            });
+            toast.error(`Conditional entry [${conditionalIndex}] not found on edge`);
+            sessionLogService.endOperation(logOpId, 'error', `Conditional entry [${conditionalIndex}] not found`);
+            return;
+          }
+          
+          const nextGraph = structuredClone(graph);
+          const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === targetId || e.id === targetId);
+          
+          if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
+            const condEntry = nextGraph.edges[edgeIndex].conditional_p[conditionalIndex];
+            
+            // Ensure condEntry.p exists
+            if (!condEntry.p) {
+              condEntry.p = {};
+            }
+            
+            // Apply updates to condEntry.p (respecting overrides)
+            let changesApplied = 0;
+            
+            // mean (probability)
+            if (updateData.mean !== undefined && !condEntry.p.mean_overridden) {
+              condEntry.p.mean = updateData.mean;
+              changesApplied++;
+            } else if (updateData.mean !== undefined && condEntry.p.mean_overridden) {
+              console.log('[DataOperationsService] Skipping mean (overridden)');
+            }
+            
+            // n and k go into evidence (not directly on p)
+            if (updateData.n !== undefined || updateData.k !== undefined) {
+              if (!condEntry.p.evidence) {
+                condEntry.p.evidence = {};
+              }
+              if (updateData.n !== undefined) {
+                condEntry.p.evidence.n = updateData.n;
+                changesApplied++;
+              }
+              if (updateData.k !== undefined) {
+                condEntry.p.evidence.k = updateData.k;
+                changesApplied++;
+              }
+            }
+            
+            // stdev
+            if (updateData.stdev !== undefined && !condEntry.p.stdev_overridden) {
+              condEntry.p.stdev = updateData.stdev;
+              changesApplied++;
+            } else if (updateData.stdev !== undefined && condEntry.p.stdev_overridden) {
+              console.log('[DataOperationsService] Skipping stdev (overridden)');
+            }
+            
+            // data_source (provenance)
+            if (updateData.data_source) {
+              condEntry.p.data_source = updateData.data_source;
+              changesApplied++;
+            }
+            
+            if (nextGraph.metadata) {
+              nextGraph.metadata.updated_at = new Date().toISOString();
+            }
+            
+            console.log('[DataOperationsService] Applied to conditional_p:', {
+              conditionalIndex,
+              changesApplied,
+              condEntryP: condEntry.p
+            });
+            
+            setGraph(nextGraph);
+            
+            if (changesApplied > 0) {
+              toast.success(`Applied to conditional[${conditionalIndex}]: ${changesApplied} fields updated`);
+            } else {
+              toast('No changes applied (fields may be overridden)', { icon: 'ℹ️' });
+            }
+          }
+          
+          sessionLogService.endOperation(logOpId, 'success', `Applied to conditional_p[${conditionalIndex}]`);
+          return;  // Done - skip the base edge path below
+        }
+        // ===== END CONDITIONAL_P HANDLING =====
         
         // Call UpdateManager to transform and apply external data directly to graph
         // DAS data is "external" data (not from file), so use handleExternalToGraph

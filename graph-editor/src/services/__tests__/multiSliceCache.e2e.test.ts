@@ -1441,6 +1441,428 @@ describe('Multi-Slice Retrieval and Caching E2E (Real Production Code)', () => {
   });
   
   // =========================================================================
+  // TESTS: CONDITIONAL PROBABILITY - Multi-Slice Caching (PARITY WITH edge.p)
+  // =========================================================================
+  
+  describe('Conditional Probability Multi-Slice Caching (PARITY)', () => {
+    /**
+     * PARITY PRINCIPLE: conditional_p MUST behave identically to edge.p
+     * in all caching, aggregation, and slice isolation scenarios.
+     */
+    
+    function createGraphWithConditionalP(options: {
+      currentQueryDSL?: string;
+      dataInterestsDSL?: string;
+    } = {}): GraphData {
+      return {
+        nodes: [
+          { uuid: 'node-a', id: 'test-from', label: 'Test From', data: { event_id: 'test-from-event' } },
+          { uuid: 'node-b', id: 'test-to', label: 'Test To', data: { event_id: 'test-to-event' } },
+          { uuid: 'node-promo', id: 'promo', label: 'Promo', data: { event_id: 'promo-event' } }
+        ],
+        edges: [
+          {
+            uuid: 'edge-uuid-1',
+            id: 'test-edge-1',
+            from: 'node-a',
+            to: 'node-b',
+            source: 'node-a',
+            target: 'node-b',
+            query: 'from(test-from).to(test-to)',
+            p: {
+              id: 'base-param',
+              connection: 'amplitude-prod',
+              mean: 0.5
+            },
+            conditional_p: [
+              {
+                condition: 'visited(promo)',
+                p: {
+                  id: 'cond-param-0',
+                  connection: 'amplitude-prod',
+                  query: 'from(test-from).to(test-to).visited(promo)',
+                  mean: 0.65
+                }
+              },
+              {
+                condition: 'visited(checkout)',
+                p: {
+                  id: 'cond-param-1',
+                  connection: 'amplitude-prod',
+                  mean: 0.45
+                }
+              }
+            ]
+          }
+        ],
+        dataInterestsDSL: options.dataInterestsDSL,
+        currentQueryDSL: options.currentQueryDSL || 'window(1-Oct-25:7-Oct-25)',
+        metadata: { name: 'test-graph-conditional' }
+      } as unknown as GraphData;
+    }
+    
+    function setupConditionalMockFiles(paramId: string, existingValues: any[] = []) {
+      const paramFile = {
+        id: paramId,
+        connection: 'amplitude-prod',
+        query: 'from(test-from).to(test-to).visited(promo)',
+        values: existingValues
+      };
+      
+      vi.spyOn(fileRegistry, 'getFile').mockImplementation((fileId: string) => {
+        if (fileId === `parameter-${paramId}`) {
+          return { data: paramFile, isDirty: false } as any;
+        }
+        if (fileId === 'event-test-from-event') {
+          return { 
+            data: { id: 'test-from-event', name: 'Test From', provider_event_names: { amplitude: 'Test From Amplitude' } },
+            isDirty: false
+          } as any;
+        }
+        if (fileId === 'event-test-to-event') {
+          return { 
+            data: { id: 'test-to-event', name: 'Test To', provider_event_names: { amplitude: 'Test To Amplitude' } },
+            isDirty: false
+          } as any;
+        }
+        if (fileId === 'event-promo-event') {
+          return { 
+            data: { id: 'promo-event', name: 'Promo', provider_event_names: { amplitude: 'Promo Amplitude' } },
+            isDirty: false
+          } as any;
+        }
+        return undefined;
+      });
+      
+      vi.spyOn(fileRegistry, 'updateFile').mockImplementation(() => Promise.resolve());
+      
+      return paramFile;
+    }
+    
+    it('conditional_p should use cached slice without API call', { timeout: 30000 }, async () => {
+      const graph = createGraphWithConditionalP({
+        currentQueryDSL: 'context(channel:google).window(1-Oct-25:7-Oct-25)'
+      });
+      const setGraph = vi.fn();
+      
+      // Pre-populate cache with conditional_p[0] data
+      setupConditionalMockFiles('cond-param-0', [{
+        window_from: '2025-10-01T00:00:00.000Z',
+        window_to: '2025-10-07T23:59:59.999Z',
+        n: 700, k: 490,  // 70% for conditional
+        n_daily: [100, 100, 100, 100, 100, 100, 100],
+        k_daily: [70, 70, 70, 70, 70, 70, 70],
+        dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+        sliceDSL: 'context(channel:google)',
+        query_signature: 'google-cond-sig'
+      }]);
+      
+      // Get conditional_p from cache
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: 'context(channel:google)',
+        conditionalIndex: 0
+      });
+      
+      // Should NOT have called API - data was in cache
+      expect(getAPICallCount()).toBe(0);
+    });
+    
+    it('conditional_p should correctly filter by sliceDSL', async () => {
+      const graph = createGraphWithConditionalP({
+        currentQueryDSL: 'context(channel:facebook).window(1-Oct-25:7-Oct-25)'
+      });
+      let updatedGraph: any = null;
+      const setGraph = vi.fn((g) => { updatedGraph = g; });
+      
+      // Cache with multiple slices for conditional_p
+      setupConditionalMockFiles('cond-param-0', [
+        {
+          window_from: '2025-10-01T00:00:00.000Z',
+          window_to: '2025-10-07T23:59:59.999Z',
+          n: 1000, k: 700, // Google: 70%
+          n_daily: [143, 143, 143, 143, 143, 143, 142],
+          k_daily: [100, 100, 100, 100, 100, 100, 100],
+          dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+          sliceDSL: 'context(channel:google)',
+          query_signature: 'google-sig'
+        },
+        {
+          window_from: '2025-10-01T00:00:00.000Z',
+          window_to: '2025-10-07T23:59:59.999Z',
+          n: 800, k: 640, // Facebook: 80% (different!)
+          n_daily: [114, 114, 114, 114, 114, 115, 115],
+          k_daily: [91, 91, 91, 91, 91, 92, 93],
+          dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+          sliceDSL: 'context(channel:facebook)',
+          query_signature: 'facebook-sig'
+        }
+      ]);
+      
+      // Request Facebook slice for conditional_p
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: 'context(channel:facebook)',
+        conditionalIndex: 0
+      });
+      
+      expect(setGraph).toHaveBeenCalled();
+      
+      // Verify conditional_p[0] was updated with Facebook data (n=800), not Google (n=1000)
+      if (updatedGraph) {
+        const edge = updatedGraph.edges?.find((e: any) => e.uuid === 'edge-uuid-1');
+        if (edge?.conditional_p?.[0]?.p?.evidence) {
+          expect(edge.conditional_p[0].p.evidence.n).toBe(800);
+          expect(edge.conditional_p[0].p.evidence.k).toBe(640);
+        }
+        
+        // edge.p should be UNCHANGED
+        expect(edge?.p?.mean).toBe(0.5);
+      }
+    });
+    
+    it('conditional_p should serve narrow window from cached wide window', async () => {
+      const graph = createGraphWithConditionalP({
+        currentQueryDSL: 'context(channel:google).window(1-Oct-25:3-Oct-25)'
+      });
+      const setGraph = vi.fn();
+      
+      // 7-day cache for conditional_p
+      setupConditionalMockFiles('cond-param-0', [{
+        window_from: '2025-10-01T00:00:00.000Z',
+        window_to: '2025-10-07T23:59:59.999Z',
+        n: 700, k: 490,
+        n_daily: [100, 100, 100, 100, 100, 100, 100],
+        k_daily: [70, 70, 70, 70, 70, 70, 70],
+        dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+        sliceDSL: 'context(channel:google)',
+        query_signature: 'google-cond-sig'
+      }]);
+      
+      // Request only 3 days (subset of cached 7 days)
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-03T23:59:59.999Z' },
+        targetSlice: 'context(channel:google)',
+        conditionalIndex: 0
+      });
+      
+      // No API call - narrow window is subset of cached wide window
+      expect(getAPICallCount()).toBe(0);
+    });
+    
+    it('conditional_p should switch between cached context slices without API calls', async () => {
+      const graph = createGraphWithConditionalP({
+        currentQueryDSL: 'window(1-Oct-25:7-Oct-25)'
+      });
+      const setGraph = vi.fn();
+      
+      // Cache all 3 channels for conditional_p
+      setupConditionalMockFiles('cond-param-0', [
+        {
+          window_from: '2025-10-01T00:00:00.000Z', window_to: '2025-10-07T23:59:59.999Z',
+          n: 1000, k: 700,
+          n_daily: [143, 143, 143, 143, 143, 143, 142],
+          k_daily: [100, 100, 100, 100, 100, 100, 100],
+          dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+          sliceDSL: 'context(channel:google)',
+          query_signature: 'google-sig'
+        },
+        {
+          window_from: '2025-10-01T00:00:00.000Z', window_to: '2025-10-07T23:59:59.999Z',
+          n: 800, k: 640,
+          n_daily: [114, 114, 114, 114, 114, 115, 115],
+          k_daily: [91, 91, 91, 91, 91, 92, 93],
+          dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+          sliceDSL: 'context(channel:facebook)',
+          query_signature: 'facebook-sig'
+        },
+        {
+          window_from: '2025-10-01T00:00:00.000Z', window_to: '2025-10-07T23:59:59.999Z',
+          n: 500, k: 350,
+          n_daily: [71, 71, 71, 72, 72, 72, 71],
+          k_daily: [50, 50, 50, 50, 50, 50, 50],
+          dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+          sliceDSL: 'context(channel:other)',
+          query_signature: 'other-sig'
+        }
+      ]);
+      
+      // Query Google
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: 'context(channel:google)',
+        conditionalIndex: 0
+      });
+      
+      // Query Facebook
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: 'context(channel:facebook)',
+        conditionalIndex: 0
+      });
+      
+      // Query Other
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: 'context(channel:other)',
+        conditionalIndex: 0
+      });
+      
+      // Zero API calls - all from cache
+      expect(getAPICallCount()).toBe(0);
+    });
+    
+    it('conditional_p[0] and conditional_p[1] should cache independently', async () => {
+      const graph = createGraphWithConditionalP();
+      const setGraph = vi.fn();
+      
+      // Separate caches for each conditional entry
+      // For cond-param-0:
+      setupConditionalMockFiles('cond-param-0', [{
+        window_from: '2025-10-01T00:00:00.000Z', window_to: '2025-10-07T23:59:59.999Z',
+        n: 700, k: 490,  // 70%
+        n_daily: [100, 100, 100, 100, 100, 100, 100],
+        k_daily: [70, 70, 70, 70, 70, 70, 70],
+        dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+        sliceDSL: '',
+        query_signature: 'cond-0-sig'
+      }]);
+      
+      // Get conditional_p[0] - cache hit
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: '',
+        conditionalIndex: 0
+      });
+      
+      expect(getAPICallCount()).toBe(0);
+      
+      // Now setup cache for cond-param-1 (separate parameter file)
+      vi.restoreAllMocks();
+      vi.spyOn(contextRegistry, 'getValuesForContext').mockResolvedValue([
+        { id: 'google', label: 'Google' },
+        { id: 'facebook', label: 'Facebook' },
+        { id: 'other', label: 'Other' }
+      ] as any);
+      
+      setupConditionalMockFiles('cond-param-1', [{
+        window_from: '2025-10-01T00:00:00.000Z', window_to: '2025-10-07T23:59:59.999Z',
+        n: 700, k: 315,  // 45% (different from cond-param-0!)
+        n_daily: [100, 100, 100, 100, 100, 100, 100],
+        k_daily: [45, 45, 45, 45, 45, 45, 45],
+        dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+        sliceDSL: '',
+        query_signature: 'cond-1-sig'
+      }]);
+      resetAPILog();
+      
+      // Get conditional_p[1] - separate cache
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-1',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: '',
+        conditionalIndex: 1
+      });
+      
+      // Also cache hit (separate cache)
+      expect(getAPICallCount()).toBe(0);
+    });
+    
+    it('conditional_p contextAny should SUM across matching slices', async () => {
+      const graph = createGraphWithConditionalP({
+        currentQueryDSL: 'contextAny(channel:google,channel:facebook).window(1-Oct-25:7-Oct-25)'
+      });
+      let updatedGraph: any = null;
+      const setGraph = vi.fn((g) => { updatedGraph = g; });
+      
+      // Cache with multiple slices
+      setupConditionalMockFiles('cond-param-0', [
+        {
+          window_from: '2025-10-01T00:00:00.000Z', window_to: '2025-10-07T23:59:59.999Z',
+          n: 700, k: 490, // Google
+          n_daily: [100, 100, 100, 100, 100, 100, 100],
+          k_daily: [70, 70, 70, 70, 70, 70, 70],
+          dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+          sliceDSL: 'context(channel:google)',
+          query_signature: 'google-sig'
+        },
+        {
+          window_from: '2025-10-01T00:00:00.000Z', window_to: '2025-10-07T23:59:59.999Z',
+          n: 350, k: 280, // Facebook
+          n_daily: [50, 50, 50, 50, 50, 50, 50],
+          k_daily: [40, 40, 40, 40, 40, 40, 40],
+          dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+          sliceDSL: 'context(channel:facebook)',
+          query_signature: 'facebook-sig'
+        },
+        {
+          window_from: '2025-10-01T00:00:00.000Z', window_to: '2025-10-07T23:59:59.999Z',
+          n: 140, k: 70, // Other - NOT in contextAny
+          n_daily: [20, 20, 20, 20, 20, 20, 20],
+          k_daily: [10, 10, 10, 10, 10, 10, 10],
+          dates: ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'],
+          sliceDSL: 'context(channel:other)',
+          query_signature: 'other-sig'
+        }
+      ]);
+      
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'cond-param-0',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: 'contextAny(channel:google,channel:facebook).window(1-Oct-25:7-Oct-25)',
+        conditionalIndex: 0
+      });
+      
+      expect(setGraph).toHaveBeenCalled();
+      expect(getAPICallCount()).toBe(0);
+      
+      // Should SUM google + facebook, NOT include other
+      // n = 700 + 350 = 1050, k = 490 + 280 = 770
+      if (updatedGraph) {
+        const edge = updatedGraph.edges?.find((e: any) => e.uuid === 'edge-uuid-1');
+        if (edge?.conditional_p?.[0]?.p?.evidence) {
+          expect(edge.conditional_p[0].p.evidence.n).toBe(1050);
+          expect(edge.conditional_p[0].p.evidence.k).toBe(770);
+        }
+      }
+    });
+  });
+
+  // =========================================================================
   // TESTS: Date Window Changes - Re-aggregation on Cached Data
   // =========================================================================
   

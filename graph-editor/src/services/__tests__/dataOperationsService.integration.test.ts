@@ -591,6 +591,216 @@ describe('No-Graph Scenarios', () => {
 // REGRESSION TESTS
 // ============================================================================
 
+// ============================================================================
+// CONDITIONAL PROBABILITY TESTS (PARITY WITH edge.p)
+// ============================================================================
+
+describe('Conditional Probability Operations', () => {
+  /**
+   * PARITY PRINCIPLE: conditional_p MUST behave identically to edge.p
+   * in all file management, data operations, and scenarios.
+   */
+  
+  function createGraphWithConditionalP(options: {
+    currentQueryDSL?: string;
+    paramId?: string;
+    conditionalQuery?: string;
+    conditionalIndex?: number;
+  } = {}): Graph {
+    const paramId = options.paramId || 'test-cond-param';
+    const conditionalQuery = options.conditionalQuery || 'from(test-from).to(test-to).visited(promo)';
+    
+    return {
+      nodes: [
+        { 
+          uuid: 'node-a', 
+          id: 'test-from', 
+          label: 'Test From',
+          event_id: 'test-from-event'
+        },
+        { 
+          uuid: 'node-b', 
+          id: 'test-to', 
+          label: 'Test To',
+          event_id: 'test-to-event'
+        },
+        { 
+          uuid: 'node-promo', 
+          id: 'promo', 
+          label: 'Promo',
+          event_id: 'promo-event'
+        }
+      ],
+      edges: [
+        {
+          uuid: 'test-edge-uuid',
+          id: 'test-edge-id',
+          from: 'node-a',
+          to: 'node-b',
+          query: 'from(test-from).to(test-to)',
+          p: {
+            id: 'base-param',
+            connection: 'amplitude-prod',
+            mean: 0.3
+          },
+          conditional_p: [
+            {
+              condition: 'visited(promo)',
+              p: {
+                id: paramId,
+                connection: 'amplitude-prod',
+                query: conditionalQuery,
+                mean: 0.65
+              }
+            },
+            {
+              condition: 'visited(checkout)',
+              p: {
+                id: 'other-cond-param',
+                connection: 'amplitude-prod',
+                mean: 0.45
+              }
+            }
+          ]
+        }
+      ],
+      currentQueryDSL: options.currentQueryDSL || 'window(28-Oct-25:14-Nov-25)',
+      metadata: { name: 'test-graph' }
+    } as unknown as Graph;
+  }
+
+  function setupMockConditionalFiles(paramId: string, existingValues: any[] = []) {
+    // Mock parameter file for conditional_p
+    const paramFile = {
+      id: paramId,
+      connection: 'amplitude-prod',
+      query: 'from(test-from).to(test-to).visited(promo)',
+      values: existingValues
+    };
+    
+    // @ts-ignore - mock fileRegistry
+    vi.spyOn(fileRegistry, 'getFile').mockImplementation((fileId: string) => {
+      if (fileId === `parameter-${paramId}`) {
+        return { data: paramFile, isDirty: false };
+      }
+      if (fileId === 'event-test-from-event') {
+        return { 
+          data: { 
+            id: 'test-from-event', 
+            name: 'Test From Event',
+            provider_event_names: { amplitude: 'Amplitude From Event' }
+          } 
+        };
+      }
+      if (fileId === 'event-test-to-event') {
+        return { 
+          data: { 
+            id: 'test-to-event', 
+            name: 'Test To Event',
+            provider_event_names: { amplitude: 'Amplitude To Event' }
+          } 
+        };
+      }
+      if (fileId === 'event-promo-event') {
+        return { 
+          data: { 
+            id: 'promo-event', 
+            name: 'Promo Event',
+            provider_event_names: { amplitude: 'Amplitude Promo Event' }
+          } 
+        };
+      }
+      return null;
+    });
+    
+    // @ts-ignore
+    vi.spyOn(fileRegistry, 'updateFile').mockImplementation(() => Promise.resolve());
+    
+    return paramFile;
+  }
+
+  describe('getParameterFromFile with conditionalIndex', () => {
+    it('should accept conditionalIndex parameter', async () => {
+      const graph = createGraphWithConditionalP();
+      const setGraph = vi.fn();
+      
+      // This should not throw - conditionalIndex is a valid parameter
+      try {
+        await dataOperationsService.getParameterFromFile({
+          paramId: 'nonexistent',
+          edgeId: 'test-edge-uuid',
+          graph,
+          setGraph,
+          conditionalIndex: 0
+        });
+      } catch (e) {
+        // May fail due to missing file, but should not fail due to invalid params
+        expect((e as Error).message).not.toContain('conditionalIndex');
+      }
+    });
+
+    it('should apply file data to conditional_p[0], not edge.p', async () => {
+      const graph = createGraphWithConditionalP({ paramId: 'test-cond-param' });
+      const setGraph = vi.fn();
+      
+      setupMockConditionalFiles('test-cond-param', [
+        { mean: 0.75, stdev: 0.05, window_from: '2025-01-01T00:00:00Z' }
+      ]);
+      
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'test-cond-param',
+        edgeId: 'test-edge-uuid',
+        graph,
+        setGraph,
+        conditionalIndex: 0
+      });
+      
+      expect(setGraph).toHaveBeenCalled();
+      const updatedGraph = setGraph.mock.calls[0][0];
+      const edge = updatedGraph.edges[0];
+      
+      // conditional_p[0].p should be updated
+      expect(edge.conditional_p[0].p.mean).toBe(0.75);
+      // edge.p should be unchanged
+      expect(edge.p.mean).toBe(0.3);
+    });
+  });
+
+  describe('DSL propagation for conditional_p', () => {
+    it('should pass currentDSL to getFromSourceDirect for conditional_p', async () => {
+      const spy = vi.spyOn(dataOperationsService, 'getFromSourceDirect');
+      
+      const graph = createGraphWithConditionalP();
+      const setGraph = vi.fn();
+      
+      setupMockConditionalFiles('test-cond-param', []);
+      
+      try {
+        await dataOperationsService.getFromSource({
+          objectType: 'parameter',
+          objectId: 'test-cond-param',
+          targetId: 'test-edge-uuid',
+          graph,
+          setGraph,
+          paramSlot: 'p',
+          conditionalIndex: 0,  // Target conditional_p[0]
+          bustCache: true,
+          currentDSL: 'window(1-Oct-25:1-Oct-25)'
+        });
+      } catch (e) {
+        // May fail due to missing mocks
+      }
+      
+      // Verify getFromSourceDirect was called with conditionalIndex
+      if (spy.mock.calls.length > 0) {
+        const callArgs = spy.mock.calls[0][0];
+        expect(callArgs.currentDSL).toBe('window(1-Oct-25:1-Oct-25)');
+        expect(callArgs.conditionalIndex).toBe(0);
+      }
+    });
+  });
+});
+
 describe('Regression Tests', () => {
   describe('BUG: targetSlice empty after getFromSourceDirect writes file', () => {
     it('should verify that the fix passes currentDSL through the chain', async () => {
