@@ -1191,7 +1191,8 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   const openTab = useCallback(async (
     item: RepositoryItem, 
     viewMode: ViewMode = 'interactive',
-    forceNew: boolean = false
+    forceNew: boolean = false,
+    initialEditorState?: Partial<TabState['editorState']>
   ): Promise<void> => {
     const fileId = `${item.type}-${item.id}`;
     
@@ -1204,6 +1205,15 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     if (!forceNew) {
       const existingTab = tabs.find(t => t.id === tabId);
       if (existingTab) {
+        // If we have initial editor state (e.g., selection), merge it into existing tab
+        if (initialEditorState) {
+          console.log('[TabContext.openTab] Merging initialEditorState into existing tab:', { tabId, initialEditorState });
+          setTabs(prev => prev.map(t => 
+            t.id === tabId 
+              ? { ...t, editorState: { ...t.editorState, ...initialEditorState } }
+              : t
+          ));
+        }
         setActiveTabId(tabId);
         await db.saveAppState({ activeTabId: tabId });
         return;
@@ -1378,6 +1388,26 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     );
 
     // Create new tab
+    const defaultEditorState = viewMode === 'interactive' && fileId.startsWith('graph-') ? {
+      useUniformScaling: false,
+      massGenerosity: 0.5,
+      autoReroute: true,
+      useSankeyView: false,
+      sidebarOpen: true,
+      whatIfOpen: false,
+      propertiesOpen: true,
+      jsonOpen: false,
+      selectedNodeId: null,
+      selectedEdgeId: null,
+      // IMPORTANT: current layer is visible by default
+      scenarioState: {
+        scenarioOrder: ['current'],
+        visibleScenarioIds: ['current'],
+        visibleColourOrderIds: ['current'],
+        selectedScenarioId: undefined,
+      },
+    } : undefined;
+    
     const newTab: TabState = {
       id: tabId,
       fileId,
@@ -1386,26 +1416,10 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       icon: getIconForType(item.type),
       closable: true,
       group: 'main-content',
-      // Initialize editor state for graph tabs
-      editorState: viewMode === 'interactive' && fileId.startsWith('graph-') ? {
-        useUniformScaling: false,
-        massGenerosity: 0.5,
-        autoReroute: true,
-        useSankeyView: false,
-        sidebarOpen: true,
-        whatIfOpen: false,
-        propertiesOpen: true,
-        jsonOpen: false,
-        selectedNodeId: null,
-        selectedEdgeId: null,
-        // IMPORTANT: current layer is visible by default
-        scenarioState: {
-          scenarioOrder: ['current'],
-          visibleScenarioIds: ['current'],
-          visibleColourOrderIds: ['current'],
-          selectedScenarioId: undefined,
-        },
-      } : undefined
+      // Initialize editor state for graph tabs, merging any initial state (e.g., selection)
+      editorState: defaultEditorState 
+        ? { ...defaultEditorState, ...initialEditorState }
+        : initialEditorState
     };
 
     // Add to registry
