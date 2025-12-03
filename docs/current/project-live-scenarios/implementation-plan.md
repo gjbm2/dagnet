@@ -14,6 +14,88 @@ This document provides a detailed file-by-file implementation plan for the Live 
 
 ## Phase 1: Core Infrastructure (MVP)
 
+### 1.0 Fetch Data Service Extraction (PREREQUISITE)
+
+**Rationale:** The existing `useFetchData` hook contains critical logic for cache checking and fetch routing. Since `regenerateScenario` runs as a callback inside `ScenariosContext` (not a React component), it cannot call hooks. We must extract the core logic to a service that can be used by both the hook and the context.
+
+**Single Code Path Principle:** After this refactor, there will be ONE code path for fetch operations:
+- `useFetchData` hook → calls `fetchDataService` → calls `dataOperationsService`
+- `ScenariosContext.regenerateScenario` → calls `fetchDataService` → calls `dataOperationsService`
+
+This eliminates any possibility of duplicate logic or divergent behaviour.
+
+---
+
+#### File: `graph-editor/src/services/fetchDataService.ts` (NEW)
+
+**Create new service file with logic extracted from `useFetchData.ts`:**
+
+1. **`itemNeedsFetch(item, window, graph, dsl)`:**
+   - Extract from hook lines 202-244
+   - Check param/case file in fileRegistry
+   - Check connection exists
+   - Call `calculateIncrementalFetch` for window/slice coverage
+   - Return boolean
+
+2. **`getItemsNeedingFetch(window, graph, dsl)`:**
+   - Extract from hook lines 249-305
+   - Iterate edges → build FetchItem for each param slot
+   - Iterate nodes → build FetchItem for each case
+   - Filter using `itemNeedsFetch`
+   - Return filtered items
+
+3. **`fetchItem(item, options, graph, setGraph, dsl)`:**
+   - Extract from hook lines 311-437
+   - Route to correct `dataOperationsService` method based on mode
+   - Handle 'versioned', 'direct', 'from-file' modes
+   - Return `FetchResult`
+
+4. **`fetchItems(items, options, graph, setGraph, dsl, onProgress?)`:**
+   - Extract from hook lines 442-460
+   - Sequential fetch with progress callback
+   - Return array of results
+
+5. **`checkDSLNeedsFetch(dsl, graph)`:**
+   - Parse DSL to extract window
+   - Call `getItemsNeedingFetch(window, graph, dsl)`
+   - Return `{ needsFetch: boolean, items: FetchItem[] }`
+
+6. **`checkMultipleDSLsNeedFetch(dsls, graph)`:**
+   - Call `checkDSLNeedsFetch` for each DSL
+   - Return array of `{ dsl, needsFetch, items }` results
+
+**Design Reference:** §4.2.1 Context Chips (cache checking behaviour), existing `useFetchData` logic
+
+---
+
+#### File: `graph-editor/src/hooks/useFetchData.ts`
+
+**Refactor to thin wrapper around service:**
+
+1. **Import `fetchDataService`**
+
+2. **`itemNeedsFetch` callback:**
+   - Call `fetchDataService.itemNeedsFetch(item, window, graph, effectiveDSL)`
+
+3. **`getItemsNeedingFetch` callback:**
+   - Call `fetchDataService.getItemsNeedingFetch(window, graph, effectiveDSL)`
+
+4. **`fetchItem` callback:**
+   - Call `fetchDataService.fetchItem(item, options, getGraph(), setGraph, getDSL())`
+
+5. **`fetchItems` callback:**
+   - Call `fetchDataService.fetchItems(items, options, getGraph(), setGraph, getDSL(), onProgress)`
+
+6. **Retain React-specific logic:**
+   - `getGraph()` getter for fresh graph reference
+   - `getDSL()` getter for fresh DSL
+   - `useMemo` for effectiveDSL
+   - `useCallback` wrappers
+
+**Backward Compatibility:** All existing call sites continue to use the hook unchanged. Internal implementation now delegates to service.
+
+---
+
 ### 1.1 Type Definitions
 
 #### File: `graph-editor/src/types/scenarios.ts`
@@ -56,12 +138,16 @@ This document provides a detailed file-by-file implementation plan for the Live 
 
 3. **Add `regenerateScenario` function:**
    - Parse queryDSL with `parseConstraints()`
-   - Compute inherited DSL from lower live scenarios
-   - Split into fetch parts and what-if parts
+   - Compute inherited DSL from lower live scenarios using `computeInheritedDSL`
+   - Split into fetch parts and what-if parts using `scenarioRegenerationService.splitDSLParts`
    - Build effective fetch DSL using `augmentDSLWithConstraint`
-   - Call `dataOperationsService.getFromSourceDirect()`
+   - Check cache via `fetchDataService.checkDSLNeedsFetch(effectiveDSL, graph)`
+   - If needsFetch: call `fetchDataService.fetchItems(items, { mode: 'versioned' }, ...)`
+   - If cached: call `fetchDataService.fetchItems(items, { mode: 'from-file' }, ...)`
    - Apply what-if using `computeEffectiveEdgeProbability()`
    - Update scenario.params and `lastRegeneratedAt`
+   
+   **Uses fetchDataService** — same code path as hook-based fetches
 
 4. **Add `regenerateAllLive` function:**
    - Filter scenarios where `meta.isLive === true`
@@ -193,22 +279,24 @@ This document provides a detailed file-by-file implementation plan for the Live 
 
 #### File: `graph-editor/src/components/modals/ScenarioQueryEditModal.tsx` (NEW)
 
-**Create new modal component:**
+**Create new modal component that REUSES existing `QueryExpressionEditor`:**
+
+**Principle:** DO NOT create a new query editor — the existing `QueryExpressionEditor` serves this purpose. This modal is a thin wrapper providing modal chrome and save/cancel actions.
 
 1. **Props:**
    - `isOpen: boolean`
    - `scenarioId: string`
+   - `currentDSL: string`
    - `onClose: () => void`
    - `onSave: (newDSL: string) => void`
 
 2. **State:**
-   - `editingDSL: string` — local edit state
-   - `effectiveDSL: string` — computed preview
+   - `editingDSL: string` — local edit state (initialised from currentDSL)
 
 3. **Render:**
    - Modal header: "Edit Live Scenario Query"
-   - `QueryExpressionEditor` component for DSL input
-   - Read-only display of effective DSL (merged with base)
+   - **Embed existing `QueryExpressionEditor`** with `value={editingDSL}` and `onChange={setEditingDSL}`
+   - Read-only display of effective DSL (inherited + editingDSL merged)
    - Cancel button
    - "Save & Refresh" button
 
@@ -253,40 +341,9 @@ This document provides a detailed file-by-file implementation plan for the Live 
 
 ## Phase 2: Bulk Creation
 
-### 2.1 Cache Checking Service
+**Note:** Cache checking and fetch service extraction was moved to Phase 1 (§1.0). The `fetchDataService` is now available for all Phase 2 features.
 
-#### File: `graph-editor/src/services/cacheCheckService.ts` (NEW)
-
-**Create new service with:**
-
-1. **`checkDSLNeedsFetch(dsl: string, graph: Graph)`:**
-   - Extract from existing `useFetchData.itemNeedsFetch` logic
-   - Return `{ needsFetch: boolean, items: FetchItem[] }`
-
-2. **`checkMultipleDSLsNeedFetch(dsls: string[], graph: Graph)`:**
-   - Call `checkDSLNeedsFetch` for each
-   - Return `Array<{ dsl: string, needsFetch: boolean }>`
-
-3. **`getItemsNeedingFetchForDSL(dsl: string, graph: Graph, window: DateRange)`:**
-   - Reuse `calculateIncrementalFetch` from windowAggregationService
-   - Return items needing fetch
-
-**Design Reference:** §4.2.1 Context Chips (behaviour: if ALL in cache...)
-
----
-
-#### File: `graph-editor/src/hooks/useFetchData.ts`
-
-**Changes:**
-- Extract `itemNeedsFetch` logic to `cacheCheckService`
-- Keep hook as thin wrapper calling service
-- Ensure backward compatibility
-
-**Design Reference:** §4.2.1 (cache checking for bulk creation)
-
----
-
-### 2.2 Bulk Creation Modal
+### 2.1 Bulk Creation Modal
 
 #### File: `graph-editor/src/components/modals/BulkScenarioCreationModal.tsx` (NEW)
 
@@ -304,7 +361,7 @@ This document provides a detailed file-by-file implementation plan for the Live 
    - `fetchStatus: Record<string, boolean>` — whether each needs fetch
 
 3. **On mount:**
-   - Call `checkMultipleDSLsNeedFetch` for all values
+   - Call `fetchDataService.checkMultipleDSLsNeedFetch` for all values
    - Populate `fetchStatus`
 
 4. **Render:**
@@ -322,7 +379,7 @@ This document provides a detailed file-by-file implementation plan for the Live 
 
 ---
 
-### 2.3 Context Chip Context Menu
+### 2.2 Context Chip Context Menu
 
 #### File: `graph-editor/src/components/QueryExpressionEditor.tsx`
 
@@ -338,7 +395,7 @@ This document provides a detailed file-by-file implementation plan for the Live 
 2. **"Create [N] scenarios..." handler:**
    - Get context key from chip
    - Get all values from `contextRegistry.getValuesForContext(key)`
-   - Check cache status via `checkMultipleDSLsNeedFetch`
+   - Check cache status via `fetchDataService.checkMultipleDSLsNeedFetch`
    - If all cached: create scenarios immediately
    - If any need fetch: open `BulkScenarioCreationModal`
 
@@ -346,7 +403,7 @@ This document provides a detailed file-by-file implementation plan for the Live 
 
 ---
 
-### 2.4 Window Preset Context Menu
+### 2.3 Window Preset Context Menu
 
 #### File: `graph-editor/src/components/WindowSelector.tsx`
 
@@ -367,7 +424,7 @@ This document provides a detailed file-by-file implementation plan for the Live 
 3. **Similar patterns for 30d (monthly) and 90d (quarterly)**
 
 4. **Menu item onClick:**
-   - Check cache via `checkDSLNeedsFetch`
+   - Check cache via `fetchDataService.checkDSLNeedsFetch`
    - If cached: create live scenario immediately
    - If fetch needed: show confirmation toast, then create
 
@@ -375,7 +432,7 @@ This document provides a detailed file-by-file implementation plan for the Live 
 
 ---
 
-### 2.5 Context Sidebar Affordance
+### 2.4 Context Sidebar Affordance
 
 #### File: `graph-editor/src/components/Navigator/NavigatorItemContextMenu.tsx`
 
@@ -384,7 +441,7 @@ This document provides a detailed file-by-file implementation plan for the Live 
 1. **For context files (type === 'context'):**
    - Add "Create [N] scenarios..." menu item
    - Get all values from context file
-   - Same logic as context chip: check cache, show modal if needed
+   - Same logic as context chip: check cache via `fetchDataService`, show modal if needed
 
 **Design Reference:** §4.2.2 Context Sidebar Navigation
 
@@ -402,7 +459,7 @@ This document provides a detailed file-by-file implementation plan for the Live 
 
 1. **"To Base" button logic:**
    - Get live scenarios: `scenarios.filter(s => s.meta?.isLive)`
-   - Call `checkMultipleDSLsNeedFetch` for each
+   - Call `fetchDataService.checkMultipleDSLsNeedFetch` for each
    - If any need fetch: show confirmation modal with count
    - If all cached: proceed immediately
    - Call `putToBase()` from ScenariosContext
@@ -596,11 +653,11 @@ Ref: Design §5.7 (What-If Baking)
 
 ---
 
-#### File: `graph-editor/src/services/__tests__/cacheCheckService.test.ts` (NEW) — **CRITICAL**
+#### File: `graph-editor/src/services/__tests__/fetchDataService.test.ts` (NEW) — **CRITICAL**
 
-This is the most important test file as it validates the generalised cache checking logic.
+This is the most important test file as it validates the generalised cache checking and fetch logic extracted from `useFetchData`.
 
-Ref: Design §5.4 (Bulk Scenario Creation Modal), existing `useFetchData` cache logic
+Ref: Design §5.4 (Bulk Scenario Creation Modal), extracted from `useFetchData` hook
 
 **`checkDSLNeedsFetch` — window coverage tests:**
 
@@ -752,7 +809,7 @@ Ref: Design §5.6 (URL Parameters)
 
 | Service/Component | Test Count | Priority |
 |-------------------|------------|----------|
-| `cacheCheckService` | 25+ scenarios | **CRITICAL** — new generalised logic |
+| `fetchDataService` | 25+ scenarios | **CRITICAL** — core fetch/cache logic extracted from hook |
 | `scenarioRegenerationService` | 15+ scenarios | High |
 | `ScenariosContext` (live scenario methods) | 20+ scenarios | High |
 | Integration (full flow) | 10+ scenarios | High |
@@ -761,7 +818,7 @@ Ref: Design §5.6 (URL Parameters)
 
 ### Test Execution Order
 
-1. **Phase 1:** `cacheCheckService.test.ts` — foundational, must pass first
+1. **Phase 1:** `fetchDataService.test.ts` — foundational, must pass first
 2. **Phase 1:** `scenarioRegenerationService.test.ts`
 3. **Phase 1:** `ScenariosContext.liveScenarios.test.ts`
 4. **Phase 2-3:** `liveScenarios.integration.test.ts`
@@ -775,14 +832,14 @@ Ref: Design §5.6 (URL Parameters)
 
 | File | Phase | Purpose |
 |------|-------|---------|
+| `services/fetchDataService.ts` | 1 | **Core fetch/cache logic extracted from hook** |
 | `services/scenarioRegenerationService.ts` | 1 | DSL splitting, effective params computation |
-| `services/cacheCheckService.ts` | 2 | Multi-DSL cache checking |
-| `components/modals/ScenarioQueryEditModal.tsx` | 1 | DSL editing modal |
+| `components/modals/ScenarioQueryEditModal.tsx` | 1 | DSL editing modal (reuses QueryExpressionEditor) |
 | `components/modals/BulkScenarioCreationModal.tsx` | 2 | Bulk creation with fetch indicators |
 | `components/modals/ToBaseConfirmModal.tsx` | 3 | Confirmation for To Base |
 | `hooks/useURLScenarios.ts` | 4 | URL parameter parsing |
+| `services/__tests__/fetchDataService.test.ts` | 1 | Unit tests for fetch/cache service |
 | `services/__tests__/scenarioRegenerationService.test.ts` | 1 | Unit tests |
-| `services/__tests__/cacheCheckService.test.ts` | 2 | Unit tests |
 | `contexts/__tests__/ScenariosContext.liveScenarios.test.ts` | 1 | Context tests |
 | `services/__tests__/liveScenarios.integration.test.ts` | 1-3 | Integration tests |
 | `tests/urlScenarios.e2e.test.ts` | 4 | E2E tests |
@@ -793,11 +850,11 @@ Ref: Design §5.6 (URL Parameters)
 |------|-------|---------|
 | `types/scenarios.ts` | 1 | Add queryDSL, isLive, lastRegeneratedAt fields |
 | `types/index.ts` | 1 | Add baseDSL to ConversionGraph |
+| `hooks/useFetchData.ts` | 1 | **Refactor to thin wrapper around fetchDataService** |
 | `contexts/ScenariosContext.tsx` | 1,3 | Add live scenario operations, baseDSL state |
 | `components/panels/ScenariosPanel.tsx` | 1,3 | UI for live scenarios, To Base, Refresh All |
 | `components/panels/ScenariosPanel.css` | 1 | Styles for live scenario indicators |
 | `components/modals/index.ts` | 1,2,3 | Export new modals |
-| `hooks/useFetchData.ts` | 2 | Extract cache checking to service |
 | `components/QueryExpressionEditor.tsx` | 2 | Context chip context menu |
 | `components/WindowSelector.tsx` | 2 | Preset button context menus |
 | `components/Navigator/NavigatorItemContextMenu.tsx` | 2 | Context file "Create scenarios" |
@@ -820,23 +877,24 @@ Ref: Design §5.6 (URL Parameters)
 
 ### Phase 1: Core Infrastructure
 
-1. `types/scenarios.ts` — Add ScenarioMeta fields
-2. `types/index.ts` — Add baseDSL to ConversionGraph
-3. `services/scenarioRegenerationService.ts` (NEW) — DSL splitting and what-if computation
-4. `contexts/ScenariosContext.tsx` — Core live scenario functions
-5. `components/modals/ScenarioQueryEditModal.tsx` (NEW) — DSL editing modal
-6. `components/panels/ScenariosPanel.tsx` — UI changes for live scenarios
-7. Unit tests for Phase 1
+1. `services/fetchDataService.ts` (NEW) — **PREREQUISITE**: Extract fetch/cache logic from hook
+2. `hooks/useFetchData.ts` — Refactor to thin wrapper around fetchDataService
+3. `services/__tests__/fetchDataService.test.ts` (NEW) — **CRITICAL** tests for extracted service
+4. `types/scenarios.ts` — Add ScenarioMeta fields
+5. `types/index.ts` — Add baseDSL to ConversionGraph
+6. `services/scenarioRegenerationService.ts` (NEW) — DSL splitting and what-if computation
+7. `contexts/ScenariosContext.tsx` — Core live scenario functions (uses fetchDataService)
+8. `components/modals/ScenarioQueryEditModal.tsx` (NEW) — DSL editing modal (reuses QueryExpressionEditor)
+9. `components/panels/ScenariosPanel.tsx` — UI changes for live scenarios
+10. Remaining unit tests for Phase 1
 
 ### Phase 2: Bulk Creation
 
-8. `services/cacheCheckService.ts` (NEW) — Multi-DSL cache checking
-9. `hooks/useFetchData.ts` — Refactor to use cache check service
-10. `components/modals/BulkScenarioCreationModal.tsx` (NEW) — Bulk creation with fetch indicators
-11. `components/QueryExpressionEditor.tsx` — Context chip context menu
-12. `components/WindowSelector.tsx` — Preset button context menus
-13. Navigator context menu — "Create scenarios..." option
-14. Unit tests for Phase 2
+11. `components/modals/BulkScenarioCreationModal.tsx` (NEW) — Bulk creation with fetch indicators
+12. `components/QueryExpressionEditor.tsx` — Context chip context menu
+13. `components/WindowSelector.tsx` — Preset button context menus
+14. Navigator context menu — "Create scenarios..." option
+15. Unit tests for Phase 2
 
 ### Phase 3: Base Propagation
 
@@ -858,9 +916,11 @@ Ref: Design §5.6 (URL Parameters)
 
 | Phase | Files | Effort |
 |-------|-------|--------|
-| Phase 1: Core Infrastructure | 7 + tests | 2-3 days |
-| Phase 2: Bulk Creation | 6 + tests | 2 days |
+| Phase 1: Core Infrastructure (incl. service extraction) | 10 + tests | 3-4 days |
+| Phase 2: Bulk Creation | 4 + tests | 1.5 days |
 | Phase 3: Base Propagation | 3 + tests | 1 day |
 | Phase 4: URL Parameters | 3 + tests | 1 day |
-| **Total** | **19 files** | **6-7 days** |
+| **Total** | **20 files** | **6.5-7.5 days** |
+
+**Note:** Service extraction (§1.0) ensures single code path for all fetch operations, preventing duplicate logic between hook and context usage.
 

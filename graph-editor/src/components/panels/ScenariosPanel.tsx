@@ -19,10 +19,14 @@ import { useTabContext } from '../../contexts/TabContext';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { Scenario } from '../../types/scenarios';
 import { ScenarioEditorModal } from '../modals/ScenarioEditorModal';
+import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
+import { ToBaseConfirmModal } from '../modals/ToBaseConfirmModal';
 import { ContextMenu, ContextMenuItem } from '../ContextMenu';
 import { ColourSelector } from '../ColourSelector';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import { parseConstraints } from '@/lib/queryDSL';
+import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/scenarioRegenerationService';
+import { fetchDataService } from '../../services/fetchDataService';
 import { 
   Eye, 
   EyeOff, 
@@ -32,10 +36,12 @@ import {
   X, 
   Camera,
   ChevronDown,
-  FileText,
   Check,
   ArrowDownToLine,
-  Layers
+  Layers,
+  Zap,
+  RefreshCw,
+  ArrowDownFromLine
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import './ScenariosPanel.css';
@@ -50,6 +56,20 @@ interface ScenariosPanelProps {
  */
 function getScenarioTooltip(scenario: Scenario): string {
   const parts: string[] = [];
+  
+  // Live scenario indicator
+  if (scenario.meta?.isLive) {
+    parts.push(`⚡ Live Scenario`);
+    if (scenario.meta.queryDSL) {
+      parts.push(`Query DSL: ${scenario.meta.queryDSL}`);
+    }
+    if (scenario.meta.lastEffectiveDSL) {
+      parts.push(`Effective DSL: ${scenario.meta.lastEffectiveDSL}`);
+    }
+    if (scenario.meta.lastRegeneratedAt) {
+      parts.push(`Last regenerated: ${new Date(scenario.meta.lastRegeneratedAt).toLocaleString()}`);
+    }
+  }
   
   if (scenario.meta?.window) {
     const start = new Date(scenario.meta.window.start).toLocaleDateString();
@@ -104,7 +124,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     );
   }
   
-  const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour } = scenariosContext;
+  const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour, createLiveScenario, regenerateScenario, regenerateAllLive, putToBase, baseDSL } = scenariosContext;
   
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -115,6 +135,17 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   const [pendingBlankScenarioId, setPendingBlankScenarioId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; scenarioId: string } | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  
+  // Query edit modal state for live scenarios
+  const [queryEditModalScenarioId, setQueryEditModalScenarioId] = useState<string | null>(null);
+  
+  // To Base confirmation modal state
+  const [toBaseModalOpen, setToBaseModalOpen] = useState(false);
+  const [toBaseModalData, setToBaseModalData] = useState<{
+    scenariosNeedingFetch: number;
+    totalLiveScenarios: number;
+    newBaseDSL: string;
+  } | null>(null);
   
   // What-If panel expansion state (independent of DSL)
   const [whatIfPanelExpanded, setWhatIfPanelExpanded] = useState(false);
@@ -476,23 +507,222 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, [pendingBlankScenarioId]);
   
   /**
-   * Flatten all overlays into Original (no confirmation needed - it's reversible via graph history)
+   * Flatten all overlays into Base (no confirmation needed - it's reversible via graph history)
    */
   const handleFlatten = useCallback(async () => {
     try {
       await flatten();
       
-      // Update tab visibility: show only Current, hide Original
+      // Update tab visibility: show only Current, hide Base
       if (tabId) {
         await operations.setVisibleScenarios(tabId, ['current']);
       }
       
-      toast.success('Flattened: Current copied to Original, all scenarios removed');
+      toast.success('Flattened: Current copied to Base, all scenarios removed');
     } catch (error) {
       console.error('Failed to flatten:', error);
       toast.error('Failed to flatten');
     }
   }, [flatten, tabId, operations]);
+
+  /**
+   * Create a live scenario from the current query DSL
+   */
+  const handleCreateFromCurrentQuery = useCallback(async () => {
+    if (!tabId) {
+      toast.error('No active tab');
+      return;
+    }
+    
+    // Get current DSL from graphStore
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    
+    if (!currentDSL || !currentDSL.trim()) {
+      toast.error('No query DSL set. Select a window or context first.');
+      return;
+    }
+    
+    try {
+      const newScenario = await createLiveScenario(currentDSL, undefined, tabId);
+      
+      // Make the new scenario visible by default
+      await operations.toggleScenarioVisibility(tabId, newScenario.id);
+      
+      toast.success('Live scenario created');
+      setShowCreateMenu(false);
+    } catch (error) {
+      console.error('Failed to create live scenario:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to create live scenario';
+      toast.error(errorMessage);
+    }
+  }, [tabId, graphStore, createLiveScenario, operations]);
+
+  /**
+   * Refresh a live scenario (regenerate from source)
+   */
+  const handleRefreshScenario = useCallback(async (scenarioId: string) => {
+    try {
+      await regenerateScenario(scenarioId);
+      toast.success('Scenario refreshed');
+    } catch (error) {
+      console.error('Failed to refresh scenario:', error);
+      toast.error('Failed to refresh scenario');
+    }
+  }, [regenerateScenario]);
+  
+  /**
+   * Open the query edit modal for a live scenario
+   */
+  const handleOpenQueryEdit = useCallback((scenarioId: string) => {
+    setQueryEditModalScenarioId(scenarioId);
+  }, []);
+  
+  /**
+   * Close the query edit modal
+   */
+  const handleCloseQueryEdit = useCallback(() => {
+    setQueryEditModalScenarioId(null);
+  }, []);
+  
+  /**
+   * Save edited query DSL and regenerate the scenario
+   */
+  const handleSaveQueryDSL = useCallback(async (newDSL: string) => {
+    if (!queryEditModalScenarioId) return;
+    
+    try {
+      // Find the scenario to update
+      const scenario = scenarios.find(s => s.id === queryEditModalScenarioId);
+      if (!scenario) {
+        toast.error('Scenario not found');
+        return;
+      }
+      
+      // Update the scenario's queryDSL via context
+      // Note: updateScenarioQueryDSL handles both the update and regeneration
+      if (scenariosContext.updateScenarioQueryDSL) {
+        await scenariosContext.updateScenarioQueryDSL(queryEditModalScenarioId, newDSL);
+        toast.success('Query DSL updated and scenario refreshed');
+      }
+    } catch (error) {
+      console.error('Failed to update query DSL:', error);
+      toast.error('Failed to update query DSL');
+    }
+  }, [queryEditModalScenarioId, scenarios, scenariosContext]);
+
+  /**
+   * Refresh all live scenarios
+   */
+  const handleRefreshAllLive = useCallback(async () => {
+    try {
+      // Pass visible scenario IDs to ensure only visible scenarios contribute to inheritance
+      await regenerateAllLive(undefined, visibleScenarioIds);
+      toast.success('All live scenarios refreshed');
+    } catch (error) {
+      console.error('Failed to refresh all live scenarios:', error);
+      toast.error('Failed to refresh all live scenarios');
+    }
+  }, [regenerateAllLive]);
+
+  /**
+   * "To Base" - push current DSL to base and regenerate all live scenarios
+   * Shows confirmation modal if any scenarios need data fetch.
+   */
+  const handlePutToBase = useCallback(async () => {
+    const graph = graphStore?.getState().graph;
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    
+    if (!graph) {
+      toast.error('No graph loaded');
+      return;
+    }
+    
+    // Get live scenarios
+    const liveScenarios = scenarios.filter(s => s.meta?.isLive);
+    
+    if (liveScenarios.length === 0) {
+      // No live scenarios - just update base DSL
+      try {
+        await putToBase(visibleScenarioIds);
+        toast.success('Base DSL updated');
+      } catch (error) {
+        console.error('Failed to put to base:', error);
+        toast.error('Failed to put to base');
+      }
+      return;
+    }
+    
+    // Build effective DSLs for each live scenario with the NEW base DSL
+    const effectiveDSLs = liveScenarios.map((scenario, idx) => {
+      // Calculate what the inherited DSL would be with the new base
+      const scenarioIndex = scenarios.findIndex(s => s.id === scenario.id);
+      const inheritedDSL = computeInheritedDSL(scenarioIndex, scenarios, currentDSL);
+      return computeEffectiveFetchDSL(inheritedDSL, scenario.meta?.queryDSL || '');
+    });
+    
+    // Check cache status for all effective DSLs
+    const cacheResults = fetchDataService.checkMultipleDSLsNeedFetch(effectiveDSLs, graph);
+    const scenariosNeedingFetch = cacheResults.filter(r => r.needsFetch).length;
+    
+    // If any need fetch, show confirmation modal
+    if (scenariosNeedingFetch > 0) {
+      setToBaseModalData({
+        scenariosNeedingFetch,
+        totalLiveScenarios: liveScenarios.length,
+        newBaseDSL: currentDSL,
+      });
+      setToBaseModalOpen(true);
+      return;
+    }
+    
+    // All cached - proceed immediately
+    try {
+      await putToBase(visibleScenarioIds);
+      toast.success('Base DSL updated and live scenarios refreshed');
+    } catch (error) {
+      console.error('Failed to put to base:', error);
+      toast.error('Failed to put to base');
+    }
+  }, [graphStore, scenarios, putToBase]);
+  
+  /**
+   * Confirm "To Base" from modal - proceed with operation
+   */
+  const handleConfirmPutToBase = useCallback(async () => {
+    setToBaseModalOpen(false);
+    setToBaseModalData(null);
+    
+    try {
+      const toastId = toast.loading('Updating base and regenerating scenarios...');
+      await putToBase(visibleScenarioIds);
+      toast.success('Base DSL updated and live scenarios refreshed', { id: toastId });
+    } catch (error) {
+      console.error('Failed to put to base:', error);
+      toast.error('Failed to put to base');
+    }
+  }, [putToBase]);
+  
+  /**
+   * Cancel "To Base" from modal
+   */
+  const handleCancelPutToBase = useCallback(() => {
+    setToBaseModalOpen(false);
+    setToBaseModalData(null);
+  }, []);
+
+  // Check if there are any live scenarios
+  const hasLiveScenarios = useMemo(() => {
+    return scenarios.some(s => s.meta?.isLive);
+  }, [scenarios]);
+  
+  // Check if "To Base" should be enabled
+  // Enable when: current DSL differs from base DSL OR there are live scenarios to regenerate
+  const canPutToBase = useMemo(() => {
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    const baseDSLValue = baseDSL || '';
+    const dslDiffers = currentDSL !== baseDSLValue;
+    return dslDiffers || hasLiveScenarios;
+  }, [graphStore, baseDSL, hasLiveScenarios]);
   
   /**
    * Show only this scenario (hide all others)
@@ -836,6 +1066,17 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         <div className="scenarios-header">
           <Layers size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
           <h3 className="scenarios-title">Scenarios</h3>
+          {/* Refresh All button - only shown if there are live scenarios */}
+          {hasLiveScenarios && (
+            <button
+              className="scenarios-header-btn"
+              onClick={handleRefreshAllLive}
+              title="Refresh all live scenarios"
+              style={{ marginLeft: 'auto' }}
+            >
+              <RefreshCw size={14} />
+            </button>
+          )}
         </div>
       )}
       
@@ -991,12 +1232,24 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           <button
             className="scenarios-control-btn scenarios-control-btn-flatten"
             onClick={handleFlatten}
-            title="Copy Current to Original and remove all scenario overlays"
+            title="Copy Current to Base and remove all scenario overlays"
             disabled={scenarios.length === 0}
             style={{ opacity: scenarios.length === 0 ? 0.5 : 1 }}
           >
             <ArrowDownToLine size={14} />
-            <span>Flatten all</span>
+            <span>Flatten</span>
+          </button>
+          
+          {/* To Base button - pushes current DSL to base and regenerates all live scenarios */}
+          <button
+            className="scenarios-control-btn scenarios-control-btn-flatten"
+            onClick={handlePutToBase}
+            title="Push current query DSL to Base and regenerate all live scenarios"
+            disabled={!canPutToBase}
+            style={{ opacity: canPutToBase ? 1 : 0.5 }}
+          >
+            <ArrowDownFromLine size={14} />
+            <span>To Base</span>
           </button>
         </div>
         
@@ -1103,6 +1356,20 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
                   onClick={() => handleStartEdit(scenario)}
                 >
                   {scenario.name}
+                  {/* Live scenario indicator - appended to label if space */}
+                  {scenario.meta?.isLive && (
+                    <span title="Live scenario">
+                      <Zap 
+                        size={11} 
+                        style={{ 
+                          color: '#374151', 
+                          marginLeft: '4px',
+                          verticalAlign: 'middle',
+                          flexShrink: 0
+                        }}
+                      />
+                    </span>
+                  )}
                 </div>
               )}
               
@@ -1127,7 +1394,16 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
                 </>
               ) : (
                 <>
-                  {/* Normal mode: delete, edit modal, visibility */}
+                  {/* Normal mode: refresh (live only), delete, edit (pencil opens query edit for live, otherwise params editor), visibility */}
+                  {scenario.meta?.isLive && (
+                    <button
+                      className="scenario-action-btn"
+                      onClick={() => handleRefreshScenario(scenario.id)}
+                      title="Refresh from source"
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                  )}
                   <button
                     className="scenario-action-btn danger"
                     onClick={() => handleDelete(scenario.id)}
@@ -1137,8 +1413,11 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
               </button>
               <button
                 className="scenario-action-btn"
-                onClick={() => handleOpenEditor(scenario.id)}
-                title="Open in editor"
+                onClick={() => scenario.meta?.isLive 
+                  ? handleOpenQueryEdit(scenario.id) 
+                  : handleOpenEditor(scenario.id)
+                }
+                title={scenario.meta?.isLive ? "Edit query DSL" : "Open in editor"}
               >
                     <Edit2 size={14} />
               </button>
@@ -1156,10 +1435,10 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         });
         })()}
         
-        {/* Divider before Original */}
+        {/* Divider before Base */}
         <div className="scenarios-divider" />
         
-        {/* Original (base) - pinned at BOTTOM, non-draggable, toggleable */}
+        {/* Base - pinned at BOTTOM, non-draggable, toggleable */}
         <div className="scenario-row scenario-base">
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {baseVisible ? (
@@ -1177,15 +1456,26 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           <div 
             className="scenario-name"
             onContextMenu={(e) => handleContextMenu(e, 'base')}
+            title={baseDSL ? `Base DSL: ${baseDSL}` : "Base parameters — inherited by all scenarios unless overridden"}
           >
-            Original
+            Base
           </div>
           
           {/* Right-aligned action buttons */}
+          {/* Refresh button - refreshes all live scenarios using base DSL */}
+          {hasLiveScenarios && (
+            <button
+              className="scenario-action-btn"
+              onClick={handleRefreshAllLive}
+              title="Refresh all live scenarios"
+            >
+              <RefreshCw size={14} />
+            </button>
+          )}
           <button
             className="scenario-action-btn"
             onClick={() => handleOpenEditor('base')}
-            title="Open Original in editor"
+            title="Edit Base (params and DSL)"
           >
             <Edit2 size={14} />
           </button>
@@ -1218,6 +1508,39 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       onClose={handleCloseEditor}
       onSave={handleModalSave}
     />
+    
+    {/* Query Edit Modal for Live Scenarios */}
+    {queryEditModalScenarioId && (() => {
+      const scenario = scenarios.find(s => s.id === queryEditModalScenarioId);
+      if (!scenario?.meta?.queryDSL) return null;
+      
+      // Compute inherited DSL for this scenario's position in the stack
+      const scenarioIndex = scenarios.findIndex(s => s.id === queryEditModalScenarioId);
+      const inheritedDSL = computeInheritedDSL(scenarioIndex, scenarios, baseDSL);
+      
+      return (
+        <ScenarioQueryEditModal
+          isOpen={true}
+          scenarioName={scenario.name}
+          currentDSL={scenario.meta.queryDSL}
+          inheritedDSL={inheritedDSL}
+          onSave={handleSaveQueryDSL}
+          onClose={handleCloseQueryEdit}
+        />
+      );
+    })()}
+    
+    {/* To Base Confirmation Modal */}
+    {toBaseModalOpen && toBaseModalData && (
+      <ToBaseConfirmModal
+        isOpen={true}
+        scenariosNeedingFetch={toBaseModalData.scenariosNeedingFetch}
+        totalLiveScenarios={toBaseModalData.totalLiveScenarios}
+        newBaseDSL={toBaseModalData.newBaseDSL}
+        onConfirm={handleConfirmPutToBase}
+        onCancel={handleCancelPutToBase}
+      />
+    )}
     
     {/* Create Menu Dropdown - using fixed positioning like context menus */}
     {showCreateMenu && menuPosition && (
@@ -1302,6 +1625,29 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
         >
           Blank
+        </button>
+        {/* Divider */}
+        <div style={{ height: '1px', background: '#e5e7eb', margin: '4px 0' }} />
+        <button
+          onClick={handleCreateFromCurrentQuery}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            width: '100%',
+            padding: '8px 12px',
+            background: 'transparent',
+            border: 'none',
+            color: '#374151',
+            fontSize: '13px',
+            textAlign: 'left',
+            cursor: 'pointer',
+            borderRadius: '2px'
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+        >
+          From current query <Zap size={12} style={{ color: 'currentColor', marginLeft: '4px' }} />
         </button>
       </div>
     )}

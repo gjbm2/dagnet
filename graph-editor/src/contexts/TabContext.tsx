@@ -1024,6 +1024,21 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       if (graphName) {
         console.log(`TabContext: Loading graph '${graphName}' from default repo`);
         
+        // Check if a tab for this graph already exists (read from DB since state may be stale)
+        const savedTabs = await db.tabs.toArray();
+        const existingTab = savedTabs.find(t => t.fileId === `graph-${graphName}`);
+        if (existingTab) {
+          console.log(`TabContext: Tab for graph '${graphName}' already exists (${existingTab.id}), switching to it`);
+          setActiveTabId(existingTab.id);
+          await db.saveAppState({ activeTabId: existingTab.id });
+          
+          // Clean up URL parameter
+          const url = new URL(window.location.href);
+          url.searchParams.delete('graph');
+          window.history.replaceState({}, document.title, url.toString());
+          return;
+        }
+        
         // Create a graph item for the named graph
         const graphItem: RepositoryItem = {
           id: graphName,
@@ -1815,6 +1830,58 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   }, [tabs, updateTabState]);
 
   /**
+   * Add scenarios to visible list (uses functional update to avoid stale closures)
+   * This is safer than setVisibleScenarios when called rapidly in succession.
+   */
+  const addVisibleScenarios = useCallback(async (tabId: string, scenarioIdsToAdd: string[]): Promise<void> => {
+    // Use functional update to get LATEST state, avoiding stale closure issues
+    setTabs(prevTabs => {
+      const tabIndex = prevTabs.findIndex(t => t.id === tabId);
+      if (tabIndex < 0) return prevTabs;
+      
+      const tab = prevTabs[tabIndex];
+      const currentState = tab.editorState?.scenarioState || {
+        scenarioOrder: [],
+        visibleScenarioIds: ['current'],
+        visibleColourOrderIds: ['current'],
+      };
+      
+      // Only add IDs that aren't already visible
+      const currentVisible = new Set(currentState.visibleScenarioIds);
+      const toAdd = scenarioIdsToAdd.filter(id => !currentVisible.has(id));
+      
+      if (toAdd.length === 0) return prevTabs; // No change needed
+      
+      const newVisibleIds = [...currentState.visibleScenarioIds, ...toAdd];
+      const newColourOrderIds = [...currentState.visibleColourOrderIds, ...toAdd.filter(id => !currentState.visibleColourOrderIds.includes(id))];
+      const newScenarioOrder = [...toAdd, ...(currentState.scenarioOrder || [])]; // Prepend new ones
+      
+      // Create updated tabs array
+      const updatedTabs = [...prevTabs];
+      updatedTabs[tabIndex] = {
+        ...tab,
+        editorState: {
+          ...tab.editorState,
+          scenarioState: {
+            ...currentState,
+            scenarioOrder: newScenarioOrder,
+            visibleScenarioIds: newVisibleIds,
+            visibleColourOrderIds: newColourOrderIds
+          }
+        }
+      };
+      
+      console.log(`[TabContext] addVisibleScenarios: Added ${toAdd.length} scenarios to visibility`, {
+        tabId,
+        added: toAdd,
+        newTotal: newVisibleIds.length
+      });
+      
+      return updatedTabs;
+    });
+  }, []);
+
+  /**
    * Toggle scenario visibility for a tab
    */
   const toggleScenarioVisibility = useCallback(async (tabId: string, scenarioId: string): Promise<void> => {
@@ -1942,6 +2009,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     isNodeHidden,
     getScenarioState,
     setVisibleScenarios,
+    addVisibleScenarios,
     toggleScenarioVisibility,
     selectScenario,
     reorderScenarios

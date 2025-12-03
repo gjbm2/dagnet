@@ -164,3 +164,48 @@ export function normalizeToISO(date: string): string {
   return date;
 }
 
+/**
+ * Check if a string is a relative date expression (e.g., "-14d", "-2m", "+7w")
+ */
+export function isRelativeDate(dateStr: string): boolean {
+  return /^-?\d+[dwmy]$/.test(dateStr);
+}
+
+/**
+ * Resolve a relative date expression (e.g., "-14d", "-2m") to an actual UK date string.
+ * Returns the input unchanged if it's not a relative date.
+ * 
+ * @param dateStr - Date string, possibly relative like "-14d" or "-2m"
+ * @returns Resolved date in UK format (d-MMM-yy) or original if not relative
+ */
+export function resolveRelativeDate(dateStr: string): string {
+  if (!dateStr) return dateStr;
+  
+  // Match relative date patterns: -14d, -2m, -1y, etc.
+  const relativeMatch = dateStr.match(/^(-?\d+)([dwmy])$/);
+  if (!relativeMatch) return dateStr;
+  
+  const offset = parseInt(relativeMatch[1], 10);
+  const unit = relativeMatch[2];
+  
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  
+  switch (unit) {
+    case 'd':
+      now.setDate(now.getDate() + offset);
+      break;
+    case 'w':
+      now.setDate(now.getDate() + (offset * 7));
+      break;
+    case 'm':
+      now.setMonth(now.getMonth() + offset);
+      break;
+    case 'y':
+      now.setFullYear(now.getFullYear() + offset);
+      break;
+  }
+  
+  return formatDateUK(now);
+}
+

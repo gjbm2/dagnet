@@ -1,5 +1,31 @@
 # TODO
 
+## URL Parameter Management (DESIGN NEEDED)
+
+**Problem:** URL parameter handling is fragmented and inconsistent:
+- `TabContext` cleans `?graph=` after loading, but `useURLScenarios` needs it for matching
+- No clear ownership of which component cleans which params
+- Params are cleaned immediately, making URLs non-shareable
+- Second visit to same URL with `?scenarios=` adds duplicate scenarios instead of deduping
+
+**Issues:**
+1. `?graph=` is cleaned before `useURLScenarios` can use it for tab matching
+2. Revisiting a URL like `?graph=sample-graph&scenarios=window(-10d:)` should either:
+   - Clear existing scenarios and create fresh ones (daily dashboard use case)
+   - OR dedupe: skip creating scenarios that already exist with same DSL string
+3. No general strategy for URL state management
+
+**Proposed Solution:**
+1. Centralise URL param handling in a single service/hook
+2. Don't clean params immediately - keep URLs shareable
+3. For scenarios: dedupe by DSL string (don't create if one with same `queryDSL` exists)
+4. Consider: should `?scenarios=` replace all scenarios or add to existing?
+
+**Priority:** Medium - Affects daily dashboard use case
+**Related:** `useURLScenarios.ts`, `TabContext.tsx` loadFromURLData
+
+---
+
 ## Keyboard jamming issue
 
 Now when the bug happens:
@@ -117,10 +143,6 @@ Could use Web Worker for true background execution:
 
 ---
 
-## Extra bugs
-
-- **INVESTIGATE**: `dailyMode: true` may not be propagating to DAS as `mode: 'daily'`. Test `flag-threading.test.ts` is skipped - verify in prod that daily data fetch actually works.
-
 ## Analytics Implementation (Phase 1 Complete ✅)
 
 **Current Status:** See `docs/current/ANALYTICS_IMPLEMENTATION_STATUS.md` for full details
@@ -164,15 +186,6 @@ Could use Web Worker for true background execution:
 
 **Estimated Effort:** 20-24 hours
 
-
-## Current query DSL
-
-- This query string is now a natural candidate for what to use to populate the name of newly created scenarios, poss. along with timestamp.
-- If user creates a DIFF scenario rather than an ALL scenario, we can also subtract this query FROM what is otherwise shown (compositing layer 2 and below) to construct a helpful Human Readable name
-- e.g. if we had (compositing from layer 2 and down) window(1-Jan-25:1-Jan-25) and user then added window(1-Jan-25:1-Jan-25).case(experiment:treament), then when they created a diff snapshot, it would calculate window(1-Jan-25:1-Jan-25).case(experiment:treament)-window(1-Jan-25:1-Jan-25)=case(experiment:treament) (noting we need a service for this query subtraction & addition logic, not to do it inline in the scenario editor) and write "case(experiment:treament) @ 9:24am, 13-Nov-25"  as the scenario name
-- crucially, this would allow dynamic layers / scenarios (useful for saved charts/reports)
-- (expand / contract scenario to show dsl string, and a 'generate' button on the right to 'run' that scenario)
-- then we need to persist scenarios to graph
 
 ### Auto-scenarios (requires 'scenario from dsl query' feature)
 
@@ -222,6 +235,7 @@ Could use Web Worker for true background execution:
 - speed of chevron animation scale on log lag
 
 ### Medium 
+- Persist scenarios to graph?
 - Hooks for every menu item; clear up menus in general, they're a mess....
 - Session / tab state not reliably persisting on reload (annoying)
 - let's add a 'Create [x] scenarios' on right click context menu on context chips in window component AND within context drop-down which: creates one scenario for each value in the key clicked  -- e.g. if I had browser-type, it would create one scenario [snapshot all mode] for each of the values in browser-type. As always, ensure the logic for this is NOT expressed in the menu file, but in a generalised location
@@ -291,6 +305,7 @@ Could use Web Worker for true background execution:
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- x5 etc. badges next to overriden symbols on graph
 - Check we load right querydsl on graph load
 - Missing terminal node type on node file
 - Keyboard short cuts, generally

@@ -25,19 +25,28 @@
   overflow-y: auto;
 }
 
+/* New wrapper for value option + button */
+.context-value-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+  margin: 2px 0;
+  border-radius: 3px;
+  transition: background-color 0.15s;
+}
+
+.context-value-row:hover {
+  background: #f3f4f6;
+}
+
 .context-value-option {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
   cursor: pointer;
-  border-radius: 3px;
-  transition: background-color 0.15s;
-  margin: 2px 0;
-}
-
-.context-value-option:hover {
-  background: #f3f4f6;
+  flex-grow: 1;
+  /* Remove hover/margin from here as it's on row now */
 }
 
 .context-value-option input[type="checkbox"] {
@@ -49,6 +58,37 @@
   font-size: 13px;
   color: #374151;
   user-select: none;
+}
+
+.context-value-create-scenario-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px; /* Fixed size icon button */
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #9CA3AF;
+  opacity: 0; /* Hidden by default */
+  transition: all 0.15s;
+  font-size: 11px;
+  gap: 2px;
+}
+
+/* Show button on row hover */
+.context-value-row:hover .context-value-create-scenario-btn {
+  opacity: 1;
+}
+
+.context-value-create-scenario-btn:hover {
+  background: #E5E7EB;
+  color: #374151;
 }
 
 .context-selector-actions {
@@ -98,12 +138,19 @@
   border-bottom: none;
 }
 
+.context-key-header-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
 .context-key-header {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
+  padding-right: 60px; /* Make room for the scenarios button */
   background: white;
   border: none;
   cursor: pointer;
@@ -120,6 +167,37 @@
 
 .context-key-header.expanded {
   background: #f3f4f6;
+}
+
+.context-create-scenarios-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
+  color: #9CA3AF;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.context-key-header-row:hover .context-create-scenarios-btn {
+  color: #6B7280;
+  border-color: #e5e7eb;
+}
+
+.context-create-scenarios-btn:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  color: #374151;
 }
 
 .context-key-values {
@@ -153,4 +231,3 @@
   border-top: 1px solid #e5e7eb;
   font-style: italic;
 }
-

@@ -26,6 +26,25 @@
   color: #374151;
 }
 
+/* Header action button (e.g., Refresh All) - subtle, icon-only */
+.scenarios-header-btn {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #6B7280;
+  transition: all 0.15s ease;
+}
+
+.scenarios-header-btn:hover {
+  background: #E5E7EB;
+  color: #374151;
+}
+
 /* Scenario List */
 .scenarios-list {
   overflow-y: auto;
@@ -334,7 +353,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 7px 12px;
   background: white;
   border: 1px solid #D1D5DB;
   border-radius: 4px;
@@ -343,7 +362,7 @@
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
-  flex: 1;
+  flex: 1 1 auto; /* Grow and shrink equally */
   min-width: 0; /* Allow button to shrink */
   overflow: hidden; /* Prevent overflow */
   text-overflow: ellipsis; /* Add ellipsis if text is too long */
@@ -359,12 +378,14 @@
   cursor: not-allowed;
 }
 
+/* Secondary action buttons (Flatten, To Base) - less prominent, compact */
 .scenarios-control-btn-flatten {
-  flex: 0 0 auto; /* Don't grow, don't shrink, auto width */
+  flex: 0 0 auto; /* Don't grow, don't shrink, auto width based on content */
   width: auto;
-  min-width: 120px; /* Narrower than the other button */
+  padding: 4px 6px; /* Tighter padding */
   background: transparent !important; /* Less prominent - no white background */
   border-color: #E5E7EB; /* Lighter border */
+  font-size: 11px; /* Slightly smaller text */
 }
 
 .scenarios-control-btn-flatten:hover:not(:disabled) {
