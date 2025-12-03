@@ -87,7 +87,15 @@ function formatNodeForLog(node: any): string {
  * @param graph - Graph for topology analysis
  * @returns Compiled query string with minus/plus terms, or original if compilation fails
  */
-async function compileExcludeQuery(queryString: string, graph: any): Promise<string> {
+interface CompileExcludeResult {
+  compiled_query: string;
+  was_compiled: boolean;
+  success: boolean;
+  error?: string;
+  terms_count?: number;
+}
+
+async function compileExcludeQuery(queryString: string, graph: any): Promise<{ compiled: string; wasCompiled: boolean; error?: string }> {
   try {
     // Call Python API endpoint to compile the query
     const response = await fetch('/api/compile-exclude', {
@@ -102,19 +110,38 @@ async function compileExcludeQuery(queryString: string, graph: any): Promise<str
     if (!response.ok) {
       const errorText = await response.text();
       console.error('[compileExcludeQuery] API error:', errorText);
-      return queryString; // Return original on error
+      return { compiled: queryString, wasCompiled: false, error: `API error: ${errorText}` };
     }
     
-    const result = await response.json();
+    const result: CompileExcludeResult = await response.json();
+    
+    // CRITICAL: Check was_compiled flag to detect silent failures
+    // The API returns the original query on failure, so we can't just check compiled_query !== queryString
+    if (!result.success) {
+      console.error('[compileExcludeQuery] Compilation failed:', result.error);
+      return { compiled: queryString, wasCompiled: false, error: result.error || 'Unknown compilation error' };
+    }
+    
+    if (!result.was_compiled) {
+      // No excludes found (shouldn't happen if we pre-checked, but handle gracefully)
+      console.warn('[compileExcludeQuery] No excludes found in query - nothing to compile');
+      return { compiled: queryString, wasCompiled: false };
+    }
+    
     if (result.compiled_query) {
-      return result.compiled_query;
+      console.log('[compileExcludeQuery] Successfully compiled:', {
+        original: queryString,
+        compiled: result.compiled_query,
+        termsCount: result.terms_count
+      });
+      return { compiled: result.compiled_query, wasCompiled: true };
     }
     
     console.warn('[compileExcludeQuery] No compiled_query in response:', result);
-    return queryString;
+    return { compiled: queryString, wasCompiled: false, error: 'No compiled_query in response' };
   } catch (error) {
     console.error('[compileExcludeQuery] Failed to call compile API:', error);
-    return queryString; // Return original on error
+    return { compiled: queryString, wasCompiled: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -2734,15 +2761,33 @@ class DataOperationsService {
         
         if (nQueryHasExcludes && !nQueryIsAlreadyComposite && connectionName?.includes('amplitude')) {
           console.log('[DataOps:DUAL_QUERY:EXCLUDE] n_query has excludes, compiling to minus/plus for Amplitude');
+          sessionLogService.addChild(logOpId, 'info', 'N_QUERY_EXCLUDE_COMPILE_START',
+            'Compiling n_query exclude() to minus/plus for Amplitude',
+            `Original n_query: ${nQueryString}`
+          );
           try {
-            const compiledNQuery = await compileExcludeQuery(nQueryString, graph);
-            if (compiledNQuery && compiledNQuery !== nQueryString) {
-              console.log('[DataOps:DUAL_QUERY:EXCLUDE] Compiled n_query:', compiledNQuery);
-              nQueryString = compiledNQuery;
+            const nQueryCompileResult = await compileExcludeQuery(nQueryString, graph);
+            if (nQueryCompileResult.wasCompiled && nQueryCompileResult.compiled !== nQueryString) {
+              console.log('[DataOps:DUAL_QUERY:EXCLUDE] Compiled n_query:', nQueryCompileResult.compiled);
+              sessionLogService.addChild(logOpId, 'success', 'N_QUERY_EXCLUDE_COMPILE_SUCCESS',
+                'n_query exclude compiled to minus/plus form',
+                `Compiled: ${nQueryCompileResult.compiled}`
+              );
+              nQueryString = nQueryCompileResult.compiled;
               nQueryIsComposite = true;
+            } else if (nQueryCompileResult.error) {
+              console.error('[DataOps:DUAL_QUERY:EXCLUDE] n_query exclude compilation failed:', nQueryCompileResult.error);
+              sessionLogService.addChild(logOpId, 'error', 'N_QUERY_EXCLUDE_COMPILE_FAILED',
+                `n_query exclude compilation failed: ${nQueryCompileResult.error}`,
+                'n_query excludes will be ignored - data may be incorrect!'
+              );
+              toast.error(`n_query exclude compilation failed: ${nQueryCompileResult.error}`);
             }
           } catch (error) {
             console.error('[DataOps:DUAL_QUERY:EXCLUDE] Failed to compile n_query excludes:', error);
+            sessionLogService.addChild(logOpId, 'error', 'N_QUERY_EXCLUDE_COMPILE_ERROR',
+              `Exception during n_query exclude compilation: ${error instanceof Error ? error.message : String(error)}`
+            );
             toast.error('Failed to compile n_query excludes - excludes will be ignored');
           }
         } else if (nQueryIsAlreadyComposite) {
@@ -3115,16 +3160,42 @@ class DataOperationsService {
       let isComposite = isAlreadyComposite;
       if (hasExcludes && !isAlreadyComposite && connectionName?.includes('amplitude')) {
         console.log('[DataOps:EXCLUDE] Query has excludes, compiling to minus/plus for Amplitude');
+        sessionLogService.addChild(logOpId, 'info', 'EXCLUDE_COMPILE_START',
+          'Compiling exclude() to minus/plus for Amplitude',
+          `Original query: ${queryString}`
+        );
         try {
           // Call Python API to compile exclude query
-          const compiledQuery = await compileExcludeQuery(queryString, graph);
-          if (compiledQuery && compiledQuery !== queryString) {
-            console.log('[DataOps:EXCLUDE] Compiled query:', compiledQuery);
-            queryString = compiledQuery;
+          const compileResult = await compileExcludeQuery(queryString, graph);
+          if (compileResult.wasCompiled && compileResult.compiled !== queryString) {
+            console.log('[DataOps:EXCLUDE] Compiled query:', compileResult.compiled);
+            sessionLogService.addChild(logOpId, 'success', 'EXCLUDE_COMPILE_SUCCESS',
+              'Exclude compiled to minus/plus form',
+              `Compiled: ${compileResult.compiled}`
+            );
+            queryString = compileResult.compiled;
             isComposite = true;
+          } else if (compileResult.error) {
+            // Compilation failed with error
+            console.error('[DataOps:EXCLUDE] Exclude compilation failed:', compileResult.error);
+            sessionLogService.addChild(logOpId, 'error', 'EXCLUDE_COMPILE_FAILED',
+              `Exclude compilation failed: ${compileResult.error}`,
+              'Excludes will be ignored - data may be incorrect!'
+            );
+            toast.error(`Exclude compilation failed: ${compileResult.error}. Excludes will be ignored!`);
+          } else if (!compileResult.wasCompiled) {
+            // No excludes found (unexpected since we pre-checked)
+            console.warn('[DataOps:EXCLUDE] No excludes compiled (unexpected)');
+            sessionLogService.addChild(logOpId, 'warning', 'EXCLUDE_COMPILE_NONE',
+              'No excludes found to compile (unexpected)',
+              `Query checked: ${queryString}`
+            );
           }
         } catch (error) {
           console.error('[DataOps:EXCLUDE] Failed to compile exclude query:', error);
+          sessionLogService.addChild(logOpId, 'error', 'EXCLUDE_COMPILE_ERROR',
+            `Exception during exclude compilation: ${error instanceof Error ? error.message : String(error)}`
+          );
           toast.error('Failed to compile exclude query - excludes will be ignored');
         }
       }
