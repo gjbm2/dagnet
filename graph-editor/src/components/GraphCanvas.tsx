@@ -85,9 +85,12 @@ interface GraphCanvasProps {
   // Tab identification for keyboard event filtering
   tabId?: string;
   activeTabId?: string | null;
+  // External selection (for deep linking from issues viewer etc.)
+  externalSelectedNodeId?: string | null;
+  externalSelectedEdgeId?: string | null;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -97,6 +100,8 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onSelectedEdgeChange={onSelectedEdgeChange}
         onDoubleClickNode={onDoubleClickNode}
         onDoubleClickEdge={onDoubleClickEdge}
+        externalSelectedNodeId={externalSelectedNodeId}
+        externalSelectedEdgeId={externalSelectedEdgeId}
         onSelectEdge={onSelectEdge}
         onAddNodeRef={onAddNodeRef}
         onDeleteSelectedRef={onDeleteSelectedRef}
@@ -110,7 +115,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
   // Track if user is panning/zooming to disable beads during interaction
   const [isPanningOrZooming, setIsPanningOrZooming] = React.useState(false);
   const panTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -312,6 +317,63 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [autoReroute, onNodesChangeBase]);
 
+  // Handle external selection (for deep linking from issues viewer, etc.)
+  // Use a timestamp-based approach: GraphEditor should pass a selection timestamp 
+  // to force re-selection even for the same ID
+  const lastAppliedSelectionRef = useRef<string | null>(null);
+  
+  useEffect(() => {
+    // Build a selection key that includes both node and edge IDs
+    const selectionKey = `${externalSelectedNodeId || ''}-${externalSelectedEdgeId || ''}`;
+    
+    // Skip if nothing to select
+    if (!externalSelectedNodeId && !externalSelectedEdgeId) {
+      return;
+    }
+    
+    // Check if this selection is already visually applied in React Flow
+    const nodeAlreadySelected = externalSelectedNodeId && nodes.some(n => n.id === externalSelectedNodeId && n.selected);
+    const edgeAlreadySelected = externalSelectedEdgeId && edges.some(e => e.id === externalSelectedEdgeId && e.selected);
+    
+    console.log('[GraphCanvas] External selection check:', {
+      externalSelectedNodeId,
+      externalSelectedEdgeId,
+      nodeAlreadySelected,
+      edgeAlreadySelected,
+      edgeCount: edges.length
+    });
+    
+    // If already selected in React Flow, skip
+    if ((externalSelectedNodeId && nodeAlreadySelected) || (externalSelectedEdgeId && edgeAlreadySelected)) {
+      return;
+    }
+    
+    // Apply the selection
+    if (externalSelectedNodeId) {
+      console.log('[GraphCanvas] Applying external node selection:', externalSelectedNodeId);
+      setNodes(prevNodes => prevNodes.map(n => ({
+        ...n,
+        selected: n.id === externalSelectedNodeId
+      })));
+      setEdges(prevEdges => prevEdges.map(e => ({ ...e, selected: false })));
+      onSelectedNodeChange(externalSelectedNodeId);
+      onSelectedEdgeChange(null);
+    } else if (externalSelectedEdgeId) {
+      console.log('[GraphCanvas] Applying external edge selection:', externalSelectedEdgeId);
+      const matchingEdge = edges.find(e => e.id === externalSelectedEdgeId);
+      console.log('[GraphCanvas] Matching edge found:', matchingEdge ? 'yes' : 'no', matchingEdge?.id);
+      if (!matchingEdge) {
+        console.log('[GraphCanvas] Available edge IDs:', edges.slice(0, 5).map(e => e.id));
+      }
+      setNodes(prevNodes => prevNodes.map(n => ({ ...n, selected: false })));
+      setEdges(prevEdges => prevEdges.map(e => ({
+        ...e,
+        selected: e.id === externalSelectedEdgeId
+      })));
+      onSelectedNodeChange(null);
+      onSelectedEdgeChange(externalSelectedEdgeId);
+    }
+  }, [externalSelectedNodeId, externalSelectedEdgeId, setNodes, setEdges, onSelectedNodeChange, onSelectedEdgeChange, nodes, edges]);
 
   // Edge width/offset calculation constants
   // Use shared constants from nodeEdgeConstants.ts

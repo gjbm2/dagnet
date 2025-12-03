@@ -52,6 +52,9 @@ interface IntegrityIssue {
   field?: string;
   suggestion?: string;
   details?: string;
+  // Deep linking: node/edge identifiers for graph issues
+  nodeUuid?: string;
+  edgeUuid?: string;
 }
 
 interface IntegrityResult {
@@ -215,8 +218,10 @@ export class IntegrityCheckService {
         if (file.fileId.endsWith('-index')) continue;
         
         const fileData = file.data;
-        const fileIdParts = file.fileId.split('-');
-        const expectedId = fileIdParts.slice(1).join('-');
+        // Extract expected ID from fileId, handling workspace prefixes
+        // fileId format: "type-name" or "repo-branch-type-name"
+        // We need to find the type marker and extract the name after it
+        const expectedId = this.extractExpectedId(file.fileId, file.type);
         
         // ─────────────────────────────────────────────────────────────────────
         // Empty/Null Data Check
@@ -450,6 +455,31 @@ export class IntegrityCheckService {
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
+  // HELPER METHODS
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  /**
+   * Extract the expected ID from a fileId, handling workspace prefixes.
+   * FileId formats:
+   * - "parameter-coffee-to-bds" → "coffee-to-bds"
+   * - "<private-repo>-main-parameter-coffee-to-bds" → "coffee-to-bds"
+   */
+  private static extractExpectedId(fileId: string, type: string): string {
+    // Type markers that indicate the start of the actual file type
+    const typeMarker = `${type}-`;
+    const idx = fileId.indexOf(typeMarker);
+    
+    if (idx >= 0) {
+      // Found the type marker - extract everything after "type-"
+      return fileId.substring(idx + typeMarker.length);
+    }
+    
+    // Fallback: no type marker found, use old logic (split by first hyphen)
+    const firstHyphen = fileId.indexOf('-');
+    return firstHyphen >= 0 ? fileId.substring(firstHyphen + 1) : fileId;
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
   // ID FORMAT VALIDATION
   // ═══════════════════════════════════════════════════════════════════════════
   
@@ -466,7 +496,9 @@ export class IntegrityCheckService {
     type: ObjectType | 'system',
     field: string,
     id: string,
-    issues: IntegrityIssue[]
+    issues: IntegrityIssue[],
+    nodeUuid?: string,
+    edgeUuid?: string
   ): void {
     if (!id) return;
     
@@ -479,7 +511,9 @@ export class IntegrityCheckService {
         category: 'id-format',
         field,
         message: `ID exceeds max length (${id.length} > ${MAX_ID_LENGTH})`,
-        suggestion: 'Use a shorter identifier (max 64 chars)'
+        suggestion: 'Use a shorter identifier (max 64 chars)',
+        nodeUuid,
+        edgeUuid
       });
     }
     
@@ -505,7 +539,9 @@ export class IntegrityCheckService {
         category: 'id-format',
         field,
         message: `ID "${id}" contains invalid characters (spaces, > not allowed)`,
-        suggestion
+        suggestion,
+        nodeUuid,
+        edgeUuid
       });
     }
   }
@@ -515,7 +551,9 @@ export class IntegrityCheckService {
     type: ObjectType | 'system',
     field: string,
     uuid: string,
-    issues: IntegrityIssue[]
+    issues: IntegrityIssue[],
+    nodeUuid?: string,
+    edgeUuid?: string
   ): void {
     if (!uuid) return;
     
@@ -527,7 +565,9 @@ export class IntegrityCheckService {
         category: 'id-format',
         field,
         message: `Invalid UUID format: "${uuid}"`,
-        suggestion: 'UUIDs should be v4 format (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx)'
+        suggestion: 'UUIDs should be v4 format (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx)',
+        nodeUuid,
+        edgeUuid
       });
     }
   }
@@ -912,7 +952,7 @@ export class IntegrityCheckService {
           message: 'Node missing uuid'
         });
       } else {
-        this.validateUuidFormat(graphFileId, 'graph', `nodes[${i}].uuid`, node.uuid, issues);
+        this.validateUuidFormat(graphFileId, 'graph', `nodes[${i}].uuid`, node.uuid, issues, node.uuid);
         
         // Check for duplicate UUIDs
         if (nodeUuids.has(node.uuid)) {
@@ -922,7 +962,8 @@ export class IntegrityCheckService {
             severity: 'error',
             category: 'duplicate',
             field: `nodes[${i}].uuid`,
-            message: `Duplicate node UUID: ${node.uuid.substring(0, 8)}...`
+            message: `Duplicate node UUID: ${node.uuid.substring(0, 8)}...`,
+            nodeUuid: node.uuid
           });
         }
         nodeUuids.add(node.uuid);
@@ -936,7 +977,8 @@ export class IntegrityCheckService {
           severity: 'warning',
           category: 'schema',
           field: `nodes[${i}]`,
-          message: 'Node missing human-readable id'
+          message: 'Node missing human-readable id',
+          nodeUuid: node.uuid
         });
       } else {
         // Note: node.id is a human-readable label in the graph, not a schema-validated file ID
@@ -948,7 +990,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'duplicate',
             field: `nodes[${i}].id`,
-            message: `Duplicate node id in graph: "${node.id}"`
+            message: `Duplicate node id in graph: "${node.id}"`,
+            nodeUuid: node.uuid
           });
         }
         nodeHumanIds.add(node.id);
@@ -964,7 +1007,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'reference',
             field: `nodes[${i}].event_id`,
-            message: `Node references non-existent event: ${node.event_id}`
+            message: `Node references non-existent event: ${node.event_id}`,
+            nodeUuid: node.uuid
           });
         }
       }
@@ -972,7 +1016,7 @@ export class IntegrityCheckService {
       // Case reference
       if (node.case?.id) {
         referencedCases.add(node.case.id);
-        this.validateFileIdFormat(graphFileId, 'graph', `nodes[${i}].case.id`, node.case.id, issues);
+        this.validateFileIdFormat(graphFileId, 'graph', `nodes[${i}].case.id`, node.case.id, issues, node.uuid);
         if (!caseFiles.has(node.case.id)) {
           issues.push({
             fileId: graphFileId,
@@ -980,7 +1024,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'reference',
             field: `nodes[${i}].case.id`,
-            message: `Node references non-existent case: ${node.case.id}`
+            message: `Node references non-existent case: ${node.case.id}`,
+            nodeUuid: node.uuid
           });
         }
         
@@ -993,7 +1038,8 @@ export class IntegrityCheckService {
               severity: 'warning',
               category: 'connection',
               field: `nodes[${i}].case.connection`,
-              message: `Unknown connection: ${node.case.connection}`
+              message: `Unknown connection: ${node.case.connection}`,
+              nodeUuid: node.uuid
             });
           }
         }
@@ -1018,7 +1064,8 @@ export class IntegrityCheckService {
               severity: 'error',
               category: 'value',
               field: `nodes[${i}].case.variants`,
-              message: `Variant weights sum to ${totalWeight.toFixed(4)}, not 1.0`
+              message: `Variant weights sum to ${totalWeight.toFixed(4)}, not 1.0`,
+              nodeUuid: node.uuid
             });
           }
         }
@@ -1034,7 +1081,8 @@ export class IntegrityCheckService {
             severity: 'info',
             category: 'reference',
             field: `nodes[${i}].context.id`,
-            message: `Node references non-existent context: ${node.context.id}`
+            message: `Node references non-existent context: ${node.context.id}`,
+            nodeUuid: node.uuid
           });
         }
       }
@@ -1048,7 +1096,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'value',
             field: `nodes[${i}].entry.entry_weight`,
-            message: `Negative entry weight: ${node.entry.entry_weight}`
+            message: `Negative entry weight: ${node.entry.entry_weight}`,
+            nodeUuid: node.uuid
           });
         }
       }
@@ -1067,7 +1116,7 @@ export class IntegrityCheckService {
       
       // UUID validation
       if (edge.uuid) {
-        this.validateUuidFormat(graphFileId, 'graph', `edges[${i}].uuid`, edge.uuid, issues);
+        this.validateUuidFormat(graphFileId, 'graph', `edges[${i}].uuid`, edge.uuid, issues, undefined, edge.uuid);
         
         if (edgeUuids.has(edge.uuid)) {
           issues.push({
@@ -1076,7 +1125,8 @@ export class IntegrityCheckService {
             severity: 'error',
             category: 'duplicate',
             field: `edges[${i}].uuid`,
-            message: `Duplicate edge UUID: ${edge.uuid.substring(0, 8)}...`
+            message: `Duplicate edge UUID: ${edge.uuid.substring(0, 8)}...`,
+            edgeUuid: edge.uuid
           });
         }
         edgeUuids.add(edge.uuid);
@@ -1092,7 +1142,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'duplicate',
             field: `edges[${i}].id`,
-            message: `Duplicate edge id in graph: "${edge.id}"`
+            message: `Duplicate edge id in graph: "${edge.id}"`,
+            edgeUuid: edge.uuid
           });
         }
         edgeHumanIds.add(edge.id);
@@ -1114,7 +1165,8 @@ export class IntegrityCheckService {
             category: 'id-format',
             field: `edges[${i}].id`,
             message: `Edge ID contains invalid characters: "${edge.id}"`,
-            suggestion
+            suggestion,
+            edgeUuid: edge.uuid
           });
         }
       }
@@ -1127,7 +1179,8 @@ export class IntegrityCheckService {
           severity: 'error',
           category: 'graph-structure',
           field: `edges[${i}].from`,
-          message: 'Edge missing "from" node reference'
+          message: 'Edge missing "from" node reference',
+          edgeUuid: edge.uuid
         });
       } else if (!nodeUuids.has(edge.from)) {
         issues.push({
@@ -1137,7 +1190,8 @@ export class IntegrityCheckService {
           category: 'graph-structure',
           field: `edges[${i}].from`,
           message: `Edge references non-existent source node`,
-          details: `UUID: ${edge.from.substring(0, 8)}...`
+          details: `UUID: ${edge.from.substring(0, 8)}...`,
+          edgeUuid: edge.uuid
         });
       } else {
         connectedNodes.add(edge.from);
@@ -1150,7 +1204,8 @@ export class IntegrityCheckService {
           severity: 'error',
           category: 'graph-structure',
           field: `edges[${i}].to`,
-          message: 'Edge missing "to" node reference'
+          message: 'Edge missing "to" node reference',
+          edgeUuid: edge.uuid
         });
       } else if (!nodeUuids.has(edge.to)) {
         issues.push({
@@ -1160,7 +1215,8 @@ export class IntegrityCheckService {
           category: 'graph-structure',
           field: `edges[${i}].to`,
           message: `Edge references non-existent target node`,
-          details: `UUID: ${edge.to.substring(0, 8)}...`
+          details: `UUID: ${edge.to.substring(0, 8)}...`,
+          edgeUuid: edge.uuid
         });
       } else {
         connectedNodes.add(edge.to);
@@ -1174,14 +1230,15 @@ export class IntegrityCheckService {
           severity: 'info',
           category: 'graph-structure',
           field: `edges[${i}]`,
-          message: 'Edge is a self-loop (connects node to itself)'
+          message: 'Edge is a self-loop (connects node to itself)',
+          edgeUuid: edge.uuid
         });
       }
       
       // Parameter references
       if (edge.p?.id) {
         referencedParams.add(edge.p.id);
-        this.validateFileIdFormat(graphFileId, 'graph', `edges[${i}].p.id`, edge.p.id, issues);
+        this.validateFileIdFormat(graphFileId, 'graph', `edges[${i}].p.id`, edge.p.id, issues, undefined, edge.uuid);
         if (!parameterFiles.has(edge.p.id)) {
           issues.push({
             fileId: graphFileId,
@@ -1189,7 +1246,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'reference',
             field: `edges[${i}].p.id`,
-            message: `Edge references non-existent parameter: ${edge.p.id}`
+            message: `Edge references non-existent parameter: ${edge.p.id}`,
+            edgeUuid: edge.uuid
           });
         }
         
@@ -1202,7 +1260,8 @@ export class IntegrityCheckService {
               severity: 'warning',
               category: 'connection',
               field: `edges[${i}].p.connection`,
-              message: `Unknown connection: ${edge.p.connection}`
+              message: `Unknown connection: ${edge.p.connection}`,
+              edgeUuid: edge.uuid
             });
           }
         }
@@ -1218,7 +1277,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'reference',
             field: `edges[${i}].cost_gbp.id`,
-            message: `Edge references non-existent cost parameter: ${edge.cost_gbp.id}`
+            message: `Edge references non-existent cost parameter: ${edge.cost_gbp.id}`,
+            edgeUuid: edge.uuid
           });
         }
       }
@@ -1232,7 +1292,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'reference',
             field: `edges[${i}].cost_time.id`,
-            message: `Edge references non-existent time cost: ${edge.cost_time.id}`
+            message: `Edge references non-existent time cost: ${edge.cost_time.id}`,
+            edgeUuid: edge.uuid
           });
         }
       }
@@ -1246,7 +1307,8 @@ export class IntegrityCheckService {
             severity: 'error',
             category: 'value',
             field: `edges[${i}].p.value`,
-            message: `Probability ${edge.p.value} out of range [0, 1]`
+            message: `Probability ${edge.p.value} out of range [0, 1]`,
+            edgeUuid: edge.uuid
           });
         }
       }
@@ -1260,7 +1322,8 @@ export class IntegrityCheckService {
             severity: 'warning',
             category: 'value',
             field: `edges[${i}].weight_default`,
-            message: `Negative edge weight: ${edge.weight_default}`
+            message: `Negative edge weight: ${edge.weight_default}`,
+            edgeUuid: edge.uuid
           });
         }
       }
@@ -1277,7 +1340,8 @@ export class IntegrityCheckService {
                 severity: 'error',
                 category: 'value',
                 field: `edges[${i}].conditional_p[${j}].value`,
-                message: `Conditional probability ${cp.value} out of range [0, 1]`
+                message: `Conditional probability ${cp.value} out of range [0, 1]`,
+                edgeUuid: edge.uuid
               });
             }
           }

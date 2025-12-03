@@ -113,6 +113,7 @@ export interface TabState {
     jsonOpen?: boolean;
     selectedNodeId?: string | null;
     selectedEdgeId?: string | null;
+    selectionTimestamp?: number; // Timestamp of last selection event (to force re-selection/centering)
     // What-if analysis state (per-tab, not per-file)
     whatIfAnalysis?: any;
     caseOverrides?: Record<string, string>; // nodeId -> variantName (legacy, will be converted to whatIfDSL)
@@ -275,7 +276,7 @@ export interface SettingsData {
  * Tab operations interface
  */
 export interface TabOperations {
-  openTab: (item: RepositoryItem, viewMode?: ViewMode, forceNew?: boolean) => Promise<void>;
+  openTab: (item: RepositoryItem, viewMode?: ViewMode, forceNew?: boolean, initialEditorState?: Partial<TabState['editorState']>) => Promise<void>;
   closeTab: (tabId: string, force?: boolean) => Promise<boolean>;
   switchTab: (tabId: string) => void;
   updateTabData: (fileId: string, newData: any) => void;
