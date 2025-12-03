@@ -74,12 +74,12 @@ With lag distributions on edges, we can:
 
 | Window Type | Definition | Purpose |
 |-------------|------------|---------|
-| **Event Window** | Period during which users *enter* the funnel | Defines the cohort population (n) |
-| **Cohort Window** | Period during which we observe *conversions* | Defines how long we track (k over time) |
+| **Cohort Window** | Period during which users *enter* the funnel | Defines the cohort population (n) |
+| **Observation Window** | Period during which we observe *conversions* | Defines how long we track (k over time) |
 
 **Example:**
-- Event window: 1-Nov-25 to 7-Nov-25 (cohort entry)
-- Cohort window: 1-Nov-25 to 21-Nov-25 (14 days to mature)
+- Cohort window: 1-Nov-25 to 7-Nov-25 (cohort entry)
+- Observation window: 1-Nov-25 to 21-Nov-25 (14 days to mature)
 
 Users who entered on 7-Nov have only 14 days to convert; users from 1-Nov have 20 days. This asymmetry is what creates the survival curve data.
 
@@ -176,105 +176,150 @@ interface LatencyConfig {
 
 ### 3.2 Parameter File Additions (Phase 0: A‑anchored cohort evidence)
 
-For edges with `latency.track: true`, parameter files store **A‑anchored per‑cohort evidence** plus a small set of edge‑level latency summaries. The structure is derived from the 3‑step Amplitude funnel \(A→X→Y\) and is intentionally human‑readable.
+For edges with `latency.track: true`, parameter files store **A‑anchored per‑cohort evidence** plus edge‑level latency summaries. The structure **extends the existing parameter schema pattern** (flat parallel arrays, `window_from`/`window_to`, `data_source` object) with new latency fields.
 
 ```yaml
 # parameter-{edge-id}.yaml  (example: A=HouseholdCreated, X=SwitchRegistered, Y=SwitchSuccess)
 id: switch-registered-to-success
 name: Switch Registered → Success
 type: probability
-source: amplitude:funnel
 
+# Edge-level latency configuration (see §3.1)
 latency:
   track: true
-  maturity_days: 30                 # Per-edge setting (see §3.1)
+  maturity_days: 30
 
 values:
-  - label: Cohorts 1-Sep-25 to 30-Nov-25
-    query_date: 2-Dec-25           # When this data was fetched
-    conversion_window_days: 45     # Amplitude cs parameter in days (right-censor longstop)
-
-    totals:
-      n: 1450                      # Total X→Y cohort n across all A-cohorts in window
-      k: 1021                      # Total X→Y converters
-
-    # Edge-level latency summary for X→Y
+  - # === Slice identification (see §3.3 and §4.7.1) ===
+    # sliceDSL is CANONICAL: includes anchor node_id + absolute dates
+    sliceDSL: 'cohort(household-created,1-Sep-25:30-Nov-25).context(channel:all)'
+    
+    # === Core fields (existing schema) ===
+    mean: 0.7041                     # k/n
+    n: 1450                          # Total X→Y cohort n
+    k: 1021                          # Total X→Y converters
+    cohort_from: '1-Sep-25'          # NEW: Cohort entry window start (A-entry dates)
+    cohort_to: '30-Nov-25'           # NEW: Cohort entry window end
+    
+    # === Daily breakdown (existing schema - flat parallel arrays) ===
+    dates: [1-Sep-25, 2-Sep-25, 3-Sep-25, ...]       # d-MMM-yy format (A-entry dates)
+    n_daily: [21, 7, 12, ...]                        # Per-cohort n
+    k_daily: [19, 4, 10, ...]                        # Per-cohort k
+    
+    # === NEW: Per-cohort latency (flat arrays, parallel to dates) ===
+    median_lag_days: [6.0, 6.0, 6.0, ...]            # X→Y median lag per cohort
+    mean_lag_days: [6.2, 6.0, 5.9, ...]              # X→Y mean lag per cohort
+    
+    # === NEW: Anchor data for multi-step funnels (flat arrays, parallel to dates) ===
+    anchor_n_daily: [575, 217, 318, ...]             # Users entering A per cohort
+    anchor_median_lag_days: [14.8, 16.2, 17.5, ...]  # A→X median lag per cohort
+    anchor_mean_lag_days: [15.9, 16.2, 18.3, ...]    # A→X mean lag per cohort
+    
+    # === NEW: Edge-level latency summary for X→Y ===
     latency:
-      median_days: 6.0             # Weighted median X→Y lag from dayMedianTransTimes
-      mean_days: 7.0               # Weighted mean X→Y lag from dayAvgTransTimes
-      completeness: 1.0            # See §5.0.1 (latency.completeness)
-      histogram:                   # Coarsened daily histogram (0–10d, then 10+ catch-all)
+      median_days: 6.0               # Weighted median X→Y lag
+      mean_days: 7.0                 # Weighted mean X→Y lag
+      completeness: 1.0              # Maturity progress 0-1 (see §5.0.1)
+      histogram:
         total_converters: 1021
         bins:
-          - day: 3
-            count: 2
-          - day: 6
-            count: 716
-          - day: 7
-            count: 206
-          - day: 8
-            count: 42
-          - day: 9
-            count: 55
-          - day_range: [10, 45]
-            count: 0               # Example only; real data uses Amplitude histogram
-
-    # Per-cohort evidence, anchored on A-entry date (HouseholdCreated)
-    cohort_data:
-      - date: 1-Sep-25             # d-MMM-yy format, per repo convention
-        anchor_n: 575              # Users who entered A on this date
-        anchor_median_lag: 14.8    # A→X median lag in days (from dayMedianTransTimes step 1)
-        anchor_mean_lag: 15.9      # A→X mean lag in days (from dayAvgTransTimes step 1)
-
-        n: 21                      # Users from this A-cohort who reached X (SwitchRegistered)
-        k: 19                      # Users from this A-cohort who reached Y (SwitchSuccess)
-        median_lag: 6.0            # X→Y median lag in days (step 2)
-        mean_lag: 6.2              # X→Y mean lag in days (step 2)
-
-      - date: 2-Sep-25
-        anchor_n: 217
-        anchor_median_lag: 16.2
-        anchor_mean_lag: 16.2
-        n: 7
-        k: 4
-        median_lag: 6.0
-        mean_lag: 6.0
-
-      # ... one row per A-anchored cohort date ...
-
-    # Optional upstream (A→X) summary for convolution and diagnostics
+          - { day: 3, count: 2 }
+          - { day: 6, count: 716 }
+          - { day: 7, count: 206 }
+          - { day: 8, count: 42 }
+          - { day: 9, count: 55 }
+    
+    # === NEW: Upstream (A→X) latency for convolution ===
     anchor_latency:
-      median_days: 11.4            # Overall A→X median lag
-      mean_days: 12.3              # Overall A→X mean lag
-      histogram:                   # Coarsened A→X histogram (same scheme as above)
+      median_days: 11.4
+      mean_days: 12.3
+      histogram:
         total_converters: 1450
         bins:
-          - day: 3
-            count: 1
-          - day: 4
-            count: 6
-          - day: 5
-            count: 37
-          - day: 6
-            count: 59
-          - day: 7
-            count: 85
-          - day: 8
-            count: 78
-          - day: 9
-            count: 155
-          - day_range: [10, 45]
-            count: 1029
+          - { day: 3, count: 1 }
+          - { day: 4, count: 6 }
+          - { day: 5, count: 37 }
+          # ... days 6-9 ...
+          - { day_range: [10, 45], count: 1029 }
+    
+    # === Provenance (existing schema) ===
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T00:00:00Z'
+
+# Anchor node reference (for multi-step funnel queries)
+anchor:
+  node_id: household-created
+  description: Graph node used as cohort anchor (resolved to event at query time)
+
+metadata:
+  description: X→Y edge from 3-step A→X→Y funnel
+  created_at: '2025-12-02T00:00:00Z'
+  author: amplitude-import
+  version: '1.0.0'
 ```
 
 **Notes:**
 
-- `cohort_data.date` is always an **A‑entry (anchor) date**, not an X‑entry date. This makes `cohort(anchor, ...)` queries trivial: we just slice rows by date and aggregate `n`/`k`.
-- `anchor_n` is used both for A→X diagnostics and for any future A→Y convolution logic. It is **not** required to answer X→Y cohort queries on evidence.
-- The **forecast baseline** for X→Y is derived from `latency.median_days`, `latency.mean_days` and (optionally) the `histogram` and will be refined by Phase 1 inference logic (§5).
-- The same pattern applies for any edge \(X→Y\): we store X→Y evidence and (optionally) the upstream A→X lag information relevant for that edge.
+- **Flat parallel arrays**: `dates`, `n_daily`, `k_daily`, `median_lag_days`, `mean_lag_days`, `anchor_n_daily`, `anchor_median_lag_days`, `anchor_mean_lag_days` are all parallel arrays indexed by cohort date. This aligns with the existing schema pattern.
+- **Anchor data** (`anchor_*` arrays) is only present for multi-step funnels (A→X→Y) where we need upstream lag for convolution. For 2-step funnels, these fields are absent.
+- The **forecast baseline** for X→Y is derived from `latency.median_days`, `latency.mean_days` and the `histogram`, refined by Phase 1 inference logic (§5).
+- The script `amplitude_to_param.py` generates this format from Amplitude funnel responses.
 
-### 3.3 Renaming: cost_time → labour_cost
+### 3.3 Slice Labelling: `sliceDSL` and Date Bounds
+
+**CHANGE FROM CURRENT BEHAVIOUR:** The current codebase strips `window()` from `sliceDSL`, storing only context dimensions. This loses information about the query type and makes it impossible to distinguish cohort vs window slices.
+
+**New design:** `sliceDSL` should be a **canonical label** for the slice. See §4.7.1 for full specification.
+
+**Key requirements:**
+- **Absolute dates** (not relative) — enables merging across fetches
+- **Explicit anchor node_id** for cohort slices — prevents cross-graph confusion
+- **All context clauses** — fully identifies the slice
+
+```yaml
+# Cohort slice (canonical format)
+sliceDSL: 'cohort(household-created,1-Sep-25:30-Nov-25).context(channel:google)'
+cohort_from: '1-Sep-25'
+cohort_to: '30-Nov-25'
+
+# Window slice (canonical format)
+sliceDSL: 'window(25-Nov-25:1-Dec-25).context(channel:google)'
+window_from: '25-Nov-25'
+window_to: '1-Dec-25'
+```
+
+**Rationale:**
+- `sliceDSL` is a **canonical identifier**, not a copy of the pinned query
+- Enables intelligent cache/merge policy (see §4.7.3)
+- Prevents incorrect cache hits from different anchor nodes
+- Absolute dates allow merging slices fetched at different times
+
+**Date bound fields:**
+- `cohort_from`/`cohort_to` — resolved absolute bounds for cohort slices (A-entry dates)
+- `window_from`/`window_to` — resolved absolute bounds for window slices (X-event dates)
+
+These serve as **indexed fields for efficient filtering** without DSL parsing.
+
+**Implementation:** Update `extractSliceDimensions()` and `mergeTimeSeriesIntoParameter()` to generate canonical sliceDSL (anchor + absolute dates) rather than preserving the original query.
+
+### 3.4 Date Format Standardisation
+
+**CHANGE FROM CURRENT SCHEMA:** The current `parameter-schema.yaml` uses ISO `date-time` format for `window_from`/`window_to` (e.g., `2025-01-01T00:00:00Z`). We standardise on **`d-MMM-yy`** format throughout:
+
+| Field | Current Schema | New Standard |
+|-------|---------------|--------------|
+| `window_from`, `window_to` | `2025-01-01T00:00:00Z` | `1-Jan-25` |
+| `cohort_from`, `cohort_to` | *(new fields)* | `1-Sep-25` |
+| `dates[]` array | *(unspecified)* | `1-Sep-25` |
+
+**Exceptions:**
+- `data_source.retrieved_at` — remains ISO `date-time` (machine timestamp)
+- `metadata.created_at`, `metadata.updated_at` — remain ISO `date-time`
+
+**Schema update required:** Change `window_from`/`window_to` from `format: date-time` to `format: date` with pattern `^\d{1,2}-[A-Z][a-z]{2}-\d{2}$` and add `cohort_from`/`cohort_to` with same pattern.
+
+### 3.5 Renaming: cost_time → labour_cost
 
 The operations team uses "time cost" to track **human effort** (hours spent processing), distinct from latency (calendar time to conversion). We rename:
 
@@ -398,44 +443,62 @@ When the pinned DSL (e.g., `or(window(-7d:), cohort(-90d:)).context(channel)`) c
 
 1. **Cohort slice** (A-anchored):
    - Fetch 3-step funnel `[A → X → Y]` for the cohort range.
-   - Store as `cohort_data` + `latency` + `anchor_latency` (as per §3.2).
+   - Store using flat arrays (`dates`, `n_daily`, `k_daily`, `median_lag_days`, `anchor_*`) plus `latency` and `anchor_latency` blocks (as per §3.2).
    - Used for `cohort(...)` queries and for building the edge-level model (p*, lag CDF).
 
 2. **Window slice** (X-anchored):
    - Fetch 2-step funnel `[X → Y]` for the window range.
-   - Store as `window_data` (simple `dates`, `n_daily`, `k_daily` arrays).
+   - Store using same flat-array pattern (`dates`, `n_daily`, `k_daily`), no anchor data needed.
    - Used for `window(...)` queries — gives "raw recent events" at this edge.
 
-Both slices are stored in the **same param file**, distinguished by `sliceDSL`:
+Both slices are stored in the **same param file**, distinguished by `sliceDSL` (see §3.3 and §4.7.1):
 
 ```yaml
 values:
-  # A-anchored cohort slice
-  - sliceDSL: 'cohort(-90d:).context(channel:google)'
-    query_date: '2-Dec-25'
-    totals: { n: 1450, k: 1021 }
-    latency: { median_days: 6.0, mean_days: 7.0, completeness: 1.0 }
-    cohort_data: [ ... per-A-date rows ... ]
+  # A-anchored cohort slice (full latency data)
+  # Note: sliceDSL is CANONICAL — includes anchor node_id + absolute dates
+  - sliceDSL: 'cohort(household-created,1-Sep-25:30-Nov-25).context(channel:google)'
+    mean: 0.704
+    n: 1450
+    k: 1021
+    cohort_from: '1-Sep-25'          # Cohort entry bounds (A-entry dates)
+    cohort_to: '30-Nov-25'
+    dates: [1-Sep-25, 2-Sep-25, ...]
+    n_daily: [21, 7, ...]
+    k_daily: [19, 4, ...]
+    median_lag_days: [6.0, 6.0, ...]
+    anchor_n_daily: [575, 217, ...]
+    anchor_median_lag_days: [14.8, 16.2, ...]
+    latency: { median_days: 6.0, mean_days: 7.0, completeness: 1.0, ... }
     anchor_latency: { ... }
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T00:00:00Z'
 
-  # X-anchored window slice (recent)
-  - sliceDSL: 'window(-7d:).context(channel:google)'
-    query_date: '2-Dec-25'
-    totals: { n: 120, k: 8 }
-    window_data:
-      dates: [ '25-Nov-25', '26-Nov-25', ... ]
-      n_daily: [ 18, 22, ... ]
-      k_daily: [ 1, 2, ... ]
+  # X-anchored window slice (recent events only)
+  # Note: sliceDSL uses absolute dates (no anchor needed for window slices)
+  - sliceDSL: 'window(25-Nov-25:1-Dec-25).context(channel:google)'
+    mean: 0.067
+    n: 120
+    k: 8
+    window_from: '25-Nov-25'         # Event occurrence bounds (X-event dates)
+    window_to: '1-Dec-25'
+    dates: [25-Nov-25, 26-Nov-25, ...]
+    n_daily: [18, 22, ...]
+    k_daily: [1, 2, ...]
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T00:00:00Z'
 ```
 
 **Query resolution:**
 
 | Query | Edge has `latency.track=true`? | Resolution |
 |-------|-------------------------------|------------|
-| `cohort(...)` | Yes | Use `cohort_data` (A-anchored); slice by A-date, aggregate n/k |
+| `cohort(...)` | Yes | Use cohort slice (A-anchored); slice by date, aggregate n/k |
 | `cohort(...)` | No | Treat as `window()` (existing logic) |
-| `window(...)` | Yes, and `window_data` exists | Use `window_data` (X-anchored); slice by X-date |
-| `window(...)` | Yes, but no `window_data` | Fall back to model-based convolution from `cohort_data` + lag CDF |
+| `window(...)` | Yes, and window slice exists | Use window slice (X-anchored); slice by date |
+| `window(...)` | Yes, but no window slice | Fall back to model-based convolution from cohort slice + lag CDF |
 | `window(...)` | No | Existing `window()` logic (n_daily/k_daily by event date) |
 
 **Implications:**
@@ -443,6 +506,232 @@ values:
 - **Pinned DSL design matters:** To get both cohort and window views for a latency edge, the pinned DSL must include both `cohort(...)` and `window(...)` clauses (e.g., `or(window(-30d:), cohort(-90d:))`).
 - **Amplitude query count:** For latency edges with dual slices, we make two Amplitude calls per context slice (one 3-step, one 2-step). This is acceptable given the distinct use cases.
 - **Non-latency edges are unchanged:** `cohort()` on a non-latency edge is just an alias for `window()`.
+
+### 4.7 Canonical sliceDSL, Maturity Calculation, and Cache Policy
+
+#### 4.7.1 Canonical sliceDSL Format
+
+**IMPORTANT:** The `sliceDSL` stored in param files is a **canonical label**, not a copy of the pinned query. It must fully identify the slice independent of graph context.
+
+**Problem:** User pins `cohort(-90d:)` for a graph where START = `household-created`. The Amplitude query is constructed using that anchor. But the *param file* is shared — another graph with different START might incorrectly use this cohort data.
+
+**Solution:** `sliceDSL` must include:
+1. **Absolute dates** (not relative)
+2. **Explicit anchor node_id** for cohort slices
+3. **All context clauses**
+
+**Canonical format:**
+```
+cohort(<anchor_node_id>,<start>:<end>)[.context(...)]
+window(<start>:<end>)[.context(...)]
+```
+
+**Examples:**
+```yaml
+# Pinned DSL: cohort(-90d:).context(channel:google)
+# Graph START: household-created
+# Query date: 2-Dec-25
+
+# Stored sliceDSL (CANONICAL):
+sliceDSL: 'cohort(household-created,1-Sep-25:30-Nov-25).context(channel:google)'
+
+# NOT this (ambiguous):
+sliceDSL: 'cohort(-90d:).context(channel:google)'
+```
+
+**For window slices** (no anchor needed):
+```yaml
+# Pinned DSL: window(-7d:)
+# Query date: 2-Dec-25
+
+sliceDSL: 'window(25-Nov-25:1-Dec-25).context(channel:google)'
+```
+
+**Why this matters:**
+- Unambiguous slice identification across graphs
+- Enables intelligent merging (see §4.7.3)
+- Prevents incorrect cache hits from different anchors
+
+#### 4.7.2 Total Maturity Calculation
+
+For cohort slices, we need **total maturity** to determine cache/refresh policy. A cohort from Day D is mature when `today - D >= total_maturity`.
+
+**Total maturity = A→X maturity + X→Y maturity**
+
+Where:
+- **X→Y maturity** = `edge.latency.maturity_days` (configured on the edge)
+- **A→X maturity** = max sum of `maturity_days` across all paths from anchor A to X
+
+**Algorithm: Longest path in DAG**
+
+```python
+def compute_a_x_maturity(graph, anchor_id, x_id):
+    """
+    Find max maturity path from anchor to x.
+    Conservative: uses longest path to ensure all conversions have matured.
+    """
+    # Topological sort (graph is a DAG)
+    topo_order = topological_sort(graph)
+    
+    # DP: max maturity to reach each node from anchor
+    max_maturity = {node: -inf for node in graph.nodes}
+    max_maturity[anchor_id] = 0
+    
+    for node_id in topo_order:
+        if max_maturity[node_id] == -inf:
+            continue  # Unreachable from anchor
+        
+        for edge in outgoing_edges(node_id):
+            edge_mat = edge.latency.maturity_days if edge.latency?.track else 0
+            max_maturity[edge.to] = max(
+                max_maturity[edge.to],
+                max_maturity[node_id] + edge_mat
+            )
+    
+    return max_maturity[x_id]
+
+# Total maturity for edge X→Y with anchor A
+total_maturity = compute_a_x_maturity(graph, anchor_id, x_id) + xy_edge.latency.maturity_days
+```
+
+**Example:**
+```
+Graph: A --[10d]--> B --[7d]--> X --[30d]--> Y
+       A --[5d]---> C --[15d]-----> X
+
+Path A→B→X: 10 + 7 = 17 days
+Path A→C→X: 5 + 15 = 20 days
+
+A→X maturity = max(17, 20) = 20 days
+Total maturity = 20 + 30 = 50 days
+```
+
+**Edge cases:**
+- A = X (direct edge): A→X maturity = 0
+- Non-latency edges: maturity_days = 0
+- X unreachable from A: error (invalid anchor)
+
+**Future optimisation:** Instead of sum of maturity_days, convolve the actual latency distributions for a tighter estimate. Deferred to Phase 1+ as the conservative approach is simpler and the calculation only affects caching, not the actual cohort data which is A-anchored anyway.
+
+#### 4.7.3 Cache and Merge Policy
+
+**CHANGE FROM CURRENT BEHAVIOUR:** This section describes changes to both `window()` AND `cohort()` retrieval mechanics.
+
+**Current behaviour (all edges):**
+- Fetch only missing date gaps
+- Append new slices to param file
+- `sliceDSL` stores the context only (window stripped)
+- Works for non-latency edges where each day's data is final when fetched
+
+**Problems this creates:**
+- **Latency edges:** Data matures over time — k accrues after initial fetch
+- **Recent data:** Incomplete; needs refresh, but current logic skips "cached" dates
+- **Appending:** Creates bloated, repetitive param files
+- **Relative DSL:** Cannot merge slices fetched at different times
+
+**New policy (applies to ALL slice types):**
+
+| Slice Type | Cache Policy | Merge Policy | sliceDSL Format |
+|------------|--------------|--------------|-----------------|
+| `window()` with maturity=0 | Incremental gaps | Merge by date | `window(<abs_start>:<abs_end>)[.context()]` |
+| `window()` with maturity>0 | Re-fetch immature portion | Replace immature, merge mature | `window(<abs_start>:<abs_end>)[.context()]` |
+| `cohort()` | Re-fetch if immature cohorts OR stale | Replace entire slice | `cohort(<anchor>,<abs_start>:<abs_end>)[.context()]` |
+
+**Window slice (CHANGED from current behaviour):**
+
+For `window()` with `maturity_days=0` (non-latency or instant conversion):
+```
+Current incremental logic continues to work.
+Merge by date, update sliceDSL bounds to reflect coverage.
+sliceDSL: 'window(1-Sep-25:30-Nov-25).context(...)' ← absolute dates
+```
+
+For `window()` with `maturity_days>0` (latency edge):
+```
+Query: window(-30d:-1d), maturity_days=7, today=T
+
+Mature portion:   [-30d:-8d]  → use cache if exists
+Immature portion: [-7d:-1d]   → ALWAYS re-fetch (data still accruing)
+
+On merge:
+  - Replace data for dates in immature window
+  - Keep cached data for mature dates
+  - Update sliceDSL bounds: 'window(<earliest>:<latest>).context(...)'
+```
+
+**Cohort slice:**
+```
+Query: cohort(household-created,-90d:), total_maturity=50d, today=T
+
+Cohorts [-90d:-51d]: mature → could use cache
+Cohorts [-50d:]:     immature → data still accruing
+
+Re-fetch triggers:
+  1. Any immature cohorts need updating
+  2. Stale data (last fetch > N hours ago)
+  3. Explicit user refresh
+
+On merge:
+  - Replace entire slice (cohort data is holistic)
+  - Update sliceDSL bounds to reflect actual coverage
+```
+
+**Key changes for window() slices:**
+- `sliceDSL` now uses **absolute dates** (not stripped)
+- Merge updates `sliceDSL` bounds to reflect actual coverage
+- For latency edges: immature portion always re-fetched
+
+**Key changes for cohort() slices:**
+- `sliceDSL` includes **anchor node_id** + absolute dates
+- Replace entire slice on refresh (not incremental append)
+- Merge updates `sliceDSL` bounds to reflect actual coverage
+
+**Merge and sliceDSL update:**
+
+When merging fetches over time:
+```
+Day 1: Fetch cohort(a,-90d:) → covers 1-Sep-25:30-Nov-25
+       sliceDSL: 'cohort(household-created,1-Sep-25:30-Nov-25)'
+
+Day 2: Fetch cohort(a,-90d:) → covers 2-Sep-25:1-Dec-25
+       
+After merge:
+       dates[] spans 1-Sep-25:1-Dec-25
+       sliceDSL: 'cohort(household-created,1-Sep-25:1-Dec-25)'  ← UPDATED
+```
+
+The `sliceDSL` reflects **effective coverage**, not the original query. Original queries go in `data_source.full_query` for provenance.
+
+**Implementation sketch:**
+```typescript
+function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDecision {
+  if (!edge.latency?.track) {
+    return { type: 'gaps_only' };  // Current incremental logic
+  }
+  
+  const isCohort = slice.sliceDSL.includes('cohort(');
+  
+  if (isCohort) {
+    const totalMaturity = computeTotalMaturity(graph, edge);
+    const hasImmatureCohorts = slice.dates.some(d => 
+      daysSince(d) < totalMaturity
+    );
+    const isStale = hoursSince(slice.data_source.retrieved_at) > REFRESH_HOURS;
+    
+    if (hasImmatureCohorts || isStale) {
+      return { type: 'replace_slice' };
+    }
+    return { type: 'use_cache' };
+  }
+  
+  // Window with latency
+  const maturityDays = edge.latency.maturity_days;
+  return { 
+    type: 'partial',
+    matureCutoff: daysAgo(maturityDays + 1),  // Re-fetch after this date
+  };
+}
+```
 
 ---
 
@@ -958,7 +1247,6 @@ Cross-section of edge:
 
         ┌───────────────────────────────┐
         │ ╱ ╱ ╱ OUTER (forecast) ╱ ╱ ╱ │  ← Striped (offset pattern)
-        │ ╱ ╱ ╱ ╱ ╱ ╱ ╱ ╱ ╱ ╱ ╱ ╱ ╱ ╱ │
         ───────────────────────────────
         │///////// INNER ///////////// │  ← Striped (same width, offset)
         │/////////(mature)///////////// │
@@ -1030,7 +1318,7 @@ A new bead displays latency information on edges with `latency.track: true`:
 | Property | Value |
 |----------|-------|
 | Position | **Right-aligned** on edge (new bead position) |
-| Format | **"13d (75%)"** — median lag + completeness (see §5.0.1) |
+| Format | **"13d (75%)"** — median lag + completeness (see §5.0.1) | *** WE MIGHT WANT TO SURRFACE ST DEV OR WHATEVER ON THE LAG DAYS TOO E.G. 13d+/-3 (75%) ***
 | Show when | `latency.track === true` AND `median_lag_days > 0` |
 | Colour | Standard bead styling (no new colour) |
 
@@ -1223,37 +1511,93 @@ if (queryPayload.cohort) {
 - Modify aggregation to separate mature vs immature cohorts
 - Return both aggregate p AND maturity breakdown
 
-#### E. Parameter Storage
+#### E. Amplitude Adapter (connections.yaml)
+
+| Change | Description |
+|--------|-------------|
+| Add `cs` default | Conversion window in seconds (default: 3,888,000 = 45 days) |
+| Extract latency fields | `dayMedianTransTimes`, `dayAvgTransTimes`, `medianTransTimes`, `avgTransTimes`, `stepTransTimeDistribution` |
+| Support `cohort()` | Pre-request script must handle cohort vs window semantics |
+
+**New defaults:**
+```yaml
+defaults:
+  base_url: "https://amplitude.com/api/2"
+  cs: 3888000  # Conversion window: 45 days in seconds
+```
+
+**New response extracts:**
+```yaml
+response:
+  extract:
+    # ... existing extracts ...
+    - name: day_median_trans_times
+      jmes: "data[0].dayMedianTransTimes"
+    - name: day_avg_trans_times
+      jmes: "data[0].dayAvgTransTimes"
+    - name: median_trans_times
+      jmes: "data[0].medianTransTimes"
+    - name: avg_trans_times
+      jmes: "data[0].avgTransTimes"
+    - name: step_trans_time_dist
+      jmes: "data[0].stepTransTimeDistribution"
+```
+
+**Pre-request changes:**
+- Detect `cohort()` vs `window()` from DSL
+- For `cohort()`: build 3-step A→X→Y funnel, set `from_step_index` and `to_step_index` for X→Y extraction
+- For `window()`: build 2-step X→Y funnel (current behaviour)
+- Pass `cs` parameter to API: `cs={connection.cs}`
+
+#### F. Parameter Storage
 
 | File | Current Role | Change Required |
 |------|--------------|-----------------|
-| `src/services/paramRegistryService.ts` | Stores/retrieves parameter data | Store cohort-level data including latency |
-| `public/param-schemas/parameter-schema.yaml` | Schema for parameter files | Add `median_trans_times`, `cohort_age_days` |
+| `src/services/paramRegistryService.ts` | Stores/retrieves parameter data | Store latency arrays and summary blocks |
+| `public/param-schemas/parameter-schema.yaml` | Schema for parameter files | Add latency fields (see §3.2) |
 
-**New fields in parameter values:**
+**New fields in parameter values** (extends existing schema pattern):
 ```yaml
 values:
-  - mean: 0.079
-    n: 1782
-    k: 140
+  - mean: 0.704
+    n: 1450
+    k: 1021
+    window_from: '2025-09-01'
+    window_to: '2025-11-30'
     
-    # Existing daily breakdown
-    n_daily: [15, 14, 15, 24, ...]
-    k_daily: [0, 1, 0, 1, ...]
-    dates: [1-Sep-24, 2-Sep-24, ...]
+    # Existing daily breakdown (unchanged)
+    dates: [1-Sep-25, 2-Sep-25, ...]
+    n_daily: [21, 7, ...]
+    k_daily: [19, 4, ...]
     
-    # NEW: Latency data per cohort
-    median_trans_times_ms: [null, 2015856000, null, 533520000, ...]
+    # NEW: Per-cohort latency (flat arrays, parallel to dates)
+    median_lag_days: [6.0, 6.0, ...]
+    mean_lag_days: [6.2, 6.0, ...]
     
-    # NEW: Cohort metadata
-    cohort_window:
-      start: 1-Sep-24
-      end: 31-Oct-24
-      maturity_days: 30
-      query_date: 1-Dec-24  # When this data was fetched
+    # NEW: Anchor data for multi-step funnels (flat arrays)
+    anchor_n_daily: [575, 217, ...]
+    anchor_median_lag_days: [14.8, 16.2, ...]
+    anchor_mean_lag_days: [15.9, 16.2, ...]
+    
+    # NEW: Edge-level latency summary
+    latency:
+      median_days: 6.0
+      mean_days: 7.0
+      completeness: 1.0
+      histogram: { ... }
+    
+    # NEW: Upstream latency (for convolution)
+    anchor_latency: { ... }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T00:00:00Z'
+      full_query: 'cohort(-90d:)'
 ```
 
-#### F. Update Manager
+See §3.2 for full structure and field descriptions.
+
+#### G. Update Manager
 
 | File | Current Role | Change Required |
 |------|--------------|-----------------|
@@ -1264,14 +1608,14 @@ values:
 - `source → edge.latency.median_days`
 - `source → edge.p.maturity_coverage`
 
-#### G. Edge Schema & Types
+#### H. Edge Schema & Types
 
 | File | Current Role | Change Required |
 |------|--------------|-----------------|
 | `src/types/index.ts` | TypeScript type definitions | Add `LatencyConfig`, rename `cost_time` |
 | `lib/graph_types.py` | Pydantic models | Add latency fields to Edge model |
 
-#### H. Edge Rendering
+#### I. Edge Rendering
 
 | File | Current Role | Change Required |
 |------|--------------|-----------------|
@@ -1279,13 +1623,13 @@ values:
 | `src/components/edges/EdgeBeads.tsx` | Renders edge beads/labels | Show latency info in beads |
 | `src/lib/nodeEdgeConstants.ts` | Edge styling constants | Add stripe patterns for forecast layer |
 
-#### I. Properties Panel
+#### J. Properties Panel
 
 | File | Current Role | Change Required |
 |------|--------------|-----------------|
 | `src/components/PropertiesPanel.tsx` | Shows selected element properties | Display latency stats, maturity coverage |
 
-#### J. Context & State
+#### K. Context & State
 
 | File | Current Role | Change Required |
 |------|--------------|-----------------|
