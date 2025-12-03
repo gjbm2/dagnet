@@ -1,5 +1,25 @@
 # TODO
 
+## GraphCanvas and GRaphEditor need a full reappraisal and refactor. It is a horror show.
+
+
+## Graph issues panel
+
+- Ideally we'd have deep linking from viewer > graph objects, but that has proven a _WORLD_ of pain because of the complexity of trying to reach into renderflow via rc dock and all KINDS of complexity. So for now...we don't have it.
+
+- Add to Graph Issues checker some semantic issues as well as syntactic ones (with suitable toggles in the viewer):
+   - pmfs not summing to 1
+   - p by variant weights not summing to 1
+   - condition_p pmgs not summing to 1
+   - terminal node type not assigned properly
+   - strange number of start nodes or start nodes and weight 
+   - conditional p groups have different conditions
+   - orphaned nodes not connected to graph
+   - missing query string
+   - etc. etc. etc. -- make a long, creative list and add checks
+   - informational: overridens applied
+
+
 ## Orphaned Scenarios Problem (DESIGN NEEDED)
 
 **Problem:** Scenarios can become orphaned and persist in IndexedDB with no way to clear them except `File > Clear`:
