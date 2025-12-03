@@ -255,6 +255,8 @@ def handle_compile_exclude(data: Dict[str, Any]) -> Dict[str, Any]:
     query_str = data.get('query')
     graph_data = data.get('graph')
     
+    print(f"[compile_exclude] Received request with query: {query_str[:200] if query_str else 'None'}...")
+    
     if not query_str:
         raise ValueError("Missing 'query' field")
     if not graph_data:
@@ -264,10 +266,21 @@ def handle_compile_exclude(data: Dict[str, Any]) -> Dict[str, Any]:
     from query_dsl import parse_query_strict
     from graph_types import Graph
     
-    parsed = parse_query_strict(query_str)
+    try:
+        parsed = parse_query_strict(query_str)
+        print(f"[compile_exclude] Parsed query: from={parsed.from_node}, to={parsed.to_node}, exclude={parsed.exclude}, visited={parsed.visited}")
+    except Exception as e:
+        print(f"[compile_exclude] Failed to parse query: {e}")
+        return {
+            "compiled_query": query_str,
+            "was_compiled": False,
+            "error": f"Query parse failed: {str(e)}",
+            "success": False
+        }
     
     if not parsed.exclude:
         # No excludes, return original query
+        print(f"[compile_exclude] No excludes found in parsed query")
         return {
             "compiled_query": query_str,
             "was_compiled": False,
@@ -275,7 +288,17 @@ def handle_compile_exclude(data: Dict[str, Any]) -> Dict[str, Any]:
         }
     
     # Build graph for topology analysis
-    graph = Graph.model_validate(graph_data)
+    try:
+        graph = Graph.model_validate(graph_data)
+        print(f"[compile_exclude] Graph validated: {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+    except Exception as e:
+        print(f"[compile_exclude] Failed to validate graph: {e}")
+        return {
+            "compiled_query": query_str,
+            "was_compiled": False,
+            "error": f"Graph validation failed: {str(e)}",
+            "success": False
+        }
     
     # Import the inclusion-exclusion compiler
     import sys
@@ -302,17 +325,31 @@ def handle_compile_exclude(data: Dict[str, Any]) -> Dict[str, Any]:
         from_id = edge.from_node
         to_id = edge.to
         # Resolve from/to to node IDs
-        from_node = next((n for n in graph.nodes if n.uuid == from_id or n.id == from_id), None)
-        to_node = next((n for n in graph.nodes if n.uuid == to_id or n.id == to_id), None)
-        if from_node and to_node:
-            from_node_id = from_node.id or from_node.uuid
-            to_node_id = to_node.id or to_node.uuid
+        from_node_match = next((n for n in graph.nodes if n.uuid == from_id or n.id == from_id), None)
+        to_node_match = next((n for n in graph.nodes if n.uuid == to_id or n.id == to_id), None)
+        if from_node_match and to_node_match:
+            from_node_id = from_node_match.id or from_node_match.uuid
+            to_node_id = to_node_match.id or to_node_match.uuid
             G.add_edge(from_node_id, to_node_id)
+    
+    print(f"[compile_exclude] Built networkx graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     
     # Get from/to nodes
     from_node = parsed.from_node
     to_node = parsed.to_node
     exclude_nodes = parsed.exclude
+    
+    print(f"[compile_exclude] Compiling: from={from_node}, to={to_node}, exclude={exclude_nodes}")
+    
+    # Check if nodes exist in graph
+    missing_nodes = []
+    for node_id in [from_node, to_node] + exclude_nodes:
+        if node_id and node_id not in G.nodes():
+            missing_nodes.append(node_id)
+    
+    if missing_nodes:
+        print(f"[compile_exclude] WARNING: Nodes not found in graph: {missing_nodes}")
+        print(f"[compile_exclude] Available nodes: {list(G.nodes())[:20]}...")  # First 20 nodes
     
     # Import the optimized inclusion-exclusion compiler
     from optimized_inclusion_exclusion import compile_optimized_inclusion_exclusion
@@ -321,6 +358,9 @@ def handle_compile_exclude(data: Dict[str, Any]) -> Dict[str, Any]:
         compiled_query, terms = compile_optimized_inclusion_exclusion(
             G, from_node, to_node, to_node, exclude_nodes
         )
+        
+        print(f"[compile_exclude] Successfully compiled: {len(terms)} terms")
+        print(f"[compile_exclude] Compiled query: {compiled_query[:200]}...")
         
         # Prepend any visited() terms from original query
         if parsed.visited:
@@ -339,7 +379,9 @@ def handle_compile_exclude(data: Dict[str, Any]) -> Dict[str, Any]:
             "success": True
         }
     except Exception as e:
+        import traceback
         print(f"[compile_exclude] Compilation failed: {e}")
+        print(f"[compile_exclude] Traceback: {traceback.format_exc()}")
         return {
             "compiled_query": query_str,
             "was_compiled": False,
