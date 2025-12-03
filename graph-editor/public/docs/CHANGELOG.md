@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.11b
+**Released:** December 03, 2025
+
+GRaph issues viewer
+
+---
+
 ## Version 0.99.10b
 **Released:** December 03, 2025
 
