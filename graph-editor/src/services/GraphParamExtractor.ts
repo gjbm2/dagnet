@@ -172,6 +172,111 @@ function extractNodeParams(node: GraphNode): NodeParamDiff | null {
  * Extract parameters from specific nodes and edges
  * Used for copying vars from selected objects
  */
+/**
+ * Extract parameters that differ between a modified graph and a base graph.
+ * Used for live scenarios to capture the fetched data as scenario params.
+ * 
+ * @param modifiedGraph - Graph with fetched data (scenario-specific)
+ * @param baseGraph - Original graph (before fetching)
+ * @returns ScenarioParams containing only the differences
+ */
+export function extractDiffParams(
+  modifiedGraph: Graph | null,
+  baseGraph: Graph | null
+): ScenarioParams {
+  if (!modifiedGraph) {
+    return { edges: {}, nodes: {} };
+  }
+  
+  const params: ScenarioParams = {
+    edges: {},
+    nodes: {}
+  };
+  
+  // Extract edge differences
+  if (modifiedGraph.edges) {
+    for (const modifiedEdge of modifiedGraph.edges) {
+      const key = modifiedEdge.id || modifiedEdge.uuid;
+      const baseEdge = baseGraph?.edges?.find(e => (e.id || e.uuid) === key);
+      
+      // Extract params from modified edge
+      const modifiedParams = extractEdgeParams(modifiedEdge);
+      if (!modifiedParams) continue;
+      
+      // If no base edge, include all params
+      if (!baseEdge) {
+        params.edges![key] = modifiedParams;
+        continue;
+      }
+      
+      // Compare and only include differences
+      const diffParams: EdgeParamDiff = {};
+      
+      // Check p.mean difference (most common case)
+      if (modifiedParams.p?.mean !== undefined) {
+        const baseMean = (baseEdge.p as any)?.mean;
+        if (baseMean === undefined || Math.abs(modifiedParams.p.mean - baseMean) > 1e-9) {
+          diffParams.p = { ...modifiedParams.p };
+        }
+      }
+      
+      // Include other param differences as needed
+      if (modifiedParams.cost_gbp?.mean !== undefined) {
+        const baseCost = baseEdge.cost_gbp?.mean;
+        if (baseCost === undefined || Math.abs(modifiedParams.cost_gbp.mean - baseCost) > 1e-9) {
+          diffParams.cost_gbp = { ...modifiedParams.cost_gbp };
+        }
+      }
+      
+      if (modifiedParams.cost_time?.mean !== undefined) {
+        const baseCost = baseEdge.cost_time?.mean;
+        if (baseCost === undefined || Math.abs(modifiedParams.cost_time.mean - baseCost) > 1e-9) {
+          diffParams.cost_time = { ...modifiedParams.cost_time };
+        }
+      }
+      
+      if (Object.keys(diffParams).length > 0) {
+        params.edges![key] = diffParams;
+      }
+    }
+  }
+  
+  // Node differences (similar pattern)
+  if (modifiedGraph.nodes) {
+    for (const modifiedNode of modifiedGraph.nodes) {
+      const key = modifiedNode.id || modifiedNode.uuid;
+      const baseNode = baseGraph?.nodes?.find(n => (n.id || n.uuid) === key);
+      
+      const modifiedParams = extractNodeParams(modifiedNode);
+      if (!modifiedParams) continue;
+      
+      if (!baseNode) {
+        params.nodes![key] = modifiedParams;
+        continue;
+      }
+      
+      // Compare entry weights
+      const diffParams: NodeParamDiff = {};
+      if (modifiedParams.entry?.entry_weight !== undefined) {
+        const baseWeight = baseNode.entry?.entry_weight;
+        if (baseWeight === undefined || Math.abs(modifiedParams.entry.entry_weight - baseWeight) > 1e-9) {
+          diffParams.entry = { ...modifiedParams.entry };
+        }
+      }
+      
+      if (Object.keys(diffParams).length > 0) {
+        params.nodes![key] = diffParams;
+      }
+    }
+  }
+  
+  return params;
+}
+
+/**
+ * Extract parameters from specific nodes and edges
+ * Used for copying vars from selected objects
+ */
 export function extractParamsFromSelection(
   graph: Graph | null,
   selectedNodeUuids: string[],

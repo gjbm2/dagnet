@@ -13,7 +13,7 @@ import { dataOperationsService } from '../services/dataOperationsService';
 import { calculateIncrementalFetch } from '../services/windowAggregationService';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
-import { FileText } from 'lucide-react';
+import { FileText, Zap } from 'lucide-react';
 import { parseConstraints } from '../lib/queryDSL';
 import { formatDateUK } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
@@ -22,7 +22,9 @@ import { ContextValueSelector } from './ContextValueSelector';
 import { contextRegistry } from '../services/contextRegistry';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { PinnedQueryModal } from './modals/PinnedQueryModal';
+import { BulkScenarioCreationModal } from './modals/BulkScenarioCreationModal';
 import { useFetchData, fetchWithToast, createFetchItem, type FetchItem } from '../hooks/useFetchData';
+import { useBulkScenarioCreation } from '../hooks/useBulkScenarioCreation';
 
 interface BatchItem {
   id: string;
@@ -98,6 +100,25 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const [availableKeySections, setAvailableKeySections] = useState<any[]>([]);
   const [isUnrolled, setIsUnrolled] = useState(false);
   const [showPinnedQueryModal, setShowPinnedQueryModal] = useState(false);
+  
+  // Preset context menu state
+  const [presetContextMenu, setPresetContextMenu] = useState<{
+    x: number;
+    y: number;
+    preset: 7 | 30 | 90;
+  } | null>(null);
+  const presetContextMenuRef = useRef<HTMLDivElement>(null);
+  
+  // Bulk scenario creation hook
+  const {
+    createWindowScenario,
+    createMultipleWindowScenarios,
+    getWindowDSLForPreset,
+    openBulkCreateForContext,
+    bulkCreateModal,
+    closeBulkCreateModal,
+    createScenariosForContext
+  } = useBulkScenarioCreation();
   const [showingAllContexts, setShowingAllContexts] = useState(false);
   
   const contextButtonRef = useRef<HTMLButtonElement>(null);
@@ -332,6 +353,20 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showContextDropdown]);
+  
+  // Close preset context menu when clicking outside
+  useEffect(() => {
+    if (!presetContextMenu) return;
+    
+    function handleClickOutside(event: MouseEvent) {
+      if (presetContextMenuRef.current && !presetContextMenuRef.current.contains(event.target as Node)) {
+        setPresetContextMenu(null);
+      }
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [presetContextMenu]);
   
   // Sync refs with state (separate effects to avoid triggering aggregation)
   useEffect(() => {
@@ -757,6 +792,27 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     updateWindowAndDSL(startStr, endStr);
   };
   
+  // Right-click handler for preset buttons
+  const handlePresetContextMenu = useCallback((preset: 7 | 30 | 90, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setPresetContextMenu({ x: e.clientX, y: e.clientY, preset });
+  }, []);
+  
+  // Create live scenario from window preset (using hook)
+  const handleCreateWindowScenario = useCallback(async (preset: 7 | 30 | 90, offset: number = 0) => {
+    const windowDSL = getWindowDSLForPreset(preset, offset);
+    await createWindowScenario(windowDSL);
+    setPresetContextMenu(null);
+  }, [createWindowScenario, getWindowDSLForPreset]);
+  
+  // Create multiple window scenarios (using hook)
+  const handleCreateMultipleWindowScenarios = useCallback(async (preset: 7 | 30 | 90, count: number) => {
+    const dsls = Array.from({ length: count }, (_, i) => getWindowDSLForPreset(preset, i));
+    await createMultipleWindowScenarios(dsls);
+    setPresetContextMenu(null);
+  }, [createMultipleWindowScenarios, getWindowDSLForPreset]);
+  
   // Helper to check if current window matches a preset
   const getActivePreset = (): number | 'today' | null => {
     if (!window) return null;
@@ -949,24 +1005,27 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           <button
             type="button"
             onClick={() => handlePreset(7)}
+            onContextMenu={(e) => handlePresetContextMenu(7, e)}
             className={`window-selector-preset ${activePreset === 7 ? 'active' : ''}`}
-            title="Last 7 days"
+            title="Last 7 days (right-click for scenarios)"
           >
             7d
           </button>
           <button
             type="button"
             onClick={() => handlePreset(30)}
+            onContextMenu={(e) => handlePresetContextMenu(30, e)}
             className={`window-selector-preset ${activePreset === 30 ? 'active' : ''}`}
-            title="Last 30 days"
+            title="Last 30 days (right-click for scenarios)"
           >
             30d
           </button>
           <button
             type="button"
             onClick={() => handlePreset(90)}
+            onContextMenu={(e) => handlePresetContextMenu(90, e)}
             className={`window-selector-preset ${activePreset === 90 ? 'active' : ''}`}
-            title="Last 90 days"
+            title="Last 90 days (right-click for scenarios)"
           >
             90d
           </button>
@@ -1076,6 +1135,19 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 currentValues={currentContextValues}
                 currentContextKey={currentContextKey}
                 showingAll={showingAllContexts}
+                onCreateScenarios={(contextKey, values) => {
+                  if (values) {
+                    // Create scenarios for specific values immediately
+                    createScenariosForContext(contextKey, values);
+                    // Keep dropdown open to allow creating more? Or close?
+                    // If user clicked "+", they probably want to see the scenario created.
+                    // Let's keep it open for multi-creation workflow.
+                  } else {
+                    // Open bulk creation modal
+                    setShowContextDropdown(false);
+                    openBulkCreateForContext(contextKey);
+                  }
+                }}
                 onShowAll={async () => {
                   // Load ALL contexts from registry (not just pinned)
                   contextRegistry.clearCache();
@@ -1286,6 +1358,133 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         }}
         onClose={() => setShowPinnedQueryModal(false)}
       />
+      
+      {/* Preset context menu */}
+      {presetContextMenu && (
+        <div
+          ref={presetContextMenuRef}
+          style={{
+            position: 'fixed',
+            left: presetContextMenu.x,
+            top: presetContextMenu.y,
+            background: '#fff',
+            border: '1px solid #dee2e6',
+            borderRadius: '6px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 10000,
+            minWidth: '200px',
+            padding: '4px 0'
+          }}
+        >
+          {/* Current period */}
+          <button
+            onClick={() => handleCreateWindowScenario(presetContextMenu.preset, 0)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              width: '100%',
+              padding: '8px 12px',
+              border: 'none',
+              background: 'transparent',
+              color: '#374151',
+              fontSize: '13px',
+              textAlign: 'left',
+              cursor: 'pointer'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          >
+            Create scenario ({getWindowDSLForPreset(presetContextMenu.preset, 0)})
+            <Zap size={12} style={{ color: 'currentColor', marginLeft: 'auto' }} />
+          </button>
+          
+          {/* Previous period */}
+          <button
+            onClick={() => handleCreateWindowScenario(presetContextMenu.preset, 1)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              width: '100%',
+              padding: '8px 12px',
+              border: 'none',
+              background: 'transparent',
+              color: '#374151',
+              fontSize: '13px',
+              textAlign: 'left',
+              cursor: 'pointer'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          >
+            Create scenario ({getWindowDSLForPreset(presetContextMenu.preset, 1)})
+            <Zap size={12} style={{ color: 'currentColor', marginLeft: 'auto' }} />
+          </button>
+          
+          {/* Two periods ago */}
+          <button
+            onClick={() => handleCreateWindowScenario(presetContextMenu.preset, 2)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              width: '100%',
+              padding: '8px 12px',
+              border: 'none',
+              background: 'transparent',
+              color: '#374151',
+              fontSize: '13px',
+              textAlign: 'left',
+              cursor: 'pointer'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          >
+            Create scenario ({getWindowDSLForPreset(presetContextMenu.preset, 2)})
+            <Zap size={12} style={{ color: 'currentColor', marginLeft: 'auto' }} />
+          </button>
+          
+          {/* Separator */}
+          <div style={{ height: '1px', background: '#e5e7eb', margin: '4px 0' }} />
+          
+          {/* Create 4 periods */}
+          <button
+            onClick={() => handleCreateMultipleWindowScenarios(presetContextMenu.preset, 4)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              width: '100%',
+              padding: '8px 12px',
+              border: 'none',
+              background: 'transparent',
+              color: '#374151',
+              fontSize: '13px',
+              textAlign: 'left',
+              cursor: 'pointer'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          >
+            Create 4 scenarios ({presetContextMenu.preset === 7 ? 'weekly' : presetContextMenu.preset === 30 ? 'monthly' : 'quarterly'})
+            <Zap size={12} style={{ color: 'currentColor', marginLeft: 'auto' }} />
+          </button>
+        </div>
+      )}
+      
+      {/* Bulk scenario creation modal */}
+      {bulkCreateModal && (
+        <BulkScenarioCreationModal
+          isOpen={true}
+          contextKey={bulkCreateModal.contextKey}
+          values={bulkCreateModal.values}
+          onClose={closeBulkCreateModal}
+          onCreate={async (selectedValues) => {
+            await createScenariosForContext(bulkCreateModal.contextKey, selectedValues);
+          }}
+        />
+      )}
     </div>
   );
 }

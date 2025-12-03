@@ -20,6 +20,7 @@ import { toYAML, toJSON, toCSV, fromYAML, fromJSON } from '../../services/ParamP
 import { X, FileText, Download, AlertCircle, CheckCircle2, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
+import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import './Modal.css';
 import './ScenarioEditorModal.css';
 
@@ -32,7 +33,7 @@ interface ScenarioEditorModalProps {
 }
 
 export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave }: ScenarioEditorModalProps) {
-  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot, createBlank, renameScenario } = useScenariosContext();
+  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot, createBlank, renameScenario, baseDSL, setBaseDSL } = useScenariosContext();
   const { operations } = useTabContext();
   const graphStore = useGraphStore();
   const graph = graphStore?.getState().graph || null;
@@ -47,6 +48,7 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
   const [isSaving, setIsSaving] = useState(false);
   const [editableNote, setEditableNote] = useState('');
   const [editableName, setEditableName] = useState('');
+  const [editableBaseDSL, setEditableBaseDSL] = useState('');
   
   const editorRef = useRef<any>(null);
   
@@ -68,6 +70,9 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         setScenario(pseudoScenario);
         setEditableName(pseudoScenario.name);
         setEditableNote(pseudoScenario.meta?.note || '');
+        // Fall back to current DSL from graphStore if baseDSL is not set
+        const effectiveBaseDSL = baseDSL || graphStore?.getState().currentDSL || '';
+        setEditableBaseDSL(effectiveBaseDSL);
         
         const content = format.syntax === 'yaml'
           ? toYAML(pseudoScenario.params, format.structure)
@@ -191,6 +196,12 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
           ? fromYAML(editorValue, format.structure, graph)
           : fromJSON(editorValue, format.structure, graph);
         setBaseParams(parsed);
+        
+        // Also update base DSL if changed
+        if (editableBaseDSL !== baseDSL) {
+          setBaseDSL(editableBaseDSL);
+        }
+        
         toast.success('Base updated');
         setIsDirty(false);
         onClose();
@@ -332,6 +343,29 @@ export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave
         <div className="modal-body scenario-editor-body">
           {/* Metadata Panel */}
           <div className="scenario-metadata-panel">
+            {/* Base DSL Editor - only for Base */}
+            {scenario.id === 'base' && (
+              <div className="metadata-row metadata-dsl-row">
+                <strong>Base DSL:</strong>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <QueryExpressionEditor
+                    value={editableBaseDSL}
+                    onChange={(value) => {
+                      setEditableBaseDSL(value);
+                      setIsDirty(true);
+                    }}
+                    graph={graph}
+                    height="60px"
+                    placeholder="e.g., window(-30d:-1d).context(channel:google)"
+                    readonly={false}
+                  />
+                  <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
+                    The base query DSL inherited by all live scenarios
+                  </div>
+                </div>
+              </div>
+            )}
+            
             {/* Editable Name - only for non-Base/Current scenarios */}
             {scenario.id !== 'base' && scenario.id !== 'current' && (
               <div className="metadata-row metadata-name-row">

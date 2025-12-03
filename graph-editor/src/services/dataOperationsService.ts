@@ -48,7 +48,7 @@ import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService'
 import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
 import { sessionLogService } from './sessionLogService';
 import { parseConstraints } from '../lib/queryDSL';
-import { normalizeToUK, formatDateUK, parseUKDate } from '../lib/dateFormat';
+import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
 import { rateLimiter } from './rateLimiter';
 
 /**
@@ -531,9 +531,10 @@ class DataOperationsService {
     if (!window && targetSlice) {
       const parsed = parseConstraints(targetSlice);
       if (parsed.window?.start && parsed.window?.end) {
+        // Resolve any relative dates (e.g., "-14d") to actual dates
         window = {
-          start: parsed.window.start,
-          end: parsed.window.end,
+          start: resolveRelativeDate(parsed.window.start),
+          end: resolveRelativeDate(parsed.window.end),
         };
       }
     }

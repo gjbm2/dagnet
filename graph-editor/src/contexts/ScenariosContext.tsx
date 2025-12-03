@@ -25,14 +25,29 @@ import { composeParams } from '../services/CompositionService';
 import { computeDiff } from '../services/DiffService';
 import { fromYAML, fromJSON } from '../services/ParamPackDSLService';
 import { validateScenarioParams } from '../services/ScenarioValidator';
-import { extractParamsFromGraph } from '../services/GraphParamExtractor';
+import { extractParamsFromGraph, extractDiffParams } from '../services/GraphParamExtractor';
 import { parseWhatIfDSL } from '../lib/whatIf';
 import { useGraphStore } from './GraphStoreContext';
 import { db } from '../db/appDatabase';
+import {
+  splitDSLParts,
+  buildFetchDSL,
+  buildWhatIfDSL,
+  computeEffectiveParams,
+  computeInheritedDSL,
+  computeEffectiveFetchDSL,
+  isLiveScenario,
+  generateSmartLabel
+} from '../services/scenarioRegenerationService';
+import { 
+  fetchDataService,
+  type FetchItem 
+} from '../services/fetchDataService';
 
 // Scenario colour palette (user scenarios cycle through these)
 // Using more saturated, vibrant colours for better visibility
-const SCENARIO_PALETTE = [
+// Exported for use in bulk creation hooks
+export const SCENARIO_PALETTE = [
   '#EC4899', // Hot Pink
   '#F59E0B', // Amber
   '#10B981', // Emerald
@@ -61,9 +76,19 @@ interface ScenariosContextValue {
   currentParams: ScenarioParams;
   editorOpenScenarioId: string | null;
   
+  // Ready flag - true when scenarios have been loaded from IndexedDB
+  // Consumers should wait for this before creating scenarios to avoid race conditions
+  scenariosReady: boolean;
+  
+  // Graph reference (for checking if graph is loaded)
+  graph: Graph | null;
+  
   // Colours (graph-level, user-mutable)
   currentColour: string;
   baseColour: string;
+  
+  // Live scenarios state
+  baseDSL: string;
   
   // CRUD operations
   createSnapshot: (
@@ -80,6 +105,21 @@ interface ScenariosContextValue {
   renameScenario: (id: string, name: string) => Promise<void>;
   updateScenarioColour: (id: string, colour: string) => Promise<void>;
   deleteScenario: (id: string) => Promise<void>;
+  
+  // Live scenario operations
+  createLiveScenario: (
+    queryDSL: string,
+    name?: string,
+    tabId?: string,
+    colour?: string
+  ) => Promise<Scenario>;
+  regenerateScenario: (id: string, scenarioOverride?: Scenario, baseDSLOverride?: string, allScenariosOverride?: Scenario[], visibleOrder?: string[]) => Promise<void>;
+  regenerateAllLive: (baseDSLOverride?: string, visibleOrder?: string[]) => Promise<void>;
+  updateScenarioQueryDSL: (id: string, queryDSL: string) => Promise<void>;
+  
+  // Base DSL operations
+  setBaseDSL: (dsl: string) => void;
+  putToBase: (visibleOrder?: string[]) => Promise<void>;
   
   // Content operations
   applyContent: (id: string, content: string, options: ApplyContentOptions) => Promise<void>;
@@ -126,6 +166,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   const [currentColour, setCurrentColour] = useState<string>('#3B82F6'); // Blue (vibrant)
   const [baseColour, setBaseColour] = useState<string>('#A3A3A3'); // Neutral grey
   const [editorOpenScenarioId, setEditorOpenScenarioId] = useState<string | null>(null);
+  const [baseDSL, setBaseDSLState] = useState<string>('');
   const lastFileIdRef = useRef<string | null>(null);
   const [scenariosLoaded, setScenariosLoaded] = useState(false);
 
@@ -171,18 +212,29 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     
     const saveScenarios = async () => {
       try {
-        // Delete all scenarios for this file
-        await db.scenarios.where('fileId').equals(fileId).delete();
+        // Get current scenario IDs in memory
+        const currentIds = new Set(scenarios.map(s => s.id));
         
-        // Add all current scenarios
+        // Get all scenarios for this file from DB
+        const dbScenarios = await db.scenarios.where('fileId').equals(fileId).toArray();
+        const dbIds = new Set(dbScenarios.map(s => s.id));
+        
+        // Delete scenarios that are in DB but not in memory
+        const toDelete = dbScenarios.filter(s => !currentIds.has(s.id)).map(s => s.id);
+        if (toDelete.length > 0) {
+          await db.scenarios.bulkDelete(toDelete);
+        }
+        
+        // Upsert all current scenarios (bulkPut = insert or update)
         if (scenarios.length > 0) {
           const scenariosWithFileId = scenarios.map(scenario => ({
             ...scenario,
             fileId
           }));
-          await db.scenarios.bulkAdd(scenariosWithFileId);
-          console.log(`ScenariosContext: Saved ${scenarios.length} scenarios for file ${fileId}`);
+          await db.scenarios.bulkPut(scenariosWithFileId);
         }
+        
+        console.log(`ScenariosContext: Saved ${scenarios.length} scenarios for file ${fileId}`);
       } catch (error) {
         console.error('Failed to save scenarios to DB:', error);
       }
@@ -192,7 +244,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   }, [scenarios, fileId, scenariosLoaded]);
 
   // Extract parameters from graph
-  // - On FILE CHANGE: Set both baseParams and currentParams (new baseline)
+  // - On FILE CHANGE: Set both baseParams and currentParams (new baseline), load baseDSL
   // - On GRAPH UPDATES: Only update currentParams (base is explicitly managed)
   useEffect(() => {
     if (graph) {
@@ -205,6 +257,8 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         // File changed: set both base and current (new baseline)
         setBaseParams(params);
         setCurrentParams(params);
+        // Load baseDSL from graph (persisted in YAML)
+        setBaseDSLState(graph.baseDSL || '');
         lastFileIdRef.current = fileId || null;
       } else {
         // Same file, graph updated: only update current, preserve base
@@ -452,6 +506,402 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   }, [generateId]);
 
   /**
+   * Create a live scenario from a query DSL.
+   * 
+   * Live scenarios can be regenerated from source data at any time.
+   * The queryDSL specifies what data slice this scenario represents.
+   * 
+   * @param queryDSL - Query DSL fragment (e.g., "context(channel:google)")
+   * @param name - Optional display name (defaults to queryDSL)
+   * @param tabId - Tab ID where this scenario was created
+   * @param colour - Optional colour override (for bulk creation to avoid stale closure)
+   */
+  const createLiveScenario = useCallback(async (
+    queryDSL: string,
+    name?: string,
+    tabId?: string,
+    colour?: string
+  ): Promise<Scenario> => {
+    // Check scenario limit
+    if (scenarios.length >= MAX_SCENARIOS) {
+      throw new Error(`Maximum of ${MAX_SCENARIOS} scenarios reached`);
+    }
+    
+    // CRITICAL: If baseDSL is not set, capture the graph's current DSL as the base
+    // This ensures live scenarios inherit window/context from the current graph state
+    if (!baseDSL && graphStore) {
+      const currentGraphDSL = graphStore.getState().currentDSL || '';
+      if (currentGraphDSL) {
+        console.log(`createLiveScenario: Setting baseDSL to "${currentGraphDSL}" (was empty)`);
+        setBaseDSL(currentGraphDSL);
+      }
+    }
+    
+    const now = new Date().toISOString();
+    // Use provided colour or assign from palette
+    let assignedColour = colour;
+    if (!assignedColour) {
+      const usedColours = new Set(scenarios.map(s => s.colour));
+      const firstUnusedIndex = SCENARIO_PALETTE.findIndex(c => !usedColours.has(c));
+      assignedColour = firstUnusedIndex >= 0
+        ? SCENARIO_PALETTE[firstUnusedIndex]
+        : SCENARIO_PALETTE[scenarios.length % SCENARIO_PALETTE.length];
+    }
+    
+    const scenario: Scenario = {
+      id: generateId(),
+      name: name || generateSmartLabel(queryDSL), // Default name is smart label from DSL
+      colour: assignedColour,
+      createdAt: now,
+      version: 1,
+      params: { edges: {}, nodes: {} }, // Will be populated by regeneration
+      meta: {
+        queryDSL,
+        isLive: true,
+        createdInTabId: tabId,
+        note: `Live scenario created on ${new Date(now).toLocaleString()}`,
+      }
+    };
+    
+    // Insert new scenario at position 0 (just beneath Current in composition)
+    setScenarios(prev => [scenario, ...prev]);
+    
+    // NOTE: We don't auto-regenerate on creation because:
+    // 1. React state updates are async, so regenerateScenario's closure has stale scenarios
+    // 2. Live scenarios start with empty params - user can trigger regeneration when needed
+    // 3. Bulk creation would spam the API if we auto-regenerated each scenario
+    
+    return scenario;
+  }, [generateId, scenarios]);
+
+  /**
+   * Regenerate a live scenario from its queryDSL.
+   * 
+   * This fetches fresh data and recomputes effective params with any what-if baked in.
+   * 
+   * @param id - Scenario ID to regenerate
+   * @param scenarioOverride - Optional: pass scenario directly to avoid stale state lookup
+   * @param baseDSLOverride - Optional: pass baseDSL directly to avoid stale state
+   * @param allScenariosOverride - Optional: pass full scenarios list to ensure correct inheritance during bulk creation
+   * @param visibleOrder - Optional: pass VISIBLE scenario IDs in visual order for correct inheritance
+   */
+  const regenerateScenario = useCallback(async (id: string, scenarioOverride?: Scenario, baseDSLOverride?: string, allScenariosOverride?: Scenario[], visibleOrder?: string[]): Promise<void> => {
+    // Use provided scenario or look up from state
+    const scenario = scenarioOverride || scenarios.find(s => s.id === id);
+    if (!scenario?.meta?.queryDSL) {
+      console.warn(`Scenario ${id} is not a live scenario (no queryDSL)`);
+      return;
+    }
+    
+    if (!graph) {
+      console.warn('Cannot regenerate scenario: no graph loaded');
+      return;
+    }
+    
+    // Use provided baseDSL or fall back to state/graph
+    // Use || not ?? because empty string should fall through
+    const effectiveBaseDSL = baseDSLOverride || baseDSL || graphStore?.getState().currentDSL || '';
+    
+    // Use provided scenarios list or state
+    const effectiveScenarios = allScenariosOverride || scenarios;
+    
+    // Build scenarios in VISIBLE order for inheritance calculation
+    // ONLY VISIBLE scenarios contribute to DSL inheritance
+    // Scenarios inherit from those BELOW them in the visible stack
+    let orderedVisibleScenarios: typeof effectiveScenarios;
+    if (visibleOrder && visibleOrder.length > 0) {
+      // Filter to only visible scenarios, in visual order
+      orderedVisibleScenarios = visibleOrder
+        .filter(orderId => orderId !== 'base' && orderId !== 'current') // Exclude special IDs
+        .map(orderId => effectiveScenarios.find(s => s.id === orderId))
+        .filter((s): s is NonNullable<typeof s> => s !== undefined);
+    } else {
+      // Fallback: use all scenarios (legacy behaviour)
+      orderedVisibleScenarios = effectiveScenarios;
+    }
+    
+    // Find scenario index in VISIBLE order - for inheritance calculation
+    // Scenarios inherit from those BELOW them (higher indices in visible stack)
+    let scenarioIndex = orderedVisibleScenarios.findIndex(s => s.id === id);
+    if (scenarioIndex < 0) {
+      // Scenario not in visible list - it inherits from ALL visible scenarios + base
+      scenarioIndex = 0;
+      // Prepend the target scenario so it's at index 0 and inherits from everything
+      orderedVisibleScenarios = [scenario, ...orderedVisibleScenarios];
+    }
+    
+    // Compute inherited DSL from base + VISIBLE scenarios BELOW this one
+    const inheritedDSL = computeInheritedDSL(scenarioIndex, orderedVisibleScenarios, effectiveBaseDSL);
+    
+    // Split scenario's DSL into fetch and what-if parts
+    const { fetchParts, whatIfParts } = splitDSLParts(scenario.meta.queryDSL);
+    
+    // Build the effective fetch DSL (inherited + this scenario's fetch parts)
+    const scenarioFetchDSL = buildFetchDSL(fetchParts);
+    const effectiveFetchDSL = computeEffectiveFetchDSL(inheritedDSL, scenario.meta.queryDSL);
+    
+    // Build the what-if DSL for this scenario
+    const scenarioWhatIfDSL = buildWhatIfDSL(whatIfParts);
+    
+    console.log(`Regenerating scenario ${id}:`, {
+      queryDSL: scenario.meta.queryDSL,
+      inheritedDSL,
+      effectiveFetchDSL,
+      whatIfDSL: scenarioWhatIfDSL
+    });
+    
+    try {
+      // Check if we need to fetch data using fetchDataService
+      const cacheCheck = fetchDataService.checkDSLNeedsFetch(effectiveFetchDSL, graph);
+      
+      // CRITICAL: Create a DEEP COPY of the graph for scenario-specific fetching.
+      // This ensures that fetching data for a scenario doesn't modify the main graph.
+      // Each scenario gets its own isolated graph copy to fetch into.
+      let scenarioGraph: Graph = JSON.parse(JSON.stringify(graph));
+      const setScenarioGraph = (g: Graph | null) => {
+        if (g) scenarioGraph = g;
+        // Note: We intentionally don't update the main graph here.
+        // Scenarios store their params as overlays, not by modifying the base graph.
+      };
+      
+      if (cacheCheck.needsFetch && cacheCheck.items.length > 0) {
+        console.log(`Fetching ${cacheCheck.items.length} items for scenario ${id}...`);
+        
+        // Fetch items using versioned mode (writes to file cache)
+        const fetchResults = await fetchDataService.fetchItems(
+          cacheCheck.items,
+          { mode: 'versioned' },
+          scenarioGraph,
+          setScenarioGraph,
+          effectiveFetchDSL,
+          () => scenarioGraph
+        );
+        
+        const failures = fetchResults.filter(r => !r.success);
+        if (failures.length > 0) {
+          console.warn(`${failures.length} items failed to fetch:`, failures.map(f => f.item.name));
+        }
+      } else {
+        console.log(`All data cached for scenario ${id}, loading from files...`);
+        
+        // Even if cached, we need to load from file to populate scenarioGraph params
+        // Build fetch items from graph to load from file
+        // Fallback to graph's current window if DSL doesn't specify one
+        const windowFromDSL = fetchDataService.extractWindowFromDSL(effectiveFetchDSL);
+        const fallbackWindow = graphStore?.getState().window;
+        const windowForFetch = windowFromDSL || fallbackWindow || { start: '', end: '' };
+        
+        const allItems = fetchDataService.getItemsNeedingFetch(
+          windowForFetch,
+          scenarioGraph,
+          effectiveFetchDSL, // Use effective DSL for loading
+          false // Force collection (skip cache check) since we know we want to load from files
+        );
+        
+        if (allItems.length > 0) {
+          await fetchDataService.fetchItems(
+            allItems,
+            { mode: 'from-file' },
+            scenarioGraph,
+            setScenarioGraph,
+            effectiveFetchDSL,
+            () => scenarioGraph
+          );
+        }
+      }
+      
+      // Extract the fetched params from the scenario's isolated graph copy
+      // This captures the edge params (mean, n, k, etc.) that were loaded
+      // We compare against the original graph to get only the differences
+      const fetchedParams = extractDiffParams(scenarioGraph, graph);
+      
+      // Compute what-if params (case overrides, visited conditionals)
+      const whatIfParams = await computeEffectiveParams(scenarioGraph, scenarioWhatIfDSL);
+      
+      // Merge: fetched data params + what-if overrides
+      // whatIfParams takes precedence for any overlapping keys
+      const effectiveParams: ScenarioParams = {
+        edges: { ...fetchedParams.edges, ...whatIfParams.edges },
+        nodes: { ...fetchedParams.nodes, ...whatIfParams.nodes }
+      };
+      
+      // Update the scenario with new params
+      const now = new Date().toISOString();
+      setScenarios(prev => prev.map(s => 
+        s.id === id
+          ? {
+              ...s,
+              params: effectiveParams,
+              updatedAt: now,
+              version: s.version + 1,
+              meta: {
+                ...s.meta,
+                lastRegeneratedAt: now,
+                lastEffectiveDSL: effectiveFetchDSL,
+              }
+            }
+          : s
+      ));
+      
+      console.log(`Scenario ${id} regenerated successfully`);
+    } catch (error) {
+      console.error(`Failed to regenerate scenario ${id}:`, error);
+      throw error;
+    }
+  }, [scenarios, graph, baseDSL, graphStore]);
+
+  /**
+   * Regenerate all live scenarios.
+   * 
+   * Runs regeneration SEQUENTIALLY (bottom-up in visible order) to ensure correct DSL inheritance.
+   * Only VISIBLE scenarios contribute to inheritance - hidden scenarios are skipped.
+   * 
+   * @param baseDSLOverride - Optional: pass new baseDSL to avoid stale closure issues
+   * @param visibleOrder - Optional: pass VISIBLE scenario IDs in visual order
+   */
+  const regenerateAllLive = useCallback(async (baseDSLOverride?: string, visibleOrder?: string[]): Promise<void> => {
+    const effectiveBase = baseDSLOverride || baseDSL || graphStore?.getState().currentDSL || '';
+    
+    // Filter to only visible scenarios if visibleOrder provided
+    let scenariosToProcess: Scenario[];
+    if (visibleOrder && visibleOrder.length > 0) {
+      // Only regenerate VISIBLE live scenarios, in visual order (bottom to top)
+      // Reverse the order so we process from bottom (closest to Base) to top
+      const reversedOrder = [...visibleOrder].reverse();
+      scenariosToProcess = reversedOrder
+        .filter(id => id !== 'base' && id !== 'current')
+        .map(id => scenarios.find(s => s.id === id))
+        .filter((s): s is Scenario => s !== undefined && s.meta?.isLive === true);
+    } else {
+      // Fallback: all live scenarios in array order
+      scenariosToProcess = scenarios.filter(s => s.meta?.isLive);
+    }
+    
+    if (scenariosToProcess.length === 0) {
+      console.log('No visible live scenarios to regenerate');
+      return;
+    }
+    
+    console.log(`Regenerating ${scenariosToProcess.length} visible live scenarios sequentially with baseDSL="${effectiveBase}"...`);
+    
+    // Create a working copy of scenarios to track DSL updates as we go
+    const workingScenarios = JSON.parse(JSON.stringify(scenarios));
+    
+    let successCount = 0;
+    
+    // Process in order (bottom to top in visible stack)
+    for (const scenario of scenariosToProcess) {
+      if (!scenario.meta?.isLive) continue;
+      
+      try {
+        // Find this scenario in working copy
+        const workingScenario = workingScenarios.find((s: Scenario) => s.id === scenario.id);
+        if (!workingScenario) continue;
+        
+        // 1. Pre-calculate the new effective DSL for this scenario
+        // Use visibleOrder for inheritance calculation
+        const visibleWorkingScenarios = visibleOrder 
+          ? visibleOrder
+              .filter(id => id !== 'base' && id !== 'current')
+              .map(id => workingScenarios.find((s: Scenario) => s.id === id))
+              .filter((s: Scenario | undefined): s is Scenario => s !== undefined)
+          : workingScenarios;
+        
+        const scenarioIndex = visibleWorkingScenarios.findIndex((s: Scenario) => s.id === scenario.id);
+        const inherited = computeInheritedDSL(scenarioIndex >= 0 ? scenarioIndex : 0, visibleWorkingScenarios, effectiveBase);
+        const effective = computeEffectiveFetchDSL(inherited, scenario.meta.queryDSL);
+        
+        // 2. Update the working copy immediately
+        if (!workingScenario.meta) workingScenario.meta = {};
+        workingScenario.meta.lastEffectiveDSL = effective;
+        
+        // 3. Trigger actual regeneration with visibleOrder
+        await regenerateScenario(scenario.id, undefined, effectiveBase, workingScenarios, visibleOrder);
+        successCount++;
+        
+      } catch (err) {
+        console.error(`Failed to regenerate scenario ${scenario.id} in batch:`, err);
+      }
+    }
+    
+    console.log(`Regenerated ${successCount}/${scenariosToProcess.length} scenarios`);
+  }, [scenarios, baseDSL, graphStore, regenerateScenario]);
+
+  /**
+   * Update a scenario's queryDSL and trigger regeneration.
+   * 
+   * @param id - Scenario ID
+   * @param queryDSL - New query DSL
+   */
+  const updateScenarioQueryDSL = useCallback(async (id: string, queryDSL: string): Promise<void> => {
+    // Find the existing scenario to build the updated version
+    const existingScenario = scenarios.find(s => s.id === id);
+    if (!existingScenario) {
+      console.warn(`updateScenarioQueryDSL: Scenario ${id} not found`);
+      return;
+    }
+    
+    // Build the updated scenario
+    const updatedScenario: Scenario = {
+      ...existingScenario,
+      meta: {
+        ...existingScenario.meta,
+        queryDSL,
+        isLive: Boolean(queryDSL && queryDSL.trim()),
+      },
+      updatedAt: new Date().toISOString(),
+      version: existingScenario.version + 1,
+    };
+    
+    // Update state
+    setScenarios(prev => prev.map(s => s.id === id ? updatedScenario : s));
+    
+    // Trigger regeneration if DSL is set - pass the updated scenario directly
+    // to avoid stale closure issues (state might not have updated yet)
+    if (queryDSL && queryDSL.trim()) {
+      await regenerateScenario(id, updatedScenario);
+    }
+  }, [scenarios, regenerateScenario]);
+
+  /**
+   * Set the base DSL and persist to graph.
+   */
+  const setBaseDSL = useCallback((dsl: string): void => {
+    setBaseDSLState(dsl);
+    
+    // Also update the graph object so it persists to YAML
+    if (graphStore) {
+      const currentGraph = graphStore.getState().graph;
+      if (currentGraph) {
+        graphStore.getState().setGraph({
+          ...currentGraph,
+          baseDSL: dsl
+        });
+      }
+    }
+  }, [graphStore]);
+
+  /**
+   * "To Base" operation: Set baseDSL from current graph DSL and regenerate all live scenarios.
+   * 
+   * @param visibleOrder - Optional: pass VISIBLE scenario IDs in visual order for correct inheritance
+   */
+  const putToBase = useCallback(async (visibleOrder?: string[]): Promise<void> => {
+    // Get current DSL from graphStore
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    
+    console.log(`putToBase: Setting baseDSL to "${currentDSL}"`);
+    
+    // Update baseDSL state
+    setBaseDSL(currentDSL);
+    
+    // Regenerate all live scenarios with the new base DSL
+    // IMPORTANT: Pass currentDSL directly to avoid stale closure - setBaseDSL is async
+    // Pass visibleOrder so only visible scenarios contribute to inheritance
+    await regenerateAllLive(currentDSL, visibleOrder);
+  }, [graphStore, setBaseDSL, regenerateAllLive]);
+
+  /**
    * Get a scenario by ID
    */
   const getScenario = useCallback((id: string): Scenario | undefined => {
@@ -655,6 +1105,9 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     currentColour,
     baseColour,
     editorOpenScenarioId,
+    scenariosReady: scenariosLoaded,
+    graph,
+    baseDSL,
     createSnapshot,
     createBlank,
     getScenario,
@@ -662,6 +1115,14 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     renameScenario,
     updateScenarioColour,
     deleteScenario,
+    // Live scenario operations
+    createLiveScenario,
+    regenerateScenario,
+    regenerateAllLive,
+    updateScenarioQueryDSL,
+    setBaseDSL,
+    putToBase,
+    // Content operations
     applyContent,
     validateContent,
     openInEditor,
@@ -679,6 +1140,9 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     currentColour,
     baseColour,
     editorOpenScenarioId,
+    scenariosLoaded,
+    graph,
+    baseDSL,
     createSnapshot,
     createBlank,
     getScenario,
@@ -686,6 +1150,12 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     renameScenario,
     updateScenarioColour,
     deleteScenario,
+    createLiveScenario,
+    regenerateScenario,
+    regenerateAllLive,
+    updateScenarioQueryDSL,
+    setBaseDSL,
+    putToBase,
     applyContent,
     validateContent,
     openInEditor,

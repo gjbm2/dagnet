@@ -8,6 +8,7 @@
  */
 
 import React, { useState } from 'react';
+import { Zap } from 'lucide-react';
 import type { ContextValue } from '../services/contextRegistry';
 import './ContextValueSelector.css';
 
@@ -31,6 +32,7 @@ interface ContextValueSelectorProps {
   otherPolicy?: 'null' | 'computed' | 'explicit' | 'undefined'; // For single-key mode
   onShowAll?: () => Promise<ContextKeySection[]>; // Callback to load all contexts (not just pinned)
   showingAll?: boolean; // Whether we're currently showing all contexts
+  onCreateScenarios?: (contextKey: string, values?: string[]) => void; // Callback to create scenarios (values=undefined means open bulk modal)
 }
 
 export function ContextValueSelector({
@@ -45,7 +47,8 @@ export function ContextValueSelector({
   anchorEl,
   otherPolicy,
   onShowAll,
-  showingAll = false
+  showingAll = false,
+  onCreateScenarios
 }: ContextValueSelectorProps) {
   const [selectedValues, setSelectedValues] = useState<Set<string>>(
     new Set(currentValues)
@@ -153,19 +156,32 @@ export function ContextValueSelector({
       {mode === 'single-key' && (
         <div className="context-selector-body">
           {availableValues.map(value => (
-            <label 
-              key={value.id} 
-              className="context-value-option"
-              style={{ opacity: allValuesSelected && isMECE ? 0.5 : 1 }}
-            >
-              <input
-                type="checkbox"
-                checked={selectedValues.has(value.id)}
-                onChange={() => handleToggle(value.id, contextKey || '')}
-                disabled={allValuesSelected && isMECE}
-              />
-              <span className="context-value-label">{value.label}</span>
-            </label>
+            <div key={value.id} className="context-value-row">
+              <label 
+                className="context-value-option"
+                style={{ opacity: allValuesSelected && isMECE ? 0.5 : 1 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedValues.has(value.id)}
+                  onChange={() => handleToggle(value.id, contextKey || '')}
+                  disabled={allValuesSelected && isMECE}
+                />
+                <span className="context-value-label">{value.label}</span>
+              </label>
+              {onCreateScenarios && contextKey && (
+                <button
+                  className="context-value-create-scenario-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCreateScenarios(contextKey, [value.id]);
+                  }}
+                  title={`Create scenario for ${value.label}`}
+                >
+                  + <Zap size={10} />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -175,18 +191,32 @@ export function ContextValueSelector({
         <div className="context-selector-body">
           {availableKeys.map(keySection => (
             <div key={keySection.id} className="context-key-section">
-              <button
-                className={`context-key-header ${expandedSections.has(keySection.id) ? 'expanded' : ''}`}
-                onClick={() => handleSectionToggle(keySection.id)}
-              >
-                <span>{expandedSections.has(keySection.id) ? '▾' : '▸'}</span>
-                <span>
-                  {keySection.name}
-                  {activeKey === keySection.id && allValuesSelected && keySection.otherPolicy !== 'undefined' && (
-                    <span style={{ color: '#6B7280', fontWeight: 'normal' }}> (All)</span>
-                  )}
-                </span>
-              </button>
+              <div className="context-key-header-row">
+                <button
+                  className={`context-key-header ${expandedSections.has(keySection.id) ? 'expanded' : ''}`}
+                  onClick={() => handleSectionToggle(keySection.id)}
+                >
+                  <span>{expandedSections.has(keySection.id) ? '▾' : '▸'}</span>
+                  <span>
+                    {keySection.name}
+                    {activeKey === keySection.id && allValuesSelected && keySection.otherPolicy !== 'undefined' && (
+                      <span style={{ color: '#6B7280', fontWeight: 'normal' }}> (All)</span>
+                    )}
+                  </span>
+                </button>
+                {onCreateScenarios && keySection.values.length > 0 && (
+                  <button
+                    className="context-create-scenarios-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCreateScenarios(keySection.id);
+                    }}
+                    title={`Create ${keySection.values.length} scenarios for ${keySection.name}`}
+                  >
+                    +{keySection.values.length} <Zap size={10} />
+                  </button>
+                )}
+              </div>
               {expandedSections.has(keySection.id) && (
                 <div className="context-key-values">
                   {keySection.values.map(value => {
@@ -195,19 +225,32 @@ export function ContextValueSelector({
                     const shouldGrey = sectionAllSelected && sectionIsMECE;
                     
                     return (
-                      <label 
-                        key={value.id} 
-                        className="context-value-option"
-                        style={{ opacity: shouldGrey ? 0.5 : 1 }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedValues.has(value.id)}
-                          onChange={() => handleToggle(value.id, keySection.id)}
-                          disabled={shouldGrey}
-                        />
-                        <span className="context-value-label">{value.label}</span>
-                      </label>
+                      <div key={value.id} className="context-value-row">
+                        <label 
+                          className="context-value-option"
+                          style={{ opacity: shouldGrey ? 0.5 : 1 }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedValues.has(value.id)}
+                            onChange={() => handleToggle(value.id, keySection.id)}
+                            disabled={shouldGrey}
+                          />
+                          <span className="context-value-label">{value.label}</span>
+                        </label>
+                        {onCreateScenarios && (
+                          <button
+                            className="context-value-create-scenario-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onCreateScenarios(keySection.id, [value.id]);
+                            }}
+                            title={`Create scenario for ${value.label}`}
+                          >
+                            + <Zap size={10} />
+                          </button>
+                        )}
+                      </div>
                     );
                   })}
                 </div>

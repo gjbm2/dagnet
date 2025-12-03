@@ -123,23 +123,27 @@ export class AppDatabase extends Dexie {
 
   /**
    * Clear all data (useful for testing or reset)
+   * Clears EVERYTHING except credentials
    */
   async clearAll(): Promise<void> {
-    // Clear all files except credentials
-    // Note: connections.yaml will be cleared and re-loaded from defaults on next startup
+    // Preserve credentials file before clearing
     const credentialsFile = await this.files.get('credentials-credentials');
-    await this.files.clear();
     
-    // Restore credentials file if it existed
+    // Clear all tables except credentials table
+    await this.files.clear();
+    await this.tabs.clear();
+    await this.appState.clear();
+    await this.workspaces.clear();
+    await this.scenarios.clear();
+    await this.settings.clear();
+    // DON'T clear credentials table - those are the user's auth tokens
+    
+    // Restore credentials file
     if (credentialsFile) {
       await this.files.add(credentialsFile);
     }
     
-    await this.tabs.clear();
-    await this.appState.clear();
-    await this.workspaces.clear(); // BUGFIX: Clear workspace metadata too
-    // Don't clear settings or credentials - user preferences should persist
-    // Connections will be re-seeded from defaults (or git) on app reload
+    // Files (including connections.yaml) will be re-seeded on app reload
   }
 
   /**

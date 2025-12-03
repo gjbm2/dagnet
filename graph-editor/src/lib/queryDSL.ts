@@ -505,15 +505,32 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   const existing = parseConstraints(existingDSL);
   const newParsed = parseConstraints(newConstraint);
   
-  // Merge: combine arrays, deduplicate
+  // Merge: combine arrays with smart replacement
+  // For visited/exclude: simple deduplication (multiple values allowed)
   const mergedVisited = [...new Set([...existing.visited, ...newParsed.visited])];
   const mergedExclude = [...new Set([...existing.exclude, ...newParsed.exclude])];
-  const mergedContext = [...existing.context, ...newParsed.context].filter((kv, idx, arr) => 
-    arr.findIndex(kv2 => kv2.key === kv.key && kv2.value === kv.value) === idx
-  );
-  const mergedCases = [...existing.cases, ...newParsed.cases].filter((kv, idx, arr) => 
-    arr.findIndex(kv2 => kv2.key === kv.key && kv2.value === kv.value) === idx
-  );
+  
+  // For context: new KEY replaces existing KEY (only one value per key)
+  // Start with existing, then override with new values for same keys
+  const contextMap = new Map<string, string>();
+  for (const kv of existing.context) {
+    contextMap.set(kv.key, kv.value);
+  }
+  for (const kv of newParsed.context) {
+    contextMap.set(kv.key, kv.value); // Overwrites existing key
+  }
+  const mergedContext = Array.from(contextMap.entries()).map(([key, value]) => ({ key, value }));
+  
+  // For cases: new KEY replaces existing KEY (only one case value per case key)
+  const casesMap = new Map<string, string>();
+  for (const kv of existing.cases) {
+    casesMap.set(kv.key, kv.value);
+  }
+  for (const kv of newParsed.cases) {
+    casesMap.set(kv.key, kv.value); // Overwrites existing key
+  }
+  const mergedCases = Array.from(casesMap.entries()).map(([key, value]) => ({ key, value }));
+  
   const mergedVisitedAny = [...existing.visitedAny, ...newParsed.visitedAny];
   const mergedContextAny = [...existing.contextAny, ...newParsed.contextAny];
   // For window: new value replaces existing (last wins)
