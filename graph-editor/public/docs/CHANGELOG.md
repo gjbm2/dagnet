@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.9b
+**Released:** December 03, 2025
+
+Live scenarios
+
+---
+
 ## Version 0.99.8b
 **Released:** December 02, 2025
 
