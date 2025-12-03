@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.12b
+**Released:** December 03, 2025
+
+Finally: fixes to conditional ps (among other things)
+
+---
+
 ## Version 0.99.11b
 **Released:** December 03, 2025
 
