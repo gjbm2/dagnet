@@ -1,0 +1,417 @@
+/**
+ * Graph Issues Viewer Styles
+ * 
+ * Light mode IDE-style linter view.
+ * Follows SessionLogViewer patterns and reuses classes where possible.
+ */
+
+.graph-issues-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #ffffff;
+  color: #333333;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+}
+
+/* Toolbar - matches .log-toolbar pattern */
+.issues-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #f5f5f5;
+  border-bottom: 1px solid #e0e0e0;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* Search - matches .log-search */
+.issues-search {
+  flex: 1;
+  min-width: 150px;
+  max-width: 250px;
+  padding: 6px 10px;
+  background: #ffffff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #333;
+  font-size: 12px;
+}
+
+.issues-search:focus {
+  outline: none;
+  border-color: #0066cc;
+  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.2);
+}
+
+.issues-search::placeholder {
+  color: #999;
+}
+
+/* Graph filter dropdown */
+.issues-graph-filter {
+  padding: 6px 10px;
+  background: #ffffff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #333;
+  font-size: 12px;
+  min-width: 120px;
+}
+
+.issues-graph-filter:focus {
+  outline: none;
+  border-color: #0066cc;
+}
+
+/* Include referenced files toggle */
+.issues-include-refs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #666;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.issues-include-refs input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.issues-include-refs:hover {
+  color: #333;
+}
+
+/* Severity toggles */
+.issues-severity-toggles {
+  display: flex;
+  gap: 4px;
+}
+
+.severity-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #ffffff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #666;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s ease;
+}
+
+.severity-toggle:hover {
+  background: #f0f0f0;
+}
+
+.severity-toggle.active {
+  color: #333;
+  border-color: #0066cc;
+}
+
+.severity-toggle.severity-error.active {
+  background: rgba(220, 53, 69, 0.1);
+  border-color: #dc3545;
+}
+
+.severity-toggle.severity-warning.active {
+  background: rgba(255, 193, 7, 0.15);
+  border-color: #ffc107;
+}
+
+.severity-toggle.severity-info.active {
+  background: rgba(0, 102, 204, 0.1);
+  border-color: #0066cc;
+}
+
+/* Toolbar actions - matches .log-toolbar-actions */
+.issues-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Buttons - matches .log-btn */
+.issues-btn {
+  padding: 4px 8px;
+  background: #ffffff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #333;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.issues-btn:hover:not(:disabled) {
+  background: #f0f0f0;
+}
+
+.issues-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.issues-btn.loading {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Status bar */
+.issues-status {
+  padding: 4px 12px;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+  font-size: 11px;
+  color: #666;
+}
+
+.status-loading {
+  color: #0066cc;
+}
+
+.status-error {
+  color: #dc3545;
+}
+
+.status-time {
+  color: #888;
+}
+
+/* Issues list - matches .log-entries */
+.issues-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.issues-empty {
+  padding: 40px;
+  text-align: center;
+  color: #999;
+}
+
+/* File group */
+.file-issue-group {
+  border-bottom: 1px solid #e9ecef;
+}
+
+.file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s ease;
+}
+
+.file-header:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.expand-icon {
+  width: 12px;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #666;
+}
+
+.file-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.file-name {
+  flex: 1;
+  color: #0066cc;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.file-name:hover {
+  text-decoration: underline;
+}
+
+.issue-counts {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.count-error {
+  color: #dc3545;
+}
+
+.count-warning {
+  color: #856404;
+}
+
+.count-info {
+  color: #0066cc;
+}
+
+/* File issues - matches .log-children pattern */
+.file-issues {
+  margin-left: 20px;
+  border-left: 1px dashed #ccc;
+}
+
+/* Issue row - matches .log-entry-container pattern */
+.issue-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  border-left: 3px solid transparent;
+  transition: background 0.1s ease;
+}
+
+.issue-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.issue-row.clickable {
+  cursor: pointer;
+}
+
+.issue-row.clickable:hover {
+  background: rgba(0, 102, 204, 0.08);
+}
+
+.issue-link-icon {
+  margin-left: auto;
+  color: #0066cc;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.issue-row.clickable:hover .issue-link-icon {
+  opacity: 1;
+}
+
+.issue-row.severity-error {
+  border-left-color: #dc3545;
+}
+
+.issue-row.severity-warning {
+  border-left-color: #ffc107;
+}
+
+.issue-row.severity-info {
+  border-left-color: #0066cc;
+}
+
+.issue-severity-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.issue-category {
+  font-size: 12px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.issue-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.issue-message {
+  color: #333;
+  word-break: break-word;
+}
+
+.issue-row.severity-error .issue-message {
+  color: #721c24;
+}
+
+.issue-row.severity-warning .issue-message {
+  color: #856404;
+}
+
+.issue-field {
+  font-size: 11px;
+  color: #666;
+}
+
+.issue-field code {
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: inherit;
+  color: #c7254e;
+}
+
+.issue-suggestion {
+  font-size: 11px;
+  color: #155724;
+  font-style: italic;
+}
+
+.issue-details {
+  font-size: 11px;
+  color: #666;
+  word-break: break-word;
+}
+
+/* Scrollbar - matches .log-entries scrollbar */
+.issues-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.issues-list::-webkit-scrollbar-track {
+  background: #f0f0f0;
+}
+
+.issues-list::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 4px;
+}
+
+.issues-list::-webkit-scrollbar-thumb:hover {
+  background: #aaa;
+}
+
+/* Context menu */
+.issue-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: #ffffff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  min-width: 120px;
+}
+
+.issue-context-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+  color: #333;
+}
+
+.issue-context-menu button:hover {
+  background: #f0f0f0;
+}

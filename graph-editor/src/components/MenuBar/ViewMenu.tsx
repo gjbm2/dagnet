@@ -5,6 +5,7 @@ import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { sessionLogService } from '../../services/sessionLogService';
+import { graphIssuesService } from '../../services/graphIssuesService';
 
 /**
  * View Menu
@@ -117,6 +118,10 @@ export function ViewMenu() {
 
   const handleOpenSessionLogs = async () => {
     await sessionLogService.openLogTab();
+  };
+
+  const handleOpenGraphIssues = async () => {
+    await graphIssuesService.openIssuesTab();
   };
 
   const handleHideUnselected = async () => {
@@ -345,6 +350,13 @@ export function ViewMenu() {
             onSelect={handleOpenSessionLogs}
           >
             Session Logs
+          </Menubar.Item>
+
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={handleOpenGraphIssues}
+          >
+            Graph Issues
           </Menubar.Item>
         </Menubar.Content>
       </Menubar.Portal>

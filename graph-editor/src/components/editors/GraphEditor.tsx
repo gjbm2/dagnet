@@ -199,6 +199,18 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(tabState.selectedNodeId ?? null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(tabState.selectedEdgeId ?? null);
   
+  // Sync selection state when tabState changes (e.g., from deep linking navigation)
+  useEffect(() => {
+    if (tabState.selectedNodeId !== undefined && tabState.selectedNodeId !== selectedNodeId) {
+      console.log('[GraphEditor] Syncing selectedNodeId from tabState:', tabState.selectedNodeId);
+      setSelectedNodeId(tabState.selectedNodeId);
+    }
+    if (tabState.selectedEdgeId !== undefined && tabState.selectedEdgeId !== selectedEdgeId) {
+      console.log('[GraphEditor] Syncing selectedEdgeId from tabState:', tabState.selectedEdgeId);
+      setSelectedEdgeId(tabState.selectedEdgeId);
+    }
+  }, [tabState.selectedNodeId, tabState.selectedEdgeId]);
+  
   // Selector modal state (scoped to graph editor window)
   const [selectorModalConfig, setSelectorModalConfig] = useState<SelectorModalConfig | null>(null);
   
@@ -934,6 +946,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           onForceRerouteRef={forceRerouteRef}
           onHideUnselectedRef={hideUnselectedRef}
           whatIfDSL={whatIfDSL}
+          externalSelectedNodeId={selectedNodeId}
+          externalSelectedEdgeId={selectedEdgeId}
         />
         {/* WindowSelector inside canvas panel - naturally constrained by canvas width */}
         <WindowSelector tabId={tabId} />
