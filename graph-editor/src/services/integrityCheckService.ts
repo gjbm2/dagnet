@@ -479,6 +479,42 @@ export class IntegrityCheckService {
     return firstHyphen >= 0 ? fileId.substring(firstHyphen + 1) : fileId;
   }
   
+  /**
+   * Get the canonical (normalized) fileId by stripping workspace prefix.
+   * Used for comparing files that might have different prefixes.
+   * 
+   * Examples:
+   * - "<private-repo>-main-parameter-coffee-to-bds" → "parameter-coffee-to-bds"
+   * - "parameter-coffee-to-bds" → "parameter-coffee-to-bds"
+   * - "graph-myname" → "graph-myname"
+   * - "repo-branch-graph-myname" → "graph-myname"
+   */
+  static getCanonicalFileId(fileId: string, type: string): string {
+    const typeMarker = `${type}-`;
+    const idx = fileId.indexOf(typeMarker);
+    
+    if (idx > 0) {
+      // Found type marker not at start - strip workspace prefix
+      return fileId.substring(idx);
+    }
+    
+    // No prefix or already canonical
+    return fileId;
+  }
+  
+  /**
+   * Get a human-readable display name from a fileId.
+   * Strips workspace prefix and type prefix to get just the name.
+   * 
+   * Examples:
+   * - "<private-repo>-main-parameter-coffee-to-bds" → "coffee-to-bds"
+   * - "parameter-coffee-to-bds" → "coffee-to-bds"
+   * - "graph-myname" → "myname"
+   */
+  static getDisplayName(fileId: string, type: string): string {
+    return this.extractExpectedId(fileId, type);
+  }
+  
   // ═══════════════════════════════════════════════════════════════════════════
   // ID FORMAT VALIDATION
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1615,7 +1651,8 @@ export class IntegrityCheckService {
   // ═══════════════════════════════════════════════════════════════════════════
   
   private static detectDuplicates(allFiles: any[], issues: IntegrityIssue[]): void {
-    const idsByType = new Map<string, Map<string, any[]>>();
+    // Group files by type, then by canonical fileId to dedupe workspace-prefixed variants
+    const canonicalByType = new Map<string, Map<string, any>>();
     
     for (const file of allFiles) {
       if (file.source?.repository === 'temporary') continue;
@@ -1626,21 +1663,44 @@ export class IntegrityCheckService {
       if (!data?.id) continue;
       
       const typeKey = file.type;
-      if (!idsByType.has(typeKey)) {
-        idsByType.set(typeKey, new Map());
+      const canonicalId = this.getCanonicalFileId(file.fileId, typeKey);
+      
+      if (!canonicalByType.has(typeKey)) {
+        canonicalByType.set(typeKey, new Map());
       }
       
-      const typeMap = idsByType.get(typeKey)!;
-      if (!typeMap.has(data.id)) {
-        typeMap.set(data.id, []);
+      // Store by canonical ID - prefer the first one seen (skip if already present)
+      const typeMap = canonicalByType.get(typeKey)!;
+      if (!typeMap.has(canonicalId)) {
+        typeMap.set(canonicalId, file);
       }
-      typeMap.get(data.id)!.push(file);
+    }
+    
+    // Now check for duplicates by data.id (the ID inside the file)
+    const idsByType = new Map<string, Map<string, any[]>>();
+    
+    for (const [typeKey, canonicalMap] of canonicalByType) {
+      for (const [_canonicalId, file] of canonicalMap) {
+        const data = file.data;
+        if (!data?.id) continue;
+        
+        if (!idsByType.has(typeKey)) {
+          idsByType.set(typeKey, new Map());
+        }
+        
+        const typeMap = idsByType.get(typeKey)!;
+        if (!typeMap.has(data.id)) {
+          typeMap.set(data.id, []);
+        }
+        typeMap.get(data.id)!.push(file);
+      }
     }
     
     for (const [type, idsMap] of idsByType) {
       for (const [id, files] of idsMap) {
         if (files.length > 1) {
-          const fileIds = files.map(f => f.fileId).join(', ');
+          // Use display names for the details, not raw fileIds
+          const displayNames = files.map(f => this.getDisplayName(f.fileId, type)).join(', ');
           issues.push({
             fileId: files[0].fileId,
             type: type as ObjectType,
@@ -1648,7 +1708,7 @@ export class IntegrityCheckService {
             category: 'duplicate',
             field: 'id',
             message: `Duplicate ${type} ID "${id}"`,
-            details: `Found in: ${fileIds}`
+            details: `Found in files: ${displayNames}`
           });
         }
       }

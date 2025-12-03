@@ -318,39 +318,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [autoReroute, onNodesChangeBase]);
 
   // Handle external selection (for deep linking from issues viewer, etc.)
-  // Use a timestamp-based approach: GraphEditor should pass a selection timestamp 
-  // to force re-selection even for the same ID
-  const lastAppliedSelectionRef = useRef<string | null>(null);
+  // Track the last external selection to avoid re-processing
+  const lastExternalSelectionRef = useRef<{ nodeId: string | null | undefined; edgeId: string | null | undefined }>({ nodeId: undefined, edgeId: undefined });
   
   useEffect(() => {
-    // Build a selection key that includes both node and edge IDs
-    const selectionKey = `${externalSelectedNodeId || ''}-${externalSelectedEdgeId || ''}`;
+    // Only process if there's a new external selection request
+    const nodeChanged = externalSelectedNodeId !== lastExternalSelectionRef.current.nodeId;
+    const edgeChanged = externalSelectedEdgeId !== lastExternalSelectionRef.current.edgeId;
     
-    // Skip if nothing to select
-    if (!externalSelectedNodeId && !externalSelectedEdgeId) {
-      return;
-    }
+    if (!nodeChanged && !edgeChanged) return;
     
-    // Check if this selection is already visually applied in React Flow
-    const nodeAlreadySelected = externalSelectedNodeId && nodes.some(n => n.id === externalSelectedNodeId && n.selected);
-    const edgeAlreadySelected = externalSelectedEdgeId && edges.some(e => e.id === externalSelectedEdgeId && e.selected);
+    // Update the ref to track this selection
+    lastExternalSelectionRef.current = { nodeId: externalSelectedNodeId, edgeId: externalSelectedEdgeId };
     
-    console.log('[GraphCanvas] External selection check:', {
-      externalSelectedNodeId,
-      externalSelectedEdgeId,
-      nodeAlreadySelected,
-      edgeAlreadySelected,
-      edgeCount: edges.length
-    });
-    
-    // If already selected in React Flow, skip
-    if ((externalSelectedNodeId && nodeAlreadySelected) || (externalSelectedEdgeId && edgeAlreadySelected)) {
-      return;
-    }
-    
-    // Apply the selection
+    // If we have a node to select
     if (externalSelectedNodeId) {
-      console.log('[GraphCanvas] Applying external node selection:', externalSelectedNodeId);
+      console.log('[GraphCanvas] External node selection:', externalSelectedNodeId);
       setNodes(prevNodes => prevNodes.map(n => ({
         ...n,
         selected: n.id === externalSelectedNodeId
@@ -358,13 +341,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       setEdges(prevEdges => prevEdges.map(e => ({ ...e, selected: false })));
       onSelectedNodeChange(externalSelectedNodeId);
       onSelectedEdgeChange(null);
-    } else if (externalSelectedEdgeId) {
-      console.log('[GraphCanvas] Applying external edge selection:', externalSelectedEdgeId);
-      const matchingEdge = edges.find(e => e.id === externalSelectedEdgeId);
-      console.log('[GraphCanvas] Matching edge found:', matchingEdge ? 'yes' : 'no', matchingEdge?.id);
-      if (!matchingEdge) {
-        console.log('[GraphCanvas] Available edge IDs:', edges.slice(0, 5).map(e => e.id));
-      }
+    }
+    // If we have an edge to select
+    else if (externalSelectedEdgeId) {
+      console.log('[GraphCanvas] External edge selection:', externalSelectedEdgeId);
       setNodes(prevNodes => prevNodes.map(n => ({ ...n, selected: false })));
       setEdges(prevEdges => prevEdges.map(e => ({
         ...e,
@@ -373,7 +353,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onSelectedNodeChange(null);
       onSelectedEdgeChange(externalSelectedEdgeId);
     }
-  }, [externalSelectedNodeId, externalSelectedEdgeId, setNodes, setEdges, onSelectedNodeChange, onSelectedEdgeChange, nodes, edges]);
+  }, [externalSelectedNodeId, externalSelectedEdgeId, setNodes, setEdges, onSelectedNodeChange, onSelectedEdgeChange]);
 
   // Edge width/offset calculation constants
   // Use shared constants from nodeEdgeConstants.ts
