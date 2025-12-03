@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.10b
+**Released:** December 03, 2025
+
+Fixes to MSMDC
+
+---
+
 ## Version 0.99.9b
 **Released:** December 03, 2025
 
