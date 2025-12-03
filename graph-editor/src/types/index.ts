@@ -310,6 +310,7 @@ export interface TabOperations {
       }
     | undefined;
   setVisibleScenarios: (tabId: string, scenarioIds: string[]) => Promise<void>;
+  addVisibleScenarios: (tabId: string, scenarioIdsToAdd: string[]) => Promise<void>;
   toggleScenarioVisibility: (tabId: string, scenarioId: string) => Promise<void>;
   selectScenario: (tabId: string, scenarioId: string | undefined) => Promise<void>;
   reorderScenarios: (tabId: string, newOrder: string[]) => Promise<void>;
@@ -620,6 +621,18 @@ export interface ConversionGraph {
   // Contexts: Current query state for UI persistence
   currentQueryDSL?: string; // Current user query (e.g., "context(channel:google).window(1-Jan-25:31-Mar-25)")
                              // Persisted so graph reopens with same query state
+  
+  /**
+   * Base query DSL for live scenario composition.
+   * 
+   * Live scenarios inherit from this DSL unless they override specific constraints.
+   * Set via "To Base" action or manually.
+   * Persists to YAML file.
+   * 
+   * @example "window(-30d:)" — all live scenarios inherit this window unless they specify their own
+   * @example "window(-90d:).context(channel:google)" — both window and context inherited
+   */
+  baseDSL?: string;
 }
 
 export type Graph = ConversionGraph;

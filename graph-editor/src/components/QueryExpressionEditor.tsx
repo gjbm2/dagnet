@@ -1,12 +1,14 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, FileText, Calendar, ChevronDown, Minus, Plus } from 'lucide-react';
+import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, FileText, Calendar, ChevronDown, Minus, Plus, Zap } from 'lucide-react';
 import toast from 'react-hot-toast';
 import './QueryExpressionEditor.css';
 import { QUERY_FUNCTIONS } from '../lib/queryDSL';
 import { ContextValueSelector } from './ContextValueSelector';
 import { contextRegistry } from '../services/contextRegistry';
+import { BulkScenarioCreationModal } from './modals/BulkScenarioCreationModal';
+import { useBulkScenarioCreation } from '../hooks/useBulkScenarioCreation';
 
 interface QueryExpressionEditorProps {
   value: string;
@@ -177,6 +179,25 @@ export function QueryExpressionEditor({
   const chipRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const chipContainerRef = useRef<HTMLDivElement>(null);
   
+  // Context menu state for chips
+  const [chipContextMenu, setChipContextMenu] = useState<{
+    x: number;
+    y: number;
+    chipIndex: number;
+    chip: ParsedQueryChip;
+    contextKey?: string;
+    contextValuesCount?: number;
+  } | null>(null);
+  const chipContextMenuRef = useRef<HTMLDivElement>(null);
+  
+  // Bulk scenario creation hook
+  const {
+    bulkCreateModal,
+    closeBulkCreateModal,
+    openBulkCreateForContext,
+    createScenariosForContext
+  } = useBulkScenarioCreation();
+  
   // Close chip dropdown when clicking outside
   useEffect(() => {
     if (chipDropdownOpen === null) return;
@@ -190,6 +211,20 @@ export function QueryExpressionEditor({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [chipDropdownOpen]);
+  
+  // Close chip context menu when clicking outside
+  useEffect(() => {
+    if (chipContextMenu === null) return;
+    
+    const handleClickOutside = (event: MouseEvent) => {
+      if (chipContextMenuRef.current && !chipContextMenuRef.current.contains(event.target as Node)) {
+        setChipContextMenu(null);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [chipContextMenu]);
   
     // Validate value whenever it changes (for chip mode warning)
   useEffect(() => {
@@ -1437,6 +1472,66 @@ export function QueryExpressionEditor({
     }, 100);
   };
   
+  // Right-click context menu for chips
+  const handleChipContextMenu = useCallback(async (
+    chipIndex: number,
+    chip: ParsedQueryChip,
+    e: React.MouseEvent
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Only show context menu for context/contextAny chips (for now)
+    if (chip.type !== 'context' && chip.type !== 'contextAny') {
+      return;
+    }
+    
+    // Extract context key
+    const firstValue = chip.values[0];
+    const contextKey = firstValue?.split(':')[0];
+    if (!contextKey) return;
+    
+    // Get count of values for this context
+    let valuesCount = 0;
+    try {
+      const values = await contextRegistry.getValuesForContext(contextKey);
+      valuesCount = values.length;
+    } catch (err) {
+      console.warn('Failed to get context values:', err);
+    }
+    
+    setChipContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      chipIndex,
+      chip,
+      contextKey,
+      contextValuesCount: valuesCount
+    });
+  }, []);
+  
+  // Handle "Create scenarios" from context menu
+  const handleCreateScenariosFromChip = useCallback(async () => {
+    if (!chipContextMenu?.contextKey) return;
+    await openBulkCreateForContext(chipContextMenu.contextKey);
+    setChipContextMenu(null);
+  }, [chipContextMenu, openBulkCreateForContext]);
+  
+  // Handle bulk scenario creation from modal
+  const handleBulkCreateScenarios = useCallback(async (selectedValues: string[]) => {
+    if (!bulkCreateModal) return;
+    await createScenariosForContext(bulkCreateModal.contextKey, selectedValues);
+  }, [bulkCreateModal, createScenariosForContext]);
+  
+  // Remove chip from DSL
+  const handleRemoveChip = useCallback((chipIndex: number) => {
+    const newChips = chips.filter((_, idx) => idx !== chipIndex);
+    const newValue = newChips.map(c => c.rawText).join('.');
+    onChange(newValue);
+    if (onBlur) onBlur(newValue);
+    setChipContextMenu(null);
+  }, [chips, onChange, onBlur]);
+  
   // Click inner chip to select just the ID/value in Monaco
   const handleInnerChipClick = (chip: ParsedQueryChip, valueText: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1624,6 +1719,7 @@ export function QueryExpressionEditor({
               onMouseEnter={() => setHoveredChipIndex(index)}
               onMouseLeave={() => setHoveredChipIndex(null)}
               onClick={(e) => handleOuterChipClick(chip, e)}
+              onContextMenu={(e) => handleChipContextMenu(index, chip, e)}
               style={{
                 display: 'inline-flex',
                 alignItems: 'flex-start',  // Align to top when wrapped
@@ -1776,6 +1872,15 @@ export function QueryExpressionEditor({
             onCancel={() => setChipDropdownOpen(null)}
             anchorEl={chipDropdownAnchor}
             otherPolicy={chipDropdownOtherPolicy}
+            onCreateScenarios={(contextKey, values) => {
+              if (values) {
+                createScenariosForContext(contextKey, values);
+                setChipDropdownOpen(null);
+              } else {
+                setChipDropdownOpen(null);
+                openBulkCreateForContext(contextKey);
+              }
+            }}
           />
         </div>
       )}
@@ -1833,6 +1938,89 @@ export function QueryExpressionEditor({
               showSnippets: true
             }
           }}
+        />
+      )}
+      
+      {/* Chip context menu */}
+      {chipContextMenu && (
+        <div
+          ref={chipContextMenuRef}
+          style={{
+            position: 'fixed',
+            left: chipContextMenu.x,
+            top: chipContextMenu.y,
+            background: '#fff',
+            border: '1px solid #dee2e6',
+            borderRadius: '6px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 10000,
+            minWidth: '180px',
+            padding: '4px 0'
+          }}
+        >
+          {/* Remove option */}
+          <button
+            onClick={() => handleRemoveChip(chipContextMenu.chipIndex)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              width: '100%',
+              padding: '8px 12px',
+              border: 'none',
+              background: 'transparent',
+              color: '#374151',
+              fontSize: '13px',
+              textAlign: 'left',
+              cursor: 'pointer'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+          >
+            <X size={14} />
+            Remove
+          </button>
+          
+          {/* Separator */}
+          {chipContextMenu.contextKey && chipContextMenu.contextValuesCount && chipContextMenu.contextValuesCount > 0 && (
+            <>
+              <div style={{ height: '1px', background: '#e5e7eb', margin: '4px 0' }} />
+              
+              {/* Create scenarios option */}
+              <button
+                onClick={handleCreateScenariosFromChip}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: 'none',
+                  background: 'transparent',
+                  color: '#374151',
+                  fontSize: '13px',
+                  textAlign: 'left',
+                  cursor: 'pointer'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                Create {chipContextMenu.contextValuesCount} scenarios...
+                <Zap size={12} style={{ color: 'currentColor', marginLeft: 'auto' }} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      
+      {/* Bulk scenario creation modal */}
+      {bulkCreateModal && (
+        <BulkScenarioCreationModal
+          isOpen={true}
+          contextKey={bulkCreateModal.contextKey}
+          values={bulkCreateModal.values}
+          onClose={closeBulkCreateModal}
+          onCreate={handleBulkCreateScenarios}
         />
       )}
     </div>

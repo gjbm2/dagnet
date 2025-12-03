@@ -39,6 +39,19 @@
   margin-bottom: 4px;
 }
 
+/* Base DSL editor row */
+.metadata-dsl-row {
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #E5E7EB;
+}
+
+.metadata-dsl-row strong {
+  min-width: auto;
+}
+
 .metadata-name-input {
   flex: 1;
   padding: 6px 10px;

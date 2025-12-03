@@ -19,6 +19,7 @@ import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } 
 import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
+import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
@@ -51,6 +52,16 @@ export function useSelectionContext() {
     throw new Error('useSelectionContext must be used within SelectionContext.Provider');
   }
   return context;
+}
+
+/**
+ * URLScenariosProcessor - processes URL scenario parameters after graph loads
+ * Must be inside ScenariosProvider to access scenario context
+ */
+function URLScenariosProcessor({ fileId }: { fileId: string }) {
+  // The graph is loaded if we're rendering (GraphEditorInner gates on data)
+  useURLScenarios(true, fileId);
+  return null; // No UI - just processes URL params
 }
 
 /**
@@ -1644,6 +1655,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   return (
     <SelectionContext.Provider value={selectionContextValue}>
       <ScenariosProvider fileId={fileId} tabId={tabId}>
+      {/* Process URL scenario parameters after graph loads */}
+      <URLScenariosProcessor fileId={fileId} />
       <ViewPreferencesProvider tabId={tabId}>
       <div 
         ref={containerRef}

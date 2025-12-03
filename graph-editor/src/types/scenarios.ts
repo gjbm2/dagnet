@@ -95,6 +95,42 @@ export interface ScenarioMeta {
   
   /** User-editable note */
   note?: string;
+  
+  // === LIVE SCENARIO FIELDS ===
+  
+  /**
+   * Query DSL fragment for live scenarios.
+   * When set, this scenario can be regenerated from source.
+   * Composed with inherited DSL: effective = smartMerge(inheritedDSL, queryDSL)
+   * 
+   * Can contain both fetch elements (window, context) and what-if elements (case, visited).
+   * 
+   * @example "context(channel:google)"
+   * @example "window(-7d:).case(my-case:treatment)"
+   */
+  queryDSL?: string;
+  
+  /**
+   * Whether this is a live (regenerable) scenario.
+   * Derived: true if queryDSL is set and non-empty.
+   */
+  isLive?: boolean;
+  
+  /**
+   * Timestamp of last data regeneration (for live scenarios).
+   * Updated each time regenerateScenario is called.
+   */
+  lastRegeneratedAt?: string;
+  
+  /**
+   * The effective DSL used for last regeneration.
+   * This may differ from queryDSL if base or lower layers changed.
+   * Stored for debugging and display purposes.
+   * 
+   * @example If queryDSL="context(channel:google)" and baseDSL="window(-30d:)",
+   *          lastEffectiveDSL might be "window(-30d:).context(channel:google)"
+   */
+  lastEffectiveDSL?: string;
 }
 
 /**
