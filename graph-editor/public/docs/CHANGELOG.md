@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.13b
+**Released:** December 03, 2025
+
+Rebalancing regression fix
+
+---
+
 ## Version 0.99.12b
 **Released:** December 03, 2025
 
