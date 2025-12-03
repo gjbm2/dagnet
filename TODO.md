@@ -1,5 +1,23 @@
 # TODO
 
+## Orphaned Scenarios Problem (DESIGN NEEDED)
+
+**Problem:** Scenarios can become orphaned and persist in IndexedDB with no way to clear them except `File > Clear`:
+- Tab closed but scenarios remain (stored by `fileId`, not `tabId`)
+- Graph deleted but scenarios not cascade-deleted
+- URL scenarios created then user navigates away
+- Multiple tabs for same graph cause visibility confusion
+
+**Proposed Solutions:**
+1. **Cascade delete:** Delete scenarios when graph file is deleted (`deleteOperationsService.deleteGraphFile`)
+2. **User control:** Add "Clear All Scenarios" button to ScenariosPanel footer
+3. **Garbage collection:** On startup, scan for scenarios whose `fileId` doesn't exist and delete them
+
+**Priority:** High - Causes confusing UX and data buildup
+**Related:** `ScenariosContext.tsx`, `deleteOperationsService.ts`, `ScenariosPanel.tsx`
+
+---
+
 ## URL Parameter Management (DESIGN NEEDED)
 
 **Problem:** URL parameter handling is fragmented and inconsistent:
