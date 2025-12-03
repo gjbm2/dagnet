@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext } from '../../contexts/TabContext';
+import packageJson from '../../../package.json';
+
+const APP_VERSION = packageJson.version;
 
 /**
  * Help Menu
@@ -145,7 +148,7 @@ export function HelpMenu() {
             onSelect={handleCurrentVersion}
           >
             Current Version
-            <div className="menubar-right-slot">v{import.meta.env.VITE_APP_VERSION || '0.91b'}</div>
+            <div className="menubar-right-slot">v{APP_VERSION}</div>
           </Menubar.Item>
 
           <Menubar.Item 

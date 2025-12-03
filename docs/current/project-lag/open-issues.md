@@ -1,7 +1,7 @@
 # Project LAG: Open Issues & Design Gaps
 
 **Status:** Working Document  
-**Last Updated:** 2-Dec-25
+**Last Updated:** 3-Dec-25
 
 ---
 
@@ -344,6 +344,134 @@ We've built in recency weighting and a bounded window, but the design still trea
 ### 6. Multi-edge path timing (DAG runner convolution)
 
 For time-indexed flow through multi-edge paths (e.g., "how many reach Z by day 30 along A→…→X→Y→…→Z?"), the DAG runner still needs to convolve edge-level lag PMFs. This is orthogonal to the `window()` vs `cohort()` question but remains a Phase 1+ implementation item.
+
+---
+
+## NEW: p.mean Estimation and Display Policy (3-Dec-25)
+
+### The Core Problem
+
+For latency edges, we typically have both `window()` and `cohort()` data in the cache. There are **two distinct dimensions** to resolve:
+
+1. **Measurement policy** (technical): What data/calculation do we use for p.mean?
+2. **User intent** (UX): What do users expect to see when they select different query types?
+
+These are related but separable questions.
+
+---
+
+### Dimension 1: Measurement Policy
+
+**Question:** What data set do we use for calculating p.mean (until we build a proper stats model)?
+
+| Approach | Description | Trade-offs |
+|----------|-------------|------------|
+| **Mature cohort data only** | p.mean from cohorts aged > maturity_days | Stable, trustworthy; but invariant under query changes |
+| **Query-specific slice** | p.mean from the specific window/cohort queried | Responsive to query; but misleading for immature data |
+| **Blended forecast** | Use mature p* to project immature cohorts | Best estimate; but hides "what actually happened" |
+
+**The issue:** We will typically pin *both* `cohort()` and `window()` queries, so we have multiple data sources in the cache. When user selects a specific date window, which data informs p.mean?
+
+**Current thinking:** Not resolved. Need to decide whether p.mean is:
+- A property of the **edge** (invariant, derived from mature data)
+- A property of the **query** (varies with window selection)
+
+If invariant, we mask real trends. If query-specific, we risk showing misleading values (5% on an edge that's actually 45%).
+
+---
+
+### Dimension 2: User Intent
+
+**Question:** What do users expect to see when they select different query types?
+
+When a user selects a 7-day window on an edge with 30-day maturity, what are they asking for?
+
+| Intent | User is asking... | Implies showing... |
+|--------|-------------------|-------------------|
+| **"What happened?"** | Show me the evidence from this period | Observed p (even if 5%), thin edge |
+| **"What's the conversion rate?"** | Show me what p actually is for this edge | Forecast p (~45%), normal edge width |
+| **"How's it trending?"** | Show me if things are improving/declining | Comparison to historical baseline |
+
+**The tension:** These are legitimate but different questions. A single p.mean value can't serve all intents.
+
+**Possible resolutions:**
+1. **Mode toggle**: User chooses "evidence" vs "forecast" view
+2. **Smart defaults**: Show forecast p, but flag with completeness badge
+3. **Dual display**: Edge width = forecast, badge = observed evidence
+4. **Query-type semantics**: `window()` = evidence intent, `cohort()` = forecast intent
+
+**Not yet decided:** Which approach best serves users. May require user research or iterative refinement.
+
+---
+
+### Combined Matrix (What to Show?)
+
+| Query Type | Maturity | User Intent | What to Show? |
+|------------|----------|-------------|---------------|
+| `window()` | mature | evidence | Observed p ✓ |
+| `window()` | immature | evidence | Observed p (low) — but is this what they want? |
+| `window()` | immature | forecast | ??? — window() doesn't naturally imply forecast |
+| `cohort()` | mature | either | Observed p ✓ |
+| `cohort()` | mixed | forecast | Layered edge (§7.1) with forecast p |
+| `cohort()` | immature | forecast | Mostly forecast; show completeness |
+
+**Open:** The `window()` + immature cases are unclear. §7.1 addresses cohort display but not window queries where evidence is thin.
+
+---
+
+### Relationship to Visual Layers (§7.1)
+
+§7.1 specifies how to **display** mature vs forecast layers on edges. It answers the rendering question but not:
+- Which p.mean value to use (measurement policy)
+- What users expect to see (intent)
+
+The visual layers communicate *uncertainty* about completeness. They don't resolve what p.mean should be.
+
+---
+
+### Design Decisions Required
+
+Before implementation:
+
+1. **Measurement policy:** Is p.mean per-edge invariant or per-query-window?
+2. **User intent mapping:** Does `window()` imply evidence intent? Does `cohort()` imply forecast intent?
+3. **Display strategy:** How to handle `window()` queries on immature data?
+4. **Mode toggle:** Should there be an explicit "evidence" vs "forecast" view preference?
+
+---
+
+## NEW: Properties Panel Latency UI (3-Dec-25)
+
+### The Issue
+
+§7.7 specifies minimal UI ("Calculate Latency" toggle, "Cut-off Time" input) but lacks:
+- Layout within the Probability param section
+- Validation behaviour for "Cut-off Time" (accepts "30d"? What format?)
+- How toggling `latency.track` affects other UI elements
+- Whether derived values (median_lag_days, completeness) appear anywhere in properties
+
+**Needs:** UI mockup or clearer specification before implementation.
+
+---
+
+## Summary of Open Issues
+
+| ID | Issue | Type | Blocking? |
+|----|-------|------|-----------|
+| GAP-10 | ParsedConstraints interface for `cohort()` | Implementation | Yes |
+| GAP-11 | DSL JSON schema for `cohort()` | Implementation | Yes |
+| GAP-12 | Parameter UI schema for latency fields | Implementation | No |
+| GAP-13 | Integrity check rules for latency | Implementation | No |
+| GAP-14 | UpdateManager mapping config | Implementation | Partial |
+| GAP-15 | buildScenarioRenderEdges data threading | Implementation | Partial |
+| GAP-17 | windowAggregationService cohort routing | Implementation | Yes |
+| GAP-18 | Amplitude adapter anchor node handling | Implementation | Yes |
+| **p.mean policy** | Measurement policy + user intent | **Design** | **Yes** |
+| **Properties Panel UI** | Latency settings layout | **Design** | No |
+
+**Legend:**
+- **Design** = Requires decision before implementation
+- **Implementation** = Will be resolved during build
 
 ---
 

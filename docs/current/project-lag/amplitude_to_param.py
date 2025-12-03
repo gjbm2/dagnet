@@ -350,18 +350,26 @@ def build_param_file(
     maturity_days: int = 30,
     query_date: str = None,
     anchor_node_id: str = None,
-    conversion_window_days: int = 45,
+    dsl_query: str = None,
 ) -> dict:
-    """Build a complete parameter file structure from extracted edge data."""
+    """
+    Build a complete parameter file structure from extracted edge data.
+    
+    Aligns with existing parameter-schema.yaml patterns:
+    - Flat parallel arrays for daily breakdown (dates, n_daily, k_daily)
+    - window_from/window_to for date bounds
+    - data_source object for provenance
+    - New latency fields added as extensions
+    """
     dates = edge_data['dates']
     
     if not query_date:
         query_date = datetime.now().strftime('%Y-%m-%d')
     
-    cohort_start = min(dates) if dates else query_date
-    cohort_end = max(dates) if dates else query_date
+    cohort_start = format_date(min(dates)) if dates else format_date(query_date)
+    cohort_end = format_date(max(dates)) if dates else format_date(query_date)
     
-    # Calculate completeness
+    # Calculate completeness (§5.0.1)
     completeness = 0
     if dates and edge_data['overall_median_days']:
         query_dt = datetime.strptime(query_date, '%Y-%m-%d')
@@ -380,49 +388,40 @@ def build_param_file(
         
         completeness = round(mature_weight / total_weight, 2) if total_weight > 0 else 0
     
-    # Build per-cohort data rows
-    cohort_data = []
-    has_anchor = 'upstream_lag' in edge_data and 'anchor_median_lag_daily' in edge_data.get('upstream_lag', {})
+    # Calculate mean probability
+    n_total = edge_data['n']
+    k_total = edge_data['k']
+    mean_p = round(k_total / n_total, 4) if n_total > 0 else 0
     
-    for i, date_str in enumerate(dates):
-        # Convert date to d-MMM-yy format
-        formatted_date = format_date(date_str)
-        row = {'date': formatted_date}
-        
-        # Anchor data (if available from multi-step funnel)
-        # anchor_n = users who entered A on this date (useful for convolution weighting)
-        # anchor lags = how long it took them to reach X (for distribution fitting)
-        if has_anchor:
-            upstream = edge_data['upstream_lag']
-            row['anchor_n'] = upstream['anchor_n_daily'][i] if i < len(upstream.get('anchor_n_daily', [])) else None
-            row['anchor_median_lag'] = upstream['anchor_median_lag_daily'][i] if i < len(upstream.get('anchor_median_lag_daily', [])) else None
-            row['anchor_mean_lag'] = upstream['anchor_mean_lag_daily'][i] if i < len(upstream.get('anchor_mean_lag_daily', [])) else None
-        
-        # Edge data
-        row['n'] = edge_data['n_daily'][i] if i < len(edge_data['n_daily']) else None
-        row['k'] = edge_data['k_daily'][i] if i < len(edge_data['k_daily']) else None
-        row['median_lag'] = edge_data['median_lag_days'][i] if i < len(edge_data.get('median_lag_days', [])) else None
-        row['mean_lag'] = edge_data['mean_lag_days'][i] if i < len(edge_data.get('mean_lag_days', [])) else None
-        
-        cohort_data.append(row)
+    # Format dates to d-MMM-yy
+    dates_formatted = [format_date(d) for d in dates]
     
-    # Build totals (simple n/k for this edge)
-    totals = {
-        'n': edge_data['n'],
-        'k': edge_data['k'],
-    }
+    # Build sliceDSL - the full DSL label for this slice (see design.md §3.3)
+    # For cohort slices, this includes the cohort() clause and any context
+    slice_dsl = dsl_query if dsl_query else f"cohort({cohort_start}:{cohort_end})"
     
-    # Format dates for label
-    cohort_start_fmt = format_date(cohort_start)
-    cohort_end_fmt = format_date(cohort_end)
-    query_date_fmt = format_date(query_date)
-    
-    # Build value entry
+    # Build value entry - aligned with existing schema pattern
     value_entry = {
-        'label': f"Cohorts {cohort_start_fmt} to {cohort_end_fmt}",
-        'query_date': query_date_fmt,
-        'conversion_window_days': conversion_window_days,
-        'totals': totals,
+        # Slice identification (see §3.3)
+        'sliceDSL': slice_dsl,
+        
+        # Core fields (existing schema)
+        'mean': mean_p,
+        'n': n_total,
+        'k': k_total,
+        'cohort_from': cohort_start,  # Cohort entry bounds (A-entry dates)
+        'cohort_to': cohort_end,
+        
+        # Daily breakdown - flat arrays (existing schema pattern)
+        'dates': dates_formatted,
+        'n_daily': edge_data['n_daily'],
+        'k_daily': edge_data['k_daily'],
+        
+        # NEW: Per-cohort latency (flat arrays, parallel to dates)
+        'median_lag_days': edge_data.get('median_lag_days', []),
+        'mean_lag_days': edge_data.get('mean_lag_days', []),
+        
+        # NEW: Edge-level latency summary
         'latency': {
             'median_days': edge_data['overall_median_days'],
             'mean_days': edge_data.get('overall_mean_days'),
@@ -432,12 +431,25 @@ def build_param_file(
                 'bins': edge_data['histogram_bins'],
             },
         },
-        'cohort_data': cohort_data,
+        
+        # Provenance (existing schema pattern)
+        'data_source': {
+            'type': 'amplitude',
+            'retrieved_at': f"{query_date}T00:00:00Z",
+        },
     }
     
-    # Add anchor latency if available
-    if 'upstream_lag' in edge_data:
+    # Add anchor data if available (for cohort slices from multi-step funnels)
+    has_anchor = 'upstream_lag' in edge_data and 'anchor_n_daily' in edge_data.get('upstream_lag', {})
+    if has_anchor:
         upstream = edge_data['upstream_lag']
+        
+        # Flat arrays for anchor data (parallel to dates)
+        value_entry['anchor_n_daily'] = upstream.get('anchor_n_daily', [])
+        value_entry['anchor_median_lag_days'] = upstream.get('anchor_median_lag_daily', [])
+        value_entry['anchor_mean_lag_days'] = upstream.get('anchor_mean_lag_daily', [])
+        
+        # Upstream latency summary (for convolution)
         value_entry['anchor_latency'] = {
             'median_days': upstream['upstream_median_days'],
             'mean_days': upstream['upstream_mean_days'],
@@ -452,11 +464,17 @@ def build_param_file(
         'id': edge_id,
         'name': edge_name,
         'type': 'probability',
-        'source': 'amplitude:funnel',
-        'description': description,
         'latency': {
             'track': True,
             'maturity_days': maturity_days,
+        },
+        'values': [value_entry],
+        'metadata': {
+            'description': description,
+            'created_at': f"{query_date}T00:00:00Z",
+            'updated_at': f"{query_date}T00:00:00Z",
+            'author': 'amplitude-import',
+            'version': '1.0.0',
         },
     }
     
@@ -466,8 +484,6 @@ def build_param_file(
             'node_id': anchor_node_id,
             'description': 'Graph node used as cohort anchor (resolved to event at query time)',
         }
-    
-    param['values'] = [value_entry]
     
     return param
 
@@ -485,7 +501,7 @@ def main():
     parser.add_argument('--maturity-days', type=int, default=30, help='Maturity threshold in days')
     parser.add_argument('--query-date', help='Query date (default: today)')
     parser.add_argument('--anchor-node-id', help='Graph node_id for cohort anchor (e.g., household-created)')
-    parser.add_argument('--conversion-window-days', type=int, default=45, help='Conversion window in days (default: 45)')
+    parser.add_argument('--slice-dsl', help='Full DSL label for this slice (e.g., "cohort(-90d:).context(channel:google)")')
     
     args = parser.parse_args()
     
@@ -512,7 +528,7 @@ def main():
         maturity_days=args.maturity_days,
         query_date=args.query_date,
         anchor_node_id=args.anchor_node_id,
-        conversion_window_days=args.conversion_window_days,
+        dsl_query=args.slice_dsl,
     )
     
     # Custom YAML representer for None
