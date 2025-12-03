@@ -357,6 +357,7 @@ export async function fetchItem(
           setGraph,
           targetSlice: dsl,
           setAutoUpdating: options?.setAutoUpdating,
+          conditionalIndex: item.conditionalIndex, // For conditional_p entries
         });
       } else if (item.type === 'case') {
         await dataOperationsService.getCaseFromFile({

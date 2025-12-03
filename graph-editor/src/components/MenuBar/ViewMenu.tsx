@@ -4,6 +4,7 @@ import { useTabContext } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
+import { useSankeyView } from '../../hooks/useSankeyView';
 import { sessionLogService } from '../../services/sessionLogService';
 import { graphIssuesService } from '../../services/graphIssuesService';
 
@@ -31,9 +32,11 @@ export function ViewMenu() {
   const useUniformScaling = viewPrefsCtx?.useUniformScaling ?? (activeTab?.editorState?.useUniformScaling ?? false);
   const massGenerosity = viewPrefsCtx?.massGenerosity ?? (activeTab?.editorState?.massGenerosity ?? 0.5);
   const autoReroute = viewPrefsCtx?.autoReroute ?? (activeTab?.editorState?.autoReroute ?? true);
-  const useSankeyView = viewPrefsCtx?.useSankeyView ?? (activeTab?.editorState?.useSankeyView ?? false);
   const confidenceIntervalLevel = viewPrefsCtx?.confidenceIntervalLevel ?? (activeTab?.editorState?.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99' ?? 'none');
   const animateFlow = viewPrefsCtx?.animateFlow ?? (activeTab?.editorState?.animateFlow ?? true);
+  
+  // Use centralised hook for Sankey view toggle
+  const { useSankeyView: isSankeyView, toggleSankeyView } = useSankeyView();
   
   // Debug: Log when menu is checked
   React.useEffect(() => {
@@ -79,15 +82,6 @@ export function ViewMenu() {
       viewPrefsCtx.setAutoReroute(newValue);
     } else if (activeTabId) {
       operations.updateTabState(activeTabId, { autoReroute: newValue });
-    }
-  };
-
-  const handleToggleSankeyView = () => {
-    const newValue = !useSankeyView;
-    if (viewPrefsCtx) {
-      viewPrefsCtx.setUseSankeyView(newValue);
-    } else if (activeTabId) {
-      operations.updateTabState(activeTabId, { useSankeyView: newValue });
     }
   };
 
@@ -212,9 +206,9 @@ export function ViewMenu() {
 
               <Menubar.Item 
                 className="menubar-item" 
-                onSelect={handleToggleSankeyView}
+                onSelect={toggleSankeyView}
               >
-                {useSankeyView ? '✓ ' : ''}Sankey View
+                {isSankeyView ? '✓ ' : ''}Sankey View
               </Menubar.Item>
 
               <Menubar.Item 
@@ -305,7 +299,7 @@ export function ViewMenu() {
               </Menubar.Sub>
 
               {/* Sankey Layout option - only show when Sankey view is active */}
-              {useSankeyView && (
+              {isSankeyView && (
                 <Menubar.Item 
                   className="menubar-item" 
                   onSelect={handleSankeyLayout}

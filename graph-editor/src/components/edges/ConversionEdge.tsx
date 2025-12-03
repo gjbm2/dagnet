@@ -1725,7 +1725,7 @@ export default function ConversionEdge({
                 edgeId={id}
                 edge={fullEdge}
                 path={pathRef.current}
-                pathD={edgePath}
+                pathD={data?.useSankeyView && ribbonPath?.topEdge ? ribbonPath.topEdge : edgePath}
                 graph={graph}
                 scenarioOrder={scenarioOrder}
                 visibleScenarioIds={visibleScenarioIds}

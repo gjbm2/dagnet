@@ -4,7 +4,7 @@
  * Provides helper functions to create test data for graphs, parameters, cases, etc.
  */
 
-import type { ConversionGraph, GraphEdge, GraphNode } from '../../../types';
+import type { ConversionGraph, GraphEdge, GraphNode, ConditionalProbability } from '../../../types';
 
 /**
  * Create a test edge with default values
@@ -161,6 +161,93 @@ export const createTestNodes = (count: number, baseName: string = 'node'): Graph
     })
   );
 };
+
+/**
+ * Create a test edge with conditional_p array
+ * 
+ * conditional_p are first-class citizens with IDENTICAL behaviour to edge.p
+ * except for: more complex indexing (array index or DSL condition) and group sync
+ */
+export const createTestEdgeWithConditionalP = (overrides: Partial<GraphEdge> = {}): GraphEdge => ({
+  uuid: 'test-edge-conditional',
+  from: 'node-a',
+  to: 'node-b',
+  p: {
+    mean: 0.5,
+    stdev: 0.05,
+    distribution: 'beta'
+  },
+  conditional_p: [
+    {
+      condition: 'visited(promo)',
+      p: {
+        id: 'test-conditional-param-0',
+        mean: 0.65,
+        stdev: 0.04,
+        distribution: 'beta'
+      }
+    },
+    {
+      condition: 'visited(checkout)',
+      p: {
+        id: 'test-conditional-param-1',
+        mean: 0.45,
+        stdev: 0.03,
+        distribution: 'beta'
+      }
+    }
+  ],
+  ...overrides
+});
+
+/**
+ * Create a conditional probability entry
+ */
+export const createTestConditionalP = (overrides: any = {}) => ({
+  condition: 'visited(node-x)',
+  p: {
+    mean: 0.6,
+    stdev: 0.04,
+    distribution: 'beta',
+    ...overrides.p
+  },
+  ...overrides
+});
+
+/**
+ * Create a parameter file for a conditional probability
+ * 
+ * Conditional probability parameter files are structurally identical to edge.p parameter files
+ */
+export const createTestConditionalParameterFile = (overrides: any = {}) => ({
+  id: 'test-conditional-param',
+  name: 'Test Conditional Parameter',
+  type: 'conditional_probability',
+  query: 'from(a).to(b).visited(x)',
+  query_overridden: false,
+  values: [
+    {
+      mean: 0.65,
+      stdev: 0.04,
+      distribution: 'beta',
+      window_from: '2025-01-01T00:00:00Z'
+    }
+  ],
+  metadata: {
+    description: 'Test conditional probability parameter',
+    description_overridden: false,
+    constraints: { discrete: false },
+    tags: ['test', 'conditional'],
+    created_at: '2025-01-01T00:00:00Z',
+    updated_at: '2025-01-01T00:00:00Z',
+    author: 'test-suite',
+    version: '1.0.0',
+    status: 'active',
+    aliases: [],
+    references: []
+  },
+  ...overrides
+});
 
 /**
  * Create a parameter file with multiple historical values

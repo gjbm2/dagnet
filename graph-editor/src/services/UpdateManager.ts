@@ -1233,10 +1233,11 @@ export class UpdateManager {
       // Probability parameter: edge.p.* → parameter.values[]
       // Preserve all relevant fields including evidence data if present
       // NOTE: Do NOT include daily values (n_daily, k_daily, dates) - those are only from external data pulls
+      // NOTE: conditional_probability type is treated identically to probability (PARITY PRINCIPLE)
       { 
         sourceField: 'p.mean', 
         targetField: 'values[]',
-        condition: (source, target) => target.type === 'probability' || target.parameter_type === 'probability',
+        condition: (source, target) => target.type === 'probability' || target.type === 'conditional_probability' || target.parameter_type === 'probability' || target.parameter_type === 'conditional_probability',
         transform: (value, source) => {
           const entry: any = { mean: value };
           
@@ -1522,71 +1523,78 @@ export class UpdateManager {
     
     // Flow G: File/Parameter → Graph (UPDATE edge)
     // Note: This updates edge.p.* fields (probability parameter data), NOT edge-level metadata
+    // NOTE: conditional_probability type is treated identically to probability (PARITY PRINCIPLE)
+    const isProbType = (source: any) => 
+      source.type === 'probability' || 
+      source.type === 'conditional_probability' || 
+      source.parameter_type === 'probability' || 
+      source.parameter_type === 'conditional_probability';
+    
     this.addMapping('file_to_graph', 'UPDATE', 'parameter', [
       // Probability parameters → edge.p.*
       { 
         sourceField: 'values[latest].mean', 
         targetField: 'p.mean',
         overrideFlag: 'p.mean_overridden',
-        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+        condition: isProbType
       },
       { 
         sourceField: 'values[latest].stdev', 
         targetField: 'p.stdev',
         overrideFlag: 'p.stdev_overridden',
-        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+        condition: isProbType
       },
       { 
         sourceField: 'values[latest].distribution', 
         targetField: 'p.distribution',
         overrideFlag: 'p.distribution_overridden',
-        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+        condition: isProbType
       },
       { 
         sourceField: 'values[latest].n', 
         targetField: 'p.evidence.n',
-        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+        condition: isProbType
       },
       { 
         sourceField: 'values[latest].k', 
         targetField: 'p.evidence.k',
-        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+        condition: isProbType
       },
       { 
         sourceField: 'values[latest].window_from', 
         targetField: 'p.evidence.window_from',
-        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+        condition: isProbType
       },
       { 
         sourceField: 'values[latest].window_to', 
         targetField: 'p.evidence.window_to',
-        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+        condition: isProbType
       },
       { 
         sourceField: 'values[latest].data_source', 
         targetField: 'p.data_source',
-        condition: (source) => source.type === 'probability' || source.parameter_type === 'probability'
+        condition: isProbType
       },
       // Map data_source fields to evidence if data_source exists
       { 
         sourceField: 'values[latest].data_source.retrieved_at', 
         targetField: 'p.evidence.retrieved_at',
-        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && source.values?.[source.values.length - 1]?.data_source?.retrieved_at
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.data_source?.retrieved_at
       },
       { 
         sourceField: 'values[latest].data_source.type', 
         targetField: 'p.evidence.source',
-        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && source.values?.[source.values.length - 1]?.data_source?.type
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.data_source?.type
       },
       { 
         sourceField: 'values[latest].data_source.full_query', 
         targetField: 'p.evidence.full_query',
-        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && source.values?.[source.values.length - 1]?.data_source?.full_query
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.data_source?.full_query
       },
       { 
         sourceField: 'values[latest].data_source.debug_trace', 
         targetField: 'p.evidence.debug_trace',
-        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && source.values?.[source.values.length - 1]?.data_source?.debug_trace
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.data_source?.debug_trace
       },
       
       // Cost GBP parameters → edge.cost_gbp.*
@@ -1932,17 +1940,24 @@ export class UpdateManager {
     ]);
     
     // Flow M: External → Graph/Case (UPDATE case node directly)
+    // NOTE: External sources do NOT define variants - they only provide weights
+    // that map to user-defined variants in the case file. This mapping ONLY
+    // updates existing variants, it does NOT add new ones.
     this.addMapping('external_to_graph', 'UPDATE', 'case', [
       { 
         sourceField: 'variants', 
         targetField: 'case.variants',
         transform: (externalVariants, source, target) => {
-          // Merge external weights with existing case structure
-          // Respect weight_overridden flags (don't update overridden variants)
+          // Update weights for existing variants only (by name match)
+          // Respect weight_overridden flags
+          if (!target.case?.variants || !Array.isArray(externalVariants)) {
+            return target.case?.variants || [];
+          }
+          
           return target.case.variants.map((v: any) => {
             const externalVariant = externalVariants.find((ev: any) => ev.name === v.name);
             
-            // Only update weight if NOT overridden (same logic as parameters)
+            // Only update weight if NOT overridden and external has data
             const shouldUpdate = !v.weight_overridden && externalVariant;
             
             return {
@@ -1954,7 +1969,12 @@ export class UpdateManager {
       },
       {
         sourceField: 'data_source',
-        targetField: 'case.data_source'
+        targetField: 'case.evidence',
+        transform: (dataSource) => ({
+          source: dataSource?.connection || dataSource?.type,
+          fetched_at: dataSource?.retrieved_at,
+          path: 'direct'
+        })
       }
     ]);
     
@@ -3694,22 +3714,9 @@ export class UpdateManager {
 
     if (Array.isArray(nextGraph.edges)) {
       nextGraph.edges.forEach((edge: any) => {
-        // Update structural references in from/to that use node.id or uuid
-        if (oldId && edge.from === oldId) {
-          edge.from = newId;
-          edgesFromToUpdated++;
-        } else if (firstTimeId && edge.from === nodeUuid) {
-          edge.from = newId;
-          edgesFromToUpdated++;
-        }
-        
-        if (oldId && edge.to === oldId) {
-          edge.to = newId;
-          edgesFromToUpdated++;
-        } else if (firstTimeId && edge.to === nodeUuid) {
-          edge.to = newId;
-          edgesFromToUpdated++;
-        }
+        // NOTE: edge.from and edge.to MUST remain as node UUIDs (not human-readable IDs)
+        // per GraphEdge type definition. Do NOT update them when renaming node IDs.
+        // Other systems (Sankey, runner, etc.) rely on these being UUIDs.
 
         // Edge ID updates (use word boundaries for replacement)
         if (edge.id && typeof edge.id === 'string') {
