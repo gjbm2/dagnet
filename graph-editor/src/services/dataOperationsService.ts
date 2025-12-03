@@ -1259,14 +1259,46 @@ class DataOperationsService {
           // Apply remapped changes
           applyChanges(nextGraph.edges[edgeIndex], remappedChanges);
           
-          // Update metadata and save
+          // Update metadata
           if (nextGraph.metadata) {
             nextGraph.metadata.updated_at = new Date().toISOString();
           }
           
-          setGraph(nextGraph);
-          toast.success(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml`, { duration: 2000 });
-          sessionLogService.endOperation(logOpId, 'success', `Updated conditional_p[${conditionalIndex}] from ${paramId}.yaml`);
+          // AUTO-REBALANCE: If p.mean was updated, rebalance conditional probability siblings
+          // Same logic as regular parameters, but uses rebalanceConditionalProbabilities
+          let finalGraph = nextGraph;
+          const meanWasUpdated = result.changes?.some((c: { field: string }) => c.field === 'p.mean');
+          
+          if (meanWasUpdated) {
+            const { updateManager } = await import('./UpdateManager');
+            const updatedEdgeId = nextGraph.edges[edgeIndex].uuid || nextGraph.edges[edgeIndex].id || edgeId;
+            
+            console.log('[DataOperationsService] Rebalancing conditional_p siblings after file update:', {
+              updatedEdgeId,
+              conditionalIndex,
+              meanWasUpdated
+            });
+            
+            if (updatedEdgeId) {
+              finalGraph = updateManager.rebalanceConditionalProbabilities(
+                nextGraph,
+                updatedEdgeId,
+                conditionalIndex,
+                false // Don't force rebalance - respect overrides
+              );
+            }
+          }
+          
+          setGraph(finalGraph);
+          
+          const hadRebalance = finalGraph !== nextGraph;
+          if (hadRebalance) {
+            toast.success(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
+            sessionLogService.endOperation(logOpId, 'success', `Updated conditional_p[${conditionalIndex}] + siblings rebalanced`);
+          } else {
+            toast.success(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml`, { duration: 2000 });
+            sessionLogService.endOperation(logOpId, 'success', `Updated conditional_p[${conditionalIndex}] from ${paramId}.yaml`);
+          }
           return; // Done - skip the base edge path below
         }
         // ===== END CONDITIONAL_P HANDLING =====
@@ -4322,10 +4354,39 @@ class DataOperationsService {
               condEntryP: condEntry.p
             });
             
-            setGraph(nextGraph);
+            // AUTO-REBALANCE: If mean was updated, rebalance conditional probability siblings
+            let finalGraph = nextGraph;
+            const meanWasUpdated = updateData.mean !== undefined && !condEntry.p.mean_overridden;
             
+            if (meanWasUpdated) {
+              const { updateManager } = await import('./UpdateManager');
+              const updatedEdgeId = nextGraph.edges[edgeIndex].uuid || nextGraph.edges[edgeIndex].id || targetId;
+              
+              console.log('[DataOperationsService] Rebalancing conditional_p siblings after external fetch:', {
+                updatedEdgeId,
+                conditionalIndex,
+                meanWasUpdated
+              });
+              
+              if (updatedEdgeId) {
+                finalGraph = updateManager.rebalanceConditionalProbabilities(
+                  nextGraph,
+                  updatedEdgeId,
+                  conditionalIndex,
+                  false // Don't force rebalance - respect overrides
+                );
+              }
+            }
+            
+            setGraph(finalGraph);
+            
+            const hadRebalance = finalGraph !== nextGraph;
             if (changesApplied > 0) {
-              toast.success(`Applied to conditional[${conditionalIndex}]: ${changesApplied} fields updated`);
+              if (hadRebalance) {
+                toast.success(`Applied to conditional[${conditionalIndex}]: ${changesApplied} fields + siblings rebalanced`);
+              } else {
+                toast.success(`Applied to conditional[${conditionalIndex}]: ${changesApplied} fields updated`);
+              }
             } else {
               toast('No changes applied (fields may be overridden)', { icon: 'ℹ️' });
             }
