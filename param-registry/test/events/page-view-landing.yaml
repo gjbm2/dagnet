@@ -1,0 +1,23 @@
+id: page_view_landing
+name: Landing Page View
+description: User views the landing page from marketing campaigns, organic search, or direct traffic
+category: page_view
+tags:
+  - entry
+  - web
+  - marketing
+provider_event_names:
+  amplitude: Page View
+  segment: page_viewed
+amplitude_filters:
+  - property: page_path
+    operator: is any of
+    values:
+      - "/"
+      - "/landing"
+      - "/welcome"
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+

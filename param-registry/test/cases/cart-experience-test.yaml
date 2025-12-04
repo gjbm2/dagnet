@@ -1,0 +1,26 @@
+id: cart-experience-test
+parameter_type: case
+name: Cart Experience A/B Test
+description: Testing traditional multi-step cart (classic) against streamlined quick-add cart experience. Hypothesis is that reduced friction in quick cart will improve conversion.
+case:
+  status: active
+  variants:
+    - name: classic
+      weight: 0.5
+      description: Traditional multi-step shopping cart with full item details, quantity adjustments, and save-for-later functionality
+    - name: quick
+      weight: 0.5
+      description: Streamlined slide-out cart with minimal friction - one-click add and express checkout option
+tags:
+  - cart
+  - checkout
+  - ux
+  - conversion
+owner: product-team
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  version: "1.0.0"
+  status: active
+  author: product-team
+

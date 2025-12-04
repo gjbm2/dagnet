@@ -1,0 +1,13 @@
+id: checkout
+name: Checkout
+description: User enters shipping address, billing details, and selects delivery options. High-friction step where form complexity and unexpected costs cause abandonment.
+event_id: checkout_started
+tags:
+  - checkout
+  - conversion
+  - forms
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  version: "1.0.0"
+  status: active

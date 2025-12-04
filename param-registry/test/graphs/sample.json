@@ -1,0 +1,224 @@
+{
+    "nodes": [
+      {
+        "uuid": "088b70f0-3184-4604-a0e7-bca00cbd3a9a",
+        "id": "start",
+        "label": "Start",
+        "absorbing": false,
+        "entry": {
+          "is_start": true,
+          "entry_weight": 1
+        },
+        "layout": {
+          "x": -564,
+          "y": 30
+        }
+      },
+      {
+        "uuid": "d70c6609-3e59-4f99-b262-476181efbe97",
+        "id": "node-2",
+        "label": "Node 2",
+        "absorbing": false,
+        "layout": {
+          "x": -367,
+          "y": 22,
+          "colour": "#16a34a"
+        },
+        "type": "case",
+        "case": {
+          "id": "my-case",
+          "status": "active",
+          "variants": [
+            {
+              "name": "renamed-control",
+              "weight": 0.5
+            },
+            {
+              "name": "renamed-treatment",
+              "weight": 0.5
+            }
+          ]
+        }
+      },
+      {
+        "uuid": "5eeb3ba1-8acd-4f0a-b01e-0643ed30084a",
+        "id": "node-3",
+        "label": "Node 3",
+        "absorbing": false,
+        "layout": {
+          "x": -122,
+          "y": -108
+        }
+      },
+      {
+        "uuid": "b6b8297e-45e9-43d5-9c93-e8c9620e1764",
+        "id": "node-4",
+        "label": "Node 4",
+        "absorbing": false,
+        "layout": {
+          "x": -119,
+          "y": 166
+        }
+      },
+      {
+        "uuid": "ec18da26-010e-476c-a2e9-3172c42b78a3",
+        "id": "node-5",
+        "label": "Node 5",
+        "absorbing": false,
+        "layout": {
+          "x": 62,
+          "y": 21
+        }
+      },
+      {
+        "uuid": "8949dbfe-aa93-42cf-89ee-b8b3985a07b7",
+        "id": "node-6",
+        "label": "Node 6",
+        "absorbing": false,
+        "layout": {
+          "x": 393,
+          "y": -103
+        }
+      },
+      {
+        "uuid": "b81bfb0c-1a47-44dc-8335-11e2f3ee24ff",
+        "id": "node-7",
+        "label": "Node 7",
+        "absorbing": false,
+        "layout": {
+          "x": 342,
+          "y": 121
+        }
+      }
+    ],
+    "edges": [
+      {
+        "uuid": "87b541db-21ce-41fd-b384-2ef8c081b75a",
+        "id": "start-to-node-2",
+        "from": "088b70f0-3184-4604-a0e7-bca00cbd3a9a",
+        "to": "d70c6609-3e59-4f99-b262-476181efbe97",
+        "fromHandle": "right-out",
+        "toHandle": "left",
+        "p": {
+          "mean": 1
+        },
+        "query": "from(start).to(node-2)",
+        "description": ""
+      },
+      {
+        "uuid": "2d116218-045d-4722-9561-eafd606271ab",
+        "id": "node-2-to-node-3",
+        "from": "d70c6609-3e59-4f99-b262-476181efbe97",
+        "to": "5eeb3ba1-8acd-4f0a-b01e-0643ed30084a",
+        "fromHandle": "right-out",
+        "toHandle": "left",
+        "p": {
+          "mean": 1
+        },
+        "case_variant": "renamed-control",
+        "case_id": "d70c6609-3e59-4f99-b262-476181efbe97",
+        "description": "",
+        "query": "from(node-2).to(node-3)"
+      },
+      {
+        "uuid": "a7c25391-c12f-48dd-82ff-bcb390e8e2fe",
+        "id": "node-2-to-node-4",
+        "from": "d70c6609-3e59-4f99-b262-476181efbe97",
+        "to": "b6b8297e-45e9-43d5-9c93-e8c9620e1764",
+        "fromHandle": "right-out",
+        "toHandle": "left",
+        "p": {
+          "mean": 1
+        },
+        "case_variant": "renamed-treatment",
+        "case_id": "d70c6609-3e59-4f99-b262-476181efbe97",
+        "description": "",
+        "query": "from(node-2).to(node-4)"
+      },
+      {
+        "uuid": "85ee973b-8c89-43d5-84c5-9f5406207e83",
+        "id": "node-3-to-node-5",
+        "from": "5eeb3ba1-8acd-4f0a-b01e-0643ed30084a",
+        "to": "ec18da26-010e-476c-a2e9-3172c42b78a3",
+        "fromHandle": "right-out",
+        "toHandle": "left",
+        "p": {
+          "mean": 1
+        },
+        "query": "from(node-3).to(node-5)",
+        "description": ""
+      },
+      {
+        "uuid": "114b4df9-d531-4f76-9286-43944f38a0f8",
+        "id": "node-4-to-node-5",
+        "from": "b6b8297e-45e9-43d5-9c93-e8c9620e1764",
+        "to": "ec18da26-010e-476c-a2e9-3172c42b78a3",
+        "fromHandle": "right-out",
+        "toHandle": "left",
+        "p": {
+          "mean": 1
+        },
+        "query": "from(node-4).to(node-5)",
+        "description": ""
+      },
+      {
+        "uuid": "26648406-c7b4-445c-82de-af996c57f16f",
+        "id": "node-5-to-node-7",
+        "from": "ec18da26-010e-476c-a2e9-3172c42b78a3",
+        "to": "b81bfb0c-1a47-44dc-8335-11e2f3ee24ff",
+        "fromHandle": "right-out",
+        "toHandle": "left",
+        "p": {
+          "mean": 0.5
+        },
+        "query": "from(node-5).to(node-7)",
+        "conditional_p": [
+          {
+            "condition": "case(my-case:renamed-control)",
+            "query": "from(node-5).to(node-7).case(my-case:renamed-control)",
+            "query_overridden": false,
+            "p": {
+              "mean": 0.1
+            }
+          }
+        ],
+        "description": ""
+      },
+      {
+        "uuid": "1c5a7833-420c-46dc-8e80-6139d3913d49",
+        "id": "node-5-to-node-6",
+        "from": "ec18da26-010e-476c-a2e9-3172c42b78a3",
+        "to": "8949dbfe-aa93-42cf-89ee-b8b3985a07b7",
+        "fromHandle": "right-out",
+        "toHandle": "left",
+        "p": {
+          "mean": 0.5,
+          "mean_overridden": false
+        },
+        "query": "from(node-5).to(node-6)",
+        "conditional_p": [
+          {
+            "condition": "case(my-case:renamed-control)",
+            "query": "from(node-5).to(node-6).case(my-case:renamed-control)",
+            "query_overridden": false,
+            "p": {
+              "mean": 0.9,
+              "mean_overridden": false
+            }
+          }
+        ],
+        "description": ""
+      }
+    ],
+    "policies": {
+      "default_outcome": "success"
+    },
+    "metadata": {
+      "name": "ttest2",
+      "description": "",
+      "created_at": "2025-12-04T15:30:58.863Z",
+      "updated_at": "2025-12-04T15:39:22.756Z",
+      "version": "1.0.0"
+    },
+    "currentQueryDSL": "window(27-Nov-25:4-Dec-25)"
+  }

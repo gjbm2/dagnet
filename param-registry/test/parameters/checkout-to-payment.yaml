@@ -1,0 +1,29 @@
+id: checkout-to-payment
+name: Checkout to Payment Rate
+type: probability
+query: "from(checkout).to(payment)"
+query_overridden: false
+values:
+  - mean: 0.75
+    stdev: 0.04
+    n: 2000
+    k: 1500
+    distribution: beta
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: amplitude
+      retrieved_at: "2025-04-01T08:00:00Z"
+      full_query: "from(checkout).to(payment).window(1-Jan-25:31-Mar-25)"
+metadata:
+  description: Probability that a user who starts checkout will proceed to payment submission. Key conversion point affected by form friction and cart experience.
+  tags:
+    - conversion
+    - checkout
+    - payment
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-04-01T08:00:00Z"
+  author: analytics-team
+  version: "1.0.0"
+  status: active
+
