@@ -1,0 +1,19 @@
+id: checkout-abandon-classic
+name: Checkout Abandon Rate (Classic Cart)
+description: Probability of abandoning checkout after using classic cart experience
+type: probability
+query: from(checkout).to(abandon).case(cart-experience-test:classic)
+query_overridden: false
+values:
+  - mean: 0.28
+    stdev: 0.03
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+  tags:
+    - checkout
+    - abandonment
+    - ab-test
+    - classic-cart
+

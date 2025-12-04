@@ -1,7 +1,7 @@
 id: product-view
 name: Product View
 description: User browses product detail page with specifications, pricing, reviews, and images. Critical decision point where users either add to cart, call to order, or abandon.
-event_id: product_viewed
+event_id: product-viewed
 tags:
   - pdp
   - conversion

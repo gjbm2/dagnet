@@ -74,4 +74,28 @@ parameters:
     type: cost_gbp
     status: active
     tags: [cost, returns]
+    
+  - id: checkout-abandon-classic
+    file_path: parameters/checkout-abandon-classic.yaml
+    type: probability
+    status: active
+    tags: [abandonment, checkout, case-variant]
+    
+  - id: checkout-abandon-quick
+    file_path: parameters/checkout-abandon-quick.yaml
+    type: probability
+    status: active
+    tags: [abandonment, checkout, case-variant]
+    
+  - id: confirmed-to-shipped-classic
+    file_path: parameters/confirmed-to-shipped-classic.yaml
+    type: probability
+    status: active
+    tags: [fulfilment, shipping, case-variant]
+    
+  - id: confirmed-to-shipped-quick
+    file_path: parameters/confirmed-to-shipped-quick.yaml
+    type: probability
+    status: active
+    tags: [fulfilment, shipping, case-variant]
 

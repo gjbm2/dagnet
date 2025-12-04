@@ -1,7 +1,6 @@
 id: order-complete
 name: Order Complete
 description: Customer kept item past 30-day return window - successful transaction. Final successful outcome representing retained revenue.
-event_id: order_completed
 tags:
   - order
   - success

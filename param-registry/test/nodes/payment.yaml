@@ -1,7 +1,7 @@
 id: payment
 name: Payment
 description: Payment processing hub where web checkout and phone orders converge for card authorisation. Handles multiple payment methods and fraud checks.
-event_id: payment_submitted
+event_id: payment-submitted
 tags:
   - payment
   - conversion

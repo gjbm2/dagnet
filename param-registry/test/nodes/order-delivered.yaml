@@ -1,7 +1,6 @@
 id: order-delivered
 name: Order Delivered
 description: Order successfully delivered to customer address
-event_id: order-delivered
 tags:
   - delivery
   - success
