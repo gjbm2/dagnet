@@ -1,49 +1,49 @@
 events:
   - id: page-view-landing
     name: Landing Page View
-    description: User views the landing page
+    description: User views the landing page from marketing campaigns, organic search, or direct traffic
     category: page_view
     file_path: events/page-view-landing.yaml
     tags: [entry, web, marketing]
     
   - id: product-viewed
     name: Product Viewed
-    description: User views a product detail page
+    description: User views a product detail page with specifications, pricing, and reviews
     category: page_view
     file_path: events/product-viewed.yaml
-    tags: [product, web]
+    tags: [pdp, browse, product]
     
   - id: add-to-cart
     name: Add to Cart
-    description: User adds item to shopping cart
+    description: User adds a product to their shopping cart
     category: user_action
     file_path: events/add-to-cart.yaml
-    tags: [cart, ecommerce]
+    tags: [cart, conversion, action]
     
   - id: checkout-started
     name: Checkout Started
-    description: User initiates checkout process
+    description: User initiates the checkout process by proceeding from cart
     category: conversion
     file_path: events/checkout-started.yaml
-    tags: [checkout, conversion]
+    tags: [checkout, conversion, funnel]
     
   - id: payment-submitted
     name: Payment Submitted
-    description: User submits payment details
+    description: User submits payment details for authorisation
     category: conversion
     file_path: events/payment-submitted.yaml
-    tags: [payment, conversion]
+    tags: [payment, conversion, transaction]
     
   - id: order-confirmed
     name: Order Confirmed
-    description: Order is confirmed after successful payment
+    description: Payment successful and order placed in fulfilment queue
     category: milestone
     file_path: events/order-confirmed.yaml
-    tags: [order, conversion]
+    tags: [order, success, conversion]
     
   - id: household-delegated
-    name: Household Delegated
-    description: Legacy event for testing
+    name: Delegation Completed
+    description: Household has completed delegation step
     category: user_action
     file_path: events/household-delegated.yaml
     tags: [legacy]
@@ -57,5 +57,5 @@ events:
 
 metadata:
   version: "1.0.0"
-  updated_at: "2025-12-04T00:00:00Z"
+  updated_at: "2025-12-04T21:15:00Z"
   total_events: 8

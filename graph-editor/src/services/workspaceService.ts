@@ -1216,6 +1216,68 @@ class WorkspaceService {
   }
 
   /**
+   * Clear ALL workspaces and files from IDB (except credentials and connections).
+   * Used when switching repos to ensure a clean slate.
+   * 
+   * This is safer than trying to filter files by workspace everywhere -
+   * just nuke everything and start fresh.
+   */
+  async clearAllWorkspaces(): Promise<void> {
+    console.log(`🧹 WorkspaceService: Clearing all workspaces (clean slate)...`);
+    
+    // Get counts for logging
+    const workspaceCount = await db.workspaces.count();
+    const allFiles = await db.files.toArray();
+    
+    // Identify files to KEEP (credentials and connections)
+    const protectedFileIds = new Set<string>();
+    for (const file of allFiles) {
+      const isCredentials = file.fileId.includes('credentials');
+      const isConnections = file.fileId.includes('connections');
+      if (isCredentials || isConnections) {
+        protectedFileIds.add(file.fileId);
+      }
+    }
+    
+    // Delete all non-protected files from IDB
+    let deletedCount = 0;
+    for (const file of allFiles) {
+      if (!protectedFileIds.has(file.fileId)) {
+        await db.files.delete(file.fileId);
+        deletedCount++;
+      }
+    }
+    
+    // Delete all workspace records
+    await db.workspaces.clear();
+    
+    // Delete all tabs (except those for protected files)
+    const tabs = await db.tabs.toArray();
+    for (const tab of tabs) {
+      const isProtected = tab.fileId.includes('credentials') || tab.fileId.includes('connections');
+      if (!isProtected) {
+        await db.tabs.delete(tab.id);
+      }
+    }
+    
+    // Clear FileRegistry memory (except protected files)
+    const registry = fileRegistry as any;
+    const keysToDelete: string[] = [];
+    for (const key of registry.files.keys()) {
+      const isProtected = key.includes('credentials') || key.includes('connections');
+      if (!isProtected) {
+        keysToDelete.push(key);
+      }
+    }
+    for (const key of keysToDelete) {
+      registry.files.delete(key);
+      registry.listeners.delete(key);
+    }
+    
+    console.log(`✅ WorkspaceService: Cleared ${workspaceCount} workspace(s), ${deletedCount} file(s), kept ${protectedFileIds.size} protected file(s)`);
+  }
+
+  /**
    * Get all files in a workspace (from IDB)
    */
   async getWorkspaceFiles(repository: string, branch: string): Promise<FileState[]> {

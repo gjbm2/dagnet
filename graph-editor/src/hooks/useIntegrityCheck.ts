@@ -8,6 +8,7 @@
 import { useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { useTabContext } from '../contexts/TabContext';
+import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { IntegrityCheckService } from '../services/integrityCheckService';
 
 interface UseIntegrityCheckResult {
@@ -28,6 +29,7 @@ interface UseIntegrityCheckResult {
  */
 export function useIntegrityCheck(): UseIntegrityCheckResult {
   const { operations } = useTabContext();
+  const { state } = useNavigatorContext();
   const [isChecking, setIsChecking] = useState(false);
   
   const runCheck = useCallback(async () => {
@@ -37,7 +39,11 @@ export function useIntegrityCheck(): UseIntegrityCheckResult {
     const toastId = toast.loading('Checking integrity...');
     
     try {
-      const result = await IntegrityCheckService.checkIntegrity(operations, true);
+      // Pass current workspace to filter files
+      const workspace = state.selectedRepo && state.selectedBranch 
+        ? { repository: state.selectedRepo, branch: state.selectedBranch }
+        : undefined;
+      const result = await IntegrityCheckService.checkIntegrity(operations, true, workspace);
       
       if (result.success) {
         toast.success(
@@ -59,7 +65,7 @@ export function useIntegrityCheck(): UseIntegrityCheckResult {
     } finally {
       setIsChecking(false);
     }
-  }, [operations, isChecking]);
+  }, [operations, isChecking, state.selectedRepo, state.selectedBranch]);
   
   return {
     runCheck,
