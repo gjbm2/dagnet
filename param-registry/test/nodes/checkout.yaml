@@ -1,7 +1,7 @@
 id: checkout
 name: Checkout
 description: User enters shipping address, billing details, and selects delivery options. High-friction step where form complexity and unexpected costs cause abandonment.
-event_id: checkout_started
+event_id: checkout-started
 tags:
   - checkout
   - conversion

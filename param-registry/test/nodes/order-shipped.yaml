@@ -1,7 +1,6 @@
 id: order-shipped
 name: Order Shipped
 description: Order has been dispatched from warehouse and is in transit
-event_id: order-shipped
 tags:
   - order
   - shipping

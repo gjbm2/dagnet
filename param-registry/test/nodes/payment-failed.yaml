@@ -1,7 +1,6 @@
 id: payment-failed
 name: Payment Failed
 description: Payment was declined or failed to process (terminal failure state)
-event_id: payment-declined
 tags:
   - payment
   - failure

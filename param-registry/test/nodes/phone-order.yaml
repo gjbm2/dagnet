@@ -1,7 +1,6 @@
 id: phone-order
 name: Phone Order
 description: Customer places order via phone with sales agent, bypassing web checkout
-event_id: phone-order-placed
 tags:
   - phone
   - assisted

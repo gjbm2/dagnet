@@ -1,7 +1,6 @@
 id: return-completed
 name: Return Completed
 description: Customer returned item and refund was processed (terminal state)
-event_id: return-processed
 tags:
   - return
   - refund

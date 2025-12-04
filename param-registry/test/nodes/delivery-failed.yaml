@@ -1,7 +1,6 @@
 id: delivery-failed
 name: Delivery Failed
 description: Delivery attempt failed after maximum retries (terminal failure state)
-event_id: delivery-failed
 tags:
   - delivery
   - failure
