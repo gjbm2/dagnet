@@ -1,7 +1,7 @@
 id: add-to-cart
 name: Add to Cart
 description: User adds a product to their shopping cart, indicating purchase intent
-event_id: cart-item-added
+event_id: add-to-cart
 tags:
   - intent
   - web

@@ -23,14 +23,14 @@ events:
   - id: checkout-started
     name: Checkout Started
     description: User initiates checkout process
-    category: user_action
+    category: conversion
     file_path: events/checkout-started.yaml
     tags: [checkout, conversion]
     
   - id: payment-submitted
     name: Payment Submitted
     description: User submits payment details
-    category: user_action
+    category: conversion
     file_path: events/payment-submitted.yaml
     tags: [payment, conversion]
     
@@ -49,9 +49,9 @@ events:
     tags: [legacy]
     
   - id: saw-wa-details-page
-    name: Saw WA Details Page
+    name: saw-wa-details-page
     description: Legacy event for testing
-    category: page_view
+    category: conversion
     file_path: events/saw-wa-details-page.yaml
     tags: [legacy]
 

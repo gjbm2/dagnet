@@ -1,7 +1,7 @@
 id: order-confirmed
 name: Order Confirmed
 description: Payment successful, order placed in fulfilment queue, and confirmation email sent. Customer receives order number and estimated delivery date.
-event_id: order_confirmed
+event_id: order-confirmed
 tags:
   - order
   - confirmation

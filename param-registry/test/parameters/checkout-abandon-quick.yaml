@@ -1,0 +1,19 @@
+id: checkout-abandon-quick
+name: Checkout Abandon Rate (Quick Cart)
+description: Probability of abandoning checkout after using quick cart experience
+type: probability
+query: from(checkout).to(abandon).case(cart-experience-test:quick)
+query_overridden: false
+values:
+  - mean: 0.18
+    stdev: 0.02
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+  tags:
+    - checkout
+    - abandonment
+    - ab-test
+    - quick-cart
+

@@ -1,7 +1,6 @@
 id: order-cancelled
 name: Order Cancelled
 description: Customer cancelled order before shipping (terminal state with refund)
-event_id: order-cancelled
 tags:
   - order
   - cancellation

@@ -1,0 +1,19 @@
+id: confirmed-to-shipped-classic
+name: Shipping Rate (Classic Cart)
+description: Probability of order being shipped (not cancelled) after classic cart experience
+type: probability
+query: from(order-confirmed).to(order-shipped).visited(classic-cart)
+query_overridden: false
+values:
+  - mean: 0.96
+    stdev: 0.01
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+  tags:
+    - fulfilment
+    - shipping
+    - ab-test
+    - classic-cart
+
