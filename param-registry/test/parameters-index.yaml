@@ -1,27 +1,77 @@
-# Parameters Index
-# Created: 2025-11-05
-
-# Parameter registry for conversion graph edges
-# Each parameter represents a probability, cost, or duration value
+version: "1.0.0"
+created_at: "2025-01-01T00:00:00Z"
+updated_at: "2025-12-04T00:00:00Z"
 
 parameters:
-  - id: homepage-to-product
-    name: Homepage to Product Conversion Rate
-    parameter_type: probability
-    file: parameters/homepage-to-product.yaml
+  - id: landing-to-product
+    file_path: parameters/landing-to-product.yaml
+    type: probability
+    status: active
+    tags: [conversion, top-funnel, landing]
     
-  - id: customer-support-cost
-    name: Customer Support Cost per Contact
-    parameter_type: cost_gbp
-    file: parameters/customer-support-cost.yaml
+  - id: checkout-to-payment
+    file_path: parameters/checkout-to-payment.yaml
+    type: probability
+    status: active
+    tags: [conversion, checkout]
     
-  - id: checkout-duration
-    name: Checkout Process Duration
-    parameter_type: cost_time
-    file: parameters/checkout-duration.yaml
+  - id: checkout-to-payment-classic
+    file_path: parameters/checkout-to-payment-classic.yaml
+    type: probability
+    status: active
+    tags: [conversion, checkout, case-variant]
     
-  # Registry entry without file (valid case - data may live only on graph)
-  - id: abandoned-cart-recovery
-    name: Abandoned Cart Recovery Rate
-    parameter_type: probability
-    file: parameters/abandoned-cart-recovery.yaml  # ← File not created yet, data on graph only
+  - id: checkout-to-payment-quick
+    file_path: parameters/checkout-to-payment-quick.yaml
+    type: probability
+    status: active
+    tags: [conversion, checkout, case-variant]
+    
+  - id: confirmed-to-cancelled-classic
+    file_path: parameters/confirmed-to-cancelled-classic.yaml
+    type: probability
+    status: active
+    tags: [cancellation, case-variant]
+    
+  - id: confirmed-to-cancelled-quick
+    file_path: parameters/confirmed-to-cancelled-quick.yaml
+    type: probability
+    status: active
+    tags: [cancellation, case-variant]
+    
+  - id: payment-success-rate
+    file_path: parameters/payment-success-rate.yaml
+    type: probability
+    status: active
+    tags: [conversion, payment]
+    
+  - id: delivery-success-rate
+    file_path: parameters/delivery-success-rate.yaml
+    type: probability
+    status: active
+    tags: [fulfilment, delivery]
+    
+  - id: phone-order-handling-cost
+    file_path: parameters/phone-order-handling-cost.yaml
+    type: cost_gbp
+    status: active
+    tags: [cost, phone, operations]
+    
+  - id: phone-order-duration
+    file_path: parameters/phone-order-duration.yaml
+    type: cost_time
+    status: active
+    tags: [time, phone, operations]
+    
+  - id: shipping-cost
+    file_path: parameters/shipping-cost.yaml
+    type: cost_gbp
+    status: active
+    tags: [cost, fulfilment, shipping]
+    
+  - id: return-processing-cost
+    file_path: parameters/return-processing-cost.yaml
+    type: cost_gbp
+    status: active
+    tags: [cost, returns]
+

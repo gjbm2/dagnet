@@ -1,38 +1,89 @@
-# Nodes Index
-# Created: 2025-11-05
-# Schema: node-schema.yaml (array)
-
-# Node registry for conversion graph
-# Each node represents a state or action in the user journey
+version: "1.0.0"
+created_at: "2025-01-01T00:00:00Z"
+updated_at: "2025-12-04T00:00:00Z"
 
 nodes:
-  - id: homepage
-    name: Homepage
-    event_id: page-view
-    file: nodes/homepage.yaml
+  - id: landing-page
+    file_path: nodes/landing-page.yaml
+    status: active
+    type: entry
+    tags: [entry, web, marketing]
     
-  - id: product-page
-    name: Product Page
-    event_id: page-view
-    file: nodes/product-page.yaml
+  - id: product-view
+    file_path: nodes/product-view.yaml
+    status: active
+    type: conversion
+    tags: [web, product]
     
-  - id: shopping-cart
-    name: Shopping Cart
-    event_id: add-to-cart
-    file: nodes/shopping-cart.yaml
+  - id: add-to-cart
+    file_path: nodes/add-to-cart.yaml
+    status: active
+    type: conversion
+    tags: [web, cart]
     
-  - id: checkout-start
-    name: Checkout Start
-    event_id: page-view
-    file: nodes/checkout-start.yaml
+  - id: checkout
+    file_path: nodes/checkout.yaml
+    status: active
+    type: conversion
+    tags: [web, checkout]
     
-  - id: purchase-complete
-    name: Purchase Complete
-    event_id: checkout-complete
-    file: nodes/purchase-complete.yaml
+  - id: payment
+    file_path: nodes/payment.yaml
+    status: active
+    type: conversion
+    tags: [web, payment]
     
-  # Registry entry without file (valid case - node exists only in graph)
   - id: payment-failed
-    name: Payment Failed
-    event_id: page-view
-    file: nodes/payment-failed.yaml  # ← File not created, node added directly to graph
+    file_path: nodes/payment-failed.yaml
+    status: active
+    type: exit
+    tags: [web, error]
+    
+  - id: order-confirmed
+    file_path: nodes/order-confirmed.yaml
+    status: active
+    type: conversion
+    tags: [web, order]
+    
+  - id: order-cancelled
+    file_path: nodes/order-cancelled.yaml
+    status: active
+    type: exit
+    tags: [order, cancellation]
+    
+  - id: order-shipped
+    file_path: nodes/order-shipped.yaml
+    status: active
+    type: conversion
+    tags: [order, fulfilment]
+    
+  - id: order-delivered
+    file_path: nodes/order-delivered.yaml
+    status: active
+    type: conversion
+    tags: [order, fulfilment]
+    
+  - id: delivery-failed
+    file_path: nodes/delivery-failed.yaml
+    status: active
+    type: exit
+    tags: [order, error]
+    
+  - id: return-completed
+    file_path: nodes/return-completed.yaml
+    status: active
+    type: exit
+    tags: [order, return]
+    
+  - id: order-complete
+    file_path: nodes/order-complete.yaml
+    status: active
+    type: exit
+    tags: [order, success]
+    
+  - id: phone-order
+    file_path: nodes/phone-order.yaml
+    status: active
+    type: conversion
+    tags: [phone, order]
+
