@@ -1,4 +1,4 @@
-id: add_to_cart
+id: add-to-cart
 name: Add to Cart
 description: User adds a product to their shopping cart
 category: user_action

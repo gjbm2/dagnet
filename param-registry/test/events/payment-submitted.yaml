@@ -1,4 +1,4 @@
-id: payment_submitted
+id: payment-submitted
 name: Payment Submitted
 description: User submits payment details for authorisation
 category: conversion

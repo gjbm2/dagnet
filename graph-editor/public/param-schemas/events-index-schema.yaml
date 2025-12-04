@@ -17,8 +17,8 @@ properties:
       properties:
         id:
           type: string
-          pattern: '^[a-zA-Z0-9_]+$'
-          description: "Event ID (must match event file id)"
+          pattern: '^[a-zA-Z0-9_-]+$'
+          description: "Event ID (must match event file id, use hyphens for consistency)"
         
         name:
           type: string
@@ -69,28 +69,28 @@ properties:
 examples:
   - events:
       # Index-only entry (no separate file, minimal definition)
-      - id: page_view
+      - id: page-view
         name: "Page View"
         description: "User views a page"
         category: "page_view"
         tags: ["navigation"]
       
       # Entry with full file definition
-      - id: checkout_started
+      - id: checkout-started
         name: "Checkout Started"
         description: "User initiates checkout process"
         category: "user_action"
-        file_path: "events/conversion/checkout_started.yaml"
+        file_path: "events/checkout-started.yaml"
         tags: ["checkout", "conversion"]
       
-      - id: purchase_completed
+      - id: purchase-completed
         name: "Purchase Completed"
         description: "User completes purchase"
         category: "conversion"
-        file_path: "events/conversion/purchase_completed.yaml"
+        file_path: "events/purchase-completed.yaml"
         tags: ["purchase", "revenue"]
       
-      - id: add_to_cart
+      - id: add-to-cart
         name: "Add to Cart"
         description: "User adds item to shopping cart"
         category: "user_action"
