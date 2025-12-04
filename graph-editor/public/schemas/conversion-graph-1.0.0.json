@@ -1,0 +1,495 @@
+{
+  "$id": "https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/conversion-graph-1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Conversion Funnel Graph",
+  "$comment": "Graph JSON for a conversion funnel DAG with inlined parameters and editor hints. Core semantics: nodes are states; edges are conditional transitions; probabilities are conditional on source node; outgoing edges form a partition that may leave residual routed to a default outcome unless overridden. Acyclicity, absorbing-node constraints, and per-source probability policies are validated by the runner.",
+  "type": "object",
+  "required": ["nodes", "edges", "policies", "metadata"],
+  "additionalProperties": false,
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/Node" }
+    },
+    "edges": {
+      "type": "array",
+      "minItems": 0,
+      "items": { "$ref": "#/$defs/Edge" }
+    },
+    "policies": { "$ref": "#/$defs/Policies" },
+    "metadata": { "$ref": "#/$defs/Metadata" }
+  },
+  "$defs": {
+    "UUID": { "type": "string", "format": "uuid" },
+    "Id": { 
+      "type": "string", 
+      "minLength": 1, 
+      "maxLength": 128,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "description": "Human-readable identifier (letters, numbers, hyphens, underscores - no spaces or special chars)"
+    },
+
+    "Node": {
+      "type": "object",
+      "required": ["uuid", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "uuid": { "$ref": "#/$defs/UUID" },
+        "id": { "$ref": "#/$defs/Id" },
+        "label": { "type": "string", "maxLength": 256 },
+        "label_overridden": { "type": "boolean", "default": false, "description": "If true, label was manually edited and should not be auto-updated" },
+        "description": { "type": "string" },
+        "description_overridden": { "type": "boolean", "default": false, "description": "If true, description was manually edited and should not be auto-updated" },
+        "event_id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Direct event ID for DAS queries (letters, numbers, hyphens, underscores)"
+        },
+        "event": {
+          "type": "object",
+          "description": "Event reference for this node (optional)",
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "Reference to event in events registry (letters, numbers, hyphens, underscores)" },
+            "id_overridden": { "type": "boolean", "default": false, "description": "If true, event ID was manually edited and should not be auto-updated" }
+          },
+          "required": ["id"]
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "absorbing": { 
+          "type": "boolean", 
+          "default": false, 
+          "$comment": "If true, node is terminal and MUST have zero outgoing edges; runner enforces." 
+        },
+        "outcome_type": {
+          "type": "string",
+          "enum": ["success", "failure", "error", "neutral", "other"],
+          "description": "Classification for absorbing outcomes; optional"
+        },
+        "entry": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "is_start": { "type": "boolean", "default": false },
+            "entry_weight": { "type": "number", "minimum": 0 }
+          }
+        },
+        "costs": { 
+          "$ref": "#/$defs/Costs",
+          "$comment": "DEPRECATED: Node costs are no longer used. Costs are only tracked on edges (cost_gbp and cost_time). Runner calculates per-node costs by accumulating edge costs along paths.",
+          "deprecated": true
+        },
+        "residual_behavior": { "$ref": "#/$defs/ResidualBehavior" },
+        "case": {
+          "type": "object",
+          "description": "Case/experiment node metadata (for A/B tests, feature flags, etc.)",
+          "additionalProperties": false,
+          "properties": {
+            "uuid": { "$ref": "#/$defs/UUID" },
+            "id": { "$ref": "#/$defs/Id" },
+            "status": {
+              "type": "string",
+              "enum": ["active", "paused", "completed"],
+              "default": "active"
+            },
+            "connection": { "type": "string", "description": "Connection name from connections.yaml" },
+            "connection_string": { "type": "string", "description": "JSON blob of provider-specific settings" },
+            "evidence": {
+              "type": "object",
+              "description": "Evidence from last variant fetch",
+              "additionalProperties": false,
+              "properties": {
+                "source": { "type": "string", "description": "Connection name used for this fetch" },
+                "fetched_at": { "type": "string", "description": "Timestamp of fetch (UK format or ISO)" },
+                "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from case file" },
+                "full_query": { "type": "string", "description": "Complete query string used for this fetch (case_id + environment + any filters). Example: case(checkout_test).env(production)" },
+                "variants": {
+                  "type": "array",
+                  "description": "Fetched variant allocations",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "variant_id": { "type": "string" },
+                      "name": { "type": "string" },
+                      "allocation": { "type": "number" }
+                    }
+                  }
+                },
+                "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string for debugging/provenance" }
+              }
+            },
+            "variants": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name", "weight"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "name_overridden": { "type": "boolean", "default": false, "description": "If true, name was manually edited and should not be auto-updated" },
+                  "weight": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "weight_overridden": { "type": "boolean", "default": false, "description": "If true, weight was manually edited and should not be auto-updated" }
+                }
+              }
+            }
+          }
+        },
+        "layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "rank": { "type": "integer", "minimum": 0 },
+            "group": { "type": "string", "maxLength": 128 },
+            "colour": { "type": "string", "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" }
+          }
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "External URL for this node (can override registry node)"
+        },
+        "url_overridden": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, URL was manually edited and should not auto-sync from registry"
+        },
+        "images": {
+          "type": "array",
+          "description": "Images attached to this node (can override registry node)",
+          "items": {
+            "type": "object",
+            "required": ["image_id", "caption"],
+            "additionalProperties": false,
+            "properties": {
+              "image_id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$" },
+              "caption": { "type": "string", "maxLength": 256 },
+              "caption_overridden": { 
+                "type": "boolean", 
+                "default": false,
+                "description": "If true, caption was manually edited at graph level"
+              },
+              "file_extension": { 
+                "type": "string", 
+                "enum": ["png", "jpg", "jpeg"] 
+              }
+            }
+          }
+        },
+        "images_overridden": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, images array was manually modified and should not auto-sync from registry"
+        }
+      }
+    },
+
+    "Edge": {
+      "type": "object",
+      "required": ["uuid", "from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "uuid": { "$ref": "#/$defs/UUID" },
+        "id": { "$ref": "#/$defs/Id" },
+        "from": { 
+          "type": "string", 
+          "minLength": 1, 
+          "$comment": "Node uuid or id; runner canonicalizes to uuid and checks existence." 
+        },
+        "to": { 
+          "type": "string", 
+          "minLength": 1, 
+          "$comment": "Node uuid or id; runner canonicalizes to uuid and checks existence." 
+        },
+        "fromHandle": {
+          "type": "string",
+          "enum": ["left", "right", "top", "bottom", "left-out", "right-out", "top-out", "bottom-out"],
+          "description": "Handle on source node where edge originates"
+        },
+        "toHandle": {
+          "type": "string", 
+          "enum": ["left", "right", "top", "bottom", "left-out", "right-out", "top-out", "bottom-out"],
+          "description": "Handle on target node where edge terminates"
+        },
+        "label": { "type": "string", "maxLength": 256, "description": "Edge label (auto-derived from upstream/downstream nodes unless overridden)" },
+        "label_overridden": { "type": "boolean", "default": false, "description": "If true, label was manually edited and should not be auto-updated" },
+        "description": { "type": "string" },
+        "description_overridden": { "type": "boolean", "default": false, "description": "If true, description was manually edited and should not be auto-updated" },
+        "query": { "type": "string", "pattern": "^from\\([a-z0-9_-]+\\)\\.to\\([a-z0-9_-]+\\)", "description": "Query expression for data retrieval (auto-generated by MSMDC or manual)" },
+        "query_overridden": { "type": "boolean", "default": false, "description": "If true, query was manually edited and should not be auto-regenerated" },
+        "n_query": { "type": "string", "description": "Optional explicit query for n (denominator) when it differs from k query. Used when 'from' node shares an event with siblings and n can't be derived by stripping upstream conditions. Result's k (to_count) is used as n for the main query." },
+        "n_query_overridden": { "type": "boolean", "default": false, "description": "If true, n_query was manually edited and should not be auto-regenerated" },
+        "p": { 
+          "$ref": "#/$defs/ProbabilityParam",
+          "$comment": "Base probability (fallback when no conditional probabilities match). For case edges, variant weight is used instead."
+        },
+        "conditional_p": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConditionalProbability" },
+          "description": "Optional array of conditional probabilities. Evaluated in order; first match wins. Falls back to p if no matches."
+        },
+        "weight_default": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Used to distribute residual among free edges from the same source; proportional with others."
+        },
+        "cost_gbp": { "$ref": "#/$defs/CostParam" },
+        "cost_time": { "$ref": "#/$defs/CostParam" },
+        "case_variant": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Name of the variant this edge represents (for case edges only)"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Reference to parent case node ID (for case edges only)"
+        },
+        "display": { 
+          "$ref": "#/$defs/EdgeDisplay",
+          "description": "Display parameters for editor (colours, grouping)"
+        }
+      }
+    },
+
+    "ProbabilityParam": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "p.mean is P(to|from). Primary value is what user sees/edits. Evidence (n/k) stored separately. Override flags use suffix pattern. If mean absent, edge is 'free' and filled by policy.",
+      "properties": {
+        "mean": { "type": "number", "minimum": 0, "maximum": 1, "description": "Probability value (primary, user-facing)" },
+        "mean_overridden": { "type": "boolean", "default": false, "description": "If true, mean was manually edited and should not be auto-updated" },
+        "stdev": { "type": "number", "minimum": 0, "description": "Standard deviation" },
+        "stdev_overridden": { "type": "boolean", "default": false, "description": "If true, stdev was manually edited and should not be auto-updated" },
+        "distribution": { 
+          "type": "string", 
+          "enum": ["normal", "beta", "uniform"],
+          "default": "beta",
+          "description": "Probability distribution type (beta recommended for probabilities)"
+        },
+        "distribution_overridden": { "type": "boolean", "default": false, "description": "If true, distribution was manually edited and should not be auto-updated" },
+        "connection": { "type": "string", "description": "Connection name from connections.yaml" },
+        "connection_string": { "type": "string", "description": "JSON blob of provider-specific settings" },
+        "evidence": {
+          "type": "object",
+          "description": "Observations from data sources (context for n/k, NOT overridable). Optional fields depend on source type.",
+          "additionalProperties": false,
+          "properties": {
+            "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials) - required for probability data with observations" },
+            "k": { "type": "integer", "minimum": 0, "description": "Number of successes - optional, can be derived from n × mean" },
+            "window_from": { "type": "string", "description": "Time window start (UK format d-MMM-yy or ISO)" },
+            "window_to": { "type": "string", "description": "Time window end (UK format d-MMM-yy or ISO)" },
+            "retrieved_at": { "type": "string", "description": "When this data was retrieved from source (UK format or ISO)" },
+            "source": { "type": "string", "description": "Connection name used for this retrieval" },
+            "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from parameter file" },
+            "full_query": { "type": "string", "description": "Complete DSL query string used for this fetch (includes base query + window + context). Example: from(checkout).to(purchase).window(2025-01-01:2025-01-31).context(device:mobile)" },
+            "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string (request, response, query, connection_string, etc.) for debugging/provenance. May be truncated if response is very large." }
+          },
+          "required": ["retrieved_at", "source"]
+        },
+        "id": { "type": "string", "description": "Reference to parameter file (FK to parameter-{id}.yaml)" }
+      }
+    },
+
+    "CostParam": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Cost structure (GBP monetary or time). Mirrors ProbabilityParam pattern with override flags and optional connection.",
+      "properties": {
+        "mean": { "type": "number", "minimum": 0 },
+        "mean_overridden": { "type": "boolean", "default": false, "description": "If true, mean was manually edited and should not be auto-updated" },
+        "stdev": { "type": "number", "minimum": 0 },
+        "stdev_overridden": { "type": "boolean", "default": false, "description": "If true, stdev was manually edited and should not be auto-updated" },
+        "distribution": { 
+          "type": "string", 
+          "enum": ["normal", "lognormal", "gamma", "uniform", "beta"],
+          "default": "normal"
+        },
+        "distribution_overridden": { "type": "boolean", "default": false, "description": "If true, distribution was manually edited and should not be auto-updated" },
+        "connection": { "type": "string", "description": "Connection name from connections.yaml" },
+        "connection_string": { "type": "string", "description": "JSON blob of provider-specific settings" },
+        "evidence": {
+          "type": "object",
+          "description": "Observations from data sources (context for n/k, NOT overridable). Optional fields depend on source type.",
+          "additionalProperties": false,
+          "properties": {
+            "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials) - required for cost data with observations" },
+            "k": { "type": "integer", "minimum": 0, "description": "Number of successes/observations - optional" },
+            "window_from": { "type": "string", "description": "Time window start (UK format d-MMM-yy or ISO)" },
+            "window_to": { "type": "string", "description": "Time window end (UK format d-MMM-yy or ISO)" },
+            "retrieved_at": { "type": "string", "description": "When this data was retrieved from source (UK format or ISO)" },
+            "source": { "type": "string", "description": "Connection name used for this retrieval" },
+            "path": { "type": "string", "enum": ["direct", "file"], "description": "How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from parameter file" },
+            "full_query": { "type": "string", "description": "Complete DSL query string used for this fetch (includes base query + window + context)" },
+            "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string for debugging/provenance. May be truncated if response is very large." }
+          },
+          "required": ["retrieved_at", "source"]
+        },
+        "id": { "type": "string", "description": "Reference to cost parameter file (FK to parameter-{id}.yaml)" }
+      },
+      "required": ["mean"]
+    },
+    
+    "Condition": {
+      "type": "string",
+      "pattern": "^(visited|exclude|context|case)\\(",
+      "$comment": "Condition uses query DSL constraint syntax: visited(A,B), exclude(C), context(device:mobile), case(test:treatment). Can be combined with dots: visited(A).context(mobile). Most specific condition wins at runtime.",
+      "description": "Constraint expression using query DSL syntax (constraint clauses only, not full query)",
+      "examples": [
+        "visited(promo-viewed,feature-demo)",
+        "exclude(cart-abandoned)",
+        "context(device:mobile)",
+        "case(test-2025:treatment)",
+        "visited(promo-viewed).context(device:mobile)"
+      ]
+    },
+    
+    "ConditionalProbability": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Conditional probability: probability that applies when specific condition is met. Condition is semantic (WHEN it applies), query is full retrieval path (HOW to fetch data). Query is auto-derived from condition + edge topology via MSMDC, but can be manually overridden.",
+      "required": ["condition", "p"],
+      "properties": {
+        "condition": { "$ref": "#/$defs/Condition" },
+        "query": {
+          "type": "string",
+          "pattern": "^from\\([a-z0-9_-]+\\)\\.to\\([a-z0-9_-]+\\)",
+          "description": "Full data retrieval query (auto-derived from condition + edge topology). Example: from(checkout).to(purchase).visited(promo)"
+        },
+        "query_overridden": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, query was manually edited and should not be auto-regenerated by MSMDC"
+        },
+        "p": { "$ref": "#/$defs/ProbabilityParam" }
+      }
+    },
+    
+    "EdgeDisplay": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Display parameters for edges (not semantic, used by editor)",
+      "properties": {
+        "conditional_colour": { 
+          "type": "string", 
+          "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+          "description": "User-selected colour override for conditional edges"
+        },
+        "conditional_group": { 
+          "type": "string", 
+          "maxLength": 128,
+          "description": "Optional user-defined group for conditional colour assignment"
+        }
+      }
+    },
+
+    "Costs": {
+      "$comment": "DEPRECATED: This nested structure is no longer used. Use flat cost_gbp and cost_time fields on edges instead (both use CostParam). Kept for backward compatibility only.",
+      "type": "object",
+      "additionalProperties": false,
+      "deprecated": true,
+      "properties": {
+        "monetary": { "$ref": "#/$defs/MonetaryCost" },
+        "time": { "$ref": "#/$defs/TimeCost" }
+      }
+    },
+
+    "MonetaryCost": {
+      "$comment": "DEPRECATED: No longer used. Use cost_gbp (CostParam) on edges instead. Currency is implicitly GBP.",
+      "type": "object",
+      "additionalProperties": false,
+      "deprecated": true,
+      "properties": {
+        "value": { "type": "number", "minimum": 0 },
+        "stdev": { "type": "number", "minimum": 0 },
+        "distribution": { 
+          "type": "string", 
+          "enum": ["normal", "lognormal", "gamma", "uniform"],
+          "default": "normal"
+        },
+        "currency": { 
+          "type": "string", 
+          "enum": ["GBP", "USD", "EUR"],
+          "default": "GBP"
+        }
+      },
+      "required": ["value"]
+    },
+
+    "TimeCost": {
+      "$comment": "DEPRECATED: No longer used. Use cost_time (CostParam) on edges instead. Units are implicitly days.",
+      "type": "object",
+      "additionalProperties": false,
+      "deprecated": true,
+      "properties": {
+        "value": { "type": "number", "minimum": 0 },
+        "stdev": { "type": "number", "minimum": 0 },
+        "distribution": { 
+          "type": "string", 
+          "enum": ["normal", "lognormal", "gamma", "uniform"],
+          "default": "lognormal"
+        },
+        "units": { 
+          "type": "string", 
+          "enum": ["days", "hours", "weeks"],
+          "default": "days"
+        }
+      },
+      "required": ["value"]
+    },
+
+    "ResidualBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_outcome": { "type": "string", "minLength": 1 },
+        "overflow_policy": {
+          "type": "string",
+          "enum": ["error", "normalize", "cap"],
+          "default": "error"
+        }
+      }
+    },
+
+    "Policies": {
+      "type": "object",
+      "required": ["default_outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "default_outcome": { "type": "string", "minLength": 1 },
+        "overflow_policy": {
+          "type": "string",
+          "enum": ["error", "normalize", "cap"],
+          "default": "error"
+        },
+        "free_edge_policy": {
+          "type": "string",
+          "enum": ["complement", "uniform", "weighted"],
+          "default": "complement"
+        }
+      }
+    },
+
+    "Metadata": {
+      "type": "object",
+      "required": ["version", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "created_at": { "type": "string", "description": "Creation timestamp (UK format or ISO)" },
+        "updated_at": { "type": "string", "description": "Last update timestamp (UK format or ISO)" },
+        "author": { "type": "string", "maxLength": 256 },
+        "description": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}
