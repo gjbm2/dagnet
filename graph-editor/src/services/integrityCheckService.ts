@@ -99,19 +99,33 @@ export class IntegrityCheckService {
   
   /**
    * Check integrity of all files in the workspace
+   * @param tabOperations Tab operations for file access
+   * @param createLog Whether to create a log entry
+   * @param workspace Optional workspace filter (repository/branch) - if provided, only checks files from that workspace
    */
   static async checkIntegrity(
     tabOperations: TabOperations,
-    createLog: boolean = true
+    createLog: boolean = true,
+    workspace?: { repository: string; branch: string }
   ): Promise<IntegrityResult> {
     const issues: IntegrityIssue[] = [];
     const startTime = new Date();
-    sessionLogService.info('file', 'INTEGRITY_CHECK', 'Starting deep integrity check');
+    const workspaceInfo = workspace ? `${workspace.repository}/${workspace.branch}` : 'all workspaces';
+    sessionLogService.info('file', 'INTEGRITY_CHECK', `Starting deep integrity check for ${workspaceInfo}`);
     
     try {
-      // Get all files from IndexedDB
-      const allFiles = await db.files.toArray();
-      console.log(`🔍 IntegrityCheckService: Deep checking ${allFiles.length} files`);
+      // Get files from IndexedDB - filter by workspace if provided
+      let allFiles;
+      if (workspace) {
+        allFiles = await db.files
+          .where('source.repository').equals(workspace.repository)
+          .and(file => file.source?.branch === workspace.branch)
+          .toArray();
+        console.log(`🔍 IntegrityCheckService: Deep checking ${allFiles.length} files from ${workspaceInfo}`);
+      } else {
+        allFiles = await db.files.toArray();
+        console.log(`🔍 IntegrityCheckService: Deep checking ${allFiles.length} files from all workspaces`);
+      }
       
       // ═══════════════════════════════════════════════════════════════════════
       // PHASE 1: Build comprehensive lookup maps
@@ -905,15 +919,15 @@ export class IntegrityCheckService {
       });
     }
     
-    // Check for dimension type
-    if (!data.dimension_type && !data.context_type) {
+    // Check for context type (schema uses 'type' field with enum: categorical, ordinal, continuous)
+    if (!data.type) {
       issues.push({
         fileId: file.fileId,
         type: file.type,
         severity: 'info',
         category: 'schema',
-        field: 'dimension_type',
-        message: 'Missing dimension/context type'
+        field: 'type',
+        message: 'Missing context type (should be: categorical, ordinal, or continuous)'
       });
     }
   }
@@ -1050,10 +1064,16 @@ export class IntegrityCheckService {
       }
       
       // Case reference
+      // Note: If node.type === 'case', the case is defined inline on the node itself (not a reference)
+      // Only warn about missing external case file if it's NOT an inline definition
       if (node.case?.id) {
         referencedCases.add(node.case.id);
         this.validateFileIdFormat(graphFileId, 'graph', `nodes[${i}].case.id`, node.case.id, issues, node.uuid);
-        if (!caseFiles.has(node.case.id)) {
+        
+        // Only warn if node.type !== 'case' (i.e., it's a reference, not an inline definition)
+        // When node.type === 'case', the case.id is the ID OF this case, not a reference to another file
+        const isInlineCaseDefinition = node.type === 'case';
+        if (!caseFiles.has(node.case.id) && !isInlineCaseDefinition) {
           issues.push({
             fileId: graphFileId,
             type: 'graph',
@@ -1410,6 +1430,8 @@ export class IntegrityCheckService {
       if (edge.conditional_p && Array.isArray(edge.conditional_p)) {
         for (let j = 0; j < edge.conditional_p.length; j++) {
           const cp = edge.conditional_p[j];
+          
+          // Check value if present (legacy format)
           if (cp.value !== undefined && typeof cp.value === 'number') {
             if (cp.value < 0 || cp.value > 1) {
               issues.push({
@@ -1419,6 +1441,38 @@ export class IntegrityCheckService {
                 category: 'value',
                 field: `edges[${i}].conditional_p[${j}].value`,
                 message: `Conditional probability ${cp.value} out of range [0, 1]`,
+                edgeUuid: edge.uuid
+              });
+            }
+          }
+          
+          // Check p.mean if present (current format)
+          if (cp.p?.mean !== undefined && typeof cp.p.mean === 'number') {
+            if (cp.p.mean < 0 || cp.p.mean > 1) {
+              issues.push({
+                fileId: graphFileId,
+                type: 'graph',
+                severity: 'error',
+                category: 'value',
+                field: `edges[${i}].conditional_p[${j}].p.mean`,
+                message: `Conditional probability ${cp.p.mean} out of range [0, 1]`,
+                edgeUuid: edge.uuid
+              });
+            }
+          }
+          
+          // Track parameter references in conditional_p.p.id
+          if (cp.p?.id) {
+            referencedParams.add(cp.p.id);
+            this.validateFileIdFormat(graphFileId, 'graph', `edges[${i}].conditional_p[${j}].p.id`, cp.p.id, issues, undefined, edge.uuid);
+            if (!parameterFiles.has(cp.p.id)) {
+              issues.push({
+                fileId: graphFileId,
+                type: 'graph',
+                severity: 'warning',
+                category: 'reference',
+                field: `edges[${i}].conditional_p[${j}].p.id`,
+                message: `Conditional probability references non-existent parameter: ${cp.p.id}`,
                 edgeUuid: edge.uuid
               });
             }
@@ -2255,12 +2309,17 @@ export class IntegrityCheckService {
         const type = fileIssues[0].type;
         const icon = this.getTypeIcon(type);
         
+        // Strip workspace prefix for cleaner display (e.g., "dagnet-main-graph-sample" → "graph-sample")
+        const displayFileId = typeof type === 'string' && type !== 'system'
+          ? this.getCanonicalFileId(fileId, type)
+          : fileId;
+        
         // Create internal link for navigable files
         // Use hash URL to avoid browser stripping unknown protocols
         const isNavigable = ['graph', 'parameter', 'case', 'node', 'event', 'context'].includes(type as string);
         const fileLink = isNavigable 
-          ? `[${fileId}](#dagnet-file/${fileId})`
-          : `\`${fileId}\``;
+          ? `[${displayFileId}](#dagnet-file/${fileId})`  // Display clean name, but link with full fileId
+          : `\`${displayFileId}\``;
         
         lines.push(`### ${icon} ${fileLink}`);
         lines.push('');

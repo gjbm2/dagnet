@@ -1,5 +1,8 @@
 # TODO
 
+## E2E Test Coverage for Repository Operations (CRITICAL)
+Basic repo ops (switch repo, clear, pull) lack E2E tests and keep breaking. See `docs/current/project-contexts/e2e-test-plan.md`
+
 ## GraphCanvas and GRaphEditor need a full reappraisal and refactor. It is a horror show.
 
 
