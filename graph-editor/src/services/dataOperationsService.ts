@@ -3615,15 +3615,19 @@ class DataOperationsService {
           }
           
           const condRaw = condResult.raw as any;
-          console.log('[DataOps:DUAL_QUERY] Conditioned query result (for k):', {
-            n: condRaw?.n,  // This is the WRONG n (users at A→B), we'll discard it
-            k: condRaw?.k,  // This is the CORRECT k (users who did A→B→C)
+          console.log('[DataOps:DUAL_QUERY] Conditioned query result:', {
+            n: condRaw?.n,  // Users at 'from' who visited the upstream node(s)
+            k: condRaw?.k,  // Users who visited upstream, reached 'from', and converted to 'to'
             hasTimeSeries: !!condRaw?.time_series,
             timeSeriesLength: Array.isArray(condRaw?.time_series) ? condRaw.time_series.length : 0,
           });
           
-          // Combine: n from base (already fetched above), k from conditioned
-          const combinedN = baseN ?? 0;
+          // For conditional probability with visited_upstream:
+          // - n = users at 'from' who ALSO visited the upstream condition node(s)
+          // - k = users who visited upstream, reached 'from', and converted to 'to'
+          // This gives P(to | from, visited_upstream) - the conditional probability
+          // Note: If explicit n_query was provided, baseN already has the correct value
+          const combinedN = explicitNQuery ? (baseN ?? 0) : (condRaw?.n ?? 0);
           const combinedK = condRaw?.k ?? 0;
           const combinedP = combinedN > 0 ? combinedK / combinedN : 0;
           
@@ -3631,48 +3635,64 @@ class DataOperationsService {
             n: combinedN,
             k: combinedK,
             p: combinedP,
-            explanation: `n=${combinedN} (all at 'from'), k=${combinedK} (via upstream path), p=${(combinedP * 100).toFixed(2)}%`
+            usedExplicitNQuery: !!explicitNQuery,
+            explanation: explicitNQuery 
+              ? `n=${combinedN} (from n_query), k=${combinedK} (conditioned), p=${(combinedP * 100).toFixed(2)}%`
+              : `n=${combinedN} (at 'from' via upstream), k=${combinedK} (converted), p=${(combinedP * 100).toFixed(2)}%`
           });
           
           sessionLogService.addChild(logOpId, 'info', 'DUAL_QUERY_COMBINED',
-            `Dual query: n=${combinedN} (base), k=${combinedK} (conditioned), p=${(combinedP * 100).toFixed(2)}%`,
-            `Base query gives total at 'from', conditioned query gives conversions via upstream path`
+            `Dual query: n=${combinedN}${explicitNQuery ? ' (n_query)' : ' (conditioned)'}, k=${combinedK}, p=${(combinedP * 100).toFixed(2)}%`,
+            explicitNQuery 
+              ? `n from explicit n_query, k from conditioned query`
+              : `n = users at 'from' who visited upstream, k = those who converted`
           );
           
           // Combine time-series data if in writeToFile mode
           if (writeToFile && objectType === 'parameter') {
             const condTimeSeries = Array.isArray(condRaw?.time_series) ? condRaw.time_series : [];
             
-            // Build a map of date → {base_n, cond_k} for combining
-            const dateMap = new Map<string, { n: number; k: number }>();
+            // Build combined time series
+            // For conditional probability: n comes from conditioned query (users at 'from' who visited upstream)
+            // unless there's an explicit n_query, in which case n comes from that
+            const combinedTimeSeries: Array<{ date: string; n: number; k: number; p: number }> = [];
             
-            // Add base n values
-            if (baseTimeSeries) {
+            if (explicitNQuery && baseTimeSeries) {
+              // With explicit n_query: use base (n_query) for n, conditioned for k
+              const dateMap = new Map<string, { n: number; k: number }>();
+              
               for (const day of baseTimeSeries) {
                 dateMap.set(day.date, { n: day.n, k: 0 });
               }
-            }
-            
-            // Add conditioned k values
-            for (const day of condTimeSeries) {
-              const existing = dateMap.get(day.date);
-              if (existing) {
-                existing.k = day.k;
-              } else {
-                // Date only in conditioned (shouldn't happen, but handle it)
-                dateMap.set(day.date, { n: 0, k: day.k });
+              
+              for (const day of condTimeSeries) {
+                const existing = dateMap.get(day.date);
+                if (existing) {
+                  existing.k = day.k;
+                } else {
+                  dateMap.set(day.date, { n: 0, k: day.k });
+                }
               }
-            }
-            
-            // Build combined time series
-            const combinedTimeSeries: Array<{ date: string; n: number; k: number; p: number }> = [];
-            for (const [date, { n, k }] of dateMap) {
-              combinedTimeSeries.push({
-                date,
-                n,  // From base query (all users at 'from')
-                k,  // From conditioned query (users via upstream path who converted)
-                p: n > 0 ? k / n : 0
-              });
+              
+              for (const [date, { n, k }] of dateMap) {
+                combinedTimeSeries.push({
+                  date,
+                  n,  // From n_query
+                  k,  // From conditioned query
+                  p: n > 0 ? k / n : 0
+                });
+              }
+            } else {
+              // Without explicit n_query: use conditioned query for BOTH n and k
+              // This is the correct conditional probability P(to | from, visited)
+              for (const day of condTimeSeries) {
+                combinedTimeSeries.push({
+                  date: day.date,
+                  n: day.n,  // Users at 'from' who visited upstream
+                  k: day.k,  // Users who converted after visiting upstream
+                  p: day.n > 0 ? day.k / day.n : 0
+                });
+              }
             }
             
             // Sort by date
@@ -3680,6 +3700,7 @@ class DataOperationsService {
             
             console.log('[DataOps:DUAL_QUERY] Combined time series:', {
               days: combinedTimeSeries.length,
+              usedExplicitNQuery: !!explicitNQuery,
               sample: combinedTimeSeries.slice(0, 3),
             });
             
