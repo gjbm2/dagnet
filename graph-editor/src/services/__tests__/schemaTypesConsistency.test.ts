@@ -473,7 +473,7 @@ describe('Schema / TypeScript Types Consistency', () => {
     let schema: any;
     
     beforeAll(() => {
-      schema = loadSchema('/schemas/conversion-graph-1.0.0.json');
+      schema = loadSchema('/schemas/conversion-graph-1.1.0.json');
     });
     
     it('should have matching top-level properties', () => {
@@ -662,6 +662,77 @@ describe('Schema / TypeScript Types Consistency', () => {
       expect(schemaStatuses).toContain('active');
       expect(schemaStatuses).toContain('paused');
       expect(schemaStatuses).toContain('completed');
+    });
+  });
+  
+  describe('Schema 1.1.0 new features', () => {
+    let schema: any;
+    
+    beforeAll(() => {
+      schema = loadSchema('/schemas/conversion-graph-1.1.0.json');
+    });
+    
+    it('should have Node.type field with normal/case enum', () => {
+      const nodeDef = schema.$defs?.Node || {};
+      const typeField = nodeDef.properties?.type || {};
+      
+      expect(typeField.type).toBe('string');
+      expect(typeField.enum).toContain('normal');
+      expect(typeField.enum).toContain('case');
+      expect(typeField.default).toBe('normal');
+    });
+    
+    it('should have currentQueryDSL at root level', () => {
+      const rootProps = schema.properties || {};
+      expect(rootProps.currentQueryDSL).toBeDefined();
+      expect(rootProps.currentQueryDSL.type).toBe('string');
+    });
+    
+    it('should have Metadata.name field', () => {
+      const metadataDef = schema.$defs?.Metadata || {};
+      const nameField = metadataDef.properties?.name || {};
+      
+      expect(nameField.type).toBe('string');
+      expect(nameField.maxLength).toBe(256);
+    });
+    
+    it('case_id description should explain fallback chain', () => {
+      const edgeDef = schema.$defs?.Edge || {};
+      const caseIdField = edgeDef.properties?.case_id || {};
+      
+      // Should mention both case.id and uuid
+      expect(caseIdField.description).toMatch(/case\.id|Node\.case\.id/i);
+      expect(caseIdField.description).toMatch(/uuid/i);
+      expect(caseIdField.description).toMatch(/fallback/i);
+    });
+    
+    it('Condition description should explain case() syntax', () => {
+      const conditionDef = schema.$defs?.Condition || {};
+      
+      // Should explain all constraint functions
+      expect(conditionDef.description).toMatch(/visited/);
+      expect(conditionDef.description).toMatch(/exclude/);
+      expect(conditionDef.description).toMatch(/context/);
+      expect(conditionDef.description).toMatch(/case\(/);
+    });
+    
+    it('should have Edge $comment explaining case edge semantics', () => {
+      const edgeDef = schema.$defs?.Edge || {};
+      
+      expect(edgeDef.$comment).toBeDefined();
+      expect(edgeDef.$comment).toMatch(/case.*edge/i);
+      expect(edgeDef.$comment).toMatch(/p\.mean.*1\.0|1\.0.*p\.mean/i);
+    });
+  });
+  
+  describe('No internal flags in schema', () => {
+    it('ProbabilityParam should NOT have _noHistory field', () => {
+      const schema = loadSchema('/schemas/conversion-graph-1.1.0.json');
+      const probParamDef = schema.$defs?.ProbabilityParam || {};
+      const props = probParamDef.properties || {};
+      
+      // _noHistory is an internal UI flag that should never be in schema
+      expect(props._noHistory).toBeUndefined();
     });
   });
 });

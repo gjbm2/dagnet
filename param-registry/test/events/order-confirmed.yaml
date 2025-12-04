@@ -1,0 +1,16 @@
+id: order_confirmed
+name: Order Confirmed
+description: Payment successful and order placed in fulfilment queue
+category: milestone
+tags:
+  - order
+  - success
+  - conversion
+provider_event_names:
+  amplitude: Order Completed
+  segment: order_completed
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+

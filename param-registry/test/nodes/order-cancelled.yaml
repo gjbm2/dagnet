@@ -1,0 +1,15 @@
+id: order-cancelled
+name: Order Cancelled
+description: Customer cancelled order before shipping (terminal state with refund)
+event_id: order-cancelled
+tags:
+  - order
+  - cancellation
+  - terminal
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  author: "commerce-team"
+  version: "1.0.0"
+  status: active
+

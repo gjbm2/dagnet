@@ -1,0 +1,30 @@
+id: return-processing-cost
+name: Return Processing Cost
+type: cost_gbp
+query: "from(order-delivered).to(return-completed)"
+query_overridden: false
+values:
+  - mean: 12.50
+    stdev: 3.50
+    n: 600
+    distribution: normal
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: manual
+      edited_at: "2025-04-01T10:00:00Z"
+      author: finance-team
+      notes: Includes return shipping label, inspection, restocking, and refund processing
+metadata:
+  description: Total cost to process a customer return including reverse logistics, inspection, restocking, and payment refund fees
+  units: GBP
+  tags:
+    - cost
+    - returns
+    - fulfilment
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-04-01T10:00:00Z"
+  author: finance-team
+  version: "1.0.0"
+  status: active
+

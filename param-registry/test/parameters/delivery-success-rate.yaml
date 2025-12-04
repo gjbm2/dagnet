@@ -1,0 +1,29 @@
+id: delivery-success-rate
+name: Delivery Success Rate
+type: probability
+query: "from(order-shipped).to(order-delivered)"
+query_overridden: false
+values:
+  - mean: 0.98
+    stdev: 0.005
+    n: 5000
+    k: 4900
+    distribution: beta
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: api
+      retrieved_at: "2025-04-01T08:00:00Z"
+      notes: Data from logistics partner API
+metadata:
+  description: Probability that a shipped order will be successfully delivered. Failures include multiple failed delivery attempts resulting in return to warehouse.
+  tags:
+    - delivery
+    - fulfilment
+    - logistics
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-04-01T08:00:00Z"
+  author: ops-team
+  version: "1.0.0"
+  status: active
+

@@ -1,0 +1,16 @@
+id: payment_submitted
+name: Payment Submitted
+description: User submits payment details for authorisation
+category: conversion
+tags:
+  - payment
+  - conversion
+  - transaction
+provider_event_names:
+  amplitude: Payment Submitted
+  segment: payment_info_entered
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+

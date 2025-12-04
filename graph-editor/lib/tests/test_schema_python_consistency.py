@@ -65,7 +65,7 @@ class TestGraphSchemaConsistency:
     
     @pytest.fixture
     def schema(self) -> Dict[str, Any]:
-        return load_schema('schemas/conversion-graph-1.0.0.json')
+        return load_schema('schemas/conversion-graph-1.1.0.json')
     
     def test_top_level_properties_match(self, schema):
         """Schema top-level properties should exist in Python Graph model."""
@@ -168,7 +168,7 @@ class TestEdgeSchemaConsistency:
     
     @pytest.fixture
     def schema(self) -> Dict[str, Any]:
-        full_schema = load_schema('schemas/conversion-graph-1.0.0.json')
+        full_schema = load_schema('schemas/conversion-graph-1.1.0.json')
         return full_schema.get('$defs', {}).get('Edge', {})
     
     def test_handle_values_match(self, schema):
@@ -225,7 +225,7 @@ class TestEvidenceSchemaConsistency:
     
     @pytest.fixture
     def schema(self) -> Dict[str, Any]:
-        full_schema = load_schema('schemas/conversion-graph-1.0.0.json')
+        full_schema = load_schema('schemas/conversion-graph-1.1.0.json')
         prob_param = full_schema.get('$defs', {}).get('ProbabilityParam', {})
         return prob_param.get('properties', {}).get('evidence', {})
     
@@ -260,7 +260,7 @@ class TestMetadataSchemaConsistency:
     
     @pytest.fixture
     def schema(self) -> Dict[str, Any]:
-        full_schema = load_schema('schemas/conversion-graph-1.0.0.json')
+        full_schema = load_schema('schemas/conversion-graph-1.1.0.json')
         return full_schema.get('$defs', {}).get('Metadata', {})
     
     def test_date_fields_accept_uk_format(self, schema):
@@ -289,7 +289,7 @@ class TestProbabilityParamConsistency:
     
     @pytest.fixture
     def schema(self) -> Dict[str, Any]:
-        full_schema = load_schema('schemas/conversion-graph-1.0.0.json')
+        full_schema = load_schema('schemas/conversion-graph-1.1.0.json')
         return full_schema.get('$defs', {}).get('ProbabilityParam', {})
     
     def test_override_fields_exist(self, schema):
@@ -308,7 +308,7 @@ class TestCostParamConsistency:
     
     @pytest.fixture
     def schema(self) -> Dict[str, Any]:
-        full_schema = load_schema('schemas/conversion-graph-1.0.0.json')
+        full_schema = load_schema('schemas/conversion-graph-1.1.0.json')
         return full_schema.get('$defs', {}).get('CostParam', {})
     
     def test_override_fields_exist(self, schema):
@@ -330,7 +330,7 @@ class TestConditionalProbabilityConsistency:
     
     @pytest.fixture
     def schema(self) -> Dict[str, Any]:
-        full_schema = load_schema('schemas/conversion-graph-1.0.0.json')
+        full_schema = load_schema('schemas/conversion-graph-1.1.0.json')
         return full_schema.get('$defs', {}).get('ConditionalProbability', {})
     
     def test_query_override_field_exists(self, schema):
@@ -340,6 +340,56 @@ class TestConditionalProbabilityConsistency:
         
         assert 'query_overridden' in schema_props, "Schema missing query_overridden"
         assert 'query_overridden' in python_props, "Python missing query_overridden"
+
+
+class TestSchema110Features:
+    """Test schema 1.1.0 new features are reflected in Python types."""
+    
+    @pytest.fixture
+    def schema(self) -> Dict[str, Any]:
+        return load_schema('schemas/conversion-graph-1.1.0.json')
+    
+    def test_node_type_field_exists(self, schema):
+        """Node should have type field with normal/case enum."""
+        node_def = schema.get('$defs', {}).get('Node', {})
+        type_field = node_def.get('properties', {}).get('type', {})
+        
+        assert type_field.get('type') == 'string'
+        assert 'normal' in type_field.get('enum', [])
+        assert 'case' in type_field.get('enum', [])
+        
+        # Python model should have type field
+        python_props = get_pydantic_field_names(Node)
+        assert 'type' in python_props, "Python Node missing type field"
+    
+    def test_metadata_name_field_exists(self, schema):
+        """Metadata should have name field."""
+        metadata_def = schema.get('$defs', {}).get('Metadata', {})
+        name_field = metadata_def.get('properties', {}).get('name', {})
+        
+        assert name_field.get('type') == 'string'
+        
+        # Python model should have name field
+        python_props = get_pydantic_field_names(Metadata)
+        assert 'name' in python_props, "Python Metadata missing name field"
+    
+    def test_case_id_description_explains_fallback(self, schema):
+        """Edge.case_id description should explain case.id vs uuid fallback."""
+        edge_def = schema.get('$defs', {}).get('Edge', {})
+        case_id_field = edge_def.get('properties', {}).get('case_id', {})
+        description = case_id_field.get('description', '')
+        
+        # Should mention both case.id and uuid
+        assert 'case.id' in description.lower() or 'node.case.id' in description.lower()
+        assert 'uuid' in description.lower()
+    
+    def test_no_internal_flags_in_schema(self, schema):
+        """Internal flags like _noHistory should NOT be in schema."""
+        prob_param_def = schema.get('$defs', {}).get('ProbabilityParam', {})
+        props = prob_param_def.get('properties', {})
+        
+        # _noHistory is an internal UI flag that should never be persisted
+        assert '_noHistory' not in props, "_noHistory should not be in schema"
 
 
 if __name__ == '__main__':

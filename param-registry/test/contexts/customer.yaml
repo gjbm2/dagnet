@@ -1,0 +1,29 @@
+id: customer
+name: Customer Type
+description: Classification of customer based on purchase history. Used to analyse conversion differences between new and returning customers.
+type: categorical
+otherPolicy: null
+values:
+  - id: new
+    label: New Customer
+    description: First-time purchaser with no previous orders
+    sources:
+      amplitude:
+        field: user_properties.order_count
+        filter: "user_properties.order_count == 0 OR user_properties.order_count IS NULL"
+  - id: repeat
+    label: Repeat Customer
+    description: Customer with at least one previous purchase
+    sources:
+      amplitude:
+        field: user_properties.order_count
+        filter: "user_properties.order_count >= 1"
+metadata:
+  category: behavioral
+  data_source: user_properties
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  version: "1.0.0"
+  status: active
+  author: analytics-team
+

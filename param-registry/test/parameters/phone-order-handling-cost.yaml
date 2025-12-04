@@ -1,0 +1,30 @@
+id: phone-order-handling-cost
+name: Phone Order Handling Cost
+type: cost_gbp
+query: "from(phone-order).to(payment)"
+query_overridden: false
+values:
+  - mean: 8.50
+    stdev: 1.20
+    n: 500
+    distribution: normal
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: manual
+      edited_at: "2025-04-01T10:00:00Z"
+      author: ops-team
+      notes: Based on average call centre agent time and labour cost
+metadata:
+  description: Cost per phone order including agent time, call centre overhead, and system processing. Higher than web orders due to human involvement.
+  units: GBP
+  tags:
+    - cost
+    - phone
+    - operations
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-04-01T10:00:00Z"
+  author: ops-team
+  version: "1.0.0"
+  status: active
+

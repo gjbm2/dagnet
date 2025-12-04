@@ -1,0 +1,16 @@
+id: add_to_cart
+name: Add to Cart
+description: User adds a product to their shopping cart
+category: user_action
+tags:
+  - cart
+  - conversion
+  - action
+provider_event_names:
+  amplitude: Add to Cart
+  segment: product_added
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+

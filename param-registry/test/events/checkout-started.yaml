@@ -1,0 +1,16 @@
+id: checkout_started
+name: Checkout Started
+description: User initiates the checkout process by proceeding from cart
+category: conversion
+tags:
+  - checkout
+  - conversion
+  - funnel
+provider_event_names:
+  amplitude: Checkout Started
+  segment: checkout_started
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+

@@ -493,6 +493,18 @@ export function FileMenu() {
                   >
                     Case
                   </Menubar.Item>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={() => handleNew('event')}
+                  >
+                    Event
+                  </Menubar.Item>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={() => handleNew('node')}
+                  >
+                    Node
+                  </Menubar.Item>
                 </Menubar.SubContent>
               </Menubar.Portal>
             </Menubar.Sub>

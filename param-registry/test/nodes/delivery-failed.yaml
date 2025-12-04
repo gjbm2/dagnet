@@ -1,0 +1,15 @@
+id: delivery-failed
+name: Delivery Failed
+description: Delivery attempt failed after maximum retries (terminal failure state)
+event_id: delivery-failed
+tags:
+  - delivery
+  - failure
+  - terminal
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  author: "commerce-team"
+  version: "1.0.0"
+  status: active
+

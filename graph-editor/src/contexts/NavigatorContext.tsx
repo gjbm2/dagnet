@@ -919,3 +919,43 @@ export function useNavigatorItems(type: ObjectType): RepositoryItem[] {
   return items.filter(item => item.type === type);
 }
 
+/**
+ * Hook to check if the current repository is in read-only mode (no token configured)
+ * Returns true if no token, false if token exists, null if credentials not yet loaded
+ */
+export function useIsReadOnly(): boolean | null {
+  const { state } = useNavigatorContext();
+  const [isReadOnly, setIsReadOnly] = React.useState<boolean | null>(null);
+  
+  React.useEffect(() => {
+    const checkToken = async () => {
+      if (!state.selectedRepo) {
+        setIsReadOnly(null);
+        return;
+      }
+      
+      try {
+        const result = await credentialsManager.loadCredentials();
+        if (!result.success || !result.credentials?.git) {
+          setIsReadOnly(true);
+          return;
+        }
+        
+        const gitCreds = result.credentials.git.find(
+          (cred: any) => cred.name === state.selectedRepo
+        );
+        
+        // No token = read-only
+        setIsReadOnly(!gitCreds?.token || gitCreds.token.trim() === '');
+      } catch (error) {
+        console.error('Failed to check read-only status:', error);
+        setIsReadOnly(true);
+      }
+    };
+    
+    checkToken();
+  }, [state.selectedRepo]);
+  
+  return isReadOnly;
+}
+

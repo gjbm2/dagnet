@@ -1,0 +1,455 @@
+{
+  "nodes": [
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000001",
+      "id": "landing-page",
+      "label": "Landing Page",
+      "description": "Primary web entry point via marketing campaigns, organic search, or direct traffic",
+      "entry": { "is_start": true, "entry_weight": 1.0 },
+      "layout": { "x": 0, "y": 200 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000002",
+      "id": "product-view",
+      "label": "Product View",
+      "description": "User browses product detail page with specs, pricing, and reviews. Some users call to order instead of using web cart.",
+      "layout": { "x": 200, "y": 200 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000010",
+      "id": "cart-test",
+      "label": "Cart Experience Test",
+      "description": "A/B test comparing classic multi-step cart vs streamlined quick-add cart",
+      "type": "case",
+      "case": {
+        "id": "cart-experience-test",
+        "status": "active",
+        "variants": [
+          { "name": "classic", "weight": 0.5 },
+          { "name": "quick", "weight": 0.5 }
+        ]
+      },
+      "layout": { "x": 400, "y": 200 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000011",
+      "id": "classic-cart",
+      "label": "Classic Cart",
+      "description": "Traditional shopping cart with full item details, quantity adjustments, and save-for-later",
+      "layout": { "x": 550, "y": 100 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000012",
+      "id": "quick-cart",
+      "label": "Quick Cart",
+      "description": "Streamlined slide-out cart with minimal friction - one-click add and express checkout option",
+      "layout": { "x": 550, "y": 300 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000004",
+      "id": "checkout",
+      "label": "Checkout",
+      "description": "User enters shipping address, billing details, and selects delivery options",
+      "layout": { "x": 750, "y": 200 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000005",
+      "id": "phone-order",
+      "label": "Phone Order",
+      "description": "Customer calls sales line after viewing product online; agent takes order over phone",
+      "layout": { "x": 400, "y": -100 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000006",
+      "id": "payment",
+      "label": "Payment",
+      "description": "Payment processing hub where web checkout and phone orders converge for card authorisation",
+      "layout": { "x": 950, "y": 150 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000007",
+      "id": "payment-failed",
+      "label": "Payment Failed",
+      "description": "Card declined, insufficient funds, or fraud check failed - customer must retry or abandon",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": { "x": 1150, "y": 0 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000008",
+      "id": "order-confirmed",
+      "label": "Order Confirmed",
+      "description": "Payment successful, order placed in fulfilment queue, confirmation email sent",
+      "layout": { "x": 1150, "y": 200 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-000000000009",
+      "id": "order-cancelled",
+      "label": "Order Cancelled",
+      "description": "Customer cancelled before dispatch - full refund processed automatically",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": { "x": 1350, "y": 50 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-00000000000a",
+      "id": "order-shipped",
+      "label": "Order Shipped",
+      "description": "Order dispatched from warehouse, tracking number generated and sent to customer",
+      "layout": { "x": 1350, "y": 250 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-00000000000b",
+      "id": "delivery-failed",
+      "label": "Delivery Failed",
+      "description": "Multiple delivery attempts failed - returned to warehouse, refund initiated",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": { "x": 1550, "y": 100 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-00000000000c",
+      "id": "order-delivered",
+      "label": "Order Delivered",
+      "description": "Package successfully delivered to customer address, signature captured",
+      "layout": { "x": 1550, "y": 300 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-00000000000d",
+      "id": "order-complete",
+      "label": "Order Complete",
+      "description": "Customer kept item past 30-day return window - successful transaction",
+      "absorbing": true,
+      "outcome_type": "success",
+      "layout": { "x": 1750, "y": 250 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-00000000000e",
+      "id": "return-completed",
+      "label": "Return Completed",
+      "description": "Customer returned item within window, refund processed, stock returned",
+      "absorbing": true,
+      "outcome_type": "neutral",
+      "layout": { "x": 1750, "y": 400 }
+    },
+    {
+      "uuid": "a1000000-0000-0000-0000-00000000000f",
+      "id": "abandon",
+      "label": "Abandon",
+      "description": "User left the funnel without completing purchase - no transaction",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": { "x": 600, "y": 500 }
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000001",
+      "id": "landing-to-product",
+      "from": "a1000000-0000-0000-0000-000000000001",
+      "to": "a1000000-0000-0000-0000-000000000002",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "description": "User clicks through to view a product",
+      "p": { "mean": 0.45 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000040",
+      "id": "landing-abandon",
+      "from": "a1000000-0000-0000-0000-000000000001",
+      "to": "a1000000-0000-0000-0000-00000000000f",
+      "fromHandle": "bottom-out",
+      "toHandle": "left",
+      "description": "User bounces from landing page without viewing products",
+      "p": { "mean": 0.55 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000002",
+      "id": "product-to-cart-test",
+      "from": "a1000000-0000-0000-0000-000000000002",
+      "to": "a1000000-0000-0000-0000-000000000010",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "description": "User clicks Add to Cart - enters A/B test for cart experience",
+      "p": { "mean": 0.22 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000030",
+      "id": "product-to-phone",
+      "from": "a1000000-0000-0000-0000-000000000002",
+      "to": "a1000000-0000-0000-0000-000000000005",
+      "fromHandle": "top-out",
+      "toHandle": "left",
+      "description": "User calls phone number shown on product page to place order",
+      "p": { "mean": 0.03 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000041",
+      "id": "product-abandon",
+      "from": "a1000000-0000-0000-0000-000000000002",
+      "to": "a1000000-0000-0000-0000-00000000000f",
+      "fromHandle": "bottom-out",
+      "toHandle": "left",
+      "description": "User leaves after viewing product without adding to cart or calling",
+      "p": { "mean": 0.75 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000020",
+      "id": "cart-test-to-classic",
+      "from": "a1000000-0000-0000-0000-000000000010",
+      "to": "a1000000-0000-0000-0000-000000000011",
+      "fromHandle": "top-out",
+      "toHandle": "left",
+      "case_id": "a1000000-0000-0000-0000-000000000010",
+      "case_variant": "classic",
+      "query": "from(a1000000-0000-0000-0000-000000000010).to(classic-cart)",
+      "description": "User assigned to classic cart experience (control) - 50% of traffic via variant weight",
+      "p": { "mean": 1.0 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000021",
+      "id": "cart-test-to-quick",
+      "from": "a1000000-0000-0000-0000-000000000010",
+      "to": "a1000000-0000-0000-0000-000000000012",
+      "fromHandle": "bottom-out",
+      "toHandle": "left",
+      "case_id": "a1000000-0000-0000-0000-000000000010",
+      "case_variant": "quick",
+      "query": "from(a1000000-0000-0000-0000-000000000010).to(quick-cart)",
+      "description": "User assigned to quick cart experience (treatment) - 50% of traffic via variant weight",
+      "p": { "mean": 1.0 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000022",
+      "id": "classic-to-checkout",
+      "from": "a1000000-0000-0000-0000-000000000011",
+      "to": "a1000000-0000-0000-0000-000000000004",
+      "fromHandle": "right-out",
+      "toHandle": "top",
+      "description": "User proceeds from classic cart to checkout",
+      "p": { "mean": 0.55 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000042",
+      "id": "classic-abandon",
+      "from": "a1000000-0000-0000-0000-000000000011",
+      "to": "a1000000-0000-0000-0000-00000000000f",
+      "fromHandle": "bottom-out",
+      "toHandle": "top",
+      "description": "User abandons classic cart without proceeding to checkout",
+      "p": { "mean": 0.45 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000023",
+      "id": "quick-to-checkout",
+      "from": "a1000000-0000-0000-0000-000000000012",
+      "to": "a1000000-0000-0000-0000-000000000004",
+      "fromHandle": "right-out",
+      "toHandle": "bottom",
+      "description": "User proceeds from quick cart to checkout",
+      "p": { "mean": 0.68 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000043",
+      "id": "quick-abandon",
+      "from": "a1000000-0000-0000-0000-000000000012",
+      "to": "a1000000-0000-0000-0000-00000000000f",
+      "fromHandle": "bottom-out",
+      "toHandle": "top",
+      "description": "User abandons quick cart without proceeding to checkout",
+      "p": { "mean": 0.32 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000004",
+      "id": "checkout-to-payment",
+      "from": "a1000000-0000-0000-0000-000000000004",
+      "to": "a1000000-0000-0000-0000-000000000006",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "description": "User completes checkout form and submits payment",
+      "p": { "mean": 0.75 },
+      "conditional_p": [
+        {
+          "condition": "case(cart-experience-test:classic)",
+          "query": "from(checkout).to(payment).case(cart-experience-test:classic)",
+          "query_overridden": false,
+          "p": { "mean": 0.72 }
+        },
+        {
+          "condition": "case(cart-experience-test:quick)",
+          "query": "from(checkout).to(payment).case(cart-experience-test:quick)",
+          "query_overridden": false,
+          "p": { "mean": 0.82 }
+        }
+      ]
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000044",
+      "id": "checkout-abandon",
+      "from": "a1000000-0000-0000-0000-000000000004",
+      "to": "a1000000-0000-0000-0000-00000000000f",
+      "fromHandle": "bottom-out",
+      "toHandle": "top",
+      "description": "User abandons during checkout - form friction, unexpected costs, etc.",
+      "p": { "mean": 0.25 },
+      "conditional_p": [
+        {
+          "condition": "case(cart-experience-test:classic)",
+          "query": "from(checkout).to(abandon).case(cart-experience-test:classic)",
+          "query_overridden": false,
+          "p": { "mean": 0.28 }
+        },
+        {
+          "condition": "case(cart-experience-test:quick)",
+          "query": "from(checkout).to(abandon).case(cart-experience-test:quick)",
+          "query_overridden": false,
+          "p": { "mean": 0.18 }
+        }
+      ]
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000005",
+      "id": "phone-to-payment",
+      "from": "a1000000-0000-0000-0000-000000000005",
+      "to": "a1000000-0000-0000-0000-000000000006",
+      "fromHandle": "right-out",
+      "toHandle": "top",
+      "description": "Agent completes phone order and processes payment directly",
+      "p": { "mean": 0.85 },
+      "cost_gbp": { "mean": 8.50 },
+      "cost_time": { "mean": 12 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000045",
+      "id": "phone-abandon",
+      "from": "a1000000-0000-0000-0000-000000000005",
+      "to": "a1000000-0000-0000-0000-00000000000f",
+      "fromHandle": "bottom-out",
+      "toHandle": "top",
+      "description": "Phone call ends without completing order - price objection, out of stock, etc.",
+      "p": { "mean": 0.15 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000006",
+      "id": "payment-to-failed",
+      "from": "a1000000-0000-0000-0000-000000000006",
+      "to": "a1000000-0000-0000-0000-000000000007",
+      "fromHandle": "top-out",
+      "toHandle": "left",
+      "description": "Payment processor declines transaction",
+      "p": { "mean": 0.05 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000007",
+      "id": "payment-to-confirmed",
+      "from": "a1000000-0000-0000-0000-000000000006",
+      "to": "a1000000-0000-0000-0000-000000000008",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "description": "Payment authorised successfully",
+      "p": { "mean": 0.95 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000008",
+      "id": "confirmed-to-cancelled",
+      "from": "a1000000-0000-0000-0000-000000000008",
+      "to": "a1000000-0000-0000-0000-000000000009",
+      "fromHandle": "top-out",
+      "toHandle": "left",
+      "description": "Customer requests cancellation before shipping",
+      "p": { "mean": 0.03 },
+      "conditional_p": [
+        {
+          "condition": "visited(classic-cart)",
+          "query": "from(order-confirmed).to(order-cancelled).visited(classic-cart)",
+          "query_overridden": false,
+          "p": { "mean": 0.04 }
+        },
+        {
+          "condition": "visited(quick-cart)",
+          "query": "from(order-confirmed).to(order-cancelled).visited(quick-cart)",
+          "query_overridden": false,
+          "p": { "mean": 0.02 }
+        }
+      ]
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-000000000009",
+      "id": "confirmed-to-shipped",
+      "from": "a1000000-0000-0000-0000-000000000008",
+      "to": "a1000000-0000-0000-0000-00000000000a",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "description": "Order picked, packed, and handed to courier",
+      "p": { "mean": 0.97 },
+      "cost_gbp": { "mean": 4.95 },
+      "conditional_p": [
+        {
+          "condition": "visited(classic-cart)",
+          "query": "from(order-confirmed).to(order-shipped).visited(classic-cart)",
+          "query_overridden": false,
+          "p": { "mean": 0.96 }
+        },
+        {
+          "condition": "visited(quick-cart)",
+          "query": "from(order-confirmed).to(order-shipped).visited(quick-cart)",
+          "query_overridden": false,
+          "p": { "mean": 0.98 }
+        }
+      ]
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-00000000000a",
+      "id": "shipped-to-failed",
+      "from": "a1000000-0000-0000-0000-00000000000a",
+      "to": "a1000000-0000-0000-0000-00000000000b",
+      "fromHandle": "top-out",
+      "toHandle": "left",
+      "description": "Courier unable to deliver after 3 attempts",
+      "p": { "mean": 0.02 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-00000000000b",
+      "id": "shipped-to-delivered",
+      "from": "a1000000-0000-0000-0000-00000000000a",
+      "to": "a1000000-0000-0000-0000-00000000000c",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "description": "Successful delivery to customer",
+      "p": { "mean": 0.98 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-00000000000c",
+      "id": "delivered-to-complete",
+      "from": "a1000000-0000-0000-0000-00000000000c",
+      "to": "a1000000-0000-0000-0000-00000000000d",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "description": "Customer keeps item past return window",
+      "p": { "mean": 0.88 }
+    },
+    {
+      "uuid": "e1000000-0000-0000-0000-00000000000d",
+      "id": "delivered-to-return",
+      "from": "a1000000-0000-0000-0000-00000000000c",
+      "to": "a1000000-0000-0000-0000-00000000000e",
+      "fromHandle": "bottom-out",
+      "toHandle": "left",
+      "description": "Customer initiates return within 30 days",
+      "p": { "mean": 0.12 },
+      "cost_gbp": { "mean": 12.50 }
+    }
+  ],
+  "policies": {
+    "default_outcome": "abandon",
+    "overflow_policy": "error",
+    "free_edge_policy": "complement"
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created_at": "2025-01-01T00:00:00Z",
+    "updated_at": "2025-01-01T00:00:00Z",
+    "author": "commerce-team",
+    "description": "E-commerce checkout funnel with cart A/B test and phone order path, explicit abandonment edges ensuring pmf=1 at each node"
+  }
+}

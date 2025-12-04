@@ -1,0 +1,13 @@
+id: payment
+name: Payment
+description: Payment processing hub where web checkout and phone orders converge for card authorisation. Handles multiple payment methods and fraud checks.
+event_id: payment_submitted
+tags:
+  - payment
+  - conversion
+  - transaction
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  version: "1.0.0"
+  status: active

@@ -1,0 +1,13 @@
+id: product-view
+name: Product View
+description: User browses product detail page with specifications, pricing, reviews, and images. Critical decision point where users either add to cart, call to order, or abandon.
+event_id: product_viewed
+tags:
+  - pdp
+  - conversion
+  - browse
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  version: "1.0.0"
+  status: active

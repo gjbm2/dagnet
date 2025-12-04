@@ -1,0 +1,32 @@
+id: phone-order-duration
+name: Phone Order Duration
+type: cost_time
+query: "from(phone-order).to(payment)"
+query_overridden: false
+values:
+  - mean: 12
+    stdev: 4
+    n: 500
+    distribution: lognormal
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: api
+      retrieved_at: "2025-04-01T08:00:00Z"
+      notes: Data from call centre telephony system
+metadata:
+  description: Average duration in minutes for a phone order call from connection to payment completion
+  units: minutes
+  constraints:
+    min: 3
+    max: 45
+  tags:
+    - time
+    - phone
+    - operations
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-04-01T08:00:00Z"
+  author: ops-team
+  version: "1.0.0"
+  status: active
+

@@ -1,0 +1,29 @@
+id: landing-to-product
+name: Landing to Product View Rate
+type: probability
+query: "from(landing-page).to(product-view)"
+query_overridden: false
+values:
+  - mean: 0.45
+    stdev: 0.05
+    n: 10000
+    k: 4500
+    distribution: beta
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: amplitude
+      retrieved_at: "2025-04-01T08:00:00Z"
+      full_query: "from(landing-page).to(product-view).window(1-Jan-25:31-Mar-25)"
+metadata:
+  description: Probability that a visitor who lands on the site will proceed to view a product detail page
+  tags:
+    - conversion
+    - top-funnel
+    - landing
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-04-01T08:00:00Z"
+  author: analytics-team
+  version: "1.0.0"
+  status: active
+

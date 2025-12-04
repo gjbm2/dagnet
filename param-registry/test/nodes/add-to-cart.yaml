@@ -1,0 +1,15 @@
+id: add-to-cart
+name: Add to Cart
+description: User adds a product to their shopping cart, indicating purchase intent
+event_id: cart-item-added
+tags:
+  - intent
+  - web
+  - cart
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  author: "commerce-team"
+  version: "1.0.0"
+  status: active
+

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
-import { useNavigatorContext } from '../../contexts/NavigatorContext';
+import { useNavigatorContext, useIsReadOnly } from '../../contexts/NavigatorContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { useCommitHandler } from '../../hooks/useCommitHandler';
 import { usePullAll } from '../../hooks/usePullAll';
@@ -37,6 +37,7 @@ export function RepositoryMenu() {
   const { state, operations: navOps } = useNavigatorContext();
   const { showConfirm } = useDialog();
   const { handleCommitFiles: commitFiles } = useCommitHandler();
+  const isReadOnly = useIsReadOnly();
   
   const [isSwitchRepoModalOpen, setIsSwitchRepoModalOpen] = useState(false);
   const [isSwitchBranchModalOpen, setIsSwitchBranchModalOpen] = useState(false);
@@ -164,8 +165,21 @@ export function RepositoryMenu() {
   return (
     <>
       <Menubar.Menu>
-        <Menubar.Trigger className="menubar-trigger">
+        <Menubar.Trigger className="menubar-trigger" title={isReadOnly ? 'Read-only mode (no GitHub token)' : undefined}>
           Repository
+          {isReadOnly && (
+            <span style={{ 
+              marginLeft: '4px', 
+              fontSize: '9px', 
+              padding: '1px 4px', 
+              borderRadius: '3px',
+              background: '#fef3c7',
+              color: '#92400e',
+              fontWeight: 500
+            }}>
+              read-only
+            </span>
+          )}
         </Menubar.Trigger>
         <Menubar.Portal>
           <Menubar.Content className="menubar-content" align="start">
@@ -205,10 +219,12 @@ export function RepositoryMenu() {
             <Menubar.Item 
               className="menubar-item" 
               onSelect={handleCommitChanges}
-              disabled={!hasDirtyFiles}
+              disabled={!hasDirtyFiles || isReadOnly === true}
+              title={isReadOnly ? 'Read-only mode (no GitHub token configured)' : undefined}
             >
               Commit All Changes...
-              {hasDirtyFiles && <div className="menubar-right-slot">{dirtyFiles.length}</div>}
+              {isReadOnly && <div className="menubar-right-slot" style={{ fontSize: '10px', opacity: 0.7 }}>read-only</div>}
+              {!isReadOnly && hasDirtyFiles && <div className="menubar-right-slot">{dirtyFiles.length}</div>}
             </Menubar.Item>
 
             <Menubar.Item 

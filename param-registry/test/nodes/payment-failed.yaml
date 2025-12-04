@@ -1,0 +1,15 @@
+id: payment-failed
+name: Payment Failed
+description: Payment was declined or failed to process (terminal failure state)
+event_id: payment-declined
+tags:
+  - payment
+  - failure
+  - terminal
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  author: "commerce-team"
+  version: "1.0.0"
+  status: active
+
