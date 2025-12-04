@@ -99,6 +99,16 @@ export class CredentialsManager {
   }
 
   /**
+   * Clear cached credentials to force reload from source
+   * Call this after editing credentials.yaml
+   */
+  clearCache(): void {
+    console.log('CredentialsManager: Clearing credentials cache');
+    this.currentCredentials = null;
+    this.currentSource = null;
+  }
+
+  /**
    * Get currently loaded credentials
    */
   getCurrentCredentials(): CredentialsData | null {

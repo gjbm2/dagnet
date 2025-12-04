@@ -484,8 +484,20 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         await workspaceService.cloneWorkspace(repo, branch, gitCreds);
         console.log(`✅ NavigatorContext: Clone complete for ${repo}/${branch}`);
       } else {
-        console.log(`📦 NavigatorContext: Workspace ${repo}/${branch} exists, loading from IDB...`);
-        await workspaceService.loadWorkspaceFromIDB(repo, branch);
+        // CRITICAL: Pull latest changes AND load into FileRegistry
+        // This ensures index files and new files are fetched when switching repos
+        console.log(`📦 NavigatorContext: Workspace ${repo}/${branch} exists, pulling latest changes...`);
+        try {
+          await workspaceService.pullLatest(repo, branch, gitCreds);
+          console.log(`✅ NavigatorContext: Pull complete for ${repo}/${branch}`);
+          // CRITICAL: pullLatest updates IDB but doesn't populate FileRegistry when no changes
+          // Must load from IDB into FileRegistry after pull
+          console.log(`📦 NavigatorContext: Loading pulled files into FileRegistry...`);
+          await workspaceService.loadWorkspaceFromIDB(repo, branch);
+        } catch (pullError) {
+          console.warn(`⚠️ NavigatorContext: Pull failed, falling back to IDB cache:`, pullError);
+          await workspaceService.loadWorkspaceFromIDB(repo, branch);
+        }
       }
 
       // Get all files from workspace (IDB)
@@ -775,10 +787,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     reloadCredentials: async () => {
       console.log('🔄 NavigatorContext: Reloading credentials and workspace...');
 
-      // Get the OLD repo/branch before reloading credentials
-      const oldRepo = state.selectedRepo;
-      const oldBranch = state.selectedBranch;
-      console.log(`🔄 NavigatorContext: Old workspace: ${oldRepo}/${oldBranch}`);
+      // CRITICAL: Clear credentials cache to pick up changes to credentials.yaml (e.g., new branch)
+      credentialsManager.clearCache();
 
       // Reload credentials and determine NEW repo/branch
       // DON'T use saved state - force re-evaluation of default repo from credentials
@@ -788,26 +798,19 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         console.log(`🔄 NavigatorContext: New workspace: ${repoBranch.repo}/${repoBranch.branch}`);
 
         try {
-          // Force re-clone NEW workspace with new credentials
+          // CLEAN SLATE: Clear ALL workspaces and files (except credentials/connections)
+          // This is safer than trying to manage old/new workspaces separately
+          console.log('🧹 NavigatorContext: Clearing all workspaces (clean slate)...');
+          await workspaceService.clearAllWorkspaces();
+
+          // Clone the new workspace fresh
           console.log('🔄 NavigatorContext: Cloning new workspace with updated credentials...');
           const credentialsResult = await credentialsManager.loadCredentials();
           if (credentialsResult.success && credentialsResult.credentials) {
             const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === repoBranch.repo);
             if (gitCreds) {
-              // Delete the new workspace if it exists (to force fresh clone with new creds)
-              const newWorkspaceExists = await workspaceService.workspaceExists(repoBranch.repo, repoBranch.branch);
-              if (newWorkspaceExists) {
-                console.log(`🔄 NavigatorContext: Deleting existing ${repoBranch.repo}/${repoBranch.branch} to force re-clone`);
-                await workspaceService.deleteWorkspace(repoBranch.repo, repoBranch.branch);
-              }
               await workspaceService.cloneWorkspace(repoBranch.repo, repoBranch.branch, gitCreds);
             }
-          }
-
-          // Only delete OLD workspace AFTER successfully cloning the new one
-          if (oldRepo && oldBranch && (oldRepo !== repoBranch.repo || oldBranch !== repoBranch.branch)) {
-            console.log(`🔄 NavigatorContext: Deleting old workspace ${oldRepo}/${oldBranch}...`);
-            await workspaceService.deleteWorkspace(oldRepo, oldBranch);
           }
 
           // Load items from new workspace
