@@ -1,7 +1,7 @@
 # Project LAG: Open Issues & Design Gaps
 
 **Status:** Working Document  
-**Last Updated:** 3-Dec-25
+**Last Updated:** 4-Dec-25
 
 ---
 
@@ -347,131 +347,228 @@ For time-indexed flow through multi-edge paths (e.g., "how many reach Z by day 3
 
 ---
 
-## NEW: p.mean Estimation and Display Policy (3-Dec-25)
+## p.mean Estimation and Display Policy ✅ RESOLVED (3-Dec-25)
 
-### The Core Problem
+### Resolution Summary
 
-For latency edges, we typically have both `window()` and `cohort()` data in the cache. There are **two distinct dimensions** to resolve:
-
-1. **Measurement policy** (technical): What data/calculation do we use for p.mean?
-2. **User intent** (UX): What do users expect to see when they select different query types?
-
-These are related but separable questions.
+The two dimensions (measurement policy + user intent) are now resolved:
 
 ---
 
-### Dimension 1: Measurement Policy
+### Measurement Policy ✅
 
-**Question:** What data set do we use for calculating p.mean (until we build a proper stats model)?
+**Decision:** p.mean is calculated at **retrieval time** and **persisted on the slice**.
 
-| Approach | Description | Trade-offs |
-|----------|-------------|------------|
-| **Mature cohort data only** | p.mean from cohorts aged > maturity_days | Stable, trustworthy; but invariant under query changes |
-| **Query-specific slice** | p.mean from the specific window/cohort queried | Responsive to query; but misleading for immature data |
-| **Blended forecast** | Use mature p* to project immature cohorts | Best estimate; but hides "what actually happened" |
+- At get-from-source time, calculate p.mean for all evidence in the merged slice that meets inclusion policy
+- For contexted slices, develop p.mean specific to that window + context
+- Persist on the slice in the param file
+- Later (post Phase 1): add recency half-life weighting — just another knob to twiddle
 
-**The issue:** We will typically pin *both* `cohort()` and `window()` queries, so we have multiple data sources in the cache. When user selects a specific date window, which data informs p.mean?
-
-**Current thinking:** Not resolved. Need to decide whether p.mean is:
-- A property of the **edge** (invariant, derived from mature data)
-- A property of the **query** (varies with window selection)
-
-If invariant, we mask real trends. If query-specific, we risk showing misleading values (5% on an edge that's actually 45%).
+**Data source priority:**
+- **For forecasting p.mean:** Favour `window()` data (faster to mature, more recent)
+- **For evidence component:** Favour `cohort()` data (richer maturation curves)
 
 ---
 
-### Dimension 2: User Intent
+### User Intent & Display ✅
 
-**Question:** What do users expect to see when they select different query types?
+**Decision:** Display **both evidence and forecast** using visual layers.
 
-When a user selects a 7-day window on an edge with 30-day maturity, what are they asking for?
+The existing maths (§5.0.3 Formula A) already handles the blending correctly:
+```
+k̂_i = k_i + (n_i - k_i) · p* · (1 - F(a_i)) / (1 - p* · F(a_i))
+```
 
-| Intent | User is asking... | Implies showing... |
-|--------|-------------------|-------------------|
-| **"What happened?"** | Show me the evidence from this period | Observed p (even if 5%), thin edge |
-| **"What's the conversion rate?"** | Show me what p actually is for this edge | Forecast p (~45%), normal edge width |
-| **"How's it trending?"** | Show me if things are improving/declining | Comparison to historical baseline |
+This keeps observed k_i as **hard evidence** and forecasts only the **tail**. The formula is robust under:
+- **"Behind forecast"**: Evidence < expected → total estimate creeps down as cohort matures
+- **"Ahead of forecast"**: Evidence > expected → total estimate creeps up as cohort matures
 
-**The tension:** These are legitimate but different questions. A single p.mean value can't serve all intents.
-
-**Possible resolutions:**
-1. **Mode toggle**: User chooses "evidence" vs "forecast" view
-2. **Smart defaults**: Show forecast p, but flag with completeness badge
-3. **Dual display**: Edge width = forecast, badge = observed evidence
-4. **Query-type semantics**: `window()` = evidence intent, `cohort()` = forecast intent
-
-**Not yet decided:** Which approach best serves users. May require user research or iterative refinement.
+**Visual treatment:**
+- **Evidence component**: Two complementary overlapping striped layers → appears **solid**
+- **Forecast component**: Single striped layer → appears **striped**
+- **Stripe direction**: Opposite from stripes used for hidden current layer (may revisit later)
 
 ---
 
-### Combined Matrix (What to Show?)
+### Per-Scenario Visibility (Replaces Legend Chips) ✅ RESOLVED (3-Dec-25)
 
-| Query Type | Maturity | User Intent | What to Show? |
-|------------|----------|-------------|---------------|
-| `window()` | mature | evidence | Observed p ✓ |
-| `window()` | immature | evidence | Observed p (low) — but is this what they want? |
-| `window()` | immature | forecast | ??? — window() doesn't naturally imply forecast |
-| `cohort()` | mature | either | Observed p ✓ |
-| `cohort()` | mixed | forecast | Layered edge (§7.1) with forecast p |
-| `cohort()` | immature | forecast | Mostly forecast; show completeness |
+**Decision:** Evidence/Forecast visibility is **per-scenario**, not graph-wide legend chips.
 
-**Open:** The `window()` + immature cases are unclear. §7.1 addresses cohort display but not window queries where evidence is thin.
+This is more powerful — allows comparing "forecast only" scenario vs "evidence only" scenario side-by-side.
 
----
+**4-State Cycle on Scenario Chips:**
 
-### Relationship to Visual Layers (§7.1)
+| State | Icon | Chip Visual | Meaning |
+|-------|------|-------------|---------|
+| F+E | `<Eye>` | Gradient: solid→striped L→R | Show both layers |
+| F only | `<View>` | Striped background | Forecast only |
+| E only | `<EyeClosed>` | Solid background | Evidence only |
+| Hidden | `<EyeOff>` | Semi-transparent (existing) | Not displayed |
 
-§7.1 specifies how to **display** mature vs forecast layers on edges. It answers the rendering question but not:
-- Which p.mean value to use (measurement policy)
-- What users expect to see (intent)
+**Behaviour:**
+- Click eye icon to cycle through states
+- Per-scenario state (not per-tab, not global)
+- Default: **F+E** (show both)
+- Tooltip on icon explains current state with visual key
+- Toast feedback on state change
+- Same treatment on scenario palette swatches
 
-The visual layers communicate *uncertainty* about completeness. They don't resolve what p.mean should be.
-
----
-
-### Design Decisions Required
-
-Before implementation:
-
-1. **Measurement policy:** Is p.mean per-edge invariant or per-query-window?
-2. **User intent mapping:** Does `window()` imply evidence intent? Does `cohort()` imply forecast intent?
-3. **Display strategy:** How to handle `window()` queries on immature data?
-4. **Mode toggle:** Should there be an explicit "evidence" vs "forecast" view preference?
+**If p.forecast unavailable** (no window data):
+- F and F+E states disabled/greyed
+- Cycle only through: E → hidden → E
 
 ---
 
-## NEW: Properties Panel Latency UI (3-Dec-25)
+### Data Nomenclature ✅ RESOLVED (3-Dec-25)
 
-### The Issue
+**Stored Values:**
 
-§7.7 specifies minimal UI ("Calculate Latency" toggle, "Cut-off Time" input) but lacks:
-- Layout within the Probability param section
-- Validation behaviour for "Cut-off Time" (accepts "30d"? What format?)
-- How toggling `latency.track` affects other UI elements
-- Whether derived values (median_lag_days, completeness) appear anywhere in properties
+| Field | Meaning | When Computed | Stored? |
+|-------|---------|---------------|---------|
+| `p.forecast` | p* — mature baseline (forecast absent evidence) | Retrieval time | Yes, on slice |
+| `p.evidence` | Observed k/n from query window | Query time | No |
+| `p.mean` | Blended: evidence + forecasted tail (Formula A) | Query time | No |
 
-**Needs:** UI mockup or clearer specification before implementation.
+**Rendering by Mode:**
+
+| Mode | What to Render |
+|------|----------------|
+| E only | `p.evidence` as solid |
+| F only | `p.forecast` as striped |
+| F+E | `p.evidence` (solid inner core) + `p.mean` (striped outer) |
+
+**Key insight:** In F+E mode, the striped outer is `p.mean` (evidence-informed forecast), NOT `p.forecast` (which ignores evidence).
+
+---
+
+### Query-Time Computation ✅ RESOLVED (3-Dec-25)
+
+**Data Flow by Query Type:**
+
+| Query | Slice | p.evidence | p.forecast | p.mean |
+|-------|-------|------------|------------|--------|
+| `window()` mature | window | QT: Σk/Σn | RT: p* | = evidence |
+| `window()` immature | window | QT: Σk/Σn | RT: p* | QT: Formula A |
+| `cohort()` mature | cohort | QT: Σk/Σn | RT: p* | = evidence |
+| `cohort()` immature | cohort | QT: Σk/Σn | RT: p* | QT: Formula A |
+| `window()` no window_data | — | N/A | N/A | N/A |
+| non-latency edge | either | QT: Σk/Σn | = evidence | = evidence |
+
+**QT** = Query Time, **RT** = Retrieval Time
+
+**Phase 1 Constraint:** No convolution fallback. If no window data, p.forecast unavailable.
+
+---
+
+### Confidence Bands ✅ RESOLVED (3-Dec-25)
+
+**CI Display by Mode:**
+
+| Mode | CI Shown On | Rationale |
+|------|-------------|-----------|
+| E only | Evidence (solid) | Only one layer; show sampling uncertainty |
+| F only | Forecast (striped) | Only one layer; show forecast uncertainty |
+| F+E | Forecast portion only (striped) | Evidence is "solid" = certain; bands on uncertain part |
+
+**Implementation:** Extend existing CI rendering logic in `ConversionEdge.tsx`. Ensure stripes render within CI band.
+
+---
+
+### Edge Tooltips ✅ RESOLVED (3-Dec-25)
+
+Tooltips must show data provenance:
+
+```
+┌─────────────────────────────────────────┐
+│ Switch Registered → Success             │
+│─────────────────────────────────────────│
+│ Evidence:  8.0%  (k=80, n=1000)         │
+│   Source:  cohort(1-Nov-25:21-Nov-25)   │
+│                                         │
+│ Forecast:  45.0%  (p*)                  │
+│   Source:  window(1-Nov-25:24-Nov-25)   │
+│                                         │
+│ Blended:   42.0%                        │
+│ Completeness: 18%                       │
+│ Lag: 6.0d median                        │
+└─────────────────────────────────────────┘
+```
+
+Full tooltip redesign deferred (see TODO.md #5), but latency edges should append this info.
+
+---
+
+### Remaining Open Items
+
+1. **Validation of Formula A:** §5.0.3 marks formulas as "draft" — verify during implementation
+2. **Properties Panel UI:** Low priority; minimal viable spec exists
+
+---
+
+## Properties Panel Latency UI ✅ RESOLVED (4-Dec-25)
+
+**Location:** Within Probability/Conditional Probability card, at bottom under 'Distribution'.
+
+**Fields:**
+- Track Latency (boolean toggle)
+- Maturity Days (number input, e.g., 30)
+
+**Applies to:** `p` and `conditional_p` cards only — NOT cost params.
+
+**Layout:**
+```
+┌─ Probability ─────────────────────────────┐
+│ Mean: [0.45]  n: [1000]  k: [450]         │
+│ Distribution: [Beta ▼]                    │
+│ ─────────────────────────────────────────│
+│ [✓] Track Latency    Maturity: [30] days  │
+└───────────────────────────────────────────┘
+```
+
+Derived values (completeness, median_lag_days) shown in edge bead and tooltip, not properties panel.
 
 ---
 
 ## Summary of Open Issues
 
-| ID | Issue | Type | Blocking? |
-|----|-------|------|-----------|
-| GAP-10 | ParsedConstraints interface for `cohort()` | Implementation | Yes |
-| GAP-11 | DSL JSON schema for `cohort()` | Implementation | Yes |
-| GAP-12 | Parameter UI schema for latency fields | Implementation | No |
-| GAP-13 | Integrity check rules for latency | Implementation | No |
-| GAP-14 | UpdateManager mapping config | Implementation | Partial |
-| GAP-15 | buildScenarioRenderEdges data threading | Implementation | Partial |
-| GAP-17 | windowAggregationService cohort routing | Implementation | Yes |
-| GAP-18 | Amplitude adapter anchor node handling | Implementation | Yes |
-| **p.mean policy** | Measurement policy + user intent | **Design** | **Yes** |
-| **Properties Panel UI** | Latency settings layout | **Design** | No |
+| ID | Issue | Type | Status |
+|----|-------|------|--------|
+| GAP-10 | ParsedConstraints interface for `cohort()` | Implementation | Resolve during build |
+| GAP-11 | DSL JSON schema for `cohort()` | Implementation | Resolve during build |
+| GAP-12 | Parameter UI schema for latency fields | Implementation | Resolve during build |
+| GAP-13 | Integrity check rules for latency | Implementation | Resolve during build |
+| GAP-14 | UpdateManager mapping config | Implementation | Resolve during build |
+| GAP-15 | buildScenarioRenderEdges data threading | Implementation | Resolve during build |
+| GAP-17 | windowAggregationService cohort routing | Implementation | Resolve during build |
+| GAP-18 | Amplitude adapter anchor node handling | Implementation | Resolve during build |
+| ~~p.mean policy~~ | ~~Measurement policy + user intent~~ | ~~Design~~ | ✅ **Resolved** |
+| ~~Per-scenario visibility~~ | ~~E/F/F+E on scenario chips~~ | ~~Design~~ | ✅ **Resolved** |
+| ~~Data nomenclature~~ | ~~p.evidence / p.forecast / p.mean~~ | ~~Design~~ | ✅ **Resolved** |
+| ~~Query-time computation~~ | ~~When to compute each value~~ | ~~Design~~ | ✅ **Resolved** |
+| ~~Confidence bands~~ | ~~CI display by mode~~ | ~~Design~~ | ✅ **Resolved** |
+| ~~Edge tooltips~~ | ~~Data provenance display~~ | ~~Design~~ | ✅ **Resolved** |
+| ~~Properties Panel UI~~ | ~~Latency settings layout~~ | ~~Design~~ | ✅ **Resolved** |
+| **Formula A validation** | Verify Bayesian tail forecasting | Implementation | Verify during build |
 
-**Legend:**
-- **Design** = Requires decision before implementation
-- **Implementation** = Will be resolved during build
+### True Open Design Items
+
+**All design items are now resolved.**
+
+Everything remaining is implementation detail that will be resolved during build.
+
+### Key Decisions Made (3-4 Dec-25)
+
+1. **Per-scenario visibility** replaces legend chips — 4-state cycle (F+E → F → E → hidden) on scenario chip eye icon
+2. **Data nomenclature**: `p.evidence` (observed), `p.forecast` (p*), `p.mean` (blended)
+3. **Rendering**: E=solid, F=striped, F+E=evidence inner + mean outer
+4. **Query-time computation**: p.forecast at retrieval; p.evidence and p.mean at query time
+5. **Phase 1 constraint**: No convolution fallback; need window data for F modes
+6. **CI bands**: Only on striped portion in F+E mode; on whole edge in E or F only modes
+7. **Tooltips**: Show data provenance (which sliceDSL contributed to each value)
+8. **Properties Panel UI**: Latency settings within Probability card, under Distribution
+9. **conditional_p**: First-class citizen — identical latency treatment to `p`
+10. **Cost params**: NO latency treatment — just direct inputs
+11. **Override pattern**: `track_overridden`, `maturity_days_overridden` for put/get to file
 
 ---
 
