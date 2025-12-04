@@ -1,4 +1,4 @@
-id: checkout_started
+id: checkout-started
 name: Checkout Started
 description: User initiates the checkout process by proceeding from cart
 category: conversion
