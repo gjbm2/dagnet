@@ -928,12 +928,43 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       await db.saveAppState({ activeTabId: tabId });
     };
     
+    // Listen for workspace cleared - sync React state with IDB to remove ghost tabs
+    const handleWorkspaceCleared = async () => {
+      console.log('[TabContext] dagnet:workspaceCleared - syncing React state with IDB');
+      const idbTabs = await db.tabs.toArray();
+      const idbTabIds = new Set(idbTabs.map(t => t.id));
+      
+      // Remove any tabs from React state that don't exist in IDB
+      setTabs(prev => {
+        const filtered = prev.filter(t => idbTabIds.has(t.id));
+        const removed = prev.length - filtered.length;
+        if (removed > 0) {
+          console.log(`[TabContext] Removed ${removed} ghost tab(s) from React state`);
+        }
+        return filtered;
+      });
+      
+      // Also clear stale viewTabs from fileRegistry
+      const regFiles = (fileRegistry as any).files;
+      for (const [fileId, file] of regFiles) {
+        if (file.viewTabs && file.viewTabs.length > 0) {
+          const validTabs = file.viewTabs.filter((vt: string) => idbTabIds.has(vt));
+          if (validTabs.length !== file.viewTabs.length) {
+            console.log(`[TabContext] Cleared ${file.viewTabs.length - validTabs.length} stale viewTab(s) from ${fileId}`);
+            file.viewTabs = validTabs;
+          }
+        }
+      }
+    };
+    
     window.addEventListener('dagnet:openTemporaryTab', handleTemporaryTab as unknown as EventListener);
     window.addEventListener('dagnet:switchToTab', handleSwitchToTab as unknown as EventListener);
+    window.addEventListener('dagnet:workspaceCleared', handleWorkspaceCleared as unknown as EventListener);
     
     return () => {
       window.removeEventListener('dagnet:openTemporaryTab', handleTemporaryTab as unknown as EventListener);
       window.removeEventListener('dagnet:switchToTab', handleSwitchToTab as unknown as EventListener);
+      window.removeEventListener('dagnet:workspaceCleared', handleWorkspaceCleared as unknown as EventListener);
     };
   }, []);
 
@@ -1137,6 +1168,9 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     const savedTabs = await db.tabs.toArray();
     console.log(`TabContext: Loading ${savedTabs.length} tabs from IndexedDB:`, savedTabs.map(t => t.id));
     
+    // Build set of valid tab IDs for ghost cleanup
+    const validTabIds = new Set(savedTabs.map(t => t.id));
+    
     // Deserialize editorState for each tab (convert arrays back to Sets)
     const deserializedTabs = savedTabs.map(tab => ({
       ...tab,
@@ -1148,6 +1182,36 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       const restored = await fileRegistry.restoreFile(tab.fileId);
       if (restored) {
         console.log(`TabContext: Restored file data for ${tab.fileId}`);
+      }
+    }
+    
+    // 🧹 Clean up stale viewTabs from ALL files - both in-memory AND in IDB
+    // This prevents ghost tabs from blocking "View > Issues" etc. after F5
+    
+    // 1. Clean in-memory fileRegistry
+    const regFiles = (fileRegistry as any).files as Map<string, FileState>;
+    for (const [fileId, file] of regFiles) {
+      if (file.viewTabs && file.viewTabs.length > 0) {
+        const cleanedTabs = file.viewTabs.filter((vt: string) => validTabIds.has(vt));
+        const removedCount = file.viewTabs.length - cleanedTabs.length;
+        if (removedCount > 0) {
+          console.log(`🧹 Cleared ${removedCount} stale viewTab(s) from registry: ${fileId}`);
+          file.viewTabs = cleanedTabs;
+        }
+      }
+    }
+    
+    // 2. Clean IDB files (for files not yet loaded into memory, like graph-issues)
+    const idbFiles = await db.files.toArray();
+    for (const file of idbFiles) {
+      if (file.viewTabs && file.viewTabs.length > 0) {
+        const cleanedTabs = file.viewTabs.filter((vt: string) => validTabIds.has(vt));
+        const removedCount = file.viewTabs.length - cleanedTabs.length;
+        if (removedCount > 0) {
+          console.log(`🧹 Cleared ${removedCount} stale viewTab(s) from IDB: ${file.fileId}`);
+          file.viewTabs = cleanedTabs;
+          await db.files.put(file);
+        }
       }
     }
     
