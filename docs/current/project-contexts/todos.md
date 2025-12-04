@@ -283,6 +283,16 @@ If issues arise, revert to direct service calls - the hook is a wrapper, not new
 
 Fixed oscillation when chip expands and wraps lines.
 
+### 5. Edge Tooltip Redesign
+**Status: TODO**
+
+Tooltips need proper redesign to show data provenance (which slices contributed to evidence/forecast), completeness, and lag info. Currently tooltips are ad-hoc.
+
+### 6. Semi-Transparent Current Layer Rendering
+**Status: TODO**
+
+Current "hidden layer" rendering (semi-transparent) is confusing and will become more so with Project LAG adding striped forecast/evidence layers. Need to rethink visual treatment for hidden vs visible vs forecast vs evidence states.
+
 ---
 
 ## Implementation Order

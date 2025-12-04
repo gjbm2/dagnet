@@ -2,7 +2,7 @@
 
 **Status:** Design Draft  
 **Created:** 1-Dec-25  
-**Last Updated:** 2-Dec-25  
+**Last Updated:** 4-Dec-25  
 
 ---
 
@@ -136,11 +136,15 @@ interface GraphEdge {
 interface LatencyConfig {
   /** Whether to track latency for this edge */
   track: boolean;
+  /** True if user manually set track (vs derived from file) */
+  track_overridden?: boolean;
   
   /** Maturity threshold in days - cohorts younger than this are "immature"
    *  Default: 30 days (per-edge setting)
    */
   maturity_days?: number;  // Default: 30
+  /** True if user manually set maturity_days (vs derived from file) */
+  maturity_days_overridden?: boolean;
   
   /** Censor time in days - ignore conversions after this lag */
   censor_days?: number;  // Default: 14 or 28 depending on edge type
@@ -733,6 +737,55 @@ function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDeci
 }
 ```
 
+### 4.8 Query-Time vs Retrieval-Time Computation
+
+**Critical distinction:** Some values are pre-computed at retrieval time; others must be computed fresh at query time.
+
+| Value | When Computed | Why |
+|-------|---------------|-----|
+| `p.forecast` (p*) | **Retrieval time** | Stable baseline from mature data; doesn't depend on query window |
+| `p.evidence` | **Query time** | Depends on which dates/cohorts fall in query window |
+| `p.mean` (blended) | **Query time** | Depends on cohort ages at query time; Formula A runs per-cohort |
+
+**Query-time computation flow:**
+
+```
+User selects query window (e.g., cohort(-21d:))
+         ↓
+Slice stored cohort_data to matching dates
+         ↓
+For each cohort i in slice:
+  - k_i, n_i from stored data
+  - a_i = query_date - cohort_date (age TODAY)
+  - Apply Formula A if immature
+         ↓
+Aggregate:
+  - p.evidence = Σk_i / Σn_i
+  - p.mean = Σk̂_i / Σn_i (where k̂_i includes forecasted tail)
+         ↓
+Render using scenario visibility mode (E/F/F+E)
+```
+
+**Why p.mean must be query-time:**
+1. **Query window varies**: User might query last 21 days, last 7 days, specific range
+2. **Cohort ages change daily**: A cohort from 1-Dec has age=3 on 4-Dec, age=4 on 5-Dec
+3. **Formula A needs current ages**: The tail forecast depends on `F(a_i)` which changes as cohorts mature
+
+**Data flow by query type:**
+
+| Query | Slice Used | p.evidence | p.forecast | p.mean |
+|-------|-----------|------------|------------|--------|
+| `window()` mature | window_data | QT: Σk/Σn | RT: p* | = evidence |
+| `window()` immature | window_data | QT: Σk/Σn | RT: p* | QT: Formula A per day |
+| `cohort()` mature | cohort_data | QT: Σk/Σn | RT: p* | = evidence |
+| `cohort()` immature | cohort_data | QT: Σk/Σn | RT: p* | QT: Formula A per cohort |
+| No window_data | — | Available | **Not available** | — |
+| Non-latency edge | either | QT: Σk/Σn | = evidence | = evidence |
+
+**QT** = Query Time, **RT** = Retrieval Time
+
+**Phase 1 constraint:** If no `window()` query is pinned, `p.forecast` is unavailable. F-only and F+E visibility modes are disabled for affected edges. User must pin a `window()` query to enable forecast display.
+
 ---
 
 ## 5. Inference Engine
@@ -1280,36 +1333,81 @@ When both layers overlap, offset stripes combine to appear SOLID.
 
 ### 7.2 Edge Data Model for Rendering
 
-Edge needs to expose:
+Edge needs to expose three probability values for rendering:
 
 ```typescript
 interface EdgeLatencyDisplay {
-  // For edge width calculation
-  p_total: number;           // mature_p applied to all cohorts
-  p_mature: number;          // mature_p (same value, but based on mature evidence)
+  // Core probability values (computed at query time)
+  p: {
+    evidence: number;        // Observed k/n from query window
+    forecast: number;        // p* — mature baseline (from window slice, retrieval time)
+    mean: number;            // Blended: evidence + forecasted tail (Formula A)
+  };
   
-  // For layer widths
+  // For completeness badge
   completeness: number;      // 0-1 maturity progress (see §5.0.1)
   
-  // For tooltips / properties panel
+  // For tooltips
   median_lag_days?: number;  // From dayMedianTransTimes
-  k_observed: number;        // Actual conversions
-  k_forecast: number;        // Projected total conversions
+  
+  // Data provenance (for tooltip)
+  evidence_source?: string;  // sliceDSL that provided evidence
+  forecast_source?: string;  // sliceDSL that provided p*
 }
 ```
 
-### 7.3 View Preferences: Maturity Split Toggle
+**Value semantics:**
 
-A view preference controls whether the mature/forecast split is visualised:
+| Field | Meaning | When Computed | Stored? |
+|-------|---------|---------------|---------|
+| `p.evidence` | Observed k/n from query window | Query time | No |
+| `p.forecast` | p* — forecast absent evidence | Retrieval time | Yes, on slice |
+| `p.mean` | Evidence + forecasted tail (Formula A) | Query time | No |
 
-| Setting | Value |
-|---------|-------|
-| Name | `showMaturitySplit` |
-| Default | **On** |
-| Scope | **Per-tab** (not per-graph, not global) |
-| Location | ViewMenu + Tools side panel (shared hook) |
+**Rendering by visibility mode:**
 
-When **off**, edges render with standard solid appearance (no stripe layers).
+| Mode | Render | Width Source |
+|------|--------|--------------|
+| E only | Solid edge | `p.evidence` |
+| F only | Striped edge | `p.forecast` |
+| F+E | Solid inner + striped outer | Inner: `p.evidence`, Outer: `p.mean` |
+
+**Key insight:** In F+E mode, the striped outer uses `p.mean` (evidence-informed forecast), NOT `p.forecast` (which ignores evidence). The visual width of the striped-only portion is `p.mean - p.evidence`.
+
+### 7.3 Per-Scenario Visibility (E/F/F+E)
+
+Evidence/Forecast visibility is **per-scenario**, not graph-wide. This allows comparing a "forecast only" scenario vs "evidence only" scenario side-by-side.
+
+**4-State Cycle on Scenario Chips:**
+
+| State | Icon | Chip Visual | Meaning |
+|-------|------|-------------|---------|
+| F+E | `<Eye>` (Lucide) | Gradient: solid→striped L→R | Show both layers |
+| F only | `<View>` (Lucide) | Striped background | Forecast only |
+| E only | `<EyeClosed>` (Lucide) | Solid background | Evidence only |
+| Hidden | `<EyeOff>` (Lucide) | Semi-transparent (existing) | Not displayed |
+
+**Behaviour:**
+- Click eye icon to cycle: F+E → F → E → hidden → F+E
+- Per-scenario state (stored on scenario, not per-tab)
+- Default: **F+E** (show both)
+- Tooltip on icon shows current state with visual key
+- Toast feedback on state change ("Showing forecast only")
+- Same treatment on scenario palette swatches
+
+**If p.forecast unavailable** (no window data pinned):
+- F and F+E states disabled/greyed on that scenario
+- Cycle only: E → hidden → E
+
+**Confidence bands by mode:**
+
+| Mode | CI Shown On |
+|------|-------------|
+| E only | Evidence (solid portion) |
+| F only | Forecast (striped portion) |
+| F+E | Striped portion only (forecast uncertainty) |
+
+Extend existing CI rendering logic; ensure stripes render within CI band.
 
 ### 7.4 Edge Bead: Latency Display
 
@@ -1338,24 +1436,61 @@ The WindowSelector supports both `window()` and `cohort()` modes:
 - Cohort mode: Timer icon + "cohort(start:end)" in DSL
 - Window mode: TimerOff icon + "window(start:end)" in DSL
 
-### 7.6 Tooltips: Interim Approach
+### 7.6 Tooltips: Data Provenance
 
-Full tooltip redesign is **deferred**. For now:
-- Append latency text to existing tooltip content
-- Format: "Lag: 13d | Maturity: 75%"
+Full tooltip redesign is **deferred** (see TODO.md #5). For latency edges, append:
 
-Future tooltip cleanup tracked in `/TODO.md`.
+```
+Evidence:  8.0%  (k=80, n=1000)
+  Source:  cohort(1-Nov-25:21-Nov-25)
+
+Forecast:  45.0%  (p*)
+  Source:  window(1-Nov-25:24-Nov-25)
+
+Blended:   42.0%
+Completeness: 18%
+Lag: 6.0d median
+```
+
+**Key requirement:** Show which `sliceDSL` contributed to each value. This gives users transparency into data provenance.
+
+If p.forecast unavailable:
+```
+Evidence:  8.0%  (k=80, n=1000)
+  Source:  cohort(1-Nov-25:21-Nov-25)
+
+Forecast:  —  (no window data)
+Completeness: 18%
+Lag: 6.0d median
+```
 
 ### 7.7 Properties Panel: Latency Settings
 
-Latency configuration appears **within the Probability param section** of edge properties (not a separate section):
+Latency configuration appears **within the Probability card** (or Conditional Probability card) in the Params section of the edge panel.
+
+**Location:** At the bottom of the card, **under 'Distribution'** section.
 
 | Field | Type | Maps to |
 |-------|------|---------|
-| Calculate Latency | Boolean toggle | `edge.latency.track` |
-| Cut-off Time | String input (e.g., "30d") | `edge.latency.maturity_days` |
+| Track Latency | Boolean toggle | `edge.latency.track` |
+| Maturity Days | Number input (e.g., 30) | `edge.latency.maturity_days` |
 
-**Note:** These are configuration settings, not read-only displays. Derived values (maturity_coverage, median_lag_days) are shown via edge bead and tooltip.
+**Layout suggestion:**
+```
+┌─ Probability ─────────────────────────────┐
+│ Mean: [0.45]  n: [1000]  k: [450]         │
+│ Distribution: [Beta ▼]                    │
+│ ─────────────────────────────────────────│
+│ [✓] Track Latency    Maturity: [30] days  │
+└───────────────────────────────────────────┘
+```
+
+**Applies to:**
+- `p` (Probability) cards
+- `conditional_p` (Conditional Probability) cards
+- **NOT** cost params (`labour_cost`, `cost_money`) — these don't have latency
+
+**Note:** These are configuration settings, not read-only displays. Derived values (completeness, median_lag_days) are shown via edge bead and tooltip.
 
 ---
 
@@ -1688,9 +1823,11 @@ ConversionEdge renders with two layers
 #### Phase C1: Schema Changes
 
 - [ ] Rename `cost_time` → `labour_cost` (global search/replace)
-- [ ] Add `LatencyConfig` to edge schema (TS, Python, YAML)
-- [ ] Extend parameter schema for cohort metadata + latency
-- [ ] Add `latency` to `EdgeParamDiff` in scenarios
+- [ ] Add `LatencyConfig` to edge schema (TS, Python, YAML):
+  - `track: boolean`, `track_overridden?: boolean`
+  - `maturity_days?: number`, `maturity_days_overridden?: boolean`
+- [ ] Extend parameter schema for cohort metadata + latency block
+- [ ] Add latency fields to `EdgeParamDiff` in scenarios (read-only derived values only)
 
 #### Phase C2: DSL & Query Architecture
 
@@ -1704,13 +1841,22 @@ ConversionEdge renders with two layers
 - [ ] Store per-cohort latency in parameter files
 - [ ] Implement mature/immature split computation
 - [ ] Update `windowAggregationService` for cohort-aware aggregation
-- [ ] UpdateManager mappings for latency fields
+- [ ] UpdateManager mappings for latency fields (with `_overridden` logic)
+- [ ] **Put to file**: Write `latency.track`, `latency.maturity_days` from edge
+- [ ] **Get from file**: Apply latency config only if `*_overridden` is false on edge
+- [ ] Tests for latency override behaviour:
+  - Put latency config to file
+  - Get from file (no override) — applies to edge
+  - Get from file (with override) — does not clobber edge value
 
 #### Phase C4: Edge Rendering
 
-- [ ] Two-layer edge rendering (inner/outer with offset stripes)
-- [ ] Edge data model: `maturity_coverage`, latency stats
-- [ ] Properties panel: latency display section
+- [ ] Per-scenario visibility state (4-state cycle: F+E → F → E → hidden)
+- [ ] Two-layer edge rendering (inner=evidence, outer=mean)
+- [ ] Edge data model: `p.evidence`, `p.forecast`, `p.mean`, `completeness`
+- [ ] Properties panel: latency settings (track toggle, maturity_days input)
+- [ ] Tooltip: data provenance (which sliceDSL contributed)
+- [ ] CI bands on striped portion (extend existing CI logic)
 
 ---
 
@@ -1923,10 +2069,26 @@ Tests will require mock Amplitude responses and param files covering:
 - **Multi-modal distributions:** Some edges may have two populations (fast/slow)
 - **Heavy tails:** Users who convert after 30+ days—how to handle?
 
-### 9.4 Interaction with Conditional Edges
+### 9.4 Conditional Edges (`conditional_p`) ✅ RESOLVED
 
-- Should conditional edges (`conditional_p`) have per-condition latency?
-- Or shared latency with condition-dependent p?
+**Decision:** `conditional_p` is a first-class citizen and receives **identical latency treatment** to `p`.
+
+- Latency config (`track`, `maturity_days`) applies to the edge, not per-condition
+- Evidence/forecast split applies to the overall edge conversion
+- Each condition branch uses the same latency model
+- `p.evidence`, `p.forecast`, `p.mean` computed for the edge as a whole
+- Condition weights are separate from latency (they determine branch probabilities, not timing)
+
+**Implementation:** All references to "probability params" or `p` throughout this design apply equally to `conditional_p`. The latency machinery operates at edge level, regardless of whether the edge uses `p` or `conditional_p`.
+
+### 9.5 Cost Parameters — No Latency Treatment
+
+**Decision:** Cost parameters (`labour_cost`, `cost_money`) do **NOT** get latency treatment.
+
+- They are direct inputs to calculations, not modelled from data
+- Typically entered manually or imported from external sources (e.g., Google Sheets)
+- No Amplitude fetch, no forecasting, no evidence/forecast split
+- Just standard param handling with `_overridden` for persistence
 
 ---
 
