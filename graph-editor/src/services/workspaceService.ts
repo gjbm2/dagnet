@@ -201,6 +201,14 @@ class WorkspaceService {
     const workspaceId = `${repository}-${branch}`;
     console.log(`🚀 WorkspaceService: Cloning workspace ${workspaceId} (using Tree API)...`);
     
+    // SINGLE WORKSPACE POLICY: Clear any existing workspaces before cloning
+    // This ensures we never have stale files from other repos polluting IDB
+    const existingWorkspaces = await db.workspaces.count();
+    if (existingWorkspaces > 0) {
+      console.log(`🧹 WorkspaceService: Clearing ${existingWorkspaces} existing workspace(s) before clone (single workspace policy)`);
+      await this.clearAllWorkspaces();
+    }
+    
     // Start hierarchical log for clone operation
     const logOpId = sessionLogService.startOperation(
       'info',

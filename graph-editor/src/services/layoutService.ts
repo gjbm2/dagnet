@@ -61,15 +61,59 @@ export class LayoutService {
 
   /**
    * Load layout from IndexedDB
-   * Error handling is in db wrapper
+   * Reconciles with tabs table to remove ghost tabs
    */
   async loadLayout(): Promise<LayoutData | null> {
     const appState = await db.getAppState();
     if (appState?.dockLayout) {
       console.log('Layout loaded from IndexedDB');
-      return appState.dockLayout;
+      
+      // Get valid tab IDs from tabs table
+      const validTabs = await db.tabs.toArray();
+      const validTabIds = new Set(validTabs.map(t => t.id));
+      
+      // Filter out ghost tabs from layout
+      const cleanedLayout = this.filterGhostTabs(appState.dockLayout, validTabIds);
+      
+      return cleanedLayout;
     }
     return null;
+  }
+
+  /**
+   * Remove tabs from layout that don't exist in the tabs table
+   * Prevents ghost tabs from persisting across F5
+   */
+  private filterGhostTabs(layout: LayoutData, validTabIds: Set<string>): LayoutData {
+    const filterFromBox = (box: any): any => {
+      if (!box) return box;
+      
+      const cleaned: any = { ...box };
+      
+      // Filter tabs to only include valid ones
+      if (cleaned.tabs && Array.isArray(cleaned.tabs)) {
+        const originalCount = cleaned.tabs.length;
+        cleaned.tabs = cleaned.tabs.filter((tab: any) => validTabIds.has(tab.id));
+        const removedCount = originalCount - cleaned.tabs.length;
+        if (removedCount > 0) {
+          console.log(`🧹 Removed ${removedCount} ghost tab(s) from layout`);
+        }
+      }
+      
+      // Recurse into children
+      if (cleaned.children && Array.isArray(cleaned.children)) {
+        cleaned.children = cleaned.children.map(filterFromBox);
+      }
+      
+      return cleaned;
+    };
+    
+    return {
+      dockbox: filterFromBox(layout.dockbox),
+      floatbox: filterFromBox(layout.floatbox),
+      windowbox: filterFromBox(layout.windowbox),
+      maxbox: filterFromBox(layout.maxbox)
+    } as LayoutData;
   }
 
   /**

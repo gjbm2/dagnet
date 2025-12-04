@@ -433,6 +433,16 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     console.log(`🧹 NavigatorContext: Cleared ${registrySize} files from FileRegistry:`, filesBefore);
 
     try {
+      // SINGLE WORKSPACE POLICY: Ensure only ONE workspace exists in IDB
+      // If there are multiple, or the existing one doesn't match, clear everything
+      const existingWorkspaces = await db.workspaces.toArray();
+      const targetWorkspaceId = `${repo}-${branch}`;
+      if (existingWorkspaces.length > 1 || 
+          (existingWorkspaces.length === 1 && existingWorkspaces[0].id !== targetWorkspaceId)) {
+        console.log(`🧹 NavigatorContext: Single workspace policy - clearing ${existingWorkspaces.length} stale workspace(s)`);
+        await workspaceService.clearAllWorkspaces();
+      }
+      
       // Get credentials
       const credentialsResult = await credentialsManager.loadCredentials();
       console.log('📦 WorkspaceService: Credentials check result:', credentialsResult);
@@ -823,7 +833,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       }
     },
 
-    // Force full reload - delete workspace and re-clone (escape hatch for smart pull issues)
+    // Force full reload - CLEAN SLATE then re-clone (escape hatch for smart pull issues)
     forceFullReload: async () => {
       console.log('🔄 NavigatorContext: Force full reload requested...');
 
@@ -838,9 +848,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       try {
         setIsLoading(true);
 
-        // Delete workspace
-        console.log(`🗑️ NavigatorContext: Deleting workspace ${repo}/${branch}...`);
-        await workspaceService.deleteWorkspace(repo, branch);
+        // CLEAN SLATE: Clear ALL workspaces (not just current one)
+        // This ensures no stale files from any repo pollute the new clone
+        console.log('🧹 NavigatorContext: Clearing all workspaces (clean slate)...');
+        await workspaceService.clearAllWorkspaces();
 
         // Get credentials
         const credentialsResult = await credentialsManager.loadCredentials();
@@ -853,7 +864,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
           throw new Error(`Git credentials not found for ${repo}`);
         }
 
-        // Re-clone
+        // Re-clone fresh
         console.log(`📦 NavigatorContext: Re-cloning workspace ${repo}/${branch}...`);
         await workspaceService.cloneWorkspace(repo, branch, gitCreds);
 
