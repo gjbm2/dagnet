@@ -54,7 +54,7 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     type: 'graph',
     displayName: 'Graph',
     displayNamePlural: 'Graphs',
-    schemaFile: '/schemas/conversion-graph-1.0.0.json',
+    schemaFile: '/schemas/conversion-graph-1.1.0.json',
     directory: 'graphs',
     extensions: ['.json'],
     icon: '📊',

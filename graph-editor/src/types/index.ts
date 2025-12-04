@@ -355,7 +355,7 @@ export interface EditorProps<T = any> {
 }
 
 // ============================================================================
-// GRAPH SCHEMA TYPES (aligned with schema/conversion-graph-1.0.0.json)
+// GRAPH SCHEMA TYPES (aligned with schema/conversion-graph-1.1.0.json)
 // ============================================================================
 
 export type UUID = string;
@@ -603,7 +603,8 @@ export interface Policies {
 
 export interface Metadata {
   version: string; // semver
-  created_at: string; // ISO datetime
+  name?: string; // Human-readable graph name for display in UI
+  created_at: string; // ISO datetime or UK format (d-MMM-yy)
   updated_at?: string;
   author?: string;
   description?: string;

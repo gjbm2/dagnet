@@ -1,7 +1,7 @@
 """
 Graph fixtures for testing.
 
-Provides sample graphs matching the conversion-graph-1.0.0.json schema.
+Provides sample graphs matching the conversion-graph-1.1.0.json schema.
 """
 
 from lib.graph_types import (

@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/conversion-graph-1.0.0.json",
+  "$id": "https://raw.githubusercontent.com/gjbm2/dagnet/main/schema/conversion-graph-1.1.0.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Conversion Funnel Graph",
-  "$comment": "Graph JSON for a conversion funnel DAG with inlined parameters and editor hints. Core semantics: nodes are states; edges are conditional transitions; probabilities are conditional on source node; outgoing edges form a partition that may leave residual routed to a default outcome unless overridden. Acyclicity, absorbing-node constraints, and per-source probability policies are validated by the runner.",
+  "$comment": "Graph JSON for a conversion funnel DAG. Key semantics: (1) At least one node must have entry.is_start=true; (2) Terminal nodes must have absorbing=true and zero outgoing edges; (3) Outgoing edge probabilities from non-absorbing nodes should sum to 1.0 or use residual_behavior/policies; (4) Case nodes (type='case') split traffic across variants - each variant needs a corresponding case edge with case_id matching case.id (preferred) or node.uuid (fallback), and case_variant matching the variant name; (5) Case edges use p.mean=1.0 because split is controlled by variant weights.",
   "type": "object",
   "required": ["nodes", "edges", "policies", "metadata"],
   "additionalProperties": false,
@@ -18,25 +18,36 @@
       "items": { "$ref": "#/$defs/Edge" }
     },
     "policies": { "$ref": "#/$defs/Policies" },
-    "metadata": { "$ref": "#/$defs/Metadata" }
+    "metadata": { "$ref": "#/$defs/Metadata" },
+    "currentQueryDSL": {
+      "type": "string",
+      "description": "Current user query DSL for UI persistence (e.g., window(1-Jan-25:31-Mar-25)). Optional."
+    }
   },
   "$defs": {
     "UUID": { "type": "string", "format": "uuid" },
     "Id": { 
       "type": "string", 
-      "minLength": 1, 
+      "minLength": 0, 
       "maxLength": 128,
-      "pattern": "^[a-zA-Z0-9_-]+$",
-      "description": "Human-readable identifier (letters, numbers, hyphens, underscores - no spaces or special chars)"
+      "pattern": "^[a-zA-Z0-9_-]*$",
+      "$comment": "Empty IDs are permitted but discouraged. Assign meaningful kebab-case identifiers for clarity.",
+      "description": "Human-readable identifier (letters, numbers, hyphens, underscores). Empty is allowed but discouraged."
     },
 
     "Node": {
       "type": "object",
-      "required": ["uuid", "id"],
+      "required": ["uuid"],
       "additionalProperties": false,
       "properties": {
         "uuid": { "$ref": "#/$defs/UUID" },
         "id": { "$ref": "#/$defs/Id" },
+        "type": {
+          "type": "string",
+          "enum": ["normal", "case"],
+          "default": "normal",
+          "description": "Node type. Use 'case' for A/B test nodes that split traffic across experiment variants. Case nodes MUST also have a 'case' property defining variants."
+        },
         "label": { "type": "string", "maxLength": 256 },
         "label_overridden": { "type": "boolean", "default": false, "description": "If true, label was manually edited and should not be auto-updated" },
         "description": { "type": "string" },
@@ -63,20 +74,29 @@
         },
         "absorbing": { 
           "type": "boolean", 
-          "default": false, 
-          "$comment": "If true, node is terminal and MUST have zero outgoing edges; runner enforces." 
+          "default": false,
+          "description": "Terminal node flag. If true, this node ends a path and MUST have zero outgoing edges. Typically used for success/failure/abandon outcomes. Should be paired with outcome_type."
         },
         "outcome_type": {
           "type": "string",
           "enum": ["success", "failure", "error", "neutral", "other"],
-          "description": "Classification for absorbing outcomes; optional"
+          "description": "Classification for absorbing outcomes (success, failure, etc.). Optional but recommended for terminal nodes."
         },
         "entry": {
           "type": "object",
+          "description": "Entry point configuration. At least one node in the graph MUST have is_start=true to define where traffic enters.",
           "additionalProperties": false,
           "properties": {
-            "is_start": { "type": "boolean", "default": false },
-            "entry_weight": { "type": "number", "minimum": 0 }
+            "is_start": { 
+              "type": "boolean", 
+              "default": false,
+              "description": "If true, this node is a traffic entry point. At least one node must have is_start=true."
+            },
+            "entry_weight": { 
+              "type": "number", 
+              "minimum": 0,
+              "description": "Relative weight for multi-entry graphs. If multiple nodes have is_start=true, traffic is split proportionally by entry_weight."
+            }
           }
         },
         "costs": { 
@@ -87,11 +107,16 @@
         "residual_behavior": { "$ref": "#/$defs/ResidualBehavior" },
         "case": {
           "type": "object",
-          "description": "Case/experiment node metadata (for A/B tests, feature flags, etc.)",
+          "description": "A/B test or experiment configuration. Required when type='case'. The case node routes 100% of incoming traffic across its variants according to variant weights. Each variant MUST have a corresponding outgoing edge with case_variant matching the variant name and case_id referencing this case.",
           "additionalProperties": false,
           "properties": {
             "uuid": { "$ref": "#/$defs/UUID" },
-            "id": { "$ref": "#/$defs/Id" },
+            "id": { 
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^[a-zA-Z0-9_-]*$",
+              "description": "Semantic identifier for this experiment (e.g., 'checkout-ab-test', 'cart-experiment-2025'). Strongly recommended - used by case edges and conditional_p references. If empty, system falls back to node.uuid."
+            },
             "status": {
               "type": "string",
               "enum": ["active", "paused", "completed"],
@@ -193,6 +218,7 @@
       "type": "object",
       "required": ["uuid", "from", "to"],
       "additionalProperties": false,
+      "$comment": "Case edges (from case nodes to variant destinations) have special semantics: (1) case_id should match the parent case node's case.id (preferred) or node.uuid (fallback if case.id is empty), (2) case_variant must match a variant name from case.variants, (3) p.mean should be 1.0 because traffic split is controlled by variant weights not edge probability, (4) there should be exactly one case edge per variant.",
       "properties": {
         "uuid": { "$ref": "#/$defs/UUID" },
         "id": { "$ref": "#/$defs/Id" },
@@ -226,7 +252,7 @@
         "n_query_overridden": { "type": "boolean", "default": false, "description": "If true, n_query was manually edited and should not be auto-regenerated" },
         "p": { 
           "$ref": "#/$defs/ProbabilityParam",
-          "$comment": "Base probability (fallback when no conditional probabilities match). For case edges, variant weight is used instead."
+          "description": "Transition probability P(to|from). For normal edges: probability of taking this path (outgoing edges from a node should sum to 1.0 or use residual_behavior). For case edges: should be 1.0 (traffic split controlled by variant weights)."
         },
         "conditional_p": {
           "type": "array",
@@ -243,11 +269,11 @@
         "case_variant": {
           "type": "string",
           "maxLength": 128,
-          "description": "Name of the variant this edge represents (for case edges only)"
+          "description": "For case edges only: the variant name this edge represents. Must exactly match one of the variant names in the parent case node's case.variants array."
         },
         "case_id": {
           "type": "string",
-          "description": "Reference to parent case node ID (for case edges only)"
+          "description": "For case edges only: identifies the parent case node. Preferred: use Node.case.id (the semantic experiment identifier). Fallback: if case.id is empty, the system uses Node.uuid. When creating graphs manually, set this to match either the case node's case.id (preferred) or its uuid."
         },
         "display": { 
           "$ref": "#/$defs/EdgeDisplay",
@@ -338,12 +364,12 @@
       "type": "string",
       "pattern": "^(visited|exclude|context|case)\\(",
       "$comment": "Condition uses query DSL constraint syntax: visited(A,B), exclude(C), context(device:mobile), case(test:treatment). Can be combined with dots: visited(A).context(mobile). Most specific condition wins at runtime.",
-      "description": "Constraint expression using query DSL syntax (constraint clauses only, not full query)",
+      "description": "Constraint expression using query DSL syntax. Supported functions: visited(node-id,...) - path must include these nodes; exclude(node-id,...) - path must not include these nodes; context(key:value) - context must match; case(case-id:variant) - must be in this experiment variant where case-id is the Node.case.id value (preferred) or node.uuid (fallback), and variant is the variant name from case.variants.",
       "examples": [
         "visited(promo-viewed,feature-demo)",
         "exclude(cart-abandoned)",
         "context(device:mobile)",
-        "case(test-2025:treatment)",
+        "case(checkout-experiment:treatment)",
         "visited(promo-viewed).context(device:mobile)"
       ]
     },
@@ -480,6 +506,11 @@
       "additionalProperties": false,
       "properties": {
         "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "name": { 
+          "type": "string", 
+          "maxLength": 256,
+          "description": "Human-readable graph name for display in UI"
+        },
         "created_at": { "type": "string", "description": "Creation timestamp (UK format or ISO)" },
         "updated_at": { "type": "string", "description": "Last update timestamp (UK format or ISO)" },
         "author": { "type": "string", "maxLength": 256 },

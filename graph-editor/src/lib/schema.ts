@@ -1,6 +1,6 @@
 import Ajv from 'ajv';
 
-const SCHEMA_URL = '/schemas/conversion-graph-1.0.0.json';
+const SCHEMA_URL = '/schemas/conversion-graph-1.1.0.json';
 
 // Cache the validator to prevent duplicate schema registration
 let cachedValidator: any = null;

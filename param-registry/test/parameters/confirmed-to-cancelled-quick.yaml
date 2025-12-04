@@ -1,0 +1,30 @@
+id: confirmed-to-cancelled-quick
+name: Cancellation Rate (Quick Cart)
+type: probability
+query: "from(order-confirmed).to(order-cancelled).visited(quick-cart)"
+query_overridden: false
+values:
+  - mean: 0.02
+    stdev: 0.008
+    n: 1000
+    k: 20
+    distribution: beta
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: amplitude
+      retrieved_at: "2025-04-01T08:00:00Z"
+      full_query: "from(order-confirmed).to(order-cancelled).visited(quick-cart).window(1-Jan-25:31-Mar-25)"
+metadata:
+  description: Order cancellation rate for customers who used the quick cart. Lower cancellation suggests streamlined experience reduces second-guessing.
+  tags:
+    - cancellation
+    - post-purchase
+    - ab-test
+    - quick-cart
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-04-01T08:00:00Z"
+  author: analytics-team
+  version: "1.0.0"
+  status: active
+

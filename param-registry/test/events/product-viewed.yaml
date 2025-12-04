@@ -1,0 +1,16 @@
+id: product_viewed
+name: Product Viewed
+description: User views a product detail page with specifications, pricing, and reviews
+category: page_view
+tags:
+  - pdp
+  - browse
+  - product
+provider_event_names:
+  amplitude: Product Viewed
+  segment: product_viewed
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  status: active
+

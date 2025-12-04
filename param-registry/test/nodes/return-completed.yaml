@@ -1,0 +1,15 @@
+id: return-completed
+name: Return Completed
+description: Customer returned item and refund was processed (terminal state)
+event_id: return-processed
+tags:
+  - return
+  - refund
+  - terminal
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  author: "commerce-team"
+  version: "1.0.0"
+  status: active
+

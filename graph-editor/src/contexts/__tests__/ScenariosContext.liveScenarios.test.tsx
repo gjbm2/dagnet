@@ -19,8 +19,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
+import 'fake-indexeddb/auto';
+import { IDBFactory } from 'fake-indexeddb';
 
-// Mock dependencies before importing the context
+// Mock external dependencies but use REAL IndexedDB (via fake-indexeddb)
 vi.mock('../../services/fetchDataService', () => ({
   fetchDataService: {
     checkDSLNeedsFetch: vi.fn().mockReturnValue({ needsFetch: false, items: [] }),
@@ -31,19 +33,7 @@ vi.mock('../../services/fetchDataService', () => ({
   },
 }));
 
-vi.mock('../../db/appDatabase', () => ({
-  db: {
-    scenarios: {
-      where: vi.fn().mockReturnValue({
-        equals: vi.fn().mockReturnValue({
-          toArray: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-      bulkPut: vi.fn().mockResolvedValue(undefined),
-      bulkDelete: vi.fn().mockResolvedValue(undefined),
-    },
-  },
-}));
+// DO NOT mock db/appDatabase - use real Dexie with fake-indexeddb
 
 vi.mock('../GraphStoreContext', () => ({
   useGraphStore: vi.fn().mockReturnValue({
@@ -80,8 +70,9 @@ vi.mock('../TabContext', () => ({
 // Import after mocks
 import { ScenariosProvider, useScenariosContext } from '../ScenariosContext';
 import { fetchDataService } from '../../services/fetchDataService';
+import { db } from '../../db/appDatabase';
 
-// Helper to create wrapper with provider
+// Helper to create wrapper with provider - fileId is required for context to work correctly
 function createWrapper(fileId = 'test-file') {
   return function Wrapper({ children }: { children: React.ReactNode }) {
     return (
@@ -92,13 +83,28 @@ function createWrapper(fileId = 'test-file') {
   };
 }
 
+// Helper to wait for context to be ready (DB load complete)
+async function waitForReady(result: { current: { scenariosReady: boolean } }) {
+  await waitFor(() => {
+    expect(result.current.scenariosReady).toBe(true);
+  });
+}
+
 describe('ScenariosContext - Live Scenarios', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Close existing DB connections and reset fake-indexeddb
+    await db.scenarios.clear().catch(() => {});
+    db.close();
+    globalThis.indexedDB = new IDBFactory();
+    // Re-open the database after resetting
+    await db.open();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    // Clean up after each test
+    await db.scenarios.clear().catch(() => {});
   });
 
   // ==========================================================================
@@ -230,6 +236,9 @@ describe('ScenariosContext - Live Scenarios', () => {
         wrapper: createWrapper(),
       });
 
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
       // Create a live scenario
       let scenario: any;
       await act(async () => {
@@ -245,8 +254,13 @@ describe('ScenariosContext - Live Scenarios', () => {
         result.current.setBaseDSL('window(1-Nov-25:7-Nov-25)');
       });
 
-      // Regenerate - pass scenario directly to avoid stale state lookup
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBeGreaterThan(0);
+      });
+
       await act(async () => {
+        // Pass scenario directly to avoid stale closure issue
         await result.current.regenerateScenario(scenario.id, scenario);
       });
 
@@ -259,6 +273,9 @@ describe('ScenariosContext - Live Scenarios', () => {
         wrapper: createWrapper(),
       });
 
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
       // Create a live scenario
       let scenario: any;
       await act(async () => {
@@ -269,20 +286,30 @@ describe('ScenariosContext - Live Scenarios', () => {
         );
       });
 
-      // Pass scenario directly to avoid stale state lookup
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBeGreaterThan(0);
+      });
+
       await act(async () => {
+        // Pass scenario directly
         await result.current.regenerateScenario(scenario.id, scenario);
       });
 
-      // The scenario was regenerated - verify via mock call
-      // (State updates in happy-dom are not reliable for checking updated values)
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalled();
+      // Wait for scenario to be updated with lastEffectiveDSL
+      await waitFor(() => {
+        const updated = result.current.scenarios.find(s => s.id === scenario.id);
+        expect(updated?.meta?.lastEffectiveDSL).toBeDefined();
+      });
     });
 
     it('should update lastRegeneratedAt timestamp after regeneration', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
       });
+
+      // Wait for DB load to complete first
+      await waitForReady(result);
 
       let scenario: any;
       await act(async () => {
@@ -292,15 +319,26 @@ describe('ScenariosContext - Live Scenarios', () => {
           'test-tab'
         );
       });
+
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBeGreaterThan(0);
+      });
+
+      const beforeRegen = new Date().toISOString();
       
-      // Pass scenario directly to avoid stale state lookup
       await act(async () => {
+        // Pass scenario directly
         await result.current.regenerateScenario(scenario.id, scenario);
       });
 
-      // The scenario was regenerated - verify via mock call
-      // (State updates in happy-dom are not reliable for checking updated values)
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalled();
+      // Wait for scenario to be updated with lastRegeneratedAt
+      await waitFor(() => {
+        const updated = result.current.scenarios.find(s => s.id === scenario.id);
+        expect(updated?.meta?.lastRegeneratedAt).toBeDefined();
+        expect(new Date(updated!.meta!.lastRegeneratedAt!).getTime())
+          .toBeGreaterThanOrEqual(new Date(beforeRegen).getTime());
+      });
     });
 
     it('should skip regeneration for non-live scenarios', async () => {
@@ -308,18 +346,26 @@ describe('ScenariosContext - Live Scenarios', () => {
         wrapper: createWrapper(),
       });
 
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
       // Create a blank (non-live) scenario
       let scenario: any;
       await act(async () => {
         scenario = await result.current.createBlank('test-tab');
       });
 
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBeGreaterThan(0);
+      });
+
       // Clear mocks to track new calls
       vi.clearAllMocks();
 
-      // Try to regenerate - should be skipped
+      // Try to regenerate - should be skipped (pass scenario directly)
       await act(async () => {
-        await result.current.regenerateScenario(scenario.id);
+        await result.current.regenerateScenario(scenario.id, scenario);
       });
 
       // fetchDataService should NOT have been called for non-live scenario
@@ -332,58 +378,107 @@ describe('ScenariosContext - Live Scenarios', () => {
   // ==========================================================================
 
   describe('regenerateAllLive', () => {
-    // Note: The batch preparation logic (DSL inheritance, ordering) is tested in 
-    // scenarioRegenerationService.test.ts > prepareScenariosForBatch
-    // These tests verify the context interface and React state integration
-    
-    it('should exist and accept baseDSLOverride and visibleOrder parameters', async () => {
+    it('should regenerate all live scenarios', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
       });
 
-      // Verify function signature
-      expect(result.current.regenerateAllLive).toBeDefined();
-      expect(typeof result.current.regenerateAllLive).toBe('function');
-      
-      // Should accept parameters without throwing
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
+      // Create multiple live scenarios
+      let scenario1: any, scenario2: any;
       await act(async () => {
-        await result.current.regenerateAllLive('window(1-Nov-25:7-Nov-25)', ['scenario-1']);
+        scenario1 = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+        scenario2 = await result.current.createLiveScenario('context(channel:meta)', undefined, 'test-tab');
       });
+
+      // Verify scenarios were added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(2);
+      });
+
+      vi.clearAllMocks();
+
+      // Regenerate all - pass visibleOrder with scenario IDs
+      await act(async () => {
+        await result.current.regenerateAllLive(undefined, [scenario1.id, scenario2.id]);
+      });
+
+      // Both scenarios should have been processed
+      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(2);
     });
 
-    it('should handle empty visibleOrder gracefully', async () => {
+    it('should NOT regenerate static scenarios', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
       });
 
-      // No scenarios in visibleOrder - should not throw
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
+      // Create one live and one static scenario
+      let liveScenario: any, staticScenario: any;
       await act(async () => {
-        await result.current.regenerateAllLive(undefined, []);
+        liveScenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+        staticScenario = await result.current.createBlank('test-tab'); // Static
       });
 
-      // No scenarios to process, so no fetch calls
-      expect(fetchDataService.checkDSLNeedsFetch).not.toHaveBeenCalled();
+      // Verify scenarios were added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(2);
+      });
+
+      vi.clearAllMocks();
+
+      // Pass both in visibleOrder - only live should be processed
+      await act(async () => {
+        await result.current.regenerateAllLive(undefined, [liveScenario.id, staticScenario.id]);
+      });
+
+      // Only live scenario should be processed
+      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('should not process scenarios not in visibleOrder', async () => {
+    it('should use baseDSLOverride when provided', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
       });
 
-      // Create a scenario (returned directly, not from state)
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
       let scenario: any;
       await act(async () => {
         scenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
       });
 
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(1);
+      });
+
       vi.clearAllMocks();
 
-      // Pass empty visibleOrder - scenario should NOT be processed
+      const newBaseDSL = 'window(15-Nov-25:21-Nov-25)';
+      await act(async () => {
+        await result.current.regenerateAllLive(newBaseDSL, [scenario.id]);
+      });
+
+      // Verify regeneration happened with the override
+      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalled();
+    });
+
+    it('should handle empty scenario list gracefully', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      // No scenarios created - should not throw
       await act(async () => {
         await result.current.regenerateAllLive(undefined, []);
       });
 
-      // No scenarios in visibleOrder, so no processing
       expect(fetchDataService.checkDSLNeedsFetch).not.toHaveBeenCalled();
     });
   });
@@ -393,53 +488,91 @@ describe('ScenariosContext - Live Scenarios', () => {
   // ==========================================================================
 
   describe('putToBase', () => {
-    // Note: The batch preparation logic (DSL inheritance, ordering) is tested in 
-    // scenarioRegenerationService.test.ts > prepareScenariosForBatch
-    // These tests verify the context state management
-    
     it('should set baseDSL from current graph DSL', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
       });
 
-      // Initially baseDSL should be empty or undefined
-      expect(result.current.baseDSL).toBeFalsy();
+      // Wait for DB load to complete first
+      await waitForReady(result);
 
+      // Create a live scenario first
+      let scenario: any;
       await act(async () => {
-        await result.current.putToBase([]);
+        scenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
       });
 
-      // baseDSL should now be set (from mocked currentDSL: 'window(1-Nov-25:7-Nov-25)')
-      expect(result.current.baseDSL).toBe('window(1-Nov-25:7-Nov-25)');
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(1);
+      });
+
+      await act(async () => {
+        await result.current.putToBase([scenario.id]);
+      });
+
+      // baseDSL should be set (from mocked currentDSL: 'window(1-Nov-25:7-Nov-25)')
+      await waitFor(() => {
+        expect(result.current.baseDSL).toBe('window(1-Nov-25:7-Nov-25)');
+      });
     });
 
-    it('should accept visibleOrder parameter', async () => {
+    it('should regenerate all live scenarios after setting baseDSL', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
       });
 
-      // Should accept visibleOrder without throwing
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
+      let scenario1: any, scenario2: any;
       await act(async () => {
-        await result.current.putToBase(['scenario-1', 'scenario-2']);
+        scenario1 = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+        scenario2 = await result.current.createLiveScenario('context(channel:meta)', undefined, 'test-tab');
       });
 
-      // baseDSL should be set
-      expect(result.current.baseDSL).toBe('window(1-Nov-25:7-Nov-25)');
-    });
-
-    it('should not process scenarios when visibleOrder is empty', async () => {
-      const { result } = renderHook(() => useScenariosContext(), {
-        wrapper: createWrapper(),
+      // Verify scenarios were added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(2);
       });
 
       vi.clearAllMocks();
 
       await act(async () => {
-        await result.current.putToBase([]);
+        await result.current.putToBase([scenario1.id, scenario2.id]);
       });
 
-      // No scenarios to process
-      expect(fetchDataService.checkDSLNeedsFetch).not.toHaveBeenCalled();
+      // Both live scenarios should be regenerated
+      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('should NOT regenerate static scenarios', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
+      let liveScenario: any, staticScenario: any;
+      await act(async () => {
+        liveScenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+        staticScenario = await result.current.createBlank('test-tab'); // Static
+      });
+
+      // Verify scenarios were added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(2);
+      });
+
+      vi.clearAllMocks();
+
+      await act(async () => {
+        await result.current.putToBase([liveScenario.id, staticScenario.id]);
+      });
+
+      // Only live scenario regenerated
+      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -448,44 +581,14 @@ describe('ScenariosContext - Live Scenarios', () => {
   // ==========================================================================
 
   describe('updateScenarioQueryDSL', () => {
-    // Note: The actual regeneration logic is tested in scenarioRegenerationService.test.ts
-    // These tests verify the context state management
-    
-    it('should exist and accept id and queryDSL parameters', async () => {
+    it('should update scenario queryDSL', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
       });
 
-      // Verify function signature
-      expect(result.current.updateScenarioQueryDSL).toBeDefined();
-      expect(typeof result.current.updateScenarioQueryDSL).toBe('function');
-      
-      // Should accept parameters without throwing (even for non-existent scenario)
-      await act(async () => {
-        await result.current.updateScenarioQueryDSL('non-existent', 'context(channel:google)');
-      });
-    });
+      // Wait for DB load to complete first
+      await waitForReady(result);
 
-    it('should not throw when scenario not found', async () => {
-      const { result } = renderHook(() => useScenariosContext(), {
-        wrapper: createWrapper(),
-      });
-
-      // Should not throw
-      await act(async () => {
-        await result.current.updateScenarioQueryDSL('non-existent-id', 'context(channel:google)');
-      });
-      
-      // No error, no fetch
-      expect(fetchDataService.checkDSLNeedsFetch).not.toHaveBeenCalled();
-    });
-
-    it('should not trigger regeneration when DSL is empty', async () => {
-      const { result } = renderHook(() => useScenariosContext(), {
-        wrapper: createWrapper(),
-      });
-
-      // Create scenario
       let scenario: any;
       await act(async () => {
         scenario = await result.current.createLiveScenario(
@@ -495,15 +598,86 @@ describe('ScenariosContext - Live Scenarios', () => {
         );
       });
 
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(1);
+      });
+
+      const newDSL = 'context(channel:meta)';
+      await act(async () => {
+        await result.current.updateScenarioQueryDSL(scenario.id, newDSL);
+      });
+
+      // Wait for queryDSL to be updated
+      await waitFor(() => {
+        const updatedScenario = result.current.scenarios.find(s => s.id === scenario.id);
+        expect(updatedScenario?.meta?.queryDSL).toBe(newDSL);
+      });
+    });
+
+    it('should trigger regeneration after DSL update', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
+      let scenario: any;
+      await act(async () => {
+        scenario = await result.current.createLiveScenario(
+          'context(channel:google)',
+          undefined,
+          'test-tab'
+        );
+      });
+
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(1);
+      });
+
       vi.clearAllMocks();
 
-      // Clear DSL - should not trigger regeneration
+      await act(async () => {
+        await result.current.updateScenarioQueryDSL(scenario.id, 'context(channel:meta)');
+      });
+
+      // Regeneration should have been triggered
+      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalled();
+    });
+
+    it('should set isLive=false if DSL is cleared', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
+      let scenario: any;
+      await act(async () => {
+        scenario = await result.current.createLiveScenario(
+          'context(channel:google)',
+          undefined,
+          'test-tab'
+        );
+      });
+
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(1);
+      });
+
       await act(async () => {
         await result.current.updateScenarioQueryDSL(scenario.id, '');
       });
 
-      // No regeneration for empty DSL
-      expect(fetchDataService.checkDSLNeedsFetch).not.toHaveBeenCalled();
+      // Wait for isLive to be updated
+      await waitFor(() => {
+        const updatedScenario = result.current.scenarios.find(s => s.id === scenario.id);
+        expect(updatedScenario?.meta?.isLive).toBe(false);
+      });
     });
   });
 });

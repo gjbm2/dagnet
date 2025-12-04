@@ -1,8 +1,8 @@
 """
 Graph data type definitions using Pydantic
 
-Generated from: conversion-graph-1.0.0.json
-Source: /home/reg/dev/dagnet/graph-editor/public/schemas/schema/conversion-graph-1.0.0.json
+Generated from: conversion-graph-1.1.0.json
+Source: /home/gjbm2/dev/dagnet/graph-editor/public/schemas/conversion-graph-1.1.0.json
 
 These models match the official JSON schema exactly for validation
 of all Python graph operations.
@@ -138,7 +138,7 @@ class Layout(BaseModel):
     y: Optional[float] = None
     rank: Optional[int] = Field(None, ge=0)
     group: Optional[str] = Field(None, max_length=128)
-    color: Optional[str] = Field(None, pattern=r"^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
+    colour: Optional[str] = Field(None, pattern=r"^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
 
 
 class Node(BaseModel):
@@ -147,6 +147,7 @@ class Node(BaseModel):
     """
     uuid: str
     id: str = Field("", max_length=128)  # Allow empty ID (not yet assigned)
+    type: Optional[Literal["normal", "case"]] = Field("normal", description="Node type. Use 'case' for A/B test nodes.")
     label: Optional[str] = Field(None, max_length=256)
     label_overridden: bool = Field(False, description="If true, label was manually edited")
     description: Optional[str] = None
@@ -216,6 +217,7 @@ class Policies(BaseModel):
 class Metadata(BaseModel):
     """Graph metadata."""
     version: str = Field(..., pattern=r"^\d+\.\d+\.\d+$")
+    name: Optional[str] = Field(None, max_length=256, description="Human-readable graph name for display in UI")
     created_at: str = Field(..., description="Creation timestamp (UK format or ISO)")
     updated_at: Optional[str] = Field(None, description="Last update timestamp (UK format or ISO)")
     author: Optional[str] = Field(None, max_length=256)

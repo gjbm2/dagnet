@@ -1,0 +1,30 @@
+id: checkout-to-payment-classic
+name: Checkout to Payment Rate (Classic Cart)
+type: probability
+query: "from(checkout).to(payment).case(cart-experience-test:classic)"
+query_overridden: false
+values:
+  - mean: 0.72
+    stdev: 0.04
+    n: 1000
+    k: 720
+    distribution: beta
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: amplitude
+      retrieved_at: "2025-04-01T08:00:00Z"
+      full_query: "from(checkout).to(payment).case(cart-experience-test:classic).window(1-Jan-25:31-Mar-25)"
+metadata:
+  description: Checkout-to-payment conversion rate for users in the classic cart variant of the A/B test. Lower than quick cart due to multi-step friction.
+  tags:
+    - conversion
+    - checkout
+    - ab-test
+    - classic-cart
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-04-01T08:00:00Z"
+  author: analytics-team
+  version: "1.0.0"
+  status: active
+

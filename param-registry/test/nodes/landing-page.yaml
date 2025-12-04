@@ -1,0 +1,13 @@
+id: landing-page
+name: Landing Page
+description: Primary web entry point via marketing campaigns, organic search, or direct traffic. Users arrive here from various channels before browsing products.
+event_id: page_view_landing
+tags:
+  - entry
+  - web
+  - marketing
+metadata:
+  created_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-01-01T00:00:00Z"
+  version: "1.0.0"
+  status: active

@@ -809,7 +809,11 @@ export default function PropertiesPanel({
       if (!next.edges[edgeIndex].conditional_p![condIndex].p) {
         next.edges[edgeIndex].conditional_p![condIndex].p = {};
       }
-      Object.assign(next.edges[edgeIndex].conditional_p![condIndex].p!, changes);
+      
+      // Extract _noHistory flag before applying changes (matches updateEdgeP pattern)
+      const { _noHistory, ...actualChanges } = changes;
+      
+      Object.assign(next.edges[edgeIndex].conditional_p![condIndex].p!, actualChanges);
       
       // Update local state to reflect the change
       const updatedConditionalP = [...(next.edges[edgeIndex].conditional_p || [])];
@@ -819,7 +823,11 @@ export default function PropertiesPanel({
         next.metadata.updated_at = new Date().toISOString();
       }
       setGraph(next);
-      saveHistoryState(`Update conditional probability parameter`, undefined, selectedEdgeId || undefined);
+      
+      // Only save history if _noHistory is not set (for slider dragging, we skip history)
+      if (!_noHistory) {
+        saveHistoryState(`Update conditional probability parameter`, undefined, selectedEdgeId || undefined);
+      }
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 

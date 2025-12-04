@@ -389,6 +389,65 @@ function AppShellContent() {
     }
   };
 
+  /**
+   * Initialize with sample data from the public dagnet repo (no authentication required)
+   * This allows users to explore the app with sample conversion graphs without needing credentials
+   */
+  const handleUseSampleData = async () => {
+    setIsInitSubmitting(true);
+    
+    try {
+      // Sample credentials for the public dagnet repo - no token needed for read access
+      const sampleCredentials = {
+        version: '1.0.0',
+        git: [{
+          name: 'dagnet',
+          isDefault: true,
+          owner: 'gjbm2',
+          // No token - public repo allows unauthenticated read access
+          // Users will be in read-only mode (cannot push/commit)
+          basePath: 'param-registry/test',
+          graphsPath: 'graphs',
+          paramsPath: 'parameters',
+          contextsPath: 'contexts',
+          casesPath: 'cases',
+          nodesPath: 'nodes',
+          eventsPath: 'events',
+        }]
+      };
+
+      // Create or update credentials file in the workspace
+      const credentialsFileId = 'credentials-credentials';
+      const existingFile = fileRegistry.getFile(credentialsFileId);
+      const source = existingFile?.source || {
+        repository: 'local',
+        path: 'credentials.yaml',
+        branch: 'main',
+      };
+
+      if (!existingFile) {
+        await fileRegistry.getOrCreateFile(credentialsFileId, 'credentials', source, sampleCredentials);
+      } else {
+        existingFile.data = sampleCredentials;
+        existingFile.originalData = structuredClone(sampleCredentials);
+      }
+
+      await fileRegistry.markSaved(credentialsFileId);
+
+      // Reload workspace with new credentials
+      await navOperations.reloadCredentials();
+
+      setHasUserCredentials(true);
+
+      toast.success('Sample data loaded (read-only mode - no GitHub token)');
+    } catch (error) {
+      console.error('Failed to load sample data', error);
+      toast.error('Failed to load sample data: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setIsInitSubmitting(false);
+    }
+  };
+
   // Tab context menu state
   const [contextMenu, setContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   
@@ -1504,28 +1563,56 @@ function AppShellContent() {
                 <p style={{ fontSize: '10px', color: '#ccc', marginTop: '8px' }}>
                   v{import.meta.env.VITE_APP_VERSION || '0.91b'}
                 </p>
-                {/* Init-from-secret affordance when no user credentials are configured */}
+                {/* Initialization options when no user credentials are configured */}
                 {hasUserCredentials === false && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setInitSecret('');
-                      setInitError(null);
-                      setShowInitCredsModal(true);
-                    }}
-                    style={{
-                      marginTop: '16px',
-                      padding: '6px 12px',
-                      fontSize: '12px',
-                      borderRadius: 4,
-                      border: '1px solid #d1d5db',
-                      background: '#ffffff',
-                      color: '#374151',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Initialize credentials from server secret…
-                  </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' }}>
+                    {/* Use sample data - no authentication needed */}
+                    <button
+                      type="button"
+                      onClick={handleUseSampleData}
+                      disabled={isInitSubmitting}
+                      style={{
+                        padding: '8px 16px',
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        borderRadius: 4,
+                        border: '1px solid #3b82f6',
+                        background: '#3b82f6',
+                        color: '#ffffff',
+                        cursor: isInitSubmitting ? 'wait' : 'pointer',
+                        opacity: isInitSubmitting ? 0.7 : 1,
+                      }}
+                    >
+                      {isInitSubmitting ? 'Loading…' : 'Use sample data'}
+                    </button>
+                    <span style={{ fontSize: '10px', color: '#999', textAlign: 'center' }}>
+                      Explore example conversion graphs (read-only)
+                    </span>
+                    
+                    {/* Init from server secret - for authenticated access */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInitSecret('');
+                        setInitError(null);
+                        setShowInitCredsModal(true);
+                      }}
+                      disabled={isInitSubmitting}
+                      style={{
+                        marginTop: '8px',
+                        padding: '6px 12px',
+                        fontSize: '12px',
+                        borderRadius: 4,
+                        border: '1px solid #d1d5db',
+                        background: '#ffffff',
+                        color: '#374151',
+                        cursor: isInitSubmitting ? 'wait' : 'pointer',
+                        opacity: isInitSubmitting ? 0.7 : 1,
+                      }}
+                    >
+                      Initialize credentials from server secret…
+                    </button>
+                  </div>
                 )}
               </div>
             )}
