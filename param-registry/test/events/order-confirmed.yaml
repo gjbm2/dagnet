@@ -1,4 +1,4 @@
-id: order_confirmed
+id: order-confirmed
 name: Order Confirmed
 description: Payment successful and order placed in fulfilment queue
 category: milestone

@@ -1,54 +1,54 @@
 events:
-  - id: page_view_landing
+  - id: page-view-landing
     name: Landing Page View
     description: User views the landing page
     category: page_view
     file_path: events/page-view-landing.yaml
     tags: [entry, web, marketing]
     
-  - id: product_viewed
+  - id: product-viewed
     name: Product Viewed
     description: User views a product detail page
     category: page_view
     file_path: events/product-viewed.yaml
     tags: [product, web]
     
-  - id: add_to_cart
+  - id: add-to-cart
     name: Add to Cart
     description: User adds item to shopping cart
     category: user_action
     file_path: events/add-to-cart.yaml
     tags: [cart, ecommerce]
     
-  - id: checkout_started
+  - id: checkout-started
     name: Checkout Started
     description: User initiates checkout process
     category: user_action
     file_path: events/checkout-started.yaml
     tags: [checkout, conversion]
     
-  - id: payment_submitted
+  - id: payment-submitted
     name: Payment Submitted
     description: User submits payment details
     category: user_action
     file_path: events/payment-submitted.yaml
     tags: [payment, conversion]
     
-  - id: order_confirmed
+  - id: order-confirmed
     name: Order Confirmed
     description: Order is confirmed after successful payment
     category: milestone
     file_path: events/order-confirmed.yaml
     tags: [order, conversion]
     
-  - id: household_delegated
+  - id: household-delegated
     name: Household Delegated
     description: Legacy event for testing
     category: user_action
     file_path: events/household-delegated.yaml
     tags: [legacy]
     
-  - id: saw_wa_details_page
+  - id: saw-wa-details-page
     name: Saw WA Details Page
     description: Legacy event for testing
     category: page_view
@@ -59,4 +59,3 @@ metadata:
   version: "1.0.0"
   updated_at: "2025-12-04T00:00:00Z"
   total_events: 8
-
