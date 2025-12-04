@@ -1,27 +1,62 @@
-# Events Index
-# Created: 2025-11-10
-# Schema: events-index-schema.yaml
-
-# Event registry for tracking user actions and behaviors
-# Each event can be connected to nodes in the conversion graph
-
 events:
-  - id: household-created
-    name: Household Created
-    event_type: conversion
-    file_path: events/household-created.yaml
-    tags: ["onboarding", "account", "conversion"]
+  - id: page_view_landing
+    name: Landing Page View
+    description: User views the landing page
+    category: page_view
+    file_path: events/page-view-landing.yaml
+    tags: [entry, web, marketing]
     
-  - id: delegation-completed
-    name: Delegation Completed
-    event_type: user_action
-    file_path: events/delegation-completed.yaml
-    tags: ["onboarding", "delegation", "service-level"]
+  - id: product_viewed
+    name: Product Viewed
+    description: User views a product detail page
+    category: page_view
+    file_path: events/product-viewed.yaml
+    tags: [product, web]
+    
+  - id: add_to_cart
+    name: Add to Cart
+    description: User adds item to shopping cart
+    category: user_action
+    file_path: events/add-to-cart.yaml
+    tags: [cart, ecommerce]
+    
+  - id: checkout_started
+    name: Checkout Started
+    description: User initiates checkout process
+    category: user_action
+    file_path: events/checkout-started.yaml
+    tags: [checkout, conversion]
+    
+  - id: payment_submitted
+    name: Payment Submitted
+    description: User submits payment details
+    category: user_action
+    file_path: events/payment-submitted.yaml
+    tags: [payment, conversion]
+    
+  - id: order_confirmed
+    name: Order Confirmed
+    description: Order is confirmed after successful payment
+    category: milestone
+    file_path: events/order-confirmed.yaml
+    tags: [order, conversion]
+    
+  - id: household_delegated
+    name: Household Delegated
+    description: Legacy event for testing
+    category: user_action
+    file_path: events/household-delegated.yaml
+    tags: [legacy]
+    
+  - id: saw_wa_details_page
+    name: Saw WA Details Page
+    description: Legacy event for testing
+    category: page_view
+    file_path: events/saw-wa-details-page.yaml
+    tags: [legacy]
 
-# Categories for organizing events
-categories:
-  - onboarding
-  - account
-  - delegation
-  - service-level
+metadata:
+  version: "1.0.0"
+  updated_at: "2025-12-04T00:00:00Z"
+  total_events: 8
 
