@@ -117,6 +117,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       const result = await credentialsManager.loadCredentials();
 
       if (result.success && result.credentials) {
+        // CRITICAL: Configure gitService with new credentials BEFORE making any API calls
+        // This ensures the Octokit instance is initialized with the correct token
+        const { gitService } = await import('../services/gitService');
+        gitService.setCredentials(result.credentials);
+        
         const availableRepos = result.credentials.git.map(repo => repo.name);
 
         // Determine default repo (prefer isDefault flag, fallback to defaultGitRepo or first repo)
