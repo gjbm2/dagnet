@@ -22,7 +22,6 @@ import { db } from '../db/appDatabase';
 import { ObjectType } from '../types';
 import { LogFileService } from './logFileService';
 import type { TabOperations } from '../types';
-import { sessionLogService } from './sessionLogService';
 import { credentialsManager } from '../lib/credentials';
 
 type IssueSeverity = 'error' | 'warning' | 'info';
@@ -111,7 +110,6 @@ export class IntegrityCheckService {
     const issues: IntegrityIssue[] = [];
     const startTime = new Date();
     const workspaceInfo = workspace ? `${workspace.repository}/${workspace.branch}` : 'all workspaces';
-    sessionLogService.info('file', 'INTEGRITY_CHECK', `Starting deep integrity check for ${workspaceInfo}`);
     
     try {
       // Get files from IndexedDB - filter by workspace if provided
@@ -447,11 +445,6 @@ export class IntegrityCheckService {
         await LogFileService.createLogFile(logContent, tabOperations, 'Integrity Check Report');
       }
       
-      sessionLogService.success('file', 'INTEGRITY_CHECK_COMPLETE',
-        `Deep integrity check complete: ${summary.errors} errors, ${summary.warnings} warnings, ${summary.info} info`,
-        undefined,
-        { totalFiles: allFiles.length, ...summary });
-      
       return {
         success: summary.errors === 0,
         totalFiles: allFiles.length,
@@ -462,8 +455,6 @@ export class IntegrityCheckService {
       };
       
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      sessionLogService.error('file', 'INTEGRITY_CHECK_ERROR', `Integrity check failed: ${message}`);
       throw error;
     }
   }
