@@ -133,6 +133,78 @@ Segment definition example
     }
 ]
 JSON
+
+### Inline Behavioral Cohort Segments (UNDOCUMENTED)
+
+**Discovered 4-Dec-25**: The segment parameter also supports inline behavioral cohort definitions for filtering users based on whether they performed specific events. This is NOT documented in official Amplitude docs but works reliably.
+
+#### Format for "who did" (include users who performed event)
+```json
+{
+  "type": "event",
+  "event_type": "EVENT_NAME",
+  "filters": [/* optional event property filters */],
+  "op": ">=",
+  "value": 1,
+  "time_type": "rolling",
+  "time_value": 366
+}
+```
+
+#### Format for "who did not" (exclude users who performed event)
+```json
+{
+  "type": "event",
+  "event_type": "EVENT_NAME",
+  "filters": [/* optional event property filters */],
+  "op": "=",
+  "value": 0,
+  "time_type": "rolling",
+  "time_value": 366
+}
+```
+
+#### Key fields:
+| Field | Description |
+|-------|-------------|
+| type | Must be `"event"` for behavioral filters |
+| event_type | The event name to filter on |
+| filters | Optional array of event property filters (same format as funnel event filters) |
+| op | Comparison operator: `">="` for include, `"="` for exclude |
+| value | Count threshold: `1` for include (did at least once), `0` for exclude (never did) |
+| time_type | `"rolling"` for relative time window |
+| time_value | Number of days to look back |
+
+#### Example: Funnel with behavioral segment filter
+```bash
+curl -G -H "Authorization: Basic $AUTH" \
+  --data-urlencode 'e={"event_type":"Step1"}' \
+  --data-urlencode 'e={"event_type":"Step2"}' \
+  --data-urlencode 'start=20251109' \
+  --data-urlencode 'end=20251115' \
+  --data-urlencode 's=[{"type":"event","event_type":"PriorEvent","filters":[{"subprop_type":"event","subprop_key":"context","subprop_op":"is","subprop_value":["ONBOARDING"]}],"op":">=","value":1,"time_type":"rolling","time_value":366}]' \
+  "https://amplitude.com/api/2/funnels"
+```
+
+#### Multiple conditions (AND logic)
+Multiple behavioral filters in the segment array combine with AND logic:
+```json
+s=[
+  {"type":"event","event_type":"EventA","op":">=","value":1,"time_type":"rolling","time_value":366},
+  {"type":"event","event_type":"EventB","op":"=","value":0,"time_type":"rolling","time_value":366}
+]
+```
+This filters for users who DID EventA AND did NOT do EventB.
+
+#### Combining with cohort and property filters
+Behavioral filters can be combined with standard segment filters:
+```json
+s=[
+  {"prop":"userdata_cohort","op":"is not","values":["test_cohort_id"]},
+  {"type":"event","event_type":"TargetEvent","op":">=","value":1,"time_type":"rolling","time_value":366}
+]
+```
+
 Export data tables
 You can use the Dashboard REST API to export data from data tables. Just query any Data Table chart type, and don't include start or end dates in the query.
 
