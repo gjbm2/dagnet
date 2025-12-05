@@ -1,7 +1,7 @@
 # Native Segment Filters for visited() and minus() - Implementation Plan
 
 **Date**: 4-Dec-25  
-**Status**: Ready for implementation  
+**Status**: Implementation COMPLETE - ready for testing  
 **Priority**: High - significant simplification opportunity
 
 ## Discovery Summary
@@ -42,7 +42,7 @@ s=[
 
 ## Implementation Phases
 
-### Phase 1: Update Amplitude Adapter (connections.yaml)
+### Phase 1: Update Amplitude Adapter (connections.yaml) ✅ COMPLETE
 
 **File**: `graph-editor/public/defaults/connections.yaml`
 
@@ -91,7 +91,7 @@ if (queryPayload.excludes && queryPayload.excludes.length > 0) {
 }
 ```
 
-### Phase 2: Simplify dataOperationsService.ts
+### Phase 2: Mark Legacy Code DEPRECATED in dataOperationsService.ts ✅ COMPLETE
 
 **File**: `graph-editor/src/services/dataOperationsService.ts`
 
@@ -139,15 +139,15 @@ Mark the following code blocks as **DEPRECATED** with clear comments:
 // ═══════════════════════════════════════════════════════════════════════
 ```
 
-### Phase 3: Update buildDslFromEdge.ts
+### Phase 3: Update buildDslFromEdge.ts ✅ COMPLETE
 
-**File**: `graph-editor/src/services/buildDslFromEdge.ts`
+**File**: `graph-editor/src/lib/das/buildDslFromEdge.ts`
 
 The `visited_upstream` and `excludes` arrays should still be populated from the query DSL, but they will now be consumed by the adapter's segment filter construction rather than by super-funnel logic.
 
 No changes needed to the DSL parsing - only ensure the fields are passed through to the adapter.
 
-### Phase 4: Remove Conditional Logic Bypass
+### Phase 4: Mark Conditional Logic DEPRECATED
 
 **File**: `graph-editor/src/services/dataOperationsService.ts`
 

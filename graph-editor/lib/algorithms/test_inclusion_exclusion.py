@@ -1,5 +1,18 @@
 """
 Pytest suite for MSMDC inclusion-exclusion algorithm validation
+
+═══════════════════════════════════════════════════════════════════════════════
+DEPRECATED: 4-Dec-25
+
+These tests validate the inclusion-exclusion (minus/plus) algorithm which was
+used when Amplitude didn't support native excludes.
+
+As of 4-Dec-25, Amplitude supports native exclude via segment filters.
+This compilation algorithm will NOT be triggered for Amplitude queries.
+
+Tests remain valid for providers that don't support native excludes.
+Target deletion: After 2 weeks of production validation.
+═══════════════════════════════════════════════════════════════════════════════
 """
 
 import pytest

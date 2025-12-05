@@ -12,7 +12,7 @@ connections:
     credsRef: amplitude
     # Provider capabilities for MSMDC query generation
     capabilities:
-      supports_native_exclude: false  # Amplitude requires minus()/plus() for exclusion logic
+      supports_native_exclude: true  # Native segment filters support exclude() via inline behavioral cohorts
       supports_visited: true
       supports_ordered: true
       max_funnel_length: 10
@@ -89,27 +89,105 @@ connections:
           // Build full funnel including visited events
           const events = [];
           
-          // WARN: Check for exclude() - NOT SUPPORTED by Amplitude API
+          // Build segmentation parameter for cohort exclusions AND case filtering
+          // Amplitude API expects: s=[{"prop":"...", "op":"...", "values":[...]}]
+          // NOTE: We build segments FIRST so we can clear visited_upstream/excludes
+          // before the funnel building code runs
+          const segments = [];
+          
+          // Add cohort exclusions (if any)
+          if (connection.excluded_cohorts && connection.excluded_cohorts.length > 0) {
+            segments.push(...connection.excluded_cohorts.map(cohortId => ({
+              prop: "userdata_cohort",
+              op: "is not",  // "is not" for exclude
+              values: [cohortId]
+            })));
+          }
+          
+          // ═══════════════════════════════════════════════════════════════════════
+          // NATIVE SEGMENT FILTERS for visited() and minus()/exclude()
+          // Discovered 4-Dec-25: Amplitude supports inline behavioral cohorts in segments
+          // This replaces the super-funnel approach with simpler, more accurate segment filters
+          // CRITICAL: This MUST run BEFORE funnel building to clear visited_upstream
+          // ═══════════════════════════════════════════════════════════════════════
+          
+          // Native visited() support - add segment filters for upstream visited nodes
+          if (queryPayload.visited_upstream && queryPayload.visited_upstream.length > 0) {
+            console.log('[Amplitude Adapter] Using NATIVE segment filters for visited_upstream:', queryPayload.visited_upstream);
+            for (const eventId of queryPayload.visited_upstream) {
+              const eventDef = buildEventStepFromId(eventId);
+              segments.push({
+                type: "event",
+                event_type: eventDef.event_type,
+                filters: eventDef.filters || [],
+                op: ">=",
+                value: 1,
+                time_type: "rolling",
+                time_value: 366  // Look back ~1 year
+              });
+            }
+            // Clear visited_upstream so we don't ALSO build a super-funnel (DEPRECATED)
+            queryPayload.visited_upstream = [];
+          }
+          
+          // Native minus()/exclude() support - add segment filters for excluded nodes
+          if (queryPayload.excludes && queryPayload.excludes.length > 0) {
+            console.log('[Amplitude Adapter] Using NATIVE segment filters for excludes:', queryPayload.excludes);
+            for (const eventId of queryPayload.excludes) {
+              const eventDef = buildEventStepFromId(eventId);
+              segments.push({
+                type: "event",
+                event_type: eventDef.event_type,
+                filters: eventDef.filters || [],
+                op: "=",
+                value: 0,
+                time_type: "rolling",
+                time_value: 366
+              });
+            }
+            // Clear excludes so downstream code doesn't try composite query handling (DEPRECATED)
+            queryPayload.excludes = [];
+          }
+          
+          // Legacy exclude() field (if used) - now supported via native segment filters
           if (queryPayload.exclude && queryPayload.exclude.length > 0) {
-            console.warn('[Amplitude Adapter] WARNING: exclude() is not supported by Amplitude API!');
-            console.warn('[Amplitude Adapter] Excluded events are being IGNORED:', queryPayload.exclude);
-            console.warn('[Amplitude Adapter] To fix: use minus() instead of exclude() in your query');
-            console.warn('[Amplitude Adapter] Example: from(A).to(C).minus(from(A).to(C).visited(B))');
+            console.log('[Amplitude Adapter] Using NATIVE segment filters for exclude:', queryPayload.exclude);
+            for (const eventId of queryPayload.exclude) {
+              const eventDef = buildEventStepFromId(eventId);
+              segments.push({
+                type: "event",
+                event_type: eventDef.event_type,
+                filters: eventDef.filters || [],
+                op: "=",
+                value: 0,
+                time_type: "rolling",
+                time_value: 366
+              });
+            }
+            queryPayload.exclude = [];
           }
           
           // Build funnel with proper ordering:
-          // Super-funnel approach for upstream visited nodes:
+          // ═══════════════════════════════════════════════════════════════════════
+          // DEPRECATED: Super-funnel approach (4-Dec-25)
+          // 
+          // The super-funnel approach prepended upstream visited nodes to the funnel:
           //   visited_upstream → from → visited (between) → to
-          // This ensures temporal ordering: upstream events must occur BEFORE 'from'
-          // We then extract n/k for the from→to hop (ignoring upstream prefix)
+          // 
+          // This is now BYPASSED because visited_upstream is cleared by native segment
+          // filters ABOVE. The code remains for non-Amplitude providers or fallback.
+          // 
+          // Target deletion: After 2 weeks of production validation.
+          // ═══════════════════════════════════════════════════════════════════════
           
           // Track the index where 'from' will be placed (for n/k extraction)
           let fromStepIndex = 0;
           
           // 1. Add upstream visited events FIRST (events that must happen BEFORE 'from')
+          // NOTE: This will NOT execute for Amplitude - visited_upstream is cleared by segment filters ABOVE
           // queryPayload.visited_upstream contains event_ids
           if (queryPayload.visited_upstream && queryPayload.visited_upstream.length > 0) {
-            console.log('[Amplitude Adapter] Building SUPER-FUNNEL with upstream visited nodes:', queryPayload.visited_upstream);
+            console.log('[Amplitude Adapter] DEPRECATED: Building SUPER-FUNNEL with upstream visited nodes:', queryPayload.visited_upstream);
             events.push(...queryPayload.visited_upstream.map(eventId => buildEventStepFromId(eventId)));
             fromStepIndex = queryPayload.visited_upstream.length;
           }
@@ -131,19 +209,6 @@ connections:
           // CRITICAL: Use window variable from execution context (not queryPayload.window)!
           const startDate = formatDate(window.start);
           const endDate = formatDate(window.end);
-          
-          // Build segmentation parameter for cohort exclusions AND case filtering
-          // Amplitude API expects: s=[{"prop":"...", "op":"...", "values":[...]}]
-          const segments = [];
-          
-          // Add cohort exclusions (if any)
-          if (connection.excluded_cohorts && connection.excluded_cohorts.length > 0) {
-            segments.push(...connection.excluded_cohorts.map(cohortId => ({
-              prop: "userdata_cohort",
-              op: "is not",  // "is not" for exclude
-              values: [cohortId]
-            })));
-          }
           
           // Add case filtering (if any)
           // Pattern: case(coffee-promotion:treatment) 

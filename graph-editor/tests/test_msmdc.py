@@ -1,6 +1,18 @@
 """
 Tests for MSMDC (Minimal Set of Maximally Discriminating Constraints)
 
+═══════════════════════════════════════════════════════════════════════════════
+NOTE: As of 4-Dec-25, Amplitude supports native exclude via segment filters.
+
+The MSMDC algorithm still generates queries, but for Amplitude the exclude()
+terms are now passed through natively rather than compiled to minus()/plus().
+
+Tests that check for minus()/plus() output with Amplitude are testing the
+DEPRECATED code path (which remains for non-Amplitude providers).
+
+Target deletion of deprecated tests: After 2 weeks of production validation.
+═══════════════════════════════════════════════════════════════════════════════
+
 Tests the algorithm for generating optimal data retrieval queries for external sources.
 Based on: query-algorithms-white-paper.md
 """

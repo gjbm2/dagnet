@@ -1,6 +1,24 @@
 /**
  * Composite Query Executor
  * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * DEPRECATED: 4-Dec-25
+ * 
+ * This file implements inclusion-exclusion via multiple parallel sub-queries
+ * with weighted coefficients. This was required because we believed Amplitude
+ * didn't support native exclude/include filters.
+ * 
+ * REPLACEMENT: Native segment filters in Amplitude adapter (connections.yaml)
+ * The Amplitude API supports inline behavioral cohort definitions in the `s=`
+ * parameter with `op: ">="` for include and `op: "="` for exclude.
+ * 
+ * This code path is now bypassed by the adapter clearing visited_upstream/excludes
+ * arrays after converting them to native segment filters.
+ * 
+ * DO NOT DELETE until native segment filters are confirmed working in production.
+ * Target deletion: After 2 weeks of production validation.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
  * Executes inclusion-exclusion queries by running multiple sub-queries in parallel
  * and combining results with weighted coefficients.
  */

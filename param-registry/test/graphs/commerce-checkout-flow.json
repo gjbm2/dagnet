@@ -1,0 +1,209 @@
+{
+  "metadata": {
+    "name": "Commerce Checkout Flow",
+    "description": "E-commerce checkout funnel with web and phone channels, including post-purchase outcomes",
+    "version": "1.0.0",
+    "author": "commerce-team",
+    "created_at": "2025-01-01T00:00:00Z",
+    "updated_at": "2025-01-01T00:00:00Z"
+  },
+  "policies": {
+    "default_outcome": "abandon",
+    "overflow_policy": "error",
+    "free_edge_policy": "complement"
+  },
+  "nodes": [
+    {
+      "id": "node-1",
+      "node_id": "landing-page",
+      "label": "Landing Page",
+      "x": 100,
+      "y": 300
+    },
+    {
+      "id": "node-2",
+      "node_id": "product-view",
+      "label": "Product View",
+      "x": 250,
+      "y": 300
+    },
+    {
+      "id": "node-3",
+      "node_id": "add-to-cart",
+      "label": "Add to Cart",
+      "x": 400,
+      "y": 300
+    },
+    {
+      "id": "node-4",
+      "node_id": "checkout",
+      "label": "Checkout",
+      "x": 550,
+      "y": 300
+    },
+    {
+      "id": "node-5",
+      "node_id": "phone-order",
+      "label": "Phone Order",
+      "x": 550,
+      "y": 150
+    },
+    {
+      "id": "node-6",
+      "node_id": "payment",
+      "label": "Payment",
+      "x": 700,
+      "y": 250
+    },
+    {
+      "id": "node-7",
+      "node_id": "payment-failed",
+      "label": "Payment Failed",
+      "x": 850,
+      "y": 100
+    },
+    {
+      "id": "node-8",
+      "node_id": "order-confirmed",
+      "label": "Order Confirmed",
+      "x": 850,
+      "y": 250
+    },
+    {
+      "id": "node-9",
+      "node_id": "order-cancelled",
+      "label": "Order Cancelled",
+      "x": 1000,
+      "y": 100
+    },
+    {
+      "id": "node-10",
+      "node_id": "order-shipped",
+      "label": "Order Shipped",
+      "x": 1000,
+      "y": 250
+    },
+    {
+      "id": "node-11",
+      "node_id": "delivery-failed",
+      "label": "Delivery Failed",
+      "x": 1150,
+      "y": 100
+    },
+    {
+      "id": "node-12",
+      "node_id": "order-delivered",
+      "label": "Order Delivered",
+      "x": 1150,
+      "y": 250
+    },
+    {
+      "id": "node-13",
+      "node_id": "order-complete",
+      "label": "Order Complete",
+      "x": 1300,
+      "y": 200
+    },
+    {
+      "id": "node-14",
+      "node_id": "return-completed",
+      "label": "Return Completed",
+      "x": 1300,
+      "y": 350
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "source": "node-1",
+      "target": "node-2",
+      "label": "View Product",
+      "parameter_id": "landing-to-product"
+    },
+    {
+      "id": "edge-2",
+      "source": "node-2",
+      "target": "node-3",
+      "label": "Add to Cart",
+      "parameter_id": "product-to-cart"
+    },
+    {
+      "id": "edge-3",
+      "source": "node-3",
+      "target": "node-4",
+      "label": "Start Checkout",
+      "parameter_id": "cart-to-checkout"
+    },
+    {
+      "id": "edge-4",
+      "source": "node-4",
+      "target": "node-6",
+      "label": "Submit Payment",
+      "parameter_id": "checkout-to-payment"
+    },
+    {
+      "id": "edge-5",
+      "source": "node-5",
+      "target": "node-6",
+      "label": "Phone Payment",
+      "parameter_id": "phone-to-payment"
+    },
+    {
+      "id": "edge-6",
+      "source": "node-6",
+      "target": "node-7",
+      "label": "Payment Declined",
+      "parameter_id": "payment-failure-rate"
+    },
+    {
+      "id": "edge-7",
+      "source": "node-6",
+      "target": "node-8",
+      "label": "Payment Success",
+      "parameter_id": "payment-success-rate"
+    },
+    {
+      "id": "edge-8",
+      "source": "node-8",
+      "target": "node-9",
+      "label": "Cancel Order",
+      "parameter_id": "cancellation-rate"
+    },
+    {
+      "id": "edge-9",
+      "source": "node-8",
+      "target": "node-10",
+      "label": "Ship Order",
+      "parameter_id": "fulfilment-rate"
+    },
+    {
+      "id": "edge-10",
+      "source": "node-10",
+      "target": "node-11",
+      "label": "Delivery Fail",
+      "parameter_id": "delivery-failure-rate"
+    },
+    {
+      "id": "edge-11",
+      "source": "node-10",
+      "target": "node-12",
+      "label": "Delivered",
+      "parameter_id": "delivery-success-rate"
+    },
+    {
+      "id": "edge-12",
+      "source": "node-12",
+      "target": "node-13",
+      "label": "Keep Item",
+      "parameter_id": "retention-rate"
+    },
+    {
+      "id": "edge-13",
+      "source": "node-12",
+      "target": "node-14",
+      "label": "Return Item",
+      "parameter_id": "return-rate"
+    }
+  ]
+}
+

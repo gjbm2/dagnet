@@ -57,6 +57,7 @@
           "pattern": "^[a-zA-Z0-9_-]+$",
           "description": "Direct event ID for DAS queries (letters, numbers, hyphens, underscores)"
         },
+        "event_id_overridden": { "type": "boolean", "default": false, "description": "If true, event_id was manually edited and should not be auto-updated" },
         "event": {
           "type": "object",
           "description": "Event reference for this node (optional)",
@@ -82,6 +83,7 @@
           "enum": ["success", "failure", "error", "neutral", "other"],
           "description": "Classification for absorbing outcomes (success, failure, etc.). Optional but recommended for terminal nodes."
         },
+        "outcome_type_overridden": { "type": "boolean", "default": false, "description": "If true, outcome_type was manually edited and should not be auto-updated" },
         "entry": {
           "type": "object",
           "description": "Entry point configuration. At least one node in the graph MUST have is_start=true to define where traffic enters.",
@@ -317,7 +319,29 @@
           },
           "required": ["retrieved_at", "source"]
         },
-        "id": { "type": "string", "description": "Reference to parameter file (FK to parameter-{id}.yaml)" }
+        "id": { "type": "string", "description": "Reference to parameter file (FK to parameter-{id}.yaml)" },
+        "data_source": {
+          "type": "object",
+          "description": "Provenance information for this parameter",
+          "additionalProperties": false,
+          "properties": {
+            "type": { 
+              "type": "string", 
+              "description": "Data source type (from connections.yaml, e.g., 'amplitude', 'sheets', 'manual')"
+            },
+            "url": { "type": "string", "description": "URL to source data (e.g., Google Sheet, API endpoint)" },
+            "notes": { "type": "string", "description": "Human notes about this data source" },
+            "retrieved_at": { "type": "string", "description": "When data was retrieved (UK format or ISO)" },
+            "edited_at": { "type": "string", "description": "When data was last edited (UK format or ISO)" },
+            "author": { "type": "string", "description": "Who created/edited this data" },
+            "query": { "type": "object", "description": "Query object that produced this data" },
+            "full_query": { "type": "string", "description": "Complete DSL query string used for retrieval" },
+            "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string for debugging/provenance" },
+            "no_data": { "type": "boolean", "description": "True if data source returned no data" },
+            "experiment_id": { "type": "string", "description": "Experiment/gate ID from A/B test platform (e.g., Statsig gate_id)" }
+          },
+          "required": ["type"]
+        }
       }
     },
 

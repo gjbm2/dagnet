@@ -45,11 +45,56 @@ import { statisticalEnhancementService } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
-import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
+import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
 import { sessionLogService } from './sessionLogService';
-import { parseConstraints } from '../lib/queryDSL';
+import { parseConstraints, parseDSL } from '../lib/queryDSL';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
 import { rateLimiter } from './rateLimiter';
+import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
+import { createDASRunner } from '../lib/das';
+
+// Cached DAS runner instance for connection lookups (avoid recreating per-call)
+let cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
+function getCachedDASRunner() {
+  if (!cachedDASRunner) {
+    cachedDASRunner = createDASRunner();
+  }
+  return cachedDASRunner;
+}
+
+/**
+ * Batch mode flag - when true, suppresses individual toasts during batch operations
+ * Set this before starting a batch operation and reset it after
+ */
+let batchModeActive = false;
+
+/** Enable batch mode to suppress individual toasts */
+export function setBatchMode(active: boolean): void {
+  batchModeActive = active;
+}
+
+/** Check if batch mode is active */
+export function isBatchMode(): boolean {
+  return batchModeActive;
+}
+
+/** Wrapper for toast that respects batch mode */
+function batchableToast(message: string, options?: any): string | void {
+  if (batchModeActive) return; // Suppress in batch mode
+  return toast(message, options);
+}
+
+/** Wrapper for toast.success that respects batch mode */
+function batchableToastSuccess(message: string, options?: any): string | void {
+  if (batchModeActive) return;
+  return toast.success(message, options);
+}
+
+/** Wrapper for toast.error that respects batch mode */
+function batchableToastError(message: string, options?: any): string | void {
+  if (batchModeActive) return;
+  return toast.error(message, options);
+}
 
 /**
  * Format edge identifier in human-readable form for logging
@@ -95,6 +140,23 @@ interface CompileExcludeResult {
   terms_count?: number;
 }
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * DEPRECATED: 4-Dec-25 - EXCLUDE QUERY COMPILATION
+ * 
+ * This function compiled exclude() queries to minus/plus form via Python API.
+ * This was required because we believed Amplitude didn't support native exclude filters.
+ * 
+ * REPLACEMENT: Native segment filters in Amplitude adapter (connections.yaml)
+ * The adapter now converts excludes to segment filters with `op: "="`, `value: 0`.
+ * 
+ * This function will NOT be called for Amplitude because the adapter handles
+ * excludes natively before this code path is reached.
+ * 
+ * DO NOT DELETE until native segment filters are confirmed working in production.
+ * Target deletion: After 2 weeks of production validation.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ */
 async function compileExcludeQuery(queryString: string, graph: any): Promise<{ compiled: string; wasCompiled: boolean; error?: string }> {
   try {
     // Call Python API endpoint to compile the query
@@ -362,9 +424,8 @@ export async function computeQuerySignature(
         return node;
       };
       
-      // Parse query to get node references
+      // Parse query to get node references (using static import)
       try {
-        const { parseDSL } = await import('../lib/queryDSL');
         const parsed = parseDSL(edge.query);
         
         // Extract event_ids from from/to nodes
@@ -551,6 +612,12 @@ class DataOperationsService {
     suppressSignatureWarning?: boolean; // If true, don't show warning about different query signatures (e.g., after bust cache)
     conditionalIndex?: number; // For conditional_p entries - which index to update
   }): Promise<void> {
+    const timingStart = performance.now();
+    const timings: Record<string, number> = {};
+    const markTime = (label: string) => {
+      timings[label] = performance.now() - timingStart;
+    };
+    
     const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '', suppressSignatureWarning = false, conditionalIndex } = options;
     
     // Parse window from targetSlice DSL if not explicitly provided
@@ -566,6 +633,7 @@ class DataOperationsService {
         };
       }
     }
+    markTime('parseWindow');
     
     // Start session log
     const logOpId = sessionLogService.startOperation(
@@ -599,6 +667,7 @@ class DataOperationsService {
       
       // Check if file exists
       const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+      markTime('getFile');
       if (!paramFile) {
         toast.error(`Parameter file not found: ${paramId}`);
         sessionLogService.endOperation(logOpId, 'error', `Parameter file not found: ${paramId}`);
@@ -607,6 +676,7 @@ class DataOperationsService {
       
       // Find the target edge
       const targetEdge = graph.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
+      markTime('findEdge');
       if (!targetEdge) {
         toast.error(`Edge not found in graph`);
         sessionLogService.endOperation(logOpId, 'error', 'Edge not found in graph');
@@ -637,13 +707,13 @@ class DataOperationsService {
       
       // CRITICAL: Filter values by target slice for regular updates too
       // Without this, values[latest] picks from ANY context when falling back
+      markTime('beforeSliceFilter');
       if (targetSlice && paramFile.data?.values) {
         try {
           const allValues = paramFile.data.values as ParameterValue[];
           
           // Check if this is an uncontexted query on contexted data (MECE aggregation scenario)
           // IMPORTANT: contextAny queries are NOT uncontexted - they explicitly specify which slices to use
-          const { hasContextAny } = await import('./sliceIsolation');
           const targetSliceDimensions = extractSliceDimensions(targetSlice);
           const isUncontextedQuery = targetSliceDimensions === '' && !hasContextAny(targetSlice);
           const hasContextedData = allValues.some(v => v.sliceDSL && v.sliceDSL !== '');
@@ -686,6 +756,7 @@ class DataOperationsService {
           console.warn('[DataOperationsService] Slice isolation failed:', error);
         }
       }
+      markTime('afterSliceFilter');
       
       if (window && aggregatedData?.values) {
         // Collect value entries with daily data FROM SLICE-FILTERED aggregatedData
@@ -696,7 +767,6 @@ class DataOperationsService {
         
         // Check if we're in MECE aggregation mode (uncontexted query on contexted data)
         // IMPORTANT: contextAny queries are NOT uncontexted - they explicitly specify which slices to use
-        const { hasContextAny } = await import('./sliceIsolation');
         const targetSliceDimensions = extractSliceDimensions(targetSlice);
         const isUncontextedQuery = targetSliceDimensions === '' && !hasContextAny(targetSlice);
         const hasContextedData = allValuesWithDaily.some(v => v.sliceDSL && v.sliceDSL !== '');
@@ -708,6 +778,7 @@ class DataOperationsService {
           ? allValuesWithDaily  // MECE: use all values, they'll be summed
           : isolateSlice(allValuesWithDaily, targetSlice);  // contextAny or specific slice
         
+        markTime('beforeSignatureValidation');
         if (valuesWithDaily.length > 0) {
           try {
             // Validate query signature consistency
@@ -718,8 +789,8 @@ class DataOperationsService {
             
             if (edgeId && graph) {
               try {
+                const sigStart = performance.now();
                 // Build DSL from edge to get current query
-                const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
                 
                 // Get connection name for signature computation
                 const connectionName = targetEdge.p?.connection || 
@@ -727,17 +798,18 @@ class DataOperationsService {
                                      targetEdge.cost_time?.connection ||
                                      paramFile.data.connection;
                 
-                // Get connection to extract provider
-                const { createDASRunner } = await import('../lib/das');
-                const tempRunner = createDASRunner();
+                // Get connection to extract provider (use cached runner to avoid per-call overhead)
+                const dasRunner = getCachedDASRunner();
                 let connectionProvider: string | undefined;
                 
+                const t1 = performance.now();
                 try {
-                  const connection = connectionName ? await (tempRunner as any).connectionProvider.getConnection(connectionName) : null;
+                  const connection = connectionName ? await (dasRunner as any).connectionProvider.getConnection(connectionName) : null;
                   connectionProvider = connection?.provider;
                 } catch (e) {
                   console.warn('Could not load connection for provider mapping:', e);
                 }
+                const t2 = performance.now();
                 
                 // Event loader that reads from IDB
                 const eventLoader = async (eventId: string) => {
@@ -762,8 +834,6 @@ class DataOperationsService {
                 // not the stale graph.currentQueryDSL which may not have been updated
                 let constraints;
                 try {
-                  const { parseConstraints } = await import('../lib/queryDSL');
-                  
                   // Parse constraints from targetSlice (the DSL passed to this function)
                   // This is the source of truth for window - NOT graph.currentQueryDSL
                   const sliceConstraints = targetSlice ? parseConstraints(targetSlice) : null;
@@ -791,6 +861,7 @@ class DataOperationsService {
                 }
                 
                 // Build DSL from edge
+                const t3 = performance.now();
                 const compResult = await buildDslFromEdge(
                   targetEdge,
                   graph,
@@ -798,11 +869,15 @@ class DataOperationsService {
                   eventLoader,
                   constraints  // Pass constraints for context filters
                 );
+                const t4 = performance.now();
                 const compDsl = compResult.queryPayload;
                 const compEventDefs = compResult.eventDefinitions;
                 
                 // Compute expected query signature (include event_ids from nodes)
                 expectedQuerySignature = await computeQuerySignature(compDsl, connectionName, graph, targetEdge);
+                const t5 = performance.now();
+                
+                console.log(`[TIMING:SIG] ${paramId}: getConnection=${(t2-t1).toFixed(1)}ms, buildDsl=${(t4-t3).toFixed(1)}ms, computeSig=${(t5-t4).toFixed(1)}ms, total=${(t5-sigStart).toFixed(1)}ms`);
                 
                 // Find the latest query signature by timestamp
                 // Group entries by query signature and find the most recent timestamp for each
@@ -845,29 +920,18 @@ class DataOperationsService {
                 const signatureToUse = latestQuerySignature || expectedQuerySignature;
                 
                 if (querySignatureMismatch || (latestQuerySignature && latestQuerySignature !== expectedQuerySignature)) {
-                  console.warn('[DataOperationsService] Query signature mismatch detected:', {
+                  // Log for debugging, but don't toast - file having old signatures is normal
+                  // and the system handles it correctly by using latest signature data
+                  console.log('[DataOperationsService] Query signature mismatch detected (using latest):', {
                     expectedSignature: expectedQuerySignature,
                     latestSignature: latestQuerySignature,
                     signatureToUse,
-                    mismatchedEntries,
+                    mismatchedEntries: mismatchedEntries.length,
                     totalEntries: valuesWithDaily.length,
-                    suppressWarning: suppressSignatureWarning,
                   });
-                  
-                  // Only show warning toast if not suppressed (e.g., not a bust-cache scenario)
-                  if (!suppressSignatureWarning) {
-                    if (latestQuerySignature && latestQuerySignature !== expectedQuerySignature) {
-                      toast(`⚠ Using latest query signature (event definitions may have changed). Filtering to matching entries only.`, {
-                        icon: '⚠️',
-                        duration: 5000,
-                      });
-                    } else {
-                      toast(`⚠ Aggregating data with different query signatures (${mismatchedEntries.length} entry/entries)`, {
-                        icon: '⚠️',
-                        duration: 5000,
-                      });
-                    }
-                  }
+                  // NOTE: No toast - this is informational, not actionable by user
+                  // The file may have accumulated entries from different event configs over time
+                  // We use the latest signature and the data is still correct
                 }
                 
                 // CRITICAL: Always filter to ONLY signed values matching the signature
@@ -889,6 +953,7 @@ class DataOperationsService {
                 // Continue with aggregation even if signature validation fails
               }
             }
+            markTime('afterSignatureValidation');
             
             // Combine all daily data from all value entries into a single time series
             const allTimeSeries: TimeSeriesPoint[] = [];
@@ -924,7 +989,6 @@ class DataOperationsService {
             // In that case, we SUM values across different slices. Within SAME slice, newer overwrites older.
             // 
             // CRITICAL: Detect from QUERY, not from data - data might have empty/incorrect sliceDSL
-            const { hasContextAny } = await import('./sliceIsolation');
             const isContextAnyQuery = hasContextAny(targetSlice);
             
             // Also check data for multiple unique slices (fallback detection)
@@ -1185,6 +1249,7 @@ class DataOperationsService {
           console.log('[DataOperationsService] No daily data found, using regular update');
         }
       }
+      markTime('afterAggregation');
       
       // Call UpdateManager to transform data
       // Use validateOnly: true to get changes without mutating targetEdge in place
@@ -1196,6 +1261,7 @@ class DataOperationsService {
         'parameter',       // sub-destination
         { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
       );
+      markTime('afterUpdateManager');
       
       if (!result.success) {
         if (result.conflicts && result.conflicts.length > 0) {
@@ -1293,10 +1359,10 @@ class DataOperationsService {
           
           const hadRebalance = finalGraph !== nextGraph;
           if (hadRebalance) {
-            toast.success(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
+            batchableToastSuccess(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
             sessionLogService.endOperation(logOpId, 'success', `Updated conditional_p[${conditionalIndex}] + siblings rebalanced`);
           } else {
-            toast.success(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml`, { duration: 2000 });
+            batchableToastSuccess(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml`, { duration: 2000 });
             sessionLogService.endOperation(logOpId, 'success', `Updated conditional_p[${conditionalIndex}] from ${paramId}.yaml`);
           }
           return; // Done - skip the base edge path below
@@ -1380,20 +1446,34 @@ class DataOperationsService {
         // should persist to the graph file. The GraphEditor's syncingRef flag already
         // prevents infinite loops during the initial load.
         setGraph(finalGraph);
+        markTime('afterSetGraph');
         
         const hadRebalance = finalGraph !== nextGraph;
+        
+        // Log timing breakdown (individual values to avoid Chrome truncation)
+        const totalTime = performance.now() - timingStart;
+        console.log(`[TIMING] getParameterFromFile ${paramId}: ${totalTime.toFixed(1)}ms | ` +
+          `parse=${timings.parseWindow?.toFixed(1) || '?'}ms, ` +
+          `file=${timings.getFile?.toFixed(1) || '?'}ms, ` +
+          `edge=${timings.findEdge?.toFixed(1) || '?'}ms, ` +
+          `sliceFilter=${timings.afterSliceFilter?.toFixed(1) || '?'}ms, ` +
+          `sigValid=${timings.afterSignatureValidation?.toFixed(1) || '?'}ms, ` +
+          `aggregate=${timings.afterAggregation?.toFixed(1) || '?'}ms, ` +
+          `updateMgr=${timings.afterUpdateManager?.toFixed(1) || '?'}ms, ` +
+          `setGraph=${timings.afterSetGraph?.toFixed(1) || '?'}ms`);
+        
         if (hadRebalance) {
-          toast.success(`✓ Updated from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
+          batchableToastSuccess(`✓ Updated from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
           sessionLogService.endOperation(logOpId, 'success', `Updated from ${paramId}.yaml + siblings rebalanced`);
         } else {
-          toast.success(`✓ Updated from ${paramId}.yaml`, { duration: 2000 });
+          batchableToastSuccess(`✓ Updated from ${paramId}.yaml`, { duration: 2000 });
           sessionLogService.endOperation(logOpId, 'success', `Updated from ${paramId}.yaml`);
         }
       }
       
     } catch (error) {
       console.error('[DataOperationsService] Failed to get parameter from file:', error);
-      toast.error('Failed to get data from file');
+      batchableToastError('Failed to get data from file');
       sessionLogService.endOperation(logOpId, 'error', `Failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -2165,7 +2245,7 @@ class DataOperationsService {
         // NOTE: getFromSourceDirect already calls getParameterFromFile internally
         // (both for cache hits and after writing new data), so no second call needed
         
-        toast.success('Fetched from source and updated graph from file');
+        batchableToastSuccess('Fetched from source and updated graph from file');
         
       } else if (objectType === 'case') {
         // Cases: fetch gate config, append to schedules[], update graph nodes
@@ -2335,16 +2415,16 @@ class DataOperationsService {
           }
         }
         
-        toast.success('Fetched from source and updated graph from file');
+        batchableToastSuccess('Fetched from source and updated graph from file');
         
       } else {
-        toast.error(`Versioned fetching not yet supported for ${objectType}`);
+        batchableToastError(`Versioned fetching not yet supported for ${objectType}`);
         return;
       }
       
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`Error fetching from source: ${message}`);
+      batchableToastError(`Error fetching from source: ${message}`);
       console.error('getFromSource error:', error);
     }
   }
@@ -2840,6 +2920,25 @@ class DataOperationsService {
         }
       }
       
+      // ═══════════════════════════════════════════════════════════════════════════════
+      // DEPRECATED: 4-Dec-25 - DUAL QUERY LOGIC FOR VISITED_UPSTREAM
+      // 
+      // This section implements dual queries (base for n, conditioned for k) when
+      // visited_upstream is present. This was required because we used a "super-funnel"
+      // approach where upstream visited nodes were prepended to the funnel.
+      // 
+      // REPLACEMENT: Native segment filters in Amplitude adapter (connections.yaml)
+      // The adapter now converts visited_upstream to segment filters with `op: ">="`,
+      // `value: 1`, which correctly filters users who performed the event.
+      // 
+      // This code will NOT execute for Amplitude because the adapter clears
+      // visited_upstream after converting to segment filters. The needsDualQuery
+      // flag will be false.
+      // 
+      // DO NOT DELETE until native segment filters are confirmed working in production.
+      // Target deletion: After 2 weeks of production validation.
+      // ═══════════════════════════════════════════════════════════════════════════════
+      
       // 4b. Detect upstream conditions OR explicit n_query, and prepare base query for n
       // When a query has visited_upstream (or exclude with upstream nodes), OR when user has
       // explicitly provided an n_query (for complex topologies), we need TWO queries:
@@ -3039,29 +3138,56 @@ class DataOperationsService {
       }
       
       // If no explicit n_query but we have visited_upstream, auto-derive by stripping
-      if (!explicitNQuery && queryPayload.visited_upstream && Array.isArray(queryPayload.visited_upstream) && queryPayload.visited_upstream.length > 0) {
-        needsDualQuery = true;
-        console.log('[DataOps:DUAL_QUERY] Detected visited_upstream, will run dual queries for n and k');
-        console.log('[DataOps:DUAL_QUERY] Conditioned query has visited_upstream:', queryPayload.visited_upstream);
-        
-        // Create base query: same from/to, but strip visited_upstream
-        // This will give us a simple 2-step funnel where:
-        // - n = cumulativeRaw[0] = all users at 'from'
-        // - k = cumulativeRaw[1] = all users at 'from' who went to 'to'
-        // We only use n from this query
-        baseQueryPayload = {
-          ...queryPayload,
-          visited_upstream: undefined,  // Strip upstream conditions
-          visitedAny_upstream: undefined,  // Also strip any visitedAny upstream
-          // Note: Keep 'visited' (between from and to) if present - that's part of the path
-        };
-        
-        console.log('[DataOps:DUAL_QUERY] Base query (for n, auto-stripped):', {
-          from: baseQueryPayload.from,
-          to: baseQueryPayload.to,
-          visited: baseQueryPayload.visited,
-          visited_upstream: baseQueryPayload.visited_upstream,  // should be undefined
+      // CRITICAL FIX (4-Dec-25): Check if connection supports native segment filters
+      // If it does, the adapter will handle visited_upstream natively - no dual query needed
+      let connectionSupportsNativeVisited = false;
+      try {
+        const { createDASRunner } = await import('../lib/das');
+        const tempRunner = createDASRunner();
+        const conn = await (tempRunner as any).connectionProvider.getConnection(connectionName);
+        // supports_native_exclude also means supports native visited() via segment filters
+        connectionSupportsNativeVisited = conn?.capabilities?.supports_native_exclude === true;
+        console.log('[DataOps:DUAL_QUERY] Connection capabilities check:', {
+          connectionName,
+          supportsNativeVisited: connectionSupportsNativeVisited,
+          hasVisitedUpstream: queryPayload.visited_upstream?.length > 0
         });
+      } catch (e) {
+        console.warn('[DataOps:DUAL_QUERY] Failed to check connection capabilities:', e);
+      }
+      
+      if (!explicitNQuery && queryPayload.visited_upstream && Array.isArray(queryPayload.visited_upstream) && queryPayload.visited_upstream.length > 0) {
+        // If connection supports native segment filters, skip dual query - adapter handles it
+        if (connectionSupportsNativeVisited) {
+          console.log('[DataOps:DUAL_QUERY] Connection supports native segment filters - skipping dual query');
+          console.log('[DataOps:DUAL_QUERY] visited_upstream will be handled by adapter:', queryPayload.visited_upstream);
+          needsDualQuery = false;
+          // Don't create baseQueryPayload - not needed for native segment filters
+        } else {
+          // DEPRECATED: Dual query path for providers without native segment filters
+          needsDualQuery = true;
+          console.log('[DataOps:DUAL_QUERY] Detected visited_upstream, will run dual queries for n and k');
+          console.log('[DataOps:DUAL_QUERY] Conditioned query has visited_upstream:', queryPayload.visited_upstream);
+          
+          // Create base query: same from/to, but strip visited_upstream
+          // This will give us a simple 2-step funnel where:
+          // - n = cumulativeRaw[0] = all users at 'from'
+          // - k = cumulativeRaw[1] = all users at 'from' who went to 'to'
+          // We only use n from this query
+          baseQueryPayload = {
+            ...queryPayload,
+            visited_upstream: undefined,  // Strip upstream conditions
+            visitedAny_upstream: undefined,  // Also strip any visitedAny upstream
+            // Note: Keep 'visited' (between from and to) if present - that's part of the path
+          };
+          
+          console.log('[DataOps:DUAL_QUERY] Base query (for n, auto-stripped):', {
+            from: baseQueryPayload.from,
+            to: baseQueryPayload.to,
+            visited: baseQueryPayload.visited,
+            visited_upstream: baseQueryPayload.visited_upstream,  // should be undefined
+          });
+        }
       }
       
       // 5. Check for incremental fetch opportunities (if writeToFile and parameter file exists)
@@ -3195,10 +3321,44 @@ class DataOperationsService {
             bustCache: bustCache, // Show if cache bust is active
           });
           
+          // SESSION LOG: Cache analysis result - critical for debugging fetch issues
+          const windowDesc = `${normalizeDate(requestedWindow.start)} to ${normalizeDate(requestedWindow.end)}`;
+          const cacheStatus = bustCache 
+            ? 'BUST_CACHE' 
+            : (incrementalResult.needsFetch ? 'CACHE_MISS' : 'CACHE_HIT');
+          const cacheDetail = bustCache
+            ? `Ignoring cache: will fetch all ${incrementalResult.totalDays} days`
+            : incrementalResult.needsFetch
+              ? `Cached: ${incrementalResult.daysAvailable}/${incrementalResult.totalDays} days | Missing: ${incrementalResult.daysToFetch} days across ${incrementalResult.fetchWindows.length} gap(s)`
+              : `Fully cached: ${incrementalResult.daysAvailable}/${incrementalResult.totalDays} days`;
+          
+          // Build gap detail string for fetchWindows
+          const gapDetails = incrementalResult.fetchWindows.length > 0
+            ? incrementalResult.fetchWindows.map((w, i) => 
+                `Gap ${i + 1}: ${normalizeDate(w.start)} to ${normalizeDate(w.end)}`
+              ).join('; ')
+            : 'No gaps';
+          
+          sessionLogService.addChild(logOpId, 
+            cacheStatus === 'CACHE_HIT' ? 'success' : 'info',
+            cacheStatus,
+            `Cache check for window ${windowDesc}`,
+            `${cacheDetail}${incrementalResult.fetchWindows.length > 0 ? `\n${gapDetails}` : ''}`,
+            {
+              window: windowDesc,
+              totalDays: incrementalResult.totalDays,
+              daysAvailable: incrementalResult.daysAvailable,
+              daysToFetch: incrementalResult.daysToFetch,
+              gapCount: incrementalResult.fetchWindows.length,
+              bustCache: bustCache || false,
+              targetSlice: currentDSL || targetSlice || '',
+            }
+          );
+          
           if (!incrementalResult.needsFetch && !bustCache) {
             // All dates already exist - skip fetching (unless bustCache is true)
             shouldSkipFetch = true;
-            toast.success(`All ${incrementalResult.totalDays} days already cached`, { id: 'das-fetch' });
+            batchableToastSuccess(`All ${incrementalResult.totalDays} days already cached`, { id: 'das-fetch' });
             console.log('[DataOperationsService] Skipping fetch - all dates already exist');
           } else if (incrementalResult.fetchWindows.length > 0) {
             // We have multiple contiguous gaps - chain requests for each
@@ -3237,6 +3397,15 @@ class DataOperationsService {
       if (shouldSkipFetch && objectType === 'parameter' && objectId && targetId && graph && setGraph) {
         // Use existing data from file
         // CRITICAL: Pass currentDSL as targetSlice to ensure correct window is used
+        // NOTE: Suppress signature warnings here too - user is explicitly fetching this edge
+        
+        // SESSION LOG: Using cached data, no API fetch
+        sessionLogService.addChild(logOpId, 'success', 'USING_CACHE',
+          `Using cached data for ${entityLabel}`,
+          `All ${requestedWindow ? Math.round((new Date(requestedWindow.end).getTime() - new Date(requestedWindow.start).getTime()) / (1000 * 60 * 60 * 24)) + 1 : '?'} days available from cache`,
+          { source: 'cache', parameterId: objectId, targetId }
+        );
+        
         await this.getParameterFromFile({
           paramId: objectId,
           edgeId: targetId,
@@ -3244,8 +3413,11 @@ class DataOperationsService {
           setGraph,
           window: requestedWindow,
           targetSlice: currentDSL || '', // Pass the DSL to ensure correct constraints
+          suppressSignatureWarning: true, // Suppress warning when using cache (user triggered this)
           conditionalIndex, // Pass through for conditional_p handling
         });
+        
+        sessionLogService.endOperation(logOpId, 'success', `Applied cached data to graph`);
         return;
       }
       
@@ -3268,6 +3440,24 @@ class DataOperationsService {
       let queryParamsForStorage: any = undefined;
       let fullQueryForStorage: string | undefined = undefined;
       
+      // ═══════════════════════════════════════════════════════════════════════════════
+      // DEPRECATED: 4-Dec-25 - COMPOSITE QUERY DETECTION (minus/plus compilation)
+      // 
+      // This section detects exclude() queries and compiles them to minus/plus form
+      // for providers that don't support native excludes.
+      // 
+      // REPLACEMENT: Native segment filters in Amplitude adapter (connections.yaml)
+      // The adapter now converts excludes to segment filters with `op: "="`,
+      // `value: 0`, which correctly excludes users who performed the event.
+      // 
+      // This compilation step will NOT trigger for Amplitude because:
+      // 1. The adapter clears the `excludes` array after converting to segment filters
+      // 2. The capability `supports_native_exclude` is now true
+      // 
+      // DO NOT DELETE until native segment filters are confirmed working in production.
+      // Target deletion: After 2 weeks of production validation.
+      // ═══════════════════════════════════════════════════════════════════════════════
+      
       // Check if query uses composite operators (minus/plus for inclusion-exclusion)
       // CRITICAL: Check the ORIGINAL edge query string, NOT queryPayload.query (which doesn't exist after buildDslFromEdge)
       const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
@@ -3276,12 +3466,31 @@ class DataOperationsService {
       const hasExcludes = /\.excludes?\(/.test(queryString);
       
       // If query has excludes but isn't already compiled to minus/plus,
-      // we need to compile it for providers that don't support native excludes (like Amplitude)
+      // we need to compile it for providers that don't support native excludes
+      // NOTE: As of 4-Dec-25, Amplitude supports native exclude via segment filters,
+      // so this compilation is SKIPPED for Amplitude connections.
       let isComposite = isAlreadyComposite;
-      if (hasExcludes && !isAlreadyComposite && connectionName?.includes('amplitude')) {
-        console.log('[DataOps:EXCLUDE] Query has excludes, compiling to minus/plus for Amplitude');
+      
+      // CRITICAL: Check supports_native_exclude capability before compiling
+      // Amplitude now supports native excludes (4-Dec-25), so we skip compilation
+      // Get connection capabilities from runner
+      let supportsNativeExclude = false;
+      try {
+        const connection = await (runner as any).connectionProvider.getConnection(connectionName);
+        supportsNativeExclude = connection?.capabilities?.supports_native_exclude === true;
+        console.log('[DataOps:EXCLUDE] Connection capabilities check:', {
+          connectionName,
+          supportsNativeExclude,
+          hasExcludes
+        });
+      } catch (e) {
+        console.warn('[DataOps:EXCLUDE] Failed to get connection capabilities, assuming no native exclude support');
+      }
+      
+      if (hasExcludes && !isAlreadyComposite && !supportsNativeExclude) {
+        console.log('[DataOps:EXCLUDE] Query has excludes, provider does not support native exclude, compiling to minus/plus');
         sessionLogService.addChild(logOpId, 'info', 'EXCLUDE_COMPILE_START',
-          'Compiling exclude() to minus/plus for Amplitude',
+          `Compiling exclude() to minus/plus for ${connectionName} (no native exclude support)`,
           `Original query: ${queryString}`
         );
         try {
@@ -3941,9 +4150,37 @@ class DataOperationsService {
       
       // Show success message after all gaps are fetched (for non-daily/direct pulls)
       if (actualFetchWindows.length > 1) {
-        toast.success(`✓ Fetched all ${actualFetchWindows.length} gaps`, { id: 'das-fetch' });
+        batchableToastSuccess(`✓ Fetched all ${actualFetchWindows.length} gaps`, { id: 'das-fetch' });
       } else if (!writeToFile) {
-        toast.success(`Fetched data from source`, { id: 'das-fetch' });
+        batchableToastSuccess(`Fetched data from source`, { id: 'das-fetch' });
+      }
+      
+      // SESSION LOG: Fetch completed summary
+      const fetchedDays = allTimeSeriesData.length;
+      const gapsDesc = actualFetchWindows.map((w, i) => 
+        `${normalizeDate(w.start)} to ${normalizeDate(w.end)}`
+      ).join(', ');
+      
+      if (writeToFile && objectType === 'parameter') {
+        sessionLogService.addChild(logOpId, 
+          fetchedDays > 0 ? 'success' : 'info', 
+          'FETCH_COMPLETE',
+          `Fetched ${fetchedDays} days from ${connectionName || 'source'}`,
+          `Windows: ${gapsDesc}${fetchedDays === 0 ? ' (no data returned)' : ''}`,
+          {
+            source: connectionName || 'unknown',
+            daysReturned: fetchedDays,
+            gapsCount: actualFetchWindows.length,
+            windows: gapsDesc,
+          }
+        );
+      } else if (Object.keys(updateData).length > 0) {
+        const updateFields = Object.keys(updateData).filter(k => k !== 'data_source');
+        sessionLogService.addChild(logOpId, 'success', 'FETCH_COMPLETE',
+          `Fetched from ${connectionName || 'source'}`,
+          `Updated: ${updateFields.join(', ')}`,
+          { source: connectionName || 'unknown', fields: updateFields }
+        );
       }
       
       // Add data_source metadata for direct external connections (graph-level provenance)
@@ -3985,7 +4222,9 @@ class DataOperationsService {
           let paramFile = fileRegistry.getFile(`parameter-${objectId}`);
           if (paramFile) {
             let existingValues = (paramFile.data.values || []) as ParameterValue[];
-            const sliceDSL = extractSliceDimensions(currentDSL || '');
+            // CRITICAL: Use targetSlice (the specific slice being fetched), not currentDSL
+            // targetSlice contains the context filter (e.g., "context(channel:influencer)")
+            const sliceDSL = targetSlice || extractSliceDimensions(currentDSL || '');
             
             if (allTimeSeriesData.length > 0) {
               // API returned data - store each gap as a separate value entry
@@ -4021,7 +4260,7 @@ class DataOperationsService {
                 }
               }
               
-              toast.success(`✓ Added ${allTimeSeriesData.length} new days across ${actualFetchWindows.length} gap${actualFetchWindows.length > 1 ? 's' : ''}`, { duration: 2000 });
+              batchableToastSuccess(`✓ Added ${allTimeSeriesData.length} new days across ${actualFetchWindows.length} gap${actualFetchWindows.length > 1 ? 's' : ''}`, { duration: 2000 });
             } else {
               // API returned NO DATA - write a "no data" marker so we can cache this result
               // Without this, switching to this slice later would show fetch button again
