@@ -353,7 +353,9 @@ class TestDataSourceDrift:
         """DataSource exists in Python."""
         assert DataSource is not None
         fields = get_pydantic_fields(DataSource)
-        assert 'source_type' in fields  # Current Python field
+        assert 'type' in fields  # Main type field
+        assert 'full_query' in fields  # DSL query string for provenance
+        # NOTE: 'query' field removed - was unused and caused type confusion
 
 
 if __name__ == '__main__':
