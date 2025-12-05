@@ -1,5 +1,7 @@
 # TODO
 
+- Structural ambiguity about analysis dsl over conditional_p journeys -- can we cover absent scenarios?
+
 ## E2E Test Coverage for Repository Operations (CRITICAL)
 Basic repo ops (switch repo, clear, pull) lack E2E tests and keep breaking. See `docs/current/project-contexts/e2e-test-plan.md`
 
@@ -120,6 +122,13 @@ Reproduce the issue and share the console outpu
 ### Edge cases to consider
 - upstream visited() calls to Amplitude need to query on the right cohort window for the edges we actually care about NOT the upstream start window
 
+### Semantic linting / data depth health
+
+- Add a **semantic linting** pass to Graph Issues that checks **data depth/health** for latency edges:
+  - Flag edges where `p.forecast` is based on too few mature cohorts (low effective sample size)
+  - Flag edges where `completeness` is persistently low for the active DSL (window/cohort)
+  - Surface a **data health indicator** in the Graph Issues panel (e.g., "data shallow", "no mature cohorts yet")
+  - Treat this like other graph viewer issues: informational by default, with toggles to enable/disable
 
 ## Background Fetch Queue (DESIGN SKETCH)
 

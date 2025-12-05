@@ -29,7 +29,7 @@ Before we can show mature vs forecast visually, we need basic schema and computa
 | Add `LatencyConfig` interface to TypeScript | `src/types/index.ts` | `design.md §3.1` | ✅ |
 | Add `latency` field to `GraphEdge` interface | `src/types/index.ts` | `design.md §3.1` | ✅ |
 | Add `LatencyConfig` to Python Pydantic model | `graph-editor/lib/graph_types.py` | `design.md §9.G` | ✅ |
-| Add `latency` field to JSON schema | `public/schemas/conversion-graph-1.0.0.json` | `design.md §9.G` | ⚠️ NEEDS DESIGN |
+| Add `latency` field to JSON schema | `public/schemas/conversion-graph-1.1.0.json` | `design.md §9.G` | ⚠️ NEEDS DESIGN |
 | Add latency fields to parameter schema | `public/param-schemas/parameter-schema.yaml` | `design.md §3.2`, `§9.E` | ✅ |
 | Update parameter UI schema for new fields | `public/ui-schemas/parameter-ui-schema.json` | — | ❌ NO DESIGN |
 | Add `latency` to `EdgeParamDiff` in scenarios | `src/types/scenarios.ts` | `design.md §9.J` | ⚠️ NEEDS DESIGN |
@@ -192,14 +192,11 @@ This is a hygiene item that can be done anytime. Recommend deferring to Phase 2 
 | Add `cohort()` to `QUERY_FUNCTIONS` | `src/lib/queryDSL.ts` | `design.md §4.1` | ✅ |
 | Parse `cohort(start:end)` similar to `window()` | `src/lib/queryDSL.ts` | `design.md §4.1` | ✅ |
 | Parse `cohort(anchor,start:end)` with optional anchor | `src/lib/queryDSL.ts` | `design.md §4.2` | ✅ |
-| Add `cohort` to `ParsedConstraints` interface | `src/lib/queryDSL.ts` | — | ❌ NO DESIGN |
-| Update `normalizeConstraintString()` | `src/lib/queryDSL.ts` | — | ❌ NO DESIGN |
-| Update DSL JSON Schema | `public/schemas/query-dsl-1.0.0.json` | — | ❌ NO DESIGN |
+| Add `cohort` to `ParsedConstraints` interface | `src/lib/queryDSL.ts` | `open-issues.md GAP-10` | ✅ |
+| Update `normalizeConstraintString()` | `src/lib/queryDSL.ts` | `open-issues.md GAP-10` | ✅ |
+| Update DSL JSON Schema | `public/schemas/query-dsl-1.1.0.json` (new version) | `open-issues.md GAP-11` | ✅ |
 
-**Design Gaps:**
-- **ParsedConstraints interface**: No design for TypeScript interface changes
-- **normalizeConstraintString**: No design for how cohort() is normalized
-- **JSON Schema**: No design for schema validation of cohort() clause
+**Design Gaps:** ✅ All resolved (see `open-issues.md GAP-10, GAP-11`)
 
 ### 3.2 DSL Construction
 

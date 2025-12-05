@@ -22,7 +22,8 @@ import { formatDateUK } from './dateFormat';
 /**
  * Valid query DSL function names.
  * 
- * MUST match schema: query-dsl-1.0.0.json → $defs.QueryFunctionName.enum
+ * MUST match schema: query-dsl-1.1.0.json → $defs.QueryFunctionName.enum
+ * (Schema 1.1.0 adds 'cohort' function for latency-tracked edges)
  */
 export const QUERY_FUNCTIONS = [
   'from',
@@ -34,6 +35,7 @@ export const QUERY_FUNCTIONS = [
   'contextAny',
   'case',
   'window',
+  'cohort',
   'minus',
   'plus'
 ] as const;
@@ -70,8 +72,9 @@ export interface ParsedConstraints {
   context: Array<{key: string; value: string}>;
   cases: Array<{key: string; value: string}>;
   visitedAny: string[][];
-  contextAny: Array<{ pairs: Array<{key: string; value: string}> }>;  // NEW: OR over values within/across keys
-  window: { start?: string; end?: string } | null;  // NEW: Time window for data retrieval
+  contextAny: Array<{ pairs: Array<{key: string; value: string}> }>;  // OR over values within/across keys
+  window: { start?: string; end?: string } | null;  // Time window for data retrieval (X-anchored)
+  cohort: { anchor?: string; start?: string; end?: string } | null;  // Cohort entry window (A-anchored for latency edges)
 }
 
 export type ContextCombination = Record<string, string>; // NEW: e.g. {channel: 'google', 'browser-type': 'chrome'}
@@ -165,7 +168,8 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
       cases: [],
       visitedAny: [],
       contextAny: [],
-      window: null
+      window: null,
+      cohort: null
     };
   }
   
@@ -177,6 +181,7 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
   const visitedAny: string[][] = [];
   const contextAny: Array<{ pairs: Array<{key: string; value: string}> }> = [];
   let window: { start?: string; end?: string } | null = null;
+  let cohort: { anchor?: string; start?: string; end?: string } | null = null;
   
   // Match visited(...) - can appear multiple times
   const visitedMatches = constraint.matchAll(/visited\(([^)]+)\)/g);
@@ -255,6 +260,39 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
     };
   }
   
+  // Match cohort(start:end) or cohort(anchor,start:end)
+  // Format: cohort(-30d:) or cohort(1-Nov-25:7-Nov-25) or cohort(anchor-node,-14d:)
+  const cohortMatch = constraint.match(/cohort\(([^)]+)\)/);
+  if (cohortMatch) {
+    const args = cohortMatch[1];
+    const commaIndex = args.indexOf(',');
+    
+    if (commaIndex > 0 && !args.substring(0, commaIndex).includes(':')) {
+      // Format: cohort(anchor,start:end) - has anchor before comma
+      const anchor = args.substring(0, commaIndex).trim();
+      const dateRange = args.substring(commaIndex + 1);
+      const colonIndex = dateRange.indexOf(':');
+      if (colonIndex >= 0) {
+        cohort = {
+          anchor,
+          start: dateRange.substring(0, colonIndex).trim() || undefined,
+          end: dateRange.substring(colonIndex + 1).trim() || undefined
+        };
+      } else {
+        cohort = { anchor };
+      }
+    } else {
+      // Format: cohort(start:end) - no anchor
+      const colonIndex = args.indexOf(':');
+      if (colonIndex >= 0) {
+        cohort = {
+          start: args.substring(0, colonIndex).trim() || undefined,
+          end: args.substring(colonIndex + 1).trim() || undefined
+        };
+      }
+    }
+  }
+  
   // Deduplicate visited/exclude preserving order
   const visitedDeduped: string[] = [];
   const visitedSeen = new Set<string>();
@@ -302,7 +340,8 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
     cases: casesDeduped,
     visitedAny,
     contextAny,
-    window
+    window,
+    cohort
   };
 }
 
@@ -322,6 +361,7 @@ export function parseDSL(dsl: string | null | undefined): ParsedFullQuery {
       visitedAny: [],
       contextAny: [],
       window: null,
+      cohort: null,
       raw: ''
     };
   }
@@ -470,6 +510,28 @@ export function normalizeConstraintString(constraint: string): string {
     const end = normalizeWindowDate(parsed.window.end);
     parts.push(`window(${start}:${end})`);
   }
+  if (parsed.cohort) {
+    // Normalize dates to d-MMM-yy format (if not relative like -90d)
+    const normalizeCohortDate = (date: string | undefined): string => {
+      if (!date) return '';
+      // If relative offset (e.g., -90d, -30d), keep as-is
+      if (date.match(/^-?\d+[dwmy]$/)) return date;
+      // Otherwise convert to d-MMM-yy
+      try {
+        return formatDateUK(date);
+      } catch {
+        return date; // If parse fails, keep original
+      }
+    };
+    
+    const start = normalizeCohortDate(parsed.cohort.start);
+    const end = normalizeCohortDate(parsed.cohort.end);
+    if (parsed.cohort.anchor) {
+      parts.push(`cohort(${parsed.cohort.anchor},${start}:${end})`);
+    } else {
+      parts.push(`cohort(${start}:${end})`);
+    }
+  }
   
   return parts.join('.');
 }
@@ -533,8 +595,9 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   
   const mergedVisitedAny = [...existing.visitedAny, ...newParsed.visitedAny];
   const mergedContextAny = [...existing.contextAny, ...newParsed.contextAny];
-  // For window: new value replaces existing (last wins)
+  // For window/cohort: new value replaces existing (last wins)
   const mergedWindow = newParsed.window || existing.window;
+  const mergedCohort = newParsed.cohort || existing.cohort;
   
   // Rebuild DSL using normalize (ensures canonical order)
   const merged: ParsedConstraints = {
@@ -544,7 +607,8 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
     cases: mergedCases,
     visitedAny: mergedVisitedAny,
     contextAny: mergedContextAny,
-    window: mergedWindow
+    window: mergedWindow,
+    cohort: mergedCohort
   };
   
   // Use normalizeConstraintString to rebuild (ensures canonical order)
@@ -572,6 +636,13 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   }
   if (merged.window) {
     parts.push(`window(${merged.window.start || ''}:${merged.window.end || ''})`);
+  }
+  if (merged.cohort) {
+    if (merged.cohort.anchor) {
+      parts.push(`cohort(${merged.cohort.anchor},${merged.cohort.start || ''}:${merged.cohort.end || ''})`);
+    } else {
+      parts.push(`cohort(${merged.cohort.start || ''}:${merged.cohort.end || ''})`);
+    }
   }
   
   return parts.join('.');
