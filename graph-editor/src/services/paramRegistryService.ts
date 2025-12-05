@@ -61,15 +61,12 @@ export interface ParameterValue {
   context_id?: string;
   data_source?: {
     type: 'sheets' | 'api' | 'file' | 'manual' | 'calculated' | 'analytics' | 'amplitude' | 'statsig' | 'optimizely';
-    url?: string;
-    notes?: string;
     retrieved_at?: string; // ISO date-time
     edited_at?: string; // ISO date-time
-    author?: string;
     query?: any; // Query configuration object
     full_query?: string; // Complete DSL query string
     debug_trace?: string; // Complete execution trace as JSON string
-    no_data?: boolean; // True if API confirmed no data exists for this slice/window
+    experiment_id?: string; // Experiment/gate ID for A/B test sources (e.g., Statsig gate_id)
   };
 }
 

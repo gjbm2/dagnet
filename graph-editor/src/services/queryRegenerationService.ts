@@ -229,6 +229,33 @@ export class QueryRegenerationService {
         }
       }
     }
+    
+    // Fix data_source.query type mismatch: Python expects Dict, but sometimes frontend stores string
+    // If query is a string, move it to full_query and clear query
+    if (transformed.edges) {
+      for (const edge of transformed.edges) {
+        // Check edge.p.data_source
+        if (edge.p?.data_source && typeof (edge.p.data_source as any).query === 'string') {
+          const ds = edge.p.data_source as any;
+          if (!ds.full_query) {
+            ds.full_query = ds.query;
+          }
+          ds.query = undefined;
+        }
+        // Check conditional_p entries
+        if (edge.conditional_p) {
+          for (const cp of edge.conditional_p) {
+            if (cp.p?.data_source && typeof (cp.p.data_source as any).query === 'string') {
+              const ds = cp.p.data_source as any;
+              if (!ds.full_query) {
+                ds.full_query = ds.query;
+              }
+              ds.query = undefined;
+            }
+          }
+        }
+      }
+    }
 
     // Ensure required top-level fields for backend validation
     // -----------------------------------------------

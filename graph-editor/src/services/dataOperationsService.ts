@@ -1142,7 +1142,7 @@ class DataOperationsService {
               data_source: {
                 type: latestValueWithSource?.data_source?.type || 'file',
                 retrieved_at: new Date().toISOString(),
-                query: latestValueWithSource?.data_source?.query,
+                // NOTE: data_source.query removed - unused and caused type mismatches with Python
                 full_query: latestValueWithSource?.data_source?.full_query,
               },
             };
@@ -3542,11 +3542,12 @@ class DataOperationsService {
       // ===========================================================
       
       // Capture query info for storage (same for all gaps)
-      // CRITICAL: Store the DSL STRING (from graph edge), not the DSL object
-      // The DSL object has provider event names; we want the original query string
+      // queryParamsForStorage = DSL object (dictionary) for data_source.query
+      // fullQueryForStorage = DSL string for data_source.full_query
+      // NOTE: Python expects data_source.query to be Dict, NOT string!
       if (writeToFile && objectType === 'parameter') {
-        queryParamsForStorage = queryString || queryPayload; // Use query string first, fall back to DSL object
-        fullQueryForStorage = queryString || JSON.stringify(queryPayload);
+        queryParamsForStorage = queryPayload; // Always use DSL object (dictionary)
+        fullQueryForStorage = queryString || JSON.stringify(queryPayload); // String goes in full_query
       }
       
       // Determine data source type from connection name (used for parameter files)
@@ -4192,7 +4193,7 @@ class DataOperationsService {
             ? 'statsig'
             : 'api',
           retrieved_at: new Date().toISOString(),
-          query: queryPayload,
+          // NOTE: data_source.query removed - unused and caused type mismatches with Python
           full_query: queryPayload.query || JSON.stringify(queryPayload),
         };
       }
@@ -4290,7 +4291,6 @@ class DataOperationsService {
                     type: 'amplitude',
                     retrieved_at: new Date().toISOString(),
                     full_query: fullQueryForStorage,
-                    no_data: true, // Flag to indicate this was a confirmed "no data" from API
                   },
                   query_signature: querySignature,
                 };

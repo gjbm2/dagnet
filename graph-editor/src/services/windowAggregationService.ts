@@ -981,9 +981,10 @@ export function mergeTimeSeriesIntoParameter(
     // Without this, contexted data would be invisible to queries!
     sliceDSL: normalizedSlice,
     data_source: {
-      type: dataSourceType || 'api',
+      type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
       retrieved_at: new Date().toISOString(),
-      ...(queryParams && { query: queryParams }),
+      // NOTE: data_source.query removed - it's unused and caused type mismatches
+      // full_query (string) is sufficient for provenance/debugging
       ...(fullQuery && { full_query: fullQuery }),
     },
   };

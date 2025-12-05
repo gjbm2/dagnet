@@ -41,17 +41,13 @@ class Evidence(BaseModel):
 class DataSource(BaseModel):
     """Provenance information for parameter data."""
     type: str = Field(..., description="Data source type (from connections.yaml, e.g., 'amplitude', 'manual', 'sheets')")
-    url: Optional[str] = Field(None, description="URL to source data (e.g., Google Sheet, API endpoint)")
-    notes: Optional[str] = Field(None, description="Human notes about this data source")
     retrieved_at: Optional[str] = Field(None, description="When data was retrieved (UK format or ISO)")
     edited_at: Optional[str] = Field(None, description="When data was last edited (UK format or ISO)")
-    author: Optional[str] = Field(None, description="Who created/edited this data")
-    query: Optional[Dict[str, Any]] = Field(None, description="Query object that produced this data")
+    # NOTE: 'query' field removed - was unused and caused type confusion (Dict expected but string stored)
     full_query: Optional[str] = Field(None, description="Complete DSL query string used for retrieval")
     debug_trace: Optional[str] = Field(None, description="Complete execution trace as JSON string for debugging/provenance")
-    no_data: Optional[bool] = Field(None, description="True if data source returned no data")
     experiment_id: Optional[str] = Field(None, description="Experiment ID for A/B test sources")
-    connection: Optional[str] = Field(None, description="Connection name used")
+    no_data: Optional[bool] = Field(None, description="True if data source returned no data")
 
 
 class ProbabilityParam(BaseModel):

@@ -998,6 +998,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         setLastAggregatedWindow(currentWindow);
         // Use authoritative DSL from graphStore for tracking what we aggregated
         lastAggregatedDSLRef.current = (graphStore as any).getState?.()?.currentDSL || '';
+        
+        // CRITICAL: Invalidate coverage cache after successful fetch
+        // Otherwise, cached result with hasMissingData may be stale
+        coverageCache.clear();
+        console.log('[WindowSelector] Cleared coverage cache after successful fetch');
       }
       
       // Trigger coverage check by updating window (will detect if still needs fetch)
@@ -1339,11 +1344,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       </div>{/* End window-selector-main */}
       
       {/* Fetch button column (right side) - spans full height */}
-      {showButton && (
+      {/* Only show when we have items to fetch - prevents race condition where showButton is true but batchItemsToFetch is empty */}
+      {showButton && batchItemsToFetch.length > 0 && (
         <div className="window-selector-fetch-column">
           <button
             onClick={handleFetchData}
-            disabled={isCheckingCoverage || isFetching || batchItemsToFetch.length === 0}
+            disabled={isCheckingCoverage || isFetching}
             className={`window-selector-button ${showShimmer ? 'shimmer' : ''}`}
             title={
               isCheckingCoverage
