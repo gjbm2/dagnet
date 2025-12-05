@@ -9,8 +9,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { explodeDSL } from '../../lib/dslExplosion';
-import { dataOperationsService } from '../../services/dataOperationsService';
+import { dataOperationsService, setBatchMode } from '../../services/dataOperationsService';
 import { sessionLogService } from '../../services/sessionLogService';
+import { LogFileService } from '../../services/logFileService';
+import { useTabContext } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import './Modal.css';
@@ -42,13 +44,17 @@ export function AllSlicesModal({
   graph,
   setGraph
 }: AllSlicesModalProps) {
+  const { operations: tabOperations } = useTabContext();
   const [slices, setSlices] = useState<SliceItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ currentSlice: 0, totalSlices: 0, currentItem: 0, totalItems: 0 });
   const [bustCache, setBustCache] = useState(false);
   const [createLog, setCreateLog] = useState(false);
-  const [logContent, setLogContent] = useState<string>('');
+  
+  // CRITICAL: Use ref for log content so it's synchronously available at end of batch
+  // React state setters are async, so logContent state would be empty when we check it
+  const logContentRef = useRef<string>('');
   
   // CRITICAL: Use ref to track latest graph state during batch operations
   // Without this, rebalancing doesn't work because each iteration uses stale graph
@@ -120,9 +126,24 @@ export function AllSlicesModal({
     if (!graph || selectedSlices.length === 0) return;
 
     setIsProcessing(true);
-    setLogContent(''); // Reset log content
     const totalSlices = selectedSlices.length;
     setProgress({ currentSlice: 0, totalSlices, currentItem: 0, totalItems: 0 });
+    
+    // Enable batch mode to suppress individual toasts
+    setBatchMode(true);
+    
+    // Initialize log content with header
+    const startTime = new Date();
+    logContentRef.current = createLog ? `# All Slices Fetch Log
+
+**Started:** ${startTime.toISOString()}
+**Graph:** ${(graph as any)?.metadata?.name || 'Graph'}
+**Slices:** ${totalSlices}
+**Cache bust:** ${bustCache ? 'Yes' : 'No'}
+
+## Results
+
+` : '';
 
     // Start session log operation
     const logOpId = sessionLogService.startOperation(
@@ -217,7 +238,10 @@ export function AllSlicesModal({
                   const param = edge?.[item.paramSlot || 'p'];
                   if (param?.evidence) {
                     const evidence = param.evidence;
-                    setLogContent(prev => prev + `[${slice.dsl}] ${item.name}: n=${evidence.n}, k=${evidence.k}\n`);
+                    logContentRef.current += `✓ [${slice.dsl}] ${item.name}: n=${evidence.n}, k=${evidence.k}\n`;
+                  } else {
+                    // Fallback: log success even if evidence isn't available (async timing)
+                    logContentRef.current += `✓ [${slice.dsl}] ${item.name}: fetched\n`;
                   }
                 }
                 sliceSuccess++;
@@ -233,7 +257,17 @@ export function AllSlicesModal({
                 });
                 
                 if (createLog) {
-                  setLogContent(prev => prev + `[${slice.dsl}] ${item.name}: fetched\n`);
+                  // Get evidence from the updated graph for detailed logging
+                  const updatedEdge = graphRef.current?.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+                  const param = updatedEdge?.[item.paramSlot || 'p'];
+                  const evidence = param?.evidence;
+                  if (evidence?.n !== undefined && evidence?.k !== undefined) {
+                    logContentRef.current += `✓ [${slice.dsl}] ${item.name}: n=${evidence.n}, k=${evidence.k}, p=${(evidence.k/evidence.n*100).toFixed(1)}%\n`;
+                  } else if (param?.mean !== undefined) {
+                    logContentRef.current += `✓ [${slice.dsl}] ${item.name}: mean=${param.mean.toFixed(4)}\n`;
+                  } else {
+                    logContentRef.current += `✓ [${slice.dsl}] ${item.name}: fetched successfully\n`;
+                  }
                 }
                 sliceSuccess++;
               }
@@ -247,6 +281,9 @@ export function AllSlicesModal({
                 `[${slice.dsl}] ${item.name} failed`,
                 errorMessage
               );
+              if (createLog) {
+                logContentRef.current += `✗ [${slice.dsl}] ${item.name}: **FAILED** - ${errorMessage}\n`;
+              }
               sliceErrors++;
               // NOTE: Rate limit backoff is handled by rateLimiter service in dataOperationsService
             }
@@ -303,18 +340,31 @@ export function AllSlicesModal({
         toast.success(`All ${totalSuccess} operations completed successfully`);
       }
       
-      // Download log file if enabled
-      if (createLog && logContent) {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const blob = new Blob([logContent], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `all-slices-fetch-${timestamp}.log`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+      // Create log file tab if enabled
+      if (createLog && logContentRef.current) {
+        // Add summary to log
+        const endTime = new Date();
+        const durationMs = endTime.getTime() - startTime.getTime();
+        const durationSec = (durationMs / 1000).toFixed(1);
+        logContentRef.current += `
+## Summary
+
+- **Completed:** ${endTime.toISOString()}
+- **Duration:** ${durationSec}s
+- **Success:** ${totalSuccess}
+- **Errors:** ${totalErrors}
+`;
+        
+        // Create log tab using LogFileService
+        try {
+          await LogFileService.createLogFile(
+            logContentRef.current,
+            tabOperations,
+            `All Slices Fetch (${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })})`
+          );
+        } catch (logError) {
+          console.error('[AllSlicesModal] Failed to create log tab:', logError);
+        }
       }
 
     } catch (error) {
@@ -328,6 +378,8 @@ export function AllSlicesModal({
       toast.dismiss(progressToastId);
       toast.error(`Error: ${errorMessage}`);
     } finally {
+      // Reset batch mode to re-enable toasts
+      setBatchMode(false);
       setIsProcessing(false);
       onClose();
     }

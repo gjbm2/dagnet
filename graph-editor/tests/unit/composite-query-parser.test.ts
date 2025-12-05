@@ -1,6 +1,20 @@
 /**
  * Unit Tests: Composite Query Parser
  * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * DEPRECATED: 4-Dec-25
+ * 
+ * These tests cover the minus()/plus() parser which was used for inclusion-
+ * exclusion queries when Amplitude didn't support native excludes.
+ * 
+ * As of 4-Dec-25, Amplitude supports native exclude via segment filters.
+ * The parser remains functional for non-Amplitude providers, but this code
+ * path will NOT be triggered for Amplitude queries.
+ * 
+ * Tests remain valid to ensure parser works for fallback scenarios.
+ * Target deletion: After 2 weeks of production validation.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
  * Tests the composite query parser that handles minus()/plus() operators
  * for inclusion-exclusion principle.
  * 

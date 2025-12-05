@@ -740,9 +740,16 @@ export function calculateIncrementalFetch(
           });
           
           for (const value of sliceValues) {
+            // CRITICAL: Only count dates with VALID data (non-null n_daily/k_daily)
             if (value.dates && Array.isArray(value.dates)) {
-              for (const date of value.dates) {
-                sliceDates.add(normalizeDate(date));
+              for (let i = 0; i < value.dates.length; i++) {
+                const date = value.dates[i];
+                const hasValidN = value.n_daily && value.n_daily[i] !== null && value.n_daily[i] !== undefined;
+                const hasValidK = value.k_daily && value.k_daily[i] !== null && value.k_daily[i] !== undefined;
+                
+                if (hasValidN || hasValidK) {
+                  sliceDates.add(normalizeDate(date));
+                }
               }
             }
           }
@@ -775,10 +782,20 @@ export function calculateIncrementalFetch(
         
         for (const value of sliceValues) {
           // Extract dates from this value entry
+          // CRITICAL: Only count dates that have VALID data (non-null n_daily/k_daily)
+          // Without this check, dates with null values would be counted as "cached"
+          // and no fetch would be triggered, leaving graph with stale data
           if (value.dates && Array.isArray(value.dates)) {
-            for (const date of value.dates) {
-              const normalizedDate = normalizeDate(date);
-              existingDates.add(normalizedDate);
+            for (let i = 0; i < value.dates.length; i++) {
+              const date = value.dates[i];
+              // Check if this date has valid data
+              const hasValidN = value.n_daily && value.n_daily[i] !== null && value.n_daily[i] !== undefined;
+              const hasValidK = value.k_daily && value.k_daily[i] !== null && value.k_daily[i] !== undefined;
+              
+              if (hasValidN || hasValidK) {
+                const normalizedDate = normalizeDate(date);
+                existingDates.add(normalizedDate);
+              }
             }
           }
         }

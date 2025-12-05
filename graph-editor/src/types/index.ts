@@ -412,7 +412,6 @@ export interface CaseEvidence {
 export interface ProbabilityParam {
   mean?: number; // [0,1]
   stdev?: number; // >= 0
-  locked?: boolean; // DEPRECATED: use mean_overridden instead
   mean_overridden?: boolean; // If true, mean was manually edited
   stdev_overridden?: boolean; // If true, stdev was manually edited
   distribution_overridden?: boolean; // If true, distribution was manually edited
@@ -423,7 +422,7 @@ export interface ProbabilityParam {
   query?: any; // Query object for data retrieval (DSL query: from/to/visited/etc)
   evidence?: Evidence; // Observations from data sources (n, k, window, etc.)
   data_source?: { // Provenance information
-    type: 'sheets' | 'api' | 'file' | 'manual' | 'calculated' | 'analytics' | 'amplitude' | 'statsig' | 'optimizely';
+    type: string; // Data source type (from connections.yaml, e.g., 'amplitude', 'manual', 'sheets')
     url?: string;
     notes?: string;
     retrieved_at?: string;
@@ -433,7 +432,8 @@ export interface ProbabilityParam {
     full_query?: string;
     debug_trace?: string;
     no_data?: boolean;
-    experiment_id?: string;
+    experiment_id?: string; // Experiment/gate ID for A/B test sources (e.g., Statsig gate_id)
+    connection?: string; // Connection name used
   };
 }
 

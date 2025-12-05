@@ -221,56 +221,11 @@ export class QueryRegenerationService {
   transformGraphForBackend(graph: Graph): Graph {
     const transformed = structuredClone(graph);
     
-    // Transform all edges
-    if (transformed.edges) {
-      for (const edge of transformed.edges) {
-        // Transform p.data_source
-        const pData = edge.p as any;
-        if (pData?.data_source && 'type' in pData.data_source && !('source_type' in pData.data_source)) {
-          pData.data_source = {
-            ...pData.data_source,
-            source_type: pData.data_source.type,
-          };
-          delete pData.data_source.type;
-        }
-        
-        // Transform cost_gbp.data_source
-        const costGbpData = edge.cost_gbp as any;
-        if (costGbpData?.data_source && 'type' in costGbpData.data_source && !('source_type' in costGbpData.data_source)) {
-          costGbpData.data_source = {
-            ...costGbpData.data_source,
-            source_type: costGbpData.data_source.type,
-          };
-          delete costGbpData.data_source.type;
-        }
-        
-        // Transform cost_time.data_source
-        const costTimeData = edge.cost_time as any;
-        if (costTimeData?.data_source && 'type' in costTimeData.data_source && !('source_type' in costTimeData.data_source)) {
-          costTimeData.data_source = {
-            ...costTimeData.data_source,
-            source_type: costTimeData.data_source.type,
-          };
-          delete costTimeData.data_source.type;
-        }
-      }
-    }
-    
-    // Transform all nodes (for case.data_source and ensure valid ids)
+    // Ensure valid node ids for backend / DSL (fallback to uuid)
     if (transformed.nodes) {
       for (const node of transformed.nodes) {
-        // Ensure node.id is non-empty for backend / DSL (fallback to uuid)
         if (!node.id || (typeof node.id === 'string' && node.id.trim() === '')) {
           node.id = node.uuid as any;
-        }
-
-        const caseData = node.case as any;
-        if (caseData?.data_source && 'type' in caseData.data_source && !('source_type' in caseData.data_source)) {
-          caseData.data_source = {
-            ...caseData.data_source,
-            source_type: caseData.data_source.type,
-          };
-          delete caseData.data_source.type;
         }
       }
     }

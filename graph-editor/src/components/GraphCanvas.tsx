@@ -1576,7 +1576,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               id: graphEdge.id,
               probability: newProbability,
               stdev: graphEdge.p?.stdev,
-              locked: graphEdge.p?.locked,
               p: graphEdge.p, // Full p object with override flags
               description: graphEdge.description,
               description_overridden: graphEdge.description_overridden,

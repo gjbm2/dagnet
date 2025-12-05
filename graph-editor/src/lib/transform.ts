@@ -71,7 +71,6 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       id: e.id,  // Human-readable ID (formerly "id")
       probability: e.p?.mean ?? 0.5,
       stdev: e.p?.stdev,
-      locked: e.p?.locked,
       description: e.description,
       description_overridden: e.description_overridden, // Override flag for auto-sync
       query_overridden: e.query_overridden, // Override flag for query auto-regeneration
@@ -152,14 +151,12 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         // Explicitly set mean from probability field if it exists (ReactFlow uses 'probability' field)
         mean: e.data?.probability !== undefined ? e.data.probability : (e.data.p.mean ?? originalEdge?.p?.mean ?? 0.5),
         stdev: e.data?.stdev !== undefined ? e.data.stdev : (e.data.p.stdev ?? originalEdge?.p?.stdev),
-        locked: e.data?.locked !== undefined ? e.data.locked : (e.data.p.locked ?? originalEdge?.p?.locked),
         // Preserve mean_overridden from original if not explicitly set in e.data.p
         mean_overridden: e.data.p.mean_overridden !== undefined ? e.data.p.mean_overridden : originalEdge?.p?.mean_overridden,
       } : {
         ...originalEdge?.p,  // Preserve ALL p fields (id, distribution, evidence, mean_overridden, etc.)
         mean: e.data?.probability ?? originalEdge?.p?.mean ?? 0.5,
         stdev: e.data?.stdev ?? originalEdge?.p?.stdev,
-        locked: e.data?.locked ?? originalEdge?.p?.locked,
       };
 
       const result = {

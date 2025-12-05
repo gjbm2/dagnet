@@ -1,6 +1,21 @@
 /**
  * Integration tests for exclude compilation flow
  * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * DEPRECATED: 4-Dec-25
+ * 
+ * These tests cover the exclude → minus/plus compilation flow which was required
+ * when Amplitude didn't support native excludes.
+ * 
+ * As of 4-Dec-25, Amplitude supports native exclude via segment filters.
+ * This compilation flow will NOT be triggered for Amplitude queries because:
+ * - connections.yaml: supports_native_exclude: true
+ * - Adapter converts excludes to segment filters directly
+ * 
+ * Tests remain valid to ensure compilation works for non-Amplitude providers.
+ * Target deletion: After 2 weeks of production validation.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
  * Tests the end-to-end flow of:
  * 1. User writes query with excludes() terms
  * 2. System detects excludes and compiles to minus/plus form

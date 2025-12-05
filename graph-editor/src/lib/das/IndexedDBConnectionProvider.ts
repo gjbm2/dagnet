@@ -3,13 +3,32 @@ import type { ConnectionProvider } from './ConnectionProvider';
 import { db } from '@/db/appDatabase';
 
 export class IndexedDBConnectionProvider implements ConnectionProvider {
+  // Cache the connection file to avoid repeated IndexedDB queries
+  private cachedConnectionFile: ConnectionFile | undefined = undefined;
+  private cacheTimestamp: number = 0;
+  private static CACHE_TTL_MS = 1500; // 1.5 second cache - enough for batch fetches, minimal staleness
+
   private async loadConnectionFile(): Promise<ConnectionFile | undefined> {
     if (typeof window === 'undefined') {
       return undefined;
     }
 
+    // Return cached value if fresh
+    const now = Date.now();
+    if (this.cachedConnectionFile && (now - this.cacheTimestamp) < IndexedDBConnectionProvider.CACHE_TTL_MS) {
+      return this.cachedConnectionFile;
+    }
+
     const record = await db.files.get('connections-connections');
-    return record?.data as ConnectionFile | undefined;
+    this.cachedConnectionFile = record?.data as ConnectionFile | undefined;
+    this.cacheTimestamp = now;
+    return this.cachedConnectionFile;
+  }
+
+  /** Clear the cache (call when connections file is edited) */
+  clearCache(): void {
+    this.cachedConnectionFile = undefined;
+    this.cacheTimestamp = 0;
   }
 
   async getConnection(name: string): Promise<ConnectionDefinition> {
@@ -40,5 +59,3 @@ export class IndexedDBConnectionProvider implements ConnectionProvider {
     return this.loadConnectionFile();
   }
 }
-
-

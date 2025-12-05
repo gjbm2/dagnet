@@ -2400,8 +2400,7 @@ export class UpdateManager {
                     ? { stdev: existingConditionalP.stdev }
                     : (siblingEdge.p?.stdev !== undefined ? { stdev: siblingEdge.p.stdev } : {})),
                   // Preserve other existing p properties (distribution, etc.)
-                  ...(existingConditionalP?.distribution ? { distribution: existingConditionalP.distribution } : {}),
-                  ...(existingConditionalP?.locked !== undefined ? { locked: existingConditionalP.locked } : {})
+                  ...(existingConditionalP?.distribution ? { distribution: existingConditionalP.distribution } : {})
                 }
               };
               matchedOldIndices.add(matchingIndex);

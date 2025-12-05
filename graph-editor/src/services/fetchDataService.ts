@@ -12,12 +12,14 @@
  * This ensures identical behaviour regardless of call site.
  */
 
-import { dataOperationsService } from './dataOperationsService';
+import { dataOperationsService, setBatchMode } from './dataOperationsService';
 import { calculateIncrementalFetch, parseDate } from './windowAggregationService';
 import { fileRegistry } from '../contexts/TabContext';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
 import type { Graph, DateRange } from '../types';
+import { showProgressToast, completeProgressToast } from '../components/ProgressToast';
+import { sessionLogService } from './sessionLogService';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -482,19 +484,128 @@ export async function fetchItems(
 ): Promise<FetchResult[]> {
   if (!graph || items.length === 0) return [];
   
+  const batchStart = performance.now();
   const results: FetchResult[] = [];
   const { onProgress, ...itemOptions } = options || {};
   
-  for (let i = 0; i < items.length; i++) {
-    onProgress?.(i + 1, items.length, items[i]);
+  // For multiple items: use batch mode with visual progress toast
+  const shouldUseBatchMode = items.length > 1;
+  const progressToastId = 'batch-fetch-progress';
+  
+  // SESSION LOG: Start batch fetch operation (only for batch mode)
+  const batchLogId = shouldUseBatchMode 
+    ? sessionLogService.startOperation('info', 'data-fetch', 'BATCH_FETCH',
+        `Batch fetch: ${items.length} items`,
+        { dsl, itemCount: items.length, mode: itemOptions?.mode || 'versioned' })
+    : undefined;
+  
+  if (shouldUseBatchMode) {
+    setBatchMode(true);
+    // Show initial progress toast with visual bar
+    showProgressToast(progressToastId, 0, items.length, 'Fetching');
+  }
+  
+  let successCount = 0;
+  let errorCount = 0;
+  
+  try {
+    for (let i = 0; i < items.length; i++) {
+      onProgress?.(i + 1, items.length, items[i]);
+      
+      // Update progress toast with visual bar
+      if (shouldUseBatchMode) {
+        showProgressToast(progressToastId, i, items.length, 'Fetching');
+      }
+      
+      // CRITICAL: Use getUpdatedGraph() to get fresh graph for each item
+      // This ensures rebalancing from previous items is preserved
+      // Without this, each item clones the ORIGINAL graph, losing sibling rebalancing
+      const currentGraph = getUpdatedGraph?.() ?? graph;
+      
+      const result = await fetchItem(items[i], itemOptions, currentGraph, setGraph, dsl, getUpdatedGraph);
+      results.push(result);
+      
+      if (result.success) {
+        successCount++;
+      } else {
+        errorCount++;
+      }
+    }
     
-    // CRITICAL: Use getUpdatedGraph() to get fresh graph for each item
-    // This ensures rebalancing from previous items is preserved
-    // Without this, each item clones the ORIGINAL graph, losing sibling rebalancing
-    const currentGraph = getUpdatedGraph?.() ?? graph;
+    // Show completion toast
+    if (shouldUseBatchMode) {
+      // Show full bar briefly before completion message
+      showProgressToast(progressToastId, items.length, items.length, 'Fetching');
+      
+      // Small delay to show completed bar, then show final message
+      setTimeout(() => {
+        if (errorCount > 0) {
+          completeProgressToast(progressToastId, `Fetched ${successCount}/${items.length} (${errorCount} failed)`, true);
+        } else {
+          completeProgressToast(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`, false);
+        }
+      }, 300);
+    }
+  } finally {
+    // Always reset batch mode
+    if (shouldUseBatchMode) {
+      setBatchMode(false);
+    }
     
-    const result = await fetchItem(items[i], itemOptions, currentGraph, setGraph, dsl, getUpdatedGraph);
-    results.push(result);
+    // Log batch timing
+    const batchTime = performance.now() - batchStart;
+    const avgTime = items.length > 0 ? batchTime / items.length : 0;
+    console.log(`[TIMING] fetchItems batch: ${batchTime.toFixed(1)}ms total, ${avgTime.toFixed(1)}ms avg per item (${items.length} items)`);
+    
+    // SESSION LOG: End batch fetch operation with summary
+    if (batchLogId) {
+      // Build summary of what was fetched
+      const successItems = results.filter(r => r.success);
+      const failedItems = results.filter(r => !r.success);
+      
+      // Group successful items by type for summary
+      const byType: Record<string, string[]> = {};
+      for (const r of successItems) {
+        const type = r.item.type;
+        if (!byType[type]) byType[type] = [];
+        byType[type].push(r.item.name);
+      }
+      
+      // Build details string
+      const typeSummaries = Object.entries(byType)
+        .map(([type, names]) => `${type}s: ${names.length}`)
+        .join(', ');
+      
+      const detailLines: string[] = [];
+      if (successItems.length > 0) {
+        detailLines.push(`✓ Updated: ${successItems.map(r => r.item.name).join(', ')}`);
+        // Add result details if available
+        for (const r of successItems) {
+          if (r.details) {
+            detailLines.push(`  ${r.item.name}: ${r.details}`);
+          }
+        }
+      }
+      if (failedItems.length > 0) {
+        detailLines.push(`✗ Failed: ${failedItems.map(r => `${r.item.name}${r.error ? ` (${r.error.message})` : ''}`).join(', ')}`);
+      }
+      
+      const status = errorCount > 0 ? (successCount > 0 ? 'warning' : 'error') : 'success';
+      const summary = errorCount > 0 
+        ? `${successCount}/${items.length} succeeded, ${errorCount} failed` 
+        : `${successCount} item${successCount !== 1 ? 's' : ''} updated`;
+      
+      sessionLogService.endOperation(batchLogId, status, summary, 
+        {
+          successCount,
+          errorCount,
+          itemCount: items.length,
+          duration: Math.round(batchTime),
+          byType,
+          details: detailLines.join('\n'),
+        }
+      );
+    }
   }
   
   return results;

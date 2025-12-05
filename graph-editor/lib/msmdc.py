@@ -12,6 +12,19 @@ Algorithm (witness-guided, no full enumeration):
 Complexity: Multiple DAG reachability checks (no 2^k explosion)
 
 See also: lib/graph_select.py (topology filtering, different use case)
+
+═══════════════════════════════════════════════════════════════════════════════
+NOTE: As of 4-Dec-25, the minus()/plus() compilation logic in this file is
+DEPRECATED for Amplitude. Amplitude now supports native exclude via inline
+behavioral cohort segment filters (discovered in the Dashboard REST API).
+
+The compilation code will NOT be triggered for Amplitude because:
+- connections.yaml: supports_native_exclude: true
+- connection_capabilities.py: supports_native_exclude: True (default for amplitude)
+
+The exclude() → minus()/plus() compilation remains for providers that don't
+support native excludes (e.g., legacy providers).
+═══════════════════════════════════════════════════════════════════════════════
 """
 
 from typing import List, Set, Dict, Any, Optional, Tuple, Iterable
@@ -309,6 +322,23 @@ def generate_query_for_edge(
         from connection_capabilities import supports_native_exclude as check_native_exclude
         
         if not check_native_exclude(connection_name, provider):
+            # ═══════════════════════════════════════════════════════════════════════
+            # DEPRECATED: 4-Dec-25 - MSMDC minus()/plus() compilation
+            # 
+            # This code compiled exclude() to minus()/plus() for providers that
+            # don't support native excludes. As of 4-Dec-25, Amplitude now supports
+            # native excludes via inline behavioral cohort segment filters.
+            # 
+            # This code path will NOT execute for Amplitude because:
+            # - connections.yaml: supports_native_exclude: true
+            # - connection_capabilities.py defaults: supports_native_exclude: True
+            # 
+            # This code remains for non-Amplitude providers that don't support
+            # native excludes (e.g., legacy providers).
+            # 
+            # Target deletion: After 2 weeks of production validation.
+            # ═══════════════════════════════════════════════════════════════════════
+            
             # Provider doesn't support native exclude - compile to minus()/plus()
             print(f"[MSMDC] Provider doesn't support native exclude; compiling to inclusion-exclusion")
             print(f"[MSMDC] Excludes to compile: {L_exc_sorted}")
@@ -677,9 +707,10 @@ def _extract_connection_info(edge: Edge) -> Tuple[Optional[str], Optional[str], 
         if ds:
             all_data_sources.append(ds)
     
-    # If no data sources, assume exclude is NOT supported (conservative)
+    # If no data sources, default to supports_exclude=True (skip minus/plus compilation)
+    # Changed 5-Dec-25: Was False (conservative), now True (all providers support native exclude)
     if not all_data_sources:
-        return None, None, False
+        return None, None, True
     
     # Check each data source's capability
     all_support_exclude = True

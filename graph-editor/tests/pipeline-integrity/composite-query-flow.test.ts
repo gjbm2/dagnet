@@ -1,6 +1,20 @@
 /**
  * TIER 1 (P0): Pipeline Integrity Tests - Composite Query Flow
  * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * DEPRECATED: 4-Dec-25
+ * 
+ * These tests cover the composite query (minus/plus) pipeline which was required
+ * when Amplitude didn't support native excludes.
+ * 
+ * As of 4-Dec-25, Amplitude supports native exclude via segment filters.
+ * This pipeline will NOT be triggered for Amplitude queries. The adapter
+ * converts excludes to segment filters directly, bypassing composite execution.
+ * 
+ * Tests remain for non-Amplitude providers that don't support native excludes.
+ * Target deletion: After 2 weeks of production validation.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
  * Tests the complete flow: MSMDC → Query → DAS → Composite Executor → File → Graph
  * 
  * This test suite catches bugs like:

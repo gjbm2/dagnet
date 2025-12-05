@@ -2,6 +2,16 @@
 Connection Capabilities Loader
 
 Loads provider capabilities from connections.yaml to inform MSMDC query generation.
+
+═══════════════════════════════════════════════════════════════════════════════
+NOTE: As of 4-Dec-25, Amplitude now supports native exclude via inline 
+behavioral cohort segment filters. The `supports_native_exclude` flag for
+amplitude-prod has been set to TRUE in connections.yaml.
+
+This means MSMDC's minus()/plus() compilation logic will NO LONGER be triggered
+for Amplitude queries. The compilation code remains for providers that don't
+support native excludes.
+═══════════════════════════════════════════════════════════════════════════════
 """
 
 import yaml
@@ -60,7 +70,9 @@ def get_default_provider_capability(provider: str) -> Dict[str, Any]:
     """
     defaults = {
         "amplitude": {
-            "supports_native_exclude": False,
+            # NOTE: Changed to True on 4-Dec-25 - Amplitude supports native exclude
+            # via inline behavioral cohort segment filters in the s= parameter
+            "supports_native_exclude": True,
             "supports_visited": True,
             "supports_ordered": True,
             "max_funnel_length": 10

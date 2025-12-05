@@ -1,6 +1,24 @@
 /**
  * Composite Query Parser for Inclusion-Exclusion
  * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * DEPRECATED: 4-Dec-25
+ * 
+ * This file parses minus()/plus() operators for subtractive funnel logic.
+ * This was required because we believed Amplitude didn't support native
+ * exclude/include filters.
+ * 
+ * REPLACEMENT: Native segment filters in Amplitude adapter (connections.yaml)
+ * The Amplitude API supports inline behavioral cohort definitions in the `s=`
+ * parameter with `op: ">="` for include and `op: "="` for exclude.
+ * 
+ * This code path is now bypassed by the adapter clearing visited_upstream/excludes
+ * arrays after converting them to native segment filters.
+ * 
+ * DO NOT DELETE until native segment filters are confirmed working in production.
+ * Target deletion: After 2 weeks of production validation.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
  * Parses DSL queries with minus() and plus() operators for subtractive funnel logic.
  * 
  * Note: This parser handles minus/plus operators. For context/window constraints,
