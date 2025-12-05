@@ -216,124 +216,103 @@ export default function ConversionEdge({
   const getTooltipContent = () => {
     if (!data) return 'No data available';
     
+    const edgeId = data.id || id;
     const lines: string[] = [];
     
-    // Edge id (more useful than UUID)
-    if (data.id) {
-      lines.push(`Edge: ${data.id}`);
-    }
-    
-    // Probability info - show effective probability for case edges, sub-route probability otherwise
-    // Check if case edge (has case_variant, infer case_id from source if needed)
-    const isCaseEdgeForTooltip = fullEdge?.case_variant && (
+    // Case edge info
+    const isCaseEdge = fullEdge?.case_variant && (
       fullEdge?.case_id || 
       (graph?.nodes?.find((n: any) => n.uuid === fullEdge?.from || n.id === fullEdge?.from)?.type === 'case')
     );
-    if (isCaseEdgeForTooltip) {
-      // Case edge: show effective probability (variant weight * sub-route probability)
-      lines.push(`Effective Probability: ${(effectiveProbability * 100).toFixed(1)}%`);
-      lines.push(`Sub-Route Probability: ${(data.probability * 100).toFixed(1)}%`);
-    } else {
-      // Regular edge: show probability
-      lines.push(`Probability: ${(effectiveProbability * 100).toFixed(1)}%`);
-    }
-    if (data.stdev) {
-      lines.push(`Std Dev: ${(data.stdev * 100).toFixed(1)}%`);
-    }
-    
-    // Case edge specific info - show variant weight
-    if (data.case_variant) {
-      lines.push(`\nCase Variant: ${data.case_variant}`);
-      if (data.case_id) {
-        lines.push(`Case ID: ${data.case_id}`);
-        // Find the case node and get variant weight
-        // source could be uuid OR human-readable id, check both
-        const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
-        if (sourceNode?.type === 'case' && sourceNode?.case?.id === data.case_id) {
-          const variant = sourceNode.case.variants?.find((v: any) => v.name === data.case_variant);
-          if (variant) {
-            lines.push(`Variant Weight: ${(variant.weight * 100).toFixed(1)}%`);
-          }
+    if (isCaseEdge) {
+      lines.push(`case: ${data.case_variant}`);
+      const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
+      if (sourceNode?.type === 'case' && sourceNode?.case?.id === data.case_id) {
+        const variant = sourceNode?.case?.variants?.find((v: any) => v.name === data.case_variant);
+        if (variant) {
+          lines.push(`  weight ${(variant.weight * 100).toFixed(0)}% × sub ${(data.probability * 100).toFixed(0)}%`);
         }
       }
     }
     
-    // Conditional probabilities
+    // === PARAM: e.<edgeId>.p ===
+    lines.push(`e.${edgeId}.p`);
+    
+    // Mean ± stdev
+    const pVal = (effectiveProbability * 100).toFixed(1);
+    const pStd = data.stdev ? ` ±${(data.stdev * 100).toFixed(1)}` : '';
+    lines.push(`  ${pVal}%${pStd}`);
+    
+    // Evidence or rebalanced indicator
+    const pEvidence = fullEdge?.p?.evidence;
+    const hasEvidence = pEvidence && (pEvidence.n !== undefined || pEvidence.k !== undefined);
+    
+    if (hasEvidence && pEvidence) {
+      if (pEvidence.n !== undefined && pEvidence.k !== undefined) {
+        lines.push(`  n=${pEvidence.n} k=${pEvidence.k}`);
+      }
+      if (pEvidence.window_from && pEvidence.window_to) {
+        const fmtDate = (d: Date) => `${d.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}`;
+        lines.push(`  ${fmtDate(new Date(pEvidence.window_from))} to ${fmtDate(new Date(pEvidence.window_to))}`);
+      }
+      if (pEvidence.source) lines.push(`  source: ${pEvidence.source}`);
+      // Query only if we have evidence (actual fetch happened)
+      if (fullEdge?.query) {
+        lines.push(`  query: ${fullEdge.query}`);
+      }
+    } else {
+      lines.push(`  (rebalanced)`);
+    }
+    
+    // === PARAMS: e.<edgeId>.<condition>.p ===
     if (fullEdge?.conditional_p && fullEdge.conditional_p.length > 0) {
-      lines.push(`\nConditional Probabilities:`);
       for (const cond of fullEdge.conditional_p) {
-        const nodeNames = getVisitedNodeIds(cond.condition).map((nodeId: string) => {
-          const node = graph?.nodes.find((n: any) => n.uuid === nodeId || n.id === nodeId);
-          return node?.id || node?.label || nodeId;
-        }).join(', ');
-        const condProb = ((cond.p.mean ?? 0) * 100).toFixed(1);
-        lines.push(`  • p | visited(${nodeNames}): ${condProb}%`);
-        if (cond.p.stdev) {
-          lines.push(`    σ: ${(cond.p.stdev * 100).toFixed(1)}%`);
+        lines.push('');
+        lines.push(`e.${edgeId}.${cond.condition}.p`);
+        
+        // Mean ± stdev
+        const condVal = ((cond.p.mean ?? 0) * 100).toFixed(1);
+        const condStd = cond.p.stdev ? ` ±${(cond.p.stdev * 100).toFixed(1)}` : '';
+        lines.push(`  ${condVal}%${condStd}`);
+        
+        // Evidence or rebalanced indicator
+        const condEvidence = cond.p.evidence;
+        const condHasEvidence = condEvidence && (condEvidence.n !== undefined || condEvidence.k !== undefined);
+        
+        if (condHasEvidence && condEvidence) {
+          if (condEvidence.n !== undefined && condEvidence.k !== undefined) {
+            lines.push(`  n=${condEvidence.n} k=${condEvidence.k}`);
+          }
+          if (condEvidence.window_from && condEvidence.window_to) {
+            const fmtDate = (d: Date) => `${d.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}`;
+            lines.push(`  ${fmtDate(new Date(condEvidence.window_from))} to ${fmtDate(new Date(condEvidence.window_to))}`);
+          }
+          if (condEvidence.source) lines.push(`  source: ${condEvidence.source}`);
+          // Query only if we have evidence (actual fetch happened)
+          if (fullEdge?.query) {
+            lines.push(`  query: ${fullEdge.query}.${cond.condition}`);
+          }
+        } else {
+          lines.push(`  (rebalanced)`);
         }
       }
     }
     
     // Description
     if (data.description) {
-      lines.push(`\nDescription: ${data.description}`);
+      lines.push('');
+      lines.push(data.description);
     }
     
-    // Costs (new flat schema)
-    if (data.cost_gbp || data.cost_time) {
-      lines.push('\nCosts:');
-      if (data.cost_gbp) {
-        lines.push(`  Monetary: £${data.cost_gbp.mean?.toFixed(2) || 0}`);
-        if (data.cost_gbp.stdev) {
-          lines.push(`    (±£${data.cost_gbp.stdev.toFixed(2)})`);
-        }
-      }
-      if (data.cost_time) {
-        lines.push(`  Time: ${data.cost_time.mean?.toFixed(1) || 0} days`);
-        if (data.cost_time.stdev) {
-          lines.push(`    (±${data.cost_time.stdev.toFixed(1)} days)`);
-        }
-      }
+    // Costs
+    if (data.cost_gbp?.mean || data.cost_time?.mean) {
+      lines.push('');
+      if (data.cost_gbp?.mean) lines.push(`cost_gbp: £${data.cost_gbp.mean.toFixed(0)}`);
+      if (data.cost_time?.mean) lines.push(`cost_time: ${data.cost_time.mean.toFixed(0)}d`);
     }
     
-  // Weight default
-  if (data.weight_default !== undefined) {
-    lines.push(`\nDefault Weight: ${data.weight_default}`);
-  }
-  
-  // Evidence
-  if (fullEdge?.p?.evidence) {
-    const evidence = fullEdge.p.evidence;
-    const evidenceParts: string[] = [];
-    
-    if (evidence.n !== undefined) evidenceParts.push(`n=${evidence.n}`);
-    if (evidence.k !== undefined) evidenceParts.push(`k=${evidence.k}`);
-    
-    // Debug: Show naive p (k/n) and part pooled p
-    if (evidence.n !== undefined && evidence.k !== undefined && evidence.n > 0) {
-      const naiveP = evidence.k / evidence.n;
-      evidenceParts.push(`naive p=${(naiveP * 100).toFixed(2)}%`);
-      
-      // Part pooled p (inverse-variance weighted) - calculate if we have daily data
-      // For now, we'll show naive p. Part pooled would require daily time-series data
-      // which isn't stored on the graph edge (only in parameter files)
-      // TODO: Could fetch from parameter file if a nested p.id exists
-    }
-    
-    if (evidence.window_from && evidence.window_to) {
-      const from = new Date(evidence.window_from).toLocaleDateString();
-      const to = new Date(evidence.window_to).toLocaleDateString();
-      evidenceParts.push(`Window: ${from} - ${to}`);
-    }
-    if (evidence.source) evidenceParts.push(`Source: ${evidence.source}`);
-    
-    if (evidenceParts.length > 0) {
-      lines.push(`\nEvidence: ${evidenceParts.join(', ')}`);
-    }
-  }
-  
-  return lines.join('\n');
-};
+    return lines.join('\n');
+  };
   const { deleteElements, setEdges, getNodes, getEdges, screenToFlowPosition } = useReactFlow();
   const { graph } = useGraphStore();
   const viewPrefs = useViewPreferencesContext();
@@ -1758,9 +1737,8 @@ export default function ConversionEdge({
             lineHeight: '1.4',
             boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
             border: '1px solid #333',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            maxWidth: '300px',
+            whiteSpace: 'pre',
+            maxWidth: '600px',
             zIndex: 10000,
             pointerEvents: 'none',
           }}

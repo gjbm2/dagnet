@@ -1,5 +1,17 @@
 """
 Tests for MSMDC graph analysis algorithms (separator detection, query compilation)
+
+═══════════════════════════════════════════════════════════════════════════════
+NOTE: As of 4-Dec-25, Amplitude supports native exclude via segment filters.
+
+Tests with `supports_native_exclude=False` cover the DEPRECATED minus/plus
+compilation flow. These remain valid for non-Amplitude providers.
+
+Tests with `supports_native_exclude=True` verify the NEW native exclude path
+where queries pass through as exclude() without compilation.
+
+Target deletion of deprecated tests: After 2 weeks of production validation.
+═══════════════════════════════════════════════════════════════════════════════
 """
 
 import networkx as nx
@@ -230,6 +242,76 @@ def test_native_exclude_provider():
     assert "exclude" in query
     assert "minus" not in query
     assert "d" in query
+
+
+def test_amplitude_native_exclude_4dec25():
+    """
+    NEW TEST: Amplitude now supports native exclude (4-Dec-25)
+    
+    Verifies that when supports_native_exclude=True for Amplitude,
+    the query uses exclude() syntax and NOT minus()/plus() compilation.
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([
+        ('a', 'b'), ('b', 'c'),
+        ('a', 'd'), ('d', 'c')
+    ])
+    
+    # Amplitude with native exclude support (NEW as of 4-Dec-25)
+    query = compile_query_for_edge(
+        G,
+        ('a', 'c'),  # Edge with competing paths via b and d
+        provider='amplitude',
+        supports_native_exclude=True  # NEW: Amplitude now supports this!
+    )
+    
+    print("\n=== Amplitude Native Exclude Test (4-Dec-25) ===")
+    print(f"Generated query: {query}")
+    
+    # Should use exclude() syntax, NOT minus()/plus()
+    assert "exclude" in query, f"Expected exclude() in query, got: {query}"
+    assert "minus" not in query, f"Should NOT have minus() with native exclude: {query}"
+    assert "plus" not in query, f"Should NOT have plus() with native exclude: {query}"
+    
+    # Should exclude the competing branch (either b or d)
+    assert ("b" in query or "d" in query), f"Should exclude competing branch: {query}"
+
+
+def test_amplitude_complex_graph_native_exclude():
+    """
+    NEW TEST: Complex graph with Amplitude native exclude (4-Dec-25)
+    
+    Previously this would generate a complex minus()/plus() query.
+    Now it should generate a simple exclude() query.
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([
+        ('a', 'm'),  # Direct edge we want to isolate
+        ('a', 'b'), ('b', 'm'),
+        ('a', 'f'), ('f', 'b'), ('f', 'g'),
+        ('a', 'e'), ('e', 'b'), ('e', 'g'),
+        ('a', 'd'), ('d', 'm'), ('d', 'g'), ('d', 'e'),
+        ('g', 'm')
+    ])
+    
+    # With native exclude support
+    query = compile_query_for_edge(
+        G,
+        ('a', 'm'),
+        provider='amplitude',
+        supports_native_exclude=True
+    )
+    
+    print("\n=== Complex Graph Amplitude Native Exclude (4-Dec-25) ===")
+    print(f"Generated query: {query}")
+    
+    # Should use exclude() syntax
+    assert "exclude" in query, f"Expected exclude() in query, got: {query}"
+    assert "minus" not in query, f"Should NOT have minus() with native exclude: {query}"
+    assert "plus" not in query, f"Should NOT have plus() with native exclude: {query}"
+    
+    # The query should still be simpler than the minus/plus version
+    # (No coefficient computation needed)
 
 
 def test_no_competing_branches():

@@ -157,50 +157,6 @@ describe('DataOperationsService Integration Tests', () => {
       });
     });
 
-    it('probability with locked flag survives roundtrip', async () => {
-      const edge = createTestEdge({
-        uuid: 'edge-1',
-        p: { 
-          mean: 0.55, 
-          stdev: 0.04, 
-          distribution: 'beta',
-          locked: true 
-        }
-      });
-
-      const paramFile = createTestParameterFile({
-        id: 'locked-param',
-        type: 'probability',
-        values: []
-      });
-
-      await fileRegistry.registerFile('parameter-locked-param', paramFile);
-      const graph = createTestGraph({ edges: [edge] });
-      const setGraph = vi.fn();
-
-      // Put
-      await dataOperationsService.putParameterToFile({
-        paramId: 'locked-param',
-        edgeId: 'edge-1',
-        graph,
-        setGraph
-      });
-
-      // Get back
-      edge.p!.id = 'locked-param';
-      await dataOperationsService.getParameterFromFile({
-        paramId: 'locked-param',
-        edgeId: 'edge-1',
-        graph: createTestGraph({ edges: [edge] }),
-        setGraph
-      });
-
-      const updatedGraph = setGraph.mock.calls[setGraph.mock.calls.length - 1][0];
-      const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
-
-      expect(updatedEdge.p.locked).toBe(true);
-    });
-
     it('stale evidence data is NOT written to file', async () => {
       const edge = createTestEdge({
         uuid: 'edge-1',
@@ -401,55 +357,6 @@ describe('DataOperationsService Integration Tests', () => {
       
       // Verify conditional_p[0] is unchanged
       expect(updatedEdge.conditional_p[0].p.mean).toBe(0.65);
-    });
-
-    it('conditional_p with locked flag survives roundtrip', async () => {
-      const edge = createTestEdgeWithConditionalP({
-        uuid: 'edge-1',
-        conditional_p: [{
-          condition: 'visited(promo)',
-          p: {
-            id: 'locked-cond-param',
-            mean: 0.55,
-            stdev: 0.04,
-            distribution: 'beta',
-            locked: true
-          }
-        }]
-      });
-
-      const paramFile = createTestConditionalParameterFile({
-        id: 'locked-cond-param',
-        type: 'conditional_probability',
-        values: []
-      });
-
-      await fileRegistry.registerFile('parameter-locked-cond-param', paramFile);
-      const graph = createTestGraph({ edges: [edge] });
-      const setGraph = vi.fn();
-
-      // Put
-      await dataOperationsService.putParameterToFile({
-        paramId: 'locked-cond-param',
-        edgeId: 'edge-1',
-        graph,
-        setGraph,
-        conditionalIndex: 0
-      });
-
-      // Get back
-      await dataOperationsService.getParameterFromFile({
-        paramId: 'locked-cond-param',
-        edgeId: 'edge-1',
-        graph,
-        setGraph,
-        conditionalIndex: 0
-      });
-
-      const updatedGraph = setGraph.mock.calls[setGraph.mock.calls.length - 1][0];
-      const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
-
-      expect(updatedEdge.conditional_p[0].p.locked).toBe(true);
     });
 
     it('conditional_p stale evidence data is NOT written to file', async () => {

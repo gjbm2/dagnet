@@ -408,6 +408,11 @@ When asked to "run tests":
 - Build is slow and usually unnecessary during development
 - Only build when user asks to verify production readiness
 
+### Terminal Output
+- **NEVER** use `head`, `tail`, or other truncation commands on test/build output
+- Always show full output so user can see all results
+- If output is very long, it will be saved to a file automatically
+
 ### Test Updates Are Mandatory
 - **ALWAYS** update tests when changing functionality
 - **NEVER** leave tests broken

@@ -310,6 +310,27 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         
         console.log('[WindowSelector] Context keys from pinned DSL:', Array.from(contextKeySet));
         
+        // If no context keys in pinned DSL, fall back to showing all available
+        if (contextKeySet.size === 0) {
+          console.log('[WindowSelector] No context keys in pinned DSL - showing all available contexts');
+          const keys = await contextRegistry.getAllContextKeys();
+          console.log('[WindowSelector] All available context keys:', keys);
+          const allSections = await Promise.all(
+            keys.map(async key => {
+              const context = await contextRegistry.getContext(key.id);
+              const values = await contextRegistry.getValuesForContext(key.id);
+              return {
+                id: key.id,
+                name: key.id.replace(/_/g, ' ').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                values,
+                otherPolicy: context?.otherPolicy
+              };
+            })
+          );
+          setAvailableKeySections(allSections);
+          return;
+        }
+        
         // Load values for each pinned key
         const sections = await Promise.all(
           Array.from(contextKeySet).map(async keyId => {

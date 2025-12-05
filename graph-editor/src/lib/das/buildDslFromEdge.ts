@@ -43,12 +43,18 @@ export interface ContextFilterObject {
  * - from/to: event_ids from node references
  * - visited/visited_upstream: categorized by graph topology
  * - visitedAny/visitedAny_upstream: groups categorized by graph topology
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * NOTE: visited_upstream is now handled by native segment filters in Amplitude.
+ * The adapter converts visited_upstream to segment filters and clears the array.
+ * This field remains for non-Amplitude providers that don't support segment filters.
+ * ═══════════════════════════════════════════════════════════════════════════════
  */
 export interface QueryPayload {
   from: string;                    // event_id of the 'from' node
   to: string;                      // event_id of the 'to' node
   visited?: string[];              // Visited nodes BETWEEN from and to
-  visited_upstream?: string[];     // Visited nodes BEFORE from (for super-funnel construction)
+  visited_upstream?: string[];     // Visited nodes BEFORE from (DEPRECATED for Amplitude - now uses segment filters)
   visitedAny?: string[][];         // Groups of visited nodes BETWEEN from and to (OR within group)
   visitedAny_upstream?: string[][]; // Groups of visited nodes BEFORE from (OR within group)
   exclude?: string[];

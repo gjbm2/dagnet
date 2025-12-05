@@ -25,7 +25,9 @@ class Evidence(BaseModel):
     window_to: Optional[str] = Field(None, description="Time window end (UK format: d-MMM-yy or ISO)")
     retrieved_at: Optional[str] = Field(None, description="When this data was retrieved (UK format or ISO)")
     source: Optional[str] = Field(None, description="Connection name used for this retrieval")
-    query: Optional[Dict[str, Any]] = Field(None, description="Query that produced this data")
+    path: Optional[Literal["direct", "file"]] = Field(None, description="How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from parameter file")
+    full_query: Optional[str] = Field(None, description="Complete DSL query string used for this fetch (includes base query + window + context)")
+    debug_trace: Optional[str] = Field(None, description="Complete execution trace as JSON string for debugging/provenance")
     
     @field_validator('window_from', 'window_to', 'retrieved_at', mode='before')
     @classmethod
@@ -37,10 +39,19 @@ class Evidence(BaseModel):
 
 
 class DataSource(BaseModel):
-    """Connection settings for external data retrieval."""
-    source_type: str
-    connection_settings: Optional[str] = Field(None, description="JSON blob with source-specific settings")
-    connection_overridden: bool = Field(False, description="If true, these settings override parameter file")
+    """Provenance information for parameter data."""
+    type: str = Field(..., description="Data source type (from connections.yaml, e.g., 'amplitude', 'manual', 'sheets')")
+    url: Optional[str] = Field(None, description="URL to source data (e.g., Google Sheet, API endpoint)")
+    notes: Optional[str] = Field(None, description="Human notes about this data source")
+    retrieved_at: Optional[str] = Field(None, description="When data was retrieved (UK format or ISO)")
+    edited_at: Optional[str] = Field(None, description="When data was last edited (UK format or ISO)")
+    author: Optional[str] = Field(None, description="Who created/edited this data")
+    query: Optional[Dict[str, Any]] = Field(None, description="Query object that produced this data")
+    full_query: Optional[str] = Field(None, description="Complete DSL query string used for retrieval")
+    debug_trace: Optional[str] = Field(None, description="Complete execution trace as JSON string for debugging/provenance")
+    no_data: Optional[bool] = Field(None, description="True if data source returned no data")
+    experiment_id: Optional[str] = Field(None, description="Experiment ID for A/B test sources")
+    connection: Optional[str] = Field(None, description="Connection name used")
 
 
 class ProbabilityParam(BaseModel):
@@ -51,20 +62,24 @@ class ProbabilityParam(BaseModel):
     stdev_overridden: bool = Field(False, description="If true, stdev was manually edited")
     distribution: Optional[Literal["normal", "beta", "uniform"]] = Field("beta", description="Distribution type")
     distribution_overridden: bool = Field(False, description="If true, distribution was manually edited")
+    connection: Optional[str] = Field(None, description="Connection name from connections.yaml")
+    connection_string: Optional[str] = Field(None, description="JSON blob of provider-specific settings")
     evidence: Optional[Evidence] = None
     id: Optional[str] = Field(None, description="Reference to parameter file (FK to parameter-{id}.yaml)")
-    locked: Optional[bool] = Field(None, deprecated=True, description="DEPRECATED: Use mean_overridden instead")
     data_source: Optional[DataSource] = None
 
 
 class CostParam(BaseModel):
     """Cost parameter (monetary or time)."""
-    mean: float = Field(..., ge=0)
+    mean: Optional[float] = Field(None, ge=0)
     mean_overridden: bool = Field(False, description="If true, mean was manually edited")
     stdev: Optional[float] = Field(None, ge=0)
     stdev_overridden: bool = Field(False, description="If true, stdev was manually edited")
     distribution: Optional[Literal["normal", "lognormal", "gamma", "uniform", "beta"]] = Field("normal")
     distribution_overridden: bool = Field(False, description="If true, distribution was manually edited")
+    connection: Optional[str] = Field(None, description="Connection name from connections.yaml")
+    connection_string: Optional[str] = Field(None, description="JSON blob of provider-specific settings")
+    evidence: Optional[Evidence] = None
     id: Optional[str] = Field(None, description="Reference to cost parameter file")
     data_source: Optional[DataSource] = None
 
@@ -141,6 +156,14 @@ class Layout(BaseModel):
     colour: Optional[str] = Field(None, pattern=r"^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
 
 
+class NodeImage(BaseModel):
+    """Image reference for node display."""
+    url: str
+    alt: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
 class Node(BaseModel):
     """
     Graph node representing a state in the conversion funnel.
@@ -152,15 +175,22 @@ class Node(BaseModel):
     label_overridden: bool = Field(False, description="If true, label was manually edited")
     description: Optional[str] = None
     description_overridden: bool = Field(False, description="If true, description was manually edited")
+    event_id: Optional[str] = Field(None, description="Direct event ID for DAS queries")
+    event_id_overridden: bool = Field(False, description="If true, event_id was manually edited")
     event: Optional[EventReference] = None
     tags: Optional[List[str]] = None
     absorbing: bool = Field(False, description="If true, node is terminal (zero outgoing edges)")
     outcome_type: Optional[Literal["success", "failure", "error", "neutral", "other"]] = None
+    outcome_type_overridden: bool = Field(False, description="If true, outcome_type was manually edited")
     entry: Optional[Entry] = None
     costs: Optional[Dict[str, Any]] = Field(None, deprecated=True, description="DEPRECATED: Use edge costs")
     residual_behavior: Optional[ResidualBehavior] = None
     case: Optional[Case] = None
     layout: Optional[Layout] = None
+    url: Optional[str] = Field(None, description="URL associated with this node")
+    url_overridden: bool = Field(False, description="If true, url was manually edited")
+    images: Optional[List[NodeImage]] = Field(None, description="Images for node display")
+    images_overridden: bool = Field(False, description="If true, images were manually edited")
 
 
 # ============================================================================

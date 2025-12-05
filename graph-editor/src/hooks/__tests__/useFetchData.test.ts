@@ -17,7 +17,8 @@ vi.mock('../../services/dataOperationsService', () => ({
     getParameterFromFile: vi.fn().mockResolvedValue(undefined),
     getCaseFromFile: vi.fn().mockResolvedValue(undefined),
     getNodeFromFile: vi.fn().mockResolvedValue(undefined),
-  }
+  },
+  setBatchMode: vi.fn(), // Batch mode control for toast suppression
 }));
 
 vi.mock('../../services/windowAggregationService', () => ({
@@ -42,6 +43,7 @@ vi.mock('react-hot-toast', () => {
     success: vi.fn(),
     loading: vi.fn().mockReturnValue('toast-id'),
     dismiss: vi.fn(),
+    custom: vi.fn(), // For progress toast
   });
   return { default: toast };
 });
