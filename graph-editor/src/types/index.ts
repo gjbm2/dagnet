@@ -419,21 +419,17 @@ export interface ProbabilityParam {
   distribution?: 'normal' | 'beta' | 'uniform';
   connection?: string; // Connection name from connections.yaml
   connection_string?: string; // JSON blob of provider-specific settings
-  query?: any; // Query object for data retrieval (DSL query: from/to/visited/etc)
+  // NOTE: 'query' field removed - legacy field, actual query lives at edge.query
   evidence?: Evidence; // Observations from data sources (n, k, window, etc.)
   data_source?: { // Provenance information
     type: string; // Data source type (from connections.yaml, e.g., 'amplitude', 'manual', 'sheets')
-    url?: string;
-    notes?: string;
     retrieved_at?: string;
     edited_at?: string;
-    author?: string;
-    query?: any;
-    full_query?: string;
+    // NOTE: 'query' field removed - was unused and caused type mismatch with Python (Dict vs string)
+    full_query?: string; // Full DSL query string (e.g., "from(a).to(b).visited(c)")
     debug_trace?: string;
-    no_data?: boolean;
     experiment_id?: string; // Experiment/gate ID for A/B test sources (e.g., Statsig gate_id)
-    connection?: string; // Connection name used
+    no_data?: boolean; // True if data source returned no data
   };
 }
 

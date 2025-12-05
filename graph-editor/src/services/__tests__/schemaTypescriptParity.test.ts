@@ -41,7 +41,8 @@ const TYPESCRIPT_FIELDS = {
   ProbabilityParam: new Set([
     'mean', 'mean_overridden', 'stdev', 'stdev_overridden',
     'distribution', 'distribution_overridden', 'id',
-    'connection', 'connection_string', 'query', 'evidence', 'data_source'
+    'connection', 'connection_string', 'evidence', 'data_source'
+    // NOTE: 'query' removed - legacy field, actual query lives at edge.query
   ]),
   
   CostParam: new Set([
@@ -65,8 +66,8 @@ const TYPESCRIPT_FIELDS = {
   
   GraphNode: new Set([
     'uuid', 'id', 'type', 'label', 'label_overridden',
-    'description', 'description_overridden', 'event_id', 'event',
-    'tags', 'absorbing', 'outcome_type', 'entry', 'costs',
+    'description', 'description_overridden', 'event_id', 'event_id_overridden', 'event',
+    'tags', 'absorbing', 'outcome_type', 'outcome_type_overridden', 'entry', 'costs',
     'residual_behavior', 'case', 'layout',
     'url', 'url_overridden', 'images', 'images_overridden'
   ]),

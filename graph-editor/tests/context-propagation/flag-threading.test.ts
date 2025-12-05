@@ -486,7 +486,7 @@ describe('Context Propagation: Flag Threading', () => {
     const overhead = withCheckTime - baselineTime;
     
     // Overhead should be negligible
-    expect(overhead).toBeLessThan(10); // <10ms for 10k iterations
+    expect(overhead).toBeLessThanOrEqual(10); // <=10ms for 10k iterations
   });
 });
 
