@@ -327,28 +327,24 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const isVariantWeightUnbalanced = Math.abs(totalVariantWeight - 1.0) > 0.01;
 
   // Handlers for regular probability
-  const handleProbabilityCommit = React.useCallback((value: number, skipHistory: boolean = false) => {
+  const handleProbabilityCommit = React.useCallback(async (value: number, skipHistory: boolean = false) => {
     if (!graph) return;
-    const nextGraph = structuredClone(graph);
-    const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
-    if (edgeIndex >= 0) {
-      nextGraph.edges[edgeIndex].p = {
-        ...nextGraph.edges[edgeIndex].p,
-        mean: value,
-        mean_overridden: true
-      };
-      if (nextGraph.metadata) {
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      // Only save history if not skipping (for slider dragging)
-      const historyLabel = skipHistory ? undefined : 'Update edge probability';
-      onUpdateGraph(nextGraph, historyLabel, edgeId);
-    }
+    // Use unified UpdateManager code path for probability updates (consistent rounding)
+    const { updateManager } = await import('../services/UpdateManager');
+    const nextGraph = updateManager.updateEdgeProbability(
+      graph,
+      edgeId,
+      { mean: value },
+      { setOverrideFlag: true }
+    );
+    // Only save history if not skipping (for slider dragging)
+    const historyLabel = skipHistory ? undefined : 'Update edge probability';
+    onUpdateGraph(nextGraph, historyLabel, edgeId);
   }, [graph, edgeId, onUpdateGraph]);
   
   // Separate handler for onChange (no history) vs onCommit (with history)
-  const handleProbabilityChange = React.useCallback((value: number) => {
-    handleProbabilityCommit(value, true); // Skip history for onChange
+  const handleProbabilityChange = React.useCallback(async (value: number) => {
+    await handleProbabilityCommit(value, true); // Skip history for onChange
   }, [handleProbabilityCommit]);
 
   const handleProbabilityRebalance = React.useCallback(async () => {
@@ -376,28 +372,25 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   }, [graph, edgeId, onUpdateGraph]);
 
   // Handlers for conditional probabilities
-  const handleConditionalCommit = React.useCallback((cpIndex: number, value: number, skipHistory: boolean = false) => {
+  const handleConditionalCommit = React.useCallback(async (cpIndex: number, value: number, skipHistory: boolean = false) => {
     if (!graph) return;
-    const nextGraph = structuredClone(graph);
-    const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
-    if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
-      if (!nextGraph.edges[edgeIndex].conditional_p[cpIndex].p) {
-        nextGraph.edges[edgeIndex].conditional_p[cpIndex].p = {};
-      }
-      nextGraph.edges[edgeIndex].conditional_p[cpIndex].p.mean = value;
-      nextGraph.edges[edgeIndex].conditional_p[cpIndex].p.mean_overridden = true;
-      if (nextGraph.metadata) {
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      // Only save history if not skipping (for slider dragging)
-      const historyLabel = skipHistory ? undefined : undefined; // No label for conditional p updates
-      onUpdateGraph(nextGraph, historyLabel, edgeId);
-    }
+    // Use unified UpdateManager code path for conditional probability updates
+    const { updateManager } = await import('../services/UpdateManager');
+    const nextGraph = updateManager.updateConditionalProbability(
+      graph,
+      edgeId,
+      cpIndex,
+      { mean: value },
+      { setOverrideFlag: true }
+    );
+    // Only save history if not skipping (for slider dragging)
+    const historyLabel = skipHistory ? undefined : undefined; // No label for conditional p updates
+    onUpdateGraph(nextGraph, historyLabel, edgeId);
   }, [graph, edgeId, onUpdateGraph]);
   
   // Separate handler for onChange (no history) vs onCommit (with history)
-  const handleConditionalChange = React.useCallback((cpIndex: number, value: number) => {
-    handleConditionalCommit(cpIndex, value, true); // Skip history for onChange
+  const handleConditionalChange = React.useCallback(async (cpIndex: number, value: number) => {
+    await handleConditionalCommit(cpIndex, value, true); // Skip history for onChange
   }, [handleConditionalCommit]);
 
   const handleConditionalRebalance = React.useCallback(async (cpIndex: number) => {

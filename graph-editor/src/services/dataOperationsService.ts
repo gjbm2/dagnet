@@ -1287,9 +1287,9 @@ class DataOperationsService {
       
       if (edgeIndex >= 0 && result.changes) {
         // ===== CONDITIONAL_P HANDLING =====
-        // For conditional parameters, redirect p.* changes to conditional_p[idx].p.*
+        // Use unified UpdateManager code path for conditional probability updates
         if (conditionalIndex !== undefined) {
-          // Validate conditional_p entry exists
+          // Validate conditional_p entry exists before attempting update
           if (!nextGraph.edges[edgeIndex].conditional_p?.[conditionalIndex]) {
             console.error('[DataOperationsService] conditional_p entry not found for getParameterFromFile', {
               conditionalIndex,
@@ -1300,44 +1300,45 @@ class DataOperationsService {
             return;
           }
           
-          // Ensure conditional_p[idx].p exists
-          if (!nextGraph.edges[edgeIndex].conditional_p[conditionalIndex].p) {
-            nextGraph.edges[edgeIndex].conditional_p[conditionalIndex].p = {};
-          }
+          const { updateManager } = await import('./UpdateManager');
           
-          // Remap changes from p.* to conditional_p[idx].p.*
-          const remappedChanges = result.changes.map((change: { field: string; newValue: any }) => {
-            if (change.field.startsWith('p.')) {
-              return {
-                ...change,
-                field: `conditional_p.${conditionalIndex}.${change.field}`
-              };
-            }
-            return change;
+          // Extract values from the changes that UpdateManager's handleFileToEdge produced
+          // (these already have transforms applied - rounding, etc.)
+          const meanChange = result.changes.find((c: { field: string }) => c.field === 'p.mean');
+          const stdevChange = result.changes.find((c: { field: string }) => c.field === 'p.stdev');
+          const nChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.n');
+          const kChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.k');
+          
+          console.log('[DataOperationsService] Applying file changes to conditional_p via UpdateManager:', {
+            conditionalIndex,
+            meanChange,
+            stdevChange,
+            nChange,
+            kChange
           });
           
-          console.log('[DataOperationsService] Remapped changes for conditional_p:', {
-            original: result.changes,
-            remapped: remappedChanges,
-            conditionalIndex
-          });
+          // Apply via unified UpdateManager method
+          let updatedGraph = updateManager.updateConditionalProbability(
+            graph,
+            edgeId,
+            conditionalIndex,
+            {
+              mean: meanChange?.newValue,
+              stdev: stdevChange?.newValue,
+              evidence: (nChange || kChange) ? {
+                n: nChange?.newValue,
+                k: kChange?.newValue
+              } : undefined
+            },
+            { respectOverrides: true }
+          );
           
-          // Apply remapped changes
-          applyChanges(nextGraph.edges[edgeIndex], remappedChanges);
+          // AUTO-REBALANCE: If mean was updated, rebalance conditional probability siblings
+          let finalGraph = updatedGraph;
+          const meanWasUpdated = meanChange !== undefined;
           
-          // Update metadata
-          if (nextGraph.metadata) {
-            nextGraph.metadata.updated_at = new Date().toISOString();
-          }
-          
-          // AUTO-REBALANCE: If p.mean was updated, rebalance conditional probability siblings
-          // Same logic as regular parameters, but uses rebalanceConditionalProbabilities
-          let finalGraph = nextGraph;
-          const meanWasUpdated = result.changes?.some((c: { field: string }) => c.field === 'p.mean');
-          
-          if (meanWasUpdated) {
-            const { updateManager } = await import('./UpdateManager');
-            const updatedEdgeId = nextGraph.edges[edgeIndex].uuid || nextGraph.edges[edgeIndex].id || edgeId;
+          if (meanWasUpdated && updatedGraph !== graph) {
+            const updatedEdgeId = edgeId;
             
             console.log('[DataOperationsService] Rebalancing conditional_p siblings after file update:', {
               updatedEdgeId,
@@ -1345,19 +1346,17 @@ class DataOperationsService {
               meanWasUpdated
             });
             
-            if (updatedEdgeId) {
-              finalGraph = updateManager.rebalanceConditionalProbabilities(
-                nextGraph,
-                updatedEdgeId,
-                conditionalIndex,
-                false // Don't force rebalance - respect overrides
-              );
-            }
+            finalGraph = updateManager.rebalanceConditionalProbabilities(
+              updatedGraph,
+              updatedEdgeId,
+              conditionalIndex,
+              false // Don't force rebalance - respect overrides
+            );
           }
           
           setGraph(finalGraph);
           
-          const hadRebalance = finalGraph !== nextGraph;
+          const hadRebalance = finalGraph !== updatedGraph;
           if (hadRebalance) {
             batchableToastSuccess(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
             sessionLogService.endOperation(logOpId, 'success', `Updated conditional_p[${conditionalIndex}] + siblings rebalanced`);
@@ -4532,124 +4531,66 @@ class DataOperationsService {
         }
         
         // ===== CONDITIONAL_P HANDLING =====
-        // For conditional parameters, apply data directly to conditional_p[conditionalIndex]
-        // rather than going through UpdateManager (which only knows about edge.p)
+        // Use unified UpdateManager code path for conditional probability updates
         if (conditionalIndex !== undefined) {
-          console.log('[DataOperationsService] Applying to conditional_p:', {
+          console.log('[DataOperationsService] Applying to conditional_p via UpdateManager:', {
             conditionalIndex,
             updateData,
             hasConditionalP: !!targetEdge.conditional_p,
             conditionalPLength: targetEdge.conditional_p?.length
           });
           
-          // Validate conditional_p entry exists
-          if (!targetEdge.conditional_p?.[conditionalIndex]) {
-            console.error('[DataOperationsService] conditional_p entry not found', {
-              conditionalIndex,
-              conditionalPLength: targetEdge.conditional_p?.length
-            });
-            toast.error(`Conditional entry [${conditionalIndex}] not found on edge`);
-            sessionLogService.endOperation(logOpId, 'error', `Conditional entry [${conditionalIndex}] not found`);
+          // Use UpdateManager's unified conditional probability update
+          let nextGraph = updateManager.updateConditionalProbability(
+            graph,
+            targetId!,
+            conditionalIndex,
+            {
+              mean: updateData.mean,
+              stdev: updateData.stdev,
+              evidence: (updateData.n !== undefined || updateData.k !== undefined) 
+                ? { n: updateData.n, k: updateData.k }
+                : undefined,
+              data_source: updateData.data_source
+            },
+            { respectOverrides: true }
+          );
+          
+          // Check if graph actually changed (UpdateManager returns original if no changes)
+          if (nextGraph === graph) {
+            toast('No changes applied (fields may be overridden)', { icon: 'ℹ️' });
+            sessionLogService.endOperation(logOpId, 'success', `No changes to conditional_p[${conditionalIndex}] (overridden)`);
             return;
           }
           
-          const nextGraph = structuredClone(graph);
-          const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === targetId || e.id === targetId);
+          // AUTO-REBALANCE: If mean was updated, rebalance conditional probability siblings
+          const meanWasUpdated = updateData.mean !== undefined;
+          let finalGraph = nextGraph;
           
-          if (edgeIndex >= 0 && nextGraph.edges[edgeIndex].conditional_p) {
-            const condEntry = nextGraph.edges[edgeIndex].conditional_p[conditionalIndex];
+          if (meanWasUpdated) {
+            const updatedEdgeId = targetId!;
             
-            // Ensure condEntry.p exists
-            if (!condEntry.p) {
-              condEntry.p = {};
-            }
-            
-            // Apply updates to condEntry.p (respecting overrides)
-            let changesApplied = 0;
-            
-            // mean (probability)
-            if (updateData.mean !== undefined && !condEntry.p.mean_overridden) {
-              condEntry.p.mean = updateData.mean;
-              changesApplied++;
-            } else if (updateData.mean !== undefined && condEntry.p.mean_overridden) {
-              console.log('[DataOperationsService] Skipping mean (overridden)');
-            }
-            
-            // n and k go into evidence (not directly on p)
-            if (updateData.n !== undefined || updateData.k !== undefined) {
-              if (!condEntry.p.evidence) {
-                condEntry.p.evidence = {};
-              }
-              if (updateData.n !== undefined) {
-                condEntry.p.evidence.n = updateData.n;
-                changesApplied++;
-              }
-              if (updateData.k !== undefined) {
-                condEntry.p.evidence.k = updateData.k;
-                changesApplied++;
-              }
-            }
-            
-            // stdev
-            if (updateData.stdev !== undefined && !condEntry.p.stdev_overridden) {
-              condEntry.p.stdev = updateData.stdev;
-              changesApplied++;
-            } else if (updateData.stdev !== undefined && condEntry.p.stdev_overridden) {
-              console.log('[DataOperationsService] Skipping stdev (overridden)');
-            }
-            
-            // data_source (provenance)
-            if (updateData.data_source) {
-              condEntry.p.data_source = updateData.data_source;
-              changesApplied++;
-            }
-            
-            if (nextGraph.metadata) {
-              nextGraph.metadata.updated_at = new Date().toISOString();
-            }
-            
-            console.log('[DataOperationsService] Applied to conditional_p:', {
+            console.log('[DataOperationsService] Rebalancing conditional_p siblings after external fetch:', {
+              updatedEdgeId,
               conditionalIndex,
-              changesApplied,
-              condEntryP: condEntry.p
+              meanWasUpdated
             });
             
-            // AUTO-REBALANCE: If mean was updated, rebalance conditional probability siblings
-            let finalGraph = nextGraph;
-            const meanWasUpdated = updateData.mean !== undefined && !condEntry.p.mean_overridden;
-            
-            if (meanWasUpdated) {
-              const { updateManager } = await import('./UpdateManager');
-              const updatedEdgeId = nextGraph.edges[edgeIndex].uuid || nextGraph.edges[edgeIndex].id || targetId;
-              
-              console.log('[DataOperationsService] Rebalancing conditional_p siblings after external fetch:', {
-                updatedEdgeId,
-                conditionalIndex,
-                meanWasUpdated
-              });
-              
-              if (updatedEdgeId) {
-                finalGraph = updateManager.rebalanceConditionalProbabilities(
-                  nextGraph,
-                  updatedEdgeId,
-                  conditionalIndex,
-                  false // Don't force rebalance - respect overrides
-                );
-              }
-            }
-            
-            setGraph(finalGraph);
-            
-            const hadRebalance = finalGraph !== nextGraph;
-            if (changesApplied > 0) {
-              if (hadRebalance) {
-                toast.success(`Applied to conditional[${conditionalIndex}]: ${changesApplied} fields + siblings rebalanced`);
-              } else {
-                toast.success(`Applied to conditional[${conditionalIndex}]: ${changesApplied} fields updated`);
-              }
-            } else {
-              toast('No changes applied (fields may be overridden)', { icon: 'ℹ️' });
-            }
+            finalGraph = updateManager.rebalanceConditionalProbabilities(
+              nextGraph,
+              updatedEdgeId,
+              conditionalIndex,
+              false // Don't force rebalance - respect overrides
+            );
+          }
+          
+          setGraph(finalGraph);
+          
+          const hadRebalance = finalGraph !== nextGraph;
+          if (hadRebalance) {
+            toast.success(`Applied to conditional[${conditionalIndex}] + siblings rebalanced`);
+          } else {
+            toast.success(`Applied to conditional[${conditionalIndex}]`);
           }
           
           sessionLogService.endOperation(logOpId, 'success', `Applied to conditional_p[${conditionalIndex}]`);
