@@ -380,6 +380,227 @@ export class UpdateManager {
   }
   
   // ============================================================
+  // PROBABILITY UPDATES (unified code path)
+  // ============================================================
+  
+  /**
+   * Update edge probability (p.mean, p.stdev, etc.)
+   * 
+   * This is the SINGLE code path for all edge p updates from UI:
+   * - Slider edits
+   * - Number input edits
+   * 
+   * Applies consistent transforms (rounding to 3dp) and override handling.
+   * 
+   * @param graph - Current graph (immutable - returns new graph)
+   * @param edgeId - Edge UUID or ID
+   * @param updates - Values to update (mean, stdev)
+   * @param options - Control override flag behaviour
+   * @returns Updated graph (new object)
+   */
+  updateEdgeProbability(
+    graph: any,
+    edgeId: string,
+    updates: {
+      mean?: number;
+      stdev?: number;
+    },
+    options: {
+      setOverrideFlag?: boolean;  // If true, set mean_overridden = true (for UI edits)
+      respectOverrides?: boolean; // If true, skip updating if *_overridden is set
+    } = {}
+  ): any {
+    const { setOverrideFlag = false, respectOverrides = false } = options;
+    
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] updateEdgeProbability: Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const edge = nextGraph.edges[edgeIndex];
+    
+    // Ensure p object exists
+    if (!edge.p) {
+      edge.p = {};
+    }
+    
+    let changesApplied = 0;
+    
+    // Mean - with transform (rounding) and override handling
+    if (updates.mean !== undefined) {
+      const shouldSkip = respectOverrides && edge.p.mean_overridden;
+      if (!shouldSkip) {
+        edge.p.mean = this.roundTo3DP(updates.mean);
+        if (setOverrideFlag) {
+          edge.p.mean_overridden = true;
+        }
+        changesApplied++;
+      }
+    }
+    
+    // Stdev - with transform (rounding) and override handling
+    if (updates.stdev !== undefined) {
+      const shouldSkip = respectOverrides && edge.p.stdev_overridden;
+      if (!shouldSkip) {
+        edge.p.stdev = this.roundTo3DP(updates.stdev);
+        if (setOverrideFlag) {
+          edge.p.stdev_overridden = true;
+        }
+        changesApplied++;
+      }
+    }
+    
+    // Update metadata timestamp
+    if (changesApplied > 0 && nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    return nextGraph;
+  }
+  
+  /**
+   * Update a conditional probability entry on an edge.
+   * 
+   * This is the SINGLE code path for all conditional_p updates:
+   * - UI slider edits (EdgeContextMenu)
+   * - Data from parameter files (getParameterFromFile)
+   * - Data from external sources (getFromSourceDirect)
+   * 
+   * Applies consistent transforms (rounding to 3dp) and override handling.
+   * 
+   * @param graph - Current graph (immutable - returns new graph)
+   * @param edgeId - Edge UUID or ID
+   * @param conditionalIndex - Index into conditional_p array
+   * @param updates - Values to update (mean, stdev, evidence, data_source)
+   * @param options - Control override flag behaviour
+   * @returns Updated graph (new object)
+   */
+  updateConditionalProbability(
+    graph: any,
+    edgeId: string,
+    conditionalIndex: number,
+    updates: {
+      mean?: number;
+      stdev?: number;
+      evidence?: { n?: number; k?: number; retrieved_at?: string; source?: string };
+      data_source?: any;
+    },
+    options: {
+      setOverrideFlag?: boolean;  // If true, set mean_overridden = true (for UI edits)
+      respectOverrides?: boolean; // If true, skip updating if *_overridden is set (for data pulls)
+    } = {}
+  ): any {
+    const { setOverrideFlag = false, respectOverrides = false } = options;
+    
+    const nextGraph = structuredClone(graph);
+    const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      console.warn('[UpdateManager] updateConditionalProbability: Edge not found:', edgeId);
+      return graph;
+    }
+    
+    const edge = nextGraph.edges[edgeIndex];
+    
+    if (!edge.conditional_p?.[conditionalIndex]) {
+      console.warn('[UpdateManager] updateConditionalProbability: conditional_p entry not found:', {
+        edgeId,
+        conditionalIndex,
+        conditionalPLength: edge.conditional_p?.length
+      });
+      return graph;
+    }
+    
+    const condEntry = edge.conditional_p[conditionalIndex];
+    
+    // Ensure p object exists
+    if (!condEntry.p) {
+      condEntry.p = {};
+    }
+    
+    let changesApplied = 0;
+    
+    // Mean - with transform (rounding) and override handling
+    if (updates.mean !== undefined) {
+      const shouldSkip = respectOverrides && condEntry.p.mean_overridden;
+      if (!shouldSkip) {
+        condEntry.p.mean = this.roundTo3DP(updates.mean);
+        if (setOverrideFlag) {
+          condEntry.p.mean_overridden = true;
+        }
+        changesApplied++;
+      } else {
+        console.log('[UpdateManager] Skipping mean update (overridden)');
+      }
+    }
+    
+    // Stdev - with transform (rounding) and override handling
+    if (updates.stdev !== undefined) {
+      const shouldSkip = respectOverrides && condEntry.p.stdev_overridden;
+      if (!shouldSkip) {
+        condEntry.p.stdev = this.roundTo3DP(updates.stdev);
+        if (setOverrideFlag) {
+          condEntry.p.stdev_overridden = true;
+        }
+        changesApplied++;
+      } else {
+        console.log('[UpdateManager] Skipping stdev update (overridden)');
+      }
+    }
+    
+    // Evidence (n, k, etc.) - no transform needed, just structured assignment
+    if (updates.evidence) {
+      if (!condEntry.p.evidence) {
+        condEntry.p.evidence = {};
+      }
+      if (updates.evidence.n !== undefined) {
+        condEntry.p.evidence.n = updates.evidence.n;
+        changesApplied++;
+      }
+      if (updates.evidence.k !== undefined) {
+        condEntry.p.evidence.k = updates.evidence.k;
+        changesApplied++;
+      }
+      if (updates.evidence.retrieved_at !== undefined) {
+        condEntry.p.evidence.retrieved_at = updates.evidence.retrieved_at;
+        changesApplied++;
+      }
+      if (updates.evidence.source !== undefined) {
+        condEntry.p.evidence.source = updates.evidence.source;
+        changesApplied++;
+      }
+    }
+    
+    // Data source (provenance)
+    if (updates.data_source) {
+      condEntry.p.data_source = updates.data_source;
+      changesApplied++;
+    }
+    
+    // Update metadata timestamp
+    if (changesApplied > 0 && nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    console.log('[UpdateManager] updateConditionalProbability:', {
+      edgeId,
+      conditionalIndex,
+      updates,
+      options,
+      changesApplied
+    });
+    
+    return nextGraph;
+  }
+  
+  // ============================================================
   // LEVEL 1: DIRECTION HANDLERS (5 methods)
   // ============================================================
   
