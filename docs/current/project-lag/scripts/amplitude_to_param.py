@@ -467,6 +467,9 @@ def build_param_file(
         'latency': {
             'track': True,
             'maturity_days': maturity_days,
+            # Canonical cohort anchor for multi-step funnels (A in A→X→Y)
+            # Mirrored on graph edge as edge.latency.anchor_node_id
+            'anchor_node_id': anchor_node_id,
         },
         'values': [value_entry],
         'metadata': {
@@ -477,13 +480,6 @@ def build_param_file(
             'version': '1.0.0',
         },
     }
-    
-    # Add anchor node reference if provided
-    if anchor_node_id:
-        param['anchor'] = {
-            'node_id': anchor_node_id,
-            'description': 'Graph node used as cohort anchor (resolved to event at query time)',
-        }
     
     return param
 
