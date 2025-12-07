@@ -72,12 +72,12 @@ Global search/replace across:
   interface LatencyConfig {
     maturity_days?: number;           // >0 enables tracking
     maturity_days_overridden?: boolean;
-    recency_half_life_days?: number;  // Phase 1 fast-follow
-    recency_half_life_days_overridden?: boolean;
-    anchor_node_id?: string;          // computed by MSMDC
-    // ... other fields per design.md §3.1
+    anchor_node_id?: string;          // default anchor (computed during query construction if not explicit in DSL)
+    anchor_node_id_overridden?: boolean;
+    // NOTE: recency_half_life_days deferred to fast-follow (Appendix C.1)
   }
   ```
+- **anchor_node_id computation:** When DSL lacks explicit `cohort(anchor, dates)`, compute default as furthest upstream START node from `edge.from`. This happens during query construction in `buildDslFromEdge.ts` (or calling service), NOT as a separate hook.
 - Add `latency` field to `GraphEdge`.
 - Add `EdgeLatencyDisplay` interface for rendering (p.evidence, p.forecast, p.mean, completeness).
 
@@ -92,7 +92,11 @@ Global search/replace across:
 
 **File:** `graph-editor/src/services/GraphParamExtractor.ts`
 - Stop extracting `distribution`, `min`, `max`, `alpha`, `beta` from edges
-- Add extraction for new LAG fields (`forecast_mean`, `forecast_stdev`, `evidence_mean`, `evidence_stdev`)
+- Add extraction for new LAG fields on `ProbabilityParam`:
+  - `forecast_mean`, `forecast_stdev`
+  - `evidence_mean`, `evidence_stdev`
+  - `latency` block (`maturity_days`, `anchor_node_id`, `t95`, `completeness`, `median_lag_days` as needed for display)
+- **Critical for scenarios:** `extractEdgeParams()` and `extractDiffParams()` must include these fields so live scenario regeneration captures the full latency view per scenario DSL (see design §9.K.2)
 
 ### 1.2 Python Pydantic Models
 **Design reference:** `design.md §3.1` (LatencyConfig interface), `§9.I` (Pydantic models)
@@ -108,11 +112,12 @@ Global search/replace across:
 - Add `latency` configuration section (top-level).
 - Update `values` item schema:
   - Add `cohort_from`, `cohort_to` (date format: `d-MMM-yy`).
-  - Add `median_lag_days`, `mean_lag_days` arrays.
-  - Add `anchor_n_daily`, `anchor_median_lag_days` arrays.
-  - Add `latency` summary block (median_days, completeness, histogram).
-  - Add `anchor_latency` summary block.
+  - Add `median_lag_days`, `mean_lag_days` arrays — **CONSUMED** by lag fitting (§5.4).
+  - Add `anchor_n_daily`, `anchor_median_lag_days`, `anchor_mean_lag_days` arrays — **STORED BUT NOT CONSUMED** (for future convolution, Appendix C.2).
+  - Add `latency` summary block (median_days, completeness, histogram) — histogram is **STORED BUT NOT CONSUMED** (for future short-horizon discrete CDF, Appendix C.3).
+  - Add `anchor_latency` summary block — **STORED BUT NOT CONSUMED** (for future convolution, Appendix C.2).
   - Update `sliceDSL` description to emphasize canonical format.
+- **Rationale for storing unused fields:** Amplitude data is expensive to re-fetch; storing now avoids historical backfill when deferred features are implemented.
 - **Date format standardisation** (`design.md §3.4`):
   - Change `window_from`/`window_to` from ISO `date-time` to `d-MMM-yy` pattern.
   - Add `cohort_from`/`cohort_to` with same pattern.
@@ -123,18 +128,19 @@ Global search/replace across:
 
 **File:** `graph-editor/src/services/UpdateManager.ts`
 
-**Latency CONFIG fields (graph ↔ param file, bidirectional):**
-| Graph field | File field | Override flag |
-|-------------|------------|---------------|
-| `edge.latency.maturity_days` | `latency.maturity_days` | `maturity_days_overridden` |
-| `edge.latency.recency_half_life_days` | `latency.recency_half_life_days` | `recency_half_life_days_overridden` |
-| `edge.latency.anchor_node_id` | `latency.anchor_node_id` | (computed, no override) |
+**Latency CONFIG fields (probability ↔ param file, bidirectional):**
+| Graph/Prob field | File field | Override flag |
+|------------------|------------|---------------|
+| `edge.p.latency.maturity_days` | `latency.maturity_days` | `maturity_days_overridden` |
+| `edge.p.latency.anchor_node_id` | `latency.anchor_node_id` | `anchor_node_id_overridden` |
 
-**Latency DATA fields (file → graph only):**
-| File field | Graph field | Notes |
-|------------|-------------|-------|
-| `values[latest].latency.median_days` | `edge.latency.median_lag_days` | Display only |
-| `values[latest].latency.completeness` | `edge.latency.completeness` | Display only |
+**Note:** `recency_half_life_days` deferred to fast-follow (design Appendix C.1).
+
+**Latency DATA fields (file → probability only):**
+| File field | Graph/Prob field | Notes |
+|------------|------------------|-------|
+| `values[latest].latency.median_days` | `edge.p.latency.median_lag_days` | Display only |
+| `values[latest].latency.completeness` | `edge.p.latency.completeness` | Display only |
 | `values[latest].mean` (mature cohorts) | `edge.p.forecast.mean` | Retrieval-time computation |
 | `values[latest].stdev` (mature cohorts) | `edge.p.forecast.stdev` | Retrieval-time computation |
 
@@ -174,7 +180,7 @@ Global search/replace across:
 
 **File:** `graph-editor/src/lib/dslConstruction.ts`
 - Add `cohort()` clause construction.
-- Distinguish `cohort()` from `window()` based on edge latency configuration.
+- Distinguish `cohort()` from `window()` based on probability latency configuration (`p.latency`).
 - Handle anchor node inclusion in DSL when `anchor_node_id` differs from edge.from.
 
 **File:** `graph-editor/src/lib/dslExplosion.ts`
@@ -228,23 +234,29 @@ Global search/replace across:
   - Store extended data to parameter file via `paramRegistryService`.
 
 ### 3.2 Window Aggregation Service
-**Design reference:** `design.md §5.0` (Mature/Immature Split), `§5.0.1` (Completeness calculation), `§9.D` (windowAggregationService)
+**Design reference:** `design.md §5.5` (Completeness), `§5.6` (Asymptotic Probability), `§9.D` (windowAggregationService)
 
 **File:** `graph-editor/src/services/windowAggregationService.ts`
-- Implement `computeMatureImmatureSplit`.
 - Update `aggregateWindow` to handle cohort data structures.
-- Implement `completeness` calculation.
+- Implement CDF-based `completeness` calculation: `Σ(n_i × F(a_i)) / Σn_i`.
+- Implement `p_infinity` estimation from mature cohorts.
 
-### 3.3 Statistical Enhancement Service (Forecasting)
-**Design reference:** `design.md §5.0.2` (Phase 0 Forecasting Formula), `§4.8` (Query-time computation)
+### 3.3 Lag Distribution Fitting & Forecasting
+**Design reference:** `design.md §5.3` (Formula A), `§5.4` (Lag Distribution Fitting), `§4.8` (Query-time computation)
 
 **File:** `graph-editor/src/services/statisticalEnhancementService.ts`
-- Implement `Formula A` (forecasting logic) as a new enhancer type (e.g., `'latency-forecast'`).
-- Logic:
-  - Take raw aggregation (evidence).
-  - Read `p.forecast` (forecast baseline) from parameter file.
-  - Apply forecast formula based on cohort ages.
-  - Return blended `p.mean`.
+- Implement log-normal CDF fitting from `median_lag_days` and `mean_lag_days`:
+  - `μ = ln(median_lag_days)`
+  - `σ = sqrt(2 × ln(mean_lag_days / median_lag_days))`
+  - Fallback: if only median available, use `σ = 0.5`
+- Implement log-normal CDF: `F(t) = Φ((ln(t) - μ) / σ)` using standard normal CDF.
+- Implement **Formula A** (Bayesian tail forecasting):
+  ```
+  k̂_i = k_i + (n_i - k_i) × (p_∞ × S(a_i)) / (1 - p_∞ × F(a_i))
+  ```
+  Where `S(t) = 1 - F(t)`.
+- Add numeric guards: clamp denominator to avoid division by near-zero.
+- Return blended `p.mean = Σk̂_i / Σn_i`.
 
 ### 3.4 Parameter Registry Service
 **Design reference:** `design.md §9.F` (paramRegistryService), `§3.3` (Canonical sliceDSL)
@@ -268,16 +280,102 @@ Global search/replace across:
   - Window with maturity > 0: re-fetch immature portion, keep mature cached.
   - Cohort: replace entire slice if immature cohorts exist or data is stale.
 
-### 3.6 Total Maturity Calculation
-**Design reference:** `design.md §4.7.2`
+### 3.6 Query-Context Latency Computation
+**Design reference:** `design.md §3.1` (LatencyConfig computed fields), `§5.8` (Storage Architecture)
 
-**File:** `graph-editor/src/services/windowAggregationService.ts` (or new utility)
+**File:** `graph-editor/src/services/statisticalEnhancementService.ts`
 
 **Tasks:**
-- Implement `computeTotalMaturity(graph, anchor_id, edge)` algorithm.
-- Logic: longest-path DP from anchor to edge.from, summing `maturity_days` along path.
-- Total maturity = A→X maturity + X→Y maturity.
-- Used for cache/refresh policy decisions.
+- Implement `computeEdgeLatencyStats(edge, paramData, queryWindow)`:
+  - Filter and aggregate `median_lag_days[]`, `mean_lag_days[]`, `k_daily[]` for query window
+  - Compute: `mu`, `sigma`, `t95`, `empirical_quality_ok`
+  - Quality gate: `k >= 30` AND `mean/median` in [1.0, 3.0]
+  - Fallback: if quality fails, use `maturity_days` for `t95`
+- Attach computed values to `p.latency` on the `ProbabilityParam`:
+  - Persist `t95` for this edge/probability (used for A→X maturity and caching).
+  - Keep `mu`, `sigma`, `empirical_quality_ok` transient (service-level only).
+
+**Direct-from-source path (no param files available):**
+- When `dataOperationsService` determines that required slices are missing or stale:
+  - Construct **both** a cohort DSL and a window DSL for the current interactive query.
+  - Call Amplitude directly via the adapter to obtain:
+    - window(): edge-local dayFunnels + lag stats over a historical horizon.
+    - cohort(): A-anchored dayFunnels for the query window.
+  - Pass these raw results into `statisticalEnhancementService`:
+    - Derive `mu`, `sigma`, `t95`, `p_infinity` from window() data.
+    - Derive `p_mean`, `completeness` from cohort() exposures using Formula A.
+  - Optionally:
+    - Persist the raw slices into param files for future reuse.
+
+### 3.7 Total Maturity Calculation (Path DP)
+**Design reference:** `design.md §4.7.2`
+
+**File:** `graph-editor/src/services/statisticalEnhancementService.ts`
+
+**Tasks:**
+- Implement `getActiveEdges(graph, whatIfDSL)`:
+  - Use `computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL })` from `lib/whatIf.ts`
+  - Edge is active iff effective probability > 1e-9 (epsilon threshold)
+- Implement `computePathT95(graph, anchor_id, activeEdges)`:
+  - `activeEdges` from above — edges ACTIVE under current scenario (cases + `conditional_ps`)
+  - Run **after** all active latency edges have `t95` computed (i.e., after batch fetch completes)
+  - Topological DP over the **scenario‑effective graph**: for each active edge, `path_t95 = max(upstream path_t95) + t95`
+  - Store result on `p.latency.path_t95` for active edges (transient, for this query)
+- **O(E_active)** — runs once per query, not per render
+- Used for cache/refresh policy decisions that depend on A→X total maturity
+- **Transient (not persisted)** — scenario-specific, depends on active edges
+
+**When `path_t95` is computed:**
+- After batch fetch (all active edges have fresh `t95`)
+- Per-query: `activeEdges` depends on the query's `whatIfDSL`; the DP runs as part of query evaluation
+- NOT stored globally — it's query/scenario-specific
+
+### 3.8 Topological Sorting of Batch Fetches
+**Design reference:** `design.md §4.7.2` (fetch ordering requirement), `§5.7`, `§5.9.1` (Flow A)
+
+**File:** `graph-editor/src/services/fetchDataService.ts`
+
+**Tasks:**
+- Update `getItemsNeedingFetch()` to return items in **topological order** (edges near START nodes first)
+- Implementation: compute topological order of edges before returning `FetchItem[]`
+- **Rationale:** 
+  - Upstream `t95` baselines established from window() slices before downstream edges need them
+  - Enables `computePathT95()` to run correctly after batch
+- Standard DAG topological sort; edges are already in a DAG
+
+### 3.9 Get-from-Source Flow Mapping
+**Design reference:** `design.md §5.9` (Flows A and B)
+
+This section ties the conceptual flows to concrete services and files.
+
+**Flow A – Versioned get-from-source (pinned DSL → param files → forecast):**
+- `graph-editor/src/services/UpdateManager.ts` / `GraphMutationService`:
+  - Maintain the **pinned DSL** for each graph (used to drive overnight / batch fetch).
+  - Do not encode the current interactive query DSL.
+- `graph-editor/src/services/dataOperationsService.ts`:
+  - Expand the pinned DSL into canonical `sliceDSL` values for each edge/context.
+  - Decide which slices to fetch (cohort, window, or both) for latency edges.
+- `lib/das/amplitude_to_param.py`:
+  - Execute Amplitude window()/cohort() calls for the planned sliceDSLs.
+  - Write versioned param JSON with per-day/per-cohort arrays and metadata.
+- `graph-editor/src/services/paramRegistryService.ts`:
+  - Load param slices by canonical `sliceDSL` for use at query time.
+- `graph-editor/src/services/forecastService.ts`:
+  - From window() slices: compute `mu`, `sigma`, `t95`, `p_infinity`.
+  - From cohort() slices: compute `p_mean`, `completeness` via Formula A.
+  - Write query-specific summary stats to `edge.latency` on the graph.
+
+**Flow B – Direct get-from-source (interactive DSL → Amplitude → forecast):**
+- `graph-editor/src/services/dataOperationsService.ts`:
+  - Build the **current interactive query DSL** (cohort + window variants) for the active graph.
+  - Detect missing or stale param slices and choose the direct-from-source path.
+- Amplitude adapter (TS or Python, depending on integration boundary):
+  - Issue window() and cohort() calls for the interactive DSL only.
+- `graph-editor/src/services/forecastService.ts`:
+  - Perform the same statistical steps as in Flow A, but from fresh Amplitude responses.
+  - Optionally trigger:
+    - Writing raw slices into param files (via param registry / Python adapter).
+    - Writing summary stats into `edge.latency` for the current interactive DSL.
 
 ---
 
@@ -321,9 +419,10 @@ Add latency fields after Distribution dropdown (applies to both `p` and `conditi
 
 | Field | Type | Override flag | Behaviour |
 |-------|------|---------------|-----------|
-| Track Latency | Checkbox | `maturity_days_overridden` | When unchecked: `maturity_days = 0`. When checked: shows Maturity + Recency fields |
+| Track Latency | Checkbox | `maturity_days_overridden` | When unchecked: `maturity_days = 0`. When checked: shows Maturity field |
 | Maturity | Number input | `maturity_days_overridden` | Days threshold for cohort maturity |
-| Recency | Discrete slider | `recency_half_life_days_overridden` | Notches: 7, 14, 30, 60, 90, 180, Off |
+
+**Note:** Recency slider deferred to fast-follow (design Appendix C.1).
 
 **Default inference (frontend-only):**
 When user checks "Track Latency" on an edge with data:
@@ -384,7 +483,7 @@ When user checks "Track Latency" on an edge with data:
 - Update legend to show visibility state icons/indicators.
 
 ### 4.8 Sibling Probability Constraint Warnings
-**Design reference:** `design.md §5.0.4`
+**Design reference:** `design.md §5.10`
 
 **Files:**
 - `graph-editor/src/services/integrityCheckService.ts`
@@ -395,22 +494,24 @@ When user checks "Track Latency" on an edge with data:
 - Issue classification:
   - `Σ p.evidence > 1.0`: Error (data inconsistency).
   - `Σ p.mean > 1.0` AND `Σ p.evidence ≤ 1.0`: Info-level (forecasting artefact, expected for immature data).
-- Use threshold formula from `design.md §5.0.4` to determine when to surface info message.
+- Use threshold formula from `design.md §5.10` to determine when to surface info message.
 - Wire warnings into existing `graphIssuesService` patterns.
 
-### 4.9 View Menu: Global Recency Slider (Phase 1 Fast-Follow)
-**Design reference:** `design.md §C.1.2` (Recency Bias UI)
+### 4.9 View Menu: Global Recency Slider (DEFERRED — Fast-Follow)
+**Design reference:** `design.md Appendix C.1.2` (Recency Bias UI)
+
+> **Status:** Deferred to fast-follow. Implement after core latency features are complete.
 
 **File:** `graph-editor/src/components/ViewMenu.tsx` (or equivalent)
 
 **Tasks:**
+- Add `recency_half_life_days` to `LatencyConfig` (see Appendix C.1)
 - Add inline discrete slider for global `recency_half_life_days` default.
 - Notches: 7, 14, 30, 60, 90, 180, Off (left = most bias, right = least bias).
 - Default: 30d.
 - Store in workspace settings.
 - Takes effect on next fetch (not retroactive).
-
-**Note:** Per-edge override is in `ParameterSection.tsx` (§4.3). View menu provides global default.
+- Add per-edge override slider to `ParameterSection.tsx`.
 
 ---
 
@@ -449,42 +550,38 @@ When user checks "Track Latency" on an edge with data:
 **Data Services:**
 - `graph-editor/src/services/__tests__/dataOperationsService.test.ts` — cohort mode ingestion
 - `graph-editor/src/services/__tests__/windowAggregationService.test.ts` — cohort-aware aggregation
-- `graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts` — Formula A forecasting (new)
+- `graph-editor/src/services/__tests__/forecastService.test.ts` — log-normal CDF, Formula A (§5.3-5.4)
 
 **Python:**
 - `graph-editor/tests/test_msmdc.py` — anchor_node_id computation, A=X case, multi-start graphs
 
 **Key test scenarios (from design §11.2):**
-- Fully mature cohort (all ages ≥ maturity_days)
-- Fully immature cohort (all ages < maturity_days)
-- Mixed maturity cohort
+- Fully mature cohort (F(a_i) ≈ 1 for all cohorts)
+- Fully immature cohort (F(a_i) ≈ 0 for all cohorts)  
+- Mixed maturity cohort (various ages spanning the CDF)
 - Edge from start node (A=X case)
 - Multi-step funnel (A→X→Y)
 - Sibling probability sum > 1 (forecasting artefact warning)
+- Log-normal fitting edge cases (mean ≈ median, missing mean)
 
 ### Extended Test Coverage
 
 #### Property-Based Tests (use `fast-check`)
 
-**File:** `graph-editor/src/services/__tests__/windowAggregationService.property.test.ts` (NEW)
+**File:** `graph-editor/src/services/__tests__/forecastService.property.test.ts` (NEW)
 
 | Property | Assertion |
 |----------|-----------|
+| CDF bounds | For any `t ≥ 0`: `0 ≤ F(t) ≤ 1` |
+| CDF monotonicity | `F(t1) ≤ F(t2)` for `t1 ≤ t2` |
 | Completeness bounds | For any cohort array: `0 ≤ completeness ≤ 1` |
 | Completeness monotonicity | Adding older cohorts never decreases completeness |
-| Mature-only completeness | If all cohorts have `age ≥ median_days`, completeness = 1.0 |
-| Empty cohort handling | Empty array → completeness = 0 (or defined fallback), no crash |
-| Weight sum positivity | Recency weights: `Σw_i > 0` for any non-empty cohort array |
-
-**File:** `graph-editor/src/services/__tests__/statisticalEnhancementService.property.test.ts` (NEW)
-
-| Property | Assertion |
-|----------|-----------|
 | Forecast bounds | `0 ≤ p.mean ≤ 1` for any valid inputs |
 | Forecast ≥ evidence | `p.mean ≥ p.evidence` (forecasting can only add, not subtract) |
-| Mature cohort identity | If `age ≥ maturity_days`, forecast_k = observed_k exactly |
+| Denominator safety | `1 - p_∞ × F(a_i) > ε` for all cohorts (no division blow-up) |
 | Zero n handling | `n = 0` → graceful fallback, no division by zero |
 | NaN propagation | No NaN/Infinity in outputs for finite inputs |
+| σ derivation | `σ = sqrt(2 × ln(mean/median))` is real and positive when mean > median |
 
 #### Non-Latency Regression Suite
 
@@ -550,14 +647,17 @@ When user checks "Track Latency" on an edge with data:
 
 #### Edge Case Numeric Tests
 
-**File:** `graph-editor/src/services/__tests__/windowAggregationService.test.ts` — expand
+**File:** `graph-editor/src/services/__tests__/forecastService.test.ts` — expand
 
 | Test | Input | Expected |
 |------|-------|----------|
-| Zero-day cohort | `age = 0`, `n > 0` | `progress = 0`, no division by zero |
-| Median = 0 | `median_lag_days = 0` | Completeness = 1.0 (or error), not `Infinity` |
+| Zero-day cohort | `age = 0`, `n > 0` | `F(0) ≈ 0`, forecast uses full tail |
+| Median = 0 | `median_lag_days = 0` | Error or fallback (ln(0) undefined) |
+| Mean = median | `mean_lag_days = median_lag_days` | `σ = 0` → degenerate CDF (step at median) |
+| Mean < median | Invalid ratio | Error or fallback (sqrt of negative) |
 | Single cohort | Array of length 1 | Valid completeness, not edge-case crash |
 | Large n values | `n = 10^9` | No overflow in sums |
+| p_∞ near 1, old cohort | `p_∞ = 0.99`, `F(a_i) = 0.99` | Denominator `1 - 0.9801` is small but handled |
 | Floating point edge | `k/n = 0.333...` | Consistent rounding |
 
 ---
@@ -584,7 +684,9 @@ The following detailed design assets in `design.md` should be consulted during i
 | Parameter file example | §3.2 | Complete YAML structure with all fields |
 | Canonical sliceDSL format | §4.7.1 | Slice labelling rules |
 | Dual-slice YAML example | §4.6 | Cohort + window slice storage |
-| Phase 0 Formula A | §5.0.2 | Forecasting step-function |
+| **Formula A (Bayesian)** | §5.3 | Per-cohort tail forecasting formula |
+| **Log-normal CDF fitting** | §5.4 | Lag distribution from median/mean |
+| **Completeness formula** | §5.5 | CDF-based maturity measure |
 | Edge layer diagram | §7.1 | Two-layer stripe rendering |
 | Visibility state table | §7.3 | 4-state cycle icons and visuals |
 | Properties panel layout | §7.7 | UI placement sketch |
@@ -598,21 +700,23 @@ The following detailed design assets in `design.md` should be consulted during i
 - **Amplitude rate limits:** Will per-cohort queries hit limits for 90-day windows? Test and add batching if needed.
 - **Retention endpoint:** May be more efficient than funnel API. Evaluate if rate limits become an issue.
 
-### Deferred to Phase 1+ (Bayesian)
+### Deferred (Advanced)
 - **Stationarity:** Time-varying latency, weekday vs weekend patterns, non-stationarity alerts.
 - **Multi-modal distributions:** Fast/slow populations — requires Bayesian mixture models.
+- **Hierarchical pooling:** Shared hyperpriors across context slices (Appendix C.3).
 
-### Explicitly Out of Scope for Phase 0
+### Explicitly Out of Scope (Deferred)
 
 | Feature | Status | Implication |
 |---------|--------|-------------|
-| **Convolution fallback** | Deferred to Phase 1+ (design §C.3) | If user requests `window()` on a latency edge but only `cohort_data` exists, **return error** — do NOT attempt model-based convolution. |
-| **Time-indexed runner** | Deferred to Phase 1+ (design §6) | Runner uses `p.mean` as scalar; latency is display-only, not used in forward-pass. |
-| **Bayesian distribution fitting** | Deferred to Phase 1+ (design §5.1–5.3) | Phase 0 uses step-function maturity, not continuous lag CDF. |
-| **Recency-weighted p.forecast** | Phase 1 fast-follow (design §C.1) | Phase 0 uses simple unweighted average of mature cohorts from window() slice. |
-| **p.forecast from cohort data** | Deferred to Phase 1+ | Phase 0 requires window() slice for p.forecast; cohort-only edges show p.forecast as unavailable. |
+| **Convolution fallback** | Deferred (design Appendix C.2) | If user requests `window()` on a latency edge but only `cohort_data` exists, **return error** — do NOT attempt model-based convolution. |
+| **Time-indexed runner** | Deferred (design §6, Appendix C.4) | Runner uses `p.mean` as scalar; latency is display-only, not used in forward-pass. |
+| **Bayesian hierarchical model** | Deferred (design Appendix C.3) | Use point estimates; full posterior with credible intervals is future work. |
+| **Competing risks model** | Deferred (design Appendix C.5) | Sibling edges forecast independently; warn if `Σ p.mean > 1`. |
+| **Recency-weighted p_∞** | Fast-follow (design §5.6, Appendix C.1) | Initial implementation uses simple unweighted average of mature cohorts. |
+| **p.forecast from cohort data** | Deferred | Requires convolution fallback; cohort-only edges show p.forecast as unavailable. |
 
-**Phase 0 window() behaviour on latency edges:**
+**window() behaviour on latency edges:**
 - If `window_data` slice exists in param file → use it directly.
 - If only `cohort_data` exists → **error: "Window data not available. Fetch with window() or switch to cohort mode."**
 - No silent fallback to convolution.
@@ -631,4 +735,4 @@ The following detailed design assets in `design.md` should be consulted during i
 For implementation details:
 - **Amplitude response fields:** `design.md Appendix B`
 - **Histogram limitations:** `design.md Appendix A.1`
-- **Phase 1+ formulas:** `design.md Appendix C` (not required for Phase 0)
+- **Advanced forecasting:** `design.md Appendix C` (recency weighting, convolution fallback, hierarchical model)

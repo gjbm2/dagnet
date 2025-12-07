@@ -10,9 +10,7 @@ description: Probability and latency of switch success after registration.
 latency:
   track: true
   maturity_days: 30
-anchor:
-  node_id: household-created
-  description: Graph node used as cohort anchor (resolved to event at query time)
+  anchor_node_id: household-created
 values:
 - label: Cohorts 1-Sep-25 to 30-Nov-25
   query_date: 2-Dec-25
