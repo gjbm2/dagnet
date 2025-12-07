@@ -2,7 +2,7 @@
 
 **Status:** Design Draft  
 **Created:** 1-Dec-25  
-**Last Updated:** 4-Dec-25  
+**Last Updated:** 6-Dec-25  
 
 ---
 
@@ -118,21 +118,10 @@ The parametric family (Log-Normal, Weibull, Gamma) is fitted via MLE or Bayesian
 
 ## 3. Data Model Changes
 
-### 3.1 Edge Schema Additions
+### 3.1 Probability Schema Additions
 
 ```typescript
-interface GraphEdge {
-  // ... existing fields ...
-  
-  // Latency configuration (NEW)
-  latency?: LatencyConfig;
-  
-  // Rename: cost_time → labour_cost
-  labour_cost?: CostParam;  // Human effort in hours/days
-  
-  // NOTE: Rename cost_time → labour_cost via global search/replace
-}
-
+// Attached to ProbabilityParam (edge.p.latency and edge.conditional_p[i].p.latency)
 interface LatencyConfig {
   /** Maturity threshold in days - cohorts younger than this are "immature"
    *  
@@ -146,9 +135,6 @@ interface LatencyConfig {
   /** True if user manually set maturity_days (vs derived from file) */
   maturity_days_overridden?: boolean;
   
-  /** Censor time in days - ignore conversions after this lag */
-  censor_days?: number;  // Default: 14 or 28 depending on edge type
-  
   /** Anchor node for cohort queries - furthest upstream START node from edge.from
    *  Computed by MSMDC at graph-edit time (not retrieval time)
    */
@@ -156,36 +142,15 @@ interface LatencyConfig {
   /** True if user manually set anchor_node_id (vs MSMDC-computed) */
   anchor_node_id_overridden?: boolean;
 
-  /** Recency half-life (days) for weighting cohorts when fitting forecast model.
-   *  Phase 1 heuristic: favour more recent mature cohorts when updating p_mean,
-   *  but retain enough history for stability. Optional; not user-exposed initially.
-   */
-  recency_half_life_days?: number;  // Default: 30 (if omitted)
-  
-  /** Inferred distribution parameters
-   *  Phase 0: empirical summaries only
-   *  Phase 1+: parametric fit (lognormal/weibull) for forecasting
-   */
-  distribution?: {
-    family: 'lognormal' | 'weibull' | 'gamma' | 'discrete';
-    params: {
-      mu?: number;      // Location (lognormal)
-      sigma?: number;   // Scale (lognormal)
-      alpha?: number;   // Shape (weibull/gamma)
-      beta?: number;    // Scale (weibull) / Rate (gamma)
-      hazards?: number[]; // Discrete hazard rates by day
-                          // Use for operations-driven spikes (e.g., "nudge email on day 14")
-    };
-    credible_interval?: [number, number];  // 90% CI for median lag
-  };
-  
-  /** Override: manually specified median lag (days) */
-  median_lag_days?: number;
-  median_lag_days_overridden?: boolean;
+// Persisted scalar for caching / display (per ProbabilityParam, scenario-independent):
+//  - t95?: number;  // 95th percentile lag for this edge under the pinned DSL
+//
+// All other fit/DP internals (mu, sigma, path_t95, empirical_quality_ok)
+// are service-level computation artefacts, not separate schema fields on LatencyConfig.
 }
 ```
 
-### 3.2 Parameter File Additions (Phase 0: A‑anchored cohort evidence)
+### 3.2 Parameter File Additions (A‑anchored cohort evidence)
 
 For edges with `latency.maturity_days > 0` (latency tracking enabled), parameter files store **A‑anchored per‑cohort evidence** plus edge‑level latency summaries. The structure **extends the existing parameter schema pattern** (flat parallel arrays, `window_from`/`window_to`, `data_source` object) with new latency fields.
 
@@ -197,7 +162,8 @@ type: probability
 
 # Edge-level latency configuration (see §3.1)
 latency:
-  maturity_days: 30  # >0 enables latency tracking (no separate 'track' field)
+  maturity_days: 30             # >0 enables latency tracking (no separate 'track' field)
+  anchor_node_id: household-created  # Cohort anchor node (A in A→X→Y)
 
 values:
   - # === Slice identification (see §3.3 and §4.7.1) ===
@@ -229,7 +195,7 @@ values:
     latency:
       median_lag_days: 6.0           # Weighted median X→Y lag
       mean_lag_days: 7.0             # Weighted mean X→Y lag
-      completeness: 1.0              # Maturity progress 0-1 (see §5.0.1)
+      completeness: 1.0              # Maturity progress 0-1 (see §5.5)
       histogram:
         total_converters: 1021
         bins:
@@ -257,9 +223,10 @@ values:
       type: amplitude
       retrieved_at: '2025-12-02T00:00:00Z'
 
-# Anchor node reference (for multi-step funnel queries)
-anchor:
-  node_id: household-created
+#
+# NOTE: No separate top-level `anchor:` block – the canonical anchor lives at
+# `latency.anchor_node_id` and is mirrored on the graph edge as
+# `p.latency.anchor_node_id`.
   description: Graph node used as cohort anchor (resolved to event at query time)
 
 metadata:
@@ -273,7 +240,7 @@ metadata:
 
 - **Flat parallel arrays**: `dates`, `n_daily`, `k_daily`, `median_lag_days`, `mean_lag_days`, `anchor_n_daily`, `anchor_median_lag_days`, `anchor_mean_lag_days` are all parallel arrays indexed by cohort date. This aligns with the existing schema pattern.
 - **Anchor data** (`anchor_*` arrays) is only present for multi-step funnels (A→X→Y) where we need upstream lag for convolution. For 2-step funnels, these fields are absent.
-- The **forecast baseline** for X→Y is derived from `latency.median_lag_days`, `latency.mean_lag_days` and the `histogram`, refined by Phase 1 inference logic (§5).
+- The **forecast baseline** for X→Y is derived from `latency.median_lag_days`, `latency.mean_lag_days` and the fitted lag CDF (§5.4).
 - The script `amplitude_to_param.py` generates this format from Amplitude funnel responses.
 
 ### 3.3 Slice Labelling: `sliceDSL` and Date Bounds
@@ -343,6 +310,21 @@ The operations team uses "time cost" to track **human effort** (hours spent proc
 ---
 
 ## 4. Query Architecture Changes
+
+### 4.0 DSL Field Glossary
+
+The system uses several DSL-related fields. Their roles are distinct:
+
+| Field | Location | Purpose | Authoritative Source |
+|-------|----------|---------|---------------------|
+| `dataInterestsDSL` | `graph.dataInterestsDSL` | **Pinned DSL** — shapes overnight/batch fetches, determines which slices are pre-materialised in param files | Graph file (persisted) |
+| `currentQueryDSL` | `graph.currentQueryDSL` | **Historic record** — last interactive query, persisted so graph reopens in same state | Graph file (persisted) |
+| `currentDSL` | `graphStore.currentDSL` | **Live authoritative DSL** — drives current interactive queries, NOT to be confused with `currentQueryDSL` | In-memory store |
+| `baseDSL` | `graph.baseDSL` | **Scenario base** — live scenarios inherit from this unless they override | Graph file (persisted) |
+| `meta.queryDSL` | `Scenario.meta.queryDSL` | **Scenario-specific DSL** — defines what data slice a live scenario represents | Scenario object |
+| `sliceDSL` | `values[].sliceDSL` | **Canonical slice label** — identifies a param file slice with absolute dates + anchor | Param file |
+
+**Key distinction:** `currentDSL` (store) is authoritative for live operations; `currentQueryDSL` (graph) is only for persistence. Code comments explicitly warn: "NEVER fall back to `graph.currentQueryDSL`".
 
 ### 4.1 Event Window vs Cohort Window in DSL
 
@@ -586,60 +568,117 @@ For cohort slices, we need **total maturity** to determine cache/refresh policy.
 
 **Total maturity = A→X maturity + X→Y maturity**
 
-Where:
-- **X→Y maturity** = `edge.latency.maturity_days` (configured on the edge)
-- **A→X maturity** = max sum of `maturity_days` across all paths from anchor A to X
+**Prefer empirical data (T_95), fallback to configured `maturity_days`:**
 
-**Algorithm: Longest path in DAG**
+For each edge, compute **T_95** (95th percentile of lag distribution) from stored `median_lag_days` and `mean_lag_days`:
 
 ```python
-def compute_a_x_maturity(graph, anchor_id, x_id):
+def edge_t95(edge) -> float:
     """
-    Find max maturity path from anchor to x.
-    Conservative: uses longest path to ensure all conversions have matured.
+    Compute T_95 for an edge. Prefer empirical data, fallback to maturity_days.
     """
-    # Topological sort (graph is a DAG)
+    latency = edge.p.latency or {}
+    
+    # Check if empirical data is available and sufficient quality
+    median = latency.get('median_lag_days')
+    mean = latency.get('mean_lag_days')
+    k = latency.get('k', 0)  # Number of converters
+    
+    if median and mean and k >= 30 and 1.0 <= mean/median <= 3.0:
+        # Quality check passed: use empirical T_95
+        sigma = math.sqrt(2 * math.log(mean / median))
+        t95 = median * math.exp(1.645 * sigma)
+        return t95
+    
+    # Fallback to configured maturity_days (or default 30)
+    return latency.get('maturity_days') or 30
+g```
+
+**Quality thresholds for empirical data:**
+- `k >= 30` — sufficient converters for reliable median estimate
+- `mean/median` in [1.0, 3.0] — reasonable log-normal shape (ratio < 1 is impossible; > 3 indicates suspect data)
+
+**Scenario-aware algorithm: Longest path in DAG (uses computed `t95`)**
+
+```python
+def compute_path_t95_for_all_edges(graph, anchor_id, active_edges):
+    """
+    Compute path_t95 for all edges from anchor.
+    Run ONCE per query, after batch fetch completes (all relevant edges have t95 computed).
+    Result is transient (scenario-specific), NOT persisted to graph file.
+
+    CRITICAL: active_edges is the set of edges that are ACTIVE under the
+    current scenario (cases + conditional_ps). Inactive edges are ignored.
+    """
     topo_order = topological_sort(graph)
     
-    # DP: max maturity to reach each node from anchor
-    max_maturity = {node: -inf for node in graph.nodes}
-    max_maturity[anchor_id] = 0
+    # DP: max T_95 to reach each node from anchor
+    max_t95_to_node = {node: -inf for node in graph.nodes}
+    max_t95_to_node[anchor_id] = 0
     
     for node_id in topo_order:
-        if max_maturity[node_id] == -inf:
-            continue  # Unreachable from anchor
+        if max_t95_to_node[node_id] == -inf:
+            continue  # Unreachable from anchor under this scenario
         
         for edge in outgoing_edges(node_id):
-            edge_mat = edge.latency.maturity_days if (edge.latency?.maturity_days or 0) > 0 else 0
-            max_maturity[edge.to] = max(
-                max_maturity[edge.to],
-                max_maturity[node_id] + edge_mat
-            )
-    
-    return max_maturity[x_id]
+            if edge not in active_edges:
+                continue  # Edge is disabled in this scenario
 
-# Total maturity for edge X→Y with anchor A
-total_maturity = compute_a_x_maturity(graph, anchor_id, x_id) + xy_edge.latency.maturity_days
+            # Use t95 computed at retrieval time (edge.p.latency, service-level)
+            edge_t = edge.p.latency.t95 if edge.p.latency?.t95 else 0
+            
+            new_path = max_t95_to_node[node_id] + edge_t
+            max_t95_to_node[edge.to] = max(max_t95_to_node[edge.to], new_path)
+            
+            # Store path total on the probability latency block (transient, for this query)
+            edge.p.latency.path_t95 = new_path
 ```
 
-**Example:**
+**Complexity:** O(E_active) — runs once per batch fetch, not per edge or per query.
+
+**Determining `activeEdges`:**
+
+An edge is **active** under a scenario iff its effective probability is non-zero:
+
+```python
+def get_active_edges(graph, whatIfDSL):
+    """Return edges that are active under this scenario."""
+    active = set()
+    for edge in graph.edges:
+        eff_prob = computeEffectiveEdgeProbability(graph, edge.id, { whatIfDSL })
+        if eff_prob > 1e-9:  # Epsilon threshold for floating-point
+            active.add(edge)
+    return active
 ```
-Graph: A --[10d]--> B --[7d]--> X --[30d]--> Y
-       A --[5d]---> C --[15d]-----> X
 
-Path A→B→X: 10 + 7 = 17 days
-Path A→C→X: 5 + 15 = 20 days
+This uses the existing `computeEffectiveEdgeProbability` from `lib/whatIf.ts` which already handles case variants and `conditional_p` activation.
 
-A→X maturity = max(17, 20) = 20 days
-Total maturity = 20 + 30 = 50 days
+**Scenario effect:** Cases and `conditional_ps` determine which edges are active for a given scenario. The maturity DP **must run on this scenario‑effective graph**, not the raw topology: only edges that are actually used in the scenario contribute to A→X maturity.
+
+**When `path_t95` is computed:**
+
+- **Once per batch fetch:** After batch fetch completes, all active edges have fresh `t95` from their window() slices. Run the DP once.
+- **Per-query (scenario-aware):** The set of `activeEdges` depends on the query's `whatIfDSL` (cases, conditional_ps). A query for scenario X computes path_t95 using X's active edges. This is NOT a separate "trigger" — it's part of query evaluation.
+- **NOT stored globally:** `path_t95` is per-query/scenario, derived during query execution. It's only cached for the lifetime of that query context.
+
+**Example (with empirical data):**
+```
+Graph: A --[med=10d, mean=15d]--> B --[med=5d, mean=6d]--> X --[med=20d, mean=30d]--> Y
+
+Edge A→B: σ=0.90, T_95 = 10 × e^(1.645×0.90) = 44d
+Edge B→X: σ=0.58, T_95 = 5 × e^(1.645×0.58) = 13d  
+Edge X→Y: σ=0.90, T_95 = 20 × e^(1.645×0.90) = 88d
+
+Total maturity = max(44) + 13 + 88 = 145 days
 ```
 
 **Edge cases:**
 - A = X (direct edge): A→X maturity = 0
-- Non-latency edges: maturity_days = 0
+- Non-latency edges (`maturity_days = 0`): contribute 0 to path
+- No empirical data yet: falls back to `maturity_days`
 - X unreachable from A: error (invalid anchor)
 
-**Future optimisation:** Instead of sum of maturity_days, convolve the actual latency distributions for a tighter estimate. Deferred to Phase 1+ as the conservative approach is simpler and the calculation only affects caching, not the actual cohort data which is A-anchored anyway.
+**Fetch ordering requirement:** To ensure upstream empirical data is available when computing downstream cache policy, batch fetches should be **topologically sorted** (edges near START nodes fetched first). See implementation plan.
 
 #### 4.7.3 Cache and Merge Policy
 
@@ -733,7 +772,7 @@ The `sliceDSL` reflects **effective coverage**, not the original query. Original
 **Implementation sketch:**
 ```typescript
 function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDecision {
-  if (!edge.latency?.track) {
+  if (!edge.p?.latency?.maturity_days) {
     return { type: 'gaps_only' };  // Current incremental logic
   }
   
@@ -753,7 +792,7 @@ function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDeci
   }
   
   // Window with latency
-  const maturityDays = edge.latency.maturity_days;
+  const maturityDays = edge.p.latency.maturity_days;
   return { 
     type: 'partial',
     matureCutoff: daysAgo(maturityDays + 1),  // Re-fetch after this date
@@ -769,7 +808,7 @@ function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDeci
 |-------|---------------|-----|
 | `p.forecast` | **Retrieval time** | Stable baseline from mature data; doesn't depend on query window |
 | `p.evidence` | **Query time** | Depends on which dates/cohorts fall in query window |
-| `p.mean` (blended) | **Query time** | Depends on cohort ages at query time; Formula A runs per-cohort |
+| `p.mean` (blended) | **Query time** | Depends on cohort ages at query time; Formula A (§5.3) runs per-cohort |
 
 **Retrieval-time computation (fetch from source):**
 
@@ -784,7 +823,7 @@ Any fetch from source (manual or overnight batch "fetch all slices") triggers st
 
 **Critical: `p.forecast` requires window() data.** The forecast baseline is computed from mature cohorts in window() slices (X-anchored, recent events). Cohort() slices (A-anchored) provide per-cohort tracking but NOT `p.forecast`.
 
-**Extension (not Phase 0):** If only cohort() data exists, `p.forecast` could theoretically be derived by convolving cohort data with the lag distribution. This is deferred — Phase 0 simply shows `p.forecast` as unavailable when no window() slice exists.
+**Extension:** If only cohort() data exists, `p.forecast` can be derived by convolving cohort data with the lag distribution (see Appendix C.2). If this fallback is not implemented, show `p.forecast` as unavailable when no window() slice exists.
 
 **Implementation:** `dataOperationsService.getFromSource()` flow — extend transform to compute latency stats from Amplitude response.
 
@@ -798,7 +837,7 @@ Slice stored cohort_data to matching dates
 For each cohort i in slice:
   - k_i, n_i from stored data
   - a_i = query_date - cohort_date (age TODAY)
-  - Apply Formula A if immature
+  - Apply Formula A (§5.3)
          ↓
 Aggregate:
   - p.evidence = Σk_i / Σn_i
@@ -810,16 +849,16 @@ Render using scenario visibility mode (E/F/F+E)
 **Why p.mean must be query-time:**
 1. **Query window varies**: User might query last 21 days, last 7 days, specific range
 2. **Cohort ages change daily**: A cohort from 1-Dec has age=3 on 4-Dec, age=4 on 5-Dec
-3. **Formula A needs current ages**: The tail forecast depends on `F(a_i)` which changes as cohorts mature
+3. **Formula A (§5.3) needs current ages**: The tail forecast depends on `F(a_i)` which changes as cohorts mature
 
 **Data flow by query type:**
 
 | Query | Slice Used | p.evidence | p.forecast | p.mean |
 |-------|-----------|------------|------------|--------|
 | `window()` mature | window_data | QT: Σk/Σn | RT: p.forecast | = evidence |
-| `window()` immature | window_data | QT: Σk/Σn | RT: p.forecast | QT: Formula A per day |
+| `window()` immature | window_data | QT: Σk/Σn | RT: p.forecast | QT: Formula A (§5.3) per day |
 | `cohort()` mature | cohort_data | QT: Σk/Σn | RT: p.forecast | = evidence |
-| `cohort()` immature | cohort_data | QT: Σk/Σn | RT: p.forecast | QT: Formula A per cohort |
+| `cohort()` immature | cohort_data | QT: Σk/Σn | RT: p.forecast | QT: Formula A (§5.3) per cohort |
 | No window_data | — | Available | **Not available** | — |
 | Non-latency edge | either | QT: Σk/Σn | = evidence | = evidence |
 
@@ -831,204 +870,425 @@ Render using scenario visibility mode (E/F/F+E)
 
 ## 5. Inference Engine
 
-### 5.0 Quick & Dirty: Mature/Immature Split (Phase 0)
+### 5.1 Problem Statement
 
-**Core problem:** If typical conversion takes 30-45 days and we query "last 7 days", we have almost no observed conversions. But p ≠ 0—we need to forecast using historical data.
+**Core problem:** If typical conversion takes 30 days and we query "last 7 days", we have almost no observed conversions. But \(p \neq 0\)—users simply haven't had time to convert yet. We need to forecast the eventual conversion rate from partial data.
 
-**Solution:** Separate cohorts by maturity and treat them differently:
+**What we observe:** For each cohort \(i\) (users entering on date \(d_i\)):
+- \(n_i\) = cohort size (users who entered)
+- \(k_i\) = conversions observed so far
+- \(a_i\) = cohort age in days \(= T_{\text{query}} - d_i\)
+
+**What we want:** The expected eventual conversions \(\hat{k}_i\) accounting for users who will convert later.
+
+### 5.2 Survival Analysis Framework
+
+We model conversion as a **survival process** where each user who will eventually convert does so after some lag \(L\). The lag follows a distribution with CDF \(F(t) = P(L \leq t)\).
+
+**Key quantities:**
+
+| Symbol | Meaning |
+|--------|---------|
+| \(p_\infty\) | Asymptotic conversion probability (long-run rate from mature data) |
+| \(F(t)\) | Lag CDF — probability of converting within \(t\) days, given eventual conversion |
+| \(S(t) = 1 - F(t)\) | Survival function — probability of NOT YET converting by time \(t\) |
+
+**Observation model:** A user in cohort \(i\) (age \(a_i\)) has not converted if either:
+1. They will **never** convert (probability \(1 - p_\infty\)), or
+2. They **will** convert but haven't yet (probability \(p_\infty \cdot S(a_i)\))
+
+Therefore:
+\[
+P(\text{not converted by } a_i) = (1 - p_\infty) + p_\infty \cdot S(a_i) = 1 - p_\infty \cdot F(a_i)
+\]
+
+### 5.3 The Forecasting Formula (Formula A)
+
+Using Bayes' rule, the probability that a user who hasn't converted by age \(a_i\) will eventually convert is:
+
+\[
+P(\text{eventual} \mid \text{not by } a_i) = \frac{p_\infty \cdot S(a_i)}{1 - p_\infty \cdot F(a_i)}
+\]
+
+For cohort \(i\) with \(n_i\) users and \(k_i\) observed conversions, the **expected eventual conversions** are:
+
+\[
+\boxed{
+\hat{k}_i = k_i + (n_i - k_i) \cdot \frac{p_\infty \cdot S(a_i)}{1 - p_\infty \cdot F(a_i)}
+}
+\]
+
+**Interpretation:**
+- \(k_i\) = already converted (known)
+- \(n_i - k_i\) = not yet converted (uncertain)
+- The fraction = probability each unconverted user will eventually convert
+
+**Aggregate forecast:**
+\[
+p_{\text{mean}} = \frac{\sum_i \hat{k}_i}{\sum_i n_i}
+\]
+
+#### 5.3.1 Derivation
+
+For completeness, the full derivation using Bayes' rule:
+
+\[
+P(\text{eventual} \mid \neg\text{by}_t) = \frac{P(\neg\text{by}_t \mid \text{eventual}) \cdot P(\text{eventual})}{P(\neg\text{by}_t)}
+\]
+
+Where:
+- \(P(\text{eventual}) = p_\infty\)
+- \(P(\neg\text{by}_t \mid \text{eventual}) = S(t) = 1 - F(t)\)
+- \(P(\neg\text{by}_t) = (1 - p_\infty) + p_\infty \cdot S(t) = 1 - p_\infty \cdot F(t)\)
+
+Substituting:
+\[
+P(\text{eventual} \mid \neg\text{by}_t) = \frac{p_\infty \cdot (1 - F(t))}{1 - p_\infty \cdot F(t)}
+\]
+
+### 5.4 Lag Distribution Fitting
+
+We fit the lag CDF \(F(t)\) from Amplitude's `dayMedianTransTimes` data. The **log-normal distribution** is a natural choice for conversion lags (multiplicative factors, always positive, right-skewed).
+
+#### 5.4.1 Log-Normal CDF
+
+\[
+F(t) = \Phi\left(\frac{\ln t - \mu}{\sigma}\right)
+\]
+
+Where \(\Phi\) is the standard normal CDF, and parameters \(\mu, \sigma\) control location and spread.
+
+**Properties:**
+- Median: \(e^\mu\)
+- Mean: \(e^{\mu + \sigma^2/2}\)
+- Mode: \(e^{\mu - \sigma^2}\)
+
+#### 5.4.2 Fitting from Amplitude Data
+
+We have two data points from Amplitude:
+1. **Median lag** \(T_{\text{med}}\) from `medianTransTimes`
+2. **Mean lag** \(T_{\text{mean}}\) from `avgTransTimes`
+
+From median: \(\mu = \ln(T_{\text{med}})\)
+
+From mean/median ratio:
+\[
+\frac{T_{\text{mean}}}{T_{\text{med}}} = e^{\sigma^2/2} \implies \sigma = \sqrt{2 \ln\left(\frac{T_{\text{mean}}}{T_{\text{med}}}\right)}
+\]
+
+**Fallback:** If only median is available, use \(\sigma = 0.5\) (moderate spread) as a default.
+
+#### 5.4.3 Alternative: Weibull Distribution
+
+For edges where log-normal fits poorly (e.g., operational processes with deadlines):
+
+\[
+F(t) = 1 - e^{-(t/\lambda)^k}
+\]
+
+Where \(\lambda\) is scale (characteristic time) and \(k\) is shape:
+- \(k < 1\): decreasing hazard (early converters more likely)
+- \(k = 1\): constant hazard (exponential)
+- \(k > 1\): increasing hazard (deadline effects)
+
+Fit from median and mean using numerical methods (scipy).
+
+### 5.5 Completeness Measure
+
+**Definition:** The expected fraction of eventual conversions already observed.
+
+For each cohort \(i\):
+\[
+\text{completeness}_i = F(a_i)
+\]
+
+Aggregate (weighted by cohort size):
+\[
+\text{completeness} = \frac{\sum_i n_i \cdot F(a_i)}{\sum_i n_i}
+\]
+
+**Interpretation:**
+- 0 = all cohorts brand new, no conversions expected yet
+- 1 = all cohorts fully mature, all conversions observed
+- 0.7 = expect to have seen 70% of eventual conversions
+
+**Note:** This replaces the naive \(\min(1, a_i / T_{\text{med}})\) approximation with the actual fitted CDF, giving a more accurate estimate.
+
+### 5.6 Asymptotic Probability \(p_\infty\)
+
+The asymptotic conversion rate comes from **mature cohorts** where \(F(a_i) \approx 1\):
+
+\[
+p_\infty = \frac{\sum_{i: a_i > T_{95}} k_i}{\sum_{i: a_i > T_{95}} n_i}
+\]
+
+Where \(T_{95} = F^{-1}(0.95)\) is the 95th percentile of the lag distribution (time by which 95% of eventual converters have converted).
+
+**Recency weighting (optional):** To favour recent data while maintaining stability:
+
+\[
+p_\infty = \frac{\sum_i w_i \cdot k_i}{\sum_i w_i \cdot n_i}
+\]
+
+Where \(w_i = e^{-(T - d_i)/H}\) and \(H\) is the recency half-life (default 30 days).
+
+**Effective sample size guard:**
+\[
+N_{\text{eff}} = \frac{(\sum_i w_i \cdot n_i)^2}{\sum_i w_i^2 \cdot n_i}
+\]
+
+If \(N_{\text{eff}} < 100\), widen the window or fall back to unweighted estimate.
+
+### 5.7 Summary: Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           RETRIEVAL TIME                                │
+│  (batch fetch, topologically sorted — upstream edges first)             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Amplitude Response                                                     │
+│         ↓                                                               │
+│  Extract per-cohort arrays: n_daily[], k_daily[],                       │
+│                             median_lag_days[], mean_lag_days[]          │
+│         ↓                                                               │
+│  Store to PARAM FILE (values[]) — query-independent raw data            │
+│         ↓                                                               │
+│  Compute for current query window:                                      │
+│    - mu, sigma, t95, empirical_quality_ok                               │
+│         ↓                                                               │
+│  Store to GRAPH (edge.p.latency.*) — query-specific computed results    │
+│         ↓                                                               │
+│  After all edges fetched: run path DP → path_t95 (transient, per query) │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            QUERY TIME                                   │
+│  (user changes window, context, etc.)                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  If query changed from stored values:                                   │
+│    - Recompute mu, sigma, t95 from param file cohorts in new window     │
+│    - Update edge.latency.* on graph                                     │
+│    - Re-run path DP                                                     │
+│         ↓                                                               │
+│  Apply Formula A per cohort → p.mean, completeness                      │
+│         ↓                                                               │
+│  Render: bead, tooltip, edge layers                                     │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.8 Storage Architecture
+
+**Source of truth — Param files (query-independent):**
+
+| Data | Location | Notes |
+|------|----------|-------|
+| `n_daily[]`, `k_daily[]` | `values[]` | Per-cohort raw counts |
+| `median_lag_days[]`, `mean_lag_days[]` | `values[]` | Per-cohort lag stats |
+
+These are the raw Amplitude data. NOT aggregated — contains all dates, all contexts per slice. Param files are shared across queries.
+
+**Query-context latency values — ProbabilityParam `p.latency`:**
+
+Produced by the latency/forecast service from per-cohort arrays for the **current query**:
+
+| Field | Persistence | Notes |
+|-------|-------------|-------|
+| `t95` | **Persisted** (per ProbabilityParam) | 95th percentile lag for this edge under the pinned DSL. Used for caching and optional UI. |
+| `mu`, `sigma` | Transient | CDF params for current query window (internal to forecast service). |
+| `empirical_quality_ok` | Transient | Quality gate (k≥30, ratio in range). |
+| `path_t95` | Transient, per scenario | Scenario-aware cumulative A→X maturity (depends on active edges). Not written to graph JSON. |
+
+**Computed fresh at query time (transient display scalars):**
+
+| Value | Notes |
+|-------|-------|
+| `completeness` | F(a_i) summed for cohorts in query window |
+| `p.mean` | Formula A applied to query-window cohorts |
+
+**Query-time aggregation of lag stats:**
+
+When computing `mu`, `sigma`, `t95` for a specific query window, aggregate from per-cohort arrays:
 
 ```python
-def compute_edge_probability_with_forecast(
-    daily_cohorts: List[Tuple[date, int, int]],  # (cohort_date, n, k)
-    current_date: date,
-    maturity_days: int = 45,
-    prior_p: float = 0.5  # Fallback if no mature data
-) -> dict:
+def aggregate_lag_stats(cohorts_in_window):
     """
-    Compute p from mature cohorts, forecast immature cohorts.
-    
-    For 30-45 day conversions, "last 7 days" has almost no signal.
-    We use mature cohorts (>45 days old) for the probability estimate,
-    and apply that rate to forecast what immature cohorts will do.
+    Compute weighted mean and approximate median for query window.
+    Weights by k (converters) since lag is only observed for converters.
     """
-    mature_n, mature_k = 0, 0
-    immature_n, immature_k = 0, 0
+    total_k = sum(c.k for c in cohorts_in_window)
+    if total_k == 0:
+        return None, None  # No converters → no lag data
     
-    for cohort_date, n, k in daily_cohorts:
-        age = (current_date - cohort_date).days
-        if age >= maturity_days:
-            mature_n += n
-            mature_k += k
-        else:
-            immature_n += n
-            immature_k += k  # Partial conversions so far
+    # Weighted mean of means (mathematically correct)
+    agg_mean = sum(c.k * c.mean_lag_days for c in cohorts_in_window) / total_k
     
-    # p comes from MATURE cohorts only (they've had time to convert)
-    if mature_n > 0:
-        p = mature_k / mature_n
-    else:
-        p = prior_p  # No mature data: fall back to prior
+    # Weighted "median" (approximation: median of medians weighted by k)
+    # Note: true median would require individual event times
+    agg_median = sum(c.k * c.median_lag_days for c in cohorts_in_window) / total_k
     
-    # Forecast: project immature cohorts at mature rate
-    immature_forecast_k = immature_n * p
-    
-    total_n = mature_n + immature_n
-    
-    return {
-        'p': p,                                    # Rate from mature cohorts
-        'p_source': 'mature' if mature_n > 0 else 'prior',
-        
-        # Mature cohorts: actual data
-        'mature_n': mature_n,
-        'mature_k': mature_k,
-        
-        # Immature cohorts: observed + forecast
-        'immature_n': immature_n,
-        'immature_k_observed': immature_k,          # What we've seen so far
-        'immature_k_forecast': immature_forecast_k, # What we expect eventually
-        
-        # Combined
-        'total_n': total_n,
-        'total_k_observed': mature_k + immature_k,
-        'total_k_forecast': mature_k + immature_forecast_k,
-        
-        # Coverage: how much of our window is mature?
-        # (Phase 0 approximation; see §5.0.1 for the refined latency.completeness definition.)
-        'completeness': mature_n / total_n if total_n > 0 else 0
-    }
+    return agg_median, agg_mean
+
+# Then derive CDF params:
+# mu = ln(agg_median)
+# sigma = sqrt(2 * ln(agg_mean / agg_median))
 ```
 
-**Example:**
+**Why this separation:**
 
-| Window | Cohort Age | n | k (observed) | Treatment |
-|--------|------------|---|--------------|-----------|
-| 60 days ago | 60 | 100 | 45 | Mature: use actual k |
-| 45 days ago | 45 | 120 | 52 | Mature: use actual k |
-| 7 days ago | 7 | 80 | 3 | Immature: forecast using mature p |
-| 2 days ago | 2 | 90 | 0 | Immature: forecast using mature p |
+- **Param file** = raw data, query-independent, shared across graphs
+- **Graph file** = query context + computed results for that context
+- Computed fields on graph naturally invalidate when query changes
+- No "transient in-memory only" complexity — just standard save/load
 
-Mature p = (45+52)/(100+120) = 44.1%
+**UI can grey-out** latency displays when \(n < 100\) or \(k < 10\) (insufficient data for reliable fit).
 
-Immature forecast: (80+90) × 44.1% = 75 expected conversions
+### 5.9 Get-from-Source Flows: Versioned vs Direct
 
-**Display:**
-- Solid bar: observed conversions (97 + 3 = 100)
-- Hatched bar: forecast (75 more expected)
-- Total forecast: 175 of 390 users
+This section describes **when** we call Amplitude, **what** is computed at each step, and **where** data is stored, for two key flows:
 
-**What this gives us:**
-- Usable p estimates even for fresh windows
-- Clear separation of "known" vs "projected"
-- No complex fitting required
-- Works as soon as we have some mature cohorts
+- **(A) Versioned get-from-source** – uses *pinned DSL* to pre-fetch and store slices in param files (overnight or on demand), then answers interactive queries from the cache.
+- **(B) Direct get-from-source** – bypasses param files and computes everything from Amplitude responses for the **current interactive query DSL**.
 
-**Bonus: Latency from dayMedianTransTimes**
+#### 5.9.1 Flow A – Versioned Get-from-Source (via Param Files)
 
-Amplitude also returns per-cohort median/avg conversion times:
+This flow is driven by the **pinned DSL** on the graph. It has two phases: **fetch & version** (into param files) and **interactive query** (using current query DSL).
 
-```python
-def estimate_latency_from_amplitude(response: dict) -> dict:
-    """
-    Extract latency estimate from Amplitude's time stats.
-    
-    Uses median conversion times across cohorts (weighted by k).
-    """
-    series = response['dayMedianTransTimes']['series']
-    day_funnels = response['dayFunnels']['series']
-    
-    weighted_sum = 0
-    total_k = 0
-    
-    for i, (n, k) in enumerate(day_funnels):
-        median_ms = series[i][1]  # Second value is the transition time
-        if median_ms > 0 and k > 0:
-            weighted_sum += median_ms * k
-            total_k += k
-    
-    if total_k > 0:
-        weighted_median_ms = weighted_sum / total_k
-        median_lag_days = weighted_median_ms / (1000 * 60 * 60 * 24)
-    else:
-        median_lag_days = None
-    
-    return {
-        'median_ms': weighted_median_ms if total_k > 0 else None,
-        'median_lag_days': median_lag_days,
-        'sample_size': total_k
-    }
-```
-
-This gives us a quick latency estimate without needing maturation curves.
-
-**Limitations (addressed by full model later):**
-- Assumes stable p across cohorts (no trend)
-- No confidence intervals
-- No per-cohort maturation curve (just final p)
-- Latency estimate is aggregate, not per-cohort
-
-#### 5.0.1 Edge-Level Summary Stats (MVP, pre-Bayes)
-
-Before full survival modelling, we expose a small set of **edge-level latency stats** derived from Amplitude:
-
-1. **Typical lag (`latency.median_lag_days`)**
-   - Definition: weighted median time-to-convert (days) across all cohorts in the parameter window.
-   - Computation: as in `estimate_latency_from_amplitude()` above:
-     - Use `dayMedianTransTimes.series[i][1]` as per-cohort medians (ms).
-     - Weight by `k_i` from `dayFunnels.series[i] = [n_i, k_i]`.
-     - Ignore cohorts with `k_i = 0` or `median_ms <= 0`.
-
-2. **Completeness / maturity progress (`latency.completeness`)** — DEFINITIVE FORMULA
-   - Intuition: \"How far along are the current cohorts, relative to the typical lag?\"  
-   - For each cohort \(i\):
-     - Age in days: \(a_i = (\text{query\_date} - \text{cohort\_date}_i)\).
-     - Typical lag: \(T_{\text{med}} = \text{latency.median\_lag\_days}\).
-     - Define per-cohort progress:
-       \[
-       \text{progress}_i = \min\left(1,\ \frac{a_i}{T_{\text{med}}}\right)
-       \]
-   - Let \(n_i\) be the cohort size from `dayFunnels.series[i][0]`. Define:
-     \[
-     \text{latency.completeness} = \frac{\sum_i n_i \cdot \text{progress}_i}{\sum_i n_i}
-     \]
-   - Properties:
-     - 0 if all cohorts are brand new.
-     - 1 if all cohorts are at least one median-lag old.
-     - Smooth 0–1 measure derived from actual data (median lag), not an arbitrary threshold.
-   
-   **Why this formula (not `mature_n / total_n`):** Uses the actual observed median lag rather than a user-set `maturity_days` threshold. More informative and requires no manual configuration.
-
-3. **Sample context**
-   - We re-use existing `n`/`k` from parameter values for context:
-     - `n = \sum_i n_i`
-     - `k = \sum_i k_i`
-   - UI can grey-out latency displays when `n` and/or `k` are very small.
-
-#### 5.0.2 Phase 0 Forecasting Formula
-
-**Current scope (Phase 0):** Use a simple step-function approximation for the lag CDF:
+**Phase A1 – Fetch & version slices (pinned DSL → param files):**
 
 ```
-F(a_i) = 0  if a_i < maturity_days
-F(a_i) = 1  if a_i >= maturity_days
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Graph (Pinned DSL)                                                    │
+│    - latency edges mark which edges need dual slices                   │
+│    - pinned DSL includes cohort(...) and/or window(...) clauses        │
+│         │                                                              │
+│         ▼                                                              │
+│  Slice Planner (TS / UpdateManager + dataOperationsService)           │
+│    - Expand pinned DSL → canonical sliceDSLs (§4.7.1)                  │
+│      • For each latency edge & context combo:                          │
+│          - cohort slice: cohort(anchor_id, abs_start:abs_end)         │
+│          - window slice: window(abs_start:abs_end)                     │
+│         │                                                              │
+│         ▼                                                              │
+│  Amplitude Adapter (Python: amplitude_to_param.py)                     │
+│    - For each canonical sliceDSL:                                      │
+│      • window(): edge-local dayFunnels + lag stats                     │
+│      • cohort(): A-anchored dayFunnels (where required)                │
+│    - Writes param JSON:                                                │
+│      • dates[], n_daily[], k_daily[]                                   │
+│      • median_lag_days[], mean_lag_days[] (from Amplitude ms fields)   │
+│      • data_source metadata (retrieved_at, API params)                 │
+│         │                                                              │
+│         ▼                                                              │
+│  Param Registry (IndexedDB / files)                                    │
+│    - Stores slices keyed by sliceDSL                                   │
+│    - Versioned by retrieved_at                                        │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-This simplifies forecasting to:
+**Phase A2 – Interactive query (current query DSL → param slices → forecast):**
+
 ```
-k̂_i = k_i                                    if a_i >= maturity_days (mature)
-k̂_i = k_i + (n_i - k_i) × p.forecast         if a_i < maturity_days (immature)
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Graph Editor (UI)                                                     │
+│    - Maintains current interactive query DSL (not the pinned DSL)      │
+│    - User adjusts window(), contexts, etc.                             │
+│         │                                                              │
+│         ▼                                                              │
+│  dataOperationsService (TS)                                            │
+│    - For each edge in current view:                                    │
+│      • Resolve whether edge uses cohort() or window() semantics        │
+│        (per §4.6, §4.7)                                                │
+│      • Look up matching slices in Param Registry via sliceDSL          │
+│      • If slices missing or stale → mark for refetch                   │
+│         │                                                              │
+│         ▼                                                              │
+│  statisticalEnhancementService (TS)                                    │
+│    - For latency edges with both slices available:                     │
+│      1) From window() slice (edge-local view):                         │
+│         • Aggregate median_lag_days[], mean_lag_days[] over chosen     │
+│           history window                                               │
+│         • Fit log-normal: mu, sigma → F(t), S(t), T_95                 │
+│         • Compute p_∞ from \"mature enough\" windows                   │
+│      2) From cohort() slice (A-anchored view):                         │
+│         • Extract n_i, k_i, a_i for cohorts in the current query       │
+│         • Apply Formula A with p_∞ and F(a_i)                          │
+│         • Aggregate p.mean and completeness (§5.3–§5.6)                │
+│      3) Write summary stats into p.latency for this edge:              │
+│         • t95 (from window())                                          │
+│         • baseline p_infinity (from window())                          │
+│         • p_mean, completeness (window+cohort)                         │
+│      4) Keep mu, sigma, empirical_quality_ok, path_t95 transient       │
+│         │                                                              │
+│         ▼                                                              │
+│  Graph JSON / IndexedDB                                                │
+│    - Stores p.latency.{maturity_days, anchor_node_id, t95}             │
+│    - Tagged against the current query DSL                              │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-Then: `p.mean = Σk̂_i / Σn_i`
+**Key properties of Flow A:**
 
-**Intuition:** Mature cohorts use observed conversions. Immature cohorts forecast additional conversions at the mature baseline rate (`p.forecast`).
+- **Pinned DSL** shapes what slices exist in param files; it does *not* define the interactive query.
+- **Current query DSL** drives which slices are read and how they are aggregated.
+- **window() slices** provide early, edge-local evidence for \(p_\infty\) and lag shape.
+- **cohort() slices** provide the A-anchored exposures for the current query.
+- All heavy per-cohort calculations (Formula A) are ephemeral; only scalars are written back to the graph.
 
-**Where `p.forecast` comes from:** Computed at retrieval time as `Σk / Σn` from mature cohorts in the **window() slice** (X-anchored data). If no window() slice exists, `p.forecast` is unavailable. See Appendix C for Phase 1+ refinements (recency weighting, effective sample size guards).
+#### 5.9.2 Flow B – Direct Get-from-Source (Bypass Param Files)
 
-> **Note:** Detailed formulas for recency-weighted fitting, convolution fallback, and Bayesian enhancements are deferred to **Appendix C: Phase 1+ Forecasting Formulas**. These are speculative and not required for the current implementation scope.
+This flow answers an interactive query **even when no param files exist** (or when the user explicitly bypasses the cache). It still uses **both** window() and cohort() views, but does not require them to be persisted.
 
-#### 5.0.3 Aggregation over Multiple Slices / Contexts
+**Single-edge direct query (no param files required):**
 
-User queries frequently span **multiple stored slices** (e.g. `contextAny(channel)` or multi-value context filters). Aggregation over these slices must be **mathematically consistent** with the per-cohort Formula A above.
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  1. Current interactive query DSL                                      │
+│     - Cohort DSL: cohort(A, rel_start:rel_end)[.context(...)]          │
+│     - Window DSL: window(rel_hist_start:rel_hist_end)[.context(...)]   │
+│       (derived from the same graph + query, not from pinned DSL)       │
+├─────────────────────────────────────────────────────────────────────────┤
+│  2. Amplitude calls                                                     │
+│     - window() call:                                                   │
+│       • Returns edge-local dayFunnels + lag stats over history         │
+│     - cohort() call:                                                   │
+│       • Returns A-anchored cohorts n_i, k_i, ages a_i                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│  3. Ephemeral computation in forecastService                           │
+│     From window() only (edge-local behaviour):                         │
+│       • Aggregate median_lag_days, mean_lag_days over chosen history   │
+│       • Fit log-normal: mu, sigma, derive T_95                         │
+│       • Compute p_∞ from \"mature\" windows (age > T_95, or rule)     │
+│     From cohort() only (A-anchored exposures):                         │
+│       • For each cohort i: n_i, k_i, a_i                               │
+│       • Compute F(a_i), S(a_i) from mu, sigma                          │
+│       • Apply Formula A → k̂_i                                         │
+│     Aggregate:                                                         │
+│       • p_mean = Σk̂_i / Σn_i                                          │
+│       • completeness = Σ(n_i × F(a_i)) / Σn_i                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│  4. Optional persistence                                                │
+│     - Write window()+cohort() slices into param files (for reuse)      │
+│     - Populate p.latency on the ProbabilityParam for this DSL          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Direct-from-source limitations (vs fully versioned Flow A):**
+
+| Capability | Behaviour |
+|-----------|-----------|
+| `path_t95` | Can only be computed reliably when multiple edges have up-to-date window() baselines; in purely ad hoc direct queries we may skip or approximate it. |
+| Cross-edge consistency | Full path-level maturity and cache decisions work best when the same pinned DSL has been used to pre-populate param files for all edges. |
+| Historical comparison | Direct queries can compare windows within the Amplitude response, but cannot use long-lived, versioned slices without param files. |
+
+In both flows, **Formula A’s correctness does not depend on param files**: param files and graph fields are caches of raw slices and small summary stats, not extra sources of truth.
+
+### 5.10 Aggregation over Multiple Slices / Contexts
+
+User queries frequently span **multiple stored slices** (e.g. `contextAny(channel)` or multi-value context filters). Aggregation over these slices must be **mathematically consistent** with Formula A (§5.3).
 
 **Notation:**
 
@@ -1084,7 +1344,7 @@ In implementation terms: **do not** average per-slice `p.forecast` values. Inste
 
 **Aggregated blended probability `p.mean`:**
 
-For each cohort \\(c = (r,j) \\in \\mathcal{C}\\), reuse the Phase 0 step-function approximation:
+For each cohort \\(c = (r,j) \\in \\mathcal{C}\\), apply Formula A (§5.3):
 
 - If \\(a_c \\ge m\\) (mature): \\(\\hat{k}_c = k_c\\)
 - If \\(a_c < m\\) (immature):
@@ -1103,7 +1363,7 @@ Then:
   p_{\\text{mean, agg}} = \\frac{K_{\\text{hat, total}}}{N_{\\text{total}}}
   \\]
 
-This is exactly equivalent to **flattening all cohorts from all contexts into a single list and applying Formula A once**. It is invariant to how cohorts are grouped into slices and therefore mathematically well-defined for:
+This is exactly equivalent to **flattening all cohorts from all contexts into a single list and applying Formula A (§5.3) once**. It is invariant to how cohorts are grouped into slices and therefore mathematically well-defined for:
 
 - Multiple context values (e.g. `contextAny(channel)`)
 - Multiple explicit context filters (e.g. `or(context(channel:google), context(channel:fb))`)
@@ -1111,11 +1371,45 @@ This is exactly equivalent to **flattening all cohorts from all contexts into a 
 
 **Window-based queries:** For `window()` slices on latency edges, apply the same rules, treating each `(row, date)` pair as a "cohort" with `n_{r,t}`, `k_{r,t}`, and age defined relative to event date instead of cohort-entry date. The aggregation formulas above still hold; only the definition of \\(a_{r,\\cdot}\\) changes.
 
-#### 5.0.4 Sibling Edge Probability Constraints
+### 5.11 Scenarios and External Data Conditioning
 
-**Problem:** For sibling edges (multiple outgoing edges from the same node), probabilities must sum to ≤ 1. Formula A applies independently to each edge, which can cause `Σ p.mean > 1` as a forecasting artefact.
+Scenarios (cases and `conditional_ps`) define **which edges and parameters are active**, but they do **not** automatically create new external data segments. Conditioning of external data is only introduced where the user has explicitly modelled it.
 
-**Why this happens:** Formula A treats the "remaining pool" `(n_i - k_i)` as potential converters for THIS edge, without accounting for conversions on sibling edges. When siblings compete for the same pool, forecasts can double-count.
+**Scenario‑effective graph:**
+
+- A scenario overlay (case variants, conditional branches) produces an **effective graph**:
+  - Same nodes and potential edges as the base graph.
+  - Some edges are **active** (used in this scenario) with specific parameter bindings.
+  - Some edges are **inactive** (probability zero / not taken in this scenario).
+- All latency calculations that depend on graph structure (e.g. A→X total maturity in §4.7.2) operate on this **scenario‑effective edge set**:
+  - Only active edges contribute to `path_t95`.
+  - Conditional branches with their own latency configs only affect maturity when they are active.
+
+**External data (Amplitude) conditioning:**
+
+- External data (window()/cohort() slices from Amplitude) is segmented **only** where we have explicit model structure for it:
+  - Separate parameters / edges / contexts for different segments (e.g. `visited(d)` vs not).
+  - Corresponding `sliceDSL` values that encode those conditions.
+- Scenarios do **not** implicitly create new Amplitude segments; they only **select between existing parameters and slices**:
+  - If the user cares about “visited(d) vs not” having different behaviour, they must introduce separate params/edges/sliceDSLs for those segments.
+  - When a scenario activates a particular branch, latency and `p.forecast` for that branch are read from the slices attached to that branch’s param.
+  - Downstream edges use whatever slices exist for their own params; they are **parameter‑aware**, not automatically scenario‑conditioned.
+
+**Implications:**
+
+- **A→X maturity and cache policy** are **scenario‑aware**:
+  - They use only scenario‑active edges and their latency stats.
+  - Conditional branches with different lags influence maturity only when chosen.
+- **Downstream external behaviour** (e.g. X→Y lag and baseline) is:
+  - Based on the slices defined for that edge’s parameters.
+  - Scenario‑aware only to the extent that scenarios choose between parameters/slices the user has explicitly modelled.
+- This avoids an uncontrolled combinatorial explosion of external data requirements, while still letting users model segments they actively care about as **first‑class parameters**.
+
+### 5.12 Sibling Edge Probability Constraints
+
+**Problem:** For sibling edges (multiple outgoing edges from the same node), probabilities must sum to ≤ 1. Formula A (§5.3) applies independently to each edge, which can cause `Σ p.mean > 1` as a forecasting artefact.
+
+**Why this happens:** Formula A (§5.3) treats the "remaining pool" `(n_i - k_i)` as potential converters for THIS edge, without accounting for conversions on sibling edges. When siblings compete for the same pool, forecasts can double-count.
 
 **Analysis by configuration:**
 
@@ -1165,14 +1459,14 @@ expected_artefact ≈ (1 - completeness) × max(0, Σ p.forecast - 1)
 
 If `Σ p.mean - 1 > expected_artefact × 1.5`, show info message indicating forecasting artefact is larger than expected.
 
-#### 5.0.5 Put to File Behaviour in Aggregate Views
+### 5.11 Put to File Behaviour in Aggregate Views
 
 **Principle:** "Put to file" is **never disabled**. A param file existing means the operation is always available; it is not conditional on slice count or aggregation status.
 
 **Behaviour when current view is an aggregate over multiple slices** (e.g. `contextAny(...)`, multiple `context(...)` combinations):
 
 1. **CONFIG/metadata: always written.**
-   - Latency config (`maturity_days`, `anchor_node_id`, `censor_days`)
+   - Latency config (`maturity_days`, `anchor_node_id`)
    - Edge-level metadata (`query`, `n_query`, etc.)
    - These are top-level fields, not per-slice, so aggregation status is irrelevant.
 
@@ -1193,17 +1487,17 @@ If `Σ p.mean - 1 > expected_artefact × 1.5`, show info message indicating fore
 
 ---
 
-### 5.1–5.3 Advanced Inference (Phase 1+)
+### 5.12 Advanced Inference (Optional)
 
-> **Deferred:** Full Bayesian lag distribution fitting, hierarchical models, and posterior summaries are out of scope for Phase 0. See **Appendix C: Phase 1+ Forecasting Formulas** for the speculative design.
+> **Optional:** Full Bayesian hierarchical models and posterior summaries extend the core framework. See **Appendix C** for details.
 
 ---
 
-## 6. DAG Runner Integration (Phase 1+)
+## 6. DAG Runner Integration
 
-> **Deferred:** Time-indexed forward passes with latency convolution and Monte Carlo uncertainty are out of scope for Phase 0. The current runner uses the blended `p.mean` without temporal simulation. See **Appendix C** for speculative time-aware runner design.
+**Current behaviour:** The runner uses `p.mean` (the blended evidence+forecast probability from Formula A) as a scalar, treating conversions as instantaneous. Latency information is displayed but not used in forward-pass calculations.
 
-**Phase 0 behaviour:** The runner uses `p.mean` (the blended evidence+forecast probability) as a scalar, treating conversions as instantaneous. Latency information is displayed but not used in forward-pass calculations.
+**Future extension:** Time-indexed forward passes with latency convolution and Monte Carlo uncertainty. See **Appendix C.4** for the time-aware runner design.
 
 ---
 
@@ -1259,11 +1553,11 @@ interface EdgeLatencyDisplay {
   p: {
     evidence: number;        // Observed k/n from query window
     forecast: number;        // Mature baseline (from window slice, retrieval time)
-    mean: number;            // Blended: evidence + forecasted tail (Formula A)
+    mean: number;            // Blended: evidence + forecasted tail (Formula A, §5.3)
   };
   
   // For completeness badge
-  completeness: number;      // 0-1 maturity progress (see §5.0.1)
+  completeness: number;      // 0-1 maturity progress (see §5.5)
   
   // For tooltips
   median_lag_days?: number;  // From dayMedianTransTimes
@@ -1280,7 +1574,7 @@ interface EdgeLatencyDisplay {
 |-------|---------|---------------|---------|
 | `p.evidence` | Observed k/n from query window | Query time | No |
 | `p.forecast` | Forecast absent evidence (mature baseline) | Retrieval time | Yes, on slice |
-| `p.mean` | Evidence + forecasted tail (Formula A) | Query time | No |
+| `p.mean` | Evidence + forecasted tail (Formula A, §5.3) | Query time | No |
 
 **Rendering by visibility mode:**
 
@@ -1338,7 +1632,7 @@ A new bead displays latency information on edges with `latency.maturity_days > 0
 | Property | Value |
 |----------|-------|
 | Position | **Right-aligned** on edge (new bead position) |
-| Format | **"13d (75%)"** — median lag + completeness (see §5.0.1) | *** WE MIGHT WANT TO SURRFACE ST DEV OR WHATEVER ON THE LAG DAYS TOO E.G. 13d+/-3 (75%) ***
+| Format | **"13d ±3 (75%)"** — median lag ± σ + completeness (see §5.5) |
 | Show when | `latency.maturity_days > 0` AND `median_lag_days > 0` |
 | Colour | Standard bead styling (no new colour) |
 
@@ -1414,9 +1708,8 @@ Latency configuration fields are added to `ParameterSection` component — the s
 
 | Field | Type | Maps to | Override flag |
 |-------|------|---------|---------------|
-| Track Latency | Checkbox | `edge.latency.maturity_days` (0 vs >0) | `maturity_days_overridden` |
-| Maturity Days | Number input (shown when enabled) | `edge.latency.maturity_days` | `maturity_days_overridden` |
-| Recency | Slider (shown when enabled) | `edge.latency.recency_half_life_days` | `recency_half_life_days_overridden` |
+| Track Latency | Checkbox | `p.latency.maturity_days` (0 vs >0) | `maturity_days_overridden` |
+| Maturity Days | Number input (shown when enabled) | `p.latency.maturity_days` | `maturity_days_overridden` |
 
 **Semantics:**
 - Checkbox **unchecked**: `maturity_days = 0` (latency tracking disabled)
@@ -1426,10 +1719,9 @@ Latency configuration fields are added to `ParameterSection` component — the s
 ```
 [✓] Track Latency
     Maturity: [30] days
-    Recency:  [==●====] 30d [↺]
 ```
 
-When checkbox unchecked, Maturity and Recency rows are hidden.
+When checkbox unchecked, Maturity row is hidden.
 
 **Default inference when enabling:**
 When user checks "Track Latency" on an edge that has data:
@@ -1482,7 +1774,7 @@ edge_latency_analysis:
       n: 15
       k: 0
       is_mature: true
-      median_lag_ms: null
+      median_lag_days: null
     - date: "25-Oct-24"
       n: 80
       k: 3
@@ -1511,7 +1803,7 @@ edge_latency_analysis:
 - Extend `analysis.yaml` schema for latency fields
 - Add tabular export option for cohort-level data
 - Analytics panel components consume explicit data fields, not infer from styling
-- Consider whether completion curves require full maturation data (Phase 1+) or can work with aggregate latency (Phase 0)
+- Consider whether completion curves require full maturation data (Appendix C.3) or can work with aggregate latency (§5.5)
 
 ---
 
@@ -1548,7 +1840,7 @@ window(1-Nov-25:14-Nov-25)
 // New (default for conversion edges)
 cohort(1-Nov-25:7-Nov-25)
 
-// maturity_days comes from edge.latency.maturity_days, not the DSL
+// maturity_days comes from p.latency.maturity_days, not the DSL
 ```
 
 #### B. Amplitude Adapter
@@ -1752,10 +2044,9 @@ See §3.2 for full structure and field descriptions.
 **Data architecture — graph edge ↔ param file mirroring:**
 
 ```
-Graph Edge                    ↔    Param File
+Graph Edge / Probability      ↔    Param File
 ─────────────────────────────────────────────────────────────────
-edge.latency.maturity_days    ↔    latency.maturity_days (top-level CONFIG; >0 enables tracking)
-edge.latency.maturity_days    ↔    latency.maturity_days
+edge.p.latency.maturity_days  ↔    latency.maturity_days (top-level CONFIG; >0 enables tracking)
 edge.query                    ↔    query
 ─────────────────────────────────────────────────────────────────
 edge.p.mean                   ↔    values[].mean        (per-slice DATA)
@@ -1770,12 +2061,10 @@ edge.p.evidence.n/k           ↔    values[].n, values[].k
 
 ##### CONFIG fields (Edge ↔ Param top-level, NOT scenario)
 
-| Graph Edge | Param File | Override Flag | Notes |
-|------------|-----------|---------------|-------|
-| `edge.latency.maturity_days` | `latency.maturity_days` | `maturity_days_overridden` | >0 enables latency tracking |
-| `edge.latency.maturity_days` | `latency.maturity_days` | `maturity_days_overridden` | Maturity threshold |
-| `edge.latency.censor_days` | `latency.censor_days` | `censor_days_overridden` | Censor threshold |
-| `edge.latency.anchor_node_id` | `latency.anchor_node_id` | `anchor_node_id_overridden` | Cohort anchor (MSMDC-computed) |
+| Graph / Prob | Param File | Override Flag | Notes |
+|--------------|-----------|---------------|-------|
+| `edge.p.latency.maturity_days` | `latency.maturity_days` | `maturity_days_overridden` | >0 enables latency tracking |
+| `edge.p.latency.anchor_node_id` | `latency.anchor_node_id` | `anchor_node_id_overridden` | Cohort anchor (MSMDC-computed) |
 
 **`anchor_node_id` generation:**
 - Computed by MSMDC at graph-edit time (alongside `query` generation)
@@ -1899,6 +2188,50 @@ interface CostParam {
 - `src/services/GraphParamExtractor.ts` — stop extracting those fields
 
 **Backward compatibility:** Existing scenario files with these fields will simply have them ignored (sparse representation). No migration needed.
+
+#### 9.K.2 Scenario Rendering with Latency (Impact Summary)
+
+Scenarios can each have their own **query DSL** (e.g., `window(-90d:-60d)`, `cohort(-30d:).context(channel:google)`, `window(-90d:-60d).visited(d)`, `window(-90d:-60d).case(exp:treatment)`). For each such scenario, the renderer must be able to draw the **correct F/E/F+E latency view** without recomputing from the "current" layer.
+
+**Per-scenario param packs must contain, per edge:**
+
+- `p.mean`, `p.stdev` — scenario-specific probability and uncertainty (already present).
+- `forecast_mean`, `forecast_stdev` — scenario-specific mature baseline (from window() slices for that scenario's fetch DSL).
+- `evidence_mean`, `evidence_stdev` — scenario-specific observed rate (from cohort/window evidence for that scenario's fetch DSL).
+
+These four lag fields are sufficient to reconstruct, per scenario and per edge:
+
+- `p.evidence` = `evidence_mean` (inner solid width).
+- `p.forecast` = `forecast_mean` (outer forecast-only width in F mode).
+- `p.mean` = scenario's blended value (outer width in F+E mode; can be `p.mean` itself or recomputed from forecast/evidence if needed).
+
+**Scenario regeneration flow with latency:**
+
+1. **Split scenario DSL** (`meta.queryDSL`) into:
+   - **Fetch parts** (window, context, contextAny) → used to build the scenario's effective fetch DSL.
+   - **What-if parts** (case, visited, exclude) → used by the What-If engine after fetch.
+2. **Fetch & compute for this scenario:**
+   - Use the effective fetch DSL to drive param-file / Amplitude fetch for this scenario.
+   - Run the same latency pipeline as the base layer:
+     - window() slices → `forecast_mean`, `forecast_stdev` (scenario baseline).
+     - cohort()/window evidence → `evidence_mean`, `evidence_stdev`.
+     - Formula A → scenario `p.mean` and completeness (for display/runner).
+3. **Extract into ScenarioParams:**
+   - `GraphParamExtractor` + `extractDiffParams` include:
+     - `p.mean`, `p.stdev` (as today).
+     - `forecast_mean`, `forecast_stdev`, `evidence_mean`, `evidence_stdev` where they differ from Base or are newly available.
+4. **Render-time composition:**
+   - ScenariosContext composes `Scenario.params` over the Base graph.
+   - For each visible scenario layer and edge, the renderer reads from the composed params:
+     - Scenario `p.mean` / `p.stdev` for edge width & CI.
+     - Scenario `forecast_mean` / `evidence_mean` to derive `p.forecast` and `p.evidence` for that layer's latency display.
+   - The base latency machinery (Formula A, completeness, lag fit) is **not** rerun at render time for scenarios; it has already been baked into scenario param packs at regeneration.
+
+**Important constraints:**
+
+- Scenario param packs **do not** contain heavy bulk data (`n_daily`, `k_daily`, `median_lag_days[]`, histograms). Those live in param files and are shared across scenarios.
+- Param packs only contain the **scalar outputs needed for rendering and what-if analysis** for each scenario DSL.
+- Live scenarios regenerate their param packs when the user requests refresh; static scenarios store a snapshot of these fields.
 
 ### 9.3 Data Flow: Cohort Mode
 
@@ -2067,7 +2400,7 @@ The dual-slice retrieval architecture introduces significant complexity that req
 | `cohort()` on non-latency edge | `cohort(-60d:-30d)` | Standard `n_daily/k_daily` | Treat as `window()` |
 | Mixed query types | `cohort(-90d:)` then `window(-7d:)` | Both data blocks | Correct routing per query type |
 
-#### E. Forecasting Logic Tests (`forecastService.test.ts` — new)
+#### E. Forecasting Logic Tests (`statisticalEnhancementService.test.ts` — new)
 
 | Test Case | Inputs | Expected Output |
 |-----------|--------|-----------------|
@@ -2140,7 +2473,7 @@ These tests verify end-to-end behaviour across the full pipeline.
 3. **Verify:** Error returned: "Window data not available"
 4. **Verify:** UI prompts user to fetch window() data or switch to cohort mode
 
-**Note:** Convolution fallback (deriving window data from cohort data) is deferred to Phase 1+. Phase 0 returns an error.
+**Note:** If convolution fallback (Appendix C.2) is not implemented, return an error prompting user to fetch window() data.
 
 #### Scenario 6: Non-Latency Edge with cohort() Query
 1. Load param file for edge with `latency.maturity_days: 0` (tracking disabled)
@@ -2287,108 +2620,94 @@ Key fields from `amplitude_response.json`:
 
 ---
 
-## Appendix C: Phase 1+ Forecasting Formulas (Speculative)
+## Appendix C: Advanced Forecasting Topics
 
-> **Status:** This appendix contains speculative formulas for future phases. They are not required for Phase 0 implementation.
+> **Status:** This appendix covers advanced topics that extend the core survival analysis framework (§5). The core formula (§5.3) and distribution fitting (§5.4) are required for implementation; these extensions are optional enhancements.
 
-### C.1 Evidence vs Forecast Policy
+### C.1 Recency-Weighted \(p_\infty\) Estimation
 
-**Recency-weighted model fitting:**
+> **Status:** Deferred feature. Initial implementation uses simple unweighted average of mature cohorts (§5.6). This section specifies the recency-weighted enhancement.
 
-Within the "mature but not ancient" cohort set, favour more recent cohorts when estimating the long-run `p.forecast`:
+**New config field (add to `LatencyConfig` when implementing):**
+```typescript
+recency_half_life_days?: number;  // Default: 30
+recency_half_life_days_overridden?: boolean;
+```
 
-1. For each mature cohort, define a recency weight `w_i = exp(-(T_ingest - t_i) / H)` where `t_i` is the cohort date and `H` is `latency.recency_half_life_days` (default ~30).
+**Weight function:**
 
-2. Estimate the mature baseline probability: `p.forecast = Σ(w_i × k_i) / Σ(w_i × n_i)`
+For each mature cohort with entry date \(d_i\), define:
+\[
+w_i = \exp\left(-\frac{T_{\text{query}} - d_i}{H}\right)
+\]
 
-3. Guard against sparsity with effective sample size: `N_eff = (Σ w_i × n_i)² / Σ(w_i² × n_i)`. If `N_eff` is too small (< 500–1000), widen the window or blend with a weaker prior.
+Where \(H\) is `recency_half_life_days` (default 30). A cohort \(H\) days old has half the weight of a brand-new cohort.
 
-#### C.1.1 Moving Forecasts & Recency Weighting – Implementation Sketch (Phase 1 / Fast-Follow)
+**Weighted estimator:**
+\[
+p_\infty = \frac{\sum_i w_i \cdot k_i}{\sum_i w_i \cdot n_i}
+\]
 
-**Goal:** Make `p.forecast` a **moving, recency-weighted quantity** that updates smoothly as new data arrives, without changing the Phase 0 query/rendering contract.
+**Effective sample size guard:**
+\[
+N_{\text{eff}} = \frac{(\sum_i w_i \cdot n_i)^2}{\sum_i w_i^2 \cdot n_i}
+\]
 
-**Core idea:**
+If \(N_{\text{eff}} < 100\), fall back to unweighted estimation or widen the window.
 
-- Keep the Phase 0 contract:
-  - Retrieval time computes and stores **slice-level** `forecast_mean`, `forecast_stdev`.
-  - Query time uses those as the baseline in Formula A.
-- Change **how** `forecast_mean` is computed at retrieval time:
-  - From simple mature average (Phase 0) → to **recency-weighted** average using weights \\(w_i\\).
-  - Use the effective sample size \\(N_{eff}\\) to decide if the recency-weighted estimate is trustworthy.
+#### C.1.1 Implementation Notes
 
-**Insertion points (code):**
+**Goal:** Make \(p_\infty\) a **moving, recency-weighted quantity** that updates smoothly as new data arrives.
 
-- **`dataOperationsService.getFromSource()` transform path** (retrieval time):
-  - Today: after extracting per-cohort \\(n_i, k_i\\), we compute:
-    - `p.forecast = Σk_mature / Σn_mature` (unweighted) and write to `values[].forecast_mean`.
-  - Phase 1 change:
-    - Call a small helper (e.g. `forecastService.computeRecencyWeightedForecast(dailyCohorts, recencyHalfLife)`).
-    - That helper:
-      - Applies weights \\(w_i\\) as per C.1.
-      - Computes `forecast_mean`, `forecast_stdev`, and `N_eff`.
-      - If `N_eff` below threshold, either:
-        - Fall back to unweighted mature average, or
-        - Mark `forecast_mean` as low-confidence (flag stored in `values[].latency` or `values[].data_source.analytics`).
-    - Write the result back to:
-      - `values[].forecast_mean`, `values[].forecast_stdev`.
-      - Optional: `values[].latency.effective_sample_size`.
+**Architecture:**
 
-- **`forecastService.ts` (NEW, TS-side service):**
-  - Encapsulate:
-    - Recency weighting logic (C.1).
-    - Effective sample size calculation.
-  - Used by:
-    - `dataOperationsService` at retrieval time.
-    - Future analytics code (e.g., to recompute forecasts on different windows without re-fetching).
+- **Retrieval time:** Compute and store `forecast_mean`, `forecast_stdev` per slice.
+- **Query time:** Use stored `forecast_mean` as \(p_\infty\) in Formula A (§5.3).
 
-**Data model impact:**
+**Recency weighting is applied at retrieval time**, not query time. Each fetch recomputes `forecast_mean` with current weights, so the graph viewer sees smooth evolution without needing new query-time formulas.
 
-- **No schema changes are required** for Phase 1:
-  - We already have:
-    - `values[].forecast_mean`, `values[].forecast_stdev`.
-    - `latency.recency_half_life_days` on the edge (optional; defaulted if missing).
-  - Optionally, we may add:
-    - `values[].latency.effective_sample_size` (for debugging / semantic linting).
-- Existing Phase 0 files remain valid:
-  - When Phase 1 ships, older `forecast_mean` values simply become “legacy” until next fetch.
-  - Any re-fetch will recompute them with recency weighting.
+**Code insertion points:**
 
-**Query-time behaviour (unchanged):**
+- **`statisticalEnhancementService.ts`:** Extended to encapsulate:
+  - Recency weighting logic
+  - Effective sample size calculation
+  - Low-confidence flagging
+  
+- **`dataOperationsService.getFromSource()`:** Call `statisticalEnhancementService.computeRecencyWeightedForecast()` at retrieval time.
 
-- Formula A and the rendering logic **do not change**:
-  - `p.evidence` still derived from raw k/n in the current query window.
-  - `p.forecast` is taken from `values[].forecast_mean` (now recency-weighted).
-  - `p.mean` still computed at query time from evidence + forecast tail.
-- Moving forecasts emerge naturally because:
-  - Each new fetch recomputes `forecast_mean` with recency weights and newer cohorts.
-  - The graph viewer sees a smooth evolution of `p.forecast` over time, without needing new query-time formulas.
+**Data model (additions when implementing):**
 
-**Interaction with semantic linting (see TODO.md):**
+| Field | Location | Purpose |
+|-------|----------|---------|
+| `recency_half_life_days` | `p.latency` | Config (default 30) |
+| `recency_half_life_days_overridden` | `p.latency` | Override flag |
+| `effective_sample_size` | `values[].latency` | Optional, for diagnostics |
 
-- The same `forecastService` helper can expose:
-  - `N_eff` (effective sample size).
-  - Flags like `isForecastReliable` (based on thresholds).
-- Graph Issues can:
-  - Warn when `N_eff` is too low for a latency edge.
+**Note:** `forecast_mean` and `forecast_stdev` already exist in `values[]` from the core spec.
 
-#### C.1.2 Recency Bias UI & Config Spec (Phase 1)
+**Semantic linting integration:**
 
-**Concept:** Recency bias controls how much the forecast baseline favours recent mature cohorts over older ones. Parameterised as **half‑life in days**: a cohort `H` days older than the newest gets half the weight.
+- Warn when \(N_{\text{eff}} < 100\) ("shallow data")
+- Warn when no mature cohorts exist ("no baseline")
 
-**Metrication:**
+#### C.1.2 Recency Bias UI & Config
 
-- `recency_half_life_days: number` (default: 30)
-- Interpretation: "How many days until a cohort's influence is halved?"
-  - `H = 7`: aggressive decay, recent week dominates.
-  - `H = 30`: gentle decay (default).
-  - `H = 90`: very stable, historical data weighted heavily.
-  - `H = 0`: disabled (unweighted average, Phase 0 behaviour).
+**Concept:** Recency bias controls how much the forecast baseline favours recent mature cohorts over older ones. Parameterised as **half‑life in days**: a cohort \(H\) days older than the newest gets half the weight.
+
+**Values:**
+
+| Half-life | Behaviour |
+|-----------|-----------|
+| 7 days | Aggressive: recent week dominates |
+| 30 days | Gentle: default |
+| 90 days | Stable: historical data weighted heavily |
+| ∞ (Off) | Unweighted average |
 
 **Config hierarchy (standard override pattern):**
 
 ```
 Effective H = 
-  edge.latency.recency_half_life_days  if  recency_half_life_days_overridden
+  p.latency.recency_half_life_days  if  recency_half_life_days_overridden
   else param_file.latency.recency_half_life_days  if  present
   else workspace_default (View menu slider)
   else 30 (hardcoded fallback)
@@ -2423,7 +2742,7 @@ Follows standard `_overridden` pattern.
    - Inline slider directly in View menu (no modal).
    - **Discrete notches** (not continuous): 7d, 14d, 30d, 60d, 90d, 180d, Off.
    - Left = aggressive (7d, recent data dominates).
-   - Right = flat ("Off" = unweighted, Phase 0 behaviour).
+   - Right = flat ("Off" = unweighted average).
    - Default notch: 30d.
    - Writes to workspace settings.
    - Takes effect on **next fetch**.
@@ -2445,87 +2764,104 @@ Follows standard `_overridden` pattern.
 
 1. `dataOperationsService.getFromSource()` is called for a latency edge.
 2. Read `effective_H` from edge config (with override) or workspace default.
-3. Pass to `forecastService.computeRecencyWeightedForecast(cohorts, effective_H)`.
+3. Pass to `statisticalEnhancementService.computeRecencyWeightedForecast(cohorts, effective_H)`.
 4. Helper returns `forecast_mean`, `forecast_stdev`, `N_eff`.
 5. Write to `values[].forecast_mean`, `values[].forecast_stdev`.
 
 **Query-time flow:**
 
-- Unchanged: read `forecast_mean` from param file, apply Formula A.
+- Read `forecast_mean` from param file, apply Formula A (§5.3).
 
-**Implementation checklist (Phase 1):**
+**Implementation checklist:**
 
-- [ ] Add `recency_half_life_days`, `recency_half_life_days_overridden` to types/schemas.
-- [ ] Add workspace setting `defaultRecencyHalfLifeDays`.
-- [ ] Add slider to View menu (reuse existing slider component).
-- [ ] Add slider to Properties Panel latency section (with override pattern).
-- [ ] Create `forecastService.ts` with `computeRecencyWeightedForecast()`.
-- [ ] Update `dataOperationsService.getFromSource()` to call `forecastService`.
-- [ ] Update UpdateManager for `recency_half_life_days` (edge ↔ param file).
-  - Label edges as “data shallow” or “no mature cohorts” when forecasts are unstable.
+- [ ] Add `recency_half_life_days`, `recency_half_life_days_overridden` to types/schemas
+- [ ] Add workspace setting `defaultRecencyHalfLifeDays`
+- [ ] Add slider to View menu (reuse existing slider component)
+- [ ] Add slider to Properties Panel latency section (with override pattern)
+- [ ] Extend `statisticalEnhancementService.ts` with `computeRecencyWeightedForecast()`
+- [ ] Update `dataOperationsService.getFromSource()` to call `statisticalEnhancementService`
+- [ ] Update UpdateManager for `recency_half_life_days` (edge ↔ param file)
 
-### C.2 Full Per-Cohort Tail Forecasting (Formula A)
-
-The complete formula with continuous lag CDF:
-
-```
-k̂_i = k_i + (n_i - k_i) × p.forecast × (1 - F(a_i)) / (1 - p.forecast × F(a_i))
-```
-
-**Derivation:** Uses Bayes' rule—not having converted by age `a_i` could be because (a) the user is a non-converter, or (b) the user is a converter but slow.
-
-**Simplified approximation** (when `p.forecast × F(a_i) << 1`):
-
-```
-k̂_i ≈ k_i + (n_i - k_i) × p.forecast × (1 - F(a_i))
-```
-
-### C.3 Convolution Fallback for Window Queries
+### C.2 Convolution Fallback for Window Queries
 
 When `window(t1:t2)` is requested for a latency edge but only A-anchored `cohort_data` is available, convolve to find which A-cohorts contribute X-events in the window.
 
-Let `g(s)` = A→X lag PDF and `h(t)` = X→Y lag PDF.
+Let \(g(s)\) = A→X lag PDF and \(h(t)\) = X→Y lag PDF.
 
-Users starting X in window `[t_1, t_2]` from A-cohort date `d`:
+Users starting X in window \([t_1, t_2]\) from A-cohort date \(d\):
 
-```
-n_X_d = n_d × p_A→X × ∫[t_1-d to t_2-d] g(s) ds
-```
+\[
+n_{X,d} = n_d \cdot p_{A \to X} \cdot \int_{t_1-d}^{t_2-d} g(s) \, ds
+\]
 
 This is approximate because it uses expected A→X lag rather than the full distribution.
 
-### C.4 Bayesian Lag Distribution Fitting
+### C.3 Short-Horizon Histogram Use (Amplitude 0–10d Bins)
 
-For production Phase 1+, fit a survival model to cohort maturation curves. Each cohort provides censored survival data: n users entered, k_by_lag[t] converted by lag t, right-censored at last observed lag.
+Amplitude provides **lag histograms up to 10 days** (binned counts by lag day plus a tail bucket). The current core design deliberately **does not** use these histograms in the main survival analysis pipeline:
 
-**Hierarchical model:** Pool across context slices with shared hyperpriors for lag distribution parameters (mu_pop, sigma_pop) and per-context parameters (mu_ctx, sigma_ctx).
+- Core lag fitting (§5.4) uses `median_lag_days[]` and `mean_lag_days[]` per cohort to fit a log-normal CDF.
+- Histograms are **stored in param files** (`values[].latency.histogram`, `anchor_latency.histogram`) but not used in Formula A or completeness calculations.
 
-**Output:** Posterior summaries including median_days with credible intervals, pmf_days for convolution, and uncertainty estimates.
+**Potential enhancement (future work):**
+
+- For edges where the **median lag is short** (e.g. < 5–6 days, certainly < 10 days), the 0–10d histogram contains most of the mass and could support a more nuanced lag model:
+  - Build a **discrete CDF / PMF** directly from histogram bins for 0–10d.
+  - Use that discrete CDF instead of a parametric log-normal when computing \(F(t)\), \(S(t)\), completeness, and \(T_{95}\) in the short-lag regime.
+  - For longer lags, fall back to the log-normal fit based on `median_lag_days` / `mean_lag_days`.
+- This would require:
+  - A retrieval-time choice of lag model based on observed median/mean lag and histogram support.
+  - A small extension to `statisticalEnhancementService` to construct a discrete CDF from bins and expose it via the same `F(t)` / `S(t)` interface.
+
+For now, histograms are **“stored but unused”** by the MVP; this section records the intended future use so the data is not accidentally dropped or repurposed.
+
+### C.4 Bayesian Hierarchical Model
+
+For full uncertainty quantification, fit a survival model to cohort maturation curves. Each cohort provides censored survival data: \(n\) users entered, \(k_{\text{by lag } t}\) converted by lag \(t\), right-censored at last observed lag.
+
+**Hierarchical structure:** Pool across context slices with shared hyperpriors:
+- Population level: \(\mu_{\text{pop}}, \sigma_{\text{pop}}\) (mean/variance of log-normal parameters)
+- Context level: \(\mu_c, \sigma_c\) drawn from population distribution
+
+**Output:** Posterior summaries including:
+- \(T_{\text{med}}\) with credible intervals
+- PMF by day for convolution
+- Full uncertainty propagation to \(\hat{k}_i\)
 
 ### C.5 Time-Indexed Forward Pass
 
 With fitted lag distributions, the DAG runner computes arrivals by day via convolution:
 
 1. Seed entry nodes on day 0
-2. For each time step t, for each edge:
-   - Source mass at time t
-   - Multiply by edge probability p
+2. For each time step \(t\), for each edge:
+   - Source mass at time \(t\)
+   - Multiply by edge probability \(p\)
    - Spread arrivals across future days according to lag PMF
 3. Output: `{node_id: [mass_day_0, mass_day_1, ...]}` arrivals by day
 
 **Monte Carlo uncertainty:** Sample from posterior distributions and aggregate runs to produce mean and credible intervals (fan charts).
 
-### C.6 Formula Summary Table
+### C.6 Competing Risks for Sibling Edges
 
-| Formula | Purpose | Phase |
-|---------|---------|-------|
-| Step function F(a_i) | Simplified maturity check | 0 |
-| `p.forecast = Σk_mature / Σn_mature` | Baseline from mature cohorts | 0 |
-| Recency-weighted `p.forecast` | Better baseline with recency decay | 1 |
-| Full Formula A with continuous F(t) | Per-cohort tail forecasting | 1 |
-| Convolution fallback | Window queries from cohort data | 1 |
-| Bayesian hierarchical model | Full uncertainty quantification | 2 |
-| Time-indexed convolution | Temporal runner simulation | 2 |
+When multiple edges leave the same node (siblings), they compete for the unconverted pool. The independent application of Formula A (§5.3) can overcount.
+
+**Proper treatment:** Model as a competing risks survival problem where:
+- Each user either converts on edge A, edge B, or neither
+- The "winning" edge is the one with shortest lag (if any)
+
+**Simplification (usually sufficient):** If sibling edge lags are independent and don't overlap significantly in time, the overcount is small. Monitor `Σ p.mean` and warn if > 1.05.
+
+### C.7 Formula Summary Table
+
+| Formula | Section | Purpose |
+|---------|---------|---------|
+| Formula A (Bayes) | §5.3 | Per-cohort tail forecasting |
+| Log-normal CDF | §5.4 | Lag distribution model |
+| Completeness | §5.5 | Expected fraction observed |
+| Recency-weighted \(p_\infty\) | §5.6, C.1 | Stable baseline with decay |
+| Convolution fallback | C.2 | Window queries from cohort data |
+| Hierarchical Bayes | C.3 | Full uncertainty quantification |
+| Time-indexed convolution | C.4 | Temporal runner simulation |
 
 ---
 

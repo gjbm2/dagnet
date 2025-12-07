@@ -9,14 +9,43 @@ This registry tracks open questions, ambiguities, and potential risks identified
 
 ## 1. Schema & Types
 
-### 1.1 `anchor_node_id` computation
-- **Issue:** The design states `anchor_node_id` is computed by MSMDC at graph-edit time. We need to ensure this logic is hooked into `UpdateManager` or `GraphMutationService` correctly so it persists to the edge.
-- **Resolution:** Identify the exact hook point in `UpdateManager` where topology changes trigger re-computation of derived edge properties.
-- **Status:** Open. Need to propose specific design change (hook in `GraphMutationService`).
+### 1.1 `anchor_node_id` — Part of MSMDC Query Construction
+- **Issue:** When `edge.latency.enabled` is true, cohort queries need an anchor node.
+- **Resolution:** Two cases:
+  1. **Explicit anchor in DSL:** `cohort(anchor-node, start:end)` syntax is already parsed by `lib/queryDSL.ts` → `ParsedConstraints.cohort.anchor`.
+  2. **Default anchor (no explicit):** Computed as furthest upstream START node reachable from `edge.from`. This is a straightforward BFS during query construction in `buildDslFromEdge.ts` or the calling service.
+- **Implementation location:** MSMDC's existing query construction pass, specifically wherever the final query DSL is assembled for a latency-tracked edge. NOT a separate hook.
+- **Status:** ✅ **RESOLVED** — unambiguous; implemented as part of Phase C (query construction for latency-tracked edges).
 
 ### 1.2 `labour_cost` migration
 - **Issue:** Renaming `cost_time` to `labour_cost`.
 - **Status:** **RESOLVED**. No migration required as per user confirmation (no legacy use to support). Global search/replace is sufficient.
+
+### 1.3 Unused fields in param file schema
+- **Issue:** Several fields proposed in `design.md §3.2` are fetched from Amplitude but NOT consumed by current formulas (§5.3-5.6). These exist for deferred features (convolution, Bayesian fitting, short-horizon histograms).
+- **Fields in question:**
+  - `anchor_n_daily[]`, `anchor_median_lag_days[]`, `anchor_mean_lag_days[]` — for convolution fallback (Appendix C.2)
+  - `latency.histogram` — for short-horizon discrete CDF (Appendix C.3) and Bayesian fitting (Appendix C.4)
+  - `anchor_latency.*` block — for convolution fallback (Appendix C.2)
+- **Decision:** **Keep in schema, mark "stored but not consumed"**.
+  - Rationale: Amplitude data is expensive to re-fetch; storing now avoids needing historical backfill when features are implemented.
+  - Implementation: Schema includes these fields; retrieval code populates them; inference code ignores them until deferred features are built.
+- **Status:** **RESOLVED**.
+
+### 1.4 `maturity_days` role: boolean vs numeric
+- **Issue:** With the CDF-based formulas (§5.3-5.6), `maturity_days` is no longer used computationally in the core formulas. It's effectively just a boolean (>0 = enabled).
+- **Resolution:**
+  - §4.7.2 updated to use **T_95** (from `median_lag_days` + `mean_lag_days`) for cache calculation
+  - Falls back to `maturity_days` when empirical data unavailable or low quality (`k < 30` or `mean/median` ratio outside [1.0, 3.0])
+  - `maturity_days` now serves as: feature flag (>0 = enabled) + fallback threshold
+- **Status:** **RESOLVED**. Design §4.7.2 and implementation §3.6 updated.
+
+### 1.5 Topological sorting of batch fetches
+- **Issue:** Current `fetchDataService.getItemsNeedingFetch()` returns items in graph array order (creation order), not topological order.
+- **Resolution:**
+  - Implementation plan updated (§3.7) to add topological sorting
+  - Ensures upstream `median_lag_days` available for downstream cache calculation
+- **Status:** **RESOLVED**. Implementation §3.7 added.
 
 ## 2. Query Architecture
 
@@ -40,7 +69,15 @@ This registry tracks open questions, ambiguities, and potential risks identified
   - `p.forecast` (Mature Baseline Probability): Computed at **Retrieval Time** (from mature cohorts) and stored in the parameter file (e.g., in `values[].latency` or `values[].forecast`).
   - `Formula A`: Runs at **Query Time** to forecast immature cohorts based on their current age.
   - **Location:** Logic belongs in `statisticalEnhancementService` (TS), not `windowAggregationService`. This keeps aggregation pure (counting) and enhancements separate (forecasting).
-- **Status:** Closed. Implementation plan updated.
+- **Status:** **RESOLVED**. Implementation plan updated.
+
+### 3.3 Latency data storage architecture
+- **Issue:** Should we store slice-level latency aggregates (median, mean, T_95) in param files, or compute at query time?
+- **Resolution:**
+  - **Param files** (query-independent): Per-cohort arrays only (`median_lag_days[]`, `mean_lag_days[]`, `k_daily[]`). Raw Amplitude data, shared across queries.
+  - **Graph file** (query-specific): Computed latency stats (`mu`, `sigma`, `t95`, `path_t95`) persisted alongside pinned query DSL. Invalidated/recomputed when query changes.
+  - **Rationale:** Graph already stores query context; storing computed results for that context is logically consistent. No "transient in-memory only" complexity.
+- **Status:** **RESOLVED**. Design §3.1, §5.8 and implementation §3.6-3.7 updated.
 
 ## 4. Rendering
 
