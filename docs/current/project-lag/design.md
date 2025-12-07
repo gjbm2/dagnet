@@ -2,7 +2,7 @@
 
 **Status:** Design Draft  
 **Created:** 1-Dec-25  
-**Last Updated:** 6-Dec-25  
+**Last Updated:** 7-Dec-25  
 
 ---
 
@@ -236,12 +236,53 @@ metadata:
   version: '1.0.0'
 ```
 
-**Notes:**
+**Notes (cohort slices):**
 
 - **Flat parallel arrays**: `dates`, `n_daily`, `k_daily`, `median_lag_days`, `mean_lag_days`, `anchor_n_daily`, `anchor_median_lag_days`, `anchor_mean_lag_days` are all parallel arrays indexed by cohort date. This aligns with the existing schema pattern.
 - **Anchor data** (`anchor_*` arrays) is only present for multi-step funnels (A→X→Y) where we need upstream lag for convolution. For 2-step funnels, these fields are absent.
 - The **forecast baseline** for X→Y is derived from `latency.median_lag_days`, `latency.mean_lag_days` and the fitted lag CDF (§5.4).
 - The script `amplitude_to_param.py` generates this format from Amplitude funnel responses.
+
+#### 3.2.1 Window Slice Additions (X‑anchored)
+
+For **window() slices** (X‑anchored, no cohort/anchor semantics), the additions are lighter:
+
+```yaml
+values:
+  # X-anchored window slice (recent events only)
+  - sliceDSL: 'window(25-Nov-25:1-Dec-25).context(channel:google)'
+    mean: 0.067
+    n: 120
+    k: 8
+
+    # === Window bounds (existing, see §3.3) ===
+    window_from: '25-Nov-25'         # Event occurrence bounds (X-event dates)
+    window_to: '1-Dec-25'
+
+    # === Daily breakdown (existing schema) ===
+    dates: [25-Nov-25, 26-Nov-25, ...]
+    n_daily: [18, 22, ...]
+    k_daily: [1, 2, ...]
+
+    # === NEW: Forecast + latency per window slice ===
+    forecast: 0.071                  # Mature baseline p_∞ for this window slice
+    latency:
+      median_lag_days: 5.8           # Window-level median lag (days) for this edge
+      mean_lag_days: 6.3             # Window-level mean lag (days) for this edge
+      t95: 45                        # 95th percentile lag (days) for this edge under the pinned window
+
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T00:00:00Z'
+```
+
+**Notes (window slices):**
+
+- `window_from` / `window_to` are described in §3.3; they are **not new** but are required to make `sliceDSL` canonical.
+- `values[].forecast` is the **new field** added for window slices: it stores the mature baseline probability \(p_\infty\) computed at retrieval time (recency‑weighted if configured).
+- `values[].latency.median_lag_days` / `mean_lag_days` are **window-level summaries**: they mirror the cohort summaries but are fitted from window() lag stats, so the UI can still show a median/mean lag even if only window() data was fetched.
+- `values[].latency.t95` is the **new latency scalar** for window slices: it stores the fitted 95th percentile lag for this edge under the pinned window, so a graph can be fully reconstructed (baseline + latency) even if only window() data was fetched.
+- Window slices **reuse the existing `dates`, `n_daily`, `k_daily` arrays**; they do **not** add per‑cohort latency arrays (`median_lag_days[]`, `mean_lag_days[]`) because those are cohort‑specific.
 
 ### 3.3 Slice Labelling: `sliceDSL` and Date Bounds
 
@@ -434,13 +475,16 @@ When the pinned DSL (e.g., `or(window(-7d:), cohort(-90d:)).context(channel)`) c
 
 1. **Cohort slice** (A-anchored):
    - Fetch 3-step funnel `[A → X → Y]` for the cohort range.
-   - Store using flat arrays (`dates`, `n_daily`, `k_daily`, `median_lag_days`, `anchor_*`) plus `latency` and `anchor_latency` blocks (as per §3.2).
-   - Used for `cohort(...)` queries and for building the edge-level model (`p.forecast`, lag CDF).
+   - Store using flat arrays (`dates`, `n_daily`, `k_daily`, `median_lag_days`, `mean_lag_days`, `anchor_*`) plus `latency` and `anchor_latency` blocks (as per §3.2):
+     - Per-cohort arrays: `median_lag_days[]`, `mean_lag_days[]`, `anchor_n_daily[]`, `anchor_median_lag_days[]`, `anchor_mean_lag_days[]`.
+     - Slice summaries: `latency.{median_lag_days, mean_lag_days, completeness, histogram}`, `anchor_latency.{median_lag_days, mean_lag_days, histogram}`.
+   - Used for `cohort(...)` queries and as the A-anchored evidence for Formula A and completeness.
 
 2. **Window slice** (X-anchored):
    - Fetch 2-step funnel `[X → Y]` for the window range.
-   - Store using same flat-array pattern (`dates`, `n_daily`, `k_daily`), no anchor data needed.
-   - Used for `window(...)` queries — gives "raw recent events" at this edge.
+   - Store using same flat-array pattern (`dates`, `n_daily`, `k_daily`) plus **window-level** latency + forecast (as per §3.2.1):
+     - Slice summaries: `forecast` (baseline \(p_\infty\)), `latency.{median_lag_days, mean_lag_days, t95, histogram}`.
+   - Used for `window(...)` queries — gives "raw recent events" at this edge and a self-contained baseline/latency view.
 
 Both slices are stored in the **same param file**, distinguished by `sliceDSL` (see §3.3 and §4.7.1):
 
@@ -457,11 +501,39 @@ values:
     dates: [1-Sep-25, 2-Sep-25, ...]
     n_daily: [21, 7, ...]
     k_daily: [19, 4, ...]
+
+    # Per-cohort latency (A-anchored)
     median_lag_days: [6.0, 6.0, ...]
+    mean_lag_days: [6.2, 6.0, ...]
     anchor_n_daily: [575, 217, ...]
     anchor_median_lag_days: [14.8, 16.2, ...]
-    latency: { median_lag_days: 6.0, mean_lag_days: 7.0, completeness: 1.0, ... }
-    anchor_latency: { ... }
+    anchor_mean_lag_days: [15.9, 16.2, ...]
+
+    # Slice-level summaries + histograms
+    latency:
+      median_lag_days: 6.0
+      mean_lag_days: 7.0
+      completeness: 1.0
+      histogram:
+        total_converters: 1021
+        bins:
+          - { day: 3, count: 2 }
+          - { day: 6, count: 716 }
+          - { day: 7, count: 206 }
+          - { day: 8, count: 42 }
+          - { day: 9, count: 55 }
+
+    anchor_latency:
+      median_lag_days: 11.4
+      mean_lag_days: 12.3
+      histogram:
+        total_converters: 1450
+        bins:
+          - { day: 3, count: 1 }
+          - { day: 4, count: 6 }
+          - { day: 5, count: 37 }
+          - { day_range: [10, 45], count: 1029 }
+
     data_source:
       type: amplitude
       retrieved_at: '2025-12-02T00:00:00Z'
@@ -477,6 +549,21 @@ values:
     dates: [25-Nov-25, 26-Nov-25, ...]
     n_daily: [18, 22, ...]
     k_daily: [1, 2, ...]
+
+    # Forecast + window-level latency
+    forecast: 0.071
+    latency:
+      median_lag_days: 5.8
+      mean_lag_days: 6.3
+      t95: 45
+      histogram:
+        total_converters: 120
+        bins:
+          - { day: 3, count: 2 }
+          - { day: 5, count: 50 }
+          - { day: 7, count: 40 }
+          - { day_range: [8, 30], count: 28 }
+
     data_source:
       type: amplitude
       retrieved_at: '2025-12-02T00:00:00Z'
@@ -523,11 +610,16 @@ Without this rule, b→c would show window data from different (older) cohorts a
 
 **IMPORTANT:** The `sliceDSL` stored in param files is a **canonical label**, not a copy of the pinned query. It must fully identify the slice independent of graph context.
 
+This has two key implications:
+
+- **DSL semantics are order-insensitive.** At the level of user-facing DSL, the order of `context(...)` clauses (and other constraints) is not meaningful. The canonical `sliceDSL` is a *normalised serialisation* produced by the system (e.g. sorted context keys, fixed function order) for cache keys only.
+- **Anchors are required only in `sliceDSL` for cohort slices.** The interactive DSL does **not** require an explicit anchor argument; when it is omitted, MSMDC infers the anchor node (e.g. START or `p.latency.anchor_node_id`) and writes it into `sliceDSL` when persisting param files.
+
 **Problem:** User pins `cohort(-90d:)` for a graph where START = `household-created`. The Amplitude query is constructed using that anchor. But the *param file* is shared — another graph with different START might incorrectly use this cohort data.
 
 **Solution:** `sliceDSL` must include:
 1. **Absolute dates** (not relative)
-2. **Explicit anchor node_id** for cohort slices
+2. **Explicit anchor node_id** for cohort slices **in the stored `sliceDSL`** (inferred when omitted in the interactive DSL)
 3. **All context clauses**
 
 **Canonical format:**
@@ -535,6 +627,10 @@ Without this rule, b→c would show window data from different (older) cohorts a
 cohort(<anchor_node_id>,<start>:<end>)[.context(...)]
 window(<start>:<end>)[.context(...)]
 ```
+
+Where:
+- `<anchor_node_id>` is **always present in `sliceDSL` for cohort slices**, even if the original user query was just `cohort(start:end)` (anchor inferred from graph).
+- `.context(...)` clauses may appear in any order in the user DSL; the canonicaliser sorts/normalises them when writing `sliceDSL`.
 
 **Examples:**
 ```yaml
@@ -734,13 +830,18 @@ Cohorts [-90d:-51d]: mature → could use cache
 Cohorts [-50d:]:     immature → data still accruing
 
 Re-fetch triggers:
-  1. Any immature cohorts need updating
-  2. Stale data (last fetch > N hours ago)
-  3. Explicit user refresh
+  1. Any immature cohorts need updating (based on total_maturity)
+  2. Explicit user refresh
 
 On merge:
   - Replace entire slice (cohort data is holistic)
   - Update sliceDSL bounds to reflect actual coverage
+
+# NOTE: "staleness" heuristics based on wall-clock age of data
+# (e.g. "last fetch > N hours ago") are part of the existing system
+# but are NOT changed or specified in this project-lag design.
+# This section only introduces new maturity-based rules (1) and
+# assumes any separate isStale checks remain as-is in the fetch layer.
 ```
 
 **Key changes for window() slices:**
@@ -769,7 +870,7 @@ After merge:
 
 The `sliceDSL` reflects **effective coverage**, not the original query. Original queries go in `data_source.full_query` for provenance.
 
-**Implementation sketch:**
+**Implementation sketch (applies to any fetch-from-source, not only "fetch all"):**
 ```typescript
 function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDecision {
   if (!edge.p?.latency?.maturity_days) {
@@ -783,9 +884,8 @@ function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDeci
     const hasImmatureCohorts = slice.dates.some(d => 
       daysSince(d) < totalMaturity
     );
-    const isStale = hoursSince(slice.data_source.retrieved_at) > REFRESH_HOURS;
     
-    if (hasImmatureCohorts || isStale) {
+    if (hasImmatureCohorts) {
       return { type: 'replace_slice' };
     }
     return { type: 'use_cache' };
@@ -859,12 +959,46 @@ Render using scenario visibility mode (E/F/F+E)
 | `window()` immature | window_data | QT: Σk/Σn | RT: p.forecast | QT: Formula A (§5.3) per day |
 | `cohort()` mature | cohort_data | QT: Σk/Σn | RT: p.forecast | = evidence |
 | `cohort()` immature | cohort_data | QT: Σk/Σn | RT: p.forecast | QT: Formula A (§5.3) per cohort |
-| No window_data | — | Available | **Not available** | — |
+| No usable window baseline (API returns no data even for implicit baseline window) | — | Available | **Not available** | — |
 | Non-latency edge | either | QT: Σk/Σn | = evidence | = evidence |
 
 **QT** = Query Time, **RT** = Retrieval Time
 
-**Phase 1 constraint:** If no `window()` query is pinned, `p.forecast` is unavailable. F-only and F+E visibility modes are disabled for affected edges. User must pin a `window()` query to enable forecast display.
+#### 5.2.1 Default baseline window when no window() is specified
+
+Graphs must be able to operate **without parameter files**, and users may issue **cohort‑only** queries (no explicit `window()` clause). In those cases, we still need a sensible, recent **window() baseline** for `p.forecast` and `t_{95}`.
+
+**Policy (Phase 1, both with‑file and direct‑from‑source):**
+
+- Whenever we need `p.forecast` for a latency edge under a given interactive DSL, and **no usable window() baseline exists** for that edge + context (no suitable window slice in the registry, or the query is cohort‑only), we construct an implicit **baseline window**:
+
+  - Let `maturity_days` be the edge’s configured maturity (default 30).
+  - Define:
+    \[
+    W_{\text{base}} = \min\big(\max(\text{maturity\_days}, 30\text{d}), 60\text{d}\big)
+    \]
+    i.e. at least 30 days, at most 60 days.
+  - For a query ending at \(T_{\text{query}}\), the implicit baseline slice is:
+    \[
+    \text{window}(T_{\text{query}} - W_{\text{base}} : T_{\text{query}})
+    \]
+    with the same context clauses as the current DSL.
+
+- **Flow A (versioned, with files):**
+  - If no suitable window slice exists in param files for that edge + context, the **coverage / incremental‑fetch layer**:
+    - Uses `calculateIncrementalFetch(paramData, baselineWindow, signature, bustCache, sliceDSL)` to detect missing dates.
+    - Uses `getItemsNeedingFetch(window, graph, currentDSL)` and `batchGetFromSource` so Amplitude is hit only for missing dates in this implicit baseline, writing daily data (or `no_data` markers) into the parameter file.
+
+- **Flow B (direct‑from‑source, no files):**
+  - The same baseline window is used, but slices may live purely in memory; the statistical steps are identical.
+
+- From the implicit window response (cached or direct), `statisticalEnhancementService`:
+  - Aggregates `median_lag_days[]`, `mean_lag_days[]` over the baseline window.
+  - Fits the log‑normal lag CDF and derives `t_{95}` for the edge.
+  - Computes `p_\infty = p.forecast` from “mature enough” days, with the existing quality gate.
+  - If the quality gate fails (too few converters / implausible mean/median), it falls back to `maturity_days` for `t_{95}` as per §4.7.2; `p.forecast` may then be hidden or marked as low‑confidence.
+
+**Phase 1 constraint:** Only when we **cannot** obtain a usable baseline even after applying this implicit window policy (e.g. Amplitude returns no data for the baseline window) do we treat `p.forecast` as unavailable for that edge. In that case F‑only and F+E visibility modes are disabled for the affected edge; evidence‑only rendering remains available.
 
 ---
 
@@ -978,21 +1112,6 @@ From mean/median ratio:
 
 **Fallback:** If only median is available, use \(\sigma = 0.5\) (moderate spread) as a default.
 
-#### 5.4.3 Alternative: Weibull Distribution
-
-For edges where log-normal fits poorly (e.g., operational processes with deadlines):
-
-\[
-F(t) = 1 - e^{-(t/\lambda)^k}
-\]
-
-Where \(\lambda\) is scale (characteristic time) and \(k\) is shape:
-- \(k < 1\): decreasing hazard (early converters more likely)
-- \(k = 1\): constant hazard (exponential)
-- \(k > 1\): increasing hazard (deadline effects)
-
-Fit from median and mean using numerical methods (scipy).
-
 ### 5.5 Completeness Measure
 
 **Definition:** The expected fraction of eventual conversions already observed.
@@ -1041,42 +1160,82 @@ If \(N_{\text{eff}} < 100\), widen the window or fall back to unweighted estimat
 
 ### 5.7 Summary: Data Flow
 
+This section summarises **how data moves between Amplitude → param files → graph → UI** for both flows:
+
+- **Flow A (Versioned)** — driven by *pinned DSL*, slices stored in param files, queries answered from cache.
+- **Flow B (Direct)** — driven by *current interactive DSL*, slices fetched on demand, no param files required.
+
+In practice, a single user action (e.g. clicking "Get from source" on an edge) may perform **both phases back-to-back**:
+- **Retrieval:** call Amplitude, write or refresh slices (Flow A) or work purely in memory (Flow B).
+- **Query:** immediately recompute `p.forecast`, `p.mean`, completeness, and `p.latency.t95` for the current interactive DSL, then render.
+
+#### 5.7.1 Flow A – Versioned (Pinned DSL → Param Files → Graph)
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           RETRIEVAL TIME                                │
+│                           RETRIEVAL TIME (Flow A)                       │
 │  (batch fetch, topologically sorted — upstream edges first)             │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  Amplitude Response                                                     │
+│  1. Amplitude responses (window(), cohort())                            │
 │         ↓                                                               │
-│  Extract per-cohort arrays: n_daily[], k_daily[],                       │
-│                             median_lag_days[], mean_lag_days[]          │
+│  2. Python adapter (amplitude_to_param.py)                              │
+│     - Extract per-slice arrays:                                         │
+│         • window(): dates, n_daily, k_daily, latency.{median,mean,t95,  │
+│                    histogram}, forecast                                  │
+│         • cohort(): dates, n_daily, k_daily, median_lag_days[],         │
+│                    mean_lag_days[], anchor_*, latency, anchor_latency   │
 │         ↓                                                               │
-│  Store to PARAM FILE (values[]) — query-independent raw data            │
+│  3. Store to PARAM FILE (values[]) — query-independent raw + summary    │
 │         ↓                                                               │
-│  Compute for current query window:                                      │
-│    - mu, sigma, t95, empirical_quality_ok                               │
-│         ↓                                                               │
-│  Store to GRAPH (edge.p.latency.*) — query-specific computed results    │
-│         ↓                                                               │
-│  After all edges fetched: run path DP → path_t95 (transient, per query) │
+│  4. (Optional) After batch completes: TS computes path_t95 in memory    │
+│     - Uses persisted p.latency.t95 per edge                             │
+│     - Result is transient (per query/scenario), not written to file     │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                            QUERY TIME                                   │
-│  (user changes window, context, etc.)                                   │
+│                            QUERY TIME (Flow A)                          │
+│  (user changes window, context, etc.; answers from param cache)        │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  If query changed from stored values:                                   │
-│    - Recompute mu, sigma, t95 from param file cohorts in new window     │
-│    - Update edge.latency.* on graph                                     │
-│    - Re-run path DP                                                     │
+│  1. dataOperationsService:                                              │
+│     - Resolve which slices (window/cohort) match current DSL           │
+│     - Load slices from Param Registry via sliceDSL                     │
 │         ↓                                                               │
-│  Apply Formula A per cohort → p.mean, completeness                      │
+│  2. statisticalEnhancementService (TS):                                 │
+│     - From slices: aggregate median/mean lag, fit CDF, compute t95     │
+│     - Update p.latency.t95 on ProbabilityParams as needed              │
+│     - Apply Formula A per cohort → p.mean, completeness                │
 │         ↓                                                               │
-│  Render: bead, tooltip, edge layers                                     │
+│  3. UI render: bead, tooltip, edge layers                               │
 │                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.7.2 Flow B – Direct (Interactive DSL → Amplitude → Graph Only)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        DIRECT GET-FROM-SOURCE (Flow B)                 │
+│      (any interactive fetch that hits Amplitude, single edge or many)  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  1. Current interactive DSL (cohort()/window(), contexts, cases)       │
+│         ↓                                                               │
+│  2. Amplitude adapter (TS/Python):                                      │
+│     - Issue window()/cohort() calls needed for THIS query only         │
+│         ↓                                                               │
+│  3. statisticalEnhancementService (TS, ephemeral):                      │
+│     - From window(): fit log-normal, compute t95, p_∞                  │
+│     - From cohort(): apply Formula A → p.mean, completeness            │
+│     - Populate p.latency.t95 and scalar probabilities on the graph     │
+│         ↓                                                               │
+│  4. UI render: bead, tooltip, edge layers                               │
+│                                                                         │
+│  (Optional, outside core Flow B):                                       │
+│     - The caller MAY choose to write the fetched slices into param     │
+│       files for reuse, but this is a separate, explicit step.          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1102,12 +1261,16 @@ Produced by the latency/forecast service from per-cohort arrays for the **curren
 | `empirical_quality_ok` | Transient | Quality gate (k≥30, ratio in range). |
 | `path_t95` | Transient, per scenario | Scenario-aware cumulative A→X maturity (depends on active edges). Not written to graph JSON. |
 
-**Computed fresh at query time (transient display scalars):**
+**Computed at query time (edge probabilities, persisted for pinned DSL):**
 
-| Value | Notes |
-|-------|-------|
-| `completeness` | F(a_i) summed for cohorts in query window |
-| `p.mean` | Formula A applied to query-window cohorts |
+These values are computed from the current query window but then written back to the graph (and, for versioned flows, to the corresponding `values[]` entries) so that the pinned DSL view is reconstructible:
+
+| Field on Graph | Param File | Notes |
+|----------------|-----------|-------|
+| `edge.p.mean` | `values[].mean` | Blended probability (Formula A) for pinned DSL |
+| `edge.p.evidence.completeness` | `values[].completeness` | Completeness for pinned DSL (display only) |
+
+At runtime they are still recomputed when the interactive DSL changes; the persisted values are cache/convenience, not a separate source of truth.
 
 **Query-time aggregation of lag stats:**
 
@@ -1144,7 +1307,7 @@ def aggregate_lag_stats(cohorts_in_window):
 - Computed fields on graph naturally invalidate when query changes
 - No "transient in-memory only" complexity — just standard save/load
 
-**UI can grey-out** latency displays when \(n < 100\) or \(k < 10\) (insufficient data for reliable fit).
+> **Optional UI enhancement (deferred):** The UI *may* grey-out latency displays when cohort/sample size is below a configured threshold (e.g. \(n < 100\) or \(k < 10\)). This is a nice-to-have visual cue and **not** part of the core MVP scope.
 
 ### 5.9 Get-from-Source Flows: Versioned vs Direct
 
@@ -1168,9 +1331,13 @@ This flow is driven by the **pinned DSL** on the graph. It has two phases: **fet
 │         ▼                                                              │
 │  Slice Planner (TS / UpdateManager + dataOperationsService)           │
 │    - Expand pinned DSL → canonical sliceDSLs (§4.7.1)                  │
-│      • For each latency edge & context combo:                          │
-│          - cohort slice: cohort(anchor_id, abs_start:abs_end)         │
+│      • For each latency edge & context combo (ordered):                │
 │          - window slice: window(abs_start:abs_end)                     │
+│              (fetch window() FIRST to establish baselines)             │
+│          - cohort slice: cohort(anchor_id, abs_start:abs_end)         │
+│    - For batch jobs, edges/slices are processed in **topological**     │
+│      order (upstream edges first) so A→X window baselines exist        │
+│      before downstream edges need them (§3.8).                         │
 │         │                                                              │
 │         ▼                                                              │
 │  Amplitude Adapter (Python: amplitude_to_param.py)                     │
@@ -1198,12 +1365,32 @@ This flow is driven by the **pinned DSL** on the graph. It has two phases: **fet
 │    - User adjusts window(), contexts, etc.                             │
 │         │                                                              │
 │         ▼                                                              │
-│  dataOperationsService (TS)                                            │
+│  dataOperationsService / fetchDataService (TS)                         │
 │    - For each edge in current view:                                    │
 │      • Resolve whether edge uses cohort() or window() semantics        │
-│        (per §4.6, §4.7)                                                │
-│      • Look up matching slices in Param Registry via sliceDSL          │
-│      • If slices missing or stale → mark for refetch                   │
+│        (per §4.6, §4.7).                                               │
+│      • Look up matching slices in Param Registry via sliceDSL.         │
+│      • If a latency edge requires `p.forecast` and **no usable         │
+│        window() baseline** exists for its edge/context:                │
+│        - Construct an implicit baseline window                         │
+│          `window(T_query - W_base : T_query)` using                     │
+│          `W_base` from §5.2.1 (clamped between 30d and 60d).           │
+│      • Use the existing incremental‑fetch utility                       │
+│        `calculateIncrementalFetch(paramData, window, signature,        │
+│        bustCache, sliceDSL)` (from `windowAggregationService`) to      │
+│        detect **date‑level gaps** for both explicit and implicit       │
+│        window() slices.                                                │
+│      • Use `getItemsNeedingFetch(window, graph, currentDSL)` to        │
+│        build a `FetchItem[]` of parameters/cases (including latency    │
+│        edges) that have `needsFetch === true`.                         │
+│      • Call `batchGetFromSource` / `getFromSource` so that Amplitude   │
+│        is only hit for **missing dates**, writing new data (or         │
+│        explicit `no_data` markers) back into parameter files.          │
+│      • After batch fetch completes, recompute per‑edge `p.latency.t95` │
+│        from the updated window() slices, then run                      │
+│        `compute_path_t95_for_all_edges` (§4.7.2) over the              │
+│        scenario‑effective graph to obtain `path_t95` for caching and   │
+│        completeness decisions.                                         │
 │         │                                                              │
 │         ▼                                                              │
 │  statisticalEnhancementService (TS)                                    │
@@ -1240,7 +1427,7 @@ This flow is driven by the **pinned DSL** on the graph. It has two phases: **fet
 
 #### 5.9.2 Flow B – Direct Get-from-Source (Bypass Param Files)
 
-This flow answers an interactive query **even when no param files exist** (or when the user explicitly bypasses the cache). It still uses **both** window() and cohort() views, but does not require them to be persisted.
+This flow answers an interactive query **even when no param files exist** (or when the user explicitly bypasses the cache). It may use **window()**, **cohort()**, or **both**, depending on the current interactive DSL; it does **not** require slices to be persisted or written back to param files.
 
 **Single-edge direct query (no param files required):**
 
@@ -1251,18 +1438,18 @@ This flow answers an interactive query **even when no param files exist** (or wh
 │     - Window DSL: window(rel_hist_start:rel_hist_end)[.context(...)]   │
 │       (derived from the same graph + query, not from pinned DSL)       │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  2. Amplitude calls                                                     │
-│     - window() call:                                                   │
-│       • Returns edge-local dayFunnels + lag stats over history         │
-│     - cohort() call:                                                   │
-│       • Returns A-anchored cohorts n_i, k_i, ages a_i                  │
+│  2. Amplitude calls (as required)                                      │
+│     - If interactive DSL includes window(...):                         │
+│         • window() call → edge-local dayFunnels + lag stats over hist.│
+│     - If interactive DSL includes cohort(...):                         │
+│         • cohort() call → A-anchored cohorts n_i, k_i, ages a_i       │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  3. Ephemeral computation in forecastService                           │
-│     From window() only (edge-local behaviour):                         │
+│  3. Ephemeral computation in statisticalEnhancementService             │
+│     From window() (edge-local behaviour, if present):                  │
 │       • Aggregate median_lag_days, mean_lag_days over chosen history   │
 │       • Fit log-normal: mu, sigma, derive T_95                         │
 │       • Compute p_∞ from \"mature\" windows (age > T_95, or rule)     │
-│     From cohort() only (A-anchored exposures):                         │
+│     From cohort() (A-anchored exposures, if present):                  │
 │       • For each cohort i: n_i, k_i, a_i                               │
 │       • Compute F(a_i), S(a_i) from mu, sigma                          │
 │       • Apply Formula A → k̂_i                                         │
@@ -1270,9 +1457,10 @@ This flow answers an interactive query **even when no param files exist** (or wh
 │       • p_mean = Σk̂_i / Σn_i                                          │
 │       • completeness = Σ(n_i × F(a_i)) / Σn_i                          │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  4. Optional persistence                                                │
-│     - Write window()+cohort() slices into param files (for reuse)      │
+│  4. Graph-only update                                                  │
 │     - Populate p.latency on the ProbabilityParam for this DSL          │
+│       (t95, p_mean, completeness); no param files are written in this  │
+│       core direct-from-source flow                                      │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1636,6 +1824,22 @@ A new bead displays latency information on edges with `latency.maturity_days > 0
 | Show when | `latency.maturity_days > 0` AND `median_lag_days > 0` |
 | Colour | Standard bead styling (no new colour) |
 
+**Geometry / positioning considerations:**
+
+- Existing **left-aligned** beads already use face curvature metadata (`node.data.faceDirections`) and edge offsets to place beads cleanly on **convex node faces** (see `ConversionEdge.tsx`):
+  - They compute a `visibleStartOffset` based on:
+    - the perpendicular inset from the node face,
+    - whether the face is marked `convex` or `concave`,
+    - the edge’s offset along that face (centre vs near corners),
+  - and then place beads along a hidden path that follows the rendered edge/ribbon.
+- The **new right-aligned latency bead** must mirror this care on the **inbound node face**:
+  - Use the same `faceDirections` metadata for the **target** node (concave/convex) and its `targetFace`.
+  - Adjust the bead’s along-path offset so that it:
+    - clears concave insets at the target face,
+    - remains visually separated from the node border, even when the edge curves sharply into a concave face,
+    - remains consistent with left-aligned bead spacing when multiple beads are present.
+- Implementation detail: `EdgeBeadsRenderer` should be driven by a single, well-defined `visibleStartOffset` API that already accounts for node face convexity/concavity on the relevant end (source for left beads, target for right beads), rather than hard-coded magic numbers at call sites.
+
 ### 7.5 Window Selector: Cohort/Window Mode
 
 Users must be able to switch between `cohort()` and `window()` query modes.
@@ -1672,31 +1876,39 @@ Toggle at the left of the WindowSelector component (before presets):
 
 ### 7.6 Tooltips: Data Provenance
 
-Full tooltip redesign is **deferred** (see TODO.md #5). For latency edges, append:
+Current tooltips (see `ConversionEdge.tsx`) already present **per-param** details in a structured way:
+
+- Base probability: `e.<edgeId>.p`
+- Each conditional: `e.<edgeId>.<condition>.p`
+
+Example (simplified structure):
 
 ```
-Evidence:  8.0%  (k=80, n=1000)
-  Source:  cohort(1-Nov-25:21-Nov-25)
+e.signup->activate.p
+  37.5% ±5.0
+  n=1000 k=375
+  1-Jan-25 to 31-Jan-25
+  source: cohort(1-Jan-25:31-Jan-25)
+  query: from(signup).to(activate)
 
-Forecast:  45.0%  (p.forecast)
-  Source:  window(1-Nov-25:24-Nov-25)
-
-Blended:   42.0%
-Completeness: 18%
-Lag: 6.0d median
+e.signup->activate.context(channel:fb).p
+  42.0% ±6.2
+  n=400 k=168
+  1-Jan-25 to 31-Jan-25
+  source: cohort(1-Jan-25:31-Jan-25).context(channel:fb)
+  query: from(signup).to(activate).context(channel:fb)
 ```
 
-**Key requirement:** Show which `sliceDSL` contributed to each value. This gives users transparency into data provenance.
+For **latency edges**, we extend each `p` block with latency-specific lines:
 
-If p.forecast unavailable:
-```
-Evidence:  8.0%  (k=80, n=1000)
-  Source:  cohort(1-Nov-25:21-Nov-25)
+- `lag: <median_lag_days>d (slice: <sliceDSL>)`
+- `completeness: <X>% (slice: <sliceDSL>)`
+- Optionally, when helpful: `baseline: <p.forecast>% (window slice: <sliceDSL>)`
 
-Forecast:  —  (no window data)
-Completeness: 18%
-Lag: 6.0d median
-```
+**Key requirement:** For every number shown (evidence, forecast, blended, completeness, lag), make it clear:
+
+- Which **probability param** it belongs to (`e.edgeId.p` vs `e.edgeId.condition.p`).
+- Which **sliceDSL** (cohort/window) supplied it (via `evidence.source` / window bounds).
 
 ### 7.7 Properties Panel: Latency Settings
 
@@ -1830,17 +2042,24 @@ The shift from event-based to cohort-based querying touches **many parts** of th
 |------|--------------|-----------------|
 | `src/lib/dslConstruction.ts` | Builds query DSL from graph selection | Add `cohort()` construction, distinguish from `window()` |
 | `src/lib/das/buildDslFromEdge.ts` | Constructs DSL for specific edge | Default to `cohort()` for latency-tracked edges |
-| DSL parser (Python/JS) | Parses DSL into query components | Parse `cohort(start, end, maturity_days?)` |
+| DSL parser (Python/JS) | Parses DSL into query components | Parse `cohort(start:end)` and `cohort(anchor,start:end)` (optional anchor) |
 
-**New DSL syntax:**
+**New DSL syntax (window & cohort):**
+
 ```
-// Current (retained for event queries)
-window(1-Nov-25:14-Nov-25)
+// Event window (X-anchored, current semantics retained)
+window(<start>:<end>)
+  - start/end: absolute dates (e.g. 1-Nov-25:14-Nov-25) or relative (e.g. -30d:)
 
-// New (default for conversion edges)
-cohort(1-Nov-25:7-Nov-25)
+// Cohort window (A-anchored, new for latency edges)
+cohort(<start>:<end>)
+  - No explicit anchor in DSL: anchor inferred from graph / p.latency.anchor_node_id
 
-// maturity_days comes from p.latency.maturity_days, not the DSL
+// Cohort with explicit anchor
+cohort(<anchor_node_id>,<start>:<end>)
+  - Anchor node id is provided explicitly (e.g. cohort(household-created,1-Nov-25:7-Nov-25))
+
+// NOTE: maturity_days comes from p.latency.maturity_days, not the DSL
 ```
 
 #### B. Amplitude Adapter
@@ -2233,29 +2452,46 @@ These four lag fields are sufficient to reconstruct, per scenario and per edge:
 - Param packs only contain the **scalar outputs needed for rendering and what-if analysis** for each scenario DSL.
 - Live scenarios regenerate their param packs when the user requests refresh; static scenarios store a snapshot of these fields.
 
-### 9.3 Data Flow: Cohort Mode
+### 9.3 Data Flow: Cohort Mode (End-to-End)
 
-```
-User selects edge → Properties Panel
-         ↓
-buildDslFromEdge() → DSL with cohort() clause
-         ↓
-dataOperationsService.getFromSourceDirect()
-         ↓
-DASRunner.execute() → connections.yaml adapter
-         ↓
-Amplitude API → dayFunnels + dayMedianTransTimes
-         ↓
-Transform: extract per-cohort n, k, latency
-         ↓
-Compute mature/immature split (based on cohort age)
-         ↓
-Store to parameter file (with cohort metadata)
-         ↓
-UpdateManager → push to graph edge
-         ↓
-ConversionEdge renders with two layers
-```
+This section ties the general flows in §5.7–§5.9 back to a **single user action** in the UI for a latency-tracked edge in **cohort mode**.
+
+High-level sequence when user clicks "Get from source" on a latency edge:
+
+1. **UI → DSL construction**
+   - User selects edge in **Properties Panel**.
+   - `buildDslFromEdge()` constructs a DSL string with a `cohort(...)` clause, using:
+     - implicit anchor (from graph / `p.latency.anchor_node_id`), or
+     - explicit anchor from user-edited DSL.
+
+2. **DataOperations → choose flow**
+   - `dataOperationsService.getFromSource()` decides, per edge:
+     - If matching slices already exist and are usable → **Flow A (versioned)**: load from Param Registry and skip direct Amplitude call.
+     - If slices are missing/immature or user forces refresh → **Flow B (direct)**: call Amplitude for this edge.
+
+3. **Amplitude / DAS runner**
+   - For direct fetches, `DASRunner` + adapter execute the Amplitude call(s):
+     - `cohort(...)` → A-anchored dayFunnels + `dayMedianTransTimes` for this edge.
+     - (Optionally) `window(...)` if the interactive DSL also includes a window clause.
+
+4. **Transform & inference**
+   - Response is transformed into:
+     - per-cohort `n`, `k`, ages, `median_lag_days[]`, `mean_lag_days[]`, histograms.
+   - `statisticalEnhancementService`:
+     - Fits lag CDF (log-normal), derives `t95`.
+     - Applies Formula A for the current query window → `p.mean`, completeness.
+     - Updates `p.latency.t95` and `edge.p.evidence.completeness` / `edge.p.mean` on the graph.
+
+5. **Optional versioning (Flow A only)**
+   - When running under pinned DSL / batch runner, the same transform step also writes:
+     - `values[].*` entries into the parameter file (cohort + optional window slices).
+   - For pure direct (Flow B), this write-back is **optional** and only occurs if the caller explicitly asks to version the result.
+
+6. **Render**
+   - `ConversionEdge` re-renders using updated `p.mean`, completeness, `p.latency.t95`:
+     - Edge stroke(s) for probability,
+     - Latency bead for median/σ/completeness,
+     - Tooltip including evidence/forecast/blended and slice provenance.
 
 ### 9.4 Migration Considerations
 
@@ -2358,7 +2594,7 @@ ConversionEdge renders with two layers
 
 ## 11. Testing Strategy
 
-### 10.1 Test Coverage Requirements
+### 11.1 Test Coverage Requirements
 
 The dual-slice retrieval architecture introduces significant complexity that requires comprehensive test coverage across multiple dimensions.
 
@@ -2421,7 +2657,7 @@ The dual-slice retrieval architecture introduces significant complexity that req
 | Zero median (edge case) | [10, 5] | 0 | 1.0 (or error?) |
 | Single cohort | [15] | 30 | 0.5 |
 
-#### G. Recency Weighting Tests
+#### G. Recency Weighting Tests (Recency Extension)
 
 | Test Case | Cohort Dates | Half-life | Expected Weights |
 |-----------|--------------|-----------|------------------|
@@ -2430,7 +2666,7 @@ The dual-slice retrieval architecture introduces significant complexity that req
 | Very old cohort | [T-180] | 30 | Near-zero weight |
 | Half-life = infinity | Any | ∞ | Equal weights |
 
-#### H. Effective Sample Size Tests
+#### H. Effective Sample Size Tests (Recency Extension)
 
 | Test Case | Weights | n_i | Expected N_eff |
 |-----------|---------|-----|----------------|
@@ -2438,7 +2674,46 @@ The dual-slice retrieval architecture introduces significant complexity that req
 | One dominant | [1, 0.01, 0.01] | [100, 100, 100] | ~102 |
 | All zero except one | [1, 0, 0] | [100, 100, 100] | 100 |
 
-### 10.2 Integration Test Scenarios
+#### I. T₉₅ and Path Maturity Tests
+
+| Test Case | Setup | Expected Behaviour |
+|-----------|-------|--------------------|
+| Single edge, good empirical lag | `median_lag_days` and `mean_lag_days` with k ≥ LATENCY_MIN_FIT_CONVERTERS | `p.latency.t95` matches log-normal formula from §5.4.2 |
+| Single edge, poor empirical lag | k < LATENCY_MIN_FIT_CONVERTERS or mean/median outside [LATENCY_MIN_MEAN_MEDIAN_RATIO, LATENCY_MAX_MEAN_MEDIAN_RATIO] | `p.latency.t95` falls back to `maturity_days` |
+| Simple path A→X→Y | Edges A→X and X→Y both have persisted `p.latency.t95` | `compute_path_t95_for_all_edges` sums per-edge t95 and stores transient `path_t95` matching §4.7.2 |
+| Scenario with disabled edge | One edge on A→X path inactive under `whatIfDSL` | `path_t95` ignores inactive edge and uses only active edges’ t95 |
+
+#### J. Cross-Language Parity & Golden Fixtures
+
+Latency maths must be consistent across TypeScript and Python, and robust against subtle numerical errors.
+
+| Test Case | Files | Expected Behaviour |
+|-----------|-------|--------------------|
+| TS ↔ Python parity (lag fitting) | `statisticalEnhancementService.test.ts`, `test_lag_math.py` (or extend `test_msmdc.py`) | For a shared set of synthetic edges with known `median_lag_days` / `mean_lag_days`, TS and Python implementations of log-normal fitting produce matching `μ`, `σ`, and `t_{95}` within a tight tolerance. |
+| TS ↔ Python parity (Formula A) | Same as above | For identical cohort arrays `(n_i, k_i, a_i)` and `p_\infty`, TS and Python implementations of Formula A produce the same `p.evidence`, `p.mean`, and completeness (within tolerance). |
+| Golden funnel fixtures | Shared JSON / YAML fixtures | For a small number of canonical funnels (short-lag, long-lag, mixed maturity), the end-to-end pipeline (Amplitude adapter → param files → `statisticalEnhancementService`) reproduces pre-computed “golden” values of `p.evidence`, `p.forecast`, `p.mean`, and completeness. |
+
+#### K. Implicit Baseline Window Tests
+
+These tests ensure the **implicit baseline window** policy (§5.2.1) behaves correctly both with and without parameter files.
+
+| Test Case | Setup | Expected Behaviour |
+|-----------|-------|--------------------|
+| Cohort-only DSL, no files (Flow B) | No param files; interactive DSL contains `cohort(...)` only | System constructs baseline `window(T_query - W_base : T_query)` with `W_base` clamped to [30d, 60d], fetches window() data, and computes `p.forecast` / `t_{95}`. Evidence and forecast render correctly. |
+| Cohort-only DSL, partial window slices (Flow A) | Param file has some window() days but not full `W_base` range | `calculateIncrementalFetch` detects missing dates; `getItemsNeedingFetch`+`batchGetFromSource` fetch only missing days; final `p.forecast` / `t_{95}` is based on the full baseline window. |
+| Baseline window, API returns no data | Valid implicit baseline window, but Amplitude returns no data for that range | Edge’s `p.forecast` treated as unavailable; F and F+E visibility modes disabled; evidence-only rendering remains available; no repeated re-fetch for the same empty window once `no_data` markers are written. |
+
+#### L. Logging & Observability Tests
+
+Given the complexity of dual-slice retrieval, implicit baselines, and path maturity, tests must verify that **session logging** provides a clear, inspectable narrative for latency operations.
+
+| Test Case | Files | Expected Behaviour |
+|-----------|-------|--------------------|
+| DATA_GET_FROM_SOURCE with latency | `dataOperationsService.test.ts`, `fetchDataService.test.ts` | Starting a latency fetch emits a `data-fetch` operation via `sessionLogService` with children describing slice planning, cache hits, API calls, and UpdateManager application. |
+| Implicit baseline window logging | Same as above | When an implicit baseline window is constructed, a child log entry records edge id, `W_base`, baseline start/end dates, and the effective DSL used for that fetch. |
+| Path maturity + cache log | `statisticalEnhancementService.test.ts`, `integrityCheckService.test.ts` (or dedicated log tests) | After batch fetch, computation of `p.latency.t95` and `path_t95` is logged once per operation (not per render), making cache decisions traceable in the session log. |
+
+### 11.2 Integration Test Scenarios
 
 These tests verify end-to-end behaviour across the full pipeline.
 
@@ -2514,48 +2789,9 @@ Tests will require mock Amplitude responses and param files covering:
 
 ---
 
-## 12. Open Questions
+## 12. Open Questions (Moved)
 
-### 9.1 Amplitude API Considerations
-
-- **Rate limits:** Per-cohort queries may hit limits for long event windows
-- **Retention endpoint:** May be more efficient than multiple funnel queries
-- **Caching:** Should we cache raw Amplitude responses or derived data?
-
-### 9.2 Stationarity Assumption
-
-- Do lag distributions change over time?
-- Should we support time-varying latency (e.g., weekday vs weekend)?
-- How to detect non-stationarity and alert users?
-
-### 9.3 Edge Cases
-
-- **Zero-lag edges:** Click events with instant conversion
-- **Multi-modal distributions:** Some edges may have two populations (fast/slow)
-- **Heavy tails:** Users who convert after 30+ days—how to handle?
-
-### 9.4 Conditional Edges (`conditional_p`) ✅ RESOLVED
-
-**Decision:** `conditional_p` is a first-class citizen and receives **identical latency treatment** to `p`.
-
-- Latency config (`track`, `maturity_days`) applies to the edge, not per-condition
-- Evidence/forecast split applies to the overall edge conversion
-- Each condition branch uses the same latency model
-- `p.evidence`, `p.forecast`, `p.mean` computed for the edge as a whole
-- Condition weights are separate from latency (they determine branch probabilities, not timing)
-
-**Implementation:** All references to "probability params" or `p` throughout this design apply equally to `conditional_p`. The latency machinery operates at edge level, regardless of whether the edge uses `p` or `conditional_p`.
-
-### 9.5 Cost Parameters — No Latency Treatment
-
-**Decision:** Cost parameters (`labour_cost`, `cost_money`) do **NOT** get latency treatment.
-
-- They are direct inputs to calculations, not modelled from data
-- Typically entered manually or imported from external sources (e.g., Google Sheets)
-- No Amplitude fetch, no forecasting, no evidence/forecast split
-- Just standard param handling with `_overridden` for persistence
-
----
+> **Note:** The open questions and decisions previously listed here have been moved into `implementation-open-issues.md` (for unresolved topics) and folded into the main design where resolved. This section is intentionally left minimal to avoid drift between documents.
 
 ## Appendix A: Amplitude Data Quality Notes
 
@@ -2701,6 +2937,25 @@ If \(N_{\text{eff}} < 100\), fall back to unweighted estimation or widen the win
 | 7 days | Aggressive: recent week dominates |
 | 30 days | Gentle: default |
 | 90 days | Stable: historical data weighted heavily |
+
+### C.2 Alternative Parametric Families (Weibull, Gamma)
+
+> **Status:** Deferred feature. Initial implementation uses a log-normal fit (§5.4.2). This section sketches alternative parametric families that may better capture certain lag shapes (e.g. deadline effects) and how they would be fitted.
+
+#### C.2.1 Weibull Distribution
+
+For edges where log-normal fits poorly (e.g., operational processes with deadlines), a Weibull CDF is a natural alternative:
+
+\[
+F(t) = 1 - e^{-(t/\lambda)^k}
+\]
+
+Where \(\lambda\) is scale (characteristic time) and \(k\) is shape:
+- \(k < 1\): decreasing hazard (early converters more likely)
+- \(k = 1\): constant hazard (exponential)
+- \(k > 1\): increasing hazard (deadline effects)
+
+Fitting would proceed from median and mean using numerical methods (e.g. scipy), with the same interfaces as the log-normal fit (exposing \(F(t)\), \(S(t)\), and \(T_{95}\)).
 | ∞ (Off) | Unweighted average |
 
 **Config hierarchy (standard override pattern):**
