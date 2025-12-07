@@ -67,19 +67,13 @@ Global search/replace across:
 **Design reference:** `design.md §3.1` (Edge Schema), `§7.2` (EdgeLatencyDisplay), `§9.K` (EdgeParamDiff)
 
 **File:** `graph-editor/src/types/index.ts`
-- Add `LatencyConfig` interface:
-  ```typescript
-  interface LatencyConfig {
-    maturity_days?: number;           // >0 enables tracking
-    maturity_days_overridden?: boolean;
-    anchor_node_id?: string;          // default anchor (computed during query construction if not explicit in DSL)
-    anchor_node_id_overridden?: boolean;
-    // NOTE: recency_half_life_days deferred to fast-follow (Appendix C.1)
-  }
-  ```
-- **anchor_node_id computation:** When DSL lacks explicit `cohort(anchor, dates)`, compute default as furthest upstream START node from `edge.from`. This happens during query construction in `buildDslFromEdge.ts` (or calling service), NOT as a separate hook.
-- Add `latency` field to `GraphEdge`.
-- Add `EdgeLatencyDisplay` interface for rendering (p.evidence, p.forecast, p.mean, completeness).
+- Add a `LatencyConfig` interface with fields:
+  - `maturity_days?: number` and `maturity_days_overridden?: boolean` (>0 enables tracking).
+  - `anchor_node_id?: string` and `anchor_node_id_overridden?: boolean` (default anchor, inferred when not explicit in DSL).
+  - Recency config (`recency_half_life_days`) is deferred to a fast-follow (Appendix C.1).
+- **anchor_node_id computation:** When DSL lacks explicit `cohort(anchor, dates)`, compute the default anchor as the furthest upstream START node from `edge.from` during query construction in `buildDslFromEdge.ts` (or its caller), NOT via a separate service hook.
+- Attach `latency?: LatencyConfig` to `GraphEdge`.
+- Add an `EdgeLatencyDisplay` interface for rendering latency (probabilities, completeness) as per design §7.2.
 
 **File:** `graph-editor/src/types/scenarios.ts`
 - **Param pack cleanup** (design §9.K.1):
@@ -141,6 +135,7 @@ Global search/replace across:
 |------------|------------------|-------|
 | `values[latest].latency.median_days` | `edge.p.latency.median_lag_days` | Display only |
 | `values[latest].latency.completeness` | `edge.p.latency.completeness` | Display only |
+| `values[latest].latency.t95` | `edge.p.latency.t95` | Persisted scalar for caching / A→X maturity |
 | `values[latest].mean` (mature cohorts) | `edge.p.forecast.mean` | Retrieval-time computation |
 | `values[latest].stdev` (mature cohorts) | `edge.p.forecast.stdev` | Retrieval-time computation |
 
@@ -175,6 +170,12 @@ Global search/replace across:
 - Update compound query parsing to handle `cohort()` clauses.
 - Support `or(cohort(...), window(...))` combinations.
 
+**File:** `graph-editor/public/schemas/query-dsl-1.1.0.json`
+- Confirm DSL JSON schema supports:
+  - `cohort(start:end)` (no anchor)
+  - `cohort(anchor_node_id,start:end)` (explicit anchor)
+- Keep `QueryFunctionName.enum` and the raw-pattern examples in sync with `queryDSL.ts` and tests.
+
 ### 2.2 DSL Construction
 **Design reference:** `design.md §9.A` (DSL Construction table), `§4.6` (Dual-Slice Retrieval)
 
@@ -187,6 +188,12 @@ Global search/replace across:
 - Update explosion logic to handle `cohort()` clauses.
 - Generate atomic slices for `cohort()` × context combinations.
 - Handle `or(cohort(...), window(...))` producing separate cohort and window slices.
+
+**File:** `graph-editor/src/components/QueryExpressionEditor.tsx`
+- Extend Monaco completion so that after `cohort(` the user can:
+  - Type dates directly, as today (e.g. `cohort(-30d:)`), **or**
+  - Select an anchor node id, then a date range (e.g. `cohort(household-created,-30d:)`).
+- Reuse the same node-id suggestion set as for `from(`/`to(` autocomplete.
 
 ### 2.3 Query Payload Construction
 **Design reference:** `design.md §9.A` (buildDslFromEdge), `§4.6` (Dual-Slice requirements, Query resolution table)
@@ -227,11 +234,19 @@ Global search/replace across:
 **Design reference:** `design.md §9.C` (dataOperationsService), `§4.8` (Retrieval-time computation), `§9.3` (Data Flow)
 
 **File:** `graph-editor/src/services/dataOperationsService.ts`
-- Update `getFromSource` / `getFromSourceDirect`:
-  - Handle cohort-mode responses.
-  - Extract latency stats (medians, histograms) from Amplitude response.
-  - Call aggregation service to compute mature/immature split.
-  - Store extended data to parameter file via `paramRegistryService`.
+- Update `getFromSource` / `getFromSourceDirect` to follow the **existing incremental-fetch + cache pattern** for latency edges:
+  - **Do not** add ad‑hoc "missing data" checks in aggregation code. Instead, reuse `calculateIncrementalFetch()` and `getItemsNeedingFetch()`:
+    - At fetch‑planning time, call `getItemsNeedingFetch(window, graph, currentDSL)` (from `fetchDataService`) to obtain a `FetchItem[]` for parameters/cases (including latency parameters) that have `needsFetch === true` for the current window + sliceDSL.
+    - Under the hood, this already calls `windowAggregationService.calculateIncrementalFetch(paramData, window, signature, bustCache, slice)` to compute **date‑level gaps** and only request missing days from Amplitude.
+  - For latency edges, treat window()/cohort() slices exactly like any other parameter:
+    - `getFromSourceDirect` issues Amplitude calls for only the missing days, writes new data (or explicit `no_data` markers) into the parameter file, and then calls `getParameterFromFile` to refresh the graph view.
+    - The distinction between "not yet fetched" vs "no data from source" remains:
+      - "Not yet fetched": covered by incremental fetch and cache.
+      - "No data from source" (Amplitide returns empty for requested slice): surface a toast/error and, where appropriate, store a `no_data` marker so future coverage checks do not re‑fetch.
+  - Handle cohort-mode responses:
+    - Extract latency stats (medians, histograms) from Amplitude response (day funnels + median/mean lag arrays).
+    - Call `windowAggregationService` / `statisticalEnhancementService` to compute mature/immature split and Formula A outputs.
+    - Store extended data to parameter file via `paramRegistryService` following the existing "file as cache" pattern.
 
 ### 3.2 Window Aggregation Service
 **Design reference:** `design.md §5.5` (Completeness), `§5.6` (Asymptotic Probability), `§9.D` (windowAggregationService)
@@ -245,18 +260,10 @@ Global search/replace across:
 **Design reference:** `design.md §5.3` (Formula A), `§5.4` (Lag Distribution Fitting), `§4.8` (Query-time computation)
 
 **File:** `graph-editor/src/services/statisticalEnhancementService.ts`
-- Implement log-normal CDF fitting from `median_lag_days` and `mean_lag_days`:
-  - `μ = ln(median_lag_days)`
-  - `σ = sqrt(2 × ln(mean_lag_days / median_lag_days))`
-  - Fallback: if only median available, use `σ = 0.5`
-- Implement log-normal CDF: `F(t) = Φ((ln(t) - μ) / σ)` using standard normal CDF.
-- Implement **Formula A** (Bayesian tail forecasting):
-  ```
-  k̂_i = k_i + (n_i - k_i) × (p_∞ × S(a_i)) / (1 - p_∞ × F(a_i))
-  ```
-  Where `S(t) = 1 - F(t)`.
-- Add numeric guards: clamp denominator to avoid division by near-zero.
-- Return blended `p.mean = Σk̂_i / Σn_i`.
+- Implement log-normal CDF fitting and Formula A exactly as specified in the design:
+  - Use `median_lag_days` and `mean_lag_days` to fit the lag CDF (design §5.4).
+  - Apply Formula A to derive `p.mean` and completeness from cohorts (design §5.3–§5.6).
+- Ensure numeric guards and edge cases (e.g., degenerate denominators, missing data) are covered in tests rather than re-specifying formulas here.
 
 ### 3.4 Parameter Registry Service
 **Design reference:** `design.md §9.F` (paramRegistryService), `§3.3` (Canonical sliceDSL)
@@ -289,11 +296,22 @@ Global search/replace across:
 - Implement `computeEdgeLatencyStats(edge, paramData, queryWindow)`:
   - Filter and aggregate `median_lag_days[]`, `mean_lag_days[]`, `k_daily[]` for query window
   - Compute: `mu`, `sigma`, `t95`, `empirical_quality_ok`
-  - Quality gate: `k >= 30` AND `mean/median` in [1.0, 3.0]
+  - Quality gate: `k >= LATENCY_MIN_FIT_CONVERTERS` AND `mean/median` in [`LATENCY_MIN_MEAN_MEDIAN_RATIO`, `LATENCY_MAX_MEAN_MEDIAN_RATIO`]
   - Fallback: if quality fails, use `maturity_days` for `t95`
 - Attach computed values to `p.latency` on the `ProbabilityParam`:
   - Persist `t95` for this edge/probability (used for A→X maturity and caching).
   - Keep `mu`, `sigma`, `empirical_quality_ok` transient (service-level only).
+
+**File:** `graph-editor/src/constants/latency.ts` (NEW)
+- Define shared latency constants used by services and tests:
+  - `export const LATENCY_MIN_FIT_CONVERTERS = 30;`
+  - `export const LATENCY_MIN_MEAN_MEDIAN_RATIO = 1.0;`
+  - `export const LATENCY_MAX_MEAN_MEDIAN_RATIO = 3.0;`
+- Import these from `statisticalEnhancementService.ts` (and any other consumers) instead of hard-coding numeric thresholds.
+ - Additionally define baseline window clamps for the implicit window() history used when no explicit window slice exists:
+   - `export const LATENCY_BASELINE_MIN_WINDOW_DAYS = 30;`  // lower clamp for implicit baseline window
+   - `export const LATENCY_BASELINE_MAX_WINDOW_DAYS = 60;`  // upper clamp for implicit baseline window
+ - These are referenced in both `statisticalEnhancementService.ts` and `dataOperationsService.ts` when constructing the default baseline window described in `design.md §5.2.1`.
 
 **Direct-from-source path (no param files available):**
 - When `dataOperationsService` determines that required slices are missing or stale:
@@ -306,6 +324,10 @@ Global search/replace across:
     - Derive `p_mean`, `completeness` from cohort() exposures using Formula A.
   - Optionally:
     - Persist the raw slices into param files for future reuse.
+ - For latency edges where the interactive DSL is **cohort-only** (no explicit `window()`), the "window DSL for the current interactive query" should be constructed as an **implicit baseline window**:
+   - Compute `W_base` by clamping `maturity_days` between `LATENCY_BASELINE_MIN_WINDOW_DAYS` and `LATENCY_BASELINE_MAX_WINDOW_DAYS` (see `design.md §5.2.1`).
+   - Build an internal `window(T_query - W_base : T_query)` clause with the same context filters as the current DSL.
+   - Use this implicit baseline window exactly as if the user had specified it explicitly in the DSL; do not surface it in the UI, but do log it via `sessionLogService` for provenance.
 
 ### 3.7 Total Maturity Calculation (Path DP)
 **Design reference:** `design.md §4.7.2`
@@ -360,22 +382,21 @@ This section ties the conceptual flows to concrete services and files.
   - Write versioned param JSON with per-day/per-cohort arrays and metadata.
 - `graph-editor/src/services/paramRegistryService.ts`:
   - Load param slices by canonical `sliceDSL` for use at query time.
-- `graph-editor/src/services/forecastService.ts`:
-  - From window() slices: compute `mu`, `sigma`, `t95`, `p_infinity`.
-  - From cohort() slices: compute `p_mean`, `completeness` via Formula A.
-  - Write query-specific summary stats to `edge.latency` on the graph.
+- `graph-editor/src/services/statisticalEnhancementService.ts`:
+  - From window() slices: fit lag distribution, compute `t95`, `p_infinity` as per design.
+  - From cohort() slices: compute `p_mean`, completeness via Formula A.
+  - Populate `p.latency.t95` and edge probabilities on the graph for the pinned DSL.
 
-**Flow B – Direct get-from-source (interactive DSL → Amplitude → forecast):**
+**Flow B – Direct get-from-source (interactive DSL → Amplitude → graph only):**
 - `graph-editor/src/services/dataOperationsService.ts`:
   - Build the **current interactive query DSL** (cohort + window variants) for the active graph.
   - Detect missing or stale param slices and choose the direct-from-source path.
 - Amplitude adapter (TS or Python, depending on integration boundary):
-  - Issue window() and cohort() calls for the interactive DSL only.
-- `graph-editor/src/services/forecastService.ts`:
+  - Issue window() and/or cohort() calls for the interactive DSL only.
+- `graph-editor/src/services/statisticalEnhancementService.ts`:
   - Perform the same statistical steps as in Flow A, but from fresh Amplitude responses.
-  - Optionally trigger:
-    - Writing raw slices into param files (via param registry / Python adapter).
-    - Writing summary stats into `edge.latency` for the current interactive DSL.
+  - Populate `p.latency.t95`, `p.mean`, completeness, and related scalars on the graph.
+  - Optionally trigger writing raw slices into param files (via param registry / Python adapter) when the caller explicitly chooses to version results.
 
 ---
 
@@ -551,9 +572,11 @@ When user checks "Track Latency" on an edge with data:
 - `graph-editor/src/services/__tests__/dataOperationsService.test.ts` — cohort mode ingestion
 - `graph-editor/src/services/__tests__/windowAggregationService.test.ts` — cohort-aware aggregation
 - `graph-editor/src/services/__tests__/forecastService.test.ts` — log-normal CDF, Formula A (§5.3-5.4)
+ - `graph-editor/src/services/__tests__/latencyBaseline.e2e.test.ts` (NEW) — implicit baseline window behaviour for cohort-only DSL, both with and without param files; verifies that `W_base` is honoured, only missing dates are fetched, and `p.forecast` / `t95` are populated or correctly marked unavailable when Amplitude returns no data.
 
 **Python:**
 - `graph-editor/tests/test_msmdc.py` — anchor_node_id computation, A=X case, multi-start graphs
+- `graph-editor/tests/test_lag_math_parity.py` (or extend existing tests) — cross-language parity for log-normal CDF fitting and Formula A, using shared synthetic cohorts and golden fixtures to ensure TS and Python implementations agree within tolerance.
 
 **Key test scenarios (from design §11.2):**
 - Fully mature cohort (F(a_i) ≈ 1 for all cohorts)
@@ -644,6 +667,40 @@ When user checks "Track Latency" on an edge with data:
 | Window fetch fails, cohort succeeds | Network error on window request | Cohort data stored, window missing, UI shows cohort-only |
 | Both fail | Network errors | Error state, no partial data written |
 | Timeout mid-fetch | Slow response | Graceful timeout handling |
+
+#### Session Logging & Observability Tests
+
+**Files:** `graph-editor/src/services/__tests__/dataOperationsService.test.ts`, `graph-editor/src/services/__tests__/fetchDataService.test.ts`, `graph-editor/src/services/__tests__/sessionLogService.integration.test.ts` (NEW)
+
+| Test | Scenario | Expected |
+|------|----------|----------|
+| Latency fetch logging | Get-from-source on latency edge (with and without files) | `sessionLogService` records a `DATA_GET_FROM_SOURCE` / `BATCH_FETCH` operation with child entries for slice planning, cache hits, API calls, and UpdateManager application. |
+| Implicit baseline logging | Cohort-only DSL triggers implicit baseline window | Log contains a child entry describing `W_base`, baseline window dates, edge id, and effective DSL used for the baseline window fetch. |
+| Path maturity logging | After batch fetch with active latency edges | A single operation logs the computation of `p.latency.t95` and `path_t95` (once per query/scenario), enabling cache decisions to be traced from logs. |
+
+### Integration Flows (End-to-End)
+
+To manage the implied complexity of Project LAG, we need **integration tests that traverse the full data path** — from DSL → fetch planning → external calls → param files / cache → UpdateManager → graph → renderer — for both versioned (Flow A) and direct (Flow B) flows.
+
+#### Core Integration Suites
+
+| Flow | Files | Coverage |
+|------|-------|----------|
+| Flow A: Versioned get-from-source (pinned DSL → param files → graph) | `graph-editor/src/services/__tests__/versionedFetch.integration.test.ts`, `graph-editor/src/services/__tests__/versionedFetchFlow.e2e.test.ts` | Start from a pinned DSL that includes `cohort()` / `window()` for latency edges; call `batchGetFromSource` and verify: correct slice planning, Amplitude adapter calls, param file writes (including latency fields), `windowAggregationService` aggregation, `statisticalEnhancementService` updates to `p.latency.t95`, `p.mean`, completeness on graph edges. |
+| Flow B: Direct get-from-source (interactive DSL → Amplitude → graph only) | `graph-editor/src/services/__tests__/dataOperationsService.integration.test.ts` | Starting from a graph-only state (no param files), issue `getFromSource` with cohort-only and window-only DSL; assert that `getFromSourceDirect` issues the right Amplitude calls (including implicit baseline window for cohort-only), passes results to `statisticalEnhancementService`, and updates graph edges without requiring files. |
+| Dual-slice latency flow (window + cohort for one edge) | `graph-editor/src/services/__tests__/dataOperationsService.integration.test.ts`, `graph-editor/src/services/__tests__/latencyBaseline.e2e.test.ts` | For a single latency edge with both window() and cohort() slices, verify: both slices are fetched and stored; window() drives `p.forecast` and `t95`; cohort() drives evidence and Formula A; the combined `p.mean` and completeness are written to graph and rendered correctly. |
+| Multi-edge path maturity & caching | `graph-editor/src/services/__tests__/versionedFetch.integration.test.ts`, `graph-editor/src/services/__tests__/forecastService.test.ts` (integration-style subset) | Build a small graph A→X→Y with latency on both edges; run a batch fetch and then verify: per-edge `p.latency.t95` values, `computePathT95` results, and that subsequent `getItemsNeedingFetch` calls honour A→X maturity (no re-fetch of mature windows, only immature/gap days). |
+| Non-latency regression | `graph-editor/src/services/__tests__/nonLatencyRegression.test.ts` | Run the existing versioned fetch flows on graphs with `maturity_days = 0` to assert that non-latency edges’ behaviour (window aggregation, contexts, put-to-file) is unchanged by LAG. |
+
+#### UI-Driven End-to-End Scenarios
+
+These tests should drive the system via **UI components** to ensure wiring between hooks, services, and rendering is sound.
+
+| Scenario | Files | Coverage |
+|----------|-------|----------|
+| WindowSelector fetch & aggregate | `graph-editor/src/components/__tests__/WindowSelector.autoAggregation.test.tsx`, `fetchButtonE2E.integration.test.tsx` | User adjusts window/context; `WindowSelector` computes coverage, sets `needsFetch`, triggers `fetchItems`, and automatically aggregates from file-only where possible. Latency edges must follow the same pattern, including implicit baseline windows where needed. |
+| Latency edge render & tooltip | `graph-editor/src/components/edges/__tests__/ConversionEdge.latency.integration.test.tsx` (NEW) | Starting from a graph with populated latency stats, render `GraphCanvas` and verify: two-layer edge rendering per scenario visibility state, latency bead values, and tooltips showing correct evidence/forecast/blended values with slice provenance. |
+| Scenario-specific latency views | `graph-editor/src/components/panels/__tests__/ScenariosPanel.integration.test.tsx` | For multiple scenarios with different `meta.queryDSL` and param packs, ensure `CompositionService` / `ScenariosContext` and renderer combine to show correct per-scenario latency (p.evidence, p.forecast, p.mean) without re-running the inference engine at render time. |
 
 #### Edge Case Numeric Tests
 
