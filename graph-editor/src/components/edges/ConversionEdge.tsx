@@ -60,7 +60,7 @@ interface ConversionEdgeData {
     stdev?: number;
     distribution?: string;
   };
-  cost_time?: {
+  labour_cost?: {
     mean?: number;
     stdev?: number;
     distribution?: string;
@@ -305,10 +305,10 @@ export default function ConversionEdge({
     }
     
     // Costs
-    if (data.cost_gbp?.mean || data.cost_time?.mean) {
+    if (data.cost_gbp?.mean || data.labour_cost?.mean) {
       lines.push('');
       if (data.cost_gbp?.mean) lines.push(`cost_gbp: £${data.cost_gbp.mean.toFixed(0)}`);
-      if (data.cost_time?.mean) lines.push(`cost_time: ${data.cost_time.mean.toFixed(0)}d`);
+      if (data.labour_cost?.mean) lines.push(`labour_cost: ${data.labour_cost.mean.toFixed(0)}d`);
     }
     
     return lines.join('\n');

@@ -223,7 +223,7 @@ class Edge(BaseModel):
     conditional_p: Optional[List[ConditionalProbability]] = Field(None, description="Conditional probabilities (first match wins)")
     weight_default: Optional[float] = Field(None, ge=0, description="Weight for distributing residual probability")
     cost_gbp: Optional[CostParam] = None
-    cost_time: Optional[CostParam] = None
+    labour_cost: Optional[CostParam] = None
     case_variant: Optional[str] = Field(None, max_length=128, description="Variant name (case edges only)")
     case_id: Optional[str] = Field(None, description="Parent case node ID (case edges only)")
     display: Optional[EdgeDisplay] = None

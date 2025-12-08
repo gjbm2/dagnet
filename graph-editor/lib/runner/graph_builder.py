@@ -39,8 +39,8 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
         - conditional_p: List of conditional probabilities
         - cost_gbp: Monetary cost (extracted from cost_gbp.mean)
         - cost_gbp_stdev: Cost standard deviation
-        - cost_time: Time cost (extracted from cost_time.mean)
-        - cost_time_stdev: Time cost standard deviation
+        - labour_cost: Time cost (extracted from labour_cost.mean)
+        - labour_cost_stdev: Time cost standard deviation
         - case_id: Parent case ID (for case edges)
         - case_variant: Variant name (for case edges)
         - (all original edge data preserved)
@@ -111,8 +111,8 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
         # Extract costs and uncertainty
         cost_gbp = _extract_cost(edge.get('cost_gbp'))
         cost_gbp_stdev = _extract_cost_stdev(edge.get('cost_gbp'))
-        cost_time = _extract_cost(edge.get('cost_time'))
-        cost_time_stdev = _extract_cost_stdev(edge.get('cost_time'))
+        labour_cost = _extract_cost(edge.get('labour_cost'))
+        labour_cost_stdev = _extract_cost_stdev(edge.get('labour_cost'))
         
         G.add_edge(
             source,
@@ -126,11 +126,11 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
             conditional_p=edge.get('conditional_p', []),
             cost_gbp=cost_gbp,
             cost_gbp_stdev=cost_gbp_stdev,
-            cost_time=cost_time,
-            cost_time_stdev=cost_time_stdev,
+            labour_cost=labour_cost,
+            labour_cost_stdev=labour_cost_stdev,
             case_id=edge.get('case_id'),
             case_variant=edge.get('case_variant'),
-            **{k: v for k, v in edge.items() if k not in ['uuid', 'id', 'from', 'to', 'p', 'conditional_p', 'cost_gbp', 'cost_time', 'case_id', 'case_variant']}
+            **{k: v for k, v in edge.items() if k not in ['uuid', 'id', 'from', 'to', 'p', 'conditional_p', 'cost_gbp', 'labour_cost', 'case_id', 'case_variant']}
         )
     
     return G
@@ -223,7 +223,7 @@ def _extract_cost(cost_param: Optional[dict]) -> float:
     Extract cost value from cost parameter.
     
     Args:
-        cost_param: Cost parameter dict (cost_gbp or cost_time)
+        cost_param: Cost parameter dict (cost_gbp or labour_cost)
     
     Returns:
         Cost mean value, or 0 if not set
@@ -308,7 +308,7 @@ def _extract_cost_stdev(cost_param: Optional[dict]) -> Optional[float]:
     Extract standard deviation from cost parameter.
     
     Args:
-        cost_param: Cost parameter dict (cost_gbp or cost_time)
+        cost_param: Cost parameter dict (cost_gbp or labour_cost)
     
     Returns:
         Standard deviation or None if not present

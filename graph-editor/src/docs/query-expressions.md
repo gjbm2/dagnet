@@ -119,7 +119,7 @@ e.checkout-to-purchase.cost_gbp.mean: 12.50
 
 **Time cost:**
 ```
-e.email-to-purchase.cost_time.mean: 86400  # seconds
+e.email-to-purchase.labour_cost.mean: 86400  # seconds
 ```
 
 ---
@@ -367,7 +367,7 @@ e.checkout-to-purchase.visited(promo-landing).p.mean: 0.62
 
 # Costs
 e.checkout-to-purchase.cost_gbp.mean: 15.00
-e.checkout-to-purchase.cost_time.mean: 300
+e.checkout-to-purchase.labour_cost.mean: 300
 
 # A/B test on checkout flow
 n.checkout-gate.case(checkout-redesign:control).weight: 0.5
@@ -511,7 +511,7 @@ e.<edge-id>.<condition>.p.stdev                # Conditional stdev
 
 # Costs
 e.<edge-id>.cost_gbp.mean                      # Cost in GBP
-e.<edge-id>.cost_time.mean                     # Time cost (seconds)
+e.<edge-id>.labour_cost.mean                     # Time cost (seconds)
 
 # Weight (for probability distribution)
 e.<edge-id>.weight_default                     # Fallback weight

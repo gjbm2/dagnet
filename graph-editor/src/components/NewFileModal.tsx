@@ -48,7 +48,7 @@ export function NewFileModal({ isOpen, onClose, onCreate, fileType, defaultName 
         id: p.id, 
         name: p.name, 
         description: p.description,
-        type: p.type // Preserve parameter subtype (probability, cost_gbp, cost_time)
+        type: p.type // Preserve parameter subtype (probability, cost_gbp, labour_cost)
       }));
     } else if (typeToUse === 'context' && 'contexts' in index) {
       return (index as any).contexts.map((c: any) => ({ id: c.id, name: c.name, description: c.description }));

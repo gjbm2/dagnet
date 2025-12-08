@@ -32,7 +32,7 @@ interface EnhancedSelectorProps {
   /** Auto-focus input and show dropdown on mount */
   autoFocus?: boolean;
   /** Filter parameters by type (only applicable when type='parameter') */
-  parameterType?: 'probability' | 'cost_gbp' | 'cost_time';
+  parameterType?: 'probability' | 'cost_gbp' | 'labour_cost';
   /** Show "Current Graph" group in dropdown (for conditional node selection) */
   showCurrentGraphGroup?: boolean;
   /** Usage context for item (shows in sub-line) */
@@ -52,7 +52,7 @@ interface EnhancedSelectorProps {
   /** UUID of the graph node/edge instance being edited (for auto-get operations) */
   targetInstanceUuid?: string;
   /** For direct parameter references without param file */
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number;
   /** When true, only call onChange on blur/selection (not on each keystroke) */
   commitOnBlurOnly?: boolean;

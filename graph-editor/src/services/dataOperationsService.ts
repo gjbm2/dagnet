@@ -215,12 +215,12 @@ const windowAggregationService = new WindowAggregationService();
 
 /**
  * Extract external update payload from Sheets DAS result for edge parameters.
- * Supports edge-param scope (p/cost_gbp/cost_time) and edge-conditional scope.
+ * Supports edge-param scope (p/cost_gbp/labour_cost) and edge-conditional scope.
  */
 export function extractSheetsUpdateDataForEdge(
   raw: any,
   connectionString: any,
-  paramSlot: 'p' | 'cost_gbp' | 'cost_time' | undefined,
+  paramSlot: 'p' | 'cost_gbp' | 'labour_cost' | undefined,
   conditionalIndex: number | undefined,
   graph: Graph | null | undefined,
   targetId: string | undefined
@@ -365,14 +365,14 @@ export function extractSheetsUpdateDataForEdge(
       apply('k', p.k);
     } else if (slot === 'cost_gbp' && edgeParams.cost_gbp) {
       apply('mean', (edgeParams.cost_gbp as any).mean);
-    } else if (slot === 'cost_time' && edgeParams.cost_time) {
-      apply('mean', (edgeParams.cost_time as any).mean);
+    } else if (slot === 'labour_cost' && edgeParams.labour_cost) {
+      apply('mean', (edgeParams.labour_cost as any).mean);
     } else {
       console.warn('[extractSheetsUpdateDataForEdge] No matching slot found:', {
         slot,
         hasP: !!edgeParams.p,
         hasCostGbp: !!edgeParams.cost_gbp,
-        hasCostTime: !!edgeParams.cost_time,
+        hasCostTime: !!edgeParams.labour_cost,
       });
     }
   }
@@ -388,7 +388,7 @@ export function extractSheetsUpdateDataForEdge(
 export function extractSheetsUpdateData(
   raw: any,
   connectionString: any,
-  paramSlot: 'p' | 'cost_gbp' | 'cost_time' | undefined,
+  paramSlot: 'p' | 'cost_gbp' | 'labour_cost' | undefined,
   graph: Graph | null | undefined,
   edgeId: string | undefined
 ): { mean?: number; stdev?: number; n?: number; k?: number } {
@@ -695,11 +695,11 @@ class DataOperationsService {
       let aggregatedData = paramFile.data;
       if (!aggregatedData.type && !aggregatedData.parameter_type) {
         // Infer type from which slot on the edge references this parameter
-        let inferredType: 'probability' | 'cost_gbp' | 'cost_time' = 'probability';
+        let inferredType: 'probability' | 'cost_gbp' | 'labour_cost' = 'probability';
         if (targetEdge.cost_gbp?.id === paramId) {
           inferredType = 'cost_gbp';
-        } else if (targetEdge.cost_time?.id === paramId) {
-          inferredType = 'cost_time';
+        } else if (targetEdge.labour_cost?.id === paramId) {
+          inferredType = 'labour_cost';
         }
         aggregatedData = { ...aggregatedData, type: inferredType };
         console.log('[DataOperationsService] Inferred missing parameter type:', inferredType);
@@ -795,7 +795,7 @@ class DataOperationsService {
                 // Get connection name for signature computation
                 const connectionName = targetEdge.p?.connection || 
                                      targetEdge.cost_gbp?.connection || 
-                                     targetEdge.cost_time?.connection ||
+                                     targetEdge.labour_cost?.connection ||
                                      paramFile.data.connection;
                 
                 // Get connection to extract provider (use cached runner to avoid per-call overhead)
@@ -1378,7 +1378,7 @@ class DataOperationsService {
         // Ensure we do NOT lose the correct parameter connection id after file update.
         // Detect which slot to use from parameter file type OR from changes
         if (paramId) {
-          let slot: 'p' | 'cost_gbp' | 'cost_time' | null = null;
+          let slot: 'p' | 'cost_gbp' | 'labour_cost' | null = null;
           
           // First, try to determine slot from parameter file type
           const paramType = paramFile.data?.type || paramFile.data?.parameter_type;
@@ -1386,13 +1386,13 @@ class DataOperationsService {
             slot = 'p';
           } else if (paramType === 'cost_gbp') {
             slot = 'cost_gbp';
-          } else if (paramType === 'cost_time') {
-            slot = 'cost_time';
+          } else if (paramType === 'labour_cost') {
+            slot = 'labour_cost';
           } else {
             // Fallback: try to infer from changes
             const fields = (result.changes || []).map((c: any) => c.field || '');
             if (fields.some(f => f.startsWith('cost_gbp'))) slot = 'cost_gbp';
-            else if (fields.some(f => f.startsWith('cost_time'))) slot = 'cost_time';
+            else if (fields.some(f => f.startsWith('labour_cost'))) slot = 'labour_cost';
             else if (fields.some(f => f === 'p' || f.startsWith('p.'))) slot = 'p';
           }
           
@@ -1526,11 +1526,11 @@ class DataOperationsService {
         isNewFile = true;
         
         // Determine parameter type from edge
-        let paramType: 'probability' | 'cost_gbp' | 'cost_time' = 'probability';
+        let paramType: 'probability' | 'cost_gbp' | 'labour_cost' = 'probability';
         if (sourceEdge.cost_gbp?.id === paramId) {
           paramType = 'cost_gbp';
-        } else if (sourceEdge.cost_time?.id === paramId) {
-          paramType = 'cost_time';
+        } else if (sourceEdge.labour_cost?.id === paramId) {
+          paramType = 'labour_cost';
         }
         
         // Create file using fileOperationsService (handles registry update)
@@ -1550,7 +1550,7 @@ class DataOperationsService {
         toast.success(`Created new parameter file: ${paramId}`);
       }
       // Determine which parameter slot this file corresponds to
-      // (an edge can have p, cost_gbp, cost_time, AND conditional_p[] - we only want to write ONE)
+      // (an edge can have p, cost_gbp, labour_cost, AND conditional_p[] - we only want to write ONE)
       let filteredEdge: any = { ...sourceEdge };
       
       // ===== CONDITIONAL_P HANDLING =====
@@ -1588,9 +1588,9 @@ class DataOperationsService {
       } else if (sourceEdge.cost_gbp?.id === paramId) {
         // Writing cost_gbp parameter - keep only cost_gbp field
         filteredEdge = { cost_gbp: sourceEdge.cost_gbp };
-      } else if (sourceEdge.cost_time?.id === paramId) {
-        // Writing cost_time parameter - keep only cost_time field
-        filteredEdge = { cost_time: sourceEdge.cost_time };
+      } else if (sourceEdge.labour_cost?.id === paramId) {
+        // Writing labour_cost parameter - keep only labour_cost field
+        filteredEdge = { labour_cost: sourceEdge.labour_cost };
       } else {
         toast.error(`Edge is not connected to parameter ${paramId}`);
         return;
@@ -2201,7 +2201,7 @@ class DataOperationsService {
     targetId?: string;
     graph?: Graph | null;
     setGraph?: (graph: Graph | null) => void;
-    paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+    paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
     conditionalIndex?: number;
     bustCache?: boolean; // If true, ignore existing dates and re-fetch everything
     targetSlice?: string; // Optional: DSL for specific slice (default '' = uncontexted)
@@ -2441,7 +2441,7 @@ class DataOperationsService {
     graph?: Graph | null;
     setGraph?: (graph: Graph | null) => void;
     // For direct parameter references (no param file)
-    paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+    paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
     conditionalIndex?: number;
     writeToFile?: boolean;    // Whether to persist time-series to parameter file (versioned path) vs direct to graph
     bustCache?: boolean;      // If true, ignore existing dates and re-fetch everything
@@ -2541,7 +2541,7 @@ class DataOperationsService {
             let param: any = null;
             let baseParam: any = null;  // For fallback connection
             
-            // If paramSlot specified, use that (e.g., 'p', 'cost_gbp', 'cost_time')
+            // If paramSlot specified, use that (e.g., 'p', 'cost_gbp', 'labour_cost')
             if (paramSlot) {
               baseParam = target[paramSlot];
               param = baseParam;
@@ -5032,7 +5032,7 @@ class DataOperationsService {
       type: 'parameter' | 'case';
       objectId: string;
       targetId: string;
-      paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+      paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
       name?: string;
     }>;
     graph: Graph | null;

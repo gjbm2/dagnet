@@ -398,10 +398,10 @@ describe('values[latest] Timestamp Resolution', () => {
       expect(meanChange!.newValue).toBe(12.5);
     });
     
-    it('cost_time uses latest by timestamp', async () => {
+    it('labour_cost uses latest by timestamp', async () => {
       const paramFile = createTestParameterFile({
         id: 'cost-time',
-        type: 'cost_time',
+        type: 'labour_cost',
         values: [
           { mean: 300, window_from: '2025-01-01T00:00:00Z' },
           { mean: 310, window_from: '2025-02-01T00:00:00Z' },
@@ -409,7 +409,7 @@ describe('values[latest] Timestamp Resolution', () => {
         ]
       });
       
-      const edge = createTestEdge({ cost_time: { id: 'cost-time' } });
+      const edge = createTestEdge({ labour_cost: { id: 'cost-time' } });
       
       const result = await updateManager.handleFileToGraph(
         paramFile,
@@ -418,7 +418,7 @@ describe('values[latest] Timestamp Resolution', () => {
         'parameter'
       );
       
-      const meanChange = result.changes!.find((c: any) => c.field === 'cost_time.mean');
+      const meanChange = result.changes!.find((c: any) => c.field === 'labour_cost.mean');
       expect(meanChange!.newValue).toBe(320);
     });
   });

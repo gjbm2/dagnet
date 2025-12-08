@@ -303,11 +303,11 @@ export class WhereUsedService {
           });
         }
         
-        if (edge.cost_time?.id === targetId) {
+        if (edge.labour_cost?.id === targetId) {
           references.push({
             fileId: graphFileId,
             type: 'graph',
-            location: `edges[${i}].cost_time.id`,
+            location: `edges[${i}].labour_cost.id`,
             context: `Edge "${edgeLabel}" cost (time) parameter`
           });
         }

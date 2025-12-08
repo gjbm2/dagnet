@@ -488,7 +488,7 @@ describe('WindowSelector auto-aggregation: edge parameter coverage', () => {
     expect(edgesWithConnections).toHaveLength(2); // Only original 2
   });
 
-  it('should handle edges with cost_gbp and cost_time params', () => {
+  it('should handle edges with cost_gbp and labour_cost params', () => {
     const graph = createMockGraph({ paramCount: 1 });
     
     // Add additional param slots
@@ -497,7 +497,7 @@ describe('WindowSelector auto-aggregation: edge parameter coverage', () => {
       mean: 10,
       connection: 'sheets'
     };
-    graph.edges[0].cost_time = {
+    graph.edges[0].labour_cost = {
       id: 'time-param-1',
       mean: 5,
       connection: 'sheets'
@@ -505,7 +505,7 @@ describe('WindowSelector auto-aggregation: edge parameter coverage', () => {
     
     // All param slots should be considered
     const edge = graph.edges[0];
-    const paramSlots = ['p', 'cost_gbp', 'cost_time'].filter(slot => edge[slot]?.connection);
+    const paramSlots = ['p', 'cost_gbp', 'labour_cost'].filter(slot => edge[slot]?.connection);
     expect(paramSlots).toHaveLength(3);
   });
 });

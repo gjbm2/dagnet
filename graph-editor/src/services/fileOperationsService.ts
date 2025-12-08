@@ -857,8 +857,8 @@ class FileOperationsService {
             edge.cost_gbp.id = newId;
             updated = true;
           }
-          if (edge.cost_time?.id === oldId) {
-            edge.cost_time.id = newId;
+          if (edge.labour_cost?.id === oldId) {
+            edge.labour_cost.id = newId;
             updated = true;
           }
           

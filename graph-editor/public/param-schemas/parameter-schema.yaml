@@ -28,7 +28,7 @@ properties:
   
   type:
     type: string
-    enum: [probability, cost_gbp, cost_time]
+    enum: [probability, cost_gbp, labour_cost]
     description: "Parameter type classification"
   
   query:

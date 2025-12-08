@@ -51,7 +51,7 @@ const applyChanges = (target: any, changes: Array<{ field: string; newValue: any
 describe('Connection ID Preservation', () => {
   
   // ============================================================
-  // PARAMETER IDs (p.id, cost_gbp.id, cost_time.id)
+  // PARAMETER IDs (p.id, cost_gbp.id, labour_cost.id)
   // ============================================================
   
   describe('Parameter ID Preservation', () => {
@@ -167,15 +167,15 @@ describe('Connection ID Preservation', () => {
       expect(updatedEdge.cost_gbp!.mean).toBe(15.0);
     });
     
-    it('cost_time.id preserved', async () => {
+    it('labour_cost.id preserved', async () => {
       const edge = createTestEdge({
         uuid: 'edge-1',
-        cost_time: { id: 'checkout-duration', mean: 300 }
+        labour_cost: { id: 'checkout-duration', mean: 300 }
       });
       
       const timeFile = createTestParameterFile({
         id: 'checkout-duration',
-        type: 'cost_time',
+        type: 'labour_cost',
         values: [{ mean: 310, stdev: 95, distribution: 'lognormal' }]
       });
       
@@ -192,13 +192,13 @@ describe('Connection ID Preservation', () => {
       // Preserve
       if (result.changes && result.changes.length > 0) {
         const updatedSlot = result.changes[0]?.field.split('.')[0];
-        if (updatedSlot === 'cost_time' && !updatedEdge.cost_time!.id) {
-          updatedEdge.cost_time!.id = 'checkout-duration';
+        if (updatedSlot === 'labour_cost' && !updatedEdge.labour_cost!.id) {
+          updatedEdge.labour_cost!.id = 'checkout-duration';
         }
       }
       
-      expect(updatedEdge.cost_time!.id).toBe('checkout-duration');
-      expect(updatedEdge.cost_time!.mean).toBe(310);
+      expect(updatedEdge.labour_cost!.id).toBe('checkout-duration');
+      expect(updatedEdge.labour_cost!.mean).toBe(310);
     });
     
     it('p.id survives multiple sequential updates', async () => {

@@ -24,7 +24,7 @@ interface LightningMenuProps {
   graph: any; // Tab-specific graph
   setGraph: (graph: any) => void; // Tab-specific graph setter
   // For direct parameter references (no param file)
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time'; // Which parameter on edge
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost'; // Which parameter on edge
   conditionalIndex?: number; // Which conditional_p in array
   /** AUTHORITATIVE DSL from graphStore - the SINGLE source of truth */
   currentDSL: string;

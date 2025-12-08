@@ -58,7 +58,7 @@ function createMockGraph(options: {
     id?: string;
     p?: { id?: string; connection?: any };
     cost_gbp?: { id?: string; connection?: any };
-    cost_time?: { id?: string; connection?: any };
+    labour_cost?: { id?: string; connection?: any };
   }>;
   nodes?: Array<{
     uuid?: string;
@@ -667,13 +667,13 @@ describe('FetchDataService', () => {
       expect(result[0].objectId).toBe('param-1');
     });
 
-    it('should include all param slots (p, cost_gbp, cost_time) that need fetch', () => {
+    it('should include all param slots (p, cost_gbp, labour_cost) that need fetch', () => {
       const graph = createMockGraph({
         edges: [{
           uuid: 'edge-1',
           p: { id: 'param-p', connection: {} },
           cost_gbp: { id: 'param-cost', connection: {} },
-          cost_time: { id: 'param-time', connection: {} },
+          labour_cost: { id: 'param-time', connection: {} },
         }],
       });
       
@@ -683,7 +683,7 @@ describe('FetchDataService', () => {
       const result = getItemsNeedingFetch(mockWindow, graph, mockDSL);
       
       expect(result.length).toBe(3);
-      expect(result.map(r => r.paramSlot).sort()).toEqual(['cost_gbp', 'cost_time', 'p']);
+      expect(result.map(r => r.paramSlot).sort()).toEqual(['cost_gbp', 'labour_cost', 'p']);
     });
 
     it('should include case nodes that need fetch', () => {

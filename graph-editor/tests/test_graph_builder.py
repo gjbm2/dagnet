@@ -78,7 +78,7 @@ def build_graph_with_costs():
                 'to': 'end',
                 'p': {'mean': 1.0},
                 'cost_gbp': {'mean': 100.50},
-                'cost_time': {'mean': 5.0},
+                'labour_cost': {'mean': 5.0},
             },
         ],
     }
@@ -158,7 +158,7 @@ class TestBuildNetworkxGraph:
         
         edge = G.edges['start', 'end']
         assert edge['cost_gbp'] == 100.50
-        assert edge['cost_time'] == 5.0
+        assert edge['labour_cost'] == 5.0
     
     def test_branching_graph(self):
         """Build branching graph."""

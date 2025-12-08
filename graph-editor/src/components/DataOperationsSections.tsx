@@ -18,7 +18,7 @@ export interface DataOperationSection {
   objectType: 'parameter' | 'case' | 'node' | 'event';
   objectId: string;              // File ID (e.g., 'my-param', 'coffee-promotion', 'node-abc')
   targetId: string;              // Graph element ID (edgeId or nodeId)
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number;
   
   // Flags
@@ -269,13 +269,13 @@ export function getEdgeDataSections(
     });
   }
   
-  // 4. Cost (time) parameter (edge.cost_time) - use nested cost_time.id only
-  const costTimeParameterId = edge.cost_time?.id;
-  if (costTimeParameterId || edge.cost_time?.connection) {
+  // 4. Cost (time) parameter (edge.labour_cost) - use nested labour_cost.id only
+  const costTimeParameterId = edge.labour_cost?.id;
+  if (costTimeParameterId || edge.labour_cost?.connection) {
     const file = costTimeParameterId ? fileRegistry.getFile(`parameter-${costTimeParameterId}`) : null;
     const hasFile = !!file;
     const hasFileConnection = hasFile && !!file.data?.connection;
-    const hasDirectConnection = !!edge.cost_time?.connection;
+    const hasDirectConnection = !!edge.labour_cost?.connection;
     const hasAnyConnection = hasDirectConnection || hasFileConnection;
     const canPutToFile = !!costTimeParameterId;
     
@@ -285,7 +285,7 @@ export function getEdgeDataSections(
       objectType: 'parameter',
       objectId: costTimeParameterId || '',
       targetId: edgeId,
-      paramSlot: 'cost_time',
+      paramSlot: 'labour_cost',
       hasFile,
       hasConnection: hasAnyConnection,
       hasFileConnection,

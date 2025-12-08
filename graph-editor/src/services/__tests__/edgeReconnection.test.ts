@@ -344,7 +344,7 @@ describe('Edge Reconnection Tests', () => {
       // Add more properties to the edge (using any to test arbitrary property preservation)
       const edge = graph.edges[0] as any;
       edge.cost_gbp = { mean: 10, connection: 'test-conn' };
-      edge.cost_time = { mean: 5 };
+      edge.labour_cost = { mean: 5 };
       edge.case_variant = 'variant-a';
       edge.case_id = 'case-1';
       
@@ -366,7 +366,7 @@ describe('Edge Reconnection Tests', () => {
       expect(updatedEdge.uuid).toBe(originalEdge.uuid);
       expect(updatedEdge.p).toEqual(originalEdge.p);
       expect(updatedEdge.cost_gbp).toEqual(originalEdge.cost_gbp);
-      expect(updatedEdge.cost_time).toEqual(originalEdge.cost_time);
+      expect(updatedEdge.labour_cost).toEqual(originalEdge.labour_cost);
       expect(updatedEdge.case_variant).toBe(originalEdge.case_variant);
       expect(updatedEdge.case_id).toBe(originalEdge.case_id);
       expect(updatedEdge.description).toBe(originalEdge.description);

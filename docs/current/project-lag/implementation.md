@@ -561,6 +561,55 @@ When user checks "Track Latency" on an edge with data:
 
 **Design reference:** `design.md §11`
 
+### Sample Data for LAG Testing
+
+**Location:** `param-registry/test/`
+
+Create sample data files demonstrating latency tracking with `cohort()` and `window()` slices. This data will be used by integration tests and for manual testing of the LAG features.
+
+**Files to create/update:**
+
+1. **Parameter file with latency data:**
+   - `param-registry/test/parameters/checkout-to-purchase-latency.yaml`
+   - Contains: `cohort_from`, `cohort_to`, `median_lag_days[]`, `mean_lag_days[]`, `k_daily[]`, `n_daily[]`
+   - Multiple `values[]` entries with different `sliceDSL` (cohort and window variants)
+   - Latency summary block (`median_days`, `completeness`, `t95`)
+
+2. **Graph with latency-enabled edges:**
+   - Update `param-registry/test/graphs/ecommerce-checkout-flow.json`
+   - Add `latency: { maturity_days: 14, anchor_node_id: "..." }` to relevant edges
+   - Include edges with varying maturity settings (0, 7, 14, 30 days)
+
+3. **Parameter with dual slices (cohort + window):**
+   - `param-registry/test/parameters/signup-to-activation-latency.yaml`
+   - Demonstrates both A-anchored cohort data and X-local window data
+   - Shows `forecast_mean`, `forecast_stdev`, `evidence_mean`, `evidence_stdev`
+
+4. **Index updates:**
+   - Update `param-registry/test/parameters-index.yaml` with new parameter entries
+
+**Sample cohort data structure:**
+```yaml
+values:
+  - sliceDSL: "cohort(start-node,1-Nov-25:30-Nov-25)"
+    cohort_from: "1-Nov-25"
+    cohort_to: "30-Nov-25"
+    n: 1500
+    k: 225
+    n_daily: [50, 48, 52, ...]  # 30 days
+    k_daily: [7, 8, 6, ...]     # 30 days
+    median_lag_days: [2.1, 2.3, 2.0, ...]  # per cohort day
+    mean_lag_days: [3.2, 3.5, 3.1, ...]    # per cohort day
+    latency:
+      median_days: 2.2
+      completeness: 0.85
+      t95: 8.5
+```
+
+**When to create:** During Phase C3 (Data Storage) implementation, before integration testing.
+
+---
+
 ### Test Files to Update/Create
 
 **DSL & Query:**

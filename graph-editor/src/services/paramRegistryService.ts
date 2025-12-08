@@ -73,7 +73,7 @@ export interface ParameterValue {
 export interface Parameter {
   id: string;
   name: string;
-  type: 'probability' | 'cost_gbp' | 'cost_time';
+  type: 'probability' | 'cost_gbp' | 'labour_cost';
   values: ParameterValue[];
   // Query strings - mastered on graph edge, copied here for standalone use
   query?: string; // Main query DSL (e.g., "from(A).to(B).visited(C)")

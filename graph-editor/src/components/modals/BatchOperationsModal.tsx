@@ -21,7 +21,7 @@ interface BatchItem {
   name: string;
   objectId: string;
   targetId: string;
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number;
   // Path notation (e.g., e.my-edge.p.mean, n.my-node.case)
   path: string;
@@ -194,18 +194,18 @@ export function BatchOperationsModal({
         }
 
         // Cost Time parameter
-        if (edge.cost_time?.id && typeof edge.cost_time.id === 'string') {
-          const paramId = edge.cost_time.id;
+        if (edge.labour_cost?.id && typeof edge.labour_cost.id === 'string') {
+          const paramId = edge.labour_cost.id;
           const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
           const paramConnection = paramFile?.data?.connection;
           items.push({
-            id: `param-${paramId}-cost_time-${edgeId}`,
+            id: `param-${paramId}-labour_cost-${edgeId}`,
             type: 'parameter',
-            name: `cost_time: ${paramId}`,
+            name: `labour_cost: ${paramId}`,
             objectId: paramId,
             targetId: edgeId,
-            paramSlot: 'cost_time',
-            path: `e.${edgeDisplayId}.cost_time.mean`,
+            paramSlot: 'labour_cost',
+            path: `e.${edgeDisplayId}.labour_cost.mean`,
             edgeId: edgeDisplayId,
             edgeFrom,
             edgeTo,

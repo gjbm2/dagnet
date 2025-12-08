@@ -38,7 +38,7 @@ describe('ParamPackDSLService: unflattenParams / flattenParams round-trips', () 
       edges: {
         'checkout-to-purchase': {
           cost_gbp: { mean: 12.5 },
-          cost_time: { mean: 300 },
+          labour_cost: { mean: 300 },
         },
       },
     };
@@ -46,7 +46,7 @@ describe('ParamPackDSLService: unflattenParams / flattenParams round-trips', () 
     const flat = flattenParams(params);
     expect(flat).toEqual({
       'e.checkout-to-purchase.cost_gbp.mean': 12.5,
-      'e.checkout-to-purchase.cost_time.mean': 300,
+      'e.checkout-to-purchase.labour_cost.mean': 300,
     });
 
     const unflat = unflattenParams(flat);

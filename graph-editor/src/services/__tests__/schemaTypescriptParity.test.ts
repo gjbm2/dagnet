@@ -61,7 +61,7 @@ const TYPESCRIPT_FIELDS = {
     'label', 'label_overridden', 'description', 'description_overridden',
     'query', 'query_overridden', 'n_query', 'n_query_overridden',
     'p', 'conditional_p', 'weight_default',
-    'cost_gbp', 'cost_time', 'case_variant', 'case_id', 'display'
+    'cost_gbp', 'labour_cost', 'case_variant', 'case_id', 'display'
   ]),
   
   GraphNode: new Set([
