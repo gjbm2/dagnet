@@ -16,15 +16,24 @@ export interface ProbabilityParam {
   mean?: number;
   stdev?: number;
   
-  // === LAG fields for scenarios ===
-  /** Forecast mean from mature cohorts (p_∞) */
-  forecast_mean?: number;
-  /** Forecast standard deviation from mature cohorts */
-  forecast_stdev?: number;
-  /** Evidence mean (observed rate including immature cohorts) */
-  evidence_mean?: number;
-  /** Evidence standard deviation */
-  evidence_stdev?: number;
+  // === LAG fields for edge rendering (evidence vs forecast two-layer) ===
+  /** Forecast from mature cohorts (p_∞) — DSL: e.X.p.forecast.mean */
+  forecast?: {
+    mean?: number;
+    stdev?: number;
+  };
+  /** Evidence (observed rate including immature cohorts) — DSL: e.X.p.evidence.mean */
+  evidence?: {
+    mean?: number;
+    stdev?: number;
+  };
+  
+  // === LAG latency bead display fields (right-aligned bead) ===
+  /** Latency data — DSL: e.X.p.latency.median_lag_days, e.X.p.latency.completeness */
+  latency?: {
+    median_lag_days?: number;
+    completeness?: number;
+  };
 }
 
 /**

@@ -1,5 +1,14 @@
 # TODO
 
+## Major components
+- Dashboarding views
+- Tabulated & graphing analytics output
+- Bayesian modelling
+- Asynch / api updates
+- Cyclic graphs
+
+---
+
 - Ensure integrity checker sensibly configured to support dual slice integrity checks
 - Structural ambiguity about analysis dsl over conditional_p journeys -- can we cover absent scenarios?
 
@@ -272,7 +281,6 @@ Could use Web Worker for true background execution:
 ---
 
 ## Major components
-- Latency/lag management
 - Dashboarding views
 - Bayesian modelling (...is expected?)
 - Asynch / api updates

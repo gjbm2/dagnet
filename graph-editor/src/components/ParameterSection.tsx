@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Info } from 'lucide-react';
+import { Info, Clock } from 'lucide-react';
 import { EnhancedSelector } from './EnhancedSelector';
 import { ConnectionControl } from './ConnectionControl';
 import ProbabilityInput from './ProbabilityInput';
 import { AutomatableField } from './AutomatableField';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
-import { GraphData } from '../types';
+import { GraphData, LatencyConfig } from '../types';
 import { useTabContext } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { useGraphStore } from '../contexts/GraphStoreContext';
@@ -37,6 +37,13 @@ interface ParameterSectionProps {
     stdev_overridden?: boolean;
     distribution_overridden?: boolean;
     query_overridden?: boolean;
+    // Latency tracking (probability params only)
+    latency?: LatencyConfig;
+    // Forecast from mature cohorts (display only)
+    forecast?: {
+      mean?: number;
+      stdev?: number;
+    };
   };
   
   // Handlers
@@ -48,6 +55,7 @@ interface ParameterSectionProps {
   showQueryEditor?: boolean;  // Default true
   showStdev?: boolean;  // Default true
   showDistribution?: boolean;  // Default true
+  showLatency?: boolean;  // Default true for probability, false for cost
   showBalanceButton?: boolean;  // Default false (true for conditional p)
   isUnbalanced?: boolean;  // Show balance button as highlighted
   
@@ -80,6 +88,7 @@ export function ParameterSection({
   showQueryEditor = true,
   showStdev = true,
   showDistribution = true,
+  showLatency = paramSlot === 'p',  // Default true for probability, false for cost
   showBalanceButton = false,
   isUnbalanced = false,
   disabled = false
@@ -89,12 +98,19 @@ export function ParameterSection({
   
   // Local state for immediate input feedback
   const [localQuery, setLocalQuery] = useState(param?.query || '');
+  const [localMaturityDays, setLocalMaturityDays] = useState<string>(
+    param?.latency?.maturity_days?.toString() || '30'
+  );
   // Note: isSettingsModalOpen state moved into ConnectionControl component
   
   // Sync local state when param changes externally
   useEffect(() => {
     setLocalQuery(param?.query || '');
   }, [param?.query]);
+  
+  useEffect(() => {
+    setLocalMaturityDays(param?.latency?.maturity_days?.toString() || '30');
+  }, [param?.latency?.maturity_days]);
   
   // Callback to initialize a newly created parameter file from current edge data
   const handleCreateAndInitialize = async (paramId: string) => {
@@ -344,6 +360,123 @@ export function ParameterSection({
                 <option value="uniform">Uniform</option>
               </select>
             </div>
+          </AutomatableField>
+        </div>
+      )}
+      
+      {/* Latency Tracking (probability params only) */}
+      {showLatency && (
+        <div style={{ marginBottom: '16px' }}>
+          <AutomatableField
+            label=""
+            labelExtra={
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <input
+                  type="checkbox"
+                  id={`latency-track-${objectId}-${paramSlot}`}
+                  checked={(param?.latency?.maturity_days || 0) > 0}
+                  onChange={(e) => {
+                    const trackLatency = e.target.checked;
+                    onUpdate({
+                      latency: {
+                        ...param?.latency,
+                        maturity_days: trackLatency ? 30 : 0,
+                        maturity_days_overridden: true,
+                      }
+                    });
+                  }}
+                  disabled={disabled}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label 
+                  htmlFor={`latency-track-${objectId}-${paramSlot}`}
+                  style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#333' }}
+                >
+                  Track Latency
+                </label>
+                <span title="Enable latency tracking to forecast conversions for immature cohorts. When enabled, uses cohort-based queries to measure conversion lag.">
+                  <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
+                </span>
+              </div>
+            }
+            layout="label-above"
+            value={param?.latency?.maturity_days || 0}
+            overridden={param?.latency?.maturity_days_overridden || false}
+            onClearOverride={() => {
+              onUpdate({ 
+                latency: { 
+                  ...param?.latency,
+                  maturity_days_overridden: false 
+                } 
+              });
+            }}
+          >
+            {/* Maturity field (only shown when tracking is enabled) */}
+            {(param?.latency?.maturity_days || 0) > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label">Maturity (days)</label>
+                  <input
+                    type="number"
+                    value={localMaturityDays}
+                    onChange={(e) => {
+                      setLocalMaturityDays(e.target.value);
+                    }}
+                    onBlur={() => {
+                      const value = parseInt(localMaturityDays);
+                      const days = isNaN(value) || value < 1 ? 30 : Math.min(365, value);
+                      setLocalMaturityDays(days.toString());
+                      onUpdate({
+                        latency: {
+                          ...param?.latency,
+                          maturity_days: days,
+                          maturity_days_overridden: true,
+                        }
+                      });
+                    }}
+                    min={1}
+                    max={365}
+                    disabled={disabled}
+                    className="parameter-input"
+                    title="Days after cohort entry at which conversions are considered 'mature'."
+                  />
+                </div>
+                
+                {/* Read-only latency stats (when data exists) */}
+                {param?.latency?.median_lag_days && (
+                  <div style={{ 
+                    padding: '8px', 
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)', 
+                    borderRadius: '4px',
+                    fontSize: '12px',
+                    color: '#9CA3AF'
+                  }}>
+                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                      <span>
+                        <strong>Median Lag:</strong> {param.latency.median_lag_days.toFixed(1)}d
+                      </span>
+                      {param.latency.completeness !== undefined && (
+                        <span>
+                          <strong>Completeness:</strong> {(param.latency.completeness * 100).toFixed(0)}%
+                        </span>
+                      )}
+                      {param.latency.t95 !== undefined && (
+                        <span>
+                          <strong>t95:</strong> {param.latency.t95.toFixed(1)}d
+                        </span>
+                      )}
+                    </div>
+                    {param.latency.anchor_node_id && (
+                      <div style={{ marginTop: '4px' }}>
+                        <strong>Anchor:</strong> {param.latency.anchor_node_id}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: 'none' }} />
+            )}
           </AutomatableField>
         </div>
       )}

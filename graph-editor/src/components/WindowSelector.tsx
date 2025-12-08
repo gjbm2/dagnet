@@ -13,7 +13,7 @@ import { dataOperationsService } from '../services/dataOperationsService';
 import { calculateIncrementalFetch } from '../services/windowAggregationService';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
-import { FileText, Zap } from 'lucide-react';
+import { FileText, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
 import { parseConstraints } from '../lib/queryDSL';
 import { formatDateUK } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
@@ -98,6 +98,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // Context dropdown and unroll states
   const [showContextDropdown, setShowContextDropdown] = useState(false);
   const [availableKeySections, setAvailableKeySections] = useState<any[]>([]);
+  
+  // Cohort/Window mode toggle - determines DSL function: cohort() vs window()
+  // Default to cohort mode as per design (§7.5)
+  const [queryMode, setQueryMode] = useState<'cohort' | 'window'>('cohort');
   const [isUnrolled, setIsUnrolled] = useState(false);
   const [showPinnedQueryModal, setShowPinnedQueryModal] = useState(false);
   
@@ -146,15 +150,23 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   
   // Initialize DSL with default window if not set
   // Sets BOTH authoritative DSL (graphStore.currentDSL) AND historic record (graph.currentQueryDSL)
+  // Also detects existing query mode (cohort vs window) from existing DSL
   const isInitializedRef = useRef(false);
   useEffect(() => {
     // Check if authoritative DSL needs initialization
     const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
     
+    // Detect query mode from existing DSL
+    if (authoritativeDSL && !isInitializedRef.current) {
+      const existingMode = authoritativeDSL.includes('cohort(') ? 'cohort' : 'window';
+      setQueryMode(existingMode);
+    }
+    
     if (graph && !authoritativeDSL && !isInitializedRef.current) {
       // Use window from store if set, otherwise use defaults
       const windowToUse = window || defaultWindowDates;
-      const defaultDSL = `window(${formatDateUK(windowToUse.start)}:${formatDateUK(windowToUse.end)})`;
+      // Use queryMode for DSL function (default: cohort per design §7.5)
+      const defaultDSL = `${queryMode}(${formatDateUK(windowToUse.start)}:${formatDateUK(windowToUse.end)})`;
       console.log('[WindowSelector] Initializing AUTHORITATIVE DSL:', defaultDSL);
       
       // Set AUTHORITATIVE DSL on graphStore
@@ -166,7 +178,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       }
       isInitializedRef.current = true;
     }
-  }, [graph, window, setGraph, setCurrentDSL, defaultWindowDates, graphStore]); // Dependencies
+  }, [graph, window, setGraph, setCurrentDSL, defaultWindowDates, graphStore, queryMode]); // Dependencies
   
   // Parse current context values and key from currentQueryDSL
   const currentContextValues = useMemo(() => {
@@ -198,7 +210,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   
   // Build DSL from AUTHORITATIVE sources: window state + context from UI
   // NEVER use graph.currentQueryDSL directly for queries - it's just a record
-  const buildDSLFromState = useCallback((windowState: DateRange): string => {
+  // Uses queryMode to determine cohort() vs window() function
+  const buildDSLFromState = useCallback((windowState: DateRange, mode?: 'cohort' | 'window'): string => {
     // Get context from graph.currentQueryDSL (this IS where user's selection is stored)
     const parsed = parseConstraints(graph?.currentQueryDSL || '');
     
@@ -211,13 +224,15 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       contextParts.push(`contextAny(${pairs})`);
     }
     
-    // Build window from AUTHORITATIVE window state (not from graph.currentQueryDSL)
-    const windowPart = `window(${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`;
+    // Build window/cohort from AUTHORITATIVE window state (not from graph.currentQueryDSL)
+    // Use provided mode or fall back to current queryMode state
+    const effectiveMode = mode ?? queryMode;
+    const dateRangePart = `${effectiveMode}(${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`;
     
     return contextParts.length > 0 
-      ? `${contextParts.join('.')}.${windowPart}` 
-      : windowPart;
-  }, [graph?.currentQueryDSL]);
+      ? `${contextParts.join('.')}.${dateRangePart}` 
+      : dateRangePart;
+  }, [graph?.currentQueryDSL, queryMode]);
   
     // Update CSS variable for scenario legend positioning when height changes
   // Set on the container element (not document root) so it's scoped to this tab
@@ -749,13 +764,13 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       contextParts.push(`contextAny(${pairs})`);
     }
     
-    // Build window part with d-MMM-yy format
-    const windowPart = `window(${formatDateUK(start)}:${formatDateUK(end)})`;
+    // Build window/cohort part with d-MMM-yy format (using current queryMode)
+    const dateRangePart = `${queryMode}(${formatDateUK(start)}:${formatDateUK(end)})`;
     
     // Combine
     const newDSL = contextParts.length > 0 
-      ? `${contextParts.join('.')}.${windowPart}`
-      : windowPart;
+      ? `${contextParts.join('.')}.${dateRangePart}`
+      : dateRangePart;
     
     // CRITICAL: Update AUTHORITATIVE DSL on graphStore (for all fetch operations)
     setCurrentDSL(newDSL);
@@ -1019,6 +1034,34 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       {/* Main area (left side) */}
       <div className="window-selector-main">
       <div className="window-selector-content">
+        {/* Cohort/Window mode toggle - leftmost element per design §7.5 */}
+        <button
+          type="button"
+          className={`window-selector-mode-toggle ${queryMode === 'cohort' ? 'cohort' : 'window'}`}
+          onClick={() => {
+            const newMode = queryMode === 'cohort' ? 'window' : 'cohort';
+            setQueryMode(newMode);
+            
+            // Update DSL with new mode, preserving date range
+            if (window) {
+              const newDSL = buildDSLFromState(window, newMode);
+              setCurrentDSL(newDSL);
+              const currentGraph = getLatestGraph();
+              if (currentGraph && setGraph) {
+                setGraph({ ...currentGraph, currentQueryDSL: newDSL });
+              }
+            }
+            
+            toast.success(`Switched to ${newMode} mode`, { duration: 1500 });
+          }}
+          title={queryMode === 'cohort' 
+            ? 'Cohort mode: dates refer to when users entered the funnel' 
+            : 'Window mode: dates refer to when events occurred'}
+        >
+          {queryMode === 'cohort' ? <ToggleLeft size={16} /> : <ToggleRight size={16} />}
+          <span className="mode-label">{queryMode === 'cohort' ? 'Cohort' : 'Window'}</span>
+        </button>
+        
         <div className="window-selector-presets">
           <button
             type="button"
@@ -1110,15 +1153,17 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                     newContextParts.push(`contextAny(${pairs})`);
                   }
                   
-                  // Preserve window
-                  let windowPart = '';
+                  // Preserve window/cohort (using current queryMode)
+                  let dateRangePart = '';
                   if (oldParsed.window) {
-                    windowPart = `window(${oldParsed.window.start || ''}:${oldParsed.window.end || ''})`;
+                    dateRangePart = `${queryMode}(${oldParsed.window.start || ''}:${oldParsed.window.end || ''})`;
+                  } else if (oldParsed.cohort) {
+                    dateRangePart = `${queryMode}(${oldParsed.cohort.start || ''}:${oldParsed.cohort.end || ''})`;
                   } else if (window) {
-                    windowPart = `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
+                    dateRangePart = `${queryMode}(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
                   }
                   
-                  const fullDSL = [newContextParts.join('.'), windowPart].filter(p => p).join('.');
+                  const fullDSL = [newContextParts.join('.'), dateRangePart].filter(p => p).join('.');
                   
                   // CRITICAL: Update AUTHORITATIVE DSL on graphStore
                   setCurrentDSL(fullDSL || '');
@@ -1224,16 +1269,16 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                     }
                   }
                   
-                  // Build window part (preserve existing or use current window state)
-                  let windowPart = '';
+                  // Build window/cohort part (preserve existing or use current window state)
+                  let dateRangePart = '';
                   if (existingWindow) {
-                    windowPart = `window(${existingWindow.start || ''}:${existingWindow.end || ''})`;
+                    dateRangePart = `${queryMode}(${existingWindow.start || ''}:${existingWindow.end || ''})`;
                   } else if (window) {
-                    windowPart = `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
+                    dateRangePart = `${queryMode}(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
                   }
                   
                   // Combine
-                  const newDSL = [contextPart, windowPart].filter(p => p).join('.');
+                  const newDSL = [contextPart, dateRangePart].filter(p => p).join('.');
                   
                   // CRITICAL: Update AUTHORITATIVE DSL on graphStore
                   setCurrentDSL(newDSL || '');
@@ -1288,13 +1333,13 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   contextParts.push(`contextAny(${pairs})`);
                 }
                 
-                // Add current window
-                const windowPart = window 
-                  ? `window(${formatDateUK(window.start)}:${formatDateUK(window.end)})` 
+                // Add current window/cohort (using queryMode)
+                const dateRangePart = window 
+                  ? `${queryMode}(${formatDateUK(window.start)}:${formatDateUK(window.end)})` 
                   : '';
                 
                 // Combine
-                const parts = [...contextParts, windowPart].filter(p => p);
+                const parts = [...contextParts, dateRangePart].filter(p => p);
                 return parts.join('.');
               })()}
               readonly={false}

@@ -1473,6 +1473,85 @@ export class IntegrityCheckService {
     }
     
     // ─────────────────────────────────────────────────────────────────────────
+    // Sibling Edge Probability Constraints (LAG)
+    // For nodes with multiple outgoing edges where both have latency tracking,
+    // check if Σ p.mean > 1 (forecasting artefact) or Σ p.evidence > 1 (error)
+    // ─────────────────────────────────────────────────────────────────────────
+    
+    // Group edges by source node
+    const edgesBySource = new Map<string, any[]>();
+    for (const edge of edges) {
+      const sourceKey = edge.from || edge.source;
+      if (sourceKey) {
+        if (!edgesBySource.has(sourceKey)) {
+          edgesBySource.set(sourceKey, []);
+        }
+        edgesBySource.get(sourceKey)!.push(edge);
+      }
+    }
+    
+    // Check each node's outgoing edges
+    for (const [sourceKey, outgoingEdges] of edgesBySource) {
+      // Only check if there are multiple outgoing edges
+      if (outgoingEdges.length < 2) continue;
+      
+      // Only check edges with latency tracking enabled (maturity_days > 0)
+      const latencyEdges = outgoingEdges.filter((e: any) => 
+        e.p?.latency?.maturity_days && e.p.latency.maturity_days > 0
+      );
+      
+      // Need at least 2 sibling latency edges for this check to be relevant
+      if (latencyEdges.length < 2) continue;
+      
+      // Sum p.mean and p.evidence across sibling latency edges
+      let sumMean = 0;
+      let sumEvidence = 0;
+      let hasEvidence = false;
+      
+      for (const edge of latencyEdges) {
+        const mean = edge.p?.mean ?? 0;
+        const evidence = edge.p?.evidence?.p ?? edge.p?.evidence?.mean ?? 0;
+        
+        sumMean += mean;
+        if (edge.p?.evidence !== undefined) {
+          sumEvidence += evidence;
+          hasEvidence = true;
+        }
+      }
+      
+      // Find the source node for clearer error messages
+      const sourceNode = nodes.find((n: any) => n.id === sourceKey || n.uuid === sourceKey);
+      const sourceName = sourceNode?.id || sourceKey;
+      
+      // Check for errors and warnings
+      if (hasEvidence && sumEvidence > 1.0) {
+        // Σ p.evidence > 1.0: Error - data inconsistency
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'error',
+          category: 'value',
+          field: `node: ${sourceName}`,
+          message: `Sibling edges from "${sourceName}" have Σ p.evidence = ${(sumEvidence * 100).toFixed(1)}% > 100% — data inconsistency`,
+          suggestion: 'Check if n/k counts are correct; evidence probabilities should never sum > 100%',
+          nodeUuid: sourceNode?.uuid
+        });
+      } else if (sumMean > 1.0) {
+        // Σ p.mean > 1.0 AND Σ p.evidence ≤ 1.0: Info - forecasting artefact
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'info',
+          category: 'value',
+          field: `node: ${sourceName}`,
+          message: `Sibling edges from "${sourceName}" have Σ p.mean = ${(sumMean * 100).toFixed(1)}% > 100% — forecasting artefact for immature data`,
+          suggestion: 'This is expected when cohorts are immature. For accurate flow calculations, use p.evidence instead of p.mean.',
+          nodeUuid: sourceNode?.uuid
+        });
+      }
+    }
+    
+    // ─────────────────────────────────────────────────────────────────────────
     // Orphan Node Detection (within graph)
     // ─────────────────────────────────────────────────────────────────────────
     

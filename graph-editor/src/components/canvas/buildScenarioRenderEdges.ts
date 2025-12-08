@@ -10,6 +10,7 @@ import { Edge } from 'reactflow';
 import { computeEffectiveEdgeProbability } from '../../lib/whatIf';
 import { getComposedParamsForLayer } from '../../services/CompositionService';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, SANKEY_MAX_EDGE_WIDTH } from '../../lib/nodeEdgeConstants';
+import type { EdgeLatencyDisplay } from '../../types';
 
 interface BuildScenarioRenderEdgesParams {
   baseEdges: Edge[];
@@ -358,6 +359,89 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const paramsKey = graphEdge ? (graphEdge.id || graphEdge.uuid) : undefined;
       const edgeParams = paramsKey ? composedParams.edges?.[paramsKey] : undefined;
 
+      // LAG: derive EdgeLatencyDisplay for this layer from params + graph edge
+      let latencyDisplay: EdgeLatencyDisplay | undefined;
+      if (graphEdge) {
+        // Base probabilities from graph edge
+        const baseP = graphEdge.p || {};
+        const baseLatency = baseP.latency || {};
+
+        // Scenario-level overrides from composed params (nested structure)
+        const scenarioProb = edgeParams?.p || {};
+
+        // Two-layer rendering: evidence vs forecast
+        // DSL: e.X.p.evidence (scalar) or e.X.p.evidence.mean (nested)
+        // Handle both scalar (p.evidence: 0.1) and nested (p.evidence.mean: 0.1) formats
+        const p_evidence = typeof scenarioProb.evidence === 'number'
+          ? scenarioProb.evidence
+          : (typeof scenarioProb.evidence?.mean === 'number'
+              ? scenarioProb.evidence.mean
+              : (typeof baseP.evidence === 'number'
+                  ? baseP.evidence
+                  : (typeof baseP.evidence?.mean === 'number'
+                      ? baseP.evidence.mean
+                      : undefined)));
+
+        const p_forecast = typeof scenarioProb.forecast === 'number'
+          ? scenarioProb.forecast
+          : (typeof scenarioProb.forecast?.mean === 'number'
+              ? scenarioProb.forecast.mean
+              : (typeof baseP.forecast === 'number'
+                  ? baseP.forecast
+                  : baseP.forecast?.mean));
+
+        const p_mean = typeof scenarioProb.mean === 'number'
+          ? scenarioProb.mean
+          : baseP.mean;
+
+        // Latency bead data: prefer scenario params, fall back to base edge
+        // DSL: e.X.p.latency.median_lag_days, e.X.p.latency.completeness
+        const median_days = typeof scenarioProb.latency?.median_lag_days === 'number'
+          ? scenarioProb.latency.median_lag_days
+          : baseLatency.median_lag_days;
+
+        const completeness = typeof scenarioProb.latency?.completeness === 'number'
+          ? scenarioProb.latency.completeness
+          : baseLatency.completeness;
+
+        // Enable LAG display if we have meaningful data
+        // Two-layer: need p_mean and p_evidence
+        // Bead: need median_days
+        const hasTwoLayerData = typeof p_mean === 'number' && p_mean > 0 && typeof p_evidence === 'number';
+        const hasBeadData = typeof median_days === 'number' && median_days > 0;
+        const enabled = hasTwoLayerData || hasBeadData;
+
+        // DEBUG: Log LAG data construction for edges with evidence/forecast
+        if (p_evidence !== undefined || p_forecast !== undefined || hasBeadData) {
+          console.group(`[LAG:buildScenarioRenderEdges] ${paramsKey} (${scenarioId})`);
+          console.log('scenarioProb:', JSON.stringify(scenarioProb, null, 2));
+          console.log('baseP:', JSON.stringify(baseP, null, 2));
+          console.log('Derived values:', {
+            p_mean,
+            p_evidence,
+            p_forecast,
+            median_days,
+            completeness
+          });
+          console.log('Flags:', { hasTwoLayerData, hasBeadData, enabled });
+          console.groupEnd();
+        }
+
+        if (enabled) {
+          latencyDisplay = {
+            enabled: true,
+            median_days,
+            completeness_pct: typeof completeness === 'number'
+              ? completeness * 100
+              : undefined,
+            t95: baseLatency.t95,
+            p_evidence,
+            p_forecast,
+            p_mean
+          };
+        }
+      }
+
       // Opacity: hidden current at 5%, visible layers at dynamicLayerOpacity
       const HIDDEN_CURRENT_OPACITY = 0.05;
       const overlayOpacity = (scenarioId === 'current' && !visibleScenarioIds.includes('current')) 
@@ -382,6 +466,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         reconnectable: isCurrent,  // Enable reconnection for 'current' only
         data: {
           ...edge.data,
+          scenarioId,
           scenarioOverlay: !isCurrent,  // 'current' is NOT an overlay, it's the live layer
           scenarioColour: colour,
           strokeOpacity: overlayOpacity,
@@ -390,6 +475,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           // STEP 6: suppressConditionalColours removed (dead code, conditional colours handled by scenarioColour)
           suppressLabel: !isCurrent,  // Only 'current' shows labels
           scenarioParams: edgeParams,
+          edgeLatencyDisplay: latencyDisplay,
           probability: edgeParams?.p?.mean ?? edge.data?.probability ?? 0.5,
           stdev: edgeParams?.p?.stdev ?? edge.data?.stdev,
           calculateWidth: () => preScaled,

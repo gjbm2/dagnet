@@ -26,8 +26,14 @@ import {
   CHEVRON_LENGTH_RATIO,
   CHEVRON_OPACITY,
   CHEVRON_FADE_IN_FRACTION,
-  CHEVRON_BLUR
+  CHEVRON_BLUR,
+  LAG_STRIPE_WIDTH,
+  LAG_STRIPE_ANGLE,
+  LAG_STRIPE_OPACITY,
+  LAG_STRIPE_GAP
 } from '@/lib/nodeEdgeConstants';
+
+import type { EdgeLatencyDisplay, ScenarioVisibilityMode } from '../../types';
 
 // Edge curvature (higher = more aggressive curves, default is 0.25)
 const EDGE_CURVATURE = 0.5;
@@ -123,6 +129,9 @@ interface ConversionEdgeData {
   suppressLabel?: boolean; // Suppress label rendering for non-current overlay edges
   // Pan/zoom state to disable beads during interaction
   isPanningOrZooming?: boolean;
+  // Scenario + latency rendering data
+  scenarioId?: string;
+  edgeLatencyDisplay?: EdgeLatencyDisplay;
 }
 
 export default function ConversionEdge({
@@ -148,6 +157,15 @@ export default function ConversionEdge({
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
+
+  // Identify which scenario layer this edge belongs to (current vs overlay scenario)
+  const scenarioIdForEdge: string = React.useMemo(() => {
+    if (data?.scenarioOverlay && data.scenarioId) {
+      return data.scenarioId;
+    }
+    // Non-overlay edges are part of the 'current' layer
+    return 'current';
+  }, [data?.scenarioOverlay, data?.scenarioId]);
   
   // ATOMIC RESTORATION: Read decoration visibility from context (not edge.data)
   const { beadsVisible, isPanning, isDraggingNode } = useDecorationVisibility();
@@ -262,6 +280,36 @@ export default function ConversionEdge({
       }
     } else {
       lines.push(`  (rebalanced)`);
+    }
+    
+    // Latency information (if tracking enabled)
+    const latency = fullEdge?.p?.latency;
+    if (latency && (latency.maturity_days || 0) > 0) {
+      lines.push('');
+      lines.push(`latency:`);
+      lines.push(`  maturity: ${latency.maturity_days}d`);
+      if (latency.median_lag_days !== undefined) {
+        lines.push(`  median lag: ${latency.median_lag_days.toFixed(1)}d`);
+      }
+      if (latency.completeness !== undefined) {
+        lines.push(`  completeness: ${(latency.completeness * 100).toFixed(0)}%`);
+      }
+      if (latency.t95 !== undefined) {
+        lines.push(`  t95: ${latency.t95.toFixed(1)}d`);
+      }
+      if (latency.anchor_node_id) {
+        lines.push(`  anchor: ${latency.anchor_node_id}`);
+      }
+    }
+    
+    // Forecast information (if available)
+    const forecast = fullEdge?.p?.forecast;
+    if (forecast && forecast.mean !== undefined) {
+      lines.push('');
+      lines.push(`forecast (p∞): ${(forecast.mean * 100).toFixed(1)}%`);
+      if (forecast.stdev !== undefined) {
+        lines.push(`  ±${(forecast.stdev * 100).toFixed(1)}%`);
+      }
     }
     
     // === PARAMS: e.<edgeId>.<condition>.p ===
@@ -657,6 +705,135 @@ export default function ConversionEdge({
       }
     };
   }, [shouldShowConfidenceIntervals, effectiveProbability, data?.probability, stdev, confidenceIntervalLevel, strokeWidth, id, viewPrefs?.massGenerosity, fullEdge?.p?.distribution, data?.scenarioOverlay, (data as any)?.distribution]);
+  
+  // LAG two-layer rendering data (evidence vs forecast) driven by EdgeLatencyDisplay + scenario visibility mode
+  const lagLayerData = useMemo(() => {
+    const ld = data?.edgeLatencyDisplay;
+    
+    // DEBUG: Log what we received
+    if (ld) {
+      console.group(`[LAG:ConversionEdge] ${id} (scenario: ${scenarioIdForEdge})`);
+      console.log('edgeLatencyDisplay:', JSON.stringify(ld, null, 2));
+    }
+    
+    if (!ld || !ld.enabled) {
+      if (ld) {
+        console.log('Early exit: ld.enabled =', ld?.enabled);
+        console.groupEnd();
+      }
+      return null;
+    }
+
+    // Determine visibility mode for this scenario (F+E, F, E)
+    let mode: ScenarioVisibilityMode = 'f+e';
+    try {
+      if (activeTabId) {
+        mode = tabOps.getScenarioVisibilityMode(activeTabId, scenarioIdForEdge);
+      }
+    } catch {
+      // Fallback to default
+      mode = 'f+e';
+    }
+    
+    console.log('Visibility mode:', mode);
+
+    const pEvidence = ld.p_evidence;
+    const pForecast = ld.p_forecast ?? ld.p_mean;
+    const pMean = ld.p_mean ?? pForecast ?? pEvidence;
+    
+    console.log('Probabilities:', { pEvidence, pForecast, pMean, strokeWidth });
+
+    if (!pMean || pMean <= 0) {
+      console.log('Early exit: no valid pMean');
+      console.groupEnd();
+      return null;
+    }
+
+    // Basic width scaling is still based on strokeWidth
+    const baseWidth = strokeWidth;
+
+    if (mode === 'e') {
+      // E-only mode: use normal solid rendering (return null to fall through)
+      // The edge will render as a solid line using the normal rendering path
+      console.log('E mode: using solid rendering (returning null)');
+      console.groupEnd();
+      return null;
+    }
+
+    if (mode === 'f') {
+      if (typeof pForecast !== 'number' || pForecast <= 0) {
+        console.log('F mode: no valid pForecast, returning null');
+        console.groupEnd();
+        return null;
+      }
+      const forecastRatio = Math.min(1, Math.max(0, pForecast / pMean));
+      const width = Math.max(1, baseWidth * forecastRatio);
+      const result = {
+        mode: 'f' as const,
+        evidenceWidth: 0,
+        meanWidth: width,
+        evidenceRatio: 0,
+        evidence: pEvidence ?? 0,
+        mean: pForecast
+      };
+      console.log('F mode result:', result);
+      console.groupEnd();
+      return result;
+    }
+
+    // F+E: two striped layers - outer (forecast) and inner (evidence)
+    // If no evidence data, fall back to F mode (single stripe)
+    if (typeof pEvidence !== 'number' || pEvidence <= 0) {
+      console.log('F+E mode: no valid pEvidence, falling back to F mode');
+      const result = {
+        mode: 'f' as const,
+        evidenceWidth: 0,
+        meanWidth: baseWidth,
+        evidenceRatio: 0,
+        evidence: 0,
+        mean: pMean
+      };
+      console.groupEnd();
+      return result;
+    }
+    const evidenceRatio = Math.min(1, Math.max(0, pEvidence / pMean));
+    const evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
+    const meanWidth = baseWidth;
+    
+    console.log('F+E widths:', { evidenceWidth, meanWidth, evidenceRatio });
+
+    // If evidence and mean are effectively equal, use solid rendering
+    if (Math.abs(pEvidence - pMean) < 0.001) {
+      console.log('F+E collapsed: evidence ≈ mean, using solid rendering');
+      console.groupEnd();
+      return null;
+    }
+
+    const result = {
+      mode: 'f+e' as const,
+      evidenceWidth,
+      meanWidth,
+      evidenceRatio,
+      evidence: pEvidence,
+      mean: pMean
+    };
+    console.log('F+E mode result:', result);
+    console.groupEnd();
+    return result;
+  }, [data?.edgeLatencyDisplay, strokeWidth, tabOps, activeTabId, scenarioIdForEdge, id]);
+  
+  // Should we show LAG two-layer rendering?
+  const shouldShowLagLayers = lagLayerData !== null && !data?.useSankeyView && !shouldShowConfidenceIntervals;
+  
+  // DEBUG: Log render path decision (only for edges with potential LAG data)
+  if (data?.edgeLatencyDisplay || lagLayerData) {
+    console.log(`[LAG:RenderPath] ${id}:`, {
+      shouldShowLagLayers,
+      shouldShowConfidenceIntervals,
+      lagLayerData: lagLayerData ? lagLayerData.mode : null,
+      useSankeyView: data?.useSankeyView
+    });
+  }
   
   // Update stroke-width via DOM to enable CSS transitions
   React.useEffect(() => {
@@ -1403,6 +1580,33 @@ export default function ConversionEdge({
             <rect x="5" y="0" width="5" height="10" fill={getEdgeColour()} fillOpacity="0.2" />
           </pattern>
         )}
+        {/* LAG two-layer stripe patterns: inner (offset 0) and outer (offset half) */}
+        {shouldShowLagLayers && (
+          <>
+            {/* Inner stripe pattern (evidence layer) - offset 0 */}
+            <pattern
+              id={`lag-stripe-inner-${id}`}
+              patternUnits="userSpaceOnUse"
+              width={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP}
+              height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP}
+              patternTransform={`rotate(${LAG_STRIPE_ANGLE})`}
+            >
+              <rect x="0" y="0" width={LAG_STRIPE_WIDTH} height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP} 
+                fill={data?.scenarioColour || getEdgeColour()} fillOpacity={LAG_STRIPE_OPACITY} />
+            </pattern>
+            {/* Outer stripe pattern (forecast layer) - offset by half stripe width */}
+            <pattern
+              id={`lag-stripe-outer-${id}`}
+              patternUnits="userSpaceOnUse"
+              width={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP}
+              height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP}
+              patternTransform={`rotate(${LAG_STRIPE_ANGLE}) translate(${(LAG_STRIPE_WIDTH + LAG_STRIPE_GAP) / 2}, 0)`}
+            >
+              <rect x="0" y="0" width={LAG_STRIPE_WIDTH} height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP} 
+                fill={data?.scenarioColour || getEdgeColour()} fillOpacity={LAG_STRIPE_OPACITY} />
+            </pattern>
+          </>
+        )}
         {/* Define offset path for text to follow (parallel to edge) */}
         {data?.description && (
           <path
@@ -1533,6 +1737,65 @@ export default function ConversionEdge({
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
               />
             </>
+          ) : shouldShowLagLayers && lagLayerData ? (
+            // LAG rendering modes:
+            // - F+E: Two striped bands with offset stripes that interleave (appears solid where overlap)
+            // - F only: Single striped band for forecast
+            // - E only: Falls through to normal solid rendering (lagLayerData is null)
+            <>
+              {/* Outer layer (forecast) - striped with offset, full width */}
+              <path
+                key={`${id}-lag-outer`}
+                id={`${id}-lag-outer`}
+                style={{
+                  stroke: `url(#lag-stripe-outer-${id})`,
+                  strokeWidth: lagLayerData.meanWidth,
+                  strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
+                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                  fill: 'none',
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'miter',
+                  strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                  transition: 'stroke-width 0.3s ease-in-out',
+                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                }}
+                className="react-flow__edge-path"
+                d={edgePath}
+                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+              />
+              {/* Inner layer (evidence) - striped NO offset, narrower width - only for F+E mode */}
+              {lagLayerData.mode === 'f+e' && (
+                <path
+                  ref={pathRef}
+                  key={`${id}-lag-inner`}
+                  id={`${id}-lag-inner`}
+                  style={{
+                    stroke: `url(#lag-stripe-inner-${id})`,
+                    strokeWidth: lagLayerData.evidenceWidth,
+                    strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
+                    mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                    fill: 'none',
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'miter',
+                    strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                    markerEnd: 'none',
+                    transition: 'stroke-width 0.3s ease-in-out',
+                    pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                  }}
+                  className="react-flow__edge-path"
+                  d={edgePath}
+                  onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                  onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                  onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                  onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                  onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                />
+              )}
+            </>
           ) : (
             <>
               {/* Normal mode: render as stroked path */}
@@ -1644,14 +1907,15 @@ export default function ConversionEdge({
             
             // Compute visibleStartOffset based on source node face direction and edge offset
             const totalInset = EDGE_INSET + EDGE_INITIAL_OFFSET;
+            const nodes = getNodes();
             
             // Default for flat faces (edge perpendicular to face)
             // For perpendicular edges: path distance ≈ perpendicular distance
             let visibleStartOffset = totalInset;
+            let visibleEndOffset = totalInset;
             
-            
+            // --- Source side (left-aligned beads) ---
             if (!data?.useSankeyView && data?.sourceFace) {
-              const nodes = getNodes();
               const sourceNode = nodes.find(n => n.id === source);
               const sourceFaceDirection = sourceNode?.data?.faceDirections?.[data.sourceFace] ?? 'flat';
               
@@ -1676,24 +1940,54 @@ export default function ConversionEdge({
               const normalizedOffset = perpendicularOffset / (faceLength / 2);
               
               // Compute base perpendicular distance based on face direction
-              // For quadratic Bezier Q(t) = (1-t)²·P₀ + 2t(1-t)·P₁ + t²·P₂
-              // with control point P₁ at perpendicular depth d from the face:
-              // The actual perpendicular distance at position n ∈ [-1,1] along face is:
-              // perp(n) = (d/2) × (1 - n²)   [max depth is d/2 at center, not d]
               let basePerpDistance = totalInset;
               if (sourceFaceDirection === 'convex') {
-                // Convex: quadratic bulge, max depth of CONVEX_DEPTH/2 at center
                 const bulgeAtOffset = (CONVEX_DEPTH / 2) * (1 - normalizedOffset * normalizedOffset);
                 basePerpDistance = totalInset + bulgeAtOffset;
               } else if (sourceFaceDirection === 'concave') {
-                // Concave: quadratic indentation, max depth of CONCAVE_DEPTH/2 at center
                 const indentAtOffset = (CONCAVE_DEPTH / 2) * (1 - normalizedOffset * normalizedOffset);
                 basePerpDistance = totalInset - indentAtOffset;
               }
               
-              // visibleStartOffset is perpendicular distance, but beads measure along path
-              // For now use perpendicular as approximation; correct solution requires path integration
               visibleStartOffset = basePerpDistance;
+            }
+            
+            // --- Target side (right-aligned beads) ---
+            if (!data?.useSankeyView && data?.targetFace) {
+              const targetNode = nodes.find(n => n.id === target);
+              const targetFaceDirection = targetNode?.data?.faceDirections?.[data.targetFace] ?? 'flat';
+              
+              // Get edge offset from center (perpendicular to face)
+              const targetOffsetX = data?.targetOffsetX || 0;
+              const targetOffsetY = data?.targetOffsetY || 0;
+              
+              // Determine perpendicular offset based on face orientation
+              let perpendicularOffset = 0;
+              if (data.targetFace === 'left' || data.targetFace === 'right') {
+                perpendicularOffset = targetOffsetY;
+              } else {
+                perpendicularOffset = targetOffsetX;
+              }
+              
+              // Get node dimensions to normalize offset
+              const nominalWidth = (targetNode?.data as any)?.sankeyWidth || DEFAULT_NODE_WIDTH;
+              const nominalHeight = (targetNode?.data as any)?.sankeyHeight || DEFAULT_NODE_HEIGHT;
+              const faceLength = (data.targetFace === 'left' || data.targetFace === 'right') ? nominalHeight : nominalWidth;
+              
+              // Normalize offset to [-1, 1] range
+              const normalizedOffset = perpendicularOffset / (faceLength / 2);
+              
+              // Compute base perpendicular distance based on face direction
+              let basePerpDistance = totalInset;
+              if (targetFaceDirection === 'convex') {
+                const bulgeAtOffset = (CONVEX_DEPTH / 2) * (1 - normalizedOffset * normalizedOffset);
+                basePerpDistance = totalInset + bulgeAtOffset;
+              } else if (targetFaceDirection === 'concave') {
+                const indentAtOffset = (CONCAVE_DEPTH / 2) * (1 - normalizedOffset * normalizedOffset);
+                basePerpDistance = totalInset - indentAtOffset;
+              }
+              
+              visibleEndOffset = basePerpDistance;
             }
             
             // Use offsets in key to force re-render when edge positions change
@@ -1713,6 +2007,7 @@ export default function ConversionEdge({
                 scenariosContext={scenariosContext}
                 whatIfDSL={whatIfDSL}
                 visibleStartOffset={visibleStartOffset}
+                visibleEndOffset={visibleEndOffset}
                 onDoubleClick={handleDoubleClick}
                 useSankeyView={data?.useSankeyView}
                 edgeWidth={strokeWidth}

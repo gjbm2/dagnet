@@ -147,6 +147,8 @@ export interface TabState {
       visibleScenarioIds: string[];       // IDs of visible scenarios (render order)
       visibleColourOrderIds: string[];     // IDs in activation order (for colour assignment)
       selectedScenarioId?: string;        // Currently selected scenario
+      // LAG: Per-scenario visibility mode for evidence/forecast display
+      visibilityMode?: Record<string, ScenarioVisibilityMode>;
     };
   };
   
@@ -312,6 +314,8 @@ export interface TabOperations {
   setVisibleScenarios: (tabId: string, scenarioIds: string[]) => Promise<void>;
   addVisibleScenarios: (tabId: string, scenarioIdsToAdd: string[]) => Promise<void>;
   toggleScenarioVisibility: (tabId: string, scenarioId: string) => Promise<void>;
+  cycleScenarioVisibilityMode: (tabId: string, scenarioId: string) => Promise<void>;
+  getScenarioVisibilityMode: (tabId: string, scenarioId: string) => ScenarioVisibilityMode;
   selectScenario: (tabId: string, scenarioId: string | undefined) => Promise<void>;
   reorderScenarios: (tabId: string, newOrder: string[]) => Promise<void>;
 }
@@ -365,6 +369,19 @@ export type NodeType = 'normal' | 'case';
 export type CaseStatus = 'active' | 'paused' | 'completed';
 export type OverflowPolicy = 'error' | 'normalize' | 'cap';
 export type FreeEdgePolicy = 'complement' | 'uniform' | 'weighted';
+
+/**
+ * Scenario visibility mode for LAG (evidence/forecast display).
+ *
+ * IMPORTANT: This controls **how** a visible scenario is rendered, not
+ * **whether** it is visible. Visibility is controlled separately via the
+ * visibleScenarioIds list in TabContext.
+ *
+ * - 'f+e': Show both forecast and evidence (default)
+ * - 'f': Forecast only (striped)
+ * - 'e': Evidence only (solid)
+ */
+export type ScenarioVisibilityMode = 'f+e' | 'f' | 'e';
 
 /**
  * Time-series data point (daily breakdown)

@@ -424,7 +424,7 @@ export async function buildDslFromEdge(
       if (anchorNodeId) {
         const anchorNode = findNode(anchorNodeId);
         if (anchorNode && anchorNode.event_id) {
-          anchorEventId = anchorNode.event_id;
+          anchorEventId = anchorNode.event_id as string;
           await loadEventDefinition(anchorEventId);
           console.log(`[buildQueryPayload] Resolved anchor node "${anchorNodeId}" to event_id "${anchorEventId}"`);
         } else {
