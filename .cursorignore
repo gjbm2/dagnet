@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.egg-info/
+
+# Build outputs
+dist/
+**/dist/
+build/
+
+# IDE/Editor
+.vscode/
+.idea/
+
+# Caches
+.cache/
+.parcel-cache/
+.eslintcache
+.npm/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+
+
+
+
+

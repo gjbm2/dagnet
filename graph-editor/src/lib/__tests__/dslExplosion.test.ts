@@ -134,5 +134,72 @@ describe('DSL Explosion', () => {
       expect(count).toBe(4);
     });
   });
+
+  // ============================================================
+  // Cohort Explosion Tests (C2-T.2)
+  // ============================================================
+
+  describe('Cohort explosion', () => {
+    it('should pass cohort through with context as single atomic slice', async () => {
+      const result = await explodeDSL('cohort(-30d:).context(channel:google)');
+      
+      expect(result).toHaveLength(1);
+      expect(result[0]).toContain('cohort(-30d:)');
+      expect(result[0]).toContain('context(channel:google)');
+    });
+
+    it('should expand or(cohort, window) to two separate slices', async () => {
+      const result = await explodeDSL('or(cohort(-30d:),window(-7d:))');
+      
+      expect(result).toHaveLength(2);
+      // One slice should have cohort, other should have window
+      const hasCohort = result.some(s => s.includes('cohort(-30d:)'));
+      const hasWindow = result.some(s => s.includes('window(-7d:)'));
+      expect(hasCohort).toBe(true);
+      expect(hasWindow).toBe(true);
+    });
+
+    it('should expand or(cohort, window) with context to four slices (2×2)', async () => {
+      const result = await explodeDSL('or(cohort(-30d:),window(-7d:)).context(channel)');
+      
+      // 2 time slices × 2 channel values = 4 slices
+      expect(result).toHaveLength(4);
+      
+      // Check that each time slice appears with each channel value
+      const cohortGoogle = result.some(s => s.includes('cohort(-30d:)') && s.includes('channel:google'));
+      const cohortMeta = result.some(s => s.includes('cohort(-30d:)') && s.includes('channel:meta'));
+      const windowGoogle = result.some(s => s.includes('window(-7d:)') && s.includes('channel:google'));
+      const windowMeta = result.some(s => s.includes('window(-7d:)') && s.includes('channel:meta'));
+      
+      expect(cohortGoogle).toBe(true);
+      expect(cohortMeta).toBe(true);
+      expect(windowGoogle).toBe(true);
+      expect(windowMeta).toBe(true);
+    });
+
+    it('should apply cohort to all semicolon-separated context terms', async () => {
+      const result = await explodeDSL('(context(channel:google);context(channel:meta)).cohort(-30d:)');
+      
+      expect(result).toHaveLength(2);
+      expect(result.every(s => s.includes('cohort(-30d:)'))).toBe(true);
+    });
+
+    it('should preserve cohort with contextAny (not expanded)', async () => {
+      const result = await explodeDSL('cohort(-30d:).contextAny(channel:google,channel:meta)');
+      
+      // contextAny is passed through as-is (not expanded by dslExplosion)
+      // The OR semantics are handled at query execution time
+      expect(result).toHaveLength(1);
+      expect(result[0]).toContain('cohort(-30d:)');
+      expect(result[0]).toContain('contextAny(channel:google,channel:meta)');
+    });
+
+    it('should preserve cohort anchor in explosion', async () => {
+      const result = await explodeDSL('cohort(start-node,-14d:).context(channel:google)');
+      
+      expect(result).toHaveLength(1);
+      expect(result[0]).toContain('cohort(start-node,-14d:)');
+    });
+  });
 });
 

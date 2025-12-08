@@ -56,8 +56,26 @@ export interface ParameterValue {
                             // Used to detect if query config changed (topology, connection, mappings)
                             // Multiple slices can share same signature
   
-  window_from?: string; // ISO 8601 timestamp
-  window_to?: string; // ISO 8601 timestamp
+  // Window mode dates (X-anchored event dates)
+  window_from?: string; // ISO 8601 timestamp / UK date
+  window_to?: string; // ISO 8601 timestamp / UK date
+  
+  // Cohort mode dates (A-anchored cohort entry dates) - for latency-tracked edges
+  cohort_from?: string; // UK date (d-MMM-yy) - cohort entry start
+  cohort_to?: string;   // UK date (d-MMM-yy) - cohort entry end
+  
+  // Latency data arrays (cohort mode) - parallel to dates[]
+  median_lag_days?: number[]; // X→Y median lag per cohort day
+  mean_lag_days?: number[];   // X→Y mean lag per cohort day
+  
+  // Aggregate latency summary (cohort mode)
+  latency?: {
+    median_lag_days?: number; // Weighted median X→Y lag
+    mean_lag_days?: number;   // Weighted mean X→Y lag
+    completeness?: number;    // Maturity progress 0-1
+    t95?: number;             // 95th percentile lag (days)
+  };
+  
   context_id?: string;
   data_source?: {
     type: 'sheets' | 'api' | 'file' | 'manual' | 'calculated' | 'analytics' | 'amplitude' | 'statsig' | 'optimizely';

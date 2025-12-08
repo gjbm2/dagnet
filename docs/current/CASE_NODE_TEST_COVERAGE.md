@@ -267,3 +267,11 @@
 7. Add E2E UI tests for case operations
 8. Add stress tests for many-variant scenarios
 
+
+
+
+
+
+
+
+
