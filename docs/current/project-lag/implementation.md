@@ -5,7 +5,7 @@
 
 This document outlines the phased implementation plan for Project LAG (Latency-Aware Graph Analytics).
 
-Ref. status.md for progress.
+*** Ref. status.md for progress. ***
 
 ---
 

@@ -50,6 +50,29 @@ class DataSource(BaseModel):
     no_data: Optional[bool] = Field(None, description="True if data source returned no data")
 
 
+class LatencyConfig(BaseModel):
+    """
+    Latency configuration for edges with time-delayed conversions.
+    
+    SEMANTICS:
+    - maturity_days > 0: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
+    - maturity_days = 0 or None: Latency tracking DISABLED (standard window() behaviour)
+    """
+    maturity_days: Optional[int] = Field(None, ge=0, description="Maturity threshold in days. >0 enables latency tracking.")
+    maturity_days_overridden: bool = Field(False, description="If true, user manually set maturity_days")
+    anchor_node_id: Optional[str] = Field(None, description="Anchor node for cohort queries (furthest upstream START)")
+    anchor_node_id_overridden: bool = Field(False, description="If true, user manually set anchor_node_id")
+    t95: Optional[float] = Field(None, ge=0, description="95th percentile lag in days (computed from fitted CDF)")
+    median_lag_days: Optional[float] = Field(None, ge=0, description="Weighted median lag in days (display only)")
+    completeness: Optional[float] = Field(None, ge=0, le=1, description="Maturity progress 0-1 (display only)")
+
+
+class ForecastParams(BaseModel):
+    """Forecast probability parameters from mature cohorts."""
+    mean: Optional[float] = Field(None, ge=0, le=1, description="Forecast mean probability (p_∞)")
+    stdev: Optional[float] = Field(None, ge=0, description="Forecast standard deviation")
+
+
 class ProbabilityParam(BaseModel):
     """Probability parameter: p.mean is P(to|from)."""
     mean: Optional[float] = Field(None, ge=0, le=1, description="Probability value")
@@ -63,6 +86,9 @@ class ProbabilityParam(BaseModel):
     evidence: Optional[Evidence] = None
     id: Optional[str] = Field(None, description="Reference to parameter file (FK to parameter-{id}.yaml)")
     data_source: Optional[DataSource] = None
+    # LAG fields
+    latency: Optional[LatencyConfig] = Field(None, description="Latency configuration for this probability")
+    forecast: Optional[ForecastParams] = Field(None, description="Forecast probability from mature cohorts")
 
 
 class CostParam(BaseModel):

@@ -28,9 +28,25 @@ Pre-requisite cleanup before introducing latency complexity.
 
 ---
 
-### Phase C1: Schema Changes & Core Types ⏳ READY TO START
+### Phase C1: Schema Changes & Core Types ✅ COMPLETE
 
-### Phase C2: DSL & Query Architecture ⏸️ BLOCKED (by C1)
+| Task | Status | Notes |
+|------|--------|-------|
+| C1.1 TypeScript Types | ✅ Done | `LatencyConfig`, `EdgeLatencyDisplay`, updated `ProbabilityParam` |
+| C1.2 Python Models | ✅ Done | `LatencyConfig`, `ForecastParams` in `graph_types.py` |
+| C1.3 Parameter Schema | ✅ Done | Added latency config + slice fields to `parameter-schema.yaml` |
+| C1.4 UpdateManager | ✅ Done | Added bidirectional latency field mappings |
+| C1.5 MSMDC | ✅ Done | Added `compute_anchor_node_id()` for A→X detection |
+| C1.6 UI Schema | ✅ Done | Added latency to `parameter-ui-schema.json` |
+
+**Summary:**
+- Added `LatencyConfig` interface with `maturity_days`, `anchor_node_id`, `t95`, `median_lag_days`, `completeness`
+- Added LAG fields to `ProbabilityParam`: `latency`, `forecast`
+- Updated scenario param packs per design §9.K.1 (removed distribution fields)
+- Added 30+ new fields to parameter schema for cohort/window latency data
+- MSMDC now computes anchor_node_id (furthest upstream START node)
+
+### Phase C2: DSL & Query Architecture ⏳ READY TO START
 
 ### Phase C3: Data Storage, Aggregation & Inference ⏸️ BLOCKED (by C2)
 
@@ -72,7 +88,18 @@ Pre-requisite cleanup before introducing latency complexity.
    - Fixed query DSL tests (added `cohort` function support)
    - **All 1977 tests pass**
 
-**Phase P0 Complete** — Ready to proceed with Phase C1
+**Phase P0 Complete** — Proceeded to Phase C1
+
+5. **Completed Phase C1 schema changes:**
+   - Added `LatencyConfig` interface to TypeScript and Python
+   - Added LAG fields to `ProbabilityParam` (latency, forecast)
+   - Updated parameter schema with cohort/window latency fields
+   - Added latency field mappings to UpdateManager (bidirectional)
+   - Implemented `compute_anchor_node_id()` in MSMDC
+   - Updated UI schema for parameter form
+   - **All tests pass (1977 TS, 271 Python)**
+
+**Phase C1 Complete** — Ready to proceed with Phase C2
 
 ---
 
