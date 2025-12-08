@@ -459,6 +459,9 @@ export interface LatencyConfig {
   /** Weighted median lag in days for this edge */
   median_lag_days?: number;
   
+  /** Weighted mean lag in days (used with median to compute t95) */
+  mean_lag_days?: number;
+  
   /** Maturity progress 0-1 (see design §5.5) */
   completeness?: number;
 }
@@ -536,6 +539,14 @@ export interface CostParam {
   connection?: string; // Connection name from connections.yaml
   connection_string?: string; // JSON blob of provider-specific settings
   evidence?: Evidence; // Observations from data sources
+  data_source?: { // Provenance information
+    type: string; // Data source type (from connections.yaml, e.g., 'amplitude', 'manual', 'sheets')
+    retrieved_at?: string;
+    edited_at?: string;
+    full_query?: string; // Full DSL query string
+    debug_trace?: string;
+    experiment_id?: string; // Experiment/gate ID for A/B test sources
+  };
 }
 
 /**

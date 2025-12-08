@@ -1,0 +1,292 @@
+# Order Confirmed to Shipped - WITH LATENCY DATA
+# Medium-lag edge (~5 days median) for testing query functionality
+# Represents fulfilment processing time
+
+id: confirmed-to-shipped-latency
+name: Confirmed to Shipped Rate (with Latency)
+type: probability
+query: "from(order-confirmed).to(order-shipped)"
+query_overridden: false
+
+# Edge-level latency config
+latency:
+  maturity_days: 21
+  anchor_node_id: landing-page
+
+values:
+  # ============================================================
+  # COHORT SLICE (A-anchored: landing-page → ... → confirmed → shipped)
+  # 90-day cohort window
+  # ============================================================
+  - sliceDSL: 'cohort(landing-page,1-Sep-25:30-Nov-25)'
+    mean: 0.968
+    stdev: 0.012
+    n: 3280
+    k: 3175
+    cohort_from: '1-Sep-25'
+    cohort_to: '30-Nov-25'
+    
+    dates:
+      - '1-Sep-25'
+      - '8-Sep-25'
+      - '15-Sep-25'
+      - '22-Sep-25'
+      - '1-Oct-25'
+      - '15-Oct-25'
+      - '1-Nov-25'
+      - '10-Nov-25'
+      - '20-Nov-25'
+      - '25-Nov-25'
+      - '28-Nov-25'
+      - '30-Nov-25'
+    
+    n_daily: [35, 38, 36, 40, 37, 42, 39, 36, 34, 31, 29, 27]
+    k_daily: [34, 37, 35, 39, 36, 41, 38, 35, 32, 28, 24, 18]
+    
+    # Per-cohort latency (confirmed → shipped lag)
+    median_lag_days: [4.8, 5.0, 4.9, 5.1, 4.7, 5.2, 5.0, 5.3, 5.5, 6.0, 7.2, 9.5]
+    mean_lag_days: [5.6, 5.9, 5.7, 6.0, 5.5, 6.1, 5.8, 6.2, 6.5, 7.2, 8.8, 12.0]
+    
+    # Anchor path latency (landing-page → order-confirmed)
+    anchor_n_daily: [285, 310, 294, 326, 302, 343, 318, 294, 277, 253, 236, 220]
+    anchor_median_lag_days: [3.2, 3.4, 3.3, 3.5, 3.1, 3.6, 3.4, 3.5, 3.6, 3.8, 4.0, 4.5]
+    anchor_mean_lag_days: [3.8, 4.0, 3.9, 4.2, 3.7, 4.3, 4.0, 4.2, 4.3, 4.6, 4.9, 5.5]
+    
+    # Slice-level latency summary
+    latency:
+      median_lag_days: 5.0
+      mean_lag_days: 5.9
+      t95: 17.5
+      completeness: 0.88
+      histogram:
+        total_converters: 3175
+        bins:
+          - { day: 1, count: 127 }
+          - { day: 2, count: 254 }
+          - { day: 3, count: 445 }
+          - { day: 4, count: 572 }
+          - { day: 5, count: 635 }
+          - { day: 6, count: 508 }
+          - { day: 7, count: 318 }
+          - { day: 8, count: 159 }
+          - { day: 9, count: 79 }
+          - { day_range: [10, 21], count: 78 }
+    
+    anchor_latency:
+      median_lag_days: 3.4
+      mean_lag_days: 4.0
+      histogram:
+        total_converters: 3280
+        bins:
+          - { day: 1, count: 164 }
+          - { day: 2, count: 492 }
+          - { day: 3, count: 820 }
+          - { day: 4, count: 656 }
+          - { day: 5, count: 492 }
+          - { day: 6, count: 328 }
+          - { day_range: [7, 14], count: 328 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T08:00:00Z'
+      full_query: 'from(landing-page).to(order-confirmed).to(order-shipped).cohort(1-Sep-25:30-Nov-25)'
+
+  # ============================================================
+  # WINDOW SLICE (X-anchored: confirmed → shipped)
+  # 7-day recent events
+  # ============================================================
+  - sliceDSL: 'window(25-Nov-25:1-Dec-25)'
+    mean: 0.891
+    stdev: 0.048
+    n: 245
+    k: 218
+    window_from: '25-Nov-25'
+    window_to: '1-Dec-25'
+    
+    dates:
+      - '25-Nov-25'
+      - '26-Nov-25'
+      - '27-Nov-25'
+      - '28-Nov-25'
+      - '29-Nov-25'
+      - '30-Nov-25'
+      - '1-Dec-25'
+    
+    n_daily: [31, 36, 38, 35, 32, 37, 36]
+    k_daily: [28, 33, 35, 31, 27, 32, 32]
+    
+    # Forecast (mature baseline p∞)
+    forecast: 0.970
+    
+    # Window-level latency
+    latency:
+      median_lag_days: 5.2
+      mean_lag_days: 6.1
+      t95: 18.0
+      histogram:
+        total_converters: 218
+        bins:
+          - { day: 1, count: 9 }
+          - { day: 2, count: 17 }
+          - { day: 3, count: 31 }
+          - { day: 4, count: 39 }
+          - { day: 5, count: 44 }
+          - { day: 6, count: 35 }
+          - { day: 7, count: 22 }
+          - { day_range: [8, 14], count: 21 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T08:00:00Z'
+      full_query: 'from(order-confirmed).to(order-shipped).window(25-Nov-25:1-Dec-25)'
+
+  # ============================================================
+  # CONTEXT SLICE: visited(classic-cart) - cohort
+  # Testing visited() context for A/B test analysis
+  # ============================================================
+  - sliceDSL: 'cohort(landing-page,1-Sep-25:30-Nov-25).visited(classic-cart)'
+    mean: 0.961
+    stdev: 0.015
+    n: 1580
+    k: 1518
+    cohort_from: '1-Sep-25'
+    cohort_to: '30-Nov-25'
+    
+    dates:
+      - '1-Sep-25'
+      - '15-Sep-25'
+      - '1-Oct-25'
+      - '15-Oct-25'
+      - '1-Nov-25'
+      - '15-Nov-25'
+      - '30-Nov-25'
+    
+    n_daily: [17, 18, 19, 21, 20, 17, 13]
+    k_daily: [16, 17, 18, 20, 19, 16, 11]
+    
+    median_lag_days: [5.2, 5.4, 5.1, 5.5, 5.3, 5.8, 8.5]
+    mean_lag_days: [6.1, 6.4, 6.0, 6.5, 6.2, 6.9, 10.5]
+    
+    anchor_n_daily: [139, 147, 155, 171, 163, 139, 106]
+    anchor_median_lag_days: [3.4, 3.6, 3.3, 3.7, 3.5, 3.9, 4.8]
+    anchor_mean_lag_days: [4.0, 4.3, 3.9, 4.4, 4.1, 4.6, 5.8]
+    
+    latency:
+      median_lag_days: 5.4
+      mean_lag_days: 6.4
+      t95: 19.0
+      completeness: 0.85
+      histogram:
+        total_converters: 1518
+        bins:
+          - { day: 2, count: 91 }
+          - { day: 3, count: 182 }
+          - { day: 4, count: 258 }
+          - { day: 5, count: 304 }
+          - { day: 6, count: 273 }
+          - { day: 7, count: 182 }
+          - { day: 8, count: 106 }
+          - { day_range: [9, 21], count: 122 }
+    
+    anchor_latency:
+      median_lag_days: 3.6
+      mean_lag_days: 4.3
+      histogram:
+        total_converters: 1580
+        bins:
+          - { day: 1, count: 79 }
+          - { day: 2, count: 237 }
+          - { day: 3, count: 395 }
+          - { day: 4, count: 316 }
+          - { day: 5, count: 237 }
+          - { day_range: [6, 14], count: 316 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T08:00:00Z'
+      full_query: 'from(landing-page).to(order-confirmed).to(order-shipped).cohort(1-Sep-25:30-Nov-25).visited(classic-cart)'
+
+  # ============================================================
+  # CONTEXT SLICE: visited(quick-cart) - cohort
+  # Quick cart variant (typically faster fulfilment)
+  # ============================================================
+  - sliceDSL: 'cohort(landing-page,1-Sep-25:30-Nov-25).visited(quick-cart)'
+    mean: 0.975
+    stdev: 0.010
+    n: 1700
+    k: 1657
+    cohort_from: '1-Sep-25'
+    cohort_to: '30-Nov-25'
+    
+    dates:
+      - '1-Sep-25'
+      - '15-Sep-25'
+      - '1-Oct-25'
+      - '15-Oct-25'
+      - '1-Nov-25'
+      - '15-Nov-25'
+      - '30-Nov-25'
+    
+    n_daily: [18, 20, 18, 21, 19, 17, 14]
+    k_daily: [18, 20, 18, 21, 19, 16, 12]
+    
+    median_lag_days: [4.5, 4.7, 4.6, 4.8, 4.5, 5.0, 7.2]
+    mean_lag_days: [5.2, 5.5, 5.4, 5.6, 5.3, 5.9, 8.8]
+    
+    anchor_n_daily: [147, 163, 147, 171, 155, 139, 114]
+    anchor_median_lag_days: [3.0, 3.2, 3.1, 3.3, 3.0, 3.4, 4.2]
+    anchor_mean_lag_days: [3.5, 3.8, 3.6, 3.9, 3.5, 4.0, 5.1]
+    
+    latency:
+      median_lag_days: 4.7
+      mean_lag_days: 5.5
+      t95: 16.0
+      completeness: 0.91
+      histogram:
+        total_converters: 1657
+        bins:
+          - { day: 1, count: 83 }
+          - { day: 2, count: 166 }
+          - { day: 3, count: 298 }
+          - { day: 4, count: 381 }
+          - { day: 5, count: 331 }
+          - { day: 6, count: 215 }
+          - { day: 7, count: 100 }
+          - { day_range: [8, 21], count: 83 }
+    
+    anchor_latency:
+      median_lag_days: 3.2
+      mean_lag_days: 3.8
+      histogram:
+        total_converters: 1700
+        bins:
+          - { day: 1, count: 102 }
+          - { day: 2, count: 289 }
+          - { day: 3, count: 425 }
+          - { day: 4, count: 340 }
+          - { day: 5, count: 238 }
+          - { day_range: [6, 14], count: 306 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T08:00:00Z'
+      full_query: 'from(landing-page).to(order-confirmed).to(order-shipped).cohort(1-Sep-25:30-Nov-25).visited(quick-cart)'
+
+metadata:
+  description: >
+    Order confirmed to shipped conversion with full latency tracking. Medium-lag
+    edge (~5 days median) representing typical fulfilment processing time.
+    Includes visited() context slices for A/B test analysis of classic vs quick
+    cart impact on shipping speed.
+  tags:
+    - fulfilment
+    - shipping
+    - latency
+    - medium-lag
+    - ab-test
+  created_at: '2025-01-01T00:00:00Z'
+  updated_at: '2025-12-02T08:00:00Z'
+  author: ops-team
+  version: '2.0.0'
+  status: active
+
