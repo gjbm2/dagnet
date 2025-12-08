@@ -22,6 +22,10 @@
     "currentQueryDSL": {
       "type": "string",
       "description": "Current user query DSL for UI persistence (e.g., window(1-Jan-25:31-Mar-25)). Optional."
+    },
+    "dataInterestsDSL": {
+      "type": "string",
+      "description": "Pinned DSL for batch/overnight fetches. Determines which slices are pre-materialised in param files. Example: or(cohort(-90d:), window(-14d:)).context(channel)"
     }
   },
   "$defs": {
@@ -354,6 +358,7 @@
         "anchor_node_id_overridden": { "type": "boolean", "default": false, "description": "If true, user manually set anchor_node_id" },
         "t95": { "type": "number", "minimum": 0, "description": "95th percentile lag in days (computed from fitted CDF)" },
         "median_lag_days": { "type": "number", "minimum": 0, "description": "Weighted median lag in days (display only)" },
+        "mean_lag_days": { "type": "number", "minimum": 0, "description": "Weighted mean lag in days (used with median to compute t95)" },
         "completeness": { "type": "number", "minimum": 0, "maximum": 1, "description": "Maturity progress 0-1 (display only)" }
       }
     },
@@ -402,7 +407,25 @@
           },
           "required": ["retrieved_at", "source"]
         },
-        "id": { "type": "string", "description": "Reference to cost parameter file (FK to parameter-{id}.yaml)" }
+        "id": { "type": "string", "description": "Reference to cost parameter file (FK to parameter-{id}.yaml)" },
+        "data_source": {
+          "type": "object",
+          "description": "Provenance information for this parameter",
+          "additionalProperties": false,
+          "properties": {
+            "type": { 
+              "type": "string", 
+              "description": "Data source type (from connections.yaml, e.g., 'amplitude', 'sheets', 'manual')"
+            },
+            "retrieved_at": { "type": "string", "description": "When data was retrieved (UK format or ISO)" },
+            "edited_at": { "type": "string", "description": "When data was last edited (UK format or ISO)" },
+            "query": { "type": "object", "description": "Query object that produced this data" },
+            "full_query": { "type": "string", "description": "Complete DSL query string used for retrieval" },
+            "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string for debugging/provenance" },
+            "experiment_id": { "type": "string", "description": "Experiment/gate ID from A/B test platform (e.g., Statsig gate_id)" }
+          },
+          "required": ["type"]
+        }
       },
       "required": ["mean"]
     },

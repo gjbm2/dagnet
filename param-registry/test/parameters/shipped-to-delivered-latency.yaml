@@ -1,0 +1,304 @@
+# Order Shipped to Delivered - WITH LATENCY DATA  
+# Long-lag edge (~14 days median) for testing query functionality
+# Represents courier delivery time with high variability
+
+id: shipped-to-delivered-latency
+name: Shipped to Delivered Rate (with Latency)
+type: probability
+query: "from(order-shipped).to(order-delivered)"
+query_overridden: false
+
+# Edge-level latency config
+latency:
+  maturity_days: 45
+  anchor_node_id: landing-page
+
+values:
+  # ============================================================
+  # COHORT SLICE (A-anchored: landing-page → ... → shipped → delivered)
+  # 90-day cohort window - many immature cohorts for testing
+  # ============================================================
+  - sliceDSL: 'cohort(landing-page,1-Sep-25:30-Nov-25)'
+    mean: 0.924
+    stdev: 0.018
+    n: 3050
+    k: 2818
+    cohort_from: '1-Sep-25'
+    cohort_to: '30-Nov-25'
+    
+    dates:
+      - '1-Sep-25'
+      - '8-Sep-25'
+      - '15-Sep-25'
+      - '22-Sep-25'
+      - '1-Oct-25'
+      - '15-Oct-25'
+      - '1-Nov-25'
+      - '8-Nov-25'
+      - '15-Nov-25'
+      - '20-Nov-25'
+      - '25-Nov-25'
+      - '28-Nov-25'
+      - '30-Nov-25'
+    
+    n_daily: [32, 35, 33, 37, 34, 39, 36, 33, 31, 28, 26, 24, 22]
+    k_daily: [31, 34, 32, 36, 33, 38, 34, 30, 26, 20, 14, 8, 4]
+    
+    # Per-cohort latency (shipped → delivered lag) - note high variability
+    median_lag_days: [12.5, 13.0, 12.8, 13.2, 12.0, 13.5, 14.0, 14.5, 15.0, 16.5, 18.0, 22.0, 28.0]
+    mean_lag_days: [15.8, 16.4, 16.1, 16.7, 15.2, 17.1, 17.8, 18.5, 19.2, 21.5, 24.0, 30.0, 38.0]
+    
+    # Anchor path latency (landing-page → order-shipped) - cumulative upstream lag
+    anchor_n_daily: [268, 293, 276, 310, 285, 327, 302, 276, 260, 235, 218, 201, 184]
+    anchor_median_lag_days: [8.5, 8.8, 8.6, 9.0, 8.2, 9.2, 8.8, 9.0, 9.3, 9.8, 10.5, 11.2, 12.0]
+    anchor_mean_lag_days: [10.0, 10.4, 10.2, 10.6, 9.7, 10.9, 10.4, 10.7, 11.0, 11.6, 12.5, 13.5, 14.5]
+    
+    # Slice-level latency summary
+    latency:
+      median_lag_days: 14.0
+      mean_lag_days: 17.8
+      t95: 52.0
+      completeness: 0.72
+      histogram:
+        total_converters: 2818
+        bins:
+          - { day: 3, count: 28 }
+          - { day: 5, count: 56 }
+          - { day: 7, count: 113 }
+          - { day: 10, count: 282 }
+          - { day: 12, count: 394 }
+          - { day: 14, count: 451 }
+          - { day: 16, count: 366 }
+          - { day: 18, count: 282 }
+          - { day: 21, count: 197 }
+          - { day: 25, count: 141 }
+          - { day: 30, count: 113 }
+          - { day_range: [31, 60], count: 395 }
+    
+    anchor_latency:
+      median_lag_days: 8.8
+      mean_lag_days: 10.4
+      histogram:
+        total_converters: 3050
+        bins:
+          - { day: 4, count: 92 }
+          - { day: 6, count: 183 }
+          - { day: 8, count: 366 }
+          - { day: 10, count: 488 }
+          - { day: 12, count: 427 }
+          - { day: 14, count: 336 }
+          - { day: 16, count: 244 }
+          - { day_range: [17, 30], count: 914 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T08:00:00Z'
+      full_query: 'from(landing-page).to(order-shipped).to(order-delivered).cohort(1-Sep-25:30-Nov-25)'
+
+  # ============================================================
+  # WINDOW SLICE (X-anchored: shipped → delivered)
+  # 14-day window due to long lag
+  # ============================================================
+  - sliceDSL: 'window(18-Nov-25:1-Dec-25)'
+    mean: 0.785
+    stdev: 0.062
+    n: 412
+    k: 323
+    window_from: '18-Nov-25'
+    window_to: '1-Dec-25'
+    
+    dates:
+      - '18-Nov-25'
+      - '19-Nov-25'
+      - '20-Nov-25'
+      - '21-Nov-25'
+      - '22-Nov-25'
+      - '23-Nov-25'
+      - '24-Nov-25'
+      - '25-Nov-25'
+      - '26-Nov-25'
+      - '27-Nov-25'
+      - '28-Nov-25'
+      - '29-Nov-25'
+      - '30-Nov-25'
+      - '1-Dec-25'
+    
+    n_daily: [28, 30, 29, 31, 28, 32, 30, 29, 31, 28, 30, 27, 29, 30]
+    k_daily: [26, 28, 26, 28, 24, 27, 24, 21, 20, 16, 14, 8, 5, 2]
+    
+    # Forecast (mature baseline p∞)
+    forecast: 0.980
+    
+    # Window-level latency - shows partial observation
+    latency:
+      median_lag_days: 13.5
+      mean_lag_days: 17.2
+      t95: 50.0
+      histogram:
+        total_converters: 323
+        bins:
+          - { day: 3, count: 3 }
+          - { day: 5, count: 6 }
+          - { day: 7, count: 13 }
+          - { day: 10, count: 32 }
+          - { day: 12, count: 45 }
+          - { day: 14, count: 52 }
+          - { day: 16, count: 42 }
+          - { day_range: [17, 30], count: 130 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T08:00:00Z'
+      full_query: 'from(order-shipped).to(order-delivered).window(18-Nov-25:1-Dec-25)'
+
+  # ============================================================
+  # SPARSE DATA SLICE - for testing sparsity guards
+  # Low n/k to test edge cases
+  # ============================================================
+  - sliceDSL: 'cohort(landing-page,1-Sep-25:30-Nov-25).context(channel:email)'
+    mean: 0.875
+    stdev: 0.095
+    n: 48
+    k: 42
+    cohort_from: '1-Sep-25'
+    cohort_to: '30-Nov-25'
+    
+    dates:
+      - '1-Sep-25'
+      - '15-Sep-25'
+      - '1-Oct-25'
+      - '15-Oct-25'
+      - '1-Nov-25'
+      - '15-Nov-25'
+      - '30-Nov-25'
+    
+    n_daily: [6, 7, 8, 9, 7, 6, 5]
+    k_daily: [6, 6, 7, 8, 6, 5, 2]
+    
+    # Sparse data - fewer converters
+    median_lag_days: [13.0, 12.5, 14.0, 13.5, 14.5, 16.0, 25.0]
+    mean_lag_days: [16.5, 15.8, 17.8, 17.1, 18.5, 20.5, 32.0]
+    
+    anchor_n_daily: [50, 58, 67, 75, 58, 50, 42]
+    anchor_median_lag_days: [9.0, 8.5, 9.5, 9.2, 9.8, 10.5, 12.5]
+    anchor_mean_lag_days: [10.8, 10.2, 11.4, 11.0, 11.8, 12.6, 15.0]
+    
+    latency:
+      median_lag_days: 14.0
+      mean_lag_days: 18.0
+      t95: 55.0
+      completeness: 0.65
+      histogram:
+        total_converters: 42
+        bins:
+          - { day: 7, count: 2 }
+          - { day: 10, count: 4 }
+          - { day: 14, count: 12 }
+          - { day: 18, count: 10 }
+          - { day_range: [19, 45], count: 14 }
+    
+    anchor_latency:
+      median_lag_days: 9.5
+      mean_lag_days: 11.4
+      histogram:
+        total_converters: 48
+        bins:
+          - { day: 5, count: 2 }
+          - { day: 8, count: 7 }
+          - { day: 10, count: 12 }
+          - { day: 12, count: 10 }
+          - { day_range: [13, 25], count: 17 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-01T08:00:00Z'
+      full_query: 'from(landing-page).to(order-shipped).to(order-delivered).cohort(1-Sep-25:30-Nov-25).context(channel:email)'
+      notes: Sparse data slice for testing quality thresholds
+
+  # ============================================================
+  # MIXED MATURITY - recent cohorts for Formula A testing
+  # Shows progressive maturation
+  # ============================================================
+  - sliceDSL: 'cohort(landing-page,1-Nov-25:30-Nov-25)'
+    mean: 0.612
+    stdev: 0.085
+    n: 850
+    k: 520
+    cohort_from: '1-Nov-25'
+    cohort_to: '30-Nov-25'
+    
+    dates:
+      - '1-Nov-25'
+      - '5-Nov-25'
+      - '10-Nov-25'
+      - '15-Nov-25'
+      - '20-Nov-25'
+      - '25-Nov-25'
+      - '28-Nov-25'
+      - '30-Nov-25'
+    
+    # Shows maturation curve - older cohorts have more conversions
+    n_daily: [36, 38, 35, 31, 28, 26, 24, 22]
+    k_daily: [34, 32, 25, 18, 10, 4, 1, 0]
+    
+    # Age-dependent completion rates visible in lag
+    median_lag_days: [14.0, 14.5, 15.5, 17.0, 19.0, 22.0, 28.0, null]
+    mean_lag_days: [17.8, 18.5, 19.8, 22.0, 25.0, 29.0, 36.0, null]
+    
+    anchor_n_daily: [302, 318, 294, 260, 235, 218, 201, 184]
+    anchor_median_lag_days: [8.8, 9.0, 9.3, 9.8, 10.5, 11.2, 12.0, 13.0]
+    anchor_mean_lag_days: [10.4, 10.7, 11.0, 11.6, 12.5, 13.5, 14.5, 15.5]
+    
+    latency:
+      median_lag_days: 16.5
+      mean_lag_days: 21.0
+      t95: 62.0
+      completeness: 0.42
+      histogram:
+        total_converters: 520
+        bins:
+          - { day: 7, count: 16 }
+          - { day: 10, count: 42 }
+          - { day: 14, count: 104 }
+          - { day: 18, count: 130 }
+          - { day: 21, count: 94 }
+          - { day_range: [22, 45], count: 134 }
+    
+    anchor_latency:
+      median_lag_days: 10.0
+      mean_lag_days: 11.8
+      histogram:
+        total_converters: 850
+        bins:
+          - { day: 5, count: 26 }
+          - { day: 8, count: 102 }
+          - { day: 10, count: 170 }
+          - { day: 12, count: 153 }
+          - { day: 14, count: 119 }
+          - { day_range: [15, 30], count: 280 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T08:00:00Z'
+      full_query: 'from(landing-page).to(order-shipped).to(order-delivered).cohort(1-Nov-25:30-Nov-25)'
+      notes: Recent cohort window showing immature data for Formula A testing
+
+metadata:
+  description: >
+    Order shipped to delivered conversion with full latency tracking. Long-lag
+    edge (~14 days median) representing courier delivery time with high variance.
+    Contains mixed maturity data for testing Formula A forecasting, sparse data
+    slice for quality threshold testing, and multiple observation windows.
+  tags:
+    - delivery
+    - fulfilment
+    - latency
+    - long-lag
+    - mixed-maturity
+    - sparse-data
+  created_at: '2025-01-01T00:00:00Z'
+  updated_at: '2025-12-02T08:00:00Z'
+  author: ops-team
+  version: '2.0.0'
+  status: active
+
