@@ -241,11 +241,12 @@ export class BeadLabelBuilder {
   /**
    * Static helper: Standard latency formatter
    * value = median_lag_days, stdev = completeness (0-1)
+   * Format: "5d / 70%" (median lag days / completeness percentage)
    */
   static formatLatency(value: number, stdev?: number): string {
     const days = Math.round(value);
     const compPct = stdev !== undefined ? Math.round(stdev * 100) : 0;
-    return `${days}d (${compPct}%)`;
+    return `${days}d / ${compPct}%`;
   }
   
   /**

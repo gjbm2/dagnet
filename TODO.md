@@ -9,6 +9,10 @@
 
 ---
 
+- Edge bead tooltips: add hover tooltips explaining each bead (latency: median lag + completeness; probability; costs)
+
+- Could we / should we show a wide edge that fades out x% of the way along the edge (to indicate completeness)?
+
 - Ensure integrity checker sensibly configured to support dual slice integrity checks
 - Structural ambiguity about analysis dsl over conditional_p journeys -- can we cover absent scenarios?
 
