@@ -220,6 +220,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     
     // Skip unknown scenarios that couldn't be composed
     if (scenarioId !== 'base' && scenarioId !== 'current' && !scenario) {
+      console.warn(`[LAG:buildScenarioRenderEdges] ⏭️ SKIPPING layer ${scenarioId} - scenario not found in available scenarios`);
       continue;
     }
 
@@ -238,8 +239,15 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
       if (graphEdge) {
         const key = graphEdge.id || graphEdge.uuid;
+        // First try composed params, then fall back to graph edge's p.mean
+        // This ensures edges not explicitly in params still render at their graph-defined probability
         let probability = composedParams.edges?.[key]?.p?.mean;
 
+        if (typeof probability !== 'number') {
+          // Fall back to graph edge's probability
+          probability = graphEdge.p?.mean;
+        }
+        
         if (typeof probability !== 'number') {
           return 0;
         }
@@ -410,22 +418,6 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         const hasTwoLayerData = typeof p_mean === 'number' && p_mean > 0 && typeof p_evidence === 'number';
         const hasBeadData = typeof median_days === 'number' && median_days > 0;
         const enabled = hasTwoLayerData || hasBeadData;
-
-        // DEBUG: Log LAG data construction for edges with evidence/forecast
-        if (p_evidence !== undefined || p_forecast !== undefined || hasBeadData) {
-          console.group(`[LAG:buildScenarioRenderEdges] ${paramsKey} (${scenarioId})`);
-          console.log('scenarioProb:', JSON.stringify(scenarioProb, null, 2));
-          console.log('baseP:', JSON.stringify(baseP, null, 2));
-          console.log('Derived values:', {
-            p_mean,
-            p_evidence,
-            p_forecast,
-            median_days,
-            completeness
-          });
-          console.log('Flags:', { hasTwoLayerData, hasBeadData, enabled });
-          console.groupEnd();
-        }
 
         if (enabled) {
           latencyDisplay = {

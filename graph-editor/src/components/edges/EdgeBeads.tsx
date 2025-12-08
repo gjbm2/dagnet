@@ -503,7 +503,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             strokeDasharray={`${lozengeLength} ${pathLength}`}
             strokeDashoffset={-strokeStartDistance}
             fill="none"
-            opacity={bead.backgroundColor === '#000000' ? '0.6' : '0.85'} // 60% opacity for black params
+            opacity={bead.backgroundColor === '#000000' ? '0.7' : '0.9'} // Slightly more opaque for readability
             style={{
               filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))',
               pointerEvents: 'painted', // Only capture events over painted (visible) stroke
@@ -707,7 +707,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             strokeDasharray={`${strokeLength} ${pathLength}`}
             strokeDashoffset={-strokeStartDistance}
             fill="none"
-            opacity={bead.backgroundColor === '#000000' ? '0.6' : '0.85'}
+            opacity={bead.backgroundColor === '#000000' ? '0.7' : '0.9'}
             style={{
               filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))',
               pointerEvents: 'painted', // Only capture events over painted (visible) stroke

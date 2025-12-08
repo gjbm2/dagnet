@@ -143,7 +143,7 @@ export const CHEVRON_BLUR = 5;
 /** Width of each stripe in LAG pattern (pixels) */
 export const LAG_STRIPE_WIDTH = 3;
 
-/** Angle of LAG stripes (degrees) - 45° per design */
+/** Angle of LAG stripes (degrees) - 135° (perpendicular to edge direction) */
 export const LAG_STRIPE_ANGLE = 45;
 
 /** Opacity of the stripe fill in LAG patterns */
@@ -151,4 +151,76 @@ export const LAG_STRIPE_OPACITY = 0.85;
 
 /** Gap between stripes in LAG pattern (pixels) */
 export const LAG_STRIPE_GAP = 3;
+
+/** Base opacity for p.mean anchor edge (0-1) */
+export const LAG_ANCHOR_OPACITY = 0.15;
+
+/** 
+ * Width of fade band for anchor gradient as fraction of path (0-1)
+ * Anchor fades from full to minimum AROUND the completeness point
+ * E.g., 0.1 = ±5% around completeness, so at 50% completeness fades from 45% to 55%
+ * Could be replaced with latency.stdev when available
+ */
+export const LAG_ANCHOR_FADE_BAND = 0.01;
+
+/** 
+ * Minimum opacity at end of anchor fade (0-1, relative to LAG_ANCHOR_OPACITY)
+ * E.g., 0.25 means the anchor fades to 25% of its base opacity, not fully transparent
+ * This keeps the anchor subtly visible even past the completeness point
+ */
+export const LAG_ANCHOR_FADE_MIN = 0.15;
+
+/** Use stripes on anchor edge to show completeness (more visible on busy graphs) */
+export const LAG_ANCHOR_USE_STRIPES = false;
+
+/** Use chevrons instead of stripes for anchor pattern (directional feel) 
+ * When true with LAG_ANCHOR_USE_STRIPES, uses pattern-based chevrons
+ * When LAG_ANCHOR_USE_SPLINE_CHEVRONS is true, uses path-following chevrons instead */
+export const LAG_ANCHOR_USE_CHEVRONS = false;
+
+
+
+/** Use chevrons that follow the spline path (better for curves, overrides pattern chevrons) */
+export const LAG_ANCHOR_USE_SPLINE_CHEVRONS = true;
+
+/** Length of each chevron in pixels (from back to front point) */
+export const LAG_ANCHOR_SPLINE_CHEVRON_LENGTH = 16;
+
+/** Visible gap between chevrons in pixels */
+export const LAG_ANCHOR_SPLINE_CHEVRON_GAP = 4;
+
+/** Angle of chevron V-points from perpendicular (degrees). 0 = flat, 45 = diagonal, 90 = parallel to spline */
+export const LAG_ANCHOR_SPLINE_CHEVRON_ANGLE = 25;
+
+
+
+/** Stripe width for anchor completeness pattern (pixels) */
+export const LAG_ANCHOR_STRIPE_WIDTH = 7.5;
+
+/** Gap between stripes in anchor pattern (pixels) */
+export const LAG_ANCHOR_STRIPE_GAP = 1.5;
+
+/** Angle of anchor stripes (degrees) - different from LAG stripes for distinction */
+export const LAG_ANCHOR_STRIPE_ANGLE = -30;
+
+/** Chevron size for anchor pattern (pixels) - height of the chevron */
+export const LAG_ANCHOR_CHEVRON_SIZE = 8;
+
+/** Gap between chevrons in anchor pattern (pixels) */
+export const LAG_ANCHOR_CHEVRON_GAP = 24;
+
+/** Stroke width of chevron lines (pixels) */
+export const LAG_ANCHOR_CHEVRON_STROKE = 5;
+
+/** Stipple dot spacing (pixels) for hidden current anchor - smaller = denser dots */
+export const LAG_ANCHOR_STIPPLE_SPACING = 5;
+
+/** Stipple dot radius (pixels) for hidden current anchor */
+export const LAG_ANCHOR_STIPPLE_RADIUS = 1.5;
+
+/** Rotation angle for stipple pattern (degrees) - 45 gives diagonal dot grid */
+export const HIDDEN_CURRENT_STIPPLE_ANGLE = -30;
+
+/** Opacity for hidden current layer stipple dots (0-1) */
+export const HIDDEN_CURRENT_OPACITY = 0.2;
 

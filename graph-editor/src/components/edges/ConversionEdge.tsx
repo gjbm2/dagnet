@@ -30,7 +30,26 @@ import {
   LAG_STRIPE_WIDTH,
   LAG_STRIPE_ANGLE,
   LAG_STRIPE_OPACITY,
-  LAG_STRIPE_GAP
+  LAG_STRIPE_GAP,
+  LAG_ANCHOR_OPACITY,
+  LAG_ANCHOR_FADE_BAND,
+  LAG_ANCHOR_FADE_MIN,
+  LAG_ANCHOR_USE_STRIPES,
+  LAG_ANCHOR_USE_CHEVRONS,
+  LAG_ANCHOR_STRIPE_WIDTH,
+  LAG_ANCHOR_STRIPE_GAP,
+  LAG_ANCHOR_STRIPE_ANGLE,
+  LAG_ANCHOR_CHEVRON_SIZE,
+  LAG_ANCHOR_CHEVRON_GAP,
+  LAG_ANCHOR_CHEVRON_STROKE,
+  LAG_ANCHOR_USE_SPLINE_CHEVRONS,
+  LAG_ANCHOR_SPLINE_CHEVRON_LENGTH,
+  LAG_ANCHOR_SPLINE_CHEVRON_GAP,
+  LAG_ANCHOR_SPLINE_CHEVRON_ANGLE,
+  LAG_ANCHOR_STIPPLE_SPACING,
+  LAG_ANCHOR_STIPPLE_RADIUS,
+  HIDDEN_CURRENT_STIPPLE_ANGLE,
+  HIDDEN_CURRENT_OPACITY
 } from '@/lib/nodeEdgeConstants';
 
 import type { EdgeLatencyDisplay, ScenarioVisibilityMode } from '../../types';
@@ -710,17 +729,8 @@ export default function ConversionEdge({
   const lagLayerData = useMemo(() => {
     const ld = data?.edgeLatencyDisplay;
     
-    // DEBUG: Log what we received
-    if (ld) {
-      console.group(`[LAG:ConversionEdge] ${id} (scenario: ${scenarioIdForEdge})`);
-      console.log('edgeLatencyDisplay:', JSON.stringify(ld, null, 2));
-    }
-    
+    // No LAG data or disabled → normal rendering at p.mean width
     if (!ld || !ld.enabled) {
-      if (ld) {
-        console.log('Early exit: ld.enabled =', ld?.enabled);
-        console.groupEnd();
-      }
       return null;
     }
 
@@ -731,44 +741,51 @@ export default function ConversionEdge({
         mode = tabOps.getScenarioVisibilityMode(activeTabId, scenarioIdForEdge);
       }
     } catch {
-      // Fallback to default
       mode = 'f+e';
     }
-    
-    console.log('Visibility mode:', mode);
 
     const pEvidence = ld.p_evidence;
     const pForecast = ld.p_forecast ?? ld.p_mean;
     const pMean = ld.p_mean ?? pForecast ?? pEvidence;
-    
-    console.log('Probabilities:', { pEvidence, pForecast, pMean, strokeWidth });
 
     if (!pMean || pMean <= 0) {
-      console.log('Early exit: no valid pMean');
-      console.groupEnd();
       return null;
     }
 
-    // Basic width scaling is still based on strokeWidth
     const baseWidth = strokeWidth;
 
     if (mode === 'e') {
-      // E-only mode: use normal solid rendering (return null to fall through)
-      // The edge will render as a solid line using the normal rendering path
-      console.log('E mode: using solid rendering (returning null)');
-      console.groupEnd();
-      return null;
+      // E-only mode: solid rendering with width scaled to p.evidence
+      // Design doc §7.2: "E only | Solid edge | p.evidence"
+      // If no valid evidence → fall back to normal rendering at p.mean
+      if (typeof pEvidence !== 'number' || pEvidence <= 0) {
+        return null;
+      }
+      const evidenceRatio = Math.min(1, Math.max(0, pEvidence / (pMean || 1)));
+      const evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
+
+      return {
+        mode: 'e' as const,
+        evidenceWidth,
+        meanWidth: baseWidth,
+        evidenceRatio,
+        evidence: pEvidence,
+        mean: pMean ?? pEvidence
+      };
     }
 
     if (mode === 'f') {
+      // F-only mode: striped rendering with width scaled to p.forecast
+      // If no valid forecast → fall back to normal rendering at p.mean
       if (typeof pForecast !== 'number' || pForecast <= 0) {
-        console.log('F mode: no valid pForecast, returning null');
-        console.groupEnd();
         return null;
       }
-      const forecastRatio = Math.min(1, Math.max(0, pForecast / pMean));
+      // Note: forecast CAN exceed mean (when evidence pulls mean down from forecast)
+      // So we don't clamp to 1.0 - allow wider than baseWidth
+      const forecastRatio = Math.max(0, pForecast / pMean);
       const width = Math.max(1, baseWidth * forecastRatio);
-      const result = {
+
+      return {
         mode: 'f' as const,
         evidenceWidth: 0,
         meanWidth: width,
@@ -776,40 +793,34 @@ export default function ConversionEdge({
         evidence: pEvidence ?? 0,
         mean: pForecast
       };
-      console.log('F mode result:', result);
-      console.groupEnd();
-      return result;
     }
 
     // F+E: two striped layers - outer (forecast) and inner (evidence)
-    // If no evidence data, fall back to F mode (single stripe)
+    // If no valid evidence → fall back to F mode (single stripe at p.forecast)
     if (typeof pEvidence !== 'number' || pEvidence <= 0) {
-      console.log('F+E mode: no valid pEvidence, falling back to F mode');
-      const result = {
+      // Use forecast width (same calculation as F-only mode)
+      const forecastRatio = Math.max(0, pForecast / pMean);
+      const forecastWidth = Math.max(1, baseWidth * forecastRatio);
+      return {
         mode: 'f' as const,
         evidenceWidth: 0,
-        meanWidth: baseWidth,
+        meanWidth: forecastWidth,
         evidenceRatio: 0,
         evidence: 0,
-        mean: pMean
+        mean: pForecast
       };
-      console.groupEnd();
-      return result;
     }
+    
     const evidenceRatio = Math.min(1, Math.max(0, pEvidence / pMean));
     const evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
     const meanWidth = baseWidth;
-    
-    console.log('F+E widths:', { evidenceWidth, meanWidth, evidenceRatio });
 
     // If evidence and mean are effectively equal, use solid rendering
     if (Math.abs(pEvidence - pMean) < 0.001) {
-      console.log('F+E collapsed: evidence ≈ mean, using solid rendering');
-      console.groupEnd();
       return null;
     }
 
-    const result = {
+    return {
       mode: 'f+e' as const,
       evidenceWidth,
       meanWidth,
@@ -817,33 +828,23 @@ export default function ConversionEdge({
       evidence: pEvidence,
       mean: pMean
     };
-    console.log('F+E mode result:', result);
-    console.groupEnd();
-    return result;
   }, [data?.edgeLatencyDisplay, strokeWidth, tabOps, activeTabId, scenarioIdForEdge, id]);
   
   // Should we show LAG two-layer rendering?
   const shouldShowLagLayers = lagLayerData !== null && !data?.useSankeyView && !shouldShowConfidenceIntervals;
   
-  // DEBUG: Log render path decision (only for edges with potential LAG data)
-  if (data?.edgeLatencyDisplay || lagLayerData) {
-    console.log(`[LAG:RenderPath] ${id}:`, {
-      shouldShowLagLayers,
-      shouldShowConfidenceIntervals,
-      lagLayerData: lagLayerData ? lagLayerData.mode : null,
-      useSankeyView: data?.useSankeyView
-    });
-  }
-  
-  // Update stroke-width via DOM to enable CSS transitions
+  // Update stroke-width via DOM to enable CSS transitions.
+  // SKIP for scenario overlays: they're never user-manipulable (no beads, no selection,
+  // no sliders), so there's no CSS transition to trigger. Running this on overlays
+  // was causing LAG evidence width to be overwritten with p.mean width.
   React.useEffect(() => {
-    if (pathRef.current) {
+    if (pathRef.current && !data?.scenarioOverlay) {
       const currentWidth = (shouldShowConfidenceIntervals && confidenceData)
         ? confidenceData.widths.lower
         : strokeWidth;
       pathRef.current.style.strokeWidth = `${currentWidth}px`;
     }
-  }, [strokeWidth, shouldShowConfidenceIntervals, confidenceData?.widths.lower]);
+  }, [strokeWidth, shouldShowConfidenceIntervals, confidenceData?.widths.lower, data?.scenarioOverlay]);
   
   const isCaseEdge = (() => {
     // Check if edge has case_variant
@@ -1275,7 +1276,163 @@ export default function ConversionEdge({
     }
   }, [edgePath, strokeWidth]);
 
+  // Calculate multiple chevrons along the spline for LAG anchor
+  const splineChevrons = React.useMemo(() => {
+    if (!LAG_ANCHOR_USE_SPLINE_CHEVRONS || !shouldShowLagLayers) return null;
+    
+    try {
+      const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+      if (!nums || nums.length < 8) return null;
+      const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
+      
+      const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
+      const chevrons: Array<{ path: string; opacity: number }> = [];
+      
+      const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+      
+      // Helper to get point on bezier at parameter t
+      const getBezierPoint = (t: number) => {
+        const p01x = lerp(sx, c1x, t);
+        const p01y = lerp(sy, c1y, t);
+        const p12x = lerp(c1x, c2x, t);
+        const p12y = lerp(c1y, c2y, t);
+        const p23x = lerp(c2x, ex, t);
+        const p23y = lerp(c2y, ey, t);
+        const p012x = lerp(p01x, p12x, t);
+        const p012y = lerp(p01y, p12y, t);
+        const p123x = lerp(p12x, p23x, t);
+        const p123y = lerp(p12y, p23y, t);
+        return {
+          x: lerp(p012x, p123x, t),
+          y: lerp(p012y, p123y, t),
+          tangentX: p123x - p012x,
+          tangentY: p123y - p012y
+        };
+      };
+      
+      // Build arc-length lookup table by sampling the bezier
+      const numSamples = 100;
+      const arcLengthTable: { t: number; length: number }[] = [{ t: 0, length: 0 }];
+      let totalLength = 0;
+      let prevPoint = getBezierPoint(0);
+      
+      for (let i = 1; i <= numSamples; i++) {
+        const t = i / numSamples;
+        const point = getBezierPoint(t);
+        const segmentLength = Math.sqrt((point.x - prevPoint.x) ** 2 + (point.y - prevPoint.y) ** 2);
+        totalLength += segmentLength;
+        arcLengthTable.push({ t, length: totalLength });
+        prevPoint = point;
+      }
+      
+      // Function to find t for a given arc length
+      const getTForLength = (targetLength: number): number => {
+        if (targetLength <= 0) return 0;
+        if (targetLength >= totalLength) return 1;
+        
+        // Binary search
+        let low = 0, high = arcLengthTable.length - 1;
+        while (low < high - 1) {
+          const mid = Math.floor((low + high) / 2);
+          if (arcLengthTable[mid].length < targetLength) {
+            low = mid;
+          } else {
+            high = mid;
+          }
+        }
+        
+        // Interpolate between low and high
+        const lowEntry = arcLengthTable[low];
+        const highEntry = arcLengthTable[high];
+        const segmentFraction = (targetLength - lowEntry.length) / (highEntry.length - lowEntry.length);
+        return lerp(lowEntry.t, highEntry.t, segmentFraction);
+      };
+      
+      // Chevron dimensions
+      const halfWidth = strokeWidth / 2;  // Width based on edge probability
+      const chevronLength = LAG_ANCHOR_SPLINE_CHEVRON_LENGTH;  // Absolute length (pixels)
+      const chevronGap = LAG_ANCHOR_SPLINE_CHEVRON_GAP;  // Absolute gap (pixels)
+      // Indent calculated from angle: tan(angle) = indent / halfWidth
+      const chevronIndent = halfWidth * Math.tan(LAG_ANCHOR_SPLINE_CHEVRON_ANGLE * Math.PI / 180);
+      
+      // Spacing = chevron length + gap
+      const spacing = chevronLength + chevronGap;
+      
+      // Calculate number of chevrons based on actual path length
+      const numChevrons = Math.max(1, Math.floor(totalLength / spacing));
+      const actualSpacing = totalLength / numChevrons;
+      
+      // Generate chevrons at evenly spaced ARC LENGTH positions
+      for (let i = 0; i < numChevrons; i++) {
+        const targetLength = (i + 0.5) * actualSpacing; // Center each chevron
+        const t = getTForLength(targetLength);
+        
+        // Calculate opacity based on position along path (use arc length fraction)
+        const lengthFraction = targetLength / totalLength;
+        let opacity = 1;
+        if (lengthFraction > completeness - LAG_ANCHOR_FADE_BAND / 2) {
+          if (lengthFraction > completeness + LAG_ANCHOR_FADE_BAND / 2) {
+            opacity = LAG_ANCHOR_FADE_MIN;
+          } else {
+            // Fade within the band
+            const fadeProgress = (lengthFraction - (completeness - LAG_ANCHOR_FADE_BAND / 2)) / LAG_ANCHOR_FADE_BAND;
+            opacity = lerp(1, LAG_ANCHOR_FADE_MIN, fadeProgress);
+          }
+        }
+        
+        // Get point and tangent at this position
+        const point = getBezierPoint(t);
+        const cx = point.x;
+        const cy = point.y;
+        const angle = Math.atan2(point.tangentY, point.tangentX);
 
+        // Direction vectors
+        const dirX = Math.cos(angle);
+        const dirY = Math.sin(angle);
+        const normalX = -Math.sin(angle);
+        const normalY = Math.cos(angle);
+
+        // Filled chevron: rectangle with V-shaped front and back (all absolute pixels)
+        // Back center (upstream)
+        const backCenterX = cx - (chevronLength / 2) * dirX;
+        const backCenterY = cy - (chevronLength / 2) * dirY;
+        
+        // Front center (downstream)
+        const frontCenterX = cx + (chevronLength / 2) * dirX;
+        const frontCenterY = cy + (chevronLength / 2) * dirY;
+        
+        // Back corners at full width
+        const backLeftX = backCenterX + halfWidth * normalX;
+        const backLeftY = backCenterY + halfWidth * normalY;
+        const backRightX = backCenterX - halfWidth * normalX;
+        const backRightY = backCenterY - halfWidth * normalY;
+        
+        // Back indent (V notch pointing backward/upstream) - absolute indent
+        const backIndentX = backCenterX + chevronIndent * dirX;
+        const backIndentY = backCenterY + chevronIndent * dirY;
+        
+        // Front corners at full width
+        const frontLeftX = frontCenterX + halfWidth * normalX;
+        const frontLeftY = frontCenterY + halfWidth * normalY;
+        const frontRightX = frontCenterX - halfWidth * normalX;
+        const frontRightY = frontCenterY - halfWidth * normalY;
+        
+        // Front point (tip pointing forward/downstream) - absolute indent
+        const frontPointX = frontCenterX + chevronIndent * dirX;
+        const frontPointY = frontCenterY + chevronIndent * dirY;
+
+        // 6-point polygon: backLeft -> backIndent -> backRight -> frontRight -> frontPoint -> frontLeft -> close
+        chevrons.push({
+          path: `M ${backLeftX},${backLeftY} L ${backIndentX},${backIndentY} L ${backRightX},${backRightY} L ${frontRightX},${frontRightY} L ${frontPointX},${frontPointY} L ${frontLeftX},${frontLeftY} Z`,
+          opacity
+        });
+      }
+      
+      return chevrons;
+    } catch {
+      return null;
+    }
+  }, [edgePath, strokeWidth, shouldShowLagLayers, data?.edgeLatencyDisplay?.completeness_pct]);
 
   const handleDelete = useCallback(() => {
     deleteElements({ edges: [{ id }] });
@@ -1567,22 +1724,138 @@ export default function ConversionEdge({
   return (
     <>
       <defs>
-        {/* Diagonal stripe pattern for hidden current layer */}
+        {/* Stipple (dot) pattern for hidden current layer - replaces old stripe pattern */}
         {isHiddenCurrent && (
           <pattern
-            id={`stripe-pattern-${id}`}
+            id={`lag-anchor-stipple-${id}`}
             patternUnits="userSpaceOnUse"
-            width="10"
-            height="10"
-            patternTransform="rotate(45)"
+            width={LAG_ANCHOR_STIPPLE_SPACING}
+            height={LAG_ANCHOR_STIPPLE_SPACING}
+            patternTransform={`rotate(${HIDDEN_CURRENT_STIPPLE_ANGLE})`}
           >
-            <rect x="0" y="0" width="5" height="10" fill={getEdgeColour()} fillOpacity="0.05" />
-            <rect x="5" y="0" width="5" height="10" fill={getEdgeColour()} fillOpacity="0.2" />
+            <circle 
+              cx={LAG_ANCHOR_STIPPLE_SPACING / 2} 
+              cy={LAG_ANCHOR_STIPPLE_SPACING / 2} 
+              r={LAG_ANCHOR_STIPPLE_RADIUS} 
+              fill={getEdgeColour()}
+              fillOpacity={HIDDEN_CURRENT_OPACITY}
+            />
           </pattern>
         )}
         {/* LAG two-layer stripe patterns: inner (offset 0) and outer (offset half) */}
         {shouldShowLagLayers && (
           <>
+            {/* Anchor fade gradient - fades AROUND completeness point
+                Completeness = how much of the expected conversions we've observed
+                Gradient: full opacity → fades → 0 opacity, centered on completeness
+                Fade band width: 20% of path (±10% around completeness) - could use latency.stdev later */}
+            <linearGradient
+              id={`lag-anchor-fade-${id}`}
+              gradientUnits="userSpaceOnUse"
+              x1={adjustedSourceX}
+              y1={adjustedSourceY}
+              x2={adjustedTargetX}
+              y2={adjustedTargetY}
+            >
+              {(() => {
+                const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
+                const fadeStart = Math.max(0, completeness - LAG_ANCHOR_FADE_BAND / 2);
+                const fadeEnd = Math.min(1, completeness + LAG_ANCHOR_FADE_BAND / 2);
+                const anchorColor = (effectiveSelected || data?.isHighlighted) 
+                  ? getEdgeColour() 
+                  : (data?.scenarioColour || getEdgeColour());
+                return (
+                  <>
+                    {/* Full opacity from start to fadeStart */}
+                    <stop offset="0%" stopColor={anchorColor} stopOpacity={1} />
+                    <stop offset={`${fadeStart * 100}%`} stopColor={anchorColor} stopOpacity={1} />
+                    {/* Fade from 1 to min between fadeStart and fadeEnd */}
+                    <stop offset={`${fadeEnd * 100}%`} stopColor={anchorColor} stopOpacity={LAG_ANCHOR_FADE_MIN} />
+                    {/* Minimum opacity from fadeEnd to end */}
+                    <stop offset="100%" stopColor={anchorColor} stopOpacity={LAG_ANCHOR_FADE_MIN} />
+                  </>
+                );
+              })()}
+            </linearGradient>
+            {/* Anchor pattern - stripes or chevrons with solid color (mask handles fade) */}
+            {LAG_ANCHOR_USE_STRIPES && (
+              <>
+                <pattern
+                  id={`lag-anchor-stripe-${id}`}
+                  patternUnits="userSpaceOnUse"
+                  width={LAG_ANCHOR_USE_CHEVRONS 
+                    ? LAG_ANCHOR_CHEVRON_SIZE + LAG_ANCHOR_CHEVRON_GAP 
+                    : LAG_ANCHOR_STRIPE_WIDTH + LAG_ANCHOR_STRIPE_GAP}
+                  height={LAG_ANCHOR_USE_CHEVRONS 
+                    ? LAG_ANCHOR_CHEVRON_SIZE + LAG_ANCHOR_CHEVRON_GAP 
+                    : LAG_ANCHOR_STRIPE_WIDTH + LAG_ANCHOR_STRIPE_GAP}
+                  patternTransform={LAG_ANCHOR_USE_CHEVRONS ? undefined : `rotate(${LAG_ANCHOR_STRIPE_ANGLE})`}
+                >
+                  {LAG_ANCHOR_USE_CHEVRONS ? (
+                    // Chevron pattern: > shape pointing right (along edge direction)
+                    <path
+                      d={`M0,0 L${LAG_ANCHOR_CHEVRON_SIZE / 2},${LAG_ANCHOR_CHEVRON_SIZE / 2} L0,${LAG_ANCHOR_CHEVRON_SIZE}`}
+                      stroke={(effectiveSelected || data?.isHighlighted) 
+                        ? getEdgeColour() 
+                        : (data?.scenarioColour || getEdgeColour())}
+                      strokeWidth={LAG_ANCHOR_CHEVRON_STROKE}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      fill="none"
+                    />
+                  ) : (
+                    // Stripe pattern
+                    <rect 
+                      x="0" 
+                      y="0" 
+                      width={LAG_ANCHOR_STRIPE_WIDTH} 
+                      height={LAG_ANCHOR_STRIPE_WIDTH + LAG_ANCHOR_STRIPE_GAP} 
+                      fill={(effectiveSelected || data?.isHighlighted) 
+                        ? getEdgeColour() 
+                        : (data?.scenarioColour || getEdgeColour())}
+                    />
+                  )}
+                </pattern>
+                {/* Mask for anchor fade - white gradient controls visibility along path */}
+                <mask id={`lag-anchor-fade-mask-${id}`} maskUnits="userSpaceOnUse"
+                  x={Math.min(adjustedSourceX, adjustedTargetX) - 100}
+                  y={Math.min(adjustedSourceY, adjustedTargetY) - 100}
+                  width={Math.abs(adjustedTargetX - adjustedSourceX) + 200}
+                  height={Math.abs(adjustedTargetY - adjustedSourceY) + 200}
+                >
+                  <rect
+                    x={Math.min(adjustedSourceX, adjustedTargetX) - 100}
+                    y={Math.min(adjustedSourceY, adjustedTargetY) - 100}
+                    width={Math.abs(adjustedTargetX - adjustedSourceX) + 200}
+                    height={Math.abs(adjustedTargetY - adjustedSourceY) + 200}
+                    fill={`url(#lag-anchor-fade-white-${id})`}
+                  />
+                </mask>
+                {/* White gradient for mask (white = visible, aligned source→target) */}
+                <linearGradient
+                  id={`lag-anchor-fade-white-${id}`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={adjustedSourceX}
+                  y1={adjustedSourceY}
+                  x2={adjustedTargetX}
+                  y2={adjustedTargetY}
+                >
+                  {(() => {
+                    const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
+                    const fadeStart = Math.max(0, completeness - LAG_ANCHOR_FADE_BAND / 2);
+                    const fadeEnd = Math.min(1, completeness + LAG_ANCHOR_FADE_BAND / 2);
+                    return (
+                      <>
+                        <stop offset="0%" stopColor="white" stopOpacity={1} />
+                        <stop offset={`${fadeStart * 100}%`} stopColor="white" stopOpacity={1} />
+                        <stop offset={`${fadeEnd * 100}%`} stopColor="white" stopOpacity={LAG_ANCHOR_FADE_MIN} />
+                        <stop offset="100%" stopColor="white" stopOpacity={LAG_ANCHOR_FADE_MIN} />
+                      </>
+                    );
+                  })()}
+                </linearGradient>
+              </>
+            )}
             {/* Inner stripe pattern (evidence layer) - offset 0 */}
             <pattern
               id={`lag-stripe-inner-${id}`}
@@ -1592,7 +1865,9 @@ export default function ConversionEdge({
               patternTransform={`rotate(${LAG_STRIPE_ANGLE})`}
             >
               <rect x="0" y="0" width={LAG_STRIPE_WIDTH} height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP} 
-                fill={data?.scenarioColour || getEdgeColour()} fillOpacity={LAG_STRIPE_OPACITY} />
+                fill={data?.scenarioColour || getEdgeColour()}
+                fillOpacity={LAG_STRIPE_OPACITY}
+              />
             </pattern>
             {/* Outer stripe pattern (forecast layer) - offset by half stripe width */}
             <pattern
@@ -1628,7 +1903,7 @@ export default function ConversionEdge({
                 id={id}
                 style={{
                   fill: isHiddenCurrent 
-                    ? `url(#stripe-pattern-${id})` 
+                    ? `url(#lag-anchor-stipple-${id})` 
                     : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -1662,7 +1937,7 @@ export default function ConversionEdge({
                 id={`${id}-ci-upper`}
                 style={{
                   stroke: isHiddenCurrent 
-                    ? `url(#stripe-pattern-${id})` 
+                    ? `url(#lag-anchor-stipple-${id})` 
                     : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.upper,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8)),
@@ -1688,7 +1963,7 @@ export default function ConversionEdge({
                 id={`${id}-ci-middle`}
                 style={{
                   stroke: isHiddenCurrent 
-                    ? `url(#stripe-pattern-${id})` 
+                    ? `url(#lag-anchor-stipple-${id})` 
                     : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.middle,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8)),
@@ -1715,7 +1990,7 @@ export default function ConversionEdge({
                 id={`${id}-ci-lower`}
                 style={{
                   stroke: isHiddenCurrent 
-                    ? `url(#stripe-pattern-${id})` 
+                    ? `url(#lag-anchor-stipple-${id})` 
                     : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.lower,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8)),
@@ -1741,42 +2016,62 @@ export default function ConversionEdge({
             // LAG rendering modes:
             // - F+E: Two striped bands with offset stripes that interleave (appears solid where overlap)
             // - F only: Single striped band for forecast
-            // - E only: Falls through to normal solid rendering (lagLayerData is null)
+            // - E only: Solid edge with width scaled to p.evidence
+            // ALL modes: p.mean visual anchor (carries pathRef, beads, interactions)
             <>
-              {/* Outer layer (forecast) - striped with offset, full width */}
-              <path
-                key={`${id}-lag-outer`}
-                id={`${id}-lag-outer`}
-                style={{
-                  stroke: `url(#lag-stripe-outer-${id})`,
-                  strokeWidth: lagLayerData.meanWidth,
-                  strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
-                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
-                  fill: 'none',
-                  strokeLinecap: 'round',
-                  strokeLinejoin: 'miter',
-                  strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
-                  transition: 'stroke-width 0.3s ease-in-out',
-                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
-                }}
-                className="react-flow__edge-path"
-                d={edgePath}
-                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
-                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
-                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
-                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
-                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
-              />
-              {/* Inner layer (evidence) - striped NO offset, narrower width - only for F+E mode */}
-              {lagLayerData.mode === 'f+e' && (
+              {/* p.mean visual anchor - always at full p.mean width, fades based on completeness
+                  This provides visual reference for total mass and is the interactive element
+                  Can render as: spline chevrons, pattern stripes/chevrons, or gradient fade */}
+              {LAG_ANCHOR_USE_SPLINE_CHEVRONS && splineChevrons && !isHiddenCurrent ? (
+                // Spline-following chevrons - individual paths along the curve
+                <>
+                  {/* Invisible interaction path (carries ref and events) */}
+                  <path
+                    ref={pathRef}
+                    key={`${id}-lag-anchor-interaction`}
+                    style={{
+                      stroke: 'transparent',
+                      strokeWidth: strokeWidth,
+                      fill: 'none',
+                      pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                    }}
+                    className="react-flow__edge-path"
+                    d={edgePath}
+                    onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                    onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                    onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                    onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                    onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                  />
+                  {/* Chevrons along the path - filled shapes */}
+                  {splineChevrons.map((chevron, i) => (
+                    <path
+                      key={`${id}-lag-chevron-${i}`}
+                      d={chevron.path}
+                      fill={(effectiveSelected || data?.isHighlighted) 
+                        ? getEdgeColour() 
+                        : (data?.scenarioColour || getEdgeColour())}
+                      fillOpacity={LAG_ANCHOR_OPACITY * chevron.opacity}
+                      stroke="none"
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  ))}
+                </>
+              ) : (
+                // Pattern-based anchor (stripes, pattern chevrons, or gradient)
                 <path
                   ref={pathRef}
-                  key={`${id}-lag-inner`}
-                  id={`${id}-lag-inner`}
+                  key={`${id}-lag-anchor`}
+                  id={`${id}-lag-anchor`}
+                  mask={LAG_ANCHOR_USE_STRIPES && !isHiddenCurrent ? `url(#lag-anchor-fade-mask-${id})` : undefined}
                   style={{
-                    stroke: `url(#lag-stripe-inner-${id})`,
-                    strokeWidth: lagLayerData.evidenceWidth,
-                    strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
+                    stroke: isHiddenCurrent 
+                      ? `url(#lag-anchor-stipple-${id})`   // Stipple for hidden current
+                      : LAG_ANCHOR_USE_STRIPES
+                        ? `url(#lag-anchor-stripe-${id})`  // Stripes (mask handles fade)
+                        : `url(#lag-anchor-fade-${id})`,   // Plain gradient fade
+                    strokeWidth: strokeWidth,  // Always p.mean width
+                    strokeOpacity: LAG_ANCHOR_OPACITY,  // Base opacity (mask fades within this)
                     mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                     fill: 'none',
                     strokeLinecap: 'round',
@@ -1795,6 +2090,90 @@ export default function ConversionEdge({
                   onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
                 />
               )}
+              {lagLayerData.mode === 'e' ? (
+                // E-only mode: solid edge with width based on p.evidence (Design doc §7.2)
+                <path
+                  key={`${id}-lag-evidence`}
+                  id={`${id}-lag-evidence`}
+                  style={{
+                    stroke: isHiddenCurrent 
+                      ? `url(#lag-anchor-stipple-${id})` 
+                      : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
+                    strokeWidth: lagLayerData.evidenceWidth,
+                    strokeOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
+                    mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                    fill: 'none',
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'miter',
+                    strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                    markerEnd: 'none',
+                    transition: 'stroke-width 0.3s ease-in-out',
+                    pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                  }}
+                  className="react-flow__edge-path"
+                  d={edgePath}
+                  onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                  onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                  onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                  onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                  onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                />
+              ) : (
+                // F and F+E modes: striped rendering
+                <>
+                  {/* Outer layer (forecast) - striped with offset, full width */}
+                  <path
+                    key={`${id}-lag-outer`}
+                    id={`${id}-lag-outer`}
+                    style={{
+                      stroke: `url(#lag-stripe-outer-${id})`,
+                      strokeWidth: lagLayerData.meanWidth,
+                      strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
+                      mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                      fill: 'none',
+                      strokeLinecap: 'round',
+                      strokeLinejoin: 'miter',
+                      strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                      transition: 'stroke-width 0.3s ease-in-out',
+                      pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                    }}
+                    className="react-flow__edge-path"
+                    d={edgePath}
+                    onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                    onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                    onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                    onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                    onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                  />
+                  {/* Inner layer (evidence) - striped NO offset, narrower width - only for F+E mode */}
+                  {lagLayerData.mode === 'f+e' && (
+                    <path
+                      key={`${id}-lag-inner`}
+                      id={`${id}-lag-inner`}
+                      style={{
+                        stroke: `url(#lag-stripe-inner-${id})`,
+                        strokeWidth: lagLayerData.evidenceWidth,
+                        strokeOpacity: data?.strokeOpacity ?? EDGE_OPACITY,
+                        mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                        fill: 'none',
+                        strokeLinecap: 'round',
+                        strokeLinejoin: 'miter',
+                        strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                        markerEnd: 'none',
+                        transition: 'stroke-width 0.3s ease-in-out',
+                        pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                      }}
+                      className="react-flow__edge-path"
+                      d={edgePath}
+                      onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                      onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                      onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                      onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                      onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                    />
+                  )}
+                </>
+              )}
             </>
           ) : (
             <>
@@ -1804,8 +2183,9 @@ export default function ConversionEdge({
                 id={id}
                 style={{
                   stroke: isHiddenCurrent 
-                    ? `url(#stripe-pattern-${id})` 
+                    ? `url(#lag-anchor-stipple-${id})` 
                     : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
+                  strokeWidth: strokeWidth,  // Must be explicit - useEffect skips scenario overlays
                   strokeOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                   mixBlendMode: 'multiply',
                   fill: 'none',
