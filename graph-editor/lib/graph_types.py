@@ -64,6 +64,7 @@ class LatencyConfig(BaseModel):
     anchor_node_id_overridden: bool = Field(False, description="If true, user manually set anchor_node_id")
     t95: Optional[float] = Field(None, ge=0, description="95th percentile lag in days (computed from fitted CDF)")
     median_lag_days: Optional[float] = Field(None, ge=0, description="Weighted median lag in days (display only)")
+    mean_lag_days: Optional[float] = Field(None, ge=0, description="Weighted mean lag in days (used with median to compute t95)")
     completeness: Optional[float] = Field(None, ge=0, le=1, description="Maturity progress 0-1 (display only)")
 
 
@@ -291,6 +292,8 @@ class Graph(BaseModel):
     edges: List[Edge]
     policies: Policies
     metadata: Metadata
+    currentQueryDSL: Optional[str] = Field(None, description="Current user query DSL for UI persistence")
+    dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")
     
     def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get node by ID or UUID."""

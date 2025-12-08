@@ -69,7 +69,7 @@
       "label": "Payment",
       "description": "Payment processing hub where web checkout and phone orders converge for card authorisation",
       "event_id": "payment-submitted",
-      "layout": { "x": 950, "y": 150 }
+      "layout": { "x": 1100, "y": 150 }
     },
     {
       "uuid": "5730b5e7-a979-4a76-adb8-7b0f1d6e5478",
@@ -86,7 +86,7 @@
       "label": "Order Confirmed",
       "description": "Payment successful, order placed in fulfilment queue, confirmation email sent",
       "event_id": "order-confirmed",
-      "layout": { "x": 1150, "y": 200 }
+      "layout": { "x": 1400, "y": 200 }
     },
     {
       "uuid": "9862e91f-b27b-4552-8aa6-fc15b14b2d0b",
@@ -95,14 +95,14 @@
       "description": "Customer cancelled before dispatch - full refund processed automatically",
       "absorbing": true,
       "outcome_type": "failure",
-      "layout": { "x": 1350, "y": 50 }
+      "layout": { "x": 1750, "y": 50 }
     },
     {
       "uuid": "a9bb0734-fe19-47c2-94cb-9bc6f36894c2",
       "id": "order-shipped",
       "label": "Order Shipped",
       "description": "Order dispatched from warehouse, tracking number generated and sent to customer",
-      "layout": { "x": 1350, "y": 250 }
+      "layout": { "x": 1800, "y": 250 }
     },
     {
       "uuid": "f46a1981-c47e-4548-b4bd-0f4a84aaf0f3",
@@ -111,14 +111,14 @@
       "description": "Multiple delivery attempts failed - returned to warehouse, refund initiated",
       "absorbing": true,
       "outcome_type": "failure",
-      "layout": { "x": 1550, "y": 100 }
+      "layout": { "x": 2250, "y": 100 }
     },
     {
       "uuid": "7c029253-61a5-438d-85d7-ec43afc81cbd",
       "id": "order-delivered",
       "label": "Order Delivered",
       "description": "Package successfully delivered to customer address, signature captured",
-      "layout": { "x": 1550, "y": 300 }
+      "layout": { "x": 2300, "y": 300 }
     },
     {
       "uuid": "e0cf1497-012a-4a59-b8d4-7cfc04245e1a",
@@ -127,7 +127,7 @@
       "description": "Customer kept item past 30-day return window - successful transaction",
       "absorbing": true,
       "outcome_type": "success",
-      "layout": { "x": 1750, "y": 250 }
+      "layout": { "x": 2550, "y": 250 }
     },
     {
       "uuid": "dd7da231-82db-42be-b77c-4e1492a8279d",
@@ -136,7 +136,7 @@
       "description": "Customer returned item within window, refund processed, stock returned",
       "absorbing": true,
       "outcome_type": "neutral",
-      "layout": { "x": 1750, "y": 400 }
+      "layout": { "x": 2550, "y": 400 }
     },
     {
       "uuid": "51637b9a-b025-43a3-a161-855386818e1d",
@@ -273,7 +273,18 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "description": "User completes checkout form and submits payment",
-      "p": { "mean": 0.75, "id": "checkout-to-payment" },
+      "p": { 
+        "mean": 0.75, 
+        "id": "checkout-to-payment-latency",
+        "latency": {
+          "maturity_days": 10,
+          "anchor_node_id": "landing-page",
+          "median_lag_days": 3.0,
+          "mean_lag_days": 3.5,
+          "t95": 10.2,
+          "completeness": 0.92
+        }
+      },
       "conditional_p": [
         {
           "condition": "case(cart-experience-test:classic)",
@@ -387,7 +398,18 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "description": "Order picked, packed, and handed to courier",
-      "p": { "mean": 0.97 },
+      "p": { 
+        "mean": 0.97, 
+        "id": "confirmed-to-shipped-latency",
+        "latency": {
+          "maturity_days": 21,
+          "anchor_node_id": "landing-page",
+          "median_lag_days": 5.0,
+          "mean_lag_days": 5.9,
+          "t95": 17.5,
+          "completeness": 0.88
+        }
+      },
       "cost_gbp": { "mean": 4.95, "id": "shipping-cost" },
       "conditional_p": [
         {
@@ -422,7 +444,18 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "description": "Successful delivery to customer",
-      "p": { "mean": 0.98 }
+      "p": { 
+        "mean": 0.98, 
+        "id": "shipped-to-delivered-latency",
+        "latency": {
+          "maturity_days": 45,
+          "anchor_node_id": "landing-page",
+          "median_lag_days": 14.0,
+          "mean_lag_days": 17.8,
+          "t95": 52.0,
+          "completeness": 0.72
+        }
+      }
     },
     {
       "uuid": "e6feadce-2b00-417f-8cc7-8b90e46e54f6",
@@ -451,12 +484,13 @@
     "overflow_policy": "error",
     "free_edge_policy": "complement"
   },
+  "dataInterestsDSL": "or(cohort(landing-page,-90d:), window(-14d:)).or(context(channel:google), context(channel:organic), context(channel:email)).or(visited(classic-cart), visited(quick-cart))",
   "metadata": {
     "name": "E-commerce Checkout Flow",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "created_at": "2025-01-01T00:00:00Z",
-    "updated_at": "2025-01-01T00:00:00Z",
+    "updated_at": "2025-12-02T00:00:00Z",
     "author": "commerce-team",
-    "description": "E-commerce checkout funnel with cart A/B test and phone order path, explicit abandonment edges ensuring pmf=1 at each node"
+    "description": "E-commerce checkout funnel with cart A/B test and phone order path, explicit abandonment edges ensuring pmf=1 at each node. Includes latency tracking on key fulfilment edges."
   }
 }

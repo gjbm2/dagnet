@@ -15,6 +15,12 @@ parameters:
     status: active
     tags: [conversion, checkout]
     
+  - id: checkout-to-payment-latency
+    file_path: parameters/checkout-to-payment-latency.yaml
+    type: probability
+    status: active
+    tags: [conversion, checkout, latency, short-lag]
+    
   - id: checkout-to-payment-classic
     file_path: parameters/checkout-to-payment-classic.yaml
     type: probability
@@ -98,4 +104,16 @@ parameters:
     type: probability
     status: active
     tags: [fulfilment, shipping, case-variant]
+    
+  - id: confirmed-to-shipped-latency
+    file_path: parameters/confirmed-to-shipped-latency.yaml
+    type: probability
+    status: active
+    tags: [fulfilment, shipping, latency, medium-lag]
+    
+  - id: shipped-to-delivered-latency
+    file_path: parameters/shipped-to-delivered-latency.yaml
+    type: probability
+    status: active
+    tags: [delivery, fulfilment, latency, long-lag]
 
