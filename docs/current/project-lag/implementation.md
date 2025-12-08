@@ -5,6 +5,8 @@
 
 This document outlines the phased implementation plan for Project LAG (Latency-Aware Graph Analytics).
 
+Ref. status.md for progress.
+
 ---
 
 ## Phase P0: Rename `cost_time` → `labour_cost` (Pre-requisite)
