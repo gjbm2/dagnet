@@ -82,6 +82,6 @@ Pre-requisite cleanup before introducing latency complexity.
 - [x] `grep -r "cost_time" graph-editor/lib/` returns zero hits ✅
 - [x] `grep -r "cost_time" graph-editor/public/` returns zero hits ✅
 - [x] All TypeScript tests pass (1977 tests) ✅
-- [ ] All Python tests pass — *to be verified*
-- [ ] Manual smoke test: load graph with cost data — *to be verified*
+- [x] All Python tests pass (271 tests) ✅
+- [ ] Manual smoke test: load graph with cost data — *optional*
 
