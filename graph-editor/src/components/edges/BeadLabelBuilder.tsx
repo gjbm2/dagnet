@@ -239,6 +239,36 @@ export class BeadLabelBuilder {
   }
   
   /**
+   * Static helper: Standard latency formatter
+   * value = median_lag_days, stdev = completeness (0-1)
+   */
+  static formatLatency(value: number, stdev?: number): string {
+    const days = Math.round(value);
+    const compPct = stdev !== undefined ? Math.round(stdev * 100) : 0;
+    return `${days}d (${compPct}%)`;
+  }
+  
+  /**
+   * Static helper: Build a label for latency beads
+   */
+  static buildLatencyLabel(
+    values: BeadValue[],
+    hiddenCurrent?: HiddenCurrentValue,
+    hasExistenceVariation: boolean = false
+  ): { displayText: React.ReactNode; allIdentical: boolean } {
+    const builder = new BeadLabelBuilder(
+      values, 
+      hiddenCurrent, 
+      BeadLabelBuilder.formatLatency as ValueFormatter,
+      hasExistenceVariation
+    );
+    return {
+      displayText: builder.buildDisplayText(),
+      allIdentical: builder.shouldFullyDeduplicate()
+    };
+  }
+  
+  /**
    * Static helper: Build a label with custom formatter
    */
   static buildCustomLabel(

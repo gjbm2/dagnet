@@ -29,7 +29,10 @@ import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/sc
 import { fetchDataService } from '../../services/fetchDataService';
 import { 
   Eye, 
-  EyeOff, 
+  EyeOff,
+  Images,
+  Image,
+  Square,
   Edit2, 
   Trash2, 
   Plus,
@@ -43,6 +46,7 @@ import {
   RefreshCw,
   ArrowDownFromLine
 } from 'lucide-react';
+import type { ScenarioVisibilityMode } from '../../types';
 import toast from 'react-hot-toast';
 import './ScenariosPanel.css';
 
@@ -251,7 +255,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, [whatIfDSL, whatIfPanelExpanded]);
   
   /**
-   * Toggle scenario visibility
+   * Toggle scenario visibility (legacy - simple show/hide)
    */
   const handleToggleVisibility = useCallback(async (scenarioId: string) => {
     if (!tabId) return;
@@ -261,6 +265,112 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     } catch (error) {
       console.error('Failed to toggle scenario visibility:', error);
       toast.error('Failed to toggle visibility');
+    }
+  }, [tabId, operations]);
+  
+  /**
+   * Cycle visibility mode: F+E → F → E → hidden → F+E
+   */
+  const handleCycleVisibilityMode = useCallback(async (scenarioId: string) => {
+    if (!tabId) return;
+    
+    try {
+      // Calculate next mode before cycling (more reliable than reading state after)
+      const currentMode = operations.getScenarioVisibilityMode(tabId, scenarioId);
+      const modeOrder: ScenarioVisibilityMode[] = ['f+e', 'f', 'e'];
+      const currentIndex = modeOrder.indexOf(currentMode);
+      const nextMode = modeOrder[(currentIndex + 1) % modeOrder.length];
+      
+      await operations.cycleScenarioVisibilityMode(tabId, scenarioId);
+      
+      // Toast feedback (only tri-state now)
+      const modeLabels: Record<ScenarioVisibilityMode, string> = {
+        'f+e': 'Forecast + Evidence',
+        'f': 'Forecast only',
+        'e': 'Evidence only',
+      };
+      toast.success(modeLabels[nextMode], { duration: 1500 });
+    } catch (error) {
+      console.error('Failed to cycle visibility mode:', error);
+      toast.error('Failed to change visibility');
+    }
+  }, [tabId, operations]);
+  
+  /**
+   * Get eye icon for simple visibility (bool)
+   */
+  const getVisibilityIcon = useCallback((isVisible: boolean, size: number = 14) => {
+    return isVisible ? <Eye size={size} /> : <EyeOff size={size} />;
+  }, []);
+  
+  /**
+   * Get tri-state mode icon for a scenario (F+E / F / E)
+   */
+  const getModeIcon = useCallback((scenarioId: string, size: number = 14) => {
+    if (!tabId) return <Images size={size} />;
+    
+    const mode = operations.getScenarioVisibilityMode(tabId, scenarioId);
+    switch (mode) {
+      case 'f+e': return <Images size={size} />;
+      case 'f': return <Image size={size} />;
+      case 'e': return <Square size={size} />;
+      default: return <Images size={size} />;
+    }
+  }, [tabId, operations]);
+  
+  /**
+   * Get tri-state mode tooltip for a scenario
+   */
+  const getModeTooltip = useCallback((scenarioId: string): string => {
+    if (!tabId) return 'Cycle forecast/evidence display';
+    
+    const mode = operations.getScenarioVisibilityMode(tabId, scenarioId);
+    switch (mode) {
+      case 'f+e': return 'Forecast + evidence (click to cycle)';
+      case 'f': return 'Forecast only (click to cycle)';
+      case 'e': return 'Evidence only (click to cycle)';
+      default: return 'Cycle forecast/evidence display';
+    }
+  }, [tabId, operations]);
+  
+  /**
+   * Get swatch overlay style based on visibility mode
+   * Shows stripe patterns matching the design spec
+   */
+  const getSwatchOverlayStyle = useCallback((scenarioId: string): React.CSSProperties | null => {
+    if (!tabId) return null;
+    
+    const mode = operations.getScenarioVisibilityMode(tabId, scenarioId);
+    switch (mode) {
+      case 'f+e':
+        // Smooth gradient: solid left → striped right (evidence → forecast)
+        // Stripe overlay fades in from left to right
+        return {
+          position: 'absolute',
+          inset: 0,
+          borderRadius: 'inherit',
+          background: 'repeating-linear-gradient(45deg, transparent 0px, transparent 2px, rgba(255,255,255,0.5) 2px, rgba(255,255,255,0.5) 4px)',
+          maskImage: 'linear-gradient(90deg, transparent 0%, transparent 20%, black 80%, black 100%)',
+          WebkitMaskImage: 'linear-gradient(90deg, transparent 0%, transparent 20%, black 80%, black 100%)',
+          pointerEvents: 'none',
+        } as React.CSSProperties;
+      case 'f':
+        // Striped background (forecast only)
+        return {
+          position: 'absolute',
+          inset: 0,
+          borderRadius: 'inherit',
+          background: 'repeating-linear-gradient(45deg, transparent 0px, transparent 2px, rgba(255,255,255,0.5) 2px, rgba(255,255,255,0.5) 4px)',
+          pointerEvents: 'none',
+        };
+      case 'e':
+        // Solid background (evidence only) - no overlay needed
+        return null;
+      case 'hidden':
+        // Hidden - no overlay, but opacity handled elsewhere
+        return null;
+      default:
+        return null;
     }
   }, [tabId, operations]);
   
@@ -1088,12 +1198,15 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         <div className="scenario-row scenario-current">
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {currentVisible ? (
-            <div className="scenario-colour-swatch-wrapper">
+            <div className="scenario-colour-swatch-wrapper" style={{ position: 'relative' }}>
               <ColourSelector
                 compact={true}
                 value={getScenarioColour('current', currentVisible)}
                 onChange={(colour) => handleColourChange('current', colour)}
               />
+              {getSwatchOverlayStyle('current') && (
+                <div style={getSwatchOverlayStyle('current') as React.CSSProperties} />
+              )}
             </div>
           ) : (
             <div className="scenario-colour-swatch-placeholder"></div>
@@ -1175,7 +1288,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
             )}
           </div>
           
-          {/* Right-aligned action buttons */}
+          {/* Right-aligned action buttons (order: edit > mode > visible) */}
           <button
             className="scenario-action-btn"
             onClick={() => handleOpenEditor('current')}
@@ -1185,10 +1298,17 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           </button>
           <button
             className="scenario-action-btn"
-            onClick={() => handleToggleVisibility('current')}
-            title="Toggle visibility"
+            onClick={() => handleCycleVisibilityMode('current')}
+            title={getModeTooltip('current')}
           >
-            {currentVisible ? <Eye size={14} /> : <EyeOff size={14} />}
+            {getModeIcon('current')}
+          </button>
+          <button
+            className="scenario-action-btn"
+            onClick={() => operations.toggleScenarioVisibility(tabId!, 'current')}
+            title={currentVisible ? 'Hide Current' : 'Show Current'}
+          >
+            {getVisibilityIcon(currentVisible)}
           </button>
           
           {/* What-If Panel (rendered INSIDE Current card when expanded) */}
@@ -1316,7 +1436,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
               {/* Swatch - draggable, always show, faded if not visible, clickable to change colour */}
               <div
                 className="scenario-colour-swatch-wrapper"
-                style={{ opacity: isVisible ? 1 : 0.3 }}
+                style={{ opacity: isVisible ? 1 : 0.3, position: 'relative' }}
                 title="Drag to reorder, click to change colour"
                 draggable={!isEditing}
                 onDragStart={(e) => {
@@ -1334,6 +1454,9 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
                   value={scenarioColour}
                   onChange={(colour) => handleColourChange(scenario.id, colour)}
                 />
+                {getSwatchOverlayStyle(scenario.id) && (
+                  <div style={getSwatchOverlayStyle(scenario.id) as React.CSSProperties} />
+                )}
               </div>
               
               {/* Name - clickable to edit, or input when editing */}
@@ -1394,7 +1517,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
                 </>
               ) : (
                 <>
-                  {/* Normal mode: refresh (live only), delete, edit (pencil opens query edit for live, otherwise params editor), visibility */}
+                  {/* Normal mode: refresh (live only), then delete > edit > mode > visible */}
                   {scenario.meta?.isLive && (
                     <button
                       className="scenario-action-btn"
@@ -1419,14 +1542,21 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
                 }
                 title={scenario.meta?.isLive ? "Edit query DSL" : "Open in editor"}
               >
-                    <Edit2 size={14} />
+                <Edit2 size={14} />
               </button>
               <button
-                    className="scenario-action-btn"
-                    onClick={() => handleToggleVisibility(scenario.id)}
-                    title="Toggle visibility"
+                className="scenario-action-btn"
+                onClick={() => handleCycleVisibilityMode(scenario.id)}
+                title={getModeTooltip(scenario.id)}
               >
-                    {isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
+                {getModeIcon(scenario.id)}
+              </button>
+              <button
+                className="scenario-action-btn"
+                onClick={() => operations.toggleScenarioVisibility(tabId!, scenario.id)}
+                title={visibleScenarioIds.includes(scenario.id) ? 'Hide scenario' : 'Show scenario'}
+              >
+                {getVisibilityIcon(visibleScenarioIds.includes(scenario.id))}
               </button>
                 </>
               )}
@@ -1442,12 +1572,15 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         <div className="scenario-row scenario-base">
           {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
           {baseVisible ? (
-            <div className="scenario-colour-swatch-wrapper">
+            <div className="scenario-colour-swatch-wrapper" style={{ position: 'relative' }}>
               <ColourSelector
                 compact={true}
                 value={getScenarioColour('base', baseVisible)}
                 onChange={(colour) => handleColourChange('base', colour)}
               />
+              {getSwatchOverlayStyle('base') && (
+                <div style={getSwatchOverlayStyle('base') as React.CSSProperties} />
+              )}
             </div>
           ) : (
             <div className="scenario-colour-swatch-placeholder"></div>
@@ -1481,10 +1614,17 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           </button>
           <button
             className="scenario-action-btn"
-            onClick={() => handleToggleVisibility('base')}
-            title="Toggle visibility"
+            onClick={() => handleCycleVisibilityMode('base')}
+            title={getModeTooltip('base')}
           >
-            {baseVisible ? <Eye size={14} /> : <EyeOff size={14} />}
+            {getModeIcon('base')}
+          </button>
+          <button
+            className="scenario-action-btn"
+            onClick={() => operations.toggleScenarioVisibility(tabId!, 'base')}
+            title={baseVisible ? 'Hide Base' : 'Show Base'}
+          >
+            {getVisibilityIcon(baseVisible)}
           </button>
         </div>
       </div>

@@ -20,6 +20,7 @@ import { resolveRelativeDate } from '../lib/dateFormat';
 import type { Graph, DateRange } from '../types';
 import { showProgressToast, completeProgressToast } from '../components/ProgressToast';
 import { sessionLogService } from './sessionLogService';
+import { getEdgesInTopologicalOrder, getActiveEdges, type GraphForPath } from './statisticalEnhancementService';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -314,7 +315,125 @@ export function getItemsNeedingFetch(
     }
   }
   
-  return items;
+  // Sort items in topological order (upstream edges first) for LAG calculation
+  // This ensures that when batch fetching latency edges, upstream t95 values
+  // are computed before they're needed for downstream path_t95 calculations.
+  // See design.md §4.7.2.
+  const sortedItems = sortFetchItemsTopologically(items, graph);
+  
+  return sortedItems;
+}
+
+/**
+ * Sort fetch items in topological order.
+ * 
+ * For latency calculations, we need upstream edges fetched before downstream
+ * edges so that t95 values are available for path_t95 computation.
+ * 
+ * Non-edge items (cases) are placed at the end since they don't affect edge ordering.
+ * 
+ * @param items - Unsorted fetch items
+ * @param graph - The graph for topology information
+ * @returns Items sorted in topological order (upstream first)
+ */
+function sortFetchItemsTopologically(items: FetchItem[], graph: Graph): FetchItem[] {
+  if (!graph.edges || items.length <= 1) return items;
+
+  // Build map of targetId (edgeId) -> FetchItem for quick lookup
+  const edgeItems = new Map<string, FetchItem>();
+  const nonEdgeItems: FetchItem[] = [];
+
+  for (const item of items) {
+    if (item.type === 'parameter' && item.targetId) {
+      // Multiple items might share the same targetId (p, cost_gbp, labour_cost on same edge)
+      // Store all of them
+      const existingItems = edgeItems.get(item.targetId);
+      if (existingItems) {
+        // Handle multiple items per edge - create array
+        const arr = Array.isArray(existingItems) ? existingItems : [existingItems];
+        arr.push(item);
+        edgeItems.set(item.targetId, arr as any);
+      } else {
+        edgeItems.set(item.targetId, item);
+      }
+    } else {
+      nonEdgeItems.push(item);
+    }
+  }
+
+  // If no edge items, return as-is
+  if (edgeItems.size === 0) return items;
+
+  // Check if edges have topology data (from/to fields)
+  const hasTopologyData = graph.edges.some(e => e.from && e.to);
+  if (!hasTopologyData) {
+    // No topology data - return items in original order
+    // This handles mock/test graphs without from/to fields
+    return items;
+  }
+
+  try {
+    // Get edges in topological order
+    const graphForPath: GraphForPath = {
+      nodes: graph.nodes?.map(n => ({ id: n.uuid || n.id || '', type: n.type })) || [],
+      edges: graph.edges?.filter(e => e.from && e.to).map(e => ({
+        id: e.id,
+        uuid: e.uuid,
+        from: e.from,
+        to: e.to,
+        p: e.p,
+      })) || [],
+    };
+
+    // If no edges with topology, return original order
+    if (graphForPath.edges.length === 0) {
+      return items;
+    }
+
+    // Use all edges as active for topological ordering
+    // (We want to maintain consistent order regardless of scenario)
+    const allEdgeIds = new Set(graphForPath.edges.map(e => e.uuid || e.id || `${e.from}->${e.to}`));
+    const sortedEdges = getEdgesInTopologicalOrder(graphForPath, allEdgeIds);
+
+    // Build sorted items list following topological order
+    const sortedItems: FetchItem[] = [];
+    const addedIds = new Set<string>();
+
+    for (const edge of sortedEdges) {
+      const edgeId = edge.uuid || edge.id || '';
+      const itemOrItems = edgeItems.get(edgeId);
+      if (itemOrItems) {
+        // Handle both single item and array of items
+        const itemsArray = Array.isArray(itemOrItems) ? itemOrItems : [itemOrItems];
+        for (const item of itemsArray) {
+          if (!addedIds.has(item.id)) {
+            sortedItems.push(item);
+            addedIds.add(item.id);
+          }
+        }
+      }
+    }
+
+    // Add any edge items not in topological sort (disconnected edges)
+    for (const [_, itemOrItems] of edgeItems) {
+      const itemsArray = Array.isArray(itemOrItems) ? itemOrItems : [itemOrItems];
+      for (const item of itemsArray) {
+        if (!addedIds.has(item.id)) {
+          sortedItems.push(item);
+          addedIds.add(item.id);
+        }
+      }
+    }
+
+    // Add non-edge items at the end
+    sortedItems.push(...nonEdgeItems);
+
+    return sortedItems;
+  } catch (error) {
+    // If topological sort fails, fall back to original order
+    console.warn('[fetchDataService] Topological sort failed, using original order:', error);
+    return items;
+  }
 }
 
 // ============================================================================

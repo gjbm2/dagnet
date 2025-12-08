@@ -1039,3 +1039,186 @@ export function mergeTimeSeriesIntoParameter(
   return [...existingValues, newValue];
 }
 
+// =============================================================================
+// Cohort Aggregation Functions (LAG support)
+// Design reference: design.md §5.3-5.6
+// =============================================================================
+
+import type { CohortData } from './statisticalEnhancementService';
+
+/**
+ * Convert stored parameter values to CohortData array for LAG statistical calculations.
+ * 
+ * This extracts per-cohort data (n, k, age, lag stats) from a ParameterValue entry
+ * that was stored with cohort mode enabled.
+ * 
+ * @param value - Single ParameterValue entry from parameter file (cohort mode)
+ * @param queryDate - The date to use for computing cohort ages (typically "today")
+ * @returns Array of CohortData for use with statisticalEnhancementService functions
+ */
+export function parameterValueToCohortData(
+  value: ParameterValue,
+  queryDate: Date
+): CohortData[] {
+  const { dates, n_daily, k_daily, median_lag_days, mean_lag_days } = value;
+
+  if (!dates || !n_daily || !k_daily) {
+    return [];
+  }
+
+  if (dates.length !== n_daily.length || dates.length !== k_daily.length) {
+    console.warn('parameterValueToCohortData: Array length mismatch');
+    return [];
+  }
+
+  const cohorts: CohortData[] = [];
+
+  for (let i = 0; i < dates.length; i++) {
+    const cohortDate = parseDate(dates[i]);
+    const ageMs = queryDate.getTime() - cohortDate.getTime();
+    const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+
+    cohorts.push({
+      date: dates[i],
+      n: n_daily[i],
+      k: k_daily[i],
+      age: Math.max(0, ageDays), // Ensure non-negative
+      median_lag_days: median_lag_days?.[i],
+      mean_lag_days: mean_lag_days?.[i],
+    });
+  }
+
+  return cohorts;
+}
+
+/**
+ * Aggregate cohort data from multiple ParameterValue entries.
+ * 
+ * For latency edges, we may have multiple slices (different contexts, etc.)
+ * that need to be combined. This function handles the combination by:
+ * 1. Collecting all cohorts from all slices
+ * 2. For overlapping dates/contexts, using the most recent retrieved_at
+ * 3. Returning a unified CohortData array
+ * 
+ * @param values - Array of ParameterValue entries (cohort mode)
+ * @param queryDate - The date to use for computing cohort ages
+ * @returns Aggregated CohortData array
+ */
+export function aggregateCohortData(
+  values: ParameterValue[],
+  queryDate: Date
+): CohortData[] {
+  // Collect all cohorts from all values
+  const allCohorts: CohortData[] = [];
+  const dateMap = new Map<string, { cohort: CohortData; retrieved_at: string }>();
+
+  for (const value of values) {
+    const cohorts = parameterValueToCohortData(value, queryDate);
+    const retrievedAt = value.data_source?.retrieved_at || '';
+
+    for (const cohort of cohorts) {
+      const existing = dateMap.get(cohort.date);
+      
+      // Keep the more recent data for each date
+      if (!existing || retrievedAt > existing.retrieved_at) {
+        dateMap.set(cohort.date, { cohort, retrieved_at: retrievedAt });
+      }
+    }
+  }
+
+  // Extract cohorts sorted by date
+  const result = Array.from(dateMap.values())
+    .map(item => item.cohort)
+    .sort((a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime());
+
+  return result;
+}
+
+/**
+ * Calculate aggregate latency statistics from cohort data.
+ * 
+ * Computes weighted median and mean lag from per-cohort lag arrays.
+ * Weights by k (number of converters) since lag is only meaningful for converters.
+ * 
+ * @param cohorts - Array of CohortData with lag information
+ * @returns Aggregate latency stats, or undefined if no lag data
+ */
+export function aggregateLatencyStats(
+  cohorts: CohortData[]
+): { median_lag_days: number; mean_lag_days: number } | undefined {
+  // Filter to cohorts with lag data
+  const withLag = cohorts.filter(c => 
+    c.k > 0 && 
+    c.median_lag_days !== undefined && 
+    c.median_lag_days > 0
+  );
+
+  if (withLag.length === 0) {
+    return undefined;
+  }
+
+  // Weighted average by k (converters)
+  let totalK = 0;
+  let weightedMedian = 0;
+  let weightedMean = 0;
+
+  for (const cohort of withLag) {
+    totalK += cohort.k;
+    weightedMedian += cohort.k * (cohort.median_lag_days || 0);
+    weightedMean += cohort.k * (cohort.mean_lag_days || cohort.median_lag_days || 0);
+  }
+
+  if (totalK === 0) {
+    return undefined;
+  }
+
+  return {
+    median_lag_days: weightedMedian / totalK,
+    mean_lag_days: weightedMean / totalK,
+  };
+}
+
+/**
+ * Check if a ParameterValue entry is in cohort mode.
+ * 
+ * Cohort mode entries have cohort_from/cohort_to instead of window_from/window_to,
+ * or have sliceDSL containing 'cohort('.
+ * 
+ * @param value - ParameterValue entry to check
+ * @returns True if this is cohort mode data
+ */
+export function isCohortModeValue(value: ParameterValue): boolean {
+  // Has cohort date fields
+  if (value.cohort_from || value.cohort_to) {
+    return true;
+  }
+
+  // sliceDSL contains cohort function
+  if (value.sliceDSL && value.sliceDSL.includes('cohort(')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Get the effective date range from a ParameterValue.
+ * 
+ * Returns cohort_from/cohort_to for cohort mode, window_from/window_to for window mode.
+ * 
+ * @param value - ParameterValue entry
+ * @returns Date range, or undefined if no dates set
+ */
+export function getValueDateRange(value: ParameterValue): DateRange | undefined {
+  if (isCohortModeValue(value)) {
+    if (value.cohort_from && value.cohort_to) {
+      return { start: value.cohort_from, end: value.cohort_to };
+    }
+  } else {
+    if (value.window_from && value.window_to) {
+      return { start: value.window_from, end: value.window_to };
+    }
+  }
+  return undefined;
+}
+

@@ -1,664 +1,137 @@
-nodes:
-  - uuid: 86469c9f-2f83-49ca-a154-589231be5511
-    id: household-created
-    label: Household created
-    absorbing: false
-    entry:
-      is_start: false
-      entry_weight: 1
-    layout:
-      x: -1175
-      'y': -168
-    description: ''
-    event_id: household-created
-  - uuid: addb99b6-5773-482c-a437-4661c8433ff7
-    id: abandonned-before-delegation
-    label: abandonned-before-delegation
-    absorbing: true
-    layout:
-      x: -903
-      'y': 63
-    description: ''
-    outcome_type: failure
-    outcome_type_overridden: true
-  - uuid: 16974652-b532-41ee-b4d5-a3ef5381591d
-    id: household-delegated
-    label: household-delegated
-    absorbing: false
-    layout:
-      x: -967
-      'y': -227
-    description: ''
-    tags: []
-    event_id: household-delegated
-    event_id_overridden: false
-  - uuid: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    id: gave-bds-in-onboarding
-    label: Gave bds in onboarding
-    absorbing: false
-    layout:
-      x: -425
-      'y': -358
-    images: []
-    url: ''
-    url_overridden: true
-    event_id: gave-bds-in-onboarding
-    event_id_overridden: false
-  - uuid: 5788d308-a7a9-49ce-a755-07491315a603
-    id: viewed-coffee-screen
-    label: Viewed coffee screen
-    absorbing: false
-    layout:
-      x: -787
-      'y': -312
-    event_id: viewed-coffee-screen
-    event_id_overridden: false
-  - uuid: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    id: switch-registered
-    label: Switch registered
-    absorbing: false
-    layout:
-      x: 236
-      'y': -100
-    event_id: switch-registered
-    event_id_overridden: false
-  - uuid: 30aabc44-e448-4359-b0d0-338a231edb92
-    id: switch-success
-    label: Switch success
-    absorbing: true
-    layout:
-      x: 427
-      'y': -215
-    event_id: switch-success
-    event_id_overridden: false
-    label_overridden: false
-    outcome_type: success
-    outcome_type_overridden: true
-  - uuid: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
-    id: post-recommendation-failure
-    label: Post recommendation failure
-    absorbing: true
-    layout:
-      x: 158
-      'y': 146
-    outcome_type: failure
-    outcome_type_overridden: true
-  - uuid: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
-    id: post-registration-failure
-    label: Post registration failure
-    absorbing: true
-    layout:
-      x: 423
-      'y': 1
-    outcome_type: failure
-    outcome_type_overridden: true
-  - uuid: c7620524-c88b-4afd-a012-fb9f1d46a14a
-    id: eon-customer
-    label: Eon customer
-    absorbing: false
-    layout:
-      x: -1367
-      'y': -299
-    event_id: eon-customer
-    event_id_overridden: false
-  - uuid: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
-    id: non-eon-customer
-    label: Non eon customer
-    absorbing: false
-    layout:
-      x: -1371
-      'y': -156
-    event_id: non-eon-customer
-    event_id_overridden: true
-  - uuid: 3af310f0-53d7-417e-86b0-32bdb2667a47
-    id: Question-answered
-    label: Question answered
-    absorbing: false
-    layout:
-      x: -1589
-      'y': -176
-    event_id: question-answered
-    event_id_overridden: true
-    entry:
-      is_start: true
-  - uuid: 7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f
-    id: no-recommendation-sent
-    label: No recommendation sent
-    absorbing: true
-    layout:
-      x: -201
-      'y': -520
-    outcome_type: failure
-    outcome_type_overridden: true
-  - uuid: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
-    id: mobile-or-broadband-first-rec
-    label: Mobile or broadband first rec
-    absorbing: false
-    layout:
-      x: -565
-      'y': 81
-    event_id: non-energy-rec
-    event_id_overridden: true
-  - uuid: c28ed074-eb53-44c9-9aa8-1a1ae72bf948
-    id: recommendation-retention
-    label: Recommendation retention
-    absorbing: false
-    layout:
-      x: -569
-      'y': -67
-    event_id: energy-rec
-    event_id_overridden: true
-  - uuid: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
-    id: energy-rec
-    label: Energy rec
-    absorbing: false
-    layout:
-      x: -147
-      'y': -299
-    event_id: energy-rec
-    event_id_overridden: false
-edges:
-  - uuid: 532a304a-c435-4ea5-aa6a-44714b40adab
-    id: switch-registered-to-post-registration-failure
-    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    to: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.283
-    query: from(switch-registered).to(post-registration-failure)
-    description: ''
-  - uuid: 76e0e0f8-133d-4065-9fab-56480063d9c9
-    id: viewed-coffee-screen-to-gave-bds-in-onboarding
-    from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.421
-      stdev: 0.01602681499036883
-      id: coffee-to-bds
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        'n': 949
-        k: 400
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.319Z'
-        source: amplitude
-        full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.319Z'
-        full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
-    query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
-    description: ''
-  - uuid: household-created-to-abandonned-before-delegation
-    id: 86469c9f-2f83-49ca-a154-589231be5511->addb99b6-5773-482c-a437-4661c8433ff7
-    from: 86469c9f-2f83-49ca-a154-589231be5511
-    to: addb99b6-5773-482c-a437-4661c8433ff7
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.477
-    query: from(household-created).to(abandonned-before-delegation)
-    description: ''
-  - uuid: 370dce1d-3a36-4109-9711-204c301478c8
-    id: switch-registered-to-switch-success
-    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    to: 30aabc44-e448-4359-b0d0-338a231edb92
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.717
-      stdev: 0.0237411386977682
-      id: registration-to-success
-      evidence:
-        window_from: 16-Nov-25
-        source: amplitude
-        'n': 360
-        k: 258
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.339Z'
-        full_query: from(switch-registered).to(switch-success)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.339Z'
-        full_query: from(switch-registered).to(switch-success)
-      connection: amplitude-prod
-      connection_overridden: true
-    query: from(switch-registered).to(switch-success)
-    description: ''
-  - uuid: fcc2cbac-c5d9-4659-8947-97e2b4b09216
-    id: Question-answered-to-eon-customer
-    from: 3af310f0-53d7-417e-86b0-32bdb2667a47
-    to: c7620524-c88b-4afd-a012-fb9f1d46a14a
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.111
-      id: eon-customers
-      stdev: 0.0038596880740528125
-      evidence:
-        window_from: 16-Nov-25
-        source: amplitude
-        'n': 6624
-        k: 737
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.363Z'
-        full_query: from(Question-answered).to(eon-customer)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.363Z'
-        full_query: from(Question-answered).to(eon-customer)
-      connection: amplitude-prod
-      connection_overridden: true
-    query: from(Question-answered).to(eon-customer)
-    description: ''
-  - uuid: 22a14108-f330-4f44-900e-f74417264e63
-    id: Question-answered-to-non-eon-customer
-    from: 3af310f0-53d7-417e-86b0-32bdb2667a47
-    to: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.889
-      connection_overridden: false
-      stdev: 0.006
-      evidence:
-        'n': 5854
-        k: 4349
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-02T17:47:09.323Z'
-        query:
-          from: question-answered
-          to: non-eon-customer
-          context: []
-          case: []
-          start: '2025-11-09T00:00:00.000Z'
-          end: '2025-11-15T00:00:00.000Z'
-          query_params: >-
-            e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&e=%7B%22event_type%22%3A%22Question%20Answered%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22question%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22energy.provider%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22answer%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22cky4fnmyz000610t2l2fry3b5%22%5D%7D%5D%7D&start=20251109&end=20251115&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D
-          from_step_index: 0
-          to_step_index: 1
-        full_query: >-
-          {"from":"question-answered","to":"non-eon-customer","context":[],"case":[],"start":"2025-11-09T00:00:00.000Z","end":"2025-11-15T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Question%20Answered%22%7D&e=%7B%22event_type%22%3A%22Question%20Answered%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22question%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22energy.provider%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22answer%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22cky4fnmyz000610t2l2fry3b5%22%5D%7D%5D%7D&start=20251109&end=20251115&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
-    query: from(Question-answered).to(non-eon-customer)
-    description: ''
-    query_overridden: true
-  - uuid: e543f861-9b37-482b-b12a-a2aca8cf488d
-    id: non-eon-customer-to-household-created
-    from: 309fee8a-e95d-4fc4-b5f0-a30946741e1c
-    to: 86469c9f-2f83-49ca-a154-589231be5511
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 1
-    query: from(non-eon-customer).to(household-created)
-    description: ''
-  - uuid: d00a4122-5f98-4c50-8cfe-7318b846ca0b
-    id: eon-customer-to-household-created
-    from: c7620524-c88b-4afd-a012-fb9f1d46a14a
-    to: 86469c9f-2f83-49ca-a154-589231be5511
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 1
-    query: from(eon-customer).to(household-created)
-    description: ''
-  - uuid: 3d0a0757-8224-4cf0-a841-4ad17cd48d91
-    id: household-created-to-household-delegated
-    from: 86469c9f-2f83-49ca-a154-589231be5511
-    to: 16974652-b532-41ee-b4d5-a3ef5381591d
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.523
-      id: household-delegation-rate
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.010663302321906966
-      evidence:
-        'n': 2194
-        k: 1148
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.394Z'
-        source: amplitude
-        full_query: from(household-created).to(household-delegated)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.394Z'
-        full_query: from(household-created).to(household-delegated)
-    query: from(household-created).to(household-delegated)
-    description: ''
-  - uuid: 9d2ebbef-d009-4043-80b1-b4ec43b728d0
-    id: gave-bds-in-onboarding-to-no-recommendation-sent
-    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    to: 7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.412
-    description: ''
-    query: from(gave-bds-in-onboarding).to(no-recommendation-sent)
-  - uuid: 1531873e-c92b-49e7-bdfc-a7d375bd8eab
-    id: mobile-or-broadband-first-rec-to-post-recommendation-failure
-    from: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
-    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.928
-    description: ''
-    query: from(mobile-or-broadband-first-rec).to(post-recommendation-failure)
-  - uuid: cd3edbb3-6b99-4217-9ce9-bc63964f1151
-    id: recommendation-retention-to-post-recommendation-failure
-    from: c28ed074-eb53-44c9-9aa8-1a1ae72bf948
-    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.541
-    description: ''
-    query: from(recommendation-retention).to(post-recommendation-failure)
-  - uuid: 9624cce1-21f3-4085-9388-c155b5b657fd
-    id: mobile-or-broadband-first-rec-to-switch-registered
-    from: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
-    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.072
-      id: non-energy-rec-to-reg
-      stdev: 0.008983075874883449
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        'n': 828
-        k: 60
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.418Z'
-        source: amplitude
-        full_query: from(mobile-or-broadband-first-rec).to(switch-registered)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.418Z'
-        full_query: from(mobile-or-broadband-first-rec).to(switch-registered)
-    description: ''
-    query: from(mobile-or-broadband-first-rec).to(switch-registered)
-  - uuid: cd415317-4ac1-4bab-8f96-65da94b97f15
-    id: recommendation-retention-to-switch-registered
-    from: c28ed074-eb53-44c9-9aa8-1a1ae72bf948
-    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.459
-      id: retention-rec-to-registration
-      stdev: 0.05792807749409747
-      evidence:
-        'n': 74
-        k: 34
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.442Z'
-        source: amplitude
-        full_query: from(recommendation-retention).to(switch-registered)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.442Z'
-        full_query: from(recommendation-retention).to(switch-registered)
-      connection: amplitude-prod
-    description: ''
-    query: from(recommendation-retention).to(switch-registered)
-    query_overridden: true
-    n_query: from(household-created).to(recommendation-retention).visited(eon-customer)
-    n_query_overridden: true
-  - uuid: 1becf566-8c63-496f-b03e-207d52a710b9
-    id: household-delegated-to-recommendation-retention
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: c28ed074-eb53-44c9-9aa8-1a1ae72bf948
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.06
-      id: delegated-to-retention-rec
-      stdev: 0.005524443910429403
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        'n': 1848
-        k: 111
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.458Z'
-        source: amplitude
-        full_query: from(household-delegated).to(recommendation-retention).visited(eon-customer)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.458Z'
-        full_query: from(household-delegated).to(recommendation-retention).visited(eon-customer)
-    query: from(household-delegated).to(recommendation-retention).visited(eon-customer)
-    description: ''
-    query_overridden: true
-    n_query: from(household-created).to(household-delegated)
-    n_query_overridden: true
-  - uuid: 10e37cc7-0d37-4cd9-844b-653148025a51
-    id: household-delegated-to-mobile-or-broadband-first-rec
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.169
-      id: delegated-to-non-energy-rec
-      stdev: 0.008717518561501884
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        'n': 1848
-        k: 313
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.475Z'
-        source: amplitude
-        full_query: from(household-delegated).to(mobile-or-broadband-first-rec)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.475Z'
-        full_query: from(household-delegated).to(mobile-or-broadband-first-rec)
-    query: from(household-delegated).to(mobile-or-broadband-first-rec)
-    description: ''
-    n_query: from(household-created).to(household-delegated)
-    n_query_overridden: true
-  - uuid: 259da2be-8149-40f2-ad9e-e2bea18bb1fb
-    id: household-delegated-to-no-recommendation-sent
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: 7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.322
-    query: from(household-delegated).to(no-recommendation-sent).minus(viewed-coffee-screen)
-    description: ''
-  - uuid: 77d0a69e-3c75-4722-932b-7f54d317d0ce
-    id: gave-bds-in-onboarding-to-energy-rec
-    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
-    to: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.588
-      id: bds-to-energy-rec
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.020060373990809913
-      evidence:
-        'n': 602
-        k: 354
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.487Z'
-        source: amplitude
-        full_query: from(gave-bds-in-onboarding).to(energy-rec)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.487Z'
-        query: from(gave-bds-in-onboarding).to(energy-rec)
-        full_query: from(gave-bds-in-onboarding).to(energy-rec)
-    query: from(gave-bds-in-onboarding).to(energy-rec)
-    description: ''
-  - uuid: b00b2e14-f795-46e6-96c5-f46bfedf458d
-    id: energy-rec-to-post-recommendation-failure
-    from: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
-    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.214
-    query: from(energy-rec).to(post-recommendation-failure)
-    conditional_p:
-      - condition: visited(gave-bds-in-onboarding)
-        query: from(energy-rec).to(post-recommendation-failure).visited(gave-bds-in-onboarding)
-        query_overridden: false
-        p:
-          mean: 0.637
-    description: ''
-  - uuid: 64f4529c-62b8-4e7e-8479-c5289d925e58
-    id: household-delegated-to-viewed-coffee-screen
-    from: 16974652-b532-41ee-b4d5-a3ef5381591d
-    to: 5788d308-a7a9-49ce-a755-07491315a603
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.449
-      id: delegated-to-coffee
-      stdev: 0.011570389697366193
-      connection: amplitude-prod
-      connection_overridden: true
-      evidence:
-        'n': 1848
-        k: 829
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.576Z'
-        source: amplitude
-        full_query: from(household-delegated).to(viewed-coffee-screen)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.576Z'
-        full_query: from(household-delegated).to(viewed-coffee-screen)
-    query: from(household-delegated).to(viewed-coffee-screen)
-    description: ''
-    n_query: from(household-created).to(household-delegated)
-    n_query_overridden: true
-  - uuid: 13b5397f-9feb-453a-8e86-500c0693b4af
-    id: viewed-coffee-screen-to-energy-rec
-    from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.541
-      id: no-bdos-to-rec
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.014631066381104141
-      evidence:
-        'n': 1160
-        k: 628
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.587Z'
-        source: amplitude
-        full_query: from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.587Z'
-        query: from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)
-        full_query: from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)
-    query: from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)
-    description: ''
-  - uuid: 46ceb603-d6d1-421a-9658-083d4797b76a
-    id: viewed-coffee-screen-to-no-recommendation-sent
-    from: 5788d308-a7a9-49ce-a755-07491315a603
-    to: 7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.038
-    query: from(viewed-coffee-screen).to(no-recommendation-sent).minus(gave-bds-in-onboarding)
-    description: ''
-  - uuid: d45debd8-939b-4abb-b0d0-c5ef62412add
-    id: energy-rec-to-switch-registered
-    from: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
-    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.786
-      id: rec-with-bdos-to-registration
-      connection: amplitude-prod
-      connection_overridden: true
-      stdev: 0.01817855123355225
-      evidence:
-        'n': 509
-        k: 400
-        window_from: 16-Nov-25
-        window_to: 28-Nov-25
-        retrieved_at: '2025-12-05T02:45:20.621Z'
-        source: amplitude
-        full_query: from(energy-rec).to(switch-registered)
-      data_source:
-        type: amplitude
-        retrieved_at: '2025-12-05T02:45:20.621Z'
-        full_query: from(energy-rec).to(switch-registered)
-    description: ''
-    query: from(energy-rec).to(switch-registered)
-    query_overridden: false
-    conditional_p:
-      - condition: visited(gave-bds-in-onboarding)
-        query: from(energy-rec).to(switch-registered).visited(gave-bds-in-onboarding)
-        query_overridden: false
-        p:
-          mean: 0.36257309941520466
-          stdev: 0.03676333723816272
-          evidence:
-            'n': 171
-            k: 62
-          data_source:
-            type: amplitude
-            retrieved_at: '2025-12-04T23:29:02.551Z'
-            query:
-              from: energy-rec
-              to: switch-registered
-              visited_upstream: []
-              context: []
-              case: []
-              start: '2025-11-09T00:00:00.000Z'
-              end: '2025-11-15T00:00:00.000Z'
-              query_params: >-
-                e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251109&end=20251115&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%2C%7B%22type%22%3A%22event%22%2C%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%2C%22op%22%3A%22%3E%3D%22%2C%22value%22%3A1%2C%22time_type%22%3A%22rolling%22%2C%22time_value%22%3A366%7D%5D
-              from_step_index: 0
-              to_step_index: 1
-            full_query: >-
-              {"from":"energy-rec","to":"switch-registered","visited_upstream":[],"context":[],"case":[],"start":"2025-11-09T00:00:00.000Z","end":"2025-11-15T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251109&end=20251115&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%2C%7B%22type%22%3A%22event%22%2C%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%2C%22op%22%3A%22%3E%3D%22%2C%22value%22%3A1%2C%22time_type%22%3A%22rolling%22%2C%22time_value%22%3A366%7D%5D","from_step_index":0,"to_step_index":1}
-          id: gave-bds-in-onboarding-conditional
-          connection: amplitude-prod
-          connection_overridden: true
-policies:
-  default_outcome: success
-metadata:
-  name: conversion-flow-v0-ezra
-  description: ''
-  created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-12-05T02:50:17.519Z'
-  version: 1.0.0
-  updated: '2025-11-25T18:25:17.542Z'
-currentQueryDSL: window(28-Nov-25:5-Dec-25)
-dataInterestsDSL: window(-30d:-1d)
-baseDSL: window(16-Nov-25:21-Nov-25)
+{
+  "nodes": [
+    {
+      "uuid": "f9cc9b6f-3e47-4a84-aeda-7ea554fe0a22",
+      "id": "household-created",
+      "label": "Household created",
+      "absorbing": false,
+      "description": "",
+      "entry": {
+        "is_start": true,
+        "entry_weight": 1
+      },
+      "layout": {
+        "x": -329,
+        "y": 66
+      },
+      "event_id": "household-created",
+      "event_id_overridden": true,
+      "images": [
+        {
+          "image_id": "household-created-img",
+          "caption": "Dagnet time",
+          "file_extension": "jpg",
+          "caption_overridden": false
+        }
+      ],
+      "images_overridden": true
+    },
+    {
+      "uuid": "b4a7bca5-34ab-4d0b-a68f-3568bf4d839c",
+      "id": "household-delegated",
+      "label": "Household delegated",
+      "absorbing": true,
+      "description": "",
+      "layout": {
+        "x": 104,
+        "y": -6
+      },
+      "event_id": "household-delegated",
+      "event_id_overridden": true,
+      "outcome_type": "success",
+      "outcome_type_overridden": true
+    },
+    {
+      "uuid": "2419bd76-d0f7-4688-a2ef-fc53865413cc",
+      "id": "abandonned-before-delegation",
+      "label": "Abandonned before delegation",
+      "absorbing": true,
+      "layout": {
+        "x": 101,
+        "y": 182
+      },
+      "outcome_type": "failure",
+      "outcome_type_overridden": true
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "household-createda-to-abandonned",
+      "id": "household-created-to-abandonned-before-delegation",
+      "from": "f9cc9b6f-3e47-4a84-aeda-7ea554fe0a22",
+      "to": "2419bd76-d0f7-4688-a2ef-fc53865413cc",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.47
+      },
+      "query": "from(household-created).to(abandonned-before-delegation)",
+      "description": ""
+    },
+    {
+      "uuid": "start-to-end",
+      "id": "household-created-to-household-delegated",
+      "from": "f9cc9b6f-3e47-4a84-aeda-7ea554fe0a22",
+      "to": "b4a7bca5-34ab-4d0b-a68f-3568bf4d839c",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.53,
+        "connection": "amplitude-prod",
+        "connection_overridden": true,
+        "stdev": 0.008,
+        "evidence": {
+          "n": 3952,
+          "k": 2096,
+          "window_from": "2025-11-12T00:00:00Z",
+          "window_to": "2025-11-19T23:59:59Z",
+          "retrieved_at": "2025-11-19T23:51:27.841Z",
+          "source": "amplitude",
+          "full_query": "{\"from\":\"Household Created\",\"to\":\"Household DelegationStatusChanged\",\"context\":[],\"case\":[],\"event_filters\":{\"Household Created\":[],\"Household DelegationStatusChanged\":[{\"property\":\"newDelegationStatus\",\"operator\":\"is any of\",\"values\":[\"ON\"]}]}}"
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2025-11-19T23:51:27.841Z",
+          "query": {
+            "from": "Household Created",
+            "to": "Household DelegationStatusChanged",
+            "context": [],
+            "case": [],
+            "event_filters": {
+              "Household Created": [],
+              "Household DelegationStatusChanged": [
+                {
+                  "property": "newDelegationStatus",
+                  "operator": "is any of",
+                  "values": [
+                    "ON"
+                  ]
+                }
+              ]
+            },
+            "query_params": "e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251112&end=20251119&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D",
+            "from_step_index": 0,
+            "to_step_index": 1
+          },
+          "full_query": "{\"from\":\"Household Created\",\"to\":\"Household DelegationStatusChanged\",\"context\":[],\"case\":[],\"event_filters\":{\"Household Created\":[],\"Household DelegationStatusChanged\":[{\"property\":\"newDelegationStatus\",\"operator\":\"is any of\",\"values\":[\"ON\"]}]}}"
+        },
+        "id": "household-delegation-rate"
+      },
+      "query": "from(household-created).to(household-delegated)",
+      "description": "",
+      "parameter_id": "household-delegation-rate"
+    }
+  ],
+  "policies": {
+    "default_outcome": "success"
+  },
+  "metadata": {
+    "name": "hello-world",
+    "description": "",
+    "created_at": "2025-11-19T00:48:15.088Z",
+    "updated_at": "2025-12-02T18:14:05.624Z",
+    "version": "1.0.0",
+    "updated": "2025-11-27T03:41:03.940Z"
+  },
+  "currentQueryDSL": "cohort(1-Dec-25:8-Dec-25)"
+}

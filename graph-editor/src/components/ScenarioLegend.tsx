@@ -10,7 +10,9 @@
 
 import React, { useCallback, useState } from 'react';
 import { Scenario } from '../types/scenarios';
-import { Eye, EyeOff, X, Plus } from 'lucide-react';
+import { Eye, EyeOff, Images, Image, Square, X, Plus } from 'lucide-react';
+import type { ScenarioVisibilityMode } from '../types';
+import toast from 'react-hot-toast';
 import './ScenarioLegend.css';
 
 interface ScenarioLegendProps {
@@ -22,6 +24,8 @@ interface ScenarioLegendProps {
   showCurrent: boolean;
   showBase: boolean;
   onToggleVisibility: (scenarioId: string) => void;
+  onCycleVisibilityMode?: (scenarioId: string) => void;
+  getVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode;
   onDelete: (scenarioId: string) => void;
   onNewScenario?: () => void;
 }
@@ -35,10 +39,126 @@ export function ScenarioLegend({
   showCurrent,
   showBase,
   onToggleVisibility,
+  onCycleVisibilityMode,
+  getVisibilityMode,
   onDelete,
   onNewScenario
 }: ScenarioLegendProps) {
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
+  
+  /**
+   * Get simple visibility (eye) icon for a scenario (bool)
+   */
+  const getVisibilityIcon = useCallback((scenarioId: string) => {
+    const isVisible = visibleScenarioIds.includes(scenarioId);
+    return isVisible ? <Eye size={14} /> : <EyeOff size={14} />;
+  }, [visibleScenarioIds]);
+  
+  /**
+   * Get visibility tooltip for a scenario
+   */
+  const getVisibilityTooltip = useCallback((scenarioId: string, name: string): string => {
+    const isVisible = visibleScenarioIds.includes(scenarioId);
+    return isVisible ? `Hide ${name}` : `Show ${name}`;
+  }, [visibleScenarioIds]);
+  
+  /**
+   * Get tri-state mode icon (F+E / F / E)
+   */
+  const getModeIcon = useCallback((scenarioId: string) => {
+    if (!getVisibilityMode) return <Images size={14} />;
+    const mode = getVisibilityMode(scenarioId);
+    switch (mode) {
+      case 'f+e': return <Images size={14} />;
+      case 'f': return <Image size={14} />;
+      case 'e': return <Square size={14} />;
+      default: return <Images size={14} />;
+    }
+  }, [getVisibilityMode]);
+  
+  /**
+   * Get tri-state mode tooltip for a scenario
+   */
+  const getModeTooltip = useCallback((scenarioId: string, name: string): string => {
+    if (!getVisibilityMode) return `${name}: Cycle forecast/evidence display`;
+    const mode = getVisibilityMode(scenarioId);
+    switch (mode) {
+      case 'f+e': return `${name}: Forecast + Evidence (click to cycle)`;
+      case 'f': return `${name}: Forecast only (click to cycle)`;
+      case 'e': return `${name}: Evidence only (click to cycle)`;
+      default: return `${name}: Cycle forecast/evidence display`;
+    }
+  }, [getVisibilityMode]);
+  
+  /**
+   * Handle visibility toggle (eye icon)
+   */
+  const handleVisibilityClick = useCallback((scenarioId: string) => {
+    onToggleVisibility(scenarioId);
+  }, [onToggleVisibility]);
+  
+  /**
+   * Handle tri-state mode cycle (F+E/F/E)
+   */
+  const handleModeClick = useCallback((scenarioId: string) => {
+    if (!onCycleVisibilityMode || !getVisibilityMode) return;
+    
+    const currentMode = getVisibilityMode(scenarioId);
+    const modeOrder: ScenarioVisibilityMode[] = ['f+e', 'f', 'e'];
+    const currentIndex = modeOrder.indexOf(currentMode);
+    const nextMode = modeOrder[(currentIndex + 1) % modeOrder.length];
+    
+    onCycleVisibilityMode(scenarioId);
+    
+    const modeLabels: Record<ScenarioVisibilityMode, string> = {
+      'f+e': 'Forecast + Evidence',
+      'f': 'Forecast only',
+      'e': 'Evidence only',
+    };
+    toast.success(`${modeLabels[nextMode]}`, { duration: 1500 });
+  }, [onCycleVisibilityMode, getVisibilityMode]);
+  
+  /**
+   * Get chip background style based on visibility mode
+   * - F+E: Gradient solid→striped L→R
+   * - F only: Striped background
+   * - E only: Solid background (default)
+   * - Hidden: Semi-transparent (handled via opacity)
+   */
+  const getChipStyle = useCallback((scenarioId: string, baseColour: string): React.CSSProperties => {
+    if (!getVisibilityMode) {
+      return { backgroundColor: baseColour };
+    }
+    
+    const mode = getVisibilityMode(scenarioId);
+    
+    switch (mode) {
+      case 'f+e':
+        // Smooth gradient: solid left → striped right (evidence → forecast)
+        // Uses CSS mask to smoothly blend solid colour into stripes
+        return {
+          background: `
+            linear-gradient(90deg, ${baseColour} 0%, ${baseColour} 30%, transparent 70%, transparent 100%),
+            repeating-linear-gradient(45deg, ${baseColour} 0px, ${baseColour} 2px, ${baseColour}66 2px, ${baseColour}66 4px)
+          `,
+          backgroundColor: `${baseColour}44`,
+        };
+      case 'f':
+        // Striped background (forecast only)
+        return {
+          background: `repeating-linear-gradient(45deg, ${baseColour} 0px, ${baseColour} 2px, ${baseColour}66 2px, ${baseColour}66 4px)`,
+          backgroundColor: `${baseColour}44`,
+        };
+      case 'e':
+        // Solid background (evidence only)
+        return { backgroundColor: baseColour };
+      case 'hidden':
+        // Semi-transparent (handled via opacity in className)
+        return { backgroundColor: baseColour };
+      default:
+        return { backgroundColor: baseColour };
+    }
+  }, [getVisibilityMode]);
   
   // Count visible scenarios (user scenarios + current/base if visible)
   const visibleCount = visibleScenarioIds.length;
@@ -81,13 +201,13 @@ export function ScenarioLegend({
       {/* Order chips from bottom of stack (left) to top of stack (right) */}
       {/* Bottom: Original -> User Scenarios (reverse order) -> Current (top) */}
       
-      {/* 1. Original (base) - bottom of stack, leftmost */}
+      {/* 1. Base - bottom of stack, leftmost */}
       {shouldShowChips && showBase && (
         <div
           key="base"
           className={`scenario-legend-chip ${!visibleScenarioIds.includes('base') ? 'invisible' : ''}`}
           style={{
-            backgroundColor: getScenarioColour('base', visibleScenarioIds.includes('base')),
+            ...getChipStyle('base', getScenarioColour('base', visibleScenarioIds.includes('base'))),
             opacity: visibleScenarioIds.includes('base') ? 1 : 0.3
           }}
           onClick={(e) => {
@@ -105,16 +225,24 @@ export function ScenarioLegend({
             className="scenario-legend-toggle"
             onClick={(e) => {
               e.stopPropagation();
-              onToggleVisibility('base');
+              handleVisibilityClick('base');
             }}
-            title={visibleScenarioIds.includes('base') ? 'Hide Original' : 'Show Original'}
+            title={getVisibilityTooltip('base', 'Base')}
           >
-            {visibleScenarioIds.includes('base') ? <Eye size={14} /> : <EyeOff size={14} />}
+            {getVisibilityIcon('base')}
+          </button>
+          <button
+            className="scenario-legend-mode-toggle"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleModeClick('base');
+            }}
+            title={getModeTooltip('base', 'Base')}
+          >
+            {getModeIcon('base')}
           </button>
           
-          <span className="scenario-legend-name">Original</span>
-          
-          <div style={{ width: 20 }} />
+          <span className="scenario-legend-name">Base</span>
         </div>
       )}
       
@@ -131,7 +259,7 @@ export function ScenarioLegend({
             key={scenario.id}
             className={`scenario-legend-chip ${!isVisible ? 'invisible' : ''} ${deletingIds.includes(scenario.id) ? 'deleting' : ''}`}
             style={{
-              backgroundColor: colour,
+              ...getChipStyle(scenario.id, colour),
               opacity: isVisible ? 1 : 0.3
             }}
             onClick={(e) => {
@@ -150,11 +278,21 @@ export function ScenarioLegend({
               className="scenario-legend-toggle"
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleVisibility(scenario.id);
+                handleVisibilityClick(scenario.id);
               }}
-              title={isVisible ? 'Hide scenario' : 'Show scenario'}
+              title={getVisibilityTooltip(scenario.id, scenario.name)}
             >
-              {isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
+              {getVisibilityIcon(scenario.id)}
+            </button>
+            <button
+              className="scenario-legend-mode-toggle"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleModeClick(scenario.id);
+              }}
+              title={getModeTooltip(scenario.id, scenario.name)}
+            >
+              {getModeIcon(scenario.id)}
             </button>
             
             <span className="scenario-legend-name">{scenario.name}</span>
@@ -183,7 +321,7 @@ export function ScenarioLegend({
           key="current"
           className={`scenario-legend-chip ${!visibleScenarioIds.includes('current') ? 'invisible' : ''}`}
           style={{
-            backgroundColor: getScenarioColour('current', visibleScenarioIds.includes('current')),
+            ...getChipStyle('current', getScenarioColour('current', visibleScenarioIds.includes('current'))),
             opacity: visibleScenarioIds.includes('current') ? 1 : 0.3
           }}
           onClick={(e) => {
@@ -201,16 +339,24 @@ export function ScenarioLegend({
             className="scenario-legend-toggle"
             onClick={(e) => {
               e.stopPropagation();
-              onToggleVisibility('current');
+              handleVisibilityClick('current');
             }}
-            title={visibleScenarioIds.includes('current') ? 'Hide Current' : 'Show Current'}
+            title={getVisibilityTooltip('current', 'Current')}
           >
-            {visibleScenarioIds.includes('current') ? <Eye size={14} /> : <EyeOff size={14} />}
+            {getVisibilityIcon('current')}
+          </button>
+          <button
+            className="scenario-legend-mode-toggle"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleModeClick('current');
+            }}
+            title={getModeTooltip('current', 'Current')}
+          >
+            {getModeIcon('current')}
           </button>
           
           <span className="scenario-legend-name">Current</span>
-          
-          <div style={{ width: 20 }} />
         </div>
       )}
       

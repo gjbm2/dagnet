@@ -409,9 +409,12 @@ When asked to "run tests":
 - Only build when user asks to verify production readiness
 
 ### Terminal Output
-- **NEVER** use `head`, `tail`, or other truncation commands on test/build output
-- Always show full output so user can see all results
+**ABSOLUTELY NEVER USE `head`, `tail`, OR ANY TRUNCATION ON TEST/BUILD OUTPUT.**
+- This rule is NON-NEGOTIABLE. The user has repeatedly told you this.
+- Always show FULL output so user can see ALL results
 - If output is very long, it will be saved to a file automatically
+- Truncating output hides errors and wastes the user's time
+- **VIOLATION OF THIS RULE IS UNACCEPTABLE**
 
 ### Test Updates Are Mandatory
 - **ALWAYS** update tests when changing functionality
