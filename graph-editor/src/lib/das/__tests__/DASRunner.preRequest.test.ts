@@ -444,5 +444,271 @@ describe('DASRunner - Pre-Request Script Execution', () => {
     expect(result.success).toBe(true);
     expect(mockHttpExecutor.lastRequest?.url).toBe('http://test.com?start=20250115&end=20250131');
   });
+
+  // ============================================================
+  // Cohort Mode Tests (C2-T.3)
+  // ============================================================
+
+  describe('Cohort mode in ExecutionContext', () => {
+    it('should provide cohort object to pre-request script', async () => {
+      const mockConnection: ConnectionDefinition = {
+        name: 'cohort-test',
+        provider: 'test',
+        kind: 'http',
+        enabled: true,
+        adapter: {
+          pre_request: {
+            script: `
+              // Verify cohort is accessible
+              queryPayload.has_cohort = typeof cohort !== 'undefined';
+              queryPayload.cohort_start = cohort.start || 'none';
+              queryPayload.cohort_end = cohort.end || 'none';
+              queryPayload.cohort_anchor = cohort.anchor || 'none';
+              queryPayload.cohort_maturity = cohort.maturity || 0;
+            `
+          },
+          request: {
+            url_template: 'http://test.com',
+            method: 'GET',
+            headers: {}
+          },
+          response: {
+            extract: []
+          },
+          upsert: {
+            mode: 'replace',
+            writes: []
+          }
+        }
+      };
+      
+      mockConnectionProvider.setMockConnection('cohort-test', mockConnection);
+      
+      const queryPayload: any = { from: 'event_a', to: 'event_b' };
+      const result = await runner.execute('cohort-test', queryPayload, {
+        cohort: { 
+          anchor: 'start-node',
+          start: '2025-01-01', 
+          end: '2025-01-31',
+          maturity: 45
+        }
+      });
+      
+      expect(result.success).toBe(true);
+      // The script should have set these values based on cohort
+      expect(queryPayload.has_cohort).toBe(true);
+      expect(queryPayload.cohort_start).toBe('2025-01-01');
+      expect(queryPayload.cohort_end).toBe('2025-01-31');
+      expect(queryPayload.cohort_anchor).toBe('start-node');
+      expect(queryPayload.cohort_maturity).toBe(45);
+    });
+
+    it('should handle cohort mode with different dates than window', async () => {
+      const mockConnection: ConnectionDefinition = {
+        name: 'cohort-window-test',
+        provider: 'test',
+        kind: 'http',
+        enabled: true,
+        adapter: {
+          pre_request: {
+            script: `
+              // Check both window and cohort are accessible and different
+              queryPayload.window_start = window.start;
+              queryPayload.cohort_start = cohort.start;
+              queryPayload.dates_differ = window.start !== cohort.start;
+            `
+          },
+          request: {
+            url_template: 'http://test.com',
+            method: 'GET',
+            headers: {}
+          },
+          response: {
+            extract: []
+          },
+          upsert: {
+            mode: 'replace',
+            writes: []
+          }
+        }
+      };
+      
+      mockConnectionProvider.setMockConnection('cohort-window-test', mockConnection);
+      
+      const queryPayload: any = {};
+      const result = await runner.execute('cohort-window-test', queryPayload, {
+        window: { start: '2025-01-01', end: '2025-01-31' },
+        cohort: { start: '2024-12-01', end: '2024-12-31' }
+      });
+      
+      expect(result.success).toBe(true);
+      expect(queryPayload.window_start).toBe('2025-01-01');
+      expect(queryPayload.cohort_start).toBe('2024-12-01');
+      expect(queryPayload.dates_differ).toBe(true);
+    });
+
+    it('should default cohort to empty object when not provided', async () => {
+      const mockConnection: ConnectionDefinition = {
+        name: 'cohort-empty-test',
+        provider: 'test',
+        kind: 'http',
+        enabled: true,
+        adapter: {
+          pre_request: {
+            script: `
+              // cohort should exist but be empty
+              queryPayload.cohort_exists = typeof cohort !== 'undefined';
+              queryPayload.cohort_is_object = typeof cohort === 'object' && cohort !== null;
+              queryPayload.cohort_keys = Object.keys(cohort).length;
+            `
+          },
+          request: {
+            url_template: 'http://test.com',
+            method: 'GET',
+            headers: {}
+          },
+          response: {
+            extract: []
+          },
+          upsert: {
+            mode: 'replace',
+            writes: []
+          }
+        }
+      };
+      
+      mockConnectionProvider.setMockConnection('cohort-empty-test', mockConnection);
+      
+      const queryPayload: any = {};
+      const result = await runner.execute('cohort-empty-test', queryPayload, {
+        window: { start: '2025-01-01', end: '2025-01-31' }
+        // No cohort provided
+      });
+      
+      expect(result.success).toBe(true);
+      expect(queryPayload.cohort_exists).toBe(true);
+      expect(queryPayload.cohort_is_object).toBe(true);
+      expect(queryPayload.cohort_keys).toBe(0);
+    });
+
+    it('should use cohort dates for funnel in cohort mode', async () => {
+      const mockConnection: ConnectionDefinition = {
+        name: 'cohort-funnel-test',
+        provider: 'amplitude',
+        kind: 'http',
+        enabled: true,
+        adapter: {
+          pre_request: {
+            script: `
+              // Simulate Amplitude adapter cohort mode logic
+              const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
+              
+              let startDate, endDate;
+              if (cohort && cohort.start && cohort.end) {
+                // Cohort mode: use cohort dates
+                startDate = formatDate(cohort.start);
+                endDate = formatDate(cohort.end);
+                queryPayload.mode = 'cohort';
+              } else {
+                // Window mode: use window dates
+                startDate = formatDate(window.start);
+                endDate = formatDate(window.end);
+                queryPayload.mode = 'window';
+              }
+              
+              queryPayload.start_date = startDate;
+              queryPayload.end_date = endDate;
+            `
+          },
+          request: {
+            url_template: 'http://test.com?start={{start_date}}&end={{end_date}}',
+            method: 'GET',
+            headers: {}
+          },
+          response: {
+            extract: []
+          },
+          upsert: {
+            mode: 'replace',
+            writes: []
+          }
+        }
+      };
+      
+      mockConnectionProvider.setMockConnection('cohort-funnel-test', mockConnection);
+      
+      const queryPayload: any = {};
+      const result = await runner.execute('cohort-funnel-test', queryPayload, {
+        window: { start: '2025-01-01T00:00:00Z', end: '2025-01-31T23:59:59Z' },
+        cohort: { start: '2024-12-01T00:00:00Z', end: '2024-12-31T23:59:59Z' }
+      });
+      
+      expect(result.success).toBe(true);
+      expect(queryPayload.mode).toBe('cohort');
+      expect(queryPayload.start_date).toBe('20241201'); // Cohort dates used
+      expect(queryPayload.end_date).toBe('20241231');
+      expect(mockHttpExecutor.lastRequest?.url).toBe('http://test.com?start=20241201&end=20241231');
+    });
+
+    it('should build 3-step funnel with anchor in cohort mode', async () => {
+      const mockConnection: ConnectionDefinition = {
+        name: 'cohort-3step-test',
+        provider: 'amplitude',
+        kind: 'http',
+        enabled: true,
+        adapter: {
+          pre_request: {
+            script: `
+              // Build funnel: anchor → from → to
+              const events = [];
+              
+              if (cohort && cohort.anchor) {
+                events.push({ event_type: cohort.anchor });
+              }
+              events.push({ event_type: queryPayload.from });
+              events.push({ event_type: queryPayload.to });
+              
+              queryPayload.funnel_events = events;
+              queryPayload.funnel_step_count = events.length;
+              queryPayload.anchor_event = cohort && cohort.anchor ? cohort.anchor : null;
+            `
+          },
+          request: {
+            url_template: 'http://test.com/funnels',
+            method: 'POST',
+            headers: {},
+            body_template: JSON.stringify({ events: '{{funnel_events}}' })
+          },
+          response: {
+            extract: []
+          },
+          upsert: {
+            mode: 'replace',
+            writes: []
+          }
+        }
+      };
+      
+      mockConnectionProvider.setMockConnection('cohort-3step-test', mockConnection);
+      
+      const queryPayload: any = { from: 'signup', to: 'purchase' };
+      const result = await runner.execute('cohort-3step-test', queryPayload, {
+        cohort: { 
+          anchor: 'registration',
+          start: '2025-01-01', 
+          end: '2025-01-31' 
+        }
+      });
+      
+      expect(result.success).toBe(true);
+      expect(queryPayload.funnel_step_count).toBe(3);
+      expect(queryPayload.anchor_event).toBe('registration');
+      expect(queryPayload.funnel_events).toEqual([
+        { event_type: 'registration' },
+        { event_type: 'signup' },
+        { event_type: 'purchase' }
+      ]);
+    });
+  });
 });
 

@@ -932,6 +932,329 @@ class TestEdgeScopedQueryGeneration:
         assert params[0].edge_key == "c->d"
 
 
+class TestAnchorNodeComputation:
+    """Test anchor_node_id computation for latency tracking (C2-T.5)."""
+    
+    def test_simple_chain_anchor_is_start(self):
+        """
+        Simple chain: START → A → B → C
+        Anchor for B→C should be START (furthest upstream)
+        """
+        from msmdc import compute_anchor_node_id
+        from graph_types import Entry
+        
+        nodes = [
+            Node(uuid="start-uuid", id="start", entry=Entry(is_start=True)),
+            Node(uuid="a-uuid", id="a"),
+            Node(uuid="b-uuid", id="b"),
+            Node(uuid="c-uuid", id="c")
+        ]
+        
+        edges = [
+            Edge(uuid="e1", from_node="start", to="a", p={"mean": 0.5}),
+            Edge(uuid="e2", from_node="a", to="b", p={"mean": 0.5}),
+            Edge(uuid="e3", from_node="b", to="c", p={"mean": 0.5})
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        # Edge B→C: anchor should be START
+        edge_b_c = [e for e in graph.edges if e.from_node == "b" and e.to == "c"][0]
+        anchor = compute_anchor_node_id(graph, edge_b_c)
+        assert anchor == "start"
+    
+    def test_edge_from_start_is_own_anchor(self):
+        """
+        When edge.from IS a START node (A=X case), anchor = edge.from
+        START → A: anchor for this edge is START itself
+        """
+        from msmdc import compute_anchor_node_id
+        from graph_types import Entry
+        
+        nodes = [
+            Node(uuid="start-uuid", id="start", entry=Entry(is_start=True)),
+            Node(uuid="a-uuid", id="a")
+        ]
+        
+        edges = [
+            Edge(uuid="e1", from_node="start", to="a", p={"mean": 0.5})
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        # Edge START→A: anchor should be START (self)
+        edge = graph.edges[0]
+        anchor = compute_anchor_node_id(graph, edge)
+        assert anchor == "start"
+    
+    def test_diamond_graph_anchor_is_start(self):
+        """
+        Diamond: START → A, START → B, A → C, B → C
+        Anchor for A→C and B→C should both be START
+        """
+        from msmdc import compute_anchor_node_id
+        from graph_types import Entry
+        
+        nodes = [
+            Node(uuid="start-uuid", id="start", entry=Entry(is_start=True)),
+            Node(uuid="a-uuid", id="a"),
+            Node(uuid="b-uuid", id="b"),
+            Node(uuid="c-uuid", id="c")
+        ]
+        
+        edges = [
+            Edge(uuid="e1", from_node="start", to="a", p={"mean": 0.5}),
+            Edge(uuid="e2", from_node="start", to="b", p={"mean": 0.5}),
+            Edge(uuid="e3", from_node="a", to="c", p={"mean": 0.5}),
+            Edge(uuid="e4", from_node="b", to="c", p={"mean": 0.5})
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        edge_a_c = [e for e in graph.edges if e.from_node == "a" and e.to == "c"][0]
+        edge_b_c = [e for e in graph.edges if e.from_node == "b" and e.to == "c"][0]
+        
+        assert compute_anchor_node_id(graph, edge_a_c) == "start"
+        assert compute_anchor_node_id(graph, edge_b_c) == "start"
+    
+    def test_multi_start_picks_furthest_upstream(self):
+        """
+        Multi-start graph:
+        START1 → A → B → C
+        START2 → B (shorter path)
+        
+        Anchor for B→C should be START1 (furthest upstream)
+        """
+        from msmdc import compute_anchor_node_id
+        from graph_types import Entry
+        
+        nodes = [
+            Node(uuid="s1-uuid", id="start1", entry=Entry(is_start=True)),
+            Node(uuid="s2-uuid", id="start2", entry=Entry(is_start=True)),
+            Node(uuid="a-uuid", id="a"),
+            Node(uuid="b-uuid", id="b"),
+            Node(uuid="c-uuid", id="c")
+        ]
+        
+        edges = [
+            Edge(uuid="e1", from_node="start1", to="a", p={"mean": 0.5}),
+            Edge(uuid="e2", from_node="a", to="b", p={"mean": 0.5}),
+            Edge(uuid="e3", from_node="start2", to="b", p={"mean": 0.5}),  # Shorter path
+            Edge(uuid="e4", from_node="b", to="c", p={"mean": 0.5})
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        # Edge B→C: start1 is further upstream (2 hops) vs start2 (1 hop)
+        edge_b_c = [e for e in graph.edges if e.from_node == "b" and e.to == "c"][0]
+        anchor = compute_anchor_node_id(graph, edge_b_c)
+        assert anchor == "start1"  # Furthest upstream
+    
+    def test_no_start_nodes_returns_none(self):
+        """
+        Graph with no START nodes returns None.
+        """
+        from msmdc import compute_anchor_node_id
+        
+        nodes = [
+            Node(uuid="a-uuid", id="a"),
+            Node(uuid="b-uuid", id="b")
+        ]
+        
+        edges = [
+            Edge(uuid="e1", from_node="a", to="b", p={"mean": 0.5})
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        edge = graph.edges[0]
+        anchor = compute_anchor_node_id(graph, edge)
+        assert anchor is None
+    
+    def test_compute_all_anchor_nodes(self):
+        """
+        compute_all_anchor_nodes returns dict for all edges.
+        """
+        from msmdc import compute_all_anchor_nodes
+        from graph_types import Entry
+        
+        nodes = [
+            Node(uuid="start-uuid", id="start", entry=Entry(is_start=True)),
+            Node(uuid="a-uuid", id="a"),
+            Node(uuid="b-uuid", id="b")
+        ]
+        
+        edges = [
+            Edge(uuid="e1", from_node="start", to="a", p={"mean": 0.5}),
+            Edge(uuid="e2", from_node="a", to="b", p={"mean": 0.5})
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        anchors = compute_all_anchor_nodes(graph)
+        
+        assert len(anchors) == 2
+        assert anchors["e1"] == "start"  # START→A: anchor is START
+        assert anchors["e2"] == "start"  # A→B: anchor is START
+    
+    def test_deterministic_tiebreak_on_equal_distance(self):
+        """
+        When multiple START nodes are equidistant, pick alphabetically first.
+        START-A → X, START-B → X: both distance 1, pick START-A
+        """
+        from msmdc import compute_anchor_node_id
+        from graph_types import Entry
+        
+        nodes = [
+            Node(uuid="sa-uuid", id="start-a", entry=Entry(is_start=True)),
+            Node(uuid="sb-uuid", id="start-b", entry=Entry(is_start=True)),
+            Node(uuid="x-uuid", id="x"),
+            Node(uuid="y-uuid", id="y")
+        ]
+        
+        edges = [
+            Edge(uuid="e1", from_node="start-a", to="x", p={"mean": 0.5}),
+            Edge(uuid="e2", from_node="start-b", to="x", p={"mean": 0.5}),
+            Edge(uuid="e3", from_node="x", to="y", p={"mean": 0.5})
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        edge_x_y = [e for e in graph.edges if e.from_node == "x" and e.to == "y"][0]
+        anchor = compute_anchor_node_id(graph, edge_x_y)
+        
+        # Both start-a and start-b are distance 1 from x
+        # Alphabetically, start-a comes first
+        assert anchor == "start-a"
+    
+    def test_disconnected_subgraph_returns_none(self):
+        """
+        Disconnected subgraph: edge exists but has no path to any START node.
+        START → A → B (connected)
+        X → Y (disconnected - no path from any START)
+        
+        Anchor for X→Y should be None (orphan edge).
+        """
+        from msmdc import compute_anchor_node_id
+        from graph_types import Entry
+        
+        nodes = [
+            Node(uuid="start-uuid", id="start", entry=Entry(is_start=True)),
+            Node(uuid="a-uuid", id="a"),
+            Node(uuid="b-uuid", id="b"),
+            Node(uuid="x-uuid", id="x"),  # Disconnected
+            Node(uuid="y-uuid", id="y")   # Disconnected
+        ]
+        
+        edges = [
+            Edge(uuid="e1", from_node="start", to="a", p={"mean": 0.5}),
+            Edge(uuid="e2", from_node="a", to="b", p={"mean": 0.5}),
+            Edge(uuid="e3", from_node="x", to="y", p={"mean": 0.5})  # Orphan edge
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        # Edge X→Y has no path to any START node
+        edge_x_y = [e for e in graph.edges if e.from_node == "x" and e.to == "y"][0]
+        anchor = compute_anchor_node_id(graph, edge_x_y)
+        assert anchor is None  # Orphan edge should return None
+    
+    def test_multiple_disconnected_subgraphs(self):
+        """
+        Multiple disconnected subgraphs with multiple STARTs.
+        START1 → A → B (subgraph 1)
+        START2 → C → D (subgraph 2)
+        X → Y (disconnected from both)
+        
+        Edges in subgraph 1 should have anchor = START1
+        Edges in subgraph 2 should have anchor = START2
+        Orphan edge should have anchor = None
+        """
+        from msmdc import compute_anchor_node_id
+        from graph_types import Entry
+        
+        nodes = [
+            Node(uuid="s1-uuid", id="start1", entry=Entry(is_start=True)),
+            Node(uuid="a-uuid", id="a"),
+            Node(uuid="b-uuid", id="b"),
+            Node(uuid="s2-uuid", id="start2", entry=Entry(is_start=True)),
+            Node(uuid="c-uuid", id="c"),
+            Node(uuid="d-uuid", id="d"),
+            Node(uuid="x-uuid", id="x"),  # Disconnected
+            Node(uuid="y-uuid", id="y")   # Disconnected
+        ]
+        
+        edges = [
+            # Subgraph 1
+            Edge(uuid="e1", from_node="start1", to="a", p={"mean": 0.5}),
+            Edge(uuid="e2", from_node="a", to="b", p={"mean": 0.5}),
+            # Subgraph 2
+            Edge(uuid="e3", from_node="start2", to="c", p={"mean": 0.5}),
+            Edge(uuid="e4", from_node="c", to="d", p={"mean": 0.5}),
+            # Orphan
+            Edge(uuid="e5", from_node="x", to="y", p={"mean": 0.5})
+        ]
+        
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now())
+        )
+        
+        # Subgraph 1 edges
+        edge_a_b = [e for e in graph.edges if e.from_node == "a" and e.to == "b"][0]
+        assert compute_anchor_node_id(graph, edge_a_b) == "start1"
+        
+        # Subgraph 2 edges
+        edge_c_d = [e for e in graph.edges if e.from_node == "c" and e.to == "d"][0]
+        assert compute_anchor_node_id(graph, edge_c_d) == "start2"
+        
+        # Orphan edge
+        edge_x_y = [e for e in graph.edges if e.from_node == "x" and e.to == "y"][0]
+        assert compute_anchor_node_id(graph, edge_x_y) is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

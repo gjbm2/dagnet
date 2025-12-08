@@ -846,6 +846,7 @@ class DataOperationsService {
                     context: [...(sliceConstraints?.context || []), ...(edgeConstraints?.context || [])],
                     contextAny: [...(sliceConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
                     window: edgeConstraints?.window || sliceConstraints?.window || null,
+                    cohort: edgeConstraints?.cohort || sliceConstraints?.cohort || null,  // A-anchored cohort for latency edges
                     visited: edgeConstraints?.visited || [],
                     visitedAny: edgeConstraints?.visitedAny || []
                   };
@@ -2727,6 +2728,7 @@ class DataOperationsService {
                   context: [...(graphConstraints?.context || []), ...(edgeConstraints?.context || [])],
                   contextAny: [...(graphConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
                   window: edgeConstraints?.window || graphConstraints?.window || null,
+                  cohort: edgeConstraints?.cohort || graphConstraints?.cohort || null,  // A-anchored cohort for latency edges
                   visited: edgeConstraints?.visited || [],
                   visitedAny: edgeConstraints?.visitedAny || []
                 };
@@ -2822,6 +2824,7 @@ class DataOperationsService {
                   context: [...(graphConstraints?.context || []), ...(edgeConstraints?.context || [])],
                   contextAny: [...(graphConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
                   window: edgeConstraints?.window || graphConstraints?.window || null,
+                  cohort: edgeConstraints?.cohort || graphConstraints?.cohort || null,  // A-anchored cohort for latency edges
                   visited: edgeConstraints?.visited || [],
                   visitedAny: edgeConstraints?.visitedAny || []
                 };
@@ -3053,6 +3056,7 @@ class DataOperationsService {
               context: [...(graphConstraints?.context || []), ...(nQueryEdgeConstraints?.context || [])],
               contextAny: [...(graphConstraints?.contextAny || []), ...(nQueryEdgeConstraints?.contextAny || [])],
               window: nQueryEdgeConstraints?.window || graphConstraints?.window || null,
+              cohort: nQueryEdgeConstraints?.cohort || graphConstraints?.cohort || null,  // A-anchored cohort for latency edges
               visited: nQueryEdgeConstraints?.visited || [],
               visitedAny: nQueryEdgeConstraints?.visitedAny || []
             };
@@ -3213,6 +3217,29 @@ class DataOperationsService {
           end: nowDate.toISOString()
         };
         console.log('[DataOps] No window in DSL, using default last 7 days:', requestedWindow);
+      }
+      
+      // Extract cohort from queryPayload if present (for latency-tracked edges)
+      // Cohort mode uses A-anchored entry dates rather than X-anchored event dates
+      interface CohortOptions {
+        start?: string;
+        end?: string;
+        anchor_event_id?: string;
+        maturity_days?: number;
+        [key: string]: unknown;
+      }
+      let requestedCohort: CohortOptions | undefined;
+      if (queryPayload.cohort && typeof queryPayload.cohort === 'object') {
+        const cohort = queryPayload.cohort as CohortOptions;
+        if (cohort.start || cohort.end) {
+          requestedCohort = {
+            start: cohort.start,
+            end: cohort.end,
+            anchor_event_id: cohort.anchor_event_id,
+            maturity_days: cohort.maturity_days
+          };
+          console.log('[DataOps] Using cohort from DSL object:', requestedCohort);
+        }
       }
       
       let actualFetchWindows: DateRange[] = [requestedWindow];
@@ -3638,6 +3665,7 @@ class DataOperationsService {
             const baseResult = await runner.execute(connectionName, baseQueryPayload, {
               connection_string: connectionString,
               window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+              cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
               context: { mode: contextMode },
               edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
               eventDefinitions,
@@ -3803,6 +3831,7 @@ class DataOperationsService {
           const condResult = await runner.execute(connectionName, queryPayload, {
             connection_string: connectionString,
             window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+            cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
             context: { mode: contextMode },
             edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
             eventDefinitions,
@@ -3928,6 +3957,7 @@ class DataOperationsService {
           const result = await runner.execute(connectionName, queryPayload, {
             connection_string: connectionString,
             window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+            cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
             context: { mode: contextMode }, // Pass mode to adapter (daily or aggregate)
             edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
             caseId: objectType === 'case' ? objectId : undefined, // Pass caseId for cases

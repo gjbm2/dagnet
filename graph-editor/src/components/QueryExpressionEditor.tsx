@@ -29,7 +29,7 @@ interface QueryExpressionEditorProps {
 }
 
 interface ParsedQueryChip {
-  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'contextAny' | 'window' | 'minus' | 'plus';
+  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'contextAny' | 'window' | 'cohort' | 'minus' | 'plus';
   values: string[];
   rawText: string;
 }
@@ -79,7 +79,11 @@ const outerChipConfig = {
   },
   window: {
     label: 'window',
-    icon: Calendar  // Time window
+    icon: Calendar  // Time window (X-anchored)
+  },
+  cohort: {
+    label: 'cohort',
+    icon: Calendar  // Cohort entry window (A-anchored for latency edges)
   },
   minus: {
     label: 'minus',
@@ -112,7 +116,7 @@ function parseQueryToChips(query: string): ParsedQueryChip[] {
   const chips: ParsedQueryChip[] = [];
   
   // Match ALL function calls in order they appear
-  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context|contextAny|window|minus|plus)\(([^)]+)\)/g;
+  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context|contextAny|window|cohort|minus|plus)\(([^)]+)\)/g;
   let match;
   
   while ((match = functionRegex.exec(query)) !== null) {
@@ -647,6 +651,67 @@ export function QueryExpressionEditor({
           })();
         }
         
+        // After cohort( → suggest date formats (similar to window, but for cohort entry)
+        if (/cohort\([^)]*$/.test(textUntilPosition)) {
+          return (async () => {
+            const suggestions: any[] = [
+              {
+                label: '📅 Last 30 days cohort (-30d:)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-30d:',
+                documentation: 'Cohorts who entered in the last 30 days',
+                range,
+                sortText: '1'
+              },
+              {
+                label: '📅 Last 60 days cohort (-60d:)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-60d:',
+                documentation: 'Cohorts who entered in the last 60 days',
+                range,
+                sortText: '2'
+              },
+              {
+                label: '📅 Last 90 days cohort (-90d:)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-90d:',
+                documentation: 'Cohorts who entered in the last 90 days',
+                range,
+                sortText: '3'
+              },
+              {
+                label: '📆 Mature cohorts only (-120d:-30d)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-120d:-30d',
+                documentation: 'Cohorts that entered 30-120 days ago (mature)',
+                range,
+                sortText: '4'
+              }
+            ];
+            
+            // Add example with absolute dates (shows d-MMM-yy format)
+            try {
+              const { formatDateUK } = await import('../lib/dateFormat');
+              const today = new Date();
+              const threeMonthsAgo = new Date(today);
+              threeMonthsAgo.setMonth(today.getMonth() - 3);
+              
+              suggestions.push({
+                label: `📆 Example: ${formatDateUK(threeMonthsAgo)}:${formatDateUK(today)}`,
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: `${formatDateUK(threeMonthsAgo)}:${formatDateUK(today)}`,
+                documentation: 'Use d-MMM-yy format for specific dates',
+                range,
+                sortText: '5'
+              });
+            } catch (err) {
+              // Ignore if date formatting fails
+            }
+            
+            return { suggestions };
+          })();
+        }
+        
         // After . (dot) → suggest constraint types OR from/to/case
         if (/\.$/.test(textUntilPosition) || /\)\.$/.test(textUntilPosition)) {
           const hasSuggestions: any[] = [];
@@ -746,10 +811,20 @@ export function QueryExpressionEditor({
               kind: monaco.languages.CompletionItemKind.Function,
               insertText: 'window($0)',
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              documentation: 'Time window for data retrieval',
+              documentation: 'Time window for data retrieval (X-anchored)',
               detail: '.window(start:end) - dates as d-MMM-yy or relative like -90d',
               range,
               sortText: '7'
+            },
+            {
+              label: 'cohort',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'cohort($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Cohort entry window for latency-tracked edges (A-anchored)',
+              detail: '.cohort(start:end) or .cohort(anchor,start:end)',
+              range,
+              sortText: '8'
             },
             {
               label: 'minus',
@@ -834,10 +909,20 @@ export function QueryExpressionEditor({
               kind: monaco.languages.CompletionItemKind.Function,
               insertText: 'window($0)',
               insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-              documentation: 'Time window for data',
+              documentation: 'Time window for data (X-anchored)',
               detail: 'window(start:end) - dates as d-MMM-yy or -90d',
               range,
               sortText: '7'
+            },
+            {
+              label: 'cohort',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'cohort($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Cohort entry window for latency-tracked edges (A-anchored)',
+              detail: 'cohort(start:end) or cohort(anchor,start:end)',
+              range,
+              sortText: '8'
             },
             {
               label: 'or',

@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from graph_types import (
     Graph, Node, Edge, Evidence, ProbabilityParam, CostParam,
     ConditionalProbability, Metadata, Policies, Layout,
-    ResidualBehavior, DataSource, CaseDataSource
+    ResidualBehavior, DataSource, CaseDataSource,
+    LatencyConfig, ForecastParams
 )
 
 
@@ -257,6 +258,8 @@ class TestAllSchemaDefsHavePythonTypes:
         'Metadata': Metadata,
         'ConditionalProbability': ConditionalProbability,
         'ResidualBehavior': ResidualBehavior,
+        'LatencyConfig': LatencyConfig,
+        'ForecastParams': ForecastParams,
         # These are deprecated or not modeled separately in Python:
         # 'Costs', 'MonetaryCost', 'TimeCost' - deprecated
         # 'UUID', 'Id', 'Condition' - simple types, not classes

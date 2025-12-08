@@ -41,8 +41,20 @@ const TYPESCRIPT_FIELDS = {
   ProbabilityParam: new Set([
     'mean', 'mean_overridden', 'stdev', 'stdev_overridden',
     'distribution', 'distribution_overridden', 'id',
-    'connection', 'connection_string', 'evidence', 'data_source'
+    'connection', 'connection_string', 'evidence', 'data_source',
+    // LAG fields (Project LAG - Phase C1)
+    'latency', 'forecast'
     // NOTE: 'query' removed - legacy field, actual query lives at edge.query
+  ]),
+  
+  LatencyConfig: new Set([
+    'maturity_days', 'maturity_days_overridden',
+    'anchor_node_id', 'anchor_node_id_overridden',
+    't95', 'median_lag_days', 'completeness'
+  ]),
+  
+  ForecastParams: new Set([
+    'mean', 'stdev'
   ]),
   
   CostParam: new Set([
@@ -221,6 +233,9 @@ describe('Schema / TypeScript TOTAL PARITY', () => {
       'Policies': 'Policies',
       'ConditionalProbability': 'ConditionalProbability',
       'ResidualBehavior': 'ResidualBehavior',
+      // LAG types (Project LAG - Phase C1)
+      'LatencyConfig': 'LatencyConfig',
+      'ForecastParams': 'ForecastParams',
       // Evidence is nested, tested separately
     };
     

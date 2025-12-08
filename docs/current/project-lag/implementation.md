@@ -119,6 +119,21 @@ Global search/replace across:
   - Add `cohort_from`/`cohort_to` with same pattern.
   - Exception: `data_source.retrieved_at` and `metadata.*` remain ISO `date-time`.
 
+### 1.3.1 Graph JSON Schema
+**Design reference:** `design.md §3.1` (LatencyConfig interface)
+
+**Files:**
+- `graph-editor/public/schemas/conversion-graph-1.0.0.json`
+- `graph-editor/public/schemas/conversion-graph-1.1.0.json`
+
+**Tasks:**
+- Add `LatencyConfig` to `$defs` with fields: `maturity_days`, `maturity_days_overridden`, `anchor_node_id`, `anchor_node_id_overridden`, `t95`, `median_lag_days`, `completeness`
+- Add `ForecastParams` to `$defs` with fields: `mean`, `stdev`
+- Add `latency` and `forecast` fields to `ProbabilityParam` referencing the new `$defs`
+- Update `lib/tests/test_schema_parity.py` to include new types in `SCHEMA_TO_PYTHON` mapping
+
+**Note:** This was missing from the original plan. Parity tests caught it (8-Dec-25).
+
 ### 1.4 Update Manager Mappings
 **Design reference:** `design.md §9.H` (UpdateManager), `§9.K` (Config/Data field mappings)
 
@@ -161,68 +176,154 @@ Global search/replace across:
 
 **Design references:** `design.md §4` (Query Architecture Changes), `§9.A` (DSL Construction), `§9.E` (Amplitude Adapter)
 
-### 2.1 DSL Parsing
+**Query Processing Pipeline** (must be updated end-to-end):
+```
+queryDSL.ts → buildDslFromEdge.ts → dataOperationsService.ts → DASRunner.ts → connections.yaml adapter
+   ↓              ↓                      ↓                        ↓                   ↓
+ parse         build payload          extract cohort           pass to context     use for API
+```
+
+### 2.1 DSL Parsing ✅ COMPLETE
 **Design reference:** `design.md §4.1` (cohort() syntax), `§4.2` (Cohort Anchor Node)
 
-**File:** `graph-editor/src/lib/queryDSL.ts`
-- Add parsing support for `cohort(start:end)` and `cohort(anchor, start:end)`.
-- Ensure strict date handling (absolute dates preferred).
+**File:** `graph-editor/src/lib/queryDSL.ts` ✅
+- ✅ `cohort` added to `QUERY_FUNCTIONS` constant
+- ✅ `parseConstraints()` parses `cohort(start:end)` and `cohort(anchor,start:end)`
+- ✅ `normalizeConstraintString()` handles cohort normalization
+- ✅ `augmentDSLWithConstraint()` handles cohort merging
 
-**File:** `graph-editor/src/lib/das/compositeQueryParser.ts`
-- Update compound query parsing to handle `cohort()` clauses.
-- Support `or(cohort(...), window(...))` combinations.
+**File:** `graph-editor/src/lib/das/compositeQueryParser.ts` — SKIP
+- ⚠️ Marked DEPRECATED (4-Dec-25) for Amplitude - native segment filters replaced it
+- No cohort-specific changes needed here
 
-**File:** `graph-editor/public/schemas/query-dsl-1.1.0.json`
-- Confirm DSL JSON schema supports:
-  - `cohort(start:end)` (no anchor)
-  - `cohort(anchor_node_id,start:end)` (explicit anchor)
-- Keep `QueryFunctionName.enum` and the raw-pattern examples in sync with `queryDSL.ts` and tests.
+**File:** `graph-editor/public/schemas/query-dsl-1.1.0.json` ✅
+- ✅ `cohort` in `QueryFunctionName.enum`
+- ✅ Examples for `cohort(-30d:)`, `cohort(1-Nov-25:7-Nov-25)`, `cohort(anchor,-14d:)`
 
-### 2.2 DSL Construction
-**Design reference:** `design.md §9.A` (DSL Construction table), `§4.6` (Dual-Slice Retrieval)
+**File:** `graph-editor/src/lib/dslExplosion.ts` ✅
+- ✅ Already handles cohort via `parseConstraints()` and `normalizeConstraintString()`
+- ✅ `or(cohort(...), window(...))` correctly explodes to separate slices
 
-**File:** `graph-editor/src/lib/dslConstruction.ts`
-- Add `cohort()` clause construction.
-- Distinguish `cohort()` from `window()` based on probability latency configuration (`p.latency`).
-- Handle anchor node inclusion in DSL when `anchor_node_id` differs from edge.from.
+### 2.2 Query Editor UI ✅ COMPLETE
 
-**File:** `graph-editor/src/lib/dslExplosion.ts`
-- Update explosion logic to handle `cohort()` clauses.
-- Generate atomic slices for `cohort()` × context combinations.
-- Handle `or(cohort(...), window(...))` producing separate cohort and window slices.
+**File:** `graph-editor/src/components/QueryExpressionEditor.tsx` ✅
+- ✅ `cohort` added to `ParsedQueryChip.type` union
+- ✅ `cohort` added to `outerChipConfig` with Calendar icon
+- ✅ `cohort` added to function regex for chip parsing
+- ✅ Autocomplete suggestions for `.cohort()` after dot
+- ✅ Autocomplete suggestions for `cohort()` at line start
+- ✅ Date suggestions inside `cohort()` (30d, 60d, 90d, mature cohorts)
 
-**File:** `graph-editor/src/components/QueryExpressionEditor.tsx`
-- Extend Monaco completion so that after `cohort(` the user can:
-  - Type dates directly, as today (e.g. `cohort(-30d:)`), **or**
-  - Select an anchor node id, then a date range (e.g. `cohort(household-created,-30d:)`).
-- Reuse the same node-id suggestion set as for `from(`/`to(` autocomplete.
-
-### 2.3 Query Payload Construction
-**Design reference:** `design.md §9.A` (buildDslFromEdge), `§4.6` (Dual-Slice requirements, Query resolution table)
+### 2.3 Query Payload Construction ⚠️ PARTIAL
+**Design reference:** `design.md §9.A` (buildDslFromEdge), `§4.6` (Dual-Slice requirements)
 
 **File:** `graph-editor/src/lib/das/buildDslFromEdge.ts`
-- Update `QueryPayload` interface to support `cohort` mode.
-- Update `buildDslFromEdge` to:
-  - Detect `latency.maturity_days > 0` on edge (latency tracking enabled).
-  - **Upstream maturity check:** For `cohort()` queries, also use cohort mode if `upstream_maturity > 0` even when edge's own `maturity_days = 0`. This ensures cohort population semantics propagate through instant edges downstream of latency edges.
-  - Construct `cohort` payload if applicable.
-  - Handle dual-slice requirements (if pinned DSL requests both).
-  - Resolve `anchor_node_id` for cohort queries (default to edge.from or explicitly set).
+- ✅ `QueryPayload.cohort` field added with `start`, `end`, `anchor_event_id`, `maturity_days`
+- ✅ `resolveCohortDates()` function added (mirrors `resolveWindowDates`)
+- ⏸️ Cohort payload population from constraints — needs integration
+- ⏸️ Upstream maturity check logic — not yet implemented
+- ⏸️ Dual-slice handling — not yet implemented
 
-**Key rule:** `cohort()` only falls back to `window()` when BOTH the edge's own `maturity_days = 0` AND `compute_a_x_maturity(anchor, edge.from) = 0`.
+### 2.4 DAS Execution Pipeline ❌ NOT STARTED
+**Design reference:** `design.md §9.C` (dataOperationsService flow)
 
-### 2.4 Amplitude Adapter Refactoring
+This is the critical missing piece that connects parsed cohort to actual API calls.
+
+**File:** `graph-editor/src/lib/das/types.ts`
+- Add `cohort` field to `RunnerExecuteOptions` interface (parallel to `window`)
+- Add `cohort` field to `ExecutionContext` interface
+
+**File:** `graph-editor/src/lib/das/DASRunner.ts`
+- Update `execute()` to accept `options.cohort`
+- Pass `cohort` to `ExecutionContext` for adapter script access
+
+**File:** `graph-editor/src/services/dataOperationsService.ts`
+- In `getFromSourceDirect()`, extract `constraints.cohort` (like `constraints.window`)
+- Pass cohort to `DASRunner.execute()` via options
+- Handle cohort-mode response data (latency fields)
+
+### 2.5 Amplitude Adapter Refactoring ❌ NOT STARTED
 **Design reference:** `design.md §4.4` (Amplitude data fields), `§9.E` (Amplitude Adapter), `Appendix B` (Response Reference)
 
-**File:** `graph-editor/src/lib/das/adapters/amplitudeHelpers.ts` (NEW)
-- Create helper to encapsulate complex funnel construction logic.
-- Move logic for visited, excludes, cases, and context from YAML to this file.
-- Implement `buildCohortFunnel` logic (3-step: Anchor -> From -> To).
-
 **File:** `graph-editor/public/defaults/connections.yaml`
-- Update `amplitude-prod` adapter to use the new `amplitudeHelpers`.
-- Pass `cs` (conversion window) parameter.
-- Update `response` extraction to include `dayMedianTransTimes` and histograms.
+- Add cohort mode detection in pre_request script (`if (cohort) { ... }`)
+- For cohort mode, build 3-step funnel: `[Anchor, From, To]` (vs 2-step `[From, To]`)
+- Use `cohort.start`/`cohort.end` as entry dates (vs `window.start`/`window.end` as event dates)
+- Pass `cs` (conversion window) parameter: `cohort.maturity_days * 86400` seconds
+- Extract latency fields from response:
+  - `dayMedianTransTimes` → per-day median lag
+  - `dayAvgTransTimes` → per-day mean lag  
+  - `medianTransTimes` → aggregate median lag per step
+  - `stepTransTimeDistribution` → lag histogram
+
+**File:** `graph-editor/src/lib/das/adapters/amplitudeHelpers.ts` (OPTIONAL NEW)
+- Consider extracting complex funnel logic from YAML to TypeScript helper
+- Only if YAML script becomes too complex to maintain
+
+---
+
+## Phase C2-T: Test Coverage for C1/C2 (REQUIRED before C3)
+
+**CRITICAL:** Tests must be written for all new functionality before proceeding. Running existing tests is NOT sufficient — we need tests that exercise the new cohort/latency code paths.
+
+### C2-T.1 DSL Parsing Tests
+**File:** `graph-editor/src/lib/__tests__/queryDSL.test.ts`
+
+Tests to add:
+- Parse `cohort(-30d:)` → correct start/end resolution
+- Parse `cohort(1-Nov-25:30-Nov-25)` → absolute dates
+- Parse `cohort(anchor-node,-14d:)` → anchor + date range
+- Parse `cohort()` combined with `context()` → merged constraints
+- Normalise `cohort()` string (roundtrip)
+- Invalid cohort syntax → appropriate error
+
+### C2-T.2 DSL Explosion Tests  
+**File:** `graph-editor/src/lib/__tests__/dslExplosion.test.ts`
+
+Tests to add:
+- `cohort(-30d:).context(channel:google)` → single atomic slice
+- `or(cohort(-30d:), window(-7d:))` → two separate slices
+- `or(cohort(-30d:), window(-7d:)).context(channel:all)` → four slices (2×2)
+- Cohort × contextAny expansion
+
+### C2-T.3 DAS Types & Runner Tests
+**File:** `graph-editor/src/lib/das/__tests__/DASRunner.test.ts` (create if needed)
+
+Tests to add:
+- `cohort` field present in `ExecutionContext`
+- Pre-request script has access to `cohort` object
+- Cohort dates passed correctly to adapter
+
+### C2-T.4 Window Aggregation Tests
+**File:** `graph-editor/src/services/__tests__/windowAggregationService.test.ts`
+
+Tests to add:
+- `mergeTimeSeriesIntoParameter` with `isCohortMode: true` → sets `cohort_from`/`cohort_to`
+- `mergeTimeSeriesIntoParameter` with latency arrays → stores `median_lag_days[]`, `mean_lag_days[]`
+- `mergeTimeSeriesIntoParameter` with `latencySummary` → stores `latency` block
+- Non-cohort mode still uses `window_from`/`window_to` (regression)
+
+### C2-T.5 Python anchor_node_id Tests
+**File:** `graph-editor/tests/test_msmdc.py`
+
+Tests to add:
+- Simple chain `START → A → B → C` → anchor for B→C = START
+- Edge from START `START → A` (A=X case) → anchor = START
+- Diamond graph → anchor = START
+- Multi-START graph → deterministic furthest-upstream selection
+
+### C2-T.6 Acceptance Criteria ✅ COMPLETE (8-Dec-25)
+
+**All criteria met:**
+- [x] All C2-T tests written and passing (35 new tests)
+- [x] Tests actually exercise cohort code paths (not just type-checking)
+
+**Tests added:**
+- `queryDSL.test.ts`: 12 cohort parsing tests
+- `dslExplosion.test.ts`: 6 cohort explosion tests
+- `DASRunner.preRequest.test.ts`: 5 cohort ExecutionContext tests
+- `windowAggregationService.test.ts`: 5 cohort mode tests
+- `test_msmdc.py`: 7 anchor_node_id tests
 
 ---
 
@@ -254,9 +355,15 @@ Global search/replace across:
 **Design reference:** `design.md §5.5` (Completeness), `§5.6` (Asymptotic Probability), `§9.D` (windowAggregationService)
 
 **File:** `graph-editor/src/services/windowAggregationService.ts`
-- Update `aggregateWindow` to handle cohort data structures.
+- Handle `cohort_from`/`cohort_to` fields (parallel to `window_from`/`window_to`):
+  - Recognize cohort slices by presence of `cohort_from` or `sliceDSL` containing `cohort(`.
+  - Use cohort dates for cache-hit calculations when in cohort mode.
+- Update `aggregateWindow` to handle cohort data structures:
+  - Process `median_lag_days[]`, `mean_lag_days[]` arrays in addition to `n_daily[]`, `k_daily[]`.
+  - Aggregate latency stats alongside counts.
 - Implement CDF-based `completeness` calculation: `Σ(n_i × F(a_i)) / Σn_i`.
 - Implement `p_infinity` estimation from mature cohorts.
+- Update `calculateIncrementalFetch` to understand cohort vs window semantics.
 
 ### 3.3 Lag Distribution Fitting & Forecasting
 **Design reference:** `design.md §5.3` (Formula A), `§5.4` (Lag Distribution Fitting), `§4.8` (Query-time computation)

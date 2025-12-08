@@ -204,11 +204,51 @@ connections:
           // 4. End with 'to' (queryPayload.to is the event_id)
           events.push(buildEventStepFromId(queryPayload.to));
           
-          // Convert window to Amplitude date format (YYYYMMDD)
+          // ═══════════════════════════════════════════════════════════════════════
+          // COHORT MODE: For latency-tracked edges, use A-anchored cohort dates
+          // If cohort is provided (from parsed cohort() DSL), we:
+          // 1. Prepend anchor node as step 0 (if anchor_event_id provided)
+          // 2. Use cohort entry dates (cohort.start/end) instead of event dates
+          // 3. Set conversion window (cs) based on maturity_days
+          // ═══════════════════════════════════════════════════════════════════════
+          let isCohortMode = false;
+          let cohortAnchorStepAdded = false;
+          
+          if (cohort && (cohort.start || cohort.end)) {
+            isCohortMode = true;
+            console.log('[Amplitude Adapter] COHORT MODE enabled:', cohort);
+            
+            // If anchor_event_id is provided and different from 'from', prepend it
+            if (cohort.anchor_event_id && cohort.anchor_event_id !== queryPayload.from) {
+              // Shift existing step indices
+              fromStepIndex = fromStepIndex + 1;
+              queryPayload.to_step_index = events.length;  // Will become events.length after unshift
+              
+              // Prepend anchor event as first step
+              events.unshift(buildEventStepFromId(cohort.anchor_event_id));
+              cohortAnchorStepAdded = true;
+              
+              console.log('[Amplitude Adapter] Added anchor step at index 0:', cohort.anchor_event_id);
+              console.log('[Amplitude Adapter] Adjusted indices: from=' + fromStepIndex + ', to=' + (events.length - 1));
+            }
+          }
+          
+          // Convert window/cohort dates to Amplitude date format (YYYYMMDD)
           const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
-          // CRITICAL: Use window variable from execution context (not queryPayload.window)!
-          const startDate = formatDate(window.start);
-          const endDate = formatDate(window.end);
+          
+          // Use cohort dates if in cohort mode, otherwise use window dates
+          let startDate, endDate;
+          if (isCohortMode && cohort.start && cohort.end) {
+            // Cohort mode: dates are A-entry dates
+            startDate = formatDate(cohort.start);
+            endDate = formatDate(cohort.end);
+            console.log('[Amplitude Adapter] Using COHORT dates:', { start: startDate, end: endDate });
+          } else {
+            // Window mode: dates are X-event dates (CRITICAL: Use window from execution context!)
+            startDate = formatDate(window.start);
+            endDate = formatDate(window.end);
+            console.log('[Amplitude Adapter] Using WINDOW dates:', { start: startDate, end: endDate });
+          }
           
           // Add case filtering (if any)
           // Pattern: case(coffee-promotion:treatment) 
@@ -321,16 +361,27 @@ connections:
           }
           
           // Build query parameters for GET request
-          // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&i=1&s={...}
+          // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&i=1&s={...}&cs=...
           // i=1 means daily breakdown (required for time-series)
-          // If context.mode is 'aggregate', we could omit i=1, but keeping it for consistency
+          // cs=seconds is conversion window (for cohort mode, set based on maturity_days)
           const intervalParam = (context && context.mode === 'daily') ? 'i=1' : 'i=1';  // Always daily for now
+          
+          // Build conversion window parameter (cs) for cohort mode
+          // cs is in seconds - tells Amplitude how long to wait for conversions after cohort entry
+          let csParam = '';
+          if (isCohortMode && cohort.maturity_days && cohort.maturity_days > 0) {
+            const csSeconds = cohort.maturity_days * 24 * 60 * 60;  // Convert days to seconds
+            csParam = 'cs=' + csSeconds;
+            console.log('[Amplitude Adapter] COHORT conversion window: ' + cohort.maturity_days + ' days (' + csSeconds + ' seconds)');
+          }
+          
           const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');
           const otherParams = [
             'start=' + startDate,
             'end=' + endDate,
             intervalParam,
-            segmentParam
+            segmentParam,
+            csParam  // Conversion window for cohort mode
           ].filter(p => p).join('&');  // Filter out empty strings
           
           queryPayload.query_params = eventParams + '&' + otherParams;
@@ -361,6 +412,21 @@ connections:
           # Extract daily time-series data (dayFunnels) - available when i=1
           - name: day_funnels
             jmes: "data[0].dayFunnels"
+          # === LAG (Latency) Data Extraction ===
+          # These fields are extracted for latency-tracked edges (cohort mode)
+          # Per-day transition time arrays (parallel to dayFunnels.series)
+          - name: day_median_trans_times
+            jmes: "data[0].dayMedianTransTimes"
+          - name: day_avg_trans_times
+            jmes: "data[0].dayAvgTransTimes"
+          # Aggregate transition times per step
+          - name: median_trans_times
+            jmes: "data[0].medianTransTimes"
+          - name: avg_trans_times
+            jmes: "data[0].avgTransTimes"
+          # Histogram of transition time distribution (for lag CDF fitting)
+          - name: step_trans_time_distribution
+            jmes: "data[0].stepTransTimeDistribution"
       transform:
         # Check if we have daily data (context.mode === 'daily')
         - name: mode
@@ -370,12 +436,21 @@ connections:
             (
               $.mode = 'daily' and $.day_funnels and $.day_funnels.series ?
                 $.day_funnels.series ~> $map(function($dayData, $i) {
-                  {
-                    "date": $.day_funnels.xValues[$i],
-                    "n": $dayData[$number($queryPayload.from_step_index)],
-                    "k": $dayData[$number($queryPayload.to_step_index)],
-                    "p": $dayData[$number($queryPayload.to_step_index)] / $dayData[$number($queryPayload.from_step_index)]
-                  }
+                  $merge([
+                    {
+                      "date": $.day_funnels.xValues[$i],
+                      "n": $dayData[$number($queryPayload.from_step_index)],
+                      "k": $dayData[$number($queryPayload.to_step_index)],
+                      "p": $dayData[$number($queryPayload.to_step_index)] / $dayData[$number($queryPayload.from_step_index)]
+                    },
+                    /* Include latency data if available (cohort mode) */
+                    $.day_median_trans_times[$i] ? {
+                      "median_lag_days": $.day_median_trans_times[$i][$number($queryPayload.to_step_index)] / 86400000
+                    } : {},
+                    $.day_avg_trans_times[$i] ? {
+                      "mean_lag_days": $.day_avg_trans_times[$i][$number($queryPayload.to_step_index)] / 86400000
+                    } : {}
+                  ])
                 }) : []
             )
         # Handle null values gracefully - return 0 when no data
@@ -385,6 +460,15 @@ connections:
           jsonata: "to_count != null ? $number(to_count) : 0"
         - name: p_mean
           jsonata: "n > 0 ? k / n : 0"
+        # === LAG (Latency) Aggregate Transforms ===
+        # Extract aggregate latency stats for the X→Y transition (to_step_index)
+        - name: median_lag_days
+          jsonata: "median_trans_times[$number($queryPayload.to_step_index)] != null ? median_trans_times[$number($queryPayload.to_step_index)] / 86400000 : null"
+        - name: mean_lag_days
+          jsonata: "avg_trans_times[$number($queryPayload.to_step_index)] != null ? avg_trans_times[$number($queryPayload.to_step_index)] / 86400000 : null"
+        # Extract histogram for the X→Y transition (for lag CDF fitting)
+        - name: lag_histogram
+          jsonata: "step_trans_time_distribution[$number($queryPayload.to_step_index)]"
       upsert:
         mode: replace
         writes:

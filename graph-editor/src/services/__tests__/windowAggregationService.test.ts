@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import {
   WindowAggregationService,
   parameterToTimeSeries,
+  mergeTimeSeriesIntoParameter,
 } from '../windowAggregationService';
 
 const windowAggregationService = new WindowAggregationService();
@@ -309,6 +310,153 @@ describe('WindowAggregationService', () => {
 
       expect(result.days_included).toBe(5);
       expect(result.days_missing).toBe(2);
+    });
+  });
+
+  // ============================================================
+  // Cohort Mode Tests (C2-T.4)
+  // ============================================================
+
+  describe('mergeTimeSeriesIntoParameter - Cohort Mode', () => {
+    it('should set cohort_from/cohort_to when isCohortMode is true', () => {
+      const existingValues: any[] = [];
+      const newTimeSeries = [
+        { date: '2024-11-01', n: 1000, k: 300, p: 0.3 },
+        { date: '2024-11-02', n: 1200, k: 360, p: 0.3 },
+      ];
+      const newWindow = { start: '1-Nov-24', end: '2-Nov-24' };
+      
+      const result = mergeTimeSeriesIntoParameter(
+        existingValues,
+        newTimeSeries,
+        newWindow,
+        'test-sig',
+        {},
+        'test-query',
+        'amplitude',
+        undefined,
+        { isCohortMode: true } // mergeOptions with cohort mode enabled
+      );
+      
+      expect(result.length).toBe(1);
+      // In cohort mode, uses cohort_from/cohort_to instead of window_from/window_to
+      expect(result[0].cohort_from).toBe('1-Nov-24');
+      expect(result[0].cohort_to).toBe('2-Nov-24');
+      // In cohort mode, window_from/window_to should NOT be set
+      expect(result[0].window_from).toBeUndefined();
+      expect(result[0].window_to).toBeUndefined();
+    });
+
+    it('should store latency arrays when provided in time series', () => {
+      const existingValues: any[] = [];
+      const newTimeSeries = [
+        { date: '2024-11-01', n: 1000, k: 300, p: 0.3, median_lag_days: 2.5, mean_lag_days: 3.1 },
+        { date: '2024-11-02', n: 1200, k: 360, p: 0.3, median_lag_days: 2.8, mean_lag_days: 3.4 },
+      ];
+      const newWindow = { start: '1-Nov-24', end: '2-Nov-24' };
+      
+      const result = mergeTimeSeriesIntoParameter(
+        existingValues,
+        newTimeSeries,
+        newWindow,
+        'test-sig'
+      );
+      
+      expect(result.length).toBe(1);
+      expect(result[0].median_lag_days).toEqual([2.5, 2.8]);
+      expect(result[0].mean_lag_days).toEqual([3.1, 3.4]);
+    });
+
+    it('should store latency summary block when provided via mergeOptions', () => {
+      const existingValues: any[] = [];
+      const newTimeSeries = [
+        { date: '2024-11-01', n: 1000, k: 300, p: 0.3 },
+      ];
+      const newWindow = { start: '1-Nov-24', end: '1-Nov-24' };
+      
+      const result = mergeTimeSeriesIntoParameter(
+        existingValues,
+        newTimeSeries,
+        newWindow,
+        'test-sig',
+        {},
+        'test-query',
+        'amplitude',
+        undefined,
+        { 
+          isCohortMode: true,
+          latencySummary: {
+            median_lag_days: 2.5,
+            mean_lag_days: 3.1,
+            completeness: 0.85,
+            t95: 14.2
+          }
+        }
+      );
+      
+      expect(result.length).toBe(1);
+      expect(result[0].latency).toBeDefined();
+      expect(result[0].latency.median_lag_days).toBe(2.5);
+      expect(result[0].latency.mean_lag_days).toBe(3.1);
+      expect(result[0].latency.completeness).toBe(0.85);
+      expect(result[0].latency.t95).toBe(14.2);
+    });
+
+    it('should use window_from/window_to when isCohortMode is false (default)', () => {
+      const existingValues: any[] = [];
+      const newTimeSeries = [
+        { date: '2024-11-01', n: 1000, k: 300, p: 0.3 },
+      ];
+      const newWindow = { start: '1-Nov-24', end: '1-Nov-24' };
+      
+      const result = mergeTimeSeriesIntoParameter(
+        existingValues,
+        newTimeSeries,
+        newWindow,
+        'test-sig'
+        // No mergeOptions - defaults to window mode
+      );
+      
+      expect(result.length).toBe(1);
+      expect(result[0].cohort_from).toBeUndefined();
+      expect(result[0].cohort_to).toBeUndefined();
+      // Window dates should be set
+      expect(result[0].window_from).toBe('1-Nov-24');
+      expect(result[0].window_to).toBe('1-Nov-24');
+    });
+
+    it('should preserve existing values when adding new cohort data', () => {
+      const existingValues = [
+        {
+          window_from: '1-Oct-24',
+          window_to: '31-Oct-24',
+          n_daily: [500, 600],
+          k_daily: [150, 180],
+          query_signature: 'existing-sig'
+        }
+      ];
+      const newTimeSeries = [
+        { date: '2024-11-01', n: 1000, k: 300, p: 0.3 },
+      ];
+      const newWindow = { start: '1-Nov-24', end: '30-Nov-24' };
+      
+      const result = mergeTimeSeriesIntoParameter(
+        existingValues,
+        newTimeSeries,
+        newWindow,
+        'new-sig',
+        {},
+        'test-query',
+        'amplitude',
+        undefined,
+        { isCohortMode: true }
+      );
+      
+      // Should have both existing and new values
+      expect(result.length).toBe(2);
+      expect(result[0].window_from).toBe('1-Oct-24'); // Existing value preserved
+      expect(result[1].cohort_from).toBe('1-Nov-24'); // New value with cohort dates
+      expect(result[1].cohort_to).toBe('30-Nov-24');
     });
   });
 });

@@ -181,3 +181,11 @@ it('should do X for conditional_p[idx]', async () => {
 - Tests follow existing patterns - primarily copy + modify
 - Most critical: Phase 1 (data operations) - ~15 tests
 
+
+
+
+
+
+
+
+

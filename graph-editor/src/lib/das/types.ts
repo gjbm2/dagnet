@@ -102,7 +102,8 @@ export interface ExecutionContext {
   queryPayload: Record<string, unknown>;  // Structured query data (NOT a DSL string)
   connection: Record<string, unknown>;
   credentials: Record<string, unknown>;
-  window: Record<string, unknown>;
+  window: Record<string, unknown>;  // X-anchored event window (window mode)
+  cohort: Record<string, unknown>;  // A-anchored cohort entry window (cohort mode for latency edges)
   context: Record<string, unknown>;
   connection_string: Record<string, unknown>;
   edgeId?: string;
@@ -136,7 +137,14 @@ export interface ExecutionFailure {
 export type ExecutionResult = ExecutionSuccess | ExecutionFailure;
 
 export interface RunnerExecuteOptions {
-  window?: { start?: string; end?: string; [key: string]: unknown };
+  window?: { start?: string; end?: string; [key: string]: unknown };  // X-anchored event window
+  cohort?: {  // A-anchored cohort entry window (for latency-tracked edges)
+    start?: string;           // Cohort entry start date (ISO format)
+    end?: string;             // Cohort entry end date (ISO format)
+    anchor_event_id?: string; // Anchor node's event_id (for 3-step funnel: Anchor → From → To)
+    maturity_days?: number;   // Maturity threshold from edge.p.latency.maturity_days
+    [key: string]: unknown;
+  };
   context?: Record<string, unknown>;
   connection_string?: string | Record<string, unknown>;
   edgeId?: string;

@@ -574,6 +574,122 @@ describe('DSL Parsing Functions', () => {
     });
   });
 
+  // ============================================================
+  // TEST SUITE 8: Cohort Parsing (C2-T.1)
+  // ============================================================
+
+  describe('Cohort Parsing', () => {
+    it('should parse cohort(-30d:) with relative start and open end', () => {
+      const result = parseConstraints('cohort(-30d:)');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.start).toBe('-30d');
+      expect(result.cohort?.end).toBeUndefined(); // Empty end becomes undefined
+      expect(result.cohort?.anchor).toBeUndefined();
+    });
+
+    it('should parse cohort with absolute dates', () => {
+      const result = parseConstraints('cohort(1-Nov-25:30-Nov-25)');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.start).toBe('1-Nov-25');
+      expect(result.cohort?.end).toBe('30-Nov-25');
+      expect(result.cohort?.anchor).toBeUndefined();
+    });
+
+    it('should parse cohort with anchor node and date range', () => {
+      const result = parseConstraints('cohort(anchor-node,-14d:)');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.anchor).toBe('anchor-node');
+      expect(result.cohort?.start).toBe('-14d');
+      expect(result.cohort?.end).toBeUndefined(); // Empty end becomes undefined
+    });
+
+    it('should parse cohort with anchor and absolute dates', () => {
+      const result = parseConstraints('cohort(start-node,1-Dec-25:15-Dec-25)');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.anchor).toBe('start-node');
+      expect(result.cohort?.start).toBe('1-Dec-25');
+      expect(result.cohort?.end).toBe('15-Dec-25');
+    });
+
+    it('should parse cohort combined with context', () => {
+      const result = parseConstraints('cohort(-30d:).context(channel:google)');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.start).toBe('-30d');
+      expect(result.context).toEqual([{ key: 'channel', value: 'google' }]);
+    });
+
+    it('should parse cohort combined with visited and exclude', () => {
+      const result = parseConstraints('visited(node-a).cohort(-7d:).exclude(node-b)');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.start).toBe('-7d');
+      expect(result.visited).toEqual(['node-a']);
+      expect(result.exclude).toEqual(['node-b']);
+    });
+
+    it('should normalise cohort string (roundtrip)', () => {
+      const input = 'visited(b).cohort(-30d:).context(x:y)';
+      const normalised = normalizeConstraintString(input);
+      expect(normalised).toContain('cohort(-30d:)');
+      expect(normalised).toContain('visited(b)');
+      expect(normalised).toContain('context(x:y)');
+    });
+
+    it('should normalise cohort with anchor (roundtrip)', () => {
+      const input = 'cohort(start-node,-14d:7-Dec-25)';
+      const normalised = normalizeConstraintString(input);
+      expect(normalised).toContain('cohort(start-node,-14d:7-Dec-25)');
+    });
+
+    it('should handle empty cohort gracefully', () => {
+      // cohort without proper format should not crash
+      const result = parseConstraints('cohort()');
+      // No colon means no start/end parsed
+      expect(result.cohort).toBeNull();
+    });
+
+    it('should return null cohort for non-cohort constraint', () => {
+      const result = parseConstraints('visited(a).context(b:c)');
+      expect(result.cohort).toBeNull();
+    });
+
+    it('should parse both window and cohort in same string', () => {
+      const result = parseConstraints('window(-90d:).cohort(-30d:)');
+      expect(result.window).not.toBeNull();
+      expect(result.window?.start).toBe('-90d');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.start).toBe('-30d');
+    });
+
+    it('should handle cohort with only anchor (no dates)', () => {
+      const result = parseConstraints('cohort(start-node)');
+      // No colon in args means no date range
+      expect(result.cohort).toBeNull();
+    });
+
+    it('should parse cohort with mixed date formats (absolute start + relative end)', () => {
+      const result = parseConstraints('cohort(15-Nov-25:-7d)');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.start).toBe('15-Nov-25');
+      expect(result.cohort?.end).toBe('-7d');
+      expect(result.cohort?.anchor).toBeUndefined();
+    });
+
+    it('should parse cohort with anchor and mixed date formats', () => {
+      const result = parseConstraints('cohort(start-node,1-Dec-25:-14d)');
+      expect(result.cohort).not.toBeNull();
+      expect(result.cohort?.anchor).toBe('start-node');
+      expect(result.cohort?.start).toBe('1-Dec-25');
+      expect(result.cohort?.end).toBe('-14d');
+    });
+
+    it('should normalise cohort with mixed date formats (roundtrip)', () => {
+      const input = 'cohort(15-Nov-25:-7d).context(channel:google)';
+      const normalised = normalizeConstraintString(input);
+      expect(normalised).toContain('cohort(15-Nov-25:-7d)');
+      expect(normalised).toContain('context(channel:google)');
+    });
+  });
+
   describe('Integration: Real-world scenarios', () => {
     it('should parse migrated conditional probability format', () => {
       // Simulates what we migrated from old format
