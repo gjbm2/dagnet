@@ -126,10 +126,10 @@ describe('EdgeBeads - buildBeadDefinitions', () => {
       expect(costBead).toBeDefined();
     });
     
-    it('should generate cost_time bead when edge has cost_time', () => {
+    it('should generate labour_cost bead when edge has labour_cost', () => {
       const edge = createTestEdge({ 
         p: { mean: 0.5 },
-        cost_time: { mean: 120 }  // 2 hours in minutes
+        labour_cost: { mean: 120 }  // 2 hours in minutes
       });
       const graph = createTestGraph();
       const scenariosContext = createScenariosContext();
@@ -146,7 +146,7 @@ describe('EdgeBeads - buildBeadDefinitions', () => {
         0
       );
       
-      const costBead = beads.find(b => b.type === 'cost_time');
+      const costBead = beads.find(b => b.type === 'labour_cost');
       expect(costBead).toBeDefined();
     });
   });
@@ -700,7 +700,7 @@ describe('EdgeBeads - Bead positioning', () => {
     const edge = createTestEdge({ 
       p: { mean: 0.5 },
       cost_gbp: { mean: 10 },
-      cost_time: { mean: 60 }
+      labour_cost: { mean: 60 }
     });
     const graph = createTestGraph();
     const scenariosContext = createScenariosContext();

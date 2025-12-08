@@ -289,7 +289,7 @@ function flattenDeep(obj: any, prefix: string, result: Record<string, any>) {
  * Canonical DSL format:
  * - Base probability: e.<edgeId>.p.<field>
  * - Conditional probability: e.<edgeId>.<condition>.p.<field>
- * - Edge costs: e.<edgeId>.cost_gbp.<field>, e.<edgeId>.cost_time.<field>
+ * - Edge costs: e.<edgeId>.cost_gbp.<field>, e.<edgeId>.labour_cost.<field>
  * - Case variants: n.<nodeId>.case(<caseId>:<variantName>).weight
  * 
  * Note: conditional_p uses the condition string directly in the path (no "conditional_p" segment).
@@ -317,7 +317,7 @@ export function flattenParams(params: ScenarioParams): Record<string, any> {
         }
       }
       
-      // Flatten other edge params (p, cost_gbp, cost_time, weight_default)
+      // Flatten other edge params (p, cost_gbp, labour_cost, weight_default)
       const { conditional_p, ...otherParams } = edgeParams;
       flattenObject(otherParams, `e.${edgeId}`, flat);
     }
@@ -698,7 +698,7 @@ function normalizeConditionalInPath(
  *
  * Scope kinds:
  * - kind: 'graph'          → no narrowing (entire ScenarioParams)
- * - kind: 'edge-param'     → only a single edge + param slot (p / cost_gbp / cost_time)
+ * - kind: 'edge-param'     → only a single edge + param slot (p / cost_gbp / labour_cost)
  * - kind: 'edge-conditional' → a single conditional_p entry for a given edge + condition
  * - kind: 'node'           → a single node (all node-level params)
  * - kind: 'case'           → case variants on a single node (optionally one variant)
@@ -706,7 +706,7 @@ function normalizeConditionalInPath(
  * NOTE: Events are not first-class in ScenarioParams today; when they are added,
  * an additional scope kind can be implemented here.
  */
-export type ParamSlot = 'p' | 'cost_gbp' | 'cost_time';
+export type ParamSlot = 'p' | 'cost_gbp' | 'labour_cost';
 
 export interface EdgeParamScope {
   kind: 'edge-param';
@@ -788,8 +788,8 @@ export function applyScopeToParams(
       result.edges[paramKey].p = edgeParams.p;
     } else if (scope.slot === 'cost_gbp' && edgeParams.cost_gbp) {
       result.edges[paramKey].cost_gbp = edgeParams.cost_gbp;
-    } else if (scope.slot === 'cost_time' && edgeParams.cost_time) {
-      result.edges[paramKey].cost_time = edgeParams.cost_time;
+    } else if (scope.slot === 'labour_cost' && edgeParams.labour_cost) {
+      result.edges[paramKey].labour_cost = edgeParams.labour_cost;
     }
 
     return result;
@@ -980,7 +980,7 @@ export function buildScopedParamsFromFlatPack(
 
       const isBareField = parts.length === 1 && (last === 'mean' || last === 'stdev' || last === 'n' || last === 'k');
       const isSlotPrefixedField =
-        (first === 'p' || first === 'cost_gbp' || first === 'cost_time') &&
+        (first === 'p' || first === 'cost_gbp' || first === 'labour_cost') &&
         (last === 'mean' || last === 'stdev' || last === 'n' || last === 'k');
 
       if (isBareField) {

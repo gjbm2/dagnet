@@ -464,7 +464,7 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
       expect(result.graph.edges[0].p.n_query).toBe('from(landing).to(registration)');
     });
     
-    it('should replace node id in cost_gbp and cost_time n_query', () => {
+    it('should replace node id in cost_gbp and labour_cost n_query', () => {
       const graph = {
         nodes: [
           { uuid: 'node-a', id: 'checkout' },
@@ -478,7 +478,7 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
               mean: 100,
               n_query: 'from(browse).to(checkout)'
             },
-            cost_time: { 
+            labour_cost: { 
               mean: 120,
               n_query: 'from(browse).to(checkout)'
             },
@@ -489,7 +489,7 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
       const result = updateManager.renameNodeId(graph, 'node-a', 'payment');
       
       expect(result.graph.edges[0].cost_gbp.n_query).toBe('from(browse).to(payment)');
-      expect(result.graph.edges[0].cost_time.n_query).toBe('from(browse).to(payment)');
+      expect(result.graph.edges[0].labour_cost.n_query).toBe('from(browse).to(payment)');
     });
   });
   
@@ -797,7 +797,7 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
               mean: 10,
               query: 'service.tier == "premium"',
             },
-            cost_time: {
+            labour_cost: {
               mean: 5,
               conditional_probabilities: [
                 {
@@ -814,7 +814,7 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
       const result = updateManager.renameNodeId(graph, 'node-a', 'product');
       
       expect(result.graph.nodes[0].cost_gbp.query).toBe('product.tier == "premium"');
-      expect(result.graph.nodes[0].cost_time.conditional_probabilities[0].condition).toBe(
+      expect(result.graph.nodes[0].labour_cost.conditional_probabilities[0].condition).toBe(
         'product.region == "US"'
       );
       expect(result.queriesUpdated).toBe(1);

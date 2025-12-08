@@ -115,15 +115,15 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     }
   }
 
-  if (edge.cost_time) {
+  if (edge.labour_cost) {
     const costTime: any = {};
-    if (edge.cost_time.mean !== undefined) costTime.mean = edge.cost_time.mean;
-    if (edge.cost_time.stdev !== undefined) costTime.stdev = edge.cost_time.stdev;
-    if (edge.cost_time.distribution !== undefined) costTime.distribution = edge.cost_time.distribution;
+    if (edge.labour_cost.mean !== undefined) costTime.mean = edge.labour_cost.mean;
+    if (edge.labour_cost.stdev !== undefined) costTime.stdev = edge.labour_cost.stdev;
+    if (edge.labour_cost.distribution !== undefined) costTime.distribution = edge.labour_cost.distribution;
     costTime.units = 'days';
     
     if (Object.keys(costTime).length > 1) { // > 1 because units is always set
-      params.cost_time = costTime;
+      params.labour_cost = costTime;
     }
   }
 
@@ -228,10 +228,10 @@ export function extractDiffParams(
         }
       }
       
-      if (modifiedParams.cost_time?.mean !== undefined) {
-        const baseCost = baseEdge.cost_time?.mean;
-        if (baseCost === undefined || Math.abs(modifiedParams.cost_time.mean - baseCost) > 1e-9) {
-          diffParams.cost_time = { ...modifiedParams.cost_time };
+      if (modifiedParams.labour_cost?.mean !== undefined) {
+        const baseCost = baseEdge.labour_cost?.mean;
+        if (baseCost === undefined || Math.abs(modifiedParams.labour_cost.mean - baseCost) > 1e-9) {
+          diffParams.labour_cost = { ...modifiedParams.labour_cost };
         }
       }
       

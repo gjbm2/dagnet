@@ -32,7 +32,7 @@ interface BatchItem {
   name: string;
   objectId: string;
   targetId: string;
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
 }
 
 // Phase 3: Coverage cache - memoize coverage check results per window
@@ -40,7 +40,7 @@ interface CoverageCacheEntry {
   dslKey: string; // DSL string (contains window + context)
   hasMissingData: boolean;
   hasAnyConnection: boolean;
-  paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'cost_time' }>;
+  paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'labour_cost' }>;
   graphHash: string; // Hash of graph structure to invalidate when graph changes
 }
 
@@ -450,7 +450,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // Show if graph has any edges with parameter files (for windowed aggregation)
   // This includes both external connections and file-based parameters
   const hasParameterFiles = useMemo(() => {
-    return graph?.edges?.some(e => e.p?.id || e.cost_gbp?.id || e.cost_time?.id) || false;
+    return graph?.edges?.some(e => e.p?.id || e.cost_gbp?.id || e.labour_cost?.id) || false;
   }, [graph]);
   
   // Always show - window selector is useful for any parameter-based aggregation
@@ -572,7 +572,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       try {
         let hasMissingData = false;
         let hasAnyConnection = false;
-        const paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'cost_time' }> = [];
+        const paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'labour_cost' }> = [];
         
         // Check all parameters in graph (use ref to avoid dependency)
         if (currentGraph.edges) {
@@ -581,10 +581,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
             
             // Check each parameter slot
             // Check all parameter slots (including those with direct connections but no file)
-            const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'cost_time'; param: any }> = [];
+            const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'labour_cost'; param: any }> = [];
             if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
             if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
-            if (edge.cost_time) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
+            if (edge.labour_cost) paramSlots.push({ slot: 'labour_cost', param: edge.labour_cost });
             
             for (const { slot, param } of paramSlots) {
               const paramId = param.id;
@@ -890,10 +890,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         const edgeId = edge.uuid || edge.id || '';
         
         // Check all parameter slots (including those with direct connections but no file)
-        const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'cost_time'; param: any }> = [];
+        const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'labour_cost'; param: any }> = [];
         if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
         if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
-        if (edge.cost_time) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
+        if (edge.labour_cost) paramSlots.push({ slot: 'labour_cost', param: edge.labour_cost });
         
         for (const { slot, param } of paramSlots) {
           const paramId = param.id;

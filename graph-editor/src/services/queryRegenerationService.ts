@@ -12,7 +12,7 @@
  * 
  * Synthetic ID Format: "synthetic:{uuid}:{field}"
  * - uuid: edge.uuid or node.uuid
- * - field: "p", "conditional_p[0]", "cost_gbp", "cost_time", "case"
+ * - field: "p", "conditional_p[0]", "cost_gbp", "labour_cost", "case"
  */
 
 import toast from 'react-hot-toast';
@@ -96,10 +96,10 @@ function applyQueryToGraph(
       }
     }
     
-    if (field === 'cost_time' && edge) {
-      if (edge.cost_time) {
-        (edge.cost_time as any).query = newQuery;
-        return { applied: true, location: formatEdgeLocation(graph, edge, 'cost_time') };
+    if (field === 'labour_cost' && edge) {
+      if (edge.labour_cost) {
+        (edge.labour_cost as any).query = newQuery;
+        return { applied: true, location: formatEdgeLocation(graph, edge, 'labour_cost') };
       }
     }
     
@@ -138,12 +138,12 @@ function applyQueryToGraph(
         return { applied: true, location: formatEdgeLocation(graph, edge, 'cost_gbp') };
       }
       
-      // Check cost_time
-      if (edge.cost_time?.id === paramId) {
-        if (edge.cost_time) {
-          (edge.cost_time as any).query = newQuery;
+      // Check labour_cost
+      if (edge.labour_cost?.id === paramId) {
+        if (edge.labour_cost) {
+          (edge.labour_cost as any).query = newQuery;
         }
-        return { applied: true, location: formatEdgeLocation(graph, edge, 'cost_time') };
+        return { applied: true, location: formatEdgeLocation(graph, edge, 'labour_cost') };
       }
     }
     
@@ -446,7 +446,7 @@ export class QueryRegenerationService {
         return edge.conditional_p?.[idx]?.query || null;
       }
       if (field === 'cost_gbp' && edge) return (edge.cost_gbp as any)?.query || null;
-      if (field === 'cost_time' && edge) return (edge.cost_time as any)?.query || null;
+      if (field === 'labour_cost' && edge) return (edge.labour_cost as any)?.query || null;
       if (field === 'case' && node) return null;  // TBD
       
       return null;
@@ -460,7 +460,7 @@ export class QueryRegenerationService {
           }
         }
         if (edge.cost_gbp?.id === paramId) return (edge.cost_gbp as any).query || null;
-        if (edge.cost_time?.id === paramId) return (edge.cost_time as any).query || null;
+        if (edge.labour_cost?.id === paramId) return (edge.labour_cost as any).query || null;
       }
       
       for (const node of graph.nodes) {
@@ -487,7 +487,7 @@ export class QueryRegenerationService {
         return edge.conditional_p?.[idx]?.query_overridden || false;
       }
       if (field === 'cost_gbp' && edge) return (edge.cost_gbp as any)?.query_overridden || false;
-      if (field === 'cost_time' && edge) return (edge.cost_time as any)?.query_overridden || false;
+      if (field === 'labour_cost' && edge) return (edge.labour_cost as any)?.query_overridden || false;
       
       return false;
     } else {
@@ -500,7 +500,7 @@ export class QueryRegenerationService {
           }
         }
         if (edge.cost_gbp?.id === paramId) return (edge.cost_gbp as any)?.query_overridden || false;
-        if (edge.cost_time?.id === paramId) return (edge.cost_time as any)?.query_overridden || false;
+        if (edge.labour_cost?.id === paramId) return (edge.labour_cost as any)?.query_overridden || false;
       }
       
       return false;

@@ -57,7 +57,7 @@ export const costParam = {
 export const timeParam = {
   id: 'processing-time',
   name: 'Order Processing Time',
-  type: 'cost_time',
+  type: 'labour_cost',
   description: 'Average time to process an order',
   values: [
     {

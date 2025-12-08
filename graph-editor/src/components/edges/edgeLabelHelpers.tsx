@@ -47,7 +47,7 @@ export interface LabelSegment {
     mean?: number;
     stdev?: number;
   };
-  cost_time?: {
+  labour_cost?: {
     mean?: number;
     stdev?: number;
   };
@@ -68,7 +68,7 @@ export interface CompositeLabel {
     dedupFlags?: {
       probability: boolean;
       cost_gbp: boolean;
-      cost_time: boolean;
+      labour_cost: boolean;
     };
   };
 }
@@ -176,10 +176,10 @@ export function getEdgeInfoForLayer(
       variantWeight: caseInfo?.variantWeight,
       edgeProbability: caseInfo?.edgeProbability,
       cost_gbp: edge?.cost_gbp,
-      cost_time: edge?.cost_time,
+      labour_cost: edge?.labour_cost,
       hasProbabilityParam: !!edge?.p?.id,
       hasCostGbpParam: !!edge?.cost_gbp?.id,
-      hasCostTimeParam: !!edge?.cost_time?.id,
+      hasCostTimeParam: !!edge?.labour_cost?.id,
     };
   } else if (layerId === 'base') {
     // Base layer: ONLY use baseParams (frozen snapshot)
@@ -200,10 +200,10 @@ export function getEdgeInfoForLayer(
       variantWeight: caseInfo?.variantWeight,
       edgeProbability: caseInfo ? (scenariosContext.baseParams.edges?.[edgeKey]?.p?.mean ?? 1.0) : undefined,
       cost_gbp: scenariosContext.baseParams.edges?.[edgeKey]?.cost_gbp,
-      cost_time: scenariosContext.baseParams.edges?.[edgeKey]?.cost_time,
+      labour_cost: scenariosContext.baseParams.edges?.[edgeKey]?.labour_cost,
       hasProbabilityParam: !!edge?.p?.id,
       hasCostGbpParam: !!edge?.cost_gbp?.id,
-      hasCostTimeParam: !!edge?.cost_time?.id,
+      hasCostTimeParam: !!edge?.labour_cost?.id,
     };
   } else {
     // Scenario layer - use centralized composition
@@ -235,10 +235,10 @@ export function getEdgeInfoForLayer(
       variantWeight: caseInfo?.variantWeight,
       edgeProbability: caseInfo ? (composedParams.edges?.[edgeKey]?.p?.mean ?? 1.0) : undefined,
       cost_gbp: composedParams.edges?.[edgeKey]?.cost_gbp,
-      cost_time: composedParams.edges?.[edgeKey]?.cost_time,
+      labour_cost: composedParams.edges?.[edgeKey]?.labour_cost,
       hasProbabilityParam: !!edge?.p?.id,
       hasCostGbpParam: !!edge?.cost_gbp?.id,
-      hasCostTimeParam: !!edge?.cost_time?.id,
+      hasCostTimeParam: !!edge?.labour_cost?.id,
     };
   }
 }
@@ -275,10 +275,10 @@ export function buildCompositeLabel(
         variantWeight: caseInfo?.variantWeight,
         edgeProbability: caseInfo?.edgeProbability,
         cost_gbp: edge?.cost_gbp,
-        cost_time: edge?.cost_time,
+        labour_cost: edge?.labour_cost,
         hasProbabilityParam: !!edge?.p?.id,
         hasCostGbpParam: !!edge?.cost_gbp?.id,
-        hasCostTimeParam: !!edge?.cost_time?.id,
+        hasCostTimeParam: !!edge?.labour_cost?.id,
         colour: '#000',
         isHidden: false
       }],
@@ -385,8 +385,8 @@ export function analyzeDeduplication(segments: LabelSegment[]): CompositeLabel['
     s.stdev === first.stdev &&
     s.cost_gbp?.mean === first.cost_gbp?.mean &&
     s.cost_gbp?.stdev === first.cost_gbp?.stdev &&
-    s.cost_time?.mean === first.cost_time?.mean &&
-    s.cost_time?.stdev === first.cost_time?.stdev
+    s.labour_cost?.mean === first.labour_cost?.mean &&
+    s.labour_cost?.stdev === first.labour_cost?.stdev
   );
   
   if (allFieldsIdentical) {
@@ -398,8 +398,8 @@ export function analyzeDeduplication(segments: LabelSegment[]): CompositeLabel['
       h.stdev === first.stdev &&
       h.cost_gbp?.mean === first.cost_gbp?.mean &&
       h.cost_gbp?.stdev === first.cost_gbp?.stdev &&
-      h.cost_time?.mean === first.cost_time?.mean &&
-      h.cost_time?.stdev === first.cost_time?.stdev
+      h.labour_cost?.mean === first.labour_cost?.mean &&
+      h.labour_cost?.stdev === first.labour_cost?.stdev
     );
     
     if (hiddenMatches) {
@@ -421,8 +421,8 @@ export function analyzeDeduplication(segments: LabelSegment[]): CompositeLabel['
     s.cost_gbp?.stdev === first.cost_gbp?.stdev
   );
   const costsTimeIdentical = visible.every(s => 
-    s.cost_time?.mean === first.cost_time?.mean &&
-    s.cost_time?.stdev === first.cost_time?.stdev
+    s.labour_cost?.mean === first.labour_cost?.mean &&
+    s.labour_cost?.stdev === first.labour_cost?.stdev
   );
   
   // If any field can be deduplicated, use partial mode
@@ -432,7 +432,7 @@ export function analyzeDeduplication(segments: LabelSegment[]): CompositeLabel['
       dedupFlags: {
         probability: probsIdentical,
         cost_gbp: costsGbpIdentical,
-        cost_time: costsTimeIdentical
+        labour_cost: costsTimeIdentical
       }
     };
   }
@@ -455,7 +455,7 @@ export function analyzeDeduplication(segments: LabelSegment[]): CompositeLabel['
 export function formatSegmentValue(segment: LabelSegment, includeFields: {
   probability: boolean;
   cost_gbp: boolean;
-  cost_time: boolean;
+  labour_cost: boolean;
 }): string {
   const parts: string[] = [];
   
@@ -502,17 +502,17 @@ export function formatSegmentValue(segment: LabelSegment, includeFields: {
   }
   
   // Time cost part
-  if (includeFields.cost_time && segment.cost_time?.mean !== undefined) {
+  if (includeFields.labour_cost && segment.labour_cost?.mean !== undefined) {
     let timePart = '';
     
     if (segment.hasCostTimeParam) {
       timePart += '🔌 ';
     }
     
-    timePart += `${segment.cost_time.mean.toFixed(1)}d`;
+    timePart += `${segment.labour_cost.mean.toFixed(1)}d`;
     
-    if (segment.cost_time.stdev && segment.cost_time.stdev > 0) {
-      timePart += ` ± ${segment.cost_time.stdev.toFixed(1)}d`;
+    if (segment.labour_cost.stdev && segment.labour_cost.stdev > 0) {
+      timePart += ` ± ${segment.labour_cost.stdev.toFixed(1)}d`;
     }
     
     parts.push(timePart);
@@ -553,7 +553,7 @@ export function renderCompositeLabel(
     const value = formatSegmentValue(visible[0], {
       probability: true,
       cost_gbp: true,
-      cost_time: true
+      labour_cost: true
     });
     
     return (
@@ -569,7 +569,7 @@ export function renderCompositeLabel(
     const visibleValue = formatSegmentValue(visible[0], {
       probability: true,
       cost_gbp: true,
-      cost_time: true
+      labour_cost: true
     });
     
     return (
@@ -581,7 +581,7 @@ export function renderCompositeLabel(
           const hiddenValue = formatSegmentValue(h, {
             probability: true,
             cost_gbp: true,
-            cost_time: true
+            labour_cost: true
           });
           return (
             <span key={h.layerId} style={{ fontWeight: 'bold', fontSize: '11px', color: selected ? '#ccc' : '#999' }}>
@@ -596,7 +596,7 @@ export function renderCompositeLabel(
   // Partial or no deduplication: show segments with per-field dedup
   const includeProb = deduplication.type !== 'partial' || !deduplication.dedupFlags?.probability;
   const includeCostGbp = deduplication.type !== 'partial' || !deduplication.dedupFlags?.cost_gbp;
-  const includeCostTime = deduplication.type !== 'partial' || !deduplication.dedupFlags?.cost_time;
+  const includeCostTime = deduplication.type !== 'partial' || !deduplication.dedupFlags?.labour_cost;
   
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -639,14 +639,14 @@ export function renderCompositeLabel(
             parts.push(costPart);
           }
           
-          if (includeCostTime && segment.cost_time?.mean !== undefined) {
+          if (includeCostTime && segment.labour_cost?.mean !== undefined) {
             let timePart = '';
             if (segment.hasCostTimeParam) {
               timePart += '🔌 ';
             }
-            timePart += `${segment.cost_time.mean.toFixed(1)}d`;
-            if (segment.cost_time.stdev && segment.cost_time.stdev > 0) {
-              timePart += ` ± ${segment.cost_time.stdev.toFixed(1)}d`;
+            timePart += `${segment.labour_cost.mean.toFixed(1)}d`;
+            if (segment.labour_cost.stdev && segment.labour_cost.stdev > 0) {
+              timePart += ` ± ${segment.labour_cost.stdev.toFixed(1)}d`;
             }
             parts.push(timePart);
           }
@@ -657,7 +657,7 @@ export function renderCompositeLabel(
           value = formatSegmentValue(segment, {
             probability: includeProb,
             cost_gbp: includeCostGbp,
-            cost_time: includeCostTime
+            labour_cost: includeCostTime
           });
         }
         
@@ -684,17 +684,17 @@ export function renderCompositeLabel(
         <>
           {deduplication.dedupFlags?.probability && !isCaseEdge && (
             <span style={{ color: selected ? '#fff' : '#000', fontWeight: 'bold', fontSize: '11px' }}>
-              {formatSegmentValue(visible[0], { probability: true, cost_gbp: false, cost_time: false })}
+              {formatSegmentValue(visible[0], { probability: true, cost_gbp: false, labour_cost: false })}
             </span>
           )}
           {deduplication.dedupFlags?.cost_gbp && (
             <span style={{ color: selected ? '#fff' : '#000', fontWeight: 'bold', fontSize: '11px' }}>
-              {formatSegmentValue(visible[0], { probability: false, cost_gbp: true, cost_time: false })}
+              {formatSegmentValue(visible[0], { probability: false, cost_gbp: true, labour_cost: false })}
             </span>
           )}
-          {deduplication.dedupFlags?.cost_time && (
+          {deduplication.dedupFlags?.labour_cost && (
             <span style={{ color: selected ? '#fff' : '#000', fontWeight: 'bold', fontSize: '11px' }}>
-              {formatSegmentValue(visible[0], { probability: false, cost_gbp: false, cost_time: true })}
+              {formatSegmentValue(visible[0], { probability: false, cost_gbp: false, labour_cost: true })}
             </span>
           )}
         </>
@@ -729,14 +729,14 @@ export function renderCompositeLabel(
             parts.push(costPart);
           }
           
-          if (segment.cost_time?.mean !== undefined) {
+          if (segment.labour_cost?.mean !== undefined) {
             let timePart = '';
             if (segment.hasCostTimeParam) {
               timePart += '🔌 ';
             }
-            timePart += `${segment.cost_time.mean.toFixed(1)}d`;
-            if (segment.cost_time.stdev && segment.cost_time.stdev > 0) {
-              timePart += ` ± ${segment.cost_time.stdev.toFixed(1)}d`;
+            timePart += `${segment.labour_cost.mean.toFixed(1)}d`;
+            if (segment.labour_cost.stdev && segment.labour_cost.stdev > 0) {
+              timePart += ` ± ${segment.labour_cost.stdev.toFixed(1)}d`;
             }
             parts.push(timePart);
           }
@@ -746,7 +746,7 @@ export function renderCompositeLabel(
           value = formatSegmentValue(segment, {
             probability: true,
             cost_gbp: true,
-            cost_time: true
+            labour_cost: true
           });
         }
         

@@ -627,7 +627,7 @@ export class IntegrityCheckService {
         category: 'schema',
         field: 'type',
         message: 'Missing parameter type',
-        suggestion: 'Add "type: probability" or cost_gbp, cost_time, etc.'
+        suggestion: 'Add "type: probability" or cost_gbp, labour_cost, etc.'
       });
     }
     
@@ -663,7 +663,7 @@ export class IntegrityCheckService {
         }
         
         // Check cost is non-negative
-        if (['cost', 'cost_gbp', 'cost_time'].includes(data.type)) {
+        if (['cost', 'cost_gbp', 'labour_cost'].includes(data.type)) {
           if (typeof val.value === 'number' && val.value < 0) {
             issues.push({
               fileId: file.fileId,
@@ -1372,16 +1372,16 @@ export class IntegrityCheckService {
         }
       }
       
-      if (edge.cost_time?.id) {
-        referencedParams.add(edge.cost_time.id);
-        if (!parameterFiles.has(edge.cost_time.id)) {
+      if (edge.labour_cost?.id) {
+        referencedParams.add(edge.labour_cost.id);
+        if (!parameterFiles.has(edge.labour_cost.id)) {
           issues.push({
             fileId: graphFileId,
             type: 'graph',
             severity: 'warning',
             category: 'reference',
-            field: `edges[${i}].cost_time.id`,
-            message: `Edge references non-existent time cost: ${edge.cost_time.id}`,
+            field: `edges[${i}].labour_cost.id`,
+            message: `Edge references non-existent time cost: ${edge.labour_cost.id}`,
             edgeUuid: edge.uuid
           });
         }

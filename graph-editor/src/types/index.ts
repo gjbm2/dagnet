@@ -580,8 +580,8 @@ export interface GraphEdge {
   conditional_p?: ConditionalProbability[];
   weight_default?: number; // >= 0
   cost_gbp?: CostParam; // Cost in GBP
-  cost_time?: CostParam; // Cost in time (e.g., days)
-  costs?: Costs; // DEPRECATED: old format, use cost_gbp/cost_time instead
+  labour_cost?: CostParam; // Cost in time (e.g., days)
+  costs?: Costs; // DEPRECATED: old format, use cost_gbp/labour_cost instead
   case_variant?: string;
   case_id?: string;
   display?: EdgeDisplay;

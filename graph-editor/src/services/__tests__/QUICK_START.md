@@ -46,7 +46,7 @@ npm test -- --coverage src/services/__tests__/
 
 ### ✅ ID Preservation (11/12 tests)
 - `p.id` preserved after File→Graph updates
-- `cost_gbp.id` and `cost_time.id` preserved separately  
+- `cost_gbp.id` and `labour_cost.id` preserved separately  
 - `node.id` preserved through multiple updates
 - `case.id` preserved (1 test failing due to status mapping issue)
 

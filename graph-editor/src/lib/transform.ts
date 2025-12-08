@@ -77,7 +77,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       p: e.p, // Full probability parameter object (includes connection, connection_string, query, evidence, conditional_ps)
       conditional_p: e.conditional_p, // Conditional probability array (includes override flags)
       cost_gbp: e.cost_gbp, // Full cost_gbp parameter object (includes connection, connection_string, query, evidence)
-      cost_time: e.cost_time, // Full cost_time parameter object (includes connection, connection_string, query, evidence)
+      labour_cost: e.labour_cost, // Full labour_cost parameter object (includes connection, connection_string, query, evidence)
       weight_default: e.weight_default,
       case_variant: e.case_variant, // Add case variant for case edges
       case_id: e.case_id, // Add case ID for case edges
@@ -169,7 +169,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
         toHandle: e.targetHandle,
         p: mergedP,
         cost_gbp: e.data?.cost_gbp ?? originalEdge?.cost_gbp, // Full cost_gbp parameter object
-        cost_time: e.data?.cost_time ?? originalEdge?.cost_time, // Full cost_time parameter object
+        labour_cost: e.data?.labour_cost ?? originalEdge?.labour_cost, // Full labour_cost parameter object
         description: e.data?.description ?? '',
         weight_default: e.data?.weight_default,
         case_variant: e.data?.case_variant, // Add case variant for case edges

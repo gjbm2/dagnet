@@ -17,7 +17,7 @@ class PathResult:
     """Result of path probability calculation."""
     probability: float
     expected_cost_gbp: float
-    expected_cost_time: float
+    expected_labour_cost: float
     path_exists: bool = True
     intermediate_nodes: list[str] = field(default_factory=list)
 
@@ -174,7 +174,7 @@ def calculate_path_probability(
     Uses DFS with memoization to handle multiple paths.
     
     Args:
-        G: NetworkX DiGraph with edge 'p', 'cost_gbp', 'cost_time' attrs
+        G: NetworkX DiGraph with edge 'p', 'cost_gbp', 'labour_cost' attrs
         start_id: Start node ID (UUID or human-readable)
         end_id: End node ID (UUID or human-readable)
         pruning: Optional pruning result for visited constraints
@@ -192,7 +192,7 @@ def calculate_path_probability(
         return PathResult(
             probability=0.0,
             expected_cost_gbp=0.0,
-            expected_cost_time=0.0,
+            expected_labour_cost=0.0,
             path_exists=False
         )
     
@@ -273,7 +273,7 @@ def calculate_path_probability(
             
             # Edge costs
             edge_gbp = data.get('cost_gbp', 0.0) or 0.0
-            edge_time = data.get('cost_time', 0.0) or 0.0
+            edge_time = data.get('labour_cost', 0.0) or 0.0
             
             # Recursive costs
             target_gbp, target_time = calc_cost(target)
@@ -292,7 +292,7 @@ def calculate_path_probability(
     return PathResult(
         probability=probability,
         expected_cost_gbp=exp_gbp,
-        expected_cost_time=exp_time,
+        expected_labour_cost=exp_time,
         path_exists=probability > 0
     )
 
@@ -323,7 +323,7 @@ def calculate_path_through_node(
         return PathResult(
             probability=0.0,
             expected_cost_gbp=0.0,
-            expected_cost_time=0.0,
+            expected_labour_cost=0.0,
             path_exists=False
         )
     
@@ -336,7 +336,7 @@ def calculate_path_through_node(
         return PathResult(
             probability=0.0,
             expected_cost_gbp=0.0,
-            expected_cost_time=0.0,
+            expected_labour_cost=0.0,
             path_exists=False
         )
     
@@ -351,7 +351,7 @@ def calculate_path_through_node(
         entry_weight = G.nodes[entry].get('entry_weight', 1.0 / len(entry_nodes))
         prob_to_node += entry_weight * result.probability
         cost_to_node_gbp += entry_weight * result.expected_cost_gbp
-        cost_to_node_time += entry_weight * result.expected_cost_time
+        cost_to_node_time += entry_weight * result.expected_labour_cost
     
     # Calculate probability of reaching any absorbing from this node
     prob_from_node = 0.0
@@ -362,7 +362,7 @@ def calculate_path_through_node(
         result = calculate_path_probability(G, node_id, absorbing, pruning)
         prob_from_node += result.probability
         cost_from_node_gbp += result.probability * result.expected_cost_gbp
-        cost_from_node_time += result.probability * result.expected_cost_time
+        cost_from_node_time += result.probability * result.expected_labour_cost
     
     # Combined result
     # Note: prob_from_node should sum to 1.0 if graph is well-formed
@@ -371,7 +371,7 @@ def calculate_path_through_node(
     return PathResult(
         probability=combined_prob,
         expected_cost_gbp=cost_to_node_gbp + cost_from_node_gbp,
-        expected_cost_time=cost_to_node_time + cost_from_node_time,
+        expected_labour_cost=cost_to_node_time + cost_from_node_time,
         path_exists=combined_prob > 0
     )
 
@@ -400,7 +400,7 @@ def calculate_path_to_absorbing(
         return PathResult(
             probability=0.0,
             expected_cost_gbp=0.0,
-            expected_cost_time=0.0,
+            expected_labour_cost=0.0,
             path_exists=False
         )
     
@@ -412,7 +412,7 @@ def calculate_path_to_absorbing(
         return PathResult(
             probability=0.0,
             expected_cost_gbp=0.0,
-            expected_cost_time=0.0,
+            expected_labour_cost=0.0,
             path_exists=False
         )
     
@@ -426,12 +426,12 @@ def calculate_path_to_absorbing(
         
         total_prob += entry_weight * result.probability
         total_gbp += entry_weight * result.expected_cost_gbp
-        total_time += entry_weight * result.expected_cost_time
+        total_time += entry_weight * result.expected_labour_cost
     
     return PathResult(
         probability=total_prob,
         expected_cost_gbp=total_gbp,
-        expected_cost_time=total_time,
+        expected_labour_cost=total_time,
         path_exists=total_prob > 0
     )
 
@@ -478,7 +478,7 @@ def run_path_analysis(
             'to_node': end_id,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
-            'expected_cost_time': result.expected_cost_time,
+            'expected_labour_cost': result.expected_labour_cost,
             'path_exists': result.path_exists,
             'visited_constraints': visited_nodes,
             'visited_any_constraints': visited_any_groups,
@@ -492,7 +492,7 @@ def run_path_analysis(
             'to_node': end_id,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
-            'expected_cost_time': result.expected_cost_time,
+            'expected_labour_cost': result.expected_labour_cost,
             'path_exists': result.path_exists,
         }
     
@@ -504,7 +504,7 @@ def run_path_analysis(
             'node': start_id,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
-            'expected_cost_time': result.expected_cost_time,
+            'expected_labour_cost': result.expected_labour_cost,
             'path_exists': result.path_exists,
         }
     

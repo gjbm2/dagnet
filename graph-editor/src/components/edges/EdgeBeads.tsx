@@ -138,8 +138,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge.p?.mean_overridden, // Override flag for probability
     edge.cost_gbp?.mean, // GBP cost
     edge.cost_gbp?.mean_overridden, // Override flag for GBP cost
-    edge.cost_time?.mean, // Time cost
-    edge.cost_time?.mean_overridden, // Override flag for time cost
+    edge.labour_cost?.mean, // Time cost
+    edge.labour_cost?.mean_overridden, // Override flag for time cost
     edge.case_variant, // Case variant name
     edge.conditional_p?.length, // Conditional probabilities count
     edge.query_overridden, // Override flag for query
@@ -726,8 +726,8 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.edge?.query_overridden === nextProps.edge?.query_overridden &&
     prevProps.edge?.cost_gbp?.mean === nextProps.edge?.cost_gbp?.mean &&
     prevProps.edge?.cost_gbp?.mean_overridden === nextProps.edge?.cost_gbp?.mean_overridden &&
-    prevProps.edge?.cost_time?.mean === nextProps.edge?.cost_time?.mean &&
-    prevProps.edge?.cost_time?.mean_overridden === nextProps.edge?.cost_time?.mean_overridden &&
+    prevProps.edge?.labour_cost?.mean === nextProps.edge?.labour_cost?.mean &&
+    prevProps.edge?.labour_cost?.mean_overridden === nextProps.edge?.labour_cost?.mean_overridden &&
     prevProps.edge?.case_variant === nextProps.edge?.case_variant &&
     prevProps.edge?.conditional_p?.length === nextProps.edge?.conditional_p?.length &&
     // Graph structure and update timestamp - catches ALL graph changes

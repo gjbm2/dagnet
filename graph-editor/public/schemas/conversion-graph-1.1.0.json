@@ -103,7 +103,7 @@
         },
         "costs": { 
           "$ref": "#/$defs/Costs",
-          "$comment": "DEPRECATED: Node costs are no longer used. Costs are only tracked on edges (cost_gbp and cost_time). Runner calculates per-node costs by accumulating edge costs along paths.",
+          "$comment": "DEPRECATED: Node costs are no longer used. Costs are only tracked on edges (cost_gbp and labour_cost). Runner calculates per-node costs by accumulating edge costs along paths.",
           "deprecated": true
         },
         "residual_behavior": { "$ref": "#/$defs/ResidualBehavior" },
@@ -267,7 +267,7 @@
           "description": "Used to distribute residual among free edges from the same source; proportional with others."
         },
         "cost_gbp": { "$ref": "#/$defs/CostParam" },
-        "cost_time": { "$ref": "#/$defs/CostParam" },
+        "labour_cost": { "$ref": "#/$defs/CostParam" },
         "case_variant": {
           "type": "string",
           "maxLength": 128,
@@ -434,7 +434,7 @@
     },
 
     "Costs": {
-      "$comment": "DEPRECATED: This nested structure is no longer used. Use flat cost_gbp and cost_time fields on edges instead (both use CostParam). Kept for backward compatibility only.",
+      "$comment": "DEPRECATED: This nested structure is no longer used. Use flat cost_gbp and labour_cost fields on edges instead (both use CostParam). Kept for backward compatibility only.",
       "type": "object",
       "additionalProperties": false,
       "deprecated": true,
@@ -467,7 +467,7 @@
     },
 
     "TimeCost": {
-      "$comment": "DEPRECATED: No longer used. Use cost_time (CostParam) on edges instead. Units are implicitly days.",
+      "$comment": "DEPRECATED: No longer used. Use labour_cost (CostParam) on edges instead. Units are implicitly days.",
       "type": "object",
       "additionalProperties": false,
       "deprecated": true,

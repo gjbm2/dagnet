@@ -59,7 +59,7 @@ parameters:
     
   - id: phone-order-duration
     file_path: parameters/phone-order-duration.yaml
-    type: cost_time
+    type: labour_cost
     status: active
     tags: [time, phone, operations]
     

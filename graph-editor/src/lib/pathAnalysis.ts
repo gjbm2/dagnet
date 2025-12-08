@@ -254,7 +254,7 @@ export function calculatePathProbability(
       // Calculate probability-weighted cost (using new flat schema)
       const edgeCost = {
         monetary: edge.data?.cost_gbp?.mean || 0,
-        time: edge.data?.cost_time?.mean || 0,
+        time: edge.data?.labour_cost?.mean || 0,
         units: 'days' // Units now implicit: GBP and days
       };
       
@@ -604,12 +604,12 @@ export function calculateGeneralStats(
   };
   
   [...internalEdges, ...outgoingEdges].forEach(edge => {
-    // New flat schema: cost_gbp, cost_time
+    // New flat schema: cost_gbp, labour_cost
     if (edge.data?.cost_gbp) {
       totalCosts.monetary += edge.data.cost_gbp.mean || 0;
     }
-    if (edge.data?.cost_time) {
-      totalCosts.time += edge.data.cost_time.mean || 0;
+    if (edge.data?.labour_cost) {
+      totalCosts.time += edge.data.labour_cost.mean || 0;
       if (!totalCosts.units) {
         totalCosts.units = 'days';
       }
@@ -737,7 +737,7 @@ export function analyzeSelection(
         );
         directPathCosts = {
           monetary: directEdge.data?.cost_gbp?.mean || 0,
-          time: directEdge.data?.cost_time?.mean || 0,
+          time: directEdge.data?.labour_cost?.mean || 0,
           units: 'days'
         };
       }

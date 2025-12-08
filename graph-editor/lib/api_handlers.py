@@ -19,7 +19,7 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
             - graph: Graph data (required)
             - paramTypes: Optional filter by type
             - downstream_of: Optional incremental updates
-            - edge_id: Optional filter to single edge (returns base p, cost_gbp, cost_time)
+            - edge_id: Optional filter to single edge (returns base p, cost_gbp, labour_cost)
             - conditional_index: Optional filter to specific conditional (requires edge_id)
             - maxChecks: Optional (default 200)
             - literal_weights: Optional

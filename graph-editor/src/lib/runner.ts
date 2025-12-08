@@ -356,10 +356,10 @@ export function calculateProbabilities(
         
         if (edgeProb === 0) continue; // Skip zero-probability edges
         
-        // Get edge cost from new flat schema (cost_gbp, cost_time)
+        // Get edge cost from new flat schema (cost_gbp, labour_cost)
         const edgeCost = {
           monetary: (edge as any).cost_gbp?.mean || 0,
-          time: (edge as any).cost_time?.mean || 0
+          time: (edge as any).labour_cost?.mean || 0
         };
         
         // Calculate next visited set
@@ -426,7 +426,7 @@ export function calculateProbabilities(
   for (const e of graph.edges) {
     const edgeCost = {
       monetary: (e as any).cost_gbp?.mean || 0,
-      time: (e as any).cost_time?.mean || 0
+      time: (e as any).labour_cost?.mean || 0
     };
     edgeCostMap.set(e.uuid, edgeCost);
   }

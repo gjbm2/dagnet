@@ -140,15 +140,15 @@ function validateEdgeParams(
     }
   }
   
-  // Validate cost_time
-  if (edgeParams.cost_time !== undefined) {
-    if (edgeParams.cost_time !== null && typeof edgeParams.cost_time !== 'object') {
+  // Validate labour_cost
+  if (edgeParams.labour_cost !== undefined) {
+    if (edgeParams.labour_cost !== null && typeof edgeParams.labour_cost !== 'object') {
       errors.push({
-        path: `${path}.cost_time`,
-        message: 'cost_time must be an object or null'
+        path: `${path}.labour_cost`,
+        message: 'labour_cost must be an object or null'
       });
-    } else if (edgeParams.cost_time) {
-      validateCostParam(`${path}.cost_time`, edgeParams.cost_time, errors, warnings);
+    } else if (edgeParams.labour_cost) {
+      validateCostParam(`${path}.labour_cost`, edgeParams.labour_cost, errors, warnings);
     }
   }
   

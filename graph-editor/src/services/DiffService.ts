@@ -103,12 +103,12 @@ function diffEdgeParams(
     }
   }
   
-  // Diff cost_time
-  if (current.cost_time) {
-    const baseCost = base?.cost_time;
-    const costDiff = diffCostParam(current.cost_time, baseCost, epsilon);
+  // Diff labour_cost
+  if (current.labour_cost) {
+    const baseCost = base?.labour_cost;
+    const costDiff = diffCostParam(current.labour_cost, baseCost, epsilon);
     if (costDiff) {
-      diff.cost_time = costDiff;
+      diff.labour_cost = costDiff;
     }
   }
   

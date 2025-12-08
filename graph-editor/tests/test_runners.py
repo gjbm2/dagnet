@@ -36,14 +36,14 @@ def build_test_graph():
     G.add_node('end1', is_entry=False, absorbing=True, label='Success')
     G.add_node('end2', is_entry=False, absorbing=True, label='Failure')
     
-    G.add_edge('start', 'a', p=1.0, cost_gbp=0, cost_time=0)
-    G.add_edge('a', 'b1', p=0.4, cost_gbp=10, cost_time=1)
-    G.add_edge('a', 'b2', p=0.4, cost_gbp=10, cost_time=1)
-    G.add_edge('a', 'b3', p=0.2, cost_gbp=10, cost_time=1)
-    G.add_edge('b1', 'c', p=1.0, cost_gbp=0, cost_time=0)
-    G.add_edge('b2', 'c', p=1.0, cost_gbp=0, cost_time=0)
-    G.add_edge('b3', 'end2', p=1.0, cost_gbp=0, cost_time=0)
-    G.add_edge('c', 'end1', p=1.0, cost_gbp=0, cost_time=0)
+    G.add_edge('start', 'a', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('a', 'b1', p=0.4, cost_gbp=10, labour_cost=1)
+    G.add_edge('a', 'b2', p=0.4, cost_gbp=10, labour_cost=1)
+    G.add_edge('a', 'b3', p=0.2, cost_gbp=10, labour_cost=1)
+    G.add_edge('b1', 'c', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('b2', 'c', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('b3', 'end2', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('c', 'end1', p=1.0, cost_gbp=0, labour_cost=0)
     
     return G
 

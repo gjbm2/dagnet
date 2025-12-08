@@ -48,7 +48,7 @@ interface AutoGetScenario {
   itemId: string;
   targetInstanceUuid: string;
   hasFile: boolean;
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number;
 }
 
@@ -148,14 +148,14 @@ describe('EnhancedSelector auto-get', () => {
       );
     });
 
-    it('should pass paramSlot correctly for cost_time parameters', async () => {
+    it('should pass paramSlot correctly for labour_cost parameters', async () => {
       await simulateAutoGet(
         {
           type: 'parameter',
           itemId: 'time-param',
           targetInstanceUuid: 'edge-uuid-789',
           hasFile: true,
-          paramSlot: 'cost_time',
+          paramSlot: 'labour_cost',
         },
         mockGraph,
         mockFetchItem,
@@ -166,7 +166,7 @@ describe('EnhancedSelector auto-get', () => {
         'parameter',
         'time-param',
         'edge-uuid-789',
-        { paramSlot: 'cost_time', conditionalIndex: undefined }
+        { paramSlot: 'labour_cost', conditionalIndex: undefined }
       );
     });
 

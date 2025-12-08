@@ -702,8 +702,8 @@ def _extract_connection_info(edge: Edge) -> Tuple[Optional[str], Optional[str], 
         if ds:
             all_data_sources.append(ds)
     
-    if hasattr(edge, 'cost_time') and edge.cost_time:
-        ds = getattr(edge.cost_time, 'data_source', None)
+    if hasattr(edge, 'labour_cost') and edge.labour_cost:
+        ds = getattr(edge.labour_cost, 'data_source', None)
         if ds:
             all_data_sources.append(ds)
     
@@ -771,7 +771,7 @@ def generate_all_parameter_queries(
     Covers:
     - Edge base probabilities (edge.p)
     - Edge conditional probabilities (edge.conditional_p[])
-    - Edge costs (edge.cost_gbp, edge.cost_time)
+    - Edge costs (edge.cost_gbp, edge.labour_cost)
     - Case node variants (node.case.variants[])
     - Context parameters (inferred from conditions)
     
@@ -864,7 +864,7 @@ def generate_all_parameter_queries(
                     stats=result.coverage_stats
                 ))
         
-        # 3. Cost parameters (edge.cost_gbp, edge.cost_time)
+        # 3. Cost parameters (edge.cost_gbp, edge.labour_cost)
         # These use same query as base probability (unconditional)
         # Note: connection_name/provider already extracted above (pessimistic check)
         # Skip if filtering by conditional_index (only want conditional, not costs)
@@ -881,12 +881,12 @@ def generate_all_parameter_queries(
                 stats=result.coverage_stats
             ))
         
-        if edge.cost_time and conditional_index is None:
+        if edge.labour_cost and conditional_index is None:
             # Use real param_id if exists, otherwise generate synthetic ID
-            param_id = getattr(edge.cost_time, 'id', None) or f"synthetic:{edge.uuid}:cost_time"
+            param_id = getattr(edge.labour_cost, 'id', None) or f"synthetic:{edge.uuid}:labour_cost"
             result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
             parameters.append(ParameterQuery(
-                param_type="edge_cost_time",
+                param_type="edge_labour_cost",
                 param_id=param_id,
                 edge_key=edge_key,
                 condition=None,
@@ -942,7 +942,7 @@ def generate_queries_by_type(
         graph: Full graph structure
         param_types: List of types to include (default: all)
                     Options: "edge_base_p", "edge_conditional_p", "edge_cost_gbp",
-                            "edge_cost_time", "case_variant_edge"
+                            "edge_labour_cost", "case_variant_edge"
         max_checks: Safety cap per parameter
         downstream_of: Optional node ID - only process downstream edges
     
@@ -953,7 +953,7 @@ def generate_queries_by_type(
     
     if param_types is None:
         param_types = ["edge_base_p", "edge_conditional_p", "edge_cost_gbp", 
-                      "edge_cost_time", "case_variant_edge"]
+                      "edge_labour_cost", "case_variant_edge"]
     
     result = {ptype: [] for ptype in param_types}
     for param in all_params:

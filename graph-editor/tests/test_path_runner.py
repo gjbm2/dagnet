@@ -23,9 +23,9 @@ def build_linear_graph():
     G.add_node('b', is_entry=False, absorbing=False)
     G.add_node('end', is_entry=False, absorbing=True)
     
-    G.add_edge('start', 'a', p=1.0, cost_gbp=10.0, cost_time=1.0)
-    G.add_edge('a', 'b', p=1.0, cost_gbp=20.0, cost_time=2.0)
-    G.add_edge('b', 'end', p=1.0, cost_gbp=30.0, cost_time=3.0)
+    G.add_edge('start', 'a', p=1.0, cost_gbp=10.0, labour_cost=1.0)
+    G.add_edge('a', 'b', p=1.0, cost_gbp=20.0, labour_cost=2.0)
+    G.add_edge('b', 'end', p=1.0, cost_gbp=30.0, labour_cost=3.0)
     
     return G
 
@@ -49,14 +49,14 @@ def build_branching_graph():
     G.add_node('end1', is_entry=False, absorbing=True)
     G.add_node('end2', is_entry=False, absorbing=True)
     
-    G.add_edge('start', 'a', p=1.0, cost_gbp=0, cost_time=0)
-    G.add_edge('a', 'b1', p=0.4, cost_gbp=10, cost_time=1)
-    G.add_edge('a', 'b2', p=0.4, cost_gbp=10, cost_time=1)
-    G.add_edge('a', 'b3', p=0.2, cost_gbp=10, cost_time=1)
-    G.add_edge('b1', 'c', p=1.0, cost_gbp=0, cost_time=0)
-    G.add_edge('b2', 'c', p=1.0, cost_gbp=0, cost_time=0)
-    G.add_edge('b3', 'end2', p=1.0, cost_gbp=0, cost_time=0)
-    G.add_edge('c', 'end1', p=1.0, cost_gbp=0, cost_time=0)
+    G.add_edge('start', 'a', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('a', 'b1', p=0.4, cost_gbp=10, labour_cost=1)
+    G.add_edge('a', 'b2', p=0.4, cost_gbp=10, labour_cost=1)
+    G.add_edge('a', 'b3', p=0.2, cost_gbp=10, labour_cost=1)
+    G.add_edge('b1', 'c', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('b2', 'c', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('b3', 'end2', p=1.0, cost_gbp=0, labour_cost=0)
+    G.add_edge('c', 'end1', p=1.0, cost_gbp=0, labour_cost=0)
     
     return G
 
@@ -80,7 +80,7 @@ class TestCalculatePathProbability:
         # Total cost = 10 + 20 + 30 = 60 GBP
         assert result.expected_cost_gbp == pytest.approx(60.0)
         # Total time = 1 + 2 + 3 = 6
-        assert result.expected_cost_time == pytest.approx(6.0)
+        assert result.expected_labour_cost == pytest.approx(6.0)
     
     def test_partial_path(self):
         """Partial path has correct probability."""

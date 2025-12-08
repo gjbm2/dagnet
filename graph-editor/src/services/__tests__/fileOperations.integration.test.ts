@@ -809,7 +809,7 @@ describe('File Operations Integration Tests', () => {
               from: '1',
               to: '2',
               cost_gbp: { mean: 10, id: 'shipping-cost' },
-              cost_time: { mean: 2, id: 'shipping-cost' }
+              labour_cost: { mean: 2, id: 'shipping-cost' }
             }
           ],
           metadata: { name: 'costs' }
@@ -830,7 +830,7 @@ describe('File Operations Integration Tests', () => {
 
       const updatedGraph = fileRegistry.getFile('graph-costs');
       expect(updatedGraph?.data.edges[0].cost_gbp.id).toBe('delivery-cost');
-      expect(updatedGraph?.data.edges[0].cost_time.id).toBe('delivery-cost');
+      expect(updatedGraph?.data.edges[0].labour_cost.id).toBe('delivery-cost');
     });
 
     it('should update conditional probability references', async () => {

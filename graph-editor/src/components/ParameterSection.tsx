@@ -17,8 +17,8 @@ interface ParameterSectionProps {
   objectType: 'edge' | 'node';  // For future extensibility
   objectId: string;
   
-  // Parameter slot ('p', 'cost_gbp', 'cost_time')
-  paramSlot: 'p' | 'cost_gbp' | 'cost_time';
+  // Parameter slot ('p', 'cost_gbp', 'labour_cost')
+  paramSlot: 'p' | 'cost_gbp' | 'labour_cost';
   
   // For conditional probabilities: which index in conditional_p array
   conditionalIndex?: number;
@@ -270,8 +270,8 @@ export function ParameterSection({
                 onBlur={() => {
                   onUpdate({ mean_overridden: true });
                 }}
-                placeholder={paramSlot === 'cost_time' ? '120' : '0.00'}
-                title={paramSlot === 'cost_time' ? 'Enter minutes (future: 2d, 10m formats)' : 'Enter cost in £'}
+                placeholder={paramSlot === 'labour_cost' ? '120' : '0.00'}
+                title={paramSlot === 'labour_cost' ? 'Enter minutes (future: 2d, 10m formats)' : 'Enter cost in £'}
                 disabled={disabled}
                 className="parameter-input"
               />
