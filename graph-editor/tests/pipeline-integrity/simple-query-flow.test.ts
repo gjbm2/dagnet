@@ -330,7 +330,7 @@ describe.skip('Pipeline Integrity: Simple Query Flow', () => {
         to: 'b',
         p: { mean: 0.5, id: 'param-p' },
         cost_gbp: { mean: 100, id: 'param-cost-gbp' },
-        cost_time: { mean: 5, id: 'param-cost-time' }
+        labour_cost: { mean: 5, id: 'param-cost-time' }
       }]
     });
 

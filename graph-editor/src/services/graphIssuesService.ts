@@ -341,8 +341,8 @@ class GraphIssuesService {
       if (edge.cost_gbp?.id) {
         referenced.add(`parameter-${edge.cost_gbp.id}`);
       }
-      if (edge.cost_time?.id) {
-        referenced.add(`parameter-${edge.cost_time.id}`);
+      if (edge.labour_cost?.id) {
+        referenced.add(`parameter-${edge.labour_cost.id}`);
       }
     }
   }

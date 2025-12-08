@@ -495,7 +495,7 @@ class TestComprehensiveParameterGeneration:
                 from_node="b",
                 to="c",
                 p={"mean": 0.3},
-                cost_time={"mean": 2.5}
+                labour_cost={"mean": 2.5}
             )
         ]
         
@@ -520,7 +520,7 @@ class TestComprehensiveParameterGeneration:
         assert "edge_base_p" in param_types
         assert "edge_conditional_p" in param_types
         assert "edge_cost_gbp" in param_types
-        assert "edge_cost_time" in param_types
+        assert "edge_labour_cost" in param_types
         
         # Should have correct counts
         base_p_params = [p for p in params if p.param_type == "edge_base_p"]
@@ -530,7 +530,7 @@ class TestComprehensiveParameterGeneration:
         assert len(conditional_params) == 1  # One conditional on edge a->b
         
         cost_params = [p for p in params if "cost" in p.param_type]
-        assert len(cost_params) == 2  # cost_gbp and cost_time
+        assert len(cost_params) == 2  # cost_gbp and labour_cost
     
     def test_downstream_filtering(self):
         """Only generate queries for edges downstream of specified node."""
@@ -592,7 +592,7 @@ class TestEdgeScopedQueryGeneration:
         
         edges = [
             Edge(uuid="edge-1", from_node="a", to="b", p={"mean": 0.5}, cost_gbp={"mean": 10.0}),
-            Edge(uuid="edge-2", from_node="b", to="c", p={"mean": 0.6}, cost_time={"mean": 2.0}),
+            Edge(uuid="edge-2", from_node="b", to="c", p={"mean": 0.6}, labour_cost={"mean": 2.0}),
             Edge(uuid="edge-3", from_node="c", to="d", p={"mean": 0.7})
         ]
         
@@ -611,13 +611,13 @@ class TestEdgeScopedQueryGeneration:
         assert edge_keys == {"b->c"}
         assert len(edge_keys) == 1
         
-        # Should have base_p and cost_time (not cost_gbp which is only on edge-1)
+        # Should have base_p and labour_cost (not cost_gbp which is only on edge-1)
         param_types = set(p.param_type for p in params)
         assert "edge_base_p" in param_types
-        assert "edge_cost_time" in param_types
+        assert "edge_labour_cost" in param_types
         assert "edge_cost_gbp" not in param_types
         
-        # Verify param count (1 base_p + 1 cost_time = 2 params)
+        # Verify param count (1 base_p + 1 labour_cost = 2 params)
         assert len(params) == 2
     
     def test_filter_by_edge_uuid_with_conditionals(self):
@@ -732,7 +732,7 @@ class TestEdgeScopedQueryGeneration:
                 to="b",
                 p={"mean": 0.5},  # Should be skipped
                 cost_gbp={"mean": 10.0},  # Should be skipped
-                cost_time={"mean": 2.0},  # Should be skipped
+                labour_cost={"mean": 2.0},  # Should be skipped
                 conditional_p=[
                     {"condition": "visited(x)", "p": {"mean": 0.6}}  # Only this one (index 0)
                 ]
@@ -758,7 +758,7 @@ class TestEdgeScopedQueryGeneration:
         param_types = set(p.param_type for p in params)
         assert "edge_base_p" not in param_types
         assert "edge_cost_gbp" not in param_types
-        assert "edge_cost_time" not in param_types
+        assert "edge_labour_cost" not in param_types
     
     def test_edge_uuid_without_conditional_index_includes_all_base_params(self):
         """When only edge_uuid is specified (no conditional_index), include base_p and costs."""
@@ -776,7 +776,7 @@ class TestEdgeScopedQueryGeneration:
                 to="b",
                 p={"mean": 0.5},
                 cost_gbp={"mean": 10.0},
-                cost_time={"mean": 2.0},
+                labour_cost={"mean": 2.0},
                 conditional_p=[
                     {"condition": "visited(x)", "p": {"mean": 0.6}},
                     {"condition": "visited(y)", "p": {"mean": 0.7}}
@@ -798,7 +798,7 @@ class TestEdgeScopedQueryGeneration:
         param_types = [p.param_type for p in params]
         assert "edge_base_p" in param_types
         assert "edge_cost_gbp" in param_types
-        assert "edge_cost_time" in param_types
+        assert "edge_labour_cost" in param_types
         
         # Should NOT include any conditional_p when no conditional_index specified
         # Actually, wait - reading the implementation again, when edge_uuid is specified

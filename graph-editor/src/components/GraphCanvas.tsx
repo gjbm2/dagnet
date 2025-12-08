@@ -1582,7 +1582,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               query_overridden: graphEdge.query_overridden,
               conditional_p: graphEdge.conditional_p, // Include conditional_p with override flags
               cost_gbp: (graphEdge as any).cost_gbp, // New flat cost structure
-              cost_time: (graphEdge as any).cost_time, // New flat cost structure
+              labour_cost: (graphEdge as any).labour_cost, // New flat cost structure
               costs: graphEdge.costs, // Legacy field (for backward compat)
               weight_default: graphEdge.weight_default,
               case_variant: graphEdge.case_variant,

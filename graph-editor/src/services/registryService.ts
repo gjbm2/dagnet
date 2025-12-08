@@ -36,7 +36,7 @@ export interface RegistryItem {
   tags?: string[];
   
   // Type-specific metadata
-  parameter_type?: 'probability' | 'cost_gbp' | 'cost_time' | 'standard_deviation';
+  parameter_type?: 'probability' | 'cost_gbp' | 'labour_cost' | 'standard_deviation';
   node_type?: string;
   case_type?: string;
   event_type?: string;
@@ -178,10 +178,10 @@ class RegistryService {
   /**
    * Get parameters filtered by type
    */
-  async getParametersByType(parameterType: 'probability' | 'cost_gbp' | 'cost_time', tabs: any[] = []): Promise<RegistryItem[]> {
+  async getParametersByType(parameterType: 'probability' | 'cost_gbp' | 'labour_cost', tabs: any[] = []): Promise<RegistryItem[]> {
     const allParams = await this.getParameters(tabs);
     
-    // Schema uses 'type' field directly with values: probability, cost_gbp, cost_time
+    // Schema uses 'type' field directly with values: probability, cost_gbp, labour_cost
     // This is stored in RegistryItem.parameter_type
     return allParams.filter(p => p.parameter_type === parameterType);
   }

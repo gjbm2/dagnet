@@ -598,14 +598,14 @@ function collectBatchItems(graph: GraphData): Array<{
   objectId: string;
   targetId: string;
   name: string;
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
 }> {
   const items: Array<{
     type: 'parameter' | 'case';
     objectId: string;
     targetId: string;
     name: string;
-    paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+    paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   }> = [];
 
   // Collect parameters from edges
@@ -636,13 +636,13 @@ function collectBatchItems(graph: GraphData): Array<{
       }
 
       // Cost Time parameter
-      if (edge.cost_time?.id && typeof edge.cost_time.id === 'string') {
+      if (edge.labour_cost?.id && typeof edge.labour_cost.id === 'string') {
         items.push({
           type: 'parameter',
-          objectId: edge.cost_time.id,
+          objectId: edge.labour_cost.id,
           targetId: edgeId,
-          name: `cost_time: ${edge.cost_time.id}`,
-          paramSlot: 'cost_time'
+          name: `labour_cost: ${edge.labour_cost.id}`,
+          paramSlot: 'labour_cost'
         });
       }
     }

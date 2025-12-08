@@ -121,8 +121,8 @@ export function applyComposedParamsToGraph(
         if (edgeParams.cost_gbp !== undefined) {
           edge.cost_gbp = { ...edge.cost_gbp, ...edgeParams.cost_gbp };
         }
-        if (edgeParams.cost_time !== undefined) {
-          edge.cost_time = { ...edge.cost_time, ...edgeParams.cost_time };
+        if (edgeParams.labour_cost !== undefined) {
+          edge.labour_cost = { ...edge.labour_cost, ...edgeParams.labour_cost };
         }
         
         // Apply conditional_p (convert from Record to array format if needed)
@@ -361,8 +361,8 @@ function mergeEdgeParams(
     result.cost_gbp = source.cost_gbp === null ? undefined : { ...target.cost_gbp, ...source.cost_gbp };
   }
   
-  if (source.cost_time !== undefined) {
-    result.cost_time = source.cost_time === null ? undefined : { ...target.cost_time, ...source.cost_time };
+  if (source.labour_cost !== undefined) {
+    result.labour_cost = source.labour_cost === null ? undefined : { ...target.labour_cost, ...source.labour_cost };
   }
   
   // Merge conditional_p (special handling for nested record)

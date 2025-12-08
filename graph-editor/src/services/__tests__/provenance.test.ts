@@ -108,12 +108,12 @@ describe('Provenance Tracking', () => {
       });
     });
     
-    it('cost_time manual edit includes data_source', async () => {
+    it('labour_cost manual edit includes data_source', async () => {
       const edge = createTestEdge({
-        cost_time: { mean: 310, stdev: 95, distribution: 'lognormal' }
+        labour_cost: { mean: 310, stdev: 95, distribution: 'lognormal' }
       });
       
-      const fileData = createTestParameterFile({ type: 'cost_time', values: [] });
+      const fileData = createTestParameterFile({ type: 'labour_cost', values: [] });
       
       const result = await updateManager.handleGraphToFile(
         edge,

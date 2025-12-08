@@ -1,6 +1,6 @@
 id: phone-order-duration
 name: Phone Order Duration
-type: cost_time
+type: labour_cost
 query: "from(phone-order).to(payment)"
 query_overridden: false
 values:

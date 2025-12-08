@@ -176,7 +176,7 @@ describe('countEdgeOverrides', () => {
       from: 'node-a',
       to: 'node-b',
       cost_gbp: { mean: 100, mean_overridden: true },
-      cost_time: { mean: 5, stdev_overridden: true, distribution_overridden: true }
+      labour_cost: { mean: 5, stdev_overridden: true, distribution_overridden: true }
     };
     expect(countEdgeOverrides(edge)).toBe(3);
   });

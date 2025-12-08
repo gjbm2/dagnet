@@ -69,7 +69,7 @@ export const mockParamGitService = {
     return Promise.resolve([
       { id: 'conversion-rate', name: 'Landing to Signup Conversion', type: 'probability' },
       { id: 'acquisition-cost', name: 'Customer Acquisition Cost', type: 'cost_gbp' },
-      { id: 'processing-time', name: 'Order Processing Time', type: 'cost_time' },
+      { id: 'processing-time', name: 'Order Processing Time', type: 'labour_cost' },
     ]);
   }),
 };

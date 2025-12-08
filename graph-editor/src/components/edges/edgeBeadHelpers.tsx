@@ -20,7 +20,7 @@ import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue } from './Bea
 export type { BeadValue, HiddenCurrentValue };
 
 export interface BeadDefinition {
-  type: 'probability' | 'cost_gbp' | 'cost_time' | 'variant' | 'conditional_p';
+  type: 'probability' | 'cost_gbp' | 'labour_cost' | 'variant' | 'conditional_p';
   
   // Multi-scenario values
   values: BeadValue[];
@@ -91,10 +91,10 @@ function formatConditional(condition: string, prob: number): string {
  * 3. Building label using BeadLabelBuilder
  * 4. Constructing BeadDefinition
  * 
- * This eliminates duplicate logic across probability, cost_gbp, cost_time, etc.
+ * This eliminates duplicate logic across probability, cost_gbp, labour_cost, etc.
  */
 function buildParameterBead(config: {
-  beadType: 'probability' | 'cost_gbp' | 'cost_time';
+  beadType: 'probability' | 'cost_gbp' | 'labour_cost';
   
   // Check if parameter exists anywhere (current, base, or any visible scenario)
   checkExists: () => boolean;
@@ -338,9 +338,9 @@ function getEdgeCostTimeForLayer(
   if (!edgeKey) return undefined;
   
   if (layerId === 'current') {
-    return edge?.cost_time;
+    return edge?.labour_cost;
   } else if (layerId === 'base') {
-    return scenariosContext.baseParams.edges?.[edgeKey]?.cost_time;
+    return scenariosContext.baseParams.edges?.[edgeKey]?.labour_cost;
   } else {
     // Scenario layer - use centralized composition
     const composedParams = getComposedParamsForLayer(
@@ -349,7 +349,7 @@ function getEdgeCostTimeForLayer(
       scenariosContext.currentParams,
       scenariosContext.scenarios
     );
-    return composedParams.edges?.[edgeKey]?.cost_time;
+    return composedParams.edges?.[edgeKey]?.labour_cost;
   }
 }
 
@@ -645,12 +645,12 @@ export function buildBeadDefinitions(
   // 4. Cost Time Bead (if present in ANY layer)
   // ============================================================================
   const costTimeBead = buildParameterBead({
-    beadType: 'cost_time',
+    beadType: 'labour_cost',
     checkExists: () => {
       // Check current
-      if (edge.cost_time) return true;
+      if (edge.labour_cost) return true;
       // Check base
-      if (edgeKeyForCosts && scenariosContext.baseParams.edges?.[edgeKeyForCosts]?.cost_time) return true;
+      if (edgeKeyForCosts && scenariosContext.baseParams.edges?.[edgeKeyForCosts]?.labour_cost) return true;
       // Check all visible scenarios
       for (const scenarioId of orderedVisibleIds) {
         if (scenarioId === 'current' || scenarioId === 'base') continue;
@@ -662,8 +662,8 @@ export function buildBeadDefinitions(
     extractFromLayer: (layerId) => getEdgeCostTimeForLayer(layerId, edge, graph, scenariosContext),
     buildLabel: BeadLabelBuilder.buildCostTimeLabel,
     backgroundColor: '#000000',
-    hasParameterConnection: !!((edge as any).cost_time?.id),
-    isOverridden: !!((edge as any).cost_time?.mean_overridden),
+    hasParameterConnection: !!((edge as any).labour_cost?.id),
+    isOverridden: !!((edge as any).labour_cost?.mean_overridden),
     baseDistance,
     beadIndex: beadIndex,
     orderedVisibleIds,

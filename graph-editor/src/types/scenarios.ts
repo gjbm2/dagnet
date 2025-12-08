@@ -39,7 +39,7 @@ export interface EdgeParamDiff {
   conditional_p?: Record<string, ProbabilityParam | null>;
   weight_default?: number;
   cost_gbp?: CostParam;
-  cost_time?: CostParam;
+  labour_cost?: CostParam;
 }
 
 /**

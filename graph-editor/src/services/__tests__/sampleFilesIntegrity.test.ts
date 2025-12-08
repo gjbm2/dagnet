@@ -422,7 +422,7 @@ describe('Sample Files Integrity', () => {
         expect(param.id).toBeDefined();
         expect(typeof param.id).toBe('string');
         expect(param.type).toBeDefined();
-        expect(['probability', 'cost_gbp', 'cost_time', 'standard_deviation']).toContain(param.type);
+        expect(['probability', 'cost_gbp', 'labour_cost', 'standard_deviation']).toContain(param.type);
       }
     });
     

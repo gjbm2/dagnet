@@ -23,7 +23,7 @@ interface NavigatorEntry {
   tags?: string[];
   path?: string;
   // Type-specific properties for sub-categorization
-  parameter_type?: 'probability' | 'cost_gbp' | 'cost_time' | 'standard_deviation';
+  parameter_type?: 'probability' | 'cost_gbp' | 'labour_cost' | 'standard_deviation';
   node_type?: string;
   case_type?: string;
 }
@@ -307,7 +307,7 @@ export function ObjectTypeSection({
     const groups: Record<string, NavigatorEntry[]> = {
       'probability': [],
       'cost_gbp': [],
-      'cost_time': [],
+      'labour_cost': [],
       'other': []
     };
 
@@ -316,8 +316,8 @@ export function ObjectTypeSection({
         groups.probability.push(entry);
       } else if (entry.parameter_type === 'cost_gbp') {
         groups.cost_gbp.push(entry);
-      } else if (entry.parameter_type === 'cost_time') {
-        groups.cost_time.push(entry);
+      } else if (entry.parameter_type === 'labour_cost') {
+        groups.labour_cost.push(entry);
       } else {
         groups.other.push(entry);
       }
@@ -330,7 +330,7 @@ export function ObjectTypeSection({
   const subCategoryConfig: Record<string, { name: string; icon: React.ElementType }> = {
     'probability': { name: 'Probability', icon: TrendingUp },
     'cost_gbp': { name: 'Cost (GBP)', icon: Coins },
-    'cost_time': { name: 'Cost (Time)', icon: Clock },
+    'labour_cost': { name: 'Cost (Time)', icon: Clock },
     'other': { name: 'Other', icon: Package }
   };
 

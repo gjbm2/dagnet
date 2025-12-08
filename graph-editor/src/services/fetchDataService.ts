@@ -33,7 +33,7 @@ export interface FetchItem {
   name: string;
   objectId: string;
   targetId: string;
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number;
 }
 
@@ -269,10 +269,10 @@ export function getItemsNeedingFetch(
     for (const edge of graph.edges) {
       const edgeId = edge.uuid || edge.id || '';
       
-      const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'cost_time'; param: any }> = [];
+      const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'labour_cost'; param: any }> = [];
       if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
       if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
-      if (edge.cost_time) paramSlots.push({ slot: 'cost_time', param: edge.cost_time });
+      if (edge.labour_cost) paramSlots.push({ slot: 'labour_cost', param: edge.labour_cost });
       
       for (const { slot, param } of paramSlots) {
         const paramId = param.id;
@@ -675,7 +675,7 @@ export function createFetchItem(
   objectId: string,
   targetId: string,
   options?: {
-    paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+    paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
     conditionalIndex?: number;
     name?: string;
   }

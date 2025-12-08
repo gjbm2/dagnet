@@ -323,7 +323,7 @@
       "description": "Agent completes phone order and processes payment directly",
       "p": { "mean": 0.85 },
       "cost_gbp": { "mean": 8.50, "id": "phone-order-handling-cost" },
-      "cost_time": { "mean": 12, "id": "phone-order-duration" }
+      "labour_cost": { "mean": 12, "id": "phone-order-duration" }
     },
     {
       "uuid": "df5afba5-c3c6-4800-b86d-b1150af0f89c",

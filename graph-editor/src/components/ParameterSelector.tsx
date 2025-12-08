@@ -24,7 +24,7 @@ interface ParameterSelectorProps {
   /** Auto-focus input and show dropdown on mount */
   autoFocus?: boolean;
   /** Filter parameters by type (only applicable when type='parameter') */
-  parameterType?: 'probability' | 'cost_gbp' | 'cost_time';
+  parameterType?: 'probability' | 'cost_gbp' | 'labour_cost';
 }
 
 /**

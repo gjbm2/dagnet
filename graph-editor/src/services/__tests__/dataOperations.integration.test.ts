@@ -827,10 +827,10 @@ describe('DataOperationsService Integration Tests', () => {
       });
     });
 
-    it('cost_time: roundtrip with lognormal distribution', async () => {
+    it('labour_cost: roundtrip with lognormal distribution', async () => {
       const edge = createTestEdge({
         uuid: 'edge-1',
-        cost_time: {
+        labour_cost: {
           mean: 310,
           stdev: 95,
           distribution: 'lognormal'
@@ -839,7 +839,7 @@ describe('DataOperationsService Integration Tests', () => {
 
       const paramFile = createTestParameterFile({
         id: 'checkout-duration',
-        type: 'cost_time',
+        type: 'labour_cost',
         values: []
       });
 
@@ -856,7 +856,7 @@ describe('DataOperationsService Integration Tests', () => {
       });
 
       // Get back
-      edge.cost_time!.id = 'checkout-duration';
+      edge.labour_cost!.id = 'checkout-duration';
       await dataOperationsService.getParameterFromFile({
         paramId: 'checkout-duration',
         edgeId: 'edge-1',
@@ -867,7 +867,7 @@ describe('DataOperationsService Integration Tests', () => {
       const updatedGraph = setGraph.mock.calls[setGraph.mock.calls.length - 1][0];
       const updatedEdge = updatedGraph.edges.find((e: any) => e.uuid === 'edge-1');
 
-      expect(updatedEdge.cost_time).toMatchObject({
+      expect(updatedEdge.labour_cost).toMatchObject({
         mean: 310,
         stdev: 95,
         distribution: 'lognormal',
@@ -886,7 +886,7 @@ describe('DataOperationsService Integration Tests', () => {
         uuid: 'edge-1',
         p: { mean: 0.45, stdev: 0.03, distribution: 'beta', id: 'param-p' },
         cost_gbp: { mean: 14.8, stdev: 2.9, distribution: 'lognormal', id: 'param-gbp' },
-        cost_time: { mean: 310, stdev: 95, distribution: 'lognormal', id: 'param-time' }
+        labour_cost: { mean: 310, stdev: 95, distribution: 'lognormal', id: 'param-time' }
       });
 
       // Create three separate parameter files
@@ -904,7 +904,7 @@ describe('DataOperationsService Integration Tests', () => {
 
       await fileRegistry.registerFile('parameter-param-time', createTestParameterFile({
         id: 'param-time',
-        type: 'cost_time',
+        type: 'labour_cost',
         values: []
       }));
 
@@ -924,7 +924,7 @@ describe('DataOperationsService Integration Tests', () => {
       expect(latestP.mean).toBe(0.45);
       expect(latestP.distribution).toBe('beta');
 
-      // Put only cost_time parameter
+      // Put only labour_cost parameter
       await dataOperationsService.putParameterToFile({
         paramId: 'param-time',
         edgeId: 'edge-1',
@@ -951,7 +951,7 @@ describe('DataOperationsService Integration Tests', () => {
       const edge = createTestEdge({
         uuid: 'edge-1',
         p: { mean: 0.45, id: 'param-a' },
-        cost_time: { mean: 310, id: 'param-b' }
+        labour_cost: { mean: 310, id: 'param-b' }
       });
 
       await fileRegistry.registerFile('parameter-param-c', createTestParameterFile({

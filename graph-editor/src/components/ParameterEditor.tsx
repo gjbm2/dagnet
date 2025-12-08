@@ -25,7 +25,7 @@ interface ParameterEditorProps {
   // Context
   graph: any;
   objectId: string; // edgeId or nodeId
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number; // For conditional_p
   variantIndex?: number; // For variant weights
   allVariants?: any[]; // For variant weights

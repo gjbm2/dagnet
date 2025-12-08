@@ -84,7 +84,7 @@ def run_single_node_entry(
                 'outcome': absorbing,
                 'probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
-                'expected_cost_time': result.expected_cost_time,
+                'expected_labour_cost': result.expected_labour_cost,
             })
     
     return {
@@ -100,7 +100,7 @@ def run_single_node_entry(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
@@ -161,7 +161,7 @@ def run_path_to_end(
             'scenario_id': scenario_id,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
-            'expected_cost_time': result.expected_cost_time,
+            'expected_labour_cost': result.expected_labour_cost,
         })
     
     return {
@@ -176,7 +176,7 @@ def run_path_to_end(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar',
@@ -231,7 +231,7 @@ def run_path_through(
             'scenario_id': scenario_id,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
-            'expected_cost_time': result.expected_cost_time,
+            'expected_labour_cost': result.expected_labour_cost,
         })
     
     return {
@@ -246,7 +246,7 @@ def run_path_through(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar',
@@ -310,7 +310,7 @@ def run_end_comparison(
                 'scenario_id': scenario_id,
                 'probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
-                'expected_cost_time': result.expected_cost_time,
+                'expected_labour_cost': result.expected_labour_cost,
             })
     
     return {
@@ -325,7 +325,7 @@ def run_end_comparison(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
@@ -402,7 +402,7 @@ def run_branch_comparison(
                 'edge_probability': edge_prob,
                 'path_through_probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
-                'expected_cost_time': result.expected_cost_time,
+                'expected_labour_cost': result.expected_labour_cost,
             })
     
     return {
@@ -418,7 +418,7 @@ def run_branch_comparison(
                 {'id': 'edge_probability', 'name': 'Edge Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'path_through_probability', 'name': 'Path Through', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
@@ -531,7 +531,7 @@ def run_path(
             if i == 0:
                 prob = 1.0
                 cost_gbp = 0.0
-                cost_time = 0.0
+                labour_cost = 0.0
                 stdev = None
                 distribution = None
                 n_total = None
@@ -540,7 +540,7 @@ def run_path(
                 result = calculate_path_probability(scenario_G, start_id, stage_id, pruning)
                 prob = result.probability
                 cost_gbp = result.expected_cost_gbp
-                cost_time = result.expected_cost_time
+                labour_cost = result.expected_labour_cost
             
                 # Get statistics from incoming edge to this stage
                 prev_stage = stage_ids[i - 1]
@@ -571,7 +571,7 @@ def run_path(
                 'scenario_id': scenario_id,
                 'probability': prob,
                 'expected_cost_gbp': cost_gbp,
-                'expected_cost_time': cost_time,
+                'expected_labour_cost': labour_cost,
             }
             
             # Include optional fields only if present
@@ -609,7 +609,7 @@ def run_path(
                 {'id': 'k', 'name': 'Conversions', 'type': 'count', 'format': 'integer'},
                 {'id': 'dropoff', 'name': 'Dropoff', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'funnel',
@@ -705,7 +705,7 @@ def run_partial_path(
                     'outcome': absorbing,
                     'probability': result.probability,
                     'expected_cost_gbp': result.expected_cost_gbp,
-                    'expected_cost_time': result.expected_cost_time,
+                    'expected_labour_cost': result.expected_labour_cost,
                 })
     
     return {
@@ -722,7 +722,7 @@ def run_partial_path(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
@@ -888,21 +888,21 @@ def run_graph_overview(
         for absorbing in absorbing_nodes:
             total_prob = 0.0
             total_cost_gbp = 0.0
-            total_cost_time = 0.0
+            total_labour_cost = 0.0
             
             for entry in entry_nodes:
                 entry_weight = scenario_G.nodes[entry].get('entry_weight', 1.0 / len(entry_nodes)) if entry_nodes else 0
                 result = calculate_path_probability(scenario_G, entry, absorbing, pruning)
                 total_prob += entry_weight * result.probability
                 total_cost_gbp += entry_weight * result.expected_cost_gbp
-                total_cost_time += entry_weight * result.expected_cost_time
+                total_labour_cost += entry_weight * result.expected_labour_cost
             
             data_rows.append({
                 'outcome': absorbing,
                 'scenario_id': scenario_id,
                 'probability': total_prob,
                 'expected_cost_gbp': total_cost_gbp,
-                'expected_cost_time': total_cost_time,
+                'expected_labour_cost': total_labour_cost,
             })
     
     # Get graph stats from primary graph
@@ -923,7 +923,7 @@ def run_graph_overview(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_cost_time', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',

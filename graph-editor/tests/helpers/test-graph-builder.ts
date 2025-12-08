@@ -40,7 +40,7 @@ export interface EdgeConfig {
     };
   };
   cost_gbp?: any;
-  cost_time?: any;
+  labour_cost?: any;
   conditional_p?: Array<{
     condition: string;
     mean: number;
@@ -103,7 +103,7 @@ export function createTestGraph(config: TestGraphConfig = {}): Graph {
         evidence: edge.p.evidence || {}
       } : undefined,
       cost_gbp: edge.cost_gbp,
-      cost_time: edge.cost_time,
+      labour_cost: edge.labour_cost,
       conditional_p: edge.conditional_p,
     };
   });

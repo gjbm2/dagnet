@@ -30,7 +30,7 @@ interface NavigatorEntry {
   lastModified?: number;
   lastOpened?: number;
   // Type-specific metadata for sub-categorization
-  parameter_type?: 'probability' | 'cost_gbp' | 'cost_time' | 'standard_deviation';
+  parameter_type?: 'probability' | 'cost_gbp' | 'labour_cost' | 'standard_deviation';
   node_type?: string;
   case_type?: string;
 }

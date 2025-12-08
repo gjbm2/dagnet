@@ -209,9 +209,9 @@ describe('Sample Data Integrity', () => {
           missingRefs.push(`Edge ${edge.id}: references non-existent cost parameter "${edge.cost_gbp.id}"`);
         }
         
-        // Parameter references in cost_time.id
-        if (edge.cost_time?.id && !parameterIds.has(edge.cost_time.id)) {
-          missingRefs.push(`Edge ${edge.id}: references non-existent time parameter "${edge.cost_time.id}"`);
+        // Parameter references in labour_cost.id
+        if (edge.labour_cost?.id && !parameterIds.has(edge.labour_cost.id)) {
+          missingRefs.push(`Edge ${edge.id}: references non-existent time parameter "${edge.labour_cost.id}"`);
         }
         
         // Parameter references in conditional_p

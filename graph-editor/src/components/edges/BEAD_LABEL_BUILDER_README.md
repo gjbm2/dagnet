@@ -7,7 +7,7 @@ The bead system uses a **two-layer architecture** to ensure consistency:
 1. **`buildParameterBead()`** - Generic function that handles parameter extraction and bead construction
 2. **`BeadLabelBuilder`** - Class that handles formatting and display logic
 
-This eliminates duplicate code and ensures all parameters (probability, cost_gbp, cost_time) follow identical patterns.
+This eliminates duplicate code and ensures all parameters (probability, cost_gbp, labour_cost) follow identical patterns.
 
 ## Layer 1: BeadLabelBuilder (Formatting)
 
@@ -92,7 +92,7 @@ checkExists: () => {
 
 ### Problem 3: Duplicate logic everywhere
 
-Each parameter (probability, cost_gbp, cost_time) had its own copy-pasted loop with slight variations and bugs.
+Each parameter (probability, cost_gbp, labour_cost) had its own copy-pasted loop with slight variations and bugs.
 
 Now there's ONE generic function used by all parameters.
 

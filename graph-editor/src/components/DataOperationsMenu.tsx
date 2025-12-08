@@ -27,7 +27,7 @@ interface DataOperationsMenuProps {
   objectId: string;
   hasFile: boolean;
   targetId?: string; // edgeId or nodeId
-  paramSlot?: 'p' | 'cost_gbp' | 'cost_time';
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number;
   
   // Context
@@ -116,8 +116,8 @@ export function DataOperationsMenu({
           param = edge.p;
         } else if (paramSlot === 'cost_gbp') {
           param = edge.cost_gbp;
-        } else if (paramSlot === 'cost_time') {
-          param = edge.cost_time;
+        } else if (paramSlot === 'labour_cost') {
+          param = edge.labour_cost;
         }
         
         hasDirectConnection = !!param?.connection;

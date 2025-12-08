@@ -133,7 +133,7 @@ function countEdgeOverrides(edge: GraphEdge | undefined): number {
   
   // Cost overrides
   count += countCostParamOverrides(edge.cost_gbp);
-  count += countCostParamOverrides(edge.cost_time);
+  count += countCostParamOverrides(edge.labour_cost);
   
   return count;
 }
@@ -236,7 +236,7 @@ function clearEdgeOverrides(edge: GraphEdge): void {
   
   // Cost overrides
   clearCostParamOverrides(edge.cost_gbp);
-  clearCostParamOverrides(edge.cost_time);
+  clearCostParamOverrides(edge.labour_cost);
 }
 
 /**

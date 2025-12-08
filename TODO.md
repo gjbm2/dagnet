@@ -1,5 +1,6 @@
 # TODO
 
+- Ensure integrity checker sensibly configured to support dual slice integrity checks
 - Structural ambiguity about analysis dsl over conditional_p journeys -- can we cover absent scenarios?
 
 ## E2E Test Coverage for Repository Operations (CRITICAL)

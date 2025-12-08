@@ -34,7 +34,7 @@ Tests for connection ID preservation through file operations.
 
 **Coverage:**
 - ✅ `p.id` preserved after File→Graph updates
-- ✅ `cost_gbp.id` and `cost_time.id` preserved separately from `p.id`
+- ✅ `cost_gbp.id` and `labour_cost.id` preserved separately from `p.id`
 - ✅ `node.id` preserved through multiple updates
 - ✅ `node.case.id` preserved alongside `node.id`
 - ✅ IDs survive even when parent objects are replaced

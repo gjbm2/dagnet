@@ -642,7 +642,7 @@ describe('Schema / TypeScript Types Consistency', () => {
       // These should match what's in the TypeScript type
       expect(schemaTypes).toContain('probability');
       expect(schemaTypes).toContain('cost_gbp');
-      expect(schemaTypes).toContain('cost_time');
+      expect(schemaTypes).toContain('labour_cost');
     });
     
     it('Context.type enum should match schema', () => {

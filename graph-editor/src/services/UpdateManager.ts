@@ -155,10 +155,10 @@ export class UpdateManager {
    * - A direct connection to a data source (param.connection)
    * 
    * @param edge - The edge to check
-   * @param paramSlot - Which parameter slot to check ('p', 'cost_gbp', 'cost_time')
+   * @param paramSlot - Which parameter slot to check ('p', 'cost_gbp', 'labour_cost')
    * @returns true if the edge parameter is locked to external data
    */
-  private isEdgeParameterLocked(edge: any, paramSlot: 'p' | 'cost_gbp' | 'cost_time' = 'p'): boolean {
+  private isEdgeParameterLocked(edge: any, paramSlot: 'p' | 'cost_gbp' | 'labour_cost' = 'p'): boolean {
     const param = edge[paramSlot];
     return !!(param?.id || param?.connection);
   }
@@ -1333,14 +1333,14 @@ export class UpdateManager {
       },
       // Cost Time parameter connection
       { 
-        sourceField: 'cost_time.connection', 
+        sourceField: 'labour_cost.connection', 
         targetField: 'connection',
-        condition: (source) => !!source.cost_time?.connection && source.cost_time?.id
+        condition: (source) => !!source.labour_cost?.connection && source.labour_cost?.id
       },
       { 
-        sourceField: 'cost_time.connection_string', 
+        sourceField: 'labour_cost.connection_string', 
         targetField: 'connection_string',
-        condition: (source) => !!source.cost_time?.connection_string && source.cost_time?.id
+        condition: (source) => !!source.labour_cost?.connection_string && source.labour_cost?.id
       },
       // Type field: determine from which edge param is populated
       { 
@@ -1356,10 +1356,10 @@ export class UpdateManager {
         transform: () => 'cost_gbp'
       },
       { 
-        sourceField: 'cost_time', 
+        sourceField: 'labour_cost', 
         targetField: 'parameter_type',
-        condition: (source) => !!source.cost_time?.id,
-        transform: () => 'cost_time'
+        condition: (source) => !!source.labour_cost?.id,
+        transform: () => 'labour_cost'
       },
       // Initial values: populate from whichever param type exists
       { 
@@ -1389,15 +1389,15 @@ export class UpdateManager {
         })
       },
       { 
-        sourceField: 'cost_time.mean', 
+        sourceField: 'labour_cost.mean', 
         targetField: 'values[0]',
-        condition: (source) => !!source.cost_time?.id,
+        condition: (source) => !!source.labour_cost?.id,
         transform: (value, source) => ({
           mean: value,
-          stdev: source.cost_time.stdev,
-          distribution: source.cost_time.distribution,
-          window_from: source.cost_time.evidence?.window_from || normalizeToUK(new Date().toISOString()),
-          window_to: source.cost_time.evidence?.window_to
+          stdev: source.labour_cost.stdev,
+          distribution: source.labour_cost.distribution,
+          window_from: source.labour_cost.evidence?.window_from || normalizeToUK(new Date().toISOString()),
+          window_to: source.labour_cost.evidence?.window_to
         })
       }
     ]);
@@ -1442,14 +1442,14 @@ export class UpdateManager {
       },
       // Cost Time parameter connection
       { 
-        sourceField: 'cost_time.connection', 
+        sourceField: 'labour_cost.connection', 
         targetField: 'connection',
-        condition: (source) => !!source.cost_time?.connection && source.cost_time?.id
+        condition: (source) => !!source.labour_cost?.connection && source.labour_cost?.id
       },
       { 
-        sourceField: 'cost_time.connection_string', 
+        sourceField: 'labour_cost.connection_string', 
         targetField: 'connection_string',
-        condition: (source) => !!source.cost_time?.connection_string && source.cost_time?.id
+        condition: (source) => !!source.labour_cost?.connection_string && source.labour_cost?.id
       }
     ]);
     
@@ -1553,24 +1553,24 @@ export class UpdateManager {
           return entry;
         }
       },
-      // Cost Time parameter: edge.cost_time.* → parameter.values[]
+      // Cost Time parameter: edge.labour_cost.* → parameter.values[]
       { 
-        sourceField: 'cost_time.mean', 
+        sourceField: 'labour_cost.mean', 
         targetField: 'values[]',
-        condition: (source, target) => target.type === 'cost_time' || target.parameter_type === 'cost_time',
+        condition: (source, target) => target.type === 'labour_cost' || target.parameter_type === 'labour_cost',
         transform: (value, source) => {
           const entry: any = { mean: value };
           
           // Statistical fields
-          if (source.cost_time.stdev !== undefined) entry.stdev = source.cost_time.stdev;
-          if (source.cost_time.distribution) entry.distribution = source.cost_time.distribution;
+          if (source.labour_cost.stdev !== undefined) entry.stdev = source.labour_cost.stdev;
+          if (source.labour_cost.distribution) entry.distribution = source.labour_cost.distribution;
           
           // Evidence fields (if present - from data pulls)
-          if (source.cost_time.evidence) {
-            if (source.cost_time.evidence.n !== undefined) entry.n = source.cost_time.evidence.n;
-            if (source.cost_time.evidence.k !== undefined) entry.k = source.cost_time.evidence.k;
-            if (source.cost_time.evidence.window_from) entry.window_from = source.cost_time.evidence.window_from;
-            if (source.cost_time.evidence.window_to) entry.window_to = source.cost_time.evidence.window_to;
+          if (source.labour_cost.evidence) {
+            if (source.labour_cost.evidence.n !== undefined) entry.n = source.labour_cost.evidence.n;
+            if (source.labour_cost.evidence.k !== undefined) entry.k = source.labour_cost.evidence.k;
+            if (source.labour_cost.evidence.window_from) entry.window_from = source.labour_cost.evidence.window_from;
+            if (source.labour_cost.evidence.window_to) entry.window_to = source.labour_cost.evidence.window_to;
           }
           
           // If no evidence window_from, use current time
@@ -1579,14 +1579,14 @@ export class UpdateManager {
           }
           
           // Data source: preserve from edge if exists, otherwise mark as manual
-          if (source.cost_time.data_source) {
-            entry.data_source = source.cost_time.data_source;
-          } else if (source.cost_time.evidence?.source) {
+          if (source.labour_cost.data_source) {
+            entry.data_source = source.labour_cost.data_source;
+          } else if (source.labour_cost.evidence?.source) {
             entry.data_source = {
-              type: source.cost_time.evidence.source,
-              retrieved_at: source.cost_time.evidence.retrieved_at || new Date().toISOString(),
-              full_query: source.cost_time.evidence.full_query,
-              debug_trace: source.cost_time.evidence.debug_trace
+              type: source.labour_cost.evidence.source,
+              retrieved_at: source.labour_cost.evidence.retrieved_at || new Date().toISOString(),
+              full_query: source.labour_cost.evidence.full_query,
+              debug_trace: source.labour_cost.evidence.debug_trace
             };
           } else {
             entry.data_source = {
@@ -1852,59 +1852,59 @@ export class UpdateManager {
         condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp'
       },
       
-      // Cost Time parameters → edge.cost_time.*
+      // Cost Time parameters → edge.labour_cost.*
       { 
         sourceField: 'values[latest].mean', 
-        targetField: 'cost_time.mean',
-        overrideFlag: 'cost_time.mean_overridden',
-        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+        targetField: 'labour_cost.mean',
+        overrideFlag: 'labour_cost.mean_overridden',
+        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost'
       },
       { 
         sourceField: 'values[latest].stdev', 
-        targetField: 'cost_time.stdev',
-        overrideFlag: 'cost_time.stdev_overridden',
-        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+        targetField: 'labour_cost.stdev',
+        overrideFlag: 'labour_cost.stdev_overridden',
+        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost'
       },
       { 
         sourceField: 'values[latest].distribution', 
-        targetField: 'cost_time.distribution',
-        overrideFlag: 'cost_time.distribution_overridden',
-        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+        targetField: 'labour_cost.distribution',
+        overrideFlag: 'labour_cost.distribution_overridden',
+        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost'
       },
       { 
         sourceField: 'values[latest].window_from', 
-        targetField: 'cost_time.evidence.window_from',
-        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+        targetField: 'labour_cost.evidence.window_from',
+        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost'
       },
       { 
         sourceField: 'values[latest].window_to', 
-        targetField: 'cost_time.evidence.window_to',
-        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+        targetField: 'labour_cost.evidence.window_to',
+        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost'
       },
       { 
         sourceField: 'values[latest].data_source', 
-        targetField: 'cost_time.data_source',
-        condition: (source) => source.type === 'cost_time' || source.parameter_type === 'cost_time'
+        targetField: 'labour_cost.data_source',
+        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost'
       },
       { 
         sourceField: 'values[latest].data_source.retrieved_at', 
-        targetField: 'cost_time.evidence.retrieved_at',
-        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && source.values?.[source.values.length - 1]?.data_source?.retrieved_at
+        targetField: 'labour_cost.evidence.retrieved_at',
+        condition: (source) => (source.type === 'labour_cost' || source.parameter_type === 'labour_cost') && source.values?.[source.values.length - 1]?.data_source?.retrieved_at
       },
       { 
         sourceField: 'values[latest].data_source.type', 
-        targetField: 'cost_time.evidence.source',
-        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && source.values?.[source.values.length - 1]?.data_source?.type
+        targetField: 'labour_cost.evidence.source',
+        condition: (source) => (source.type === 'labour_cost' || source.parameter_type === 'labour_cost') && source.values?.[source.values.length - 1]?.data_source?.type
       },
       { 
         sourceField: 'values[latest].data_source.full_query', 
-        targetField: 'cost_time.evidence.full_query',
-        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && source.values?.[source.values.length - 1]?.data_source?.full_query
+        targetField: 'labour_cost.evidence.full_query',
+        condition: (source) => (source.type === 'labour_cost' || source.parameter_type === 'labour_cost') && source.values?.[source.values.length - 1]?.data_source?.full_query
       },
       { 
         sourceField: 'values[latest].data_source.debug_trace', 
-        targetField: 'cost_time.evidence.debug_trace',
-        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && source.values?.[source.values.length - 1]?.data_source?.debug_trace
+        targetField: 'labour_cost.evidence.debug_trace',
+        condition: (source) => (source.type === 'labour_cost' || source.parameter_type === 'labour_cost') && source.values?.[source.values.length - 1]?.data_source?.debug_trace
       },
       
       // NOTE: Query string is NOT synced from file→graph
@@ -1947,15 +1947,15 @@ export class UpdateManager {
       // Cost Time parameter connection
       { 
         sourceField: 'connection', 
-        targetField: 'cost_time.connection',
-        overrideFlag: 'cost_time.connection_overridden',
-        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && !!source.connection
+        targetField: 'labour_cost.connection',
+        overrideFlag: 'labour_cost.connection_overridden',
+        condition: (source) => (source.type === 'labour_cost' || source.parameter_type === 'labour_cost') && !!source.connection
       },
       { 
         sourceField: 'connection_string', 
-        targetField: 'cost_time.connection_string',
-        overrideFlag: 'cost_time.connection_overridden',
-        condition: (source) => (source.type === 'cost_time' || source.parameter_type === 'cost_time') && !!source.connection_string
+        targetField: 'labour_cost.connection_string',
+        overrideFlag: 'labour_cost.connection_overridden',
+        condition: (source) => (source.type === 'labour_cost' || source.parameter_type === 'labour_cost') && !!source.connection_string
       }
     ]);
     
@@ -3356,7 +3356,7 @@ export class UpdateManager {
     // Round to 3dp to ensure consistent precision (external data may have many decimal places)
     const originValue = this.roundTo3DP(currentEdge.p?.mean ?? 0);
     
-    // Find all sibling edges with the same parameter subtype (p, cost_gbp, or cost_time)
+    // Find all sibling edges with the same parameter subtype (p, cost_gbp, or labour_cost)
     // For case edges: only rebalance edges with the same case_variant and case_id
     // For regular edges: rebalance all edges from same source node
     // Use consistent ID matching like edge finding logic
@@ -3891,7 +3891,7 @@ export class UpdateManager {
     let conditionsUpdated = 0;
     let edgeIdsDeduped = 0;
 
-    // Helper to update queries/conditions in a parameter object (p, cost_gbp, cost_time, etc.)
+    // Helper to update queries/conditions in a parameter object (p, cost_gbp, labour_cost, etc.)
     const updateParamQueries = (param: any) => {
       if (!param || typeof param !== 'object') return;
       
@@ -3929,11 +3929,11 @@ export class UpdateManager {
       }
     };
 
-    // Update node-level parameters (p, cost_gbp, cost_time, etc.)
+    // Update node-level parameters (p, cost_gbp, labour_cost, etc.)
     if (searchTokens.length > 0) {
       updateParamQueries(node.p);
       updateParamQueries(node.cost_gbp);
-      updateParamQueries(node.cost_time);
+      updateParamQueries(node.labour_cost);
     }
 
     if (Array.isArray(nextGraph.edges)) {
@@ -4007,7 +4007,7 @@ export class UpdateManager {
           // Update edge-level parameters
           updateParamQueries(edge.p);
           updateParamQueries(edge.cost_gbp);
-          updateParamQueries(edge.cost_time);
+          updateParamQueries(edge.labour_cost);
         }
       });
     }
