@@ -70,9 +70,16 @@ export const EDGE_INITIAL_OFFSET = 0;
 
 /** 
  * Additional spacing between visible edge start and first bead (pixels)
- * This is added ON TOP of visibleStartOffset
+ * This is added ON TOP of visibleStartOffset (which accounts for source node concavity)
  */
-export const BEAD_MARKER_DISTANCE = 5;
+export const BEAD_MARKER_DISTANCE = 10;
+
+/**
+ * Additional spacing between arrival (target) node face and right-aligned beads (pixels)
+ * This is added ON TOP OF visibleEndOffset (which accounts for target node concavity)
+ * and controls how far latency beads sit away from the inbound node face.
+ */
+export const BEAD_ARRIVAL_FACE_OFFSET = 15;
 
 /** Spacing between beads along the edge path (pixels) */
 export const BEAD_SPACING = 20;
@@ -130,4 +137,18 @@ export const CHEVRON_FADE_IN_FRACTION = 0.1;
 
 /** Blur amount for chevron edges (pixels) - 0 = sharp, 1-3 = soft glow */
 export const CHEVRON_BLUR = 5;
+
+// ===== LAG (LATENCY) TWO-LAYER RENDERING =====
+
+/** Width of each stripe in LAG pattern (pixels) */
+export const LAG_STRIPE_WIDTH = 3;
+
+/** Angle of LAG stripes (degrees) - 45° per design */
+export const LAG_STRIPE_ANGLE = 45;
+
+/** Opacity of the stripe fill in LAG patterns */
+export const LAG_STRIPE_OPACITY = 0.85;
+
+/** Gap between stripes in LAG pattern (pixels) */
+export const LAG_STRIPE_GAP = 3;
 

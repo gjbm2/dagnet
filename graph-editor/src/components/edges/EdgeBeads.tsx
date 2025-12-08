@@ -10,7 +10,7 @@ import { EdgeLabelRenderer } from 'reactflow';
 import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
-import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE } from '../../lib/nodeEdgeConstants';
+import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
 
 // Helper to extract text content from React node for SVG textPath
 function extractTextFromReactNode(node: React.ReactNode): string {
@@ -59,6 +59,7 @@ interface EdgeBeadsProps {
   scenariosContext: any;
   whatIfDSL?: string | null;
   visibleStartOffset?: number;
+  visibleEndOffset?: number; // Offset from path end for target node face geometry
   onDoubleClick?: () => void;
   useSankeyView?: boolean;
   edgeWidth?: number;
@@ -82,6 +83,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     scenariosContext,
     whatIfDSL,
     visibleStartOffset = 0,
+    visibleEndOffset = 0,
     onDoubleClick,
     useSankeyView = false,
     edgeWidth = 0
@@ -213,52 +215,19 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     sankeyVerticalOffset = Math.min(BEAD_HEIGHT + VERTICAL_PADDING, edgeWidth) / 2;
   }
   
-  // Spacing along the spline is cumulative per bead
-  // Use shared constants from nodeEdgeConstants.ts
-  let currentDistance = visibleStartOffset + BEAD_MARKER_DISTANCE;
-  
   const svgBeads: React.ReactNode[] = [];
   const htmlBeads: React.ReactNode[] = [];
+  
+  // Track current distance for left-aligned beads (probability / cost / etc.)
+  // Right-aligned latency beads do NOT advance this cursor – they are positioned
+  // relative to the target node.
+  let currentDistance = visibleStartOffset  + BEAD_MARKER_DISTANCE;
   
   beadDefinitions.forEach((bead) => {
     const expanded = getBeadExpanded(bead);
     
-    // Position this bead at current distance along spline
-    const distance = Math.min(currentDistance, pathLength * 0.9); // Clamp to path
-    const point = computePath.getPointAtLength(distance);
-    
-    if (!point || isNaN(point.x) || isNaN(point.y)) {
-      console.warn('[EdgeBeads] Invalid point at distance', distance, 'for bead', bead.type);
-      return;
-    }
-    
-    // Calculate perpendicular offset for Sankey view
-    let transformOffset = '';
-    if (sankeyVerticalOffset !== 0) {
-      // Calculate tangent direction at this point
-      const delta = 1;
-      const prevDist = Math.max(0, distance - delta);
-      const nextDist = Math.min(pathLength, distance + delta);
-      const prevPoint = computePath.getPointAtLength(prevDist);
-      const nextPoint = computePath.getPointAtLength(nextDist);
-      
-      const dx = nextPoint.x - prevPoint.x;
-      const dy = nextPoint.y - prevPoint.y;
-      const length = Math.sqrt(dx * dx + dy * dy);
-      
-      if (length > 0) {
-        // Perpendicular vector (rotate tangent by 90 degrees)
-        const perpX = -dy / length;
-        const perpY = dx / length;
-        
-        // Apply offset (positive moves downward/inward from top edge)
-        const offsetX = perpX * sankeyVerticalOffset;
-        const offsetY = perpY * sankeyVerticalOffset;
-        
-        transformOffset = `translate(${offsetX}, ${offsetY})`;
-      }
-    }
-    
+    // We need bead length to position right-aligned beads correctly, so the
+    // distance calculation happens inside the expanded/collapsed branches.
     if (expanded) {
       // Expanded bead: lozenge with text along spline using SVG textPath
       const hasPlug = bead.hasParameterConnection;
@@ -281,16 +250,31 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       // Add space for plug icon if present (~10px) and zap-off icon if present (~10px)
       const plugIconWidth = hasPlug ? 10 : 0;
       const zapOffIconWidth = hasOverride ? 10 : 0;
-      // Reduce width by 20% to fix overestimation; treat this as the FULL lozenge length
+      // Treat this as the FULL lozenge length along the path
       const lozengeLength = (measuredTextWidth + LOZENGE_PADDING * 2 + plugIconWidth + zapOffIconWidth) * 1;
-      // Stroke START is fixed at this bead's distance; lozenge grows forward only
-      const strokeStartDistance = distance;
+      
+      // Compute start distance along the path.
+      // - Left-aligned: use currentDistance (cursor from source).
+      // - Right-aligned: mirror pattern from path end using visibleEndOffset.
+      let strokeStartDistance: number;
+      if (bead.rightAligned) {
+        // Right-aligned: position so RIGHT edge of lozenge clears target node.
+        // visibleEndOffset accounts for target face geometry,
+        // BEAD_ARRIVAL_FACE_OFFSET is an extra tweakable buffer (by eye).
+        const bufferFromEnd = visibleEndOffset + BEAD_ARRIVAL_FACE_OFFSET;
+        strokeStartDistance = pathLength - bufferFromEnd - lozengeLength;
+      } else {
+        // Left-aligned: use cursor from source
+        strokeStartDistance = currentDistance;
+      }
+      
+      const distance = strokeStartDistance;
       const textStartDistance = strokeStartDistance + LOZENGE_PADDING;
-      const textEndDistance = Math.min(strokeStartDistance + lozengeLength - LOZENGE_PADDING, pathLength * 0.9);
+      const textEndDistance = strokeStartDistance + lozengeLength - LOZENGE_PADDING;
       
       // Calculate plug icon position (after text + gap)
       const plugIconDistance = strokeStartDistance + LOZENGE_PADDING + measuredTextWidth + TEXT_TO_ICON_GAP;
-      const plugIconPoint = computePath.getPointAtLength(Math.min(plugIconDistance, pathLength * 0.9));
+      const plugIconPoint = computePath.getPointAtLength(plugIconDistance);
       
       // Calculate tangent angle for icon rotation
       const iconAngle = plugIconPoint ? (() => {
@@ -345,6 +329,31 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
         return extractFirstColour(bead.displayText);
       };
       const plugIconColour = getTextColour();
+      
+      // Calculate perpendicular offset for Sankey view at bead position
+      let transformOffset = '';
+      const point = computePath.getPointAtLength(distance);
+      if (!point || isNaN(point.x) || isNaN(point.y)) {
+        console.warn('[EdgeBeads] Invalid point at distance', distance, 'for bead', bead.type);
+        return;
+      }
+      if (sankeyVerticalOffset !== 0) {
+        const delta = 1;
+        const prevDist = Math.max(0, distance - delta);
+        const nextDist = Math.min(pathLength, distance + delta);
+        const prevPoint = computePath.getPointAtLength(prevDist);
+        const nextPoint = computePath.getPointAtLength(nextDist);
+        const dx = nextPoint.x - prevPoint.x;
+        const dy = nextPoint.y - prevPoint.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len > 0) {
+          const perpX = -dy / len;
+          const perpY = dx / len;
+          const offsetX = perpX * sankeyVerticalOffset;
+          const offsetY = perpY * sankeyVerticalOffset;
+          transformOffset = `translate(${offsetX}, ${offsetY})`;
+        }
+      }
       
       // Render coloured text segments in SVG
       // SVG textPath can contain tspan elements for coloured text
@@ -506,7 +515,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           {(() => {
             // Get the midpoint of the text for rotation anchor
             const textMidDistance = (textStartDistance + textEndDistance) / 2;
-            const textCenterPoint = computePath.getPointAtLength(Math.min(textMidDistance, pathLength * 0.9));
+            const textCenterPoint = computePath.getPointAtLength(textMidDistance);
             
             return (
               <g transform={isTextUpsideDown ? `rotate(180, ${textCenterPoint.x}, ${textCenterPoint.y})` : ''}>
@@ -570,7 +579,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             const zapOffDistance = hasPlug 
               ? plugIconDistance + plugIconWidth 
               : plugIconDistance;
-            const zapOffPoint = computePath.getPointAtLength(Math.min(zapOffDistance, pathLength * 0.9));
+            const zapOffPoint = computePath.getPointAtLength(zapOffDistance);
             
             // Calculate tangent angle for icon rotation
             const zapOffAngle = zapOffPoint ? (() => {
@@ -615,20 +624,60 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       );
       
       // Advance currentDistance based on this lozenge's end + spacing
-      const lozengeEndDistance = strokeStartDistance + lozengeLength;
-      currentDistance = lozengeEndDistance + BEAD_SPACING;
+      if (!bead.rightAligned) {
+        const lozengeEndDistance = strokeStartDistance + lozengeLength;
+        currentDistance = lozengeEndDistance + BEAD_SPACING;
+      }
     } else {
       // Collapsed bead: use the SAME geometry path as lozenges, but with no content width.
       // Conceptually: WIDTH = BASE_WIDTH (caps + padding), CONTENT_WIDTH = 0.
       const LOZENGE_HEIGHT = 14;
       const LOZENGE_PADDING = 0;
       const beadPathId = `${pathId}-bead-collapsed-${bead.index}`;
-
+      
       // Base width for a bead (no text): just padding on each side, scaled the same way
       const baseWidth = (LOZENGE_PADDING * 2) * 0.8;
-      const strokeStartDistance = distance;
+      
+      // Compute start distance along the path.
+      // Same pattern as expanded beads.
+      let strokeStartDistance: number;
+      if (bead.rightAligned) {
+        // Right-aligned: position so RIGHT edge clears target node.
+        const bufferFromEnd = visibleEndOffset + BEAD_ARRIVAL_FACE_OFFSET;
+        strokeStartDistance = pathLength - bufferFromEnd - baseWidth;
+      } else {
+        // Left-aligned: use cursor from source
+        strokeStartDistance = currentDistance;
+      }
+      
+      const distance = strokeStartDistance;
       const strokeLength = baseWidth;
 
+      // Calculate perpendicular offset for Sankey view at bead position
+      let transformOffset = '';
+      const point = computePath.getPointAtLength(distance);
+      if (!point || isNaN(point.x) || isNaN(point.y)) {
+        console.warn('[EdgeBeads] Invalid point at distance', distance, 'for bead', bead.type);
+        return;
+      }
+      if (sankeyVerticalOffset !== 0) {
+        const delta = 1;
+        const prevDist = Math.max(0, distance - delta);
+        const nextDist = Math.min(pathLength, distance + delta);
+        const prevPoint = computePath.getPointAtLength(prevDist);
+        const nextPoint = computePath.getPointAtLength(nextDist);
+        const dx = nextPoint.x - prevPoint.x;
+        const dy = nextPoint.y - prevPoint.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len > 0) {
+          const perpX = -dy / len;
+          const perpY = dx / len;
+          const offsetX = perpX * sankeyVerticalOffset;
+          const offsetY = perpY * sankeyVerticalOffset;
+          transformOffset = `translate(${offsetX}, ${offsetY})`;
+        }
+      }
+      
       svgBeads.push(
         <g 
           key={`bead-collapsed-${bead.type}-${bead.index}`}
@@ -668,7 +717,9 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       );
       
       // Advance currentDistance: bead occupies baseWidth along the path
-      currentDistance = strokeStartDistance + baseWidth + BEAD_SPACING;
+      if (!bead.rightAligned) {
+        currentDistance = strokeStartDistance + baseWidth + BEAD_SPACING;
+      }
     }
   });
   
@@ -688,15 +739,16 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
 // Component wrapper to avoid calling hook conditionally
 // Memoize to prevent re-renders when props haven't changed
 // ATOMIC RESTORATION: Now uses shouldSuppress flag (from context) instead of edge.data
-export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: EdgeBeadsProps & { visibleStartOffset?: number }) {
-  const { path, pathD, visibleStartOffset = 0, ...restProps } = props;
+export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: EdgeBeadsProps & { visibleStartOffset?: number; visibleEndOffset?: number }) {
+  const { path, pathD, visibleStartOffset = 0, visibleEndOffset = 0, ...restProps } = props;
   
   // Memoize the hook result to prevent unnecessary recalculations
   const beadsResult = useEdgeBeads({
     ...restProps,
     path,
     pathD,
-    visibleStartOffset
+    visibleStartOffset,
+    visibleEndOffset
   });
   
   return (
@@ -735,6 +787,7 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.graph?.metadata?.updated_at === nextProps.graph?.metadata?.updated_at &&
     // Bead positioning props (change with probability/edge width)
     prevProps.visibleStartOffset === nextProps.visibleStartOffset &&
+    prevProps.visibleEndOffset === nextProps.visibleEndOffset &&
     prevProps.edgeWidth === nextProps.edgeWidth &&
     // CRITICAL: pathD determines bead positions - must re-render when path changes
     prevProps.pathD === nextProps.pathD

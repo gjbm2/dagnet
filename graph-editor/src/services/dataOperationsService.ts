@@ -40,8 +40,18 @@ import {
   normalizeDate,
   parseDate,
   isDateInRange,
+  parameterValueToCohortData,
+  aggregateCohortData,
+  aggregateLatencyStats,
+  isCohortModeValue,
+  type TimeSeriesPointWithLatency,
 } from './windowAggregationService';
-import { statisticalEnhancementService } from './statisticalEnhancementService';
+import { 
+  statisticalEnhancementService,
+  computeEdgeLatencyStats,
+  type EdgeLatencyStats,
+  type CohortData,
+} from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
@@ -1117,6 +1127,65 @@ class DataOperationsService {
               ? await enhancedResult 
               : enhancedResult;
             
+            // LAG: Compute latency statistics if edge has latency tracking enabled
+            // See design.md §5.3-5.6 for the statistical model
+            let latencyStats: EdgeLatencyStats | undefined;
+            const maturityDays = targetEdge?.p?.latency?.maturity_days;
+            
+            if (maturityDays && maturityDays > 0 && valuesWithDaily.length > 0) {
+              try {
+                // Convert time series to cohort data for LAG calculations
+                const queryDate = new Date();
+                const cohortData: CohortData[] = [];
+                
+                // Build cohort data from all time series points
+                for (const point of allTimeSeries) {
+                  const cohortDate = parseDate(point.date);
+                  const ageMs = queryDate.getTime() - cohortDate.getTime();
+                  const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+                  
+                  cohortData.push({
+                    date: point.date,
+                    n: point.n,
+                    k: point.k,
+                    age: Math.max(0, ageDays),
+                    // Note: per-cohort lag data would come from cohort mode values
+                    // For window mode, we use aggregate lag stats
+                  });
+                }
+                
+                // Get aggregate lag stats from values (if available from cohort mode data)
+                const lagStats = aggregateLatencyStats(cohortData);
+                const aggregateMedianLag = lagStats?.median_lag_days ?? maturityDays / 2;
+                const aggregateMeanLag = lagStats?.mean_lag_days;
+                
+                // Compute full latency statistics using Formula A and CDF fitting
+                latencyStats = computeEdgeLatencyStats(
+                  cohortData,
+                  aggregateMedianLag,
+                  aggregateMeanLag,
+                  maturityDays
+                );
+                
+                console.log('[DataOperationsService] LAG statistics computed:', {
+                  maturityDays,
+                  cohortCount: cohortData.length,
+                  latencyStats: {
+                    t95: latencyStats.t95,
+                    p_infinity: latencyStats.p_infinity,
+                    p_mean: latencyStats.p_mean,
+                    p_evidence: latencyStats.p_evidence,
+                    completeness: latencyStats.completeness,
+                    forecast_available: latencyStats.forecast_available,
+                    fit_quality_ok: latencyStats.fit.empirical_quality_ok,
+                  },
+                });
+              } catch (error) {
+                console.warn('[DataOperationsService] LAG computation failed:', error);
+                // Continue without latency stats - non-fatal
+              }
+            }
+            
             // Find the most recent value entry with a data_source (prefer non-manual sources)
             // Sort by retrieved_at or window_to descending to get most recent
             const sortedByDate = [...valuesWithDaily].sort((a, b) => {
@@ -1146,6 +1215,18 @@ class DataOperationsService {
                 // NOTE: data_source.query removed - unused and caused type mismatches with Python
                 full_query: latestValueWithSource?.data_source?.full_query,
               },
+              // LAG: Include latency stats if computed (for UpdateManager to apply to edge)
+              ...(latencyStats && {
+                latency: {
+                  median_lag_days: latencyStats.fit.mu ? Math.exp(latencyStats.fit.mu) : undefined,
+                  completeness: latencyStats.completeness,
+                  t95: latencyStats.t95,
+                },
+                // Only include forecast if available (requires mature cohorts for p_infinity)
+                ...(latencyStats.forecast_available && {
+                  forecast: latencyStats.p_infinity,
+                }),
+              }),
             };
             
             // Create a modified parameter file data with aggregated value

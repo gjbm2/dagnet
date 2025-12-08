@@ -88,6 +88,14 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
     operations.toggleScenarioVisibility(tabId, scenarioId);
   }, [operations, tabId]);
   
+  const handleCycleVisibilityMode = React.useCallback((scenarioId: string) => {
+    operations.cycleScenarioVisibilityMode(tabId, scenarioId);
+  }, [operations, tabId]);
+  
+  const getVisibilityMode = React.useCallback((scenarioId: string) => {
+    return operations.getScenarioVisibilityMode(tabId, scenarioId);
+  }, [operations, tabId]);
+  
   const handleDelete = React.useCallback(async (scenarioId: string) => {
     // No confirmation needed - it's reversible via graph history
     try {
@@ -130,6 +138,8 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       showCurrent={scenarios.length >= 1}
       showBase={baseVisible}
       onToggleVisibility={handleToggleVisibility}
+      onCycleVisibilityMode={handleCycleVisibilityMode}
+      getVisibilityMode={getVisibilityMode}
       onDelete={handleDelete}
       onNewScenario={handleNewScenario}
     />

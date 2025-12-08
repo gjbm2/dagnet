@@ -20,7 +20,7 @@ import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue } from './Bea
 export type { BeadValue, HiddenCurrentValue };
 
 export interface BeadDefinition {
-  type: 'probability' | 'cost_gbp' | 'labour_cost' | 'variant' | 'conditional_p';
+  type: 'probability' | 'cost_gbp' | 'labour_cost' | 'variant' | 'conditional_p' | 'latency';
   
   // Multi-scenario values
   values: BeadValue[];
@@ -40,9 +40,10 @@ export interface BeadDefinition {
   isOverridden: boolean; // Show ⚡ icon when query is overridden
   
   // Position
-  distance: number; // along spline from visible start
+  distance: number; // along spline from visible start (or from end if rightAligned)
   expanded: boolean; // default expansion state
   index: number; // for ordering along spline
+  rightAligned?: boolean; // if true, distance is from path END (for latency beads)
 }
 
 // ============================================================================
@@ -94,7 +95,7 @@ function formatConditional(condition: string, prob: number): string {
  * This eliminates duplicate logic across probability, cost_gbp, labour_cost, etc.
  */
 function buildParameterBead(config: {
-  beadType: 'probability' | 'cost_gbp' | 'labour_cost';
+  beadType: 'probability' | 'cost_gbp' | 'labour_cost' | 'latency';
   
   // Check if parameter exists anywhere (current, base, or any visible scenario)
   checkExists: () => boolean;
@@ -124,6 +125,9 @@ function buildParameterBead(config: {
   orderedVisibleIds: string[];
   currentVisible: boolean;
   getScenarioColour: (layerId: string) => string;
+  
+  // Position modifiers
+  rightAligned?: boolean; // If true, position from path end
 }): BeadDefinition | null {
   
   // Check if parameter exists anywhere
@@ -223,6 +227,12 @@ function buildParameterBead(config: {
   // Build label using BeadLabelBuilder
   const label = config.buildLabel(values, hiddenCurrent, hasExistenceVariation);
   
+  // For right-aligned beads: distance is offset FROM END (fixed at BEAD_MARKER_DISTANCE)
+  // For left-aligned beads: distance is offset FROM START (accumulated)
+  const beadDistance = config.rightAligned
+    ? BEAD_MARKER_DISTANCE
+    : config.baseDistance + config.beadIndex * BEAD_SPACING;
+  
   return {
     type: config.beadType,
     values,
@@ -232,9 +242,10 @@ function buildParameterBead(config: {
     backgroundColor: config.backgroundColor,
     hasParameterConnection: config.hasParameterConnection,
     isOverridden: config.isOverridden,
-    distance: config.baseDistance + config.beadIndex * BEAD_SPACING,
+    distance: beadDistance,
     expanded: true,
-    index: config.beadIndex
+    index: config.beadIndex,
+    rightAligned: config.rightAligned
   };
 }
 
@@ -350,6 +361,71 @@ function getEdgeCostTimeForLayer(
       scenariosContext.scenarios
     );
     return composedParams.edges?.[edgeKey]?.labour_cost;
+  }
+}
+
+/**
+ * Extract latency bead data (median_lag_days, completeness) for a layer.
+ *
+ * Design requirement: when a layer has *no* latency configured, it should
+ * resolve to a synthetic value of **0d and 100% complete** so that:
+ *   - scenario layers with real latency can be meaningfully compared
+ *   - hidden current can show "(0d (100%))" in brackets when current is invisible.
+ *
+ * To keep the pattern consistent with other beads, we still gate creation of
+ * the latency bead via checkExists (see below); this helper is ONLY about the
+ * values used for display/difference once the bead exists.
+ *
+ * Returns { mean: median_lag_days, stdev: completeness } for formatter compatibility.
+ * DSL: e.X.p.latency.median_lag_days, e.X.p.latency.completeness
+ */
+function getEdgeLatencyForLayer(
+  layerId: string,
+  edge: GraphEdge,
+  graph: Graph,
+  scenariosContext: any
+): { mean?: number; stdev?: number } | undefined {
+  // IMPORTANT: Prefer edge.id for scenario param lookups (human-readable IDs)
+  const edgeKey = edge.id || edge.uuid;
+  if (!edgeKey) return undefined;
+  
+  if (layerId === 'current') {
+    const latency = edge?.p?.latency;
+    if (!latency) {
+      // Synthetic "no latency": 0d, 100% complete
+      return { mean: 0, stdev: 1 };
+    }
+    return {
+      mean: latency.median_lag_days ?? 0,
+      stdev: latency.completeness ?? 1
+    };
+  } else if (layerId === 'base') {
+    const latency = scenariosContext.baseParams.edges?.[edgeKey]?.p?.latency;
+    if (!latency) {
+      // Synthetic "no latency": 0d, 100% complete
+      return { mean: 0, stdev: 1 };
+    }
+    return {
+      mean: latency.median_lag_days ?? 0,
+      stdev: latency.completeness ?? 1
+    };
+  } else {
+    // Scenario layer - use centralized composition
+    const composedParams = getComposedParamsForLayer(
+      layerId,
+      scenariosContext.baseParams,
+      scenariosContext.currentParams,
+      scenariosContext.scenarios
+    );
+    const latency = composedParams.edges?.[edgeKey]?.p?.latency;
+    if (!latency) {
+      // Synthetic "no latency": 0d, 100% complete
+      return { mean: 0, stdev: 1 };
+    }
+    return {
+      mean: latency.median_lag_days ?? 0,
+      stdev: latency.completeness ?? 1
+    };
   }
 }
 
@@ -602,6 +678,45 @@ export function buildBeadDefinitions(
   
   if (probBead) {
     beads.push(probBead);
+    beadIndex++;
+  }
+  
+  // ============================================================================
+  // 2b. Latency Bead (if present in ANY layer) - right-aligned
+  // ============================================================================
+  const edgeKeyForLatency = edge.id || edge.uuid;
+  const latencyBead = buildParameterBead({
+    beadType: 'latency',
+    checkExists: () => {
+      // Check current
+      if (edge.p?.latency?.median_lag_days !== undefined) return true;
+      // Check base
+      if (edgeKeyForLatency && scenariosContext.baseParams.edges?.[edgeKeyForLatency]?.p?.latency?.median_lag_days !== undefined) return true;
+      // Check all visible scenarios
+      for (const scenarioId of orderedVisibleIds) {
+        if (scenarioId === 'current' || scenarioId === 'base') continue;
+        // Look for explicit latency on this scenario (not the synthetic 0d/100%)
+        const scenario = scenariosContext.scenarios?.find((s: any) => s.id === scenarioId);
+        const latency = scenario?.params?.edges?.[edgeKeyForLatency]?.p?.latency;
+        if (latency?.median_lag_days !== undefined) return true;
+      }
+      return false;
+    },
+    extractFromLayer: (layerId) => getEdgeLatencyForLayer(layerId, edge, graph, scenariosContext),
+    buildLabel: BeadLabelBuilder.buildLatencyLabel,
+    backgroundColor: '#374151', // Dark grey
+    hasParameterConnection: false,
+    isOverridden: false,
+    baseDistance,
+    beadIndex: beadIndex,
+    orderedVisibleIds,
+    currentVisible,
+    getScenarioColour,
+    rightAligned: true // Position from path END
+  });
+  
+  if (latencyBead) {
+    beads.push(latencyBead);
     beadIndex++;
   }
   

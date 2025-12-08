@@ -82,6 +82,7 @@
 }
 
 .scenario-legend-toggle,
+.scenario-legend-mode-toggle,
 .scenario-legend-delete {
   display: flex;
   align-items: center;
@@ -97,7 +98,8 @@
   transition: background-color 0.15s ease;
 }
 
-.scenario-legend-toggle:hover {
+.scenario-legend-toggle:hover,
+.scenario-legend-mode-toggle:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
@@ -182,11 +184,13 @@
   }
   
   .scenario-legend-toggle,
+  .scenario-legend-mode-toggle,
   .scenario-legend-delete {
     background: rgba(255, 255, 255, 0.15);
   }
   
-  .scenario-legend-toggle:hover {
+  .scenario-legend-toggle:hover,
+  .scenario-legend-mode-toggle:hover {
     background: rgba(255, 255, 255, 0.25);
   }
   

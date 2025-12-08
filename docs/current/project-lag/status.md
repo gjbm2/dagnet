@@ -2,7 +2,7 @@
 
 **Started:** 8-Dec-25
 **Last Updated:** 8-Dec-25
-**Phase:** C2-T ✅ Complete — Ready for C3
+**Phase:** C3 ✅ Complete — Ready for C4 (UI & Rendering)
 
 ---
 
@@ -83,11 +83,50 @@ Pre-requisite cleanup before introducing latency complexity.
 
 ---
 
-### Phase C3: Data Storage, Aggregation & Inference ⏳ READY TO START
+### Phase C3: Data Storage, Aggregation & Inference ✅ COMPLETE
 
-**Includes:** Create LAG sample data (`cohort()` + `window()` slices) for testing — see `implementation.md` Testing section.
+| Task | Status | Notes |
+|------|--------|-------|
+| C3.1 Constants | ✅ Done | Created `constants/latency.ts` with LAG thresholds |
+| C3.2 Log-normal CDF | ✅ Done | `statisticalEnhancementService.ts`: `logNormalCDF`, `standardNormalCDF`, `erf` |
+| C3.3 Formula A | ✅ Done | `applyFormulaA`, `applyFormulaAToAll` for Bayesian forecasting |
+| C3.4 Completeness | ✅ Done | `calculateCompleteness` using CDF-based formula (§5.5) |
+| C3.5 P-infinity | ✅ Done | `estimatePInfinity` from mature cohorts (§5.6) |
+| C3.6 Edge Stats | ✅ Done | `computeEdgeLatencyStats` with quality gates, t95 |
+| C3.7 Cohort Aggregation | ✅ Done | `windowAggregationService`: cohort data conversion functions |
+| C3.8 dataOps Integration | ✅ Done | LAG stats computed during window aggregation for latency edges |
+| C3.9 Path Maturity DP | ✅ Done | `computePathT95`, `getActiveEdges` topological DP |
+| C3.10 Topo Fetch Order | ✅ Done | `fetchDataService`: topological sorting for batch fetches |
+| C3.11 LAG Tests | ✅ Done | 75 tests for statistical functions (property-based, edge cases) |
 
-### Phase C4: UI & Rendering ⏸️ BLOCKED (by C3)
+**Key changes made:**
+- `constants/latency.ts`: New file with LAG thresholds (`LATENCY_MIN_FIT_CONVERTERS`, `LATENCY_MIN_MEAN_MEDIAN_RATIO`, etc.)
+- `statisticalEnhancementService.ts`: Added ~500 lines of LAG statistical functions:
+  - Mathematical utilities: `erf`, `standardNormalCDF`, `standardNormalInverseCDF`
+  - Log-normal: `logNormalCDF`, `logNormalSurvival`, `logNormalInverseCDF`
+  - Distribution fitting: `fitLagDistribution`, `computeT95`
+  - Formula A: `applyFormulaA`, `applyFormulaAToAll`
+  - Completeness: `calculateCompleteness`
+  - P-infinity: `estimatePInfinity`
+  - Main entry: `computeEdgeLatencyStats`
+  - Path maturity: `getActiveEdges`, `computePathT95`, `getEdgesInTopologicalOrder`
+- `windowAggregationService.ts`: Added cohort data conversion functions
+- `dataOperationsService.ts`: Integrated LAG computation into aggregation flow
+- `fetchDataService.ts`: Added topological sorting for batch fetches
+- Tests: 75 LAG statistical tests covering CDF bounds, monotonicity, Formula A, completeness, p_infinity
+
+### Phase C4: UI & Rendering ⏳ IN PROGRESS
+
+| Task | Status | Notes |
+|------|--------|-------|
+| C4.1 Edge Two-Layer Rendering | ✅ Done | `ConversionEdge.tsx` - LAG stripe patterns + two-layer paths |
+| C4.2 Edge Beads - Latency Bead | ✅ Done | `edgeBeadHelpers.tsx` lines 609-644 |
+| C4.3 Properties Panel - Latency Fields | ✅ Done | `ParameterSection.tsx` - Track Latency checkbox + Maturity field |
+| C4.4 Scenarios & Visibility 4-state | ✅ Done | `TabContext.tsx` - cycleScenarioVisibilityMode, getScenarioVisibilityMode |
+| C4.5 Tooltips - Latency/Forecast | ✅ Done | `ConversionEdge.tsx` tooltip lines 267-295 |
+| C4.6 Window Selector Toggle | ✅ Done | `WindowSelector.tsx` - cohort/window mode toggle |
+| C4.7 Scenario Chip & Legend UI | ✅ Done | `ScenariosPanel.tsx`, `ScenarioLegend.tsx` - 4-state icons (Eye/View/EyeClosed/EyeOff) |
+| C4.8 Sibling Probability Warnings | ✅ Done | `integrityCheckService.ts` - Σp>1 warning logic |
 
 ### Phase A: Analytics (Post-Core) ⏸️ BLOCKED (by C4)
 

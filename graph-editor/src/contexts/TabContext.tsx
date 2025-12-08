@@ -2024,6 +2024,61 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   }, [tabs, updateTabState]);
 
   /**
+   * Cycle scenario visibility mode: F+E → F → E → F+E
+   * For LAG feature - controls whether forecast, evidence, or both are shown.
+   *
+   * IMPORTANT: This NO LONGER controls visibility; visibility is handled
+   * solely via visibleScenarioIds and toggleScenarioVisibility.
+   */
+  const cycleScenarioVisibilityMode = useCallback(async (tabId: string, scenarioId: string): Promise<void> => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    const currentState = tab.editorState?.scenarioState || {
+      scenarioOrder: [],
+      visibleScenarioIds: [],
+      visibleColourOrderIds: [],
+      visibilityMode: {},
+    };
+
+    const currentMode = currentState.visibilityMode?.[scenarioId] || 'f+e';
+    
+    // Cycle: F+E → F → E → F+E
+    const modeOrder: Array<'f+e' | 'f' | 'e'> = ['f+e', 'f', 'e'];
+    const currentIndex = modeOrder.indexOf(currentMode);
+    const nextMode = modeOrder[(currentIndex + 1) % modeOrder.length];
+    
+    // Update visibility mode only – do NOT touch visibleScenarioIds here.
+    const newVisibilityMode = {
+      ...currentState.visibilityMode,
+      [scenarioId]: nextMode,
+    };
+
+    await updateTabState(tabId, {
+      scenarioState: {
+        ...currentState,
+        visibilityMode: newVisibilityMode,
+      },
+    });
+  }, [tabs, updateTabState]);
+
+  /**
+   * Get visibility mode for a scenario (defaults to 'f+e').
+   *
+   * NOTE: This no longer encodes hidden/visible state; that is controlled
+   * solely via visibleScenarioIds. This function only answers "how to render".
+   */
+  const getScenarioVisibilityMode = useCallback((tabId: string, scenarioId: string): 'f+e' | 'f' | 'e' => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return 'f+e';
+    
+    const currentState = tab.editorState?.scenarioState;
+    if (!currentState) return 'f+e';
+    
+    return currentState.visibilityMode?.[scenarioId] || 'f+e';
+  }, [tabs]);
+
+  /**
    * Select a scenario for a tab
    */
   const selectScenario = useCallback(async (tabId: string, scenarioId: string | undefined): Promise<void> => {
@@ -2089,6 +2144,8 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     setVisibleScenarios,
     addVisibleScenarios,
     toggleScenarioVisibility,
+    cycleScenarioVisibilityMode,
+    getScenarioVisibilityMode,
     selectScenario,
     reorderScenarios
   };
