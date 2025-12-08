@@ -1450,6 +1450,20 @@ export class UpdateManager {
         sourceField: 'labour_cost.connection_string', 
         targetField: 'connection_string',
         condition: (source) => !!source.labour_cost?.connection_string && source.labour_cost?.id
+      },
+      
+      // LAG: Latency CONFIG fields (graph → file, bidirectional)
+      { 
+        sourceField: 'p.latency.maturity_days', 
+        targetField: 'latency.maturity_days',
+        overrideFlag: 'p.latency.maturity_days_overridden',
+        condition: (source) => source.p?.latency?.maturity_days !== undefined && source.p?.id
+      },
+      { 
+        sourceField: 'p.latency.anchor_node_id', 
+        targetField: 'latency.anchor_node_id',
+        overrideFlag: 'p.latency.anchor_node_id_overridden',
+        condition: (source) => source.p?.latency?.anchor_node_id !== undefined && source.p?.id
       }
     ]);
     
@@ -1820,6 +1834,44 @@ export class UpdateManager {
         sourceField: 'values[latest].data_source.debug_trace', 
         targetField: 'p.evidence.debug_trace',
         condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.data_source?.debug_trace
+      },
+      
+      // LAG: Latency CONFIG fields (file → graph, bidirectional)
+      { 
+        sourceField: 'latency.maturity_days', 
+        targetField: 'p.latency.maturity_days',
+        overrideFlag: 'p.latency.maturity_days_overridden',
+        condition: isProbType
+      },
+      { 
+        sourceField: 'latency.anchor_node_id', 
+        targetField: 'p.latency.anchor_node_id',
+        overrideFlag: 'p.latency.anchor_node_id_overridden',
+        condition: isProbType
+      },
+      
+      // LAG: Latency DATA fields (file → graph only, display-only)
+      { 
+        sourceField: 'values[latest].latency.median_lag_days', 
+        targetField: 'p.latency.median_lag_days',
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.latency?.median_lag_days !== undefined
+      },
+      { 
+        sourceField: 'values[latest].latency.completeness', 
+        targetField: 'p.latency.completeness',
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.latency?.completeness !== undefined
+      },
+      { 
+        sourceField: 'values[latest].latency.t95', 
+        targetField: 'p.latency.t95',
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.latency?.t95 !== undefined
+      },
+      
+      // LAG: Forecast fields (file → graph only)
+      { 
+        sourceField: 'values[latest].forecast', 
+        targetField: 'p.forecast.mean',
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.forecast !== undefined
       },
       
       // Cost GBP parameters → edge.cost_gbp.*

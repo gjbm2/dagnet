@@ -409,6 +409,70 @@ export interface CaseEvidence {
   debug_trace?: string; // Complete execution trace as JSON string for debugging/provenance
 }
 
+/**
+ * Latency configuration for edges with time-delayed conversions.
+ * Attached to ProbabilityParam (edge.p.latency and edge.conditional_p[i].p.latency)
+ * 
+ * SEMANTICS:
+ * - maturity_days > 0: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
+ * - maturity_days = 0 or undefined: Latency tracking DISABLED (standard window() behaviour)
+ */
+export interface LatencyConfig {
+  /** Maturity threshold in days - cohorts younger than this are "immature"
+   *  Set >0 to enable latency tracking. Default: undefined (no tracking).
+   */
+  maturity_days?: number;
+  /** True if user manually set maturity_days (vs derived from file) */
+  maturity_days_overridden?: boolean;
+  
+  /** Anchor node for cohort queries - furthest upstream START node from edge.from
+   *  Computed by MSMDC at graph-edit time (not retrieval time)
+   */
+  anchor_node_id?: string;
+  /** True if user manually set anchor_node_id (vs MSMDC-computed) */
+  anchor_node_id_overridden?: boolean;
+  
+  /** 95th percentile lag in days - persisted scalar for caching / A→X maturity
+   *  Computed from fitted log-normal CDF. Scenario-independent.
+   */
+  t95?: number;
+  
+  // === Display-only fields (populated from file, not user-editable) ===
+  
+  /** Weighted median lag in days for this edge */
+  median_lag_days?: number;
+  
+  /** Maturity progress 0-1 (see design §5.5) */
+  completeness?: number;
+}
+
+/**
+ * Latency display data for edge rendering.
+ * Used by UI components to show latency information (beads, tooltips).
+ */
+export interface EdgeLatencyDisplay {
+  /** Whether latency tracking is enabled for this edge */
+  enabled: boolean;
+  
+  /** Median lag in days (for bead display) */
+  median_days?: number;
+  
+  /** Completeness percentage 0-100 (for bead display) */
+  completeness_pct?: number;
+  
+  /** 95th percentile lag in days */
+  t95?: number;
+  
+  /** Evidence probability (observed rate from immature + mature cohorts) */
+  p_evidence?: number;
+  
+  /** Forecast probability (projected completion rate) */
+  p_forecast?: number;
+  
+  /** Blended probability (used for rendering) */
+  p_mean?: number;
+}
+
 export interface ProbabilityParam {
   mean?: number; // [0,1]
   stdev?: number; // >= 0
@@ -430,6 +494,17 @@ export interface ProbabilityParam {
     debug_trace?: string;
     experiment_id?: string; // Experiment/gate ID for A/B test sources (e.g., Statsig gate_id)
     no_data?: boolean; // True if data source returned no data
+  };
+  
+  // === LAG (Latency-Aware Graph) fields ===
+  
+  /** Latency configuration for this probability parameter */
+  latency?: LatencyConfig;
+  
+  /** Forecast probability from mature cohorts (p_∞) */
+  forecast?: {
+    mean?: number;  // Forecast mean probability
+    stdev?: number; // Forecast standard deviation
   };
 }
 
