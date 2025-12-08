@@ -6,29 +6,38 @@
  */
 
 /**
- * Probability parameter (used in edge params)
+ * Probability parameter for scenario param packs.
+ * 
+ * NOTE (design §9.K.1): Param packs contain only the fields needed for scenario
+ * composition, NOT the full distribution parameters (alpha, beta, min, max)
+ * which are only used at inference time.
  */
 export interface ProbabilityParam {
   mean?: number;
   stdev?: number;
-  distribution?: 'beta' | 'normal' | 'lognormal' | 'gamma' | 'uniform';
-  min?: number;
-  max?: number;
-  alpha?: number;
-  beta?: number;
+  
+  // === LAG fields for scenarios ===
+  /** Forecast mean from mature cohorts (p_∞) */
+  forecast_mean?: number;
+  /** Forecast standard deviation from mature cohorts */
+  forecast_stdev?: number;
+  /** Evidence mean (observed rate including immature cohorts) */
+  evidence_mean?: number;
+  /** Evidence standard deviation */
+  evidence_stdev?: number;
 }
 
 /**
- * Cost parameter (monetary or time)
+ * Cost parameter for scenario param packs.
+ * 
+ * NOTE: Distribution fields removed per design §9.K.1 - only mean/stdev needed
+ * for scenario composition.
  */
 export interface CostParam {
   mean?: number; // Primary value field (matches schema and graph CostParam)
   stdev?: number;
-  distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform';
   currency?: string; // For monetary costs
   units?: string;    // For time costs
-  min?: number;
-  max?: number;
 }
 
 /**

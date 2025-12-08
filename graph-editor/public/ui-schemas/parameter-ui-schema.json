@@ -1,5 +1,5 @@
 {
-  "ui:order": ["id", "name", "type", "query", "query_overridden", "n_query", "n_query_overridden", "connection", "connection_string", "value", "values", "metadata"],
+  "ui:order": ["id", "name", "type", "query", "query_overridden", "n_query", "n_query_overridden", "connection", "connection_string", "latency", "value", "values", "metadata"],
   "id": {
     "ui:description": ""
   },
@@ -36,6 +36,18 @@
     },
     "ui:description": "",
     "ui:help": "Provider JSON (e.g., {\"range\": \"Sheet1!A1:B10\"})"
+  },
+  "latency": {
+    "ui:options": {
+      "accordion": true
+    },
+    "ui:description": "Latency tracking configuration",
+    "maturity_days": {
+      "ui:description": "Maturity threshold in days (>0 enables latency tracking)"
+    },
+    "anchor_node_id": {
+      "ui:description": "Anchor node for cohort queries"
+    }
   },
   "values": {
     "ui:options": {

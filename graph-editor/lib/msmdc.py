@@ -653,6 +653,97 @@ def _build_networkx_graph(graph: Graph) -> Tuple[nx.DiGraph, Dict[str, str]]:
 
 
 # ============================================================================
+# LAG: Anchor Node Computation for Latency Tracking
+# ============================================================================
+
+def compute_anchor_node_id(graph: Graph, edge: Edge) -> Optional[str]:
+    """
+    Compute the anchor node ID for cohort queries.
+    
+    The anchor node is the furthest upstream START node from edge.from.
+    For latency tracking, this is the node where cohorts are defined (A in A→X→Y).
+    
+    Algorithm:
+    - BFS backwards from edge.from to find all START nodes
+    - Return the START node with maximum topological depth from edge.from
+    - If edge.from IS a START node, return edge.from (A=X case)
+    
+    Args:
+        graph: Full graph structure
+        edge: Target edge
+    
+    Returns:
+        Human-readable node ID of the anchor node, or None if no path to START
+    """
+    G, id_by_uuid = _build_networkx_graph(graph)
+    
+    # Get edge.from as canonical ID
+    from_node = id_by_uuid.get(edge.from_node, edge.from_node)
+    
+    # Find all START nodes in the graph
+    start_nodes: Set[str] = set()
+    for node in graph.nodes:
+        entry = getattr(node, 'entry', None)
+        if entry and getattr(entry, 'is_start', False):
+            start_nodes.add(node.id)
+    
+    if not start_nodes:
+        return None
+    
+    # A=X case: edge.from is itself a START node
+    if from_node in start_nodes:
+        return from_node
+    
+    # BFS backwards from edge.from to find reachable START nodes and their distances
+    # Reverse the graph to traverse upstream
+    G_reversed = G.reverse()
+    
+    if from_node not in G_reversed:
+        return None
+    
+    # Find all START nodes reachable upstream from edge.from
+    reachable_starts: Dict[str, int] = {}  # start_node -> distance
+    
+    for start in start_nodes:
+        if start in G_reversed:
+            try:
+                # Compute shortest path length from from_node to start (in reversed graph)
+                path_length = nx.shortest_path_length(G_reversed, from_node, start)
+                reachable_starts[start] = path_length
+            except nx.NetworkXNoPath:
+                continue
+    
+    if not reachable_starts:
+        return None
+    
+    # Return the furthest upstream START (maximum distance)
+    # If tie, use deterministic sort (alphabetical node ID)
+    max_dist = max(reachable_starts.values())
+    furthest_starts = [s for s, d in reachable_starts.items() if d == max_dist]
+    furthest_starts.sort()  # Deterministic tiebreak
+    
+    return furthest_starts[0]
+
+
+def compute_all_anchor_nodes(graph: Graph) -> Dict[str, Optional[str]]:
+    """
+    Compute anchor_node_id for all edges in a graph.
+    
+    Args:
+        graph: Full graph structure
+    
+    Returns:
+        Dict mapping edge UUID → anchor_node_id (or None if no path to START)
+    """
+    result: Dict[str, Optional[str]] = {}
+    
+    for edge in graph.edges:
+        result[edge.uuid] = compute_anchor_node_id(graph, edge)
+    
+    return result
+
+
+# ============================================================================
 # Comprehensive Parameter Query Generation
 # ============================================================================
 

@@ -67,6 +67,21 @@ properties:
     type: string
     description: "JSON blob of provider-specific settings for parameter-specific overrides"
   
+  # LAG: Edge-level latency configuration (see design.md §3.1)
+  latency:
+    type: object
+    description: "Latency configuration for edges with time-delayed conversions"
+    properties:
+      maturity_days:
+        type: integer
+        minimum: 0
+        description: "Maturity threshold in days. >0 enables latency tracking."
+      anchor_node_id:
+        type: string
+        pattern: '^[a-zA-Z0-9_-]+$'
+        description: "Anchor node for cohort queries (furthest upstream START node)"
+    additionalProperties: false
+  
   values:
     type: array
     minItems: 1
@@ -129,13 +144,139 @@ properties:
         
         window_from:
           type: string
-          format: date-time
-          description: "Start of time window for this value"
+          description: "Start of time window for this value (d-MMM-yy format)"
         
         window_to:
           type: string
-          format: date-time
-          description: "End of time window for this value (optional)"
+          description: "End of time window for this value (d-MMM-yy format, optional)"
+        
+        # LAG: Cohort window bounds (A-entry dates, d-MMM-yy format)
+        cohort_from:
+          type: string
+          description: "Cohort entry window start (d-MMM-yy format)"
+        
+        cohort_to:
+          type: string
+          description: "Cohort entry window end (d-MMM-yy format)"
+        
+        # LAG: Slice identification (canonical format)
+        sliceDSL:
+          type: string
+          description: "Canonical slice label (e.g., 'cohort(anchor,1-Sep-25:30-Nov-25).context(channel:all)')"
+        
+        # LAG: Per-cohort latency arrays (parallel to dates array)
+        median_lag_days:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: "X→Y median lag per cohort day (parallel to dates array)"
+        
+        mean_lag_days:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: "X→Y mean lag per cohort day (parallel to dates array)"
+        
+        # LAG: Anchor data for multi-step funnels (parallel to dates array)
+        anchor_n_daily:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          description: "Users entering anchor node per cohort (for multi-step funnels)"
+        
+        anchor_median_lag_days:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: "A→X median lag per cohort (for multi-step funnels)"
+        
+        anchor_mean_lag_days:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: "A→X mean lag per cohort (for multi-step funnels)"
+        
+        # LAG: Forecast probability from mature cohorts
+        forecast:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: "Mature baseline probability (p_∞) for window slices"
+        
+        # LAG: Edge-level latency summary
+        latency:
+          type: object
+          description: "Latency summary for this slice"
+          properties:
+            median_lag_days:
+              type: number
+              minimum: 0
+              description: "Weighted median X→Y lag"
+            mean_lag_days:
+              type: number
+              minimum: 0
+              description: "Weighted mean X→Y lag"
+            completeness:
+              type: number
+              minimum: 0
+              maximum: 1
+              description: "Maturity progress 0-1"
+            t95:
+              type: number
+              minimum: 0
+              description: "95th percentile lag in days"
+            histogram:
+              type: object
+              description: "Lag distribution histogram"
+              properties:
+                total_converters:
+                  type: integer
+                  minimum: 0
+                bins:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      day:
+                        type: integer
+                      day_range:
+                        type: array
+                        items:
+                          type: integer
+                        minItems: 2
+                        maxItems: 2
+                      count:
+                        type: integer
+                        minimum: 0
+          additionalProperties: false
+        
+        # LAG: Upstream (A→X) latency for convolution (multi-step funnels only)
+        anchor_latency:
+          type: object
+          description: "Upstream latency summary for multi-step funnels"
+          properties:
+            median_lag_days:
+              type: number
+              minimum: 0
+            mean_lag_days:
+              type: number
+              minimum: 0
+            histogram:
+              type: object
+              properties:
+                total_converters:
+                  type: integer
+                  minimum: 0
+                bins:
+                  type: array
+                  items:
+                    type: object
+          additionalProperties: false
         
         context_id:
           type: string
