@@ -61,8 +61,15 @@ export interface QueryPayload {
   context?: Array<{ key: string; value: string }>;
   case?: Array<{ key: string; value: string }>;
   context_filters?: ContextFilterObject[]; // Structured context filters for this query
-  start?: string; // Start date (ISO format)
-  end?: string; // End date (ISO format)
+  start?: string; // Start date (ISO format) - for window mode
+  end?: string; // End date (ISO format) - for window mode
+  // Cohort mode fields (for latency-tracked edges)
+  cohort?: {
+    start?: string;        // Cohort entry start date (ISO format)
+    end?: string;          // Cohort entry end date (ISO format)
+    anchor_event_id?: string; // Anchor node's event_id (for 3-step funnel: Anchor → From → To)
+    maturity_days?: number;   // Maturity threshold from edge.p.latency.maturity_days
+  };
 }
 
 export interface EventDefinition {
@@ -398,6 +405,46 @@ export async function buildDslFromEdge(
       console.log('[buildQueryPayload] Added window:', { start: queryPayload.start, end: queryPayload.end });
     } catch (error) {
       console.error('[buildQueryPayload] Failed to resolve window dates:', error);
+      throw error;
+    }
+  }
+  
+  // Add cohort mode if constraints contain cohort clause
+  // Cohort mode is for latency-tracked edges (p.latency.maturity_days > 0)
+  if (constraints && constraints.cohort) {
+    try {
+      console.log('[buildQueryPayload] Input cohort strings:', constraints.cohort);
+      
+      const { startDate: cohortStart, endDate: cohortEnd } = resolveCohortDates(constraints.cohort);
+      
+      // Get anchor event_id - either from explicit anchor in DSL or from edge.p.latency.anchor_node_id
+      let anchorEventId: string | undefined;
+      const anchorNodeId = constraints.cohort.anchor || edge.p?.latency?.anchor_node_id;
+      
+      if (anchorNodeId) {
+        const anchorNode = findNode(anchorNodeId);
+        if (anchorNode && anchorNode.event_id) {
+          anchorEventId = anchorNode.event_id;
+          await loadEventDefinition(anchorEventId);
+          console.log(`[buildQueryPayload] Resolved anchor node "${anchorNodeId}" to event_id "${anchorEventId}"`);
+        } else {
+          console.warn(`[buildQueryPayload] Anchor node "${anchorNodeId}" not found or missing event_id`);
+        }
+      }
+      
+      // Get maturity_days from edge.p.latency
+      const maturityDays = edge.p?.latency?.maturity_days;
+      
+      queryPayload.cohort = {
+        start: cohortStart?.toISOString(),
+        end: cohortEnd?.toISOString(),
+        anchor_event_id: anchorEventId,
+        maturity_days: maturityDays
+      };
+      
+      console.log('[buildQueryPayload] Added cohort:', queryPayload.cohort);
+    } catch (error) {
+      console.error('[buildQueryPayload] Failed to resolve cohort dates:', error);
       throw error;
     }
   }
@@ -819,6 +866,47 @@ async function buildComputedOtherFilter(
   
   const valueClauses = filterObj.values.map(v => `${filterObj.field} == '${v}'`);
   return `NOT (${valueClauses.join(' OR ')})`;
+}
+
+/**
+ * Resolve cohort dates to absolute Date objects.
+ * Handles relative dates (e.g., "-90d") and absolute dates (e.g., "1-Sep-25").
+ * Similar to resolveWindowDates but semantically for cohort entry dates.
+ * 
+ * @param cohort - Cohort constraint with start/end (and optional anchor)
+ * @returns Resolved start and end dates for cohort entry window
+ */
+function resolveCohortDates(cohort: { anchor?: string; start?: string; end?: string }): { startDate?: Date; endDate?: Date } {
+  // Normalize 'now' to current local date at UTC midnight
+  const now = parseUKDate(formatDateUK(new Date()));
+  
+  console.log('[resolveCohortDates] Input:', cohort);
+  
+  let startDate: Date | undefined;
+  if (!cohort.start) {
+    startDate = undefined;
+  } else if (cohort.start.match(/^-?\d+[dwmy]$/)) {
+    // Relative offset
+    startDate = applyRelativeOffset(now, cohort.start);
+  } else {
+    // Absolute date in d-MMM-yy format
+    startDate = parseUKDate(cohort.start);
+  }
+  
+  let endDate: Date | undefined;
+  if (cohort.end === undefined) {
+    // Explicitly undefined - open-ended cohort window
+    endDate = undefined;
+  } else if (cohort.end === '') {
+    // Empty string - default to now
+    endDate = now;
+  } else if (cohort.end.match(/^-?\d+[dwmy]$/)) {
+    endDate = applyRelativeOffset(now, cohort.end);
+  } else {
+    endDate = parseUKDate(cohort.end);
+  }
+  
+  return { startDate, endDate };
 }
 
 /**

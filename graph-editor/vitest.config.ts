@@ -79,7 +79,7 @@ export default defineConfig({
     poolOptions: {
       threads: {
         singleThread: false,
-        isolate: true,  // NEW: Better isolation for new tests
+        isolate: true,  // Full isolation for test correctness
         minThreads: 1,
         maxThreads: 4
       },

@@ -911,6 +911,29 @@ export function calculateIncrementalFetch(
 }
 
 /**
+ * Extended time-series point with optional latency data (for cohort mode)
+ */
+export interface TimeSeriesPointWithLatency {
+  date: string;
+  n: number;
+  k: number;
+  p: number;
+  median_lag_days?: number;  // For cohort mode: X→Y median lag
+  mean_lag_days?: number;    // For cohort mode: X→Y mean lag
+}
+
+/**
+ * Options for merging time-series data
+ */
+export interface MergeOptions {
+  isCohortMode?: boolean;    // If true, use cohort_from/cohort_to instead of window_from/window_to
+  latencySummary?: {         // Aggregate latency summary (for cohort mode)
+    median_lag_days?: number;
+    mean_lag_days?: number;
+  };
+}
+
+/**
  * Append new time-series data to a parameter's values array.
  * 
  * IMPORTANT: This function APPENDS a new entry, it does NOT merge with existing entries.
@@ -926,30 +949,33 @@ export function calculateIncrementalFetch(
  * 4. Completeness tracking: k may vary over time as events complete
  * 
  * @param existingValues Existing values[] array from parameter file
- * @param newTimeSeries New time-series data to append
+ * @param newTimeSeries New time-series data to append (may include latency fields for cohort mode)
  * @param newWindow Window for the new data (the actual fetch window)
  * @param newQuerySignature Query signature for the new data
  * @param queryParams Optional query parameters (DSL object) for debugging
  * @param fullQuery Optional full query string for debugging
  * @param dataSourceType Type of data source (e.g., 'amplitude', 'api')
  * @param sliceDSL Context slice (e.g., 'context(channel:google)') for isolateSlice matching
+ * @param mergeOptions Additional options (cohort mode, latency summary)
  * @returns Values array with new entry APPENDED (existing entries preserved)
  */
 export function mergeTimeSeriesIntoParameter(
   existingValues: ParameterValue[],
-  newTimeSeries: Array<{ date: string; n: number; k: number; p: number }>,
+  newTimeSeries: Array<TimeSeriesPointWithLatency>,
   newWindow: DateRange,
   newQuerySignature?: string,
   queryParams?: any,
   fullQuery?: string,
   dataSourceType?: string,
-  sliceDSL?: string // CRITICAL: Context slice (e.g., 'context(channel:other)') for isolateSlice matching
+  sliceDSL?: string, // CRITICAL: Context slice (e.g., 'context(channel:other)') for isolateSlice matching
+  mergeOptions?: MergeOptions
 ): ParameterValue[] {
   if (newTimeSeries.length === 0) {
     return existingValues;
   }
 
   const normalizedSlice = sliceDSL || '';
+  const isCohortMode = mergeOptions?.isCohortMode ?? false;
   
   // Convert new time series to arrays, sorted chronologically
   const sortedTimeSeries = [...newTimeSeries].sort((a, b) => 
@@ -959,6 +985,15 @@ export function mergeTimeSeriesIntoParameter(
   const dates = sortedTimeSeries.map(p => normalizeToUK(p.date));
   const n_daily = sortedTimeSeries.map(p => p.n);
   const k_daily = sortedTimeSeries.map(p => p.k);
+  
+  // Extract latency arrays if present (cohort mode)
+  const hasLatencyData = sortedTimeSeries.some(p => p.median_lag_days !== undefined);
+  const median_lag_days = hasLatencyData 
+    ? sortedTimeSeries.map(p => p.median_lag_days ?? 0) 
+    : undefined;
+  const mean_lag_days = hasLatencyData 
+    ? sortedTimeSeries.map(p => p.mean_lag_days ?? 0) 
+    : undefined;
   
   // Calculate aggregate totals for THIS fetch only
   const totalN = n_daily.reduce((sum, n) => sum + n, 0);
@@ -974,12 +1009,22 @@ export function mergeTimeSeriesIntoParameter(
     n_daily,
     k_daily,
     dates,
-    window_from: normalizeToUK(newWindow.start),
-    window_to: normalizeToUK(newWindow.end),
+    // Use cohort_from/cohort_to for cohort mode, window_from/window_to for window mode
+    ...(isCohortMode 
+      ? { cohort_from: normalizeToUK(newWindow.start), cohort_to: normalizeToUK(newWindow.end) }
+      : { window_from: normalizeToUK(newWindow.start), window_to: normalizeToUK(newWindow.end) }
+    ),
     query_signature: newQuerySignature,
     // CRITICAL: sliceDSL enables isolateSlice to find this value entry
     // Without this, contexted data would be invisible to queries!
     sliceDSL: normalizedSlice,
+    // Include latency arrays if present (cohort mode)
+    ...(median_lag_days && { median_lag_days }),
+    ...(mean_lag_days && { mean_lag_days }),
+    // Include aggregate latency summary if provided
+    ...(mergeOptions?.latencySummary && { 
+      latency: mergeOptions.latencySummary 
+    }),
     data_source: {
       type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
       retrieved_at: new Date().toISOString(),

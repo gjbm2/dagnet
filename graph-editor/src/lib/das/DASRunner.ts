@@ -118,7 +118,8 @@ export class DASRunner {
         queryPayload,
         connection: connection.defaults || {},
         credentials,
-        window: options.window || {},
+        window: options.window || {},   // X-anchored event window
+        cohort: options.cohort || {},   // A-anchored cohort entry window (for latency edges)
         context: options.context || {},
         connection_string: connectionString,
         edgeId: options.edgeId,
@@ -152,7 +153,7 @@ export class DASRunner {
 
   /**
    * Execute pre-request JavaScript transformation script.
-   * Script has access to: queryPayload, window, connection_string, connection, context, console, caseId, edgeId, nodeId, eventDefinitions
+   * Script has access to: queryPayload, window, cohort, connection_string, connection, context, console, caseId, edgeId, nodeId, eventDefinitions
    * Script can mutate queryPayload object to add calculated fields.
    */
   private executePreRequestScript(script: string, context: ExecutionContext): void {
@@ -163,7 +164,8 @@ export class DASRunner {
       // Script can read/modify these objects
       const scriptEnv = {
         queryPayload: context.queryPayload,
-        window: context.window,
+        window: context.window,           // X-anchored event window
+        cohort: context.cohort,           // A-anchored cohort entry window (for latency edges)
         connection_string: context.connection_string,
         connection: context.connection,
         context: context.context,
@@ -192,6 +194,7 @@ export class DASRunner {
       const fn = new Function(
         'queryPayload',
         'window',
+        'cohort',
         'connection_string',
         'connection',
         'context',
@@ -207,6 +210,7 @@ export class DASRunner {
       const result = fn(
         scriptEnv.queryPayload,
         scriptEnv.window,
+        scriptEnv.cohort,
         scriptEnv.connection_string,
         scriptEnv.connection,
         scriptEnv.context,
