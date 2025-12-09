@@ -21,7 +21,7 @@ import toast from 'react-hot-toast';
 
 export interface DagNetClipboardData {
   type: 'dagnet-copy';
-  objectType: 'node' | 'parameter' | 'case';
+  objectType: 'node' | 'parameter' | 'case' | 'event';
   objectId: string;
   timestamp: number;
 }
@@ -75,7 +75,7 @@ export function useCopyPaste() {
    * @param objectId - ID of the object (e.g., 'household-created', 'p-completion-rate')
    */
   const copyToClipboard = useCallback(async (
-    objectType: 'node' | 'parameter' | 'case',
+    objectType: 'node' | 'parameter' | 'case' | 'event',
     objectId: string
   ): Promise<boolean> => {
     const data: DagNetClipboardData = {

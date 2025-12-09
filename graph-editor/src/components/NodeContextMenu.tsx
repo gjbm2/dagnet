@@ -155,6 +155,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   // Copy-paste hook for paste node functionality
   const { copiedItem } = useCopyPaste();
   const copiedNode = copiedItem?.objectType === 'node' ? copiedItem : null;
+  const copiedCase = copiedItem?.objectType === 'case' ? copiedItem : null;
+  const copiedEvent = copiedItem?.objectType === 'event' ? copiedItem : null;
 
   const handleGetNodeFromFile = () => {
     if (nodeData?.id) {
@@ -212,6 +214,103 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             toast.error('Failed to load node data from file');
           }
         }, 100);
+      }
+    }
+    
+    onClose();
+  };
+
+  // Paste case - attach copied case file to this node and trigger get from file
+  const handlePasteCase = async () => {
+    if (!copiedCase) {
+      toast.error('No case copied');
+      onClose();
+      return;
+    }
+    
+    const copiedCaseId = copiedCase.objectId;
+    const fileId = `case-${copiedCaseId}`;
+    
+    // Check if the case file exists
+    const file = fileRegistry.getFile(fileId);
+    if (!file) {
+      toast.error(`Case file not found: ${copiedCaseId}`);
+      onClose();
+      return;
+    }
+    
+    // Update the node's type to case - getCaseFromFile will handle the rest
+    if (graph) {
+      const nextGraph = structuredClone(graph);
+      const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+        n.uuid === nodeId || n.id === nodeId
+      );
+      
+      if (nodeIndex >= 0) {
+        nextGraph.nodes[nodeIndex].type = 'case'; // Set node type to case
+        if (nextGraph.metadata) {
+          nextGraph.metadata.updated_at = new Date().toISOString();
+        }
+        setGraph(nextGraph);
+        
+        // Trigger "Get from file" to populate case data
+        setTimeout(async () => {
+          try {
+            // getCaseFromFile uses nodeId (uuid) to find and update the node
+            await dataOperationsService.getCaseFromFile({
+              caseId: copiedCaseId,
+              nodeId: nodeId,
+              graph: nextGraph,
+              setGraph,
+            });
+            toast.success(`Pasted case: ${copiedCaseId}`);
+          } catch (error) {
+            console.error('[NodeContextMenu] Failed to get case from file:', error);
+            toast.error('Failed to load case data from file');
+          }
+        }, 100);
+      }
+    }
+    
+    onClose();
+  };
+
+  // Paste event - attach copied event file to this node
+  const handlePasteEvent = async () => {
+    if (!copiedEvent) {
+      toast.error('No event copied');
+      onClose();
+      return;
+    }
+    
+    const copiedEventId = copiedEvent.objectId;
+    const fileId = `event-${copiedEventId}`;
+    
+    // Check if the event file exists
+    const file = fileRegistry.getFile(fileId);
+    if (!file) {
+      toast.error(`Event file not found: ${copiedEventId}`);
+      onClose();
+      return;
+    }
+    
+    // Update the node's event_id field to attach the copied event file
+    if (graph) {
+      const nextGraph = structuredClone(graph);
+      const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+        n.uuid === nodeId || n.id === nodeId
+      );
+      
+      if (nodeIndex >= 0) {
+        nextGraph.nodes[nodeIndex].event_id = copiedEventId;
+        if (nextGraph.metadata) {
+          nextGraph.metadata.updated_at = new Date().toISOString();
+        }
+        setGraph(nextGraph);
+        
+        // Events are mapping/definition files - no "get from file" needed
+        // The event_id links the node to the event definition used during query building
+        toast.success(`Pasted event: ${copiedEventId}`);
       }
     }
     
@@ -477,6 +576,46 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
         >
           📋 Paste node: {copiedNode.objectId}
+        </div>
+      )}
+
+      {/* Paste case - only show when a case is copied */}
+      {copiedCase && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            handlePasteCase();
+          }}
+          style={{
+            padding: '8px 12px',
+            cursor: 'pointer',
+            fontSize: '13px',
+            borderRadius: '2px'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        >
+          📋 Paste case: {copiedCase.objectId}
+        </div>
+      )}
+
+      {/* Paste event - only show when an event is copied */}
+      {copiedEvent && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            handlePasteEvent();
+          }}
+          style={{
+            padding: '8px 12px',
+            cursor: 'pointer',
+            fontSize: '13px',
+            borderRadius: '2px'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        >
+          📋 Paste event: {copiedEvent.objectId}
         </div>
       )}
 

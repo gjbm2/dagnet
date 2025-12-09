@@ -22,6 +22,8 @@ export interface NavigatorEntry {
   isOrphan: boolean;
   tags?: string[];
   path?: string;
+  lastModified?: number;
+  lastOpened?: number;
   // Type-specific properties for sub-categorization
   parameter_type?: 'probability' | 'cost_gbp' | 'labour_cost' | 'standard_deviation';
   node_type?: string;
@@ -149,21 +151,14 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
     }
     
     try {
-      const whereUsedService = WhereUsedService.getInstance(fileRegistry);
-      const result = await whereUsedService.getWhereUsed(entry.type, entry.id);
+      const result = await WhereUsedService.getTooltipSummary(fileId);
       const currentBaseTooltip = `${entry.name}${entry.path ? `\n${entry.path}` : ''}`;
       
-      if (result.graphs.length === 0) {
-        const newTooltip = `${currentBaseTooltip}\n\n⚠️ Not used in any graphs`;
-        tooltipCache.set(fileId, newTooltip);
-        setTooltip(newTooltip);
-      } else {
-        const graphNames = result.graphs.slice(0, 5).join(', ');
-        const suffix = result.graphs.length > 5 ? ` and ${result.graphs.length - 5} more` : '';
-        const newTooltip = `${currentBaseTooltip}\n\n📊 Used in: ${graphNames}${suffix}`;
-        tooltipCache.set(fileId, newTooltip);
-        setTooltip(newTooltip);
-      }
+      // getTooltipSummary already includes the usage info in result.tooltip
+      // Prepend the entry name/path to it
+      const newTooltip = `${currentBaseTooltip}\n\n${result.tooltip}`;
+      tooltipCache.set(fileId, newTooltip);
+      setTooltip(newTooltip);
     } catch (error) {
       // Silently fail - use base tooltip
     }
@@ -213,6 +208,32 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
     onItemContextMenu(fileId, e);
   }, [fileId, onItemContextMenu]);
   
+  // Drag support for nodes, parameters, cases, and events (can be dropped onto graph canvas/nodes)
+  // Must be before early return to maintain consistent hook count
+  const isDraggable = entry ? (entry.type === 'node' || entry.type === 'parameter' || entry.type === 'case' || entry.type === 'event') : false;
+  
+  const handleDragStart = useCallback((e: React.DragEvent) => {
+    if (!entry || !isDraggable) return;
+    
+    // Set drag data - same format as clipboard
+    const dragData = {
+      type: 'dagnet-drag',
+      objectType: entry.type,
+      objectId: entry.id,
+    };
+    
+    e.dataTransfer.setData('application/json', JSON.stringify(dragData));
+    e.dataTransfer.effectAllowed = 'copy';
+    
+    // Set a custom drag image (optional - uses default if not set)
+    const dragIcon = document.createElement('div');
+    dragIcon.textContent = `📄 ${entry.name}`;
+    dragIcon.style.cssText = 'position: absolute; top: -1000px; background: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);';
+    document.body.appendChild(dragIcon);
+    e.dataTransfer.setDragImage(dragIcon, 0, 0);
+    setTimeout(() => document.body.removeChild(dragIcon), 0);
+  }, [entry, isDraggable]);
+  
   // Early return AFTER all hooks
   if (!entry) {
     console.error(`[NavigatorItem] No entry found for fileId: ${fileId}`);
@@ -226,11 +247,14 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
     <div
       className={`navigator-item ${isActive ? 'active' : ''}`}
       data-file-id={fileId}
+      draggable={isDraggable}
+      onDragStart={handleDragStart}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       title={displayTooltip}
+      style={{ cursor: isDraggable ? 'grab' : 'pointer' }}
     >
       <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
         {entry.name}
@@ -283,13 +307,13 @@ export function ObjectTypeSection({
   indexIsDirty,
   groupBySubCategories = false,
 }: ObjectTypeSectionProps) {
-  const { tabs } = useTabContext();
+  const { tabs, activeTabId } = useTabContext();
   const [expandedSubCategories, setExpandedSubCategories] = useState<Set<string>>(new Set(['probability', 'cost_gbp', 'labour_cost', 'standard_deviation']));
   
   const theme = getObjectTypeTheme(sectionType);
   
   // Get active file ID
-  const activeFileId = tabs.find(t => t.isActive)?.fileId || null;
+  const activeFileId = tabs.find(t => t.id === activeTabId)?.fileId || null;
   
   const toggleSubCategory = useCallback((key: string) => {
     setExpandedSubCategories(prev => {

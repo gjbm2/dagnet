@@ -16,6 +16,7 @@ import { ImageHoverPreview } from '../ImageHoverPreview';
 import { ImageLoupeView } from '../ImageLoupeView';
 import { ImageUploadModal } from '../ImageUploadModal';
 import { imageOperationsService } from '../../services/imageOperationsService';
+import { dataOperationsService } from '../../services/dataOperationsService';
 import { useCtrlKeyState } from '../../hooks/useCtrlKeyState';
 import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE, CONVEX_HANDLE_OFFSET_MULTIPLIER, CONCAVE_HANDLE_OFFSET_MULTIPLIER, FLAT_HANDLE_OFFSET_MULTIPLIER } from '@/lib/nodeEdgeConstants';
 
@@ -121,6 +122,147 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       getGraphFileId: () => activeTab?.fileId
     }, caption);
   }, [graph, data.uuid, data.id, setGraph, saveHistoryState, tabs, activeTabId]);
+
+  // Handle drag over for drop target
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  // Handle drop of node, case, or event file onto this node
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    try {
+      const jsonData = e.dataTransfer.getData('application/json');
+      if (!jsonData) return;
+      
+      const dragData = JSON.parse(jsonData);
+      if (dragData.type !== 'dagnet-drag') return;
+      
+      if (!graph) return;
+      
+      const nextGraph = structuredClone(graph);
+      const graphNode = nextGraph.nodes.find((n: any) => n.uuid === data.uuid || n.id === data.id);
+      
+      if (!graphNode) {
+        toast.error('Could not find node in graph');
+        return;
+      }
+      
+      // Handle different object types
+      if (dragData.objectType === 'node') {
+        const nodeId = dragData.objectId;
+        const fileId = `node-${nodeId}`;
+        
+        const file = fileRegistry.getFile(fileId);
+        if (!file) {
+          toast.error(`Node file not found: ${nodeId}`);
+          return;
+        }
+        
+        graphNode.id = nodeId;
+        graphNode.label = file.data?.label || nodeId;
+        
+        if (nextGraph.metadata) {
+          nextGraph.metadata.updated_at = new Date().toISOString();
+        }
+        
+        setGraph(nextGraph);
+        
+        if (typeof saveHistoryState === 'function') {
+          saveHistoryState('Attach node file', data.uuid);
+        }
+        
+        setTimeout(async () => {
+          try {
+            await dataOperationsService.getNodeFromFile({
+              nodeId: nodeId,
+              graph: nextGraph,
+              setGraph: setGraph as any,
+              targetNodeUuid: data.uuid,
+            });
+            toast.success(`Attached node: ${nodeId}`);
+          } catch (error) {
+            console.error('[ConversionNode] Failed to get node from file:', error);
+            toast.error('Failed to load node data from file');
+          }
+        }, 100);
+        
+      } else if (dragData.objectType === 'case') {
+        const caseId = dragData.objectId;
+        const fileId = `case-${caseId}`;
+        
+        const file = fileRegistry.getFile(fileId);
+        if (!file) {
+          toast.error(`Case file not found: ${caseId}`);
+          return;
+        }
+        
+        // Set node type to case - getCaseFromFile will initialize the case object
+        graphNode.type = 'case';
+        
+        if (nextGraph.metadata) {
+          nextGraph.metadata.updated_at = new Date().toISOString();
+        }
+        
+        setGraph(nextGraph);
+        
+        if (typeof saveHistoryState === 'function') {
+          saveHistoryState('Attach case file', data.uuid);
+        }
+        
+        setTimeout(async () => {
+          try {
+            // getCaseFromFile uses nodeId (uuid) to find and update the node
+            await dataOperationsService.getCaseFromFile({
+              caseId: caseId,
+              nodeId: data.uuid,
+              graph: nextGraph,
+              setGraph: setGraph as any,
+            });
+            toast.success(`Attached case: ${caseId}`);
+          } catch (error) {
+            console.error('[ConversionNode] Failed to get case from file:', error);
+            toast.error('Failed to load case data from file');
+          }
+        }, 100);
+        
+      } else if (dragData.objectType === 'event') {
+        const eventId = dragData.objectId;
+        const fileId = `event-${eventId}`;
+        
+        const file = fileRegistry.getFile(fileId);
+        if (!file) {
+          toast.error(`Event file not found: ${eventId}`);
+          return;
+        }
+        
+        graphNode.event_id = eventId;
+        
+        if (nextGraph.metadata) {
+          nextGraph.metadata.updated_at = new Date().toISOString();
+        }
+        
+        setGraph(nextGraph);
+        
+        if (typeof saveHistoryState === 'function') {
+          saveHistoryState('Attach event file', data.uuid);
+        }
+        
+        // Events are mapping/definition files - no "get from file" needed
+        // The event_id links the node to the event definition used during query building
+        toast.success(`Attached event: ${eventId}`);
+        
+      } else {
+        toast('Drop a node, case, or event file onto this node');
+      }
+    } catch (error) {
+      console.error('[ConversionNode] Drop error:', error);
+    }
+  }, [graph, data.uuid, data.id, setGraph, saveHistoryState]);
 
   // Calculate probability mass for outgoing edges
   // PMF validation ONLY applies to 'current' layer (live editable graph), not to snapshots
@@ -445,6 +587,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''} ${isCaseNode ? 'case-node' : ''}`}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
       style={{
         position: 'relative',
         padding: '8px',
