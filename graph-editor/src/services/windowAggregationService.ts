@@ -1216,35 +1216,100 @@ export function mergeTimeSeriesIntoParameter(
   const targetDims = extractSliceDimensions(normalizedSlice);
   const contextSuffix = targetDims ? `.${targetDims}` : '';
 
-  // COHORT MODE: replace entire slice for this context/case family
+  // COHORT MODE: merge new data into existing slice, preserving historical cohorts
+  // Unlike the old "replace entire slice" approach, this preserves mature historical
+  // cohort data while refreshing recent/immature cohorts from the bounded fetch.
   if (isCohortMode) {
-    // Calculate aggregate totals for THIS fetch only
-    const totalN = n_daily.reduce((sum, n) => sum + n, 0);
-    const totalK = k_daily.reduce((sum, k) => sum + k, 0);
+    // 1) Find existing cohort slice for this context/case family
+    const existingCohortSlice = existingValues.find(v => {
+      if (!isCohortModeValue(v)) return false;
+      const dims = extractSliceDimensions(v.sliceDSL ?? '');
+      return dims === targetDims;
+    });
+    
+    // 2) Build date → { n, k, median_lag, mean_lag } map, starting with existing data
+    const cohortDateMap = new Map<string, { 
+      n: number; 
+      k: number; 
+      median_lag?: number;
+      mean_lag?: number;
+    }>();
+    
+    // Add existing cohort data first (will be overwritten by new data for overlapping dates)
+    if (existingCohortSlice?.dates && existingCohortSlice?.n_daily && existingCohortSlice?.k_daily) {
+      const existingMedianLag = existingCohortSlice.median_lag_days;
+      const existingMeanLag = existingCohortSlice.mean_lag_days;
+      for (let i = 0; i < existingCohortSlice.dates.length; i++) {
+        const ukDate = normalizeDate(existingCohortSlice.dates[i]);
+        cohortDateMap.set(ukDate, {
+          n: existingCohortSlice.n_daily[i] ?? 0,
+          k: existingCohortSlice.k_daily[i] ?? 0,
+          // Preserve per-date lag if stored, else use slice-level
+          median_lag: Array.isArray(existingMedianLag) ? existingMedianLag[i] : existingMedianLag,
+          mean_lag: Array.isArray(existingMeanLag) ? existingMeanLag[i] : existingMeanLag,
+        });
+      }
+    }
+    
+    // 3) Overlay new fetched data (overwrites existing for same dates - fresher data wins)
+    for (let i = 0; i < dates.length; i++) {
+      const ukDate = normalizeDate(dates[i]);
+      cohortDateMap.set(ukDate, {
+        n: n_daily[i] ?? 0,
+        k: k_daily[i] ?? 0,
+        median_lag: Array.isArray(median_lag_days) ? median_lag_days[i] : median_lag_days,
+        mean_lag: Array.isArray(mean_lag_days) ? mean_lag_days[i] : mean_lag_days,
+      });
+    }
+    
+    // 4) Sort dates and rebuild arrays
+    const sortedDates = Array.from(cohortDateMap.keys()).sort((a, b) => 
+      parseDate(a).getTime() - parseDate(b).getTime()
+    );
+    
+    const mergedDates: string[] = [];
+    const mergedN: number[] = [];
+    const mergedK: number[] = [];
+    const mergedMedianLag: number[] = [];
+    const mergedMeanLag: number[] = [];
+    
+    for (const d of sortedDates) {
+      const entry = cohortDateMap.get(d)!;
+      mergedDates.push(d);
+      mergedN.push(entry.n);
+      mergedK.push(entry.k);
+      if (entry.median_lag !== undefined) mergedMedianLag.push(entry.median_lag);
+      if (entry.mean_lag !== undefined) mergedMeanLag.push(entry.mean_lag);
+    }
+    
+    // 5) Calculate aggregate totals from MERGED data
+    const totalN = mergedN.reduce((sum, n) => sum + n, 0);
+    const totalK = mergedK.reduce((sum, k) => sum + k, 0);
     const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
-
-    const cohortFrom = normalizeToUK(newWindow.start);
-    const cohortTo = normalizeToUK(newWindow.end);
-
-    // Build canonical cohort sliceDSL: cohort(<anchor>,<earliest>:<latest>)[.context(...)]
-    // Anchor comes from latencyConfig if available, otherwise empty (edge case: non-latency cohort)
+    
+    // 6) Determine cohort range (union of existing + new)
+    const cohortFrom = mergedDates.length > 0 ? mergedDates[0] : normalizeToUK(newWindow.start);
+    const cohortTo = mergedDates.length > 0 ? mergedDates[mergedDates.length - 1] : normalizeToUK(newWindow.end);
+    
+    // 7) Build canonical cohort sliceDSL with updated range
     const anchorNodeId = mergeOptions?.latencyConfig?.anchor_node_id || '';
     const anchorPart = anchorNodeId ? `${anchorNodeId},` : '';
     const canonicalSliceDSL = `cohort(${anchorPart}${cohortFrom}:${cohortTo})${contextSuffix}`;
-
-    const newValue: ParameterValue = {
+    
+    const mergedValue: ParameterValue = {
       mean,
       n: totalN,
       k: totalK,
-      n_daily,
-      k_daily,
-      dates,
+      n_daily: mergedN,
+      k_daily: mergedK,
+      dates: mergedDates,
       cohort_from: cohortFrom,
       cohort_to: cohortTo,
       query_signature: newQuerySignature,
       sliceDSL: canonicalSliceDSL,
-      ...(median_lag_days && { median_lag_days }),
-      ...(mean_lag_days && { mean_lag_days }),
+      // Include lag data if we have it for all dates
+      ...(mergedMedianLag.length === mergedDates.length && { median_lag_days: mergedMedianLag }),
+      ...(mergedMeanLag.length === mergedDates.length && { mean_lag_days: mergedMeanLag }),
       ...(mergeOptions?.latencySummary && { 
         latency: mergeOptions.latencySummary 
       }),
@@ -1254,15 +1319,15 @@ export function mergeTimeSeriesIntoParameter(
         ...(fullQuery && { full_query: fullQuery }),
       },
     };
-
-    // Drop existing cohort-mode values for this context/case family
+    
+    // 8) Remove old cohort slice for this family, add merged slice
     const remaining = existingValues.filter(v => {
       if (!isCohortModeValue(v)) return true;
       const dims = extractSliceDimensions(v.sliceDSL ?? '');
       return dims !== targetDims;
     });
-
-    return [...remaining, newValue];
+    
+    return [...remaining, mergedValue];
   }
 
   // WINDOW MODE: canonical merge by date for this context/case family

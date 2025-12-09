@@ -465,6 +465,12 @@ export interface LatencyConfig {
    */
   t95?: number;
   
+  /** Cumulative path latency (t95) from anchor to this edge.
+   *  Computed by statisticalEnhancementService.computePathT95().
+   *  Used for cohort retrieval horizon calculations.
+   */
+  path_t95?: number;
+  
   // === Display-only fields (populated from file, not user-editable) ===
   
   /** Weighted median lag in days for this edge */

@@ -20,7 +20,13 @@ import { resolveRelativeDate } from '../lib/dateFormat';
 import type { Graph, DateRange } from '../types';
 import { showProgressToast, completeProgressToast } from '../components/ProgressToast';
 import { sessionLogService } from './sessionLogService';
-import { getEdgesInTopologicalOrder, getActiveEdges, type GraphForPath } from './statisticalEnhancementService';
+import { 
+  getEdgesInTopologicalOrder, 
+  getActiveEdges, 
+  computePathT95, 
+  applyPathT95ToGraph,
+  type GraphForPath 
+} from './statisticalEnhancementService';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -36,6 +42,8 @@ export interface FetchItem {
   targetId: string;
   paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number;
+  /** Optional: Bounded window for cohort queries, calculated by Planner */
+  boundedCohortWindow?: DateRange;
 }
 
 export interface FetchOptions {
@@ -545,6 +553,8 @@ export async function fetchItem(
           versionedCase: options?.versionedCase,
           currentDSL: dsl,
           targetSlice: dsl,
+          // Pass through any bounded cohort window calculated by the planner
+          boundedCohortWindow: item.boundedCohortWindow,
         });
       }
       
@@ -578,6 +588,8 @@ export async function fetchItem(
           bustCache: options?.bustCache,
           currentDSL: dsl,
           targetSlice: dsl,
+          // Pass through any bounded cohort window calculated by the planner
+          boundedCohortWindow: item.boundedCohortWindow,
         });
       }
       
@@ -602,11 +614,116 @@ export async function fetchItem(
 }
 
 // ============================================================================
+// Path T95 Computation
+// ============================================================================
+
+/**
+ * Compute and apply path_t95 to the graph.
+ * 
+ * path_t95 is the cumulative latency from the anchor (start node) to each edge,
+ * computed by summing t95 values along the path. This is used by the planner to
+ * bound cohort retrieval horizons for downstream edges.
+ * 
+ * This function is called after batch fetches complete, when all edge t95 values
+ * have been updated. The computed path_t95 values are transient (not persisted)
+ * and are recomputed whenever the scenario or graph topology changes.
+ * 
+ * @param graph - The graph with updated t95 values on edges
+ * @param setGraph - Graph setter to apply the updated path_t95 values
+ * @param logOpId - Optional parent log operation ID for session logging
+ */
+export function computeAndApplyPathT95(
+  graph: Graph,
+  setGraph: (g: Graph | null) => void,
+  logOpId?: string
+): void {
+  if (!graph?.edges?.length) return;
+  
+  // Build GraphForPath representation
+  const graphForPath: GraphForPath = {
+    nodes: (graph.nodes || []).map(n => ({
+      id: n.id || n.uuid || '',
+      type: n.type,
+    })),
+    edges: (graph.edges || []).map(e => ({
+      id: e.id,
+      uuid: e.uuid,
+      from: e.from,
+      to: e.to,
+      p: e.p ? {
+        latency: e.p.latency ? {
+          maturity_days: e.p.latency.maturity_days,
+          t95: e.p.latency.t95,
+          path_t95: e.p.latency.path_t95,
+        } : undefined,
+        mean: e.p.mean,
+      } : undefined,
+    })),
+  };
+  
+  // Get active edges (edges with non-zero probability)
+  const activeEdges = getActiveEdges(graphForPath);
+  
+  if (activeEdges.size === 0) {
+    console.log('[fetchDataService] No active edges for path_t95 computation');
+    return;
+  }
+  
+  // Compute path_t95 for all active edges
+  const pathT95Map = computePathT95(graphForPath, activeEdges);
+  
+  if (pathT95Map.size === 0) {
+    console.log('[fetchDataService] path_t95 computation returned empty map');
+    return;
+  }
+  
+  // Apply to in-memory graph (clone to trigger React update)
+  const updatedGraph = { ...graph };
+  updatedGraph.edges = graph.edges.map(edge => {
+    const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+    const pathT95 = pathT95Map.get(edgeId);
+    
+    if (pathT95 !== undefined && edge.p?.latency) {
+      return {
+        ...edge,
+        p: {
+          ...edge.p,
+          latency: {
+            ...edge.p.latency,
+            path_t95: pathT95,
+          },
+        },
+      };
+    }
+    return edge;
+  });
+  
+  setGraph(updatedGraph);
+  
+  // Log summary
+  const edgesWithPathT95 = Array.from(pathT95Map.entries()).filter(([_, v]) => v > 0);
+  console.log(`[fetchDataService] Computed path_t95 for ${edgesWithPathT95.length} edges:`, 
+    Object.fromEntries(edgesWithPathT95.slice(0, 5)));
+  
+  if (logOpId) {
+    sessionLogService.addChild(logOpId, 'info', 'PATH_T95_COMPUTED',
+      `Computed path_t95 for ${edgesWithPathT95.length} edges`,
+      undefined,
+      { edgeCount: edgesWithPathT95.length, sample: Object.fromEntries(edgesWithPathT95.slice(0, 3)) }
+    );
+  }
+}
+
+// ============================================================================
 // Core: Fetch multiple items
 // ============================================================================
 
 /**
  * Fetch multiple items sequentially.
+ * 
+ * After all items are fetched, computes path_t95 for the graph so that
+ * downstream latency-aware decisions (e.g., cohort retrieval horizons)
+ * can use cumulative lag information.
  * 
  * @param items - Array of items to fetch
  * @param options - Fetch options including optional progress callback
@@ -691,6 +808,35 @@ export async function fetchItems(
           completeProgressToast(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`, false);
         }
       }, 300);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════
+    // PATH_T95 COMPUTATION (Phase 1 of retrieval-date-logic implementation)
+    // 
+    // After all items are fetched and their t95 values updated on the graph,
+    // compute path_t95 (cumulative latency from anchor) for each edge.
+    // This enables the planner to bound cohort retrieval horizons using
+    // cumulative lag rather than just edge-local t95.
+    // 
+    // path_t95 is transient (not persisted) - it's recomputed whenever
+    // the scenario or graph topology changes.
+    // ═══════════════════════════════════════════════════════════════════════
+    if (successCount > 0) {
+      const finalGraph = getUpdatedGraph?.() ?? graph;
+      if (finalGraph) {
+        // Check if any fetched items were parameters on latency edges
+        const hasLatencyItems = items.some(item => {
+          if (item.type !== 'parameter') return false;
+          const edge = finalGraph.edges?.find((e: any) => 
+            (e.uuid || e.id) === item.targetId
+          );
+          return edge?.p?.latency?.maturity_days || edge?.p?.latency?.t95;
+        });
+        
+        if (hasLatencyItems) {
+          computeAndApplyPathT95(finalGraph, setGraph, batchLogId);
+        }
+      }
     }
   } finally {
     // Always reset batch mode
@@ -840,6 +986,7 @@ export function createFetchItem(
     paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
     conditionalIndex?: number;
     name?: string;
+    boundedCohortWindow?: DateRange;
   }
 ): FetchItem {
   const slot = options?.paramSlot || 'p';
@@ -851,6 +998,7 @@ export function createFetchItem(
     targetId,
     paramSlot: options?.paramSlot,
     conditionalIndex: options?.conditionalIndex,
+    boundedCohortWindow: options?.boundedCohortWindow,
   };
 }
 

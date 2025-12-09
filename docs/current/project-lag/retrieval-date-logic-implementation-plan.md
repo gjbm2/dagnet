@@ -460,27 +460,27 @@ The following points require explicit resolution before or during implementation
 
 ### 9.1 Exact staleness thresholds
 
-- **Decision needed:** What is the precise inequality for "stale"?
-  - Proposed: A covered slice is **stale** if `days_since_retrieval > 1` **and** the slice's cohort/window end date is within `t95` (or `path_t95` for cohorts) of today.
-  - Cohorts and windows use the same rule, substituting `path_t95` for cohorts and edge-level `t95` for windows.
+- **Decision:** Reuse the existing pre‑fetch funnel staleness predicate as the single source of truth.
+  - As of this plan, that predicate treats a covered slice as **stale** if `days_since_retrieval > 1` **and** the slice's cohort/window end date is within `t95` (or `path_t95` for cohorts) of today.
+  - Cohorts and windows use the same rule, substituting `path_t95` for cohorts and edge-level `t95` for windows. The canonical definition of the inequality lives in the pre‑fetch funnel design; the planner and horizon helper call into that shared logic rather than redefining it.
 - **Fallback:** When `t95` is missing or zero, use `maturity_days`; if that is also missing, treat the slice as **stable** (no refresh pressure).
 
 ### 9.2 Per-anchor `path_t95` computation
 
-- **Decision needed:** How do we run the DP when a graph has multiple anchors?
-  - Proposed: Run the DP **once per distinct `anchor_node_id`** found on latency edges in the active scenario. Each run yields `path_t95` values only for edges reachable from that anchor; edges not reachable from a given anchor are ignored for that anchor's horizon calculations.
+- **Decision:** Compute `path_t95` by a single dynamic‑programming pass per anchor, rather than ad‑hoc per‑edge walks.
+  - Concretely, for each distinct `anchor_node_id` in the active scenario, traverse edges in topological order starting from that anchor, accumulating `t95` along each path so that, for any given edge, the resulting `path_t95` is exactly what you would get by “reaching upstream from the edge to its anchor and summing `t95` as you go”.
+  - Each run yields `path_t95` values only for edges reachable from that anchor; edges not reachable from a given anchor are ignored for that anchor's horizon calculations.
 - **Edges with no anchor:** Treat as non-latency for cohort horizon purposes (`path_t95 = 0`); they still use edge-level `t95` for staleness of their own slices.
 
 ### 9.3 Planner vs `shouldRefetch` ownership
 
-- **Decision needed:** Which layer is authoritative for the final retrieval window when `shouldRefetch` returns `replace_slice`?
-  - Proposed: The **horizon helper** (called by the planner) determines the bounded cohort window; `shouldRefetch` only decides the *policy* (`gaps_only`, `partial`, `replace_slice`, `use_cache`). Execution uses the planner's bounded window, not the raw DSL window.
-- **Conflict resolution:** If the planner says "no fetch needed" but `shouldRefetch` would have said `replace_slice`, the planner wins (it has already incorporated staleness). This avoids double-checking.
+- **Decision:** Make the planner and horizon helper the single source of truth for “fetch vs cache” and “which window to retrieve”, and reuse the existing refetch policy machinery inside that planner path rather than calling it independently from other code.
+  - In practice, the planner calls into the existing refetch policy once per item to obtain the policy (`gaps_only`, `partial`, `replace_slice`, `use_cache`), then applies the horizon helper to bound any retrieval windows; UI components and execution code consume only the planner result and never call `shouldRefetch` directly.
+- **Conflict resolution:** If the planner says "no fetch needed" but `shouldRefetch` on the same inputs would have said `replace_slice`, the planner wins (it has already incorporated staleness). This avoids double-checking and prevents competing code paths.
 
 ### 9.4 Baseline vs query window interaction
 
-- **Decision needed:** Is `t95` always derived from an implicit baseline window, or can it be recomputed from arbitrary user queries?
-  - Proposed: `t95` is **only updated** when the baseline latency-detection window is fetched (Flow A in `design.md`). Ad-hoc user queries with narrower or shifted windows **read** `t95` but do not overwrite it.
+- **Decision:** `t95` is **only updated** when the baseline latency-detection window is fetched (Flow A in `design.md`). Ad-hoc user queries with narrower or shifted windows **read** existing `t95` but do not overwrite it.
 - **`path_t95`:** Always recomputed per scenario/query from persisted `t95` values; not affected by the baseline vs query distinction.
 
 ### 9.5 Anchoring semantics in the horizon helper
@@ -490,14 +490,11 @@ The following points require explicit resolution before or during implementation
     - Missing/invalid anchor: Treat edge as non-latency for cohort horizons (`path_t95 = 0`), but still use edge `t95` for staleness.
     - Mid-path anchors: The DP starts at the anchor node; edges upstream of the anchor are unreachable and therefore have no `path_t95` contribution from that anchor.
 - **DSL date mapping:** Cohort DSL dates are always interpreted in the coordinate system of the edge's anchor. If different edges have different anchors, their horizon windows are computed independently.
+  - In practice, such cases should be rare because topological changes cause a re-calculation of `a_anchors`, but the behaviour is defined here for completeness.
 
 ### 9.6 Test coverage for multi-anchor and what-if scenarios
 
-- **Decision needed:** Are the test scenarios in section 8.2 sufficient, or do we need explicit tests for:
-  - Graphs with two or more distinct `anchor_node_id` values on different edges.
-  - What-if scenarios where edge activation changes `path_t95` mid-session.
-  - Edges that become unreachable from their anchor due to scenario toggling.
-- **Proposed:** Add explicit tests for these cases in section 8.2 before implementation begins.
+- **Decision:** Treat multi-anchor and what-if scenarios as first-class test cases and add explicit, high-coverage tests for them, with creative variations on topology and scenario toggling, in addition to the scenarios listed in section 8.2.
 
 ---
 

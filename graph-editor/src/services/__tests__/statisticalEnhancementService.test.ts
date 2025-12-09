@@ -555,9 +555,9 @@ describe('LAG Lag Distribution Fitting (§5.4)', () => {
   });
 });
 
-describe('LAG P-Infinity Estimation (§5.6)', () => {
+describe('LAG P-Infinity Estimation (§5.6, Appendix C.1)', () => {
   describe('estimatePInfinity', () => {
-    it('should estimate from mature cohorts only', () => {
+    it('should estimate from mature cohorts only with recency weighting', () => {
       const cohorts: CohortData[] = [
         { date: '1-Oct-25', n: 100, k: 60, age: 60 }, // mature (age > t95)
         { date: '15-Oct-25', n: 100, k: 55, age: 45 }, // mature
@@ -569,9 +569,16 @@ describe('LAG P-Infinity Estimation (§5.6)', () => {
       const t95 = 30; // Maturity threshold
       const pInf = estimatePInfinity(cohorts, t95);
 
-      // Should use only first 3 cohorts (age >= 30)
-      // p_∞ = (60 + 55 + 40) / (100 + 100 + 100) = 155/300 ≈ 0.517
-      expect(pInf).toBeCloseTo(0.517, 2);
+      // Should use only first 3 cohorts (age >= 30) with recency weighting
+      // With H=30 (half-life):
+      //   age 60: w = exp(-60/30) ≈ 0.135, k=60, n=100
+      //   age 45: w = exp(-45/30) ≈ 0.223, k=55, n=100
+      //   age 30: w = exp(-30/30) ≈ 0.368, k=40, n=100
+      // weighted k ≈ 8.1 + 12.3 + 14.7 = 35.1
+      // weighted n ≈ 13.5 + 22.3 + 36.8 = 72.6
+      // p_∞ ≈ 35.1 / 72.6 ≈ 0.483
+      // (Recency weighting favours the younger cohort with lower conversion)
+      expect(pInf).toBeCloseTo(0.483, 2);
     });
 
     it('should return undefined if no mature cohorts', () => {

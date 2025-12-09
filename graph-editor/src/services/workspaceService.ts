@@ -341,10 +341,13 @@ class WorkspaceService {
         }
       }
       
-      console.log(`📦 WorkspaceService: Fetching ${filesToFetch.length} files in parallel...`);
+      console.log(`📦 WorkspaceService: Fetching ${filesToFetch.length} files with concurrency limit...`);
 
-      // STEP 3: Fetch all file contents in parallel (HUGE PERF WIN!)
-      const fetchPromises = filesToFetch.map(async ({ treeItem, dirConfig }) => {
+      // STEP 3: Fetch file contents with concurrency control
+      // Limit concurrent requests to avoid overwhelming GitHub API and browser
+      const CONCURRENCY_LIMIT = 15;
+      
+      const fetchSingleFile = async ({ treeItem, dirConfig }: { treeItem: any, dirConfig: any }): Promise<string | null> => {
         try {
           const blobResult = await gitService.getBlobContent(treeItem.sha);
           if (!blobResult.success || !blobResult.data) {
@@ -428,11 +431,21 @@ class WorkspaceService {
           console.error(`❌ WorkspaceService: Failed to clone ${treeItem.path}:`, error);
           return null;
         }
-      });
+      };
 
-      // Wait for all fetches to complete
-      const results = await Promise.all(fetchPromises);
-      const fileIds = results.filter((id): id is string => id !== null);
+      // Process files in batches with concurrency control
+      const fileIds: string[] = [];
+      for (let i = 0; i < filesToFetch.length; i += CONCURRENCY_LIMIT) {
+        const batch = filesToFetch.slice(i, i + CONCURRENCY_LIMIT);
+        const batchResults = await Promise.all(batch.map(fetchSingleFile));
+        const validIds = batchResults.filter((id): id is string => id !== null);
+        fileIds.push(...validIds);
+        
+        // Log progress for large clones
+        if (filesToFetch.length > 50) {
+          console.log(`📦 WorkspaceService: Cloned ${Math.min(i + CONCURRENCY_LIMIT, filesToFetch.length)}/${filesToFetch.length} files...`);
+        }
+      }
 
       const elapsed = Date.now() - startTime;
       const registryCount = (fileRegistry as any).files.size;

@@ -287,12 +287,12 @@
 /* Object Type Section - Card-like Adobe Lightroom style with colored accents */
 .object-type-section {
   background: #fff;
-  border: 1px solid #d0d0d0;
-  border-left: 4px solid var(--section-accent-color, #9CA3AF); /* Colored left border */
+  border: 1px solid #e0e0e0;
+  border-left: 3px solid var(--section-accent-color, #9CA3AF); /* Colored left border */
   border-radius: 6px;
-  margin: 8px 8px 12px 8px;
-  overflow: visible; /* Changed from hidden to allow sticky headers */
-  transition: box-shadow 0.2s ease, border-left-color 0.2s ease;
+  margin: 8px;
+  overflow: visible; /* Required for sticky headers */
+  transition: border-left-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .object-type-section:hover {
@@ -310,29 +310,44 @@
   padding: 10px 12px;
   cursor: pointer;
   user-select: none;
-  background-color: #fafafa !important; /* Solid background - prevent transparency */
+  background: #fcfcfc; /* Very slightly lighter than panel bg #f8f9fa */
   border-bottom: 1px solid transparent;
   transition: all 0.2s ease;
   position: sticky;
   top: 0;
   z-index: 10;
-  border-radius: 6px 6px 0 0; /* Maintain rounded top corners */
+  border-radius: 6px 6px 0 0;
 }
 
 .section-header:hover {
-  background-color: #f5f5f5;
+  background-color: #f8f8f8;
 }
-
-/* Subtle tint when expanded - applied inline via style attribute */
 
 /* Add border when section is expanded */
 .section-header.is-expanded {
   border-bottom-color: #e5e5e5;
 }
 
-/* Enhance sticky header with shadow when scrolling */
-.section-header.is-sticky {
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+/* Chevron rotation */
+.chevron {
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.chevron.expanded {
+  transform: rotate(90deg);
+}
+
+/* Section content with expand/collapse */
+.section-content {
+  display: none;
+  padding: 0;
+  margin: 0;
+}
+
+.section-content.expanded {
+  display: block;
+  overflow: visible; /* Required for sticky sub-headers */
 }
 
 .section-header-left {
@@ -386,25 +401,31 @@
 
 .section-count {
   font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: #e5e5e5;
-  color: #666;
+  color: #888;
   font-weight: 500;
   flex-shrink: 0;
+  margin-left: 4px;
 }
 
-.section-index-icon {
-  font-size: 14px;
+/* Index button - minimal style */
+.index-button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
-  transition: background-color 0.15s ease;
-  flex-shrink: 0;
+  color: #888;
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
 }
 
-.section-index-icon:hover {
-  background-color: #e0e0e0;
+.index-button:hover {
+  opacity: 1;
+}
+
+.index-button.is-dirty {
+  color: #e67700;
+  opacity: 1;
 }
 
 /* Section Items - with smooth animation */
@@ -435,10 +456,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px 6px 32px;
+  padding: 5px 12px 5px 20px;
   cursor: pointer;
-  border-radius: 4px;
-  margin: 1px 8px 1px 0;
+  border-radius: 3px;
+  margin: 1px 6px;
   transition: background-color 0.15s ease;
   min-height: 24px;
 }
@@ -579,7 +600,7 @@
   .object-type-section {
     background: #252525;
     border-color: #404040;
-    border-left: 4px solid var(--section-accent-color, #9CA3AF);
+    border-left: 3px solid var(--section-accent-color, #9CA3AF);
   }
 
   .object-type-section:hover {
@@ -587,22 +608,23 @@
   }
 
   .section-header {
-    background: #2d2d2d;
-    border-bottom-color: transparent;
+    background: #2a2a2a; /* Very slightly lighter than panel bg #252525 */
   }
 
   .section-header:hover {
-    background-color: #353535;
+    background-color: #333333;
   }
-
-  /* Subtle tint when expanded - applied inline via style attribute */
-
+  
   .section-header.is-expanded {
     border-bottom-color: #404040;
   }
-
-  .section-header.is-sticky {
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  
+  .section-count {
+    color: #777;
+  }
+  
+  .index-button {
+    color: #777;
   }
 
   .section-expand-icon,
@@ -659,10 +681,13 @@
   }
   
   /* Sub-categories dark mode */
+  .sub-category + .sub-category {
+    border-top-color: #404040;
+  }
+
   .sub-category-header {
     background: #2d2d2d;
     color: #aaa;
-    border-top-color: #404040;
   }
   
   .sub-category-header:hover {
@@ -687,24 +712,20 @@
   margin: 0;
 }
 
-.sub-category:first-child {
-  margin-top: 0;
-}
-
-.sub-category:first-child .sub-category-header {
-  border-top: none; /* Remove border from first sub-category */
+/* Use adjacent sibling selector - only add border between sub-categories */
+.sub-category + .sub-category {
+  border-top: 1px solid #e5e5e5;
 }
 
 .sub-category-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   font-size: 12px;
   font-weight: 500;
   color: #666;
-  background: #f8f9fa;
-  border-top: 1px solid #e5e5e5;
+  background: #fafafa;
   cursor: pointer;
   user-select: none;
   transition: all 0.2s ease;

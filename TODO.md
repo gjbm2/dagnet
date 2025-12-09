@@ -164,6 +164,8 @@ Reproduce the issue and share the console outpu
   - Surface a **data health indicator** in the Graph Issues panel (e.g., "data shallow", "no mature cohorts yet")
   - Treat this like other graph viewer issues: informational by default, with toggles to enable/disable
 
+- Future LAG enhancement: once `path_t95` persistence is stable, explore combining upstream `path_t95` values (e.g. traffic‑weighted expected path lag) instead of pure max over paths, for richer path‑wise maturity modelling in cohort view. See `docs/current/project-lag/cohort-view.md`.
+
 ## Background Fetch Queue (DESIGN SKETCH)
 
 **Problem:** Batch fetch operations (Get All for Slice, All Slices) block the UI for minutes due to rate limiting (3s between Amplitude API calls). With 20 items, that's 1+ minute of blocked modal.
@@ -316,6 +318,7 @@ Could use Web Worker for true background execution:
 
 ### Analytics / Model Fitting (Future)
 - speed of chevron animation scale on log lag
+- Expose λ (forecast blend weight) as user-configurable setting to control how quickly evidence overrides forecast baselines in immature windows (see `forecast-fix.md`)
 
 ### Medium 
 - Persist scenarios to graph?
@@ -336,7 +339,13 @@ Could use Web Worker for true background execution:
 - Zap drop down menu:
   - 'Connection settings' on zap drop down menu isn't working
   - Sync status' on zap drop down should show last sync, source, etc. from files/graph
-- Edit: copy & paste
+- **Copy & Paste for Nodes/Parameters** - See `docs/copy-paste.md`
+  - Copy node/parameter/case from Navigator context menu
+  - Paste node on canvas (creates new node with file attached)
+  - Paste node on existing node (attaches file to node)
+  - Paste parameter on edge (attaches to appropriate slot: p/cost_gbp/labour_cost)
+  - Uses memory cache for reliable paste (not clipboard read)
+  - Triggers "Get from file" to populate data after paste
 - Graph integrity checker report
 - Minus autocomplete not working in query/selector
 - 'Clear overrides' at context & Data menu level  

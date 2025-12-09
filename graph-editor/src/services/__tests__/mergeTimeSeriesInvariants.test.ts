@@ -505,12 +505,12 @@ describe('Window Mode: Canonical sliceDSL', () => {
 });
 
 // =============================================================================
-// 5. COHORT MODE: Full Replacement
+// 5. COHORT MODE: Merge into Single Slice
 // =============================================================================
 
-describe('Cohort Mode: Full Replacement', () => {
+describe('Cohort Mode: Merge into Single Slice', () => {
   
-  it('removes ALL previous cohort values for slice family', () => {
+  it('merges new data into existing cohort slice for same family', () => {
     // Multiple existing cohort values
     const existing: ParameterValue[] = [
       cohortValue({ dates: [daysAgo(90), daysAgo(85)] }),
@@ -533,13 +533,13 @@ describe('Cohort Mode: Full Replacement', () => {
       { isCohortMode: true }
     );
     
-    // Should have EXACTLY ONE cohort value
+    // Should have EXACTLY ONE cohort value (merged)
     const cohortValues = result.filter(v => isCohortModeValue(v));
     expect(cohortValues.length).toBe(1);
     
-    // And it should be the NEW one
-    expect(cohortValues[0].cohort_from).toBe(daysAgo(60));
-    expect(cohortValues[0].cohort_to).toBe(daysAgo(55));
+    // It should be MERGED: earliest from existing, latest from new
+    expect(cohortValues[0].cohort_from).toBe(daysAgo(90)); // Earliest from existing
+    expect(cohortValues[0].cohort_to).toBe(daysAgo(55));   // Latest from new fetch
   });
   
   it('preserves window values when replacing cohort', () => {
@@ -575,7 +575,7 @@ describe('Cohort Mode: Full Replacement', () => {
     expect(windowValues[0].window_from).toBe(daysAgo(30));
   });
   
-  it('only replaces cohorts for matching context family', () => {
+  it('only merges cohorts for matching context family', () => {
     // Cohorts for two different contexts
     const existing: ParameterValue[] = [
       cohortValue({ dates: [daysAgo(90), daysAgo(80)], context: 'geo=UK' }),
@@ -597,13 +597,14 @@ describe('Cohort Mode: Full Replacement', () => {
       { isCohortMode: true }
     );
     
-    // Should have: 1 new UK cohort + 1 unchanged US cohort
+    // Should have: 1 merged UK cohort + 1 unchanged US cohort
     expect(result.length).toBe(2);
     
     const ukCohort = result.find(v => v.sliceDSL?.includes('geo=UK'));
     const usCohort = result.find(v => v.sliceDSL?.includes('geo=US'));
     
-    expect(ukCohort!.cohort_from).toBe(daysAgo(70)); // New
+    expect(ukCohort!.cohort_from).toBe(daysAgo(90)); // Merged: earliest from existing
+    expect(ukCohort!.cohort_to).toBe(daysAgo(60));   // Merged: latest from new
     expect(usCohort!.cohort_from).toBe(daysAgo(90)); // Unchanged
   });
 });

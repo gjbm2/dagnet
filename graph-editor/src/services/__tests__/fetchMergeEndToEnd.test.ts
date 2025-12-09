@@ -308,30 +308,30 @@ describe('Scenario 2: Cohort Slice Replacement', () => {
     expect(values[0].sliceDSL).toContain('household-created');
   });
   
-  it('second cohort fetch replaces first (not merged)', () => {
-    // First cohort
+  it('second cohort fetch merges with first (preserving historical data)', () => {
+    // First cohort: days 40-30 ago
     const ts1 = dasRunner.fetchWindow(40, 30);
     let values = mergeTimeSeriesIntoParameter([], ts1, { start: daysAgo(40), end: daysAgo(30) }, 'sig', undefined, undefined, 'api', '', { isCohortMode: true });
     
     expect(values.length).toBe(1);
     expect(values[0].cohort_from).toBe(daysAgo(40));
     
-    // Second cohort (different dates)
+    // Second cohort: days 35-25 ago (overlaps with first, extends further forward)
     const ts2 = dasRunner.fetchWindow(35, 25);
     values = mergeTimeSeriesIntoParameter(values, ts2, { start: daysAgo(35), end: daysAgo(25) }, 'sig', undefined, undefined, 'api', '', { isCohortMode: true });
     
-    // Should still be single cohort (replaced, not merged)
+    // Should be single cohort with MERGED date range (union of both)
     expect(values.length).toBe(1);
-    expect(values[0].cohort_from).toBe(daysAgo(35)); // New dates
-    expect(values[0].cohort_to).toBe(daysAgo(25));
+    expect(values[0].cohort_from).toBe(daysAgo(40)); // Earliest from first fetch
+    expect(values[0].cohort_to).toBe(daysAgo(25));   // Latest from second fetch
   });
   
-  it('cohort replacement preserves window values', () => {
+  it('cohort merge preserves window values', () => {
     // Start with a window value
     const windowTs = dasRunner.fetchWindow(14, 7);
     let values = mergeTimeSeriesIntoParameter([], windowTs, { start: daysAgo(14), end: daysAgo(7) }, 'sig', undefined, undefined, 'api', '');
     
-    // Add a cohort value
+    // Add a cohort value: days 60-50 ago
     const cohortTs = dasRunner.fetchWindow(60, 50);
     values = mergeTimeSeriesIntoParameter(values, cohortTs, { start: daysAgo(60), end: daysAgo(50) }, 'sig', undefined, undefined, 'api', '', { isCohortMode: true });
     
@@ -339,18 +339,19 @@ describe('Scenario 2: Cohort Slice Replacement', () => {
     expect(values.filter(v => isCohortModeValue(v)).length).toBe(1);
     expect(values.filter(v => !isCohortModeValue(v)).length).toBe(1);
     
-    // Replace the cohort
+    // Merge more cohort data: days 55-45 ago (overlaps and extends)
     const newCohortTs = dasRunner.fetchWindow(55, 45);
     values = mergeTimeSeriesIntoParameter(values, newCohortTs, { start: daysAgo(55), end: daysAgo(45) }, 'sig', undefined, undefined, 'api', '', { isCohortMode: true });
     
-    // Still 2 values: 1 window (unchanged) + 1 cohort (replaced)
+    // Still 2 values: 1 window (unchanged) + 1 cohort (merged)
     expect(values.length).toBe(2);
     
     const windowVal = values.find(v => !isCohortModeValue(v))!;
     const cohortVal = values.find(v => isCohortModeValue(v))!;
     
     expect(windowVal.window_from).toBe(daysAgo(14)); // Unchanged
-    expect(cohortVal.cohort_from).toBe(daysAgo(55)); // New
+    expect(cohortVal.cohort_from).toBe(daysAgo(60)); // Earliest from first fetch (merged)
+    expect(cohortVal.cohort_to).toBe(daysAgo(45));   // Latest from second fetch (merged)
   });
   
   it('refetch policy returns use_cache for mature cohort', () => {

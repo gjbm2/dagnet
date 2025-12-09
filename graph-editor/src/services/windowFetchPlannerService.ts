@@ -32,6 +32,8 @@ import {
 import { shouldRefetch, type LatencyConfig } from './fetchRefetchPolicy';
 import { extractSliceDimensions } from './sliceIsolation';
 import { hasFullSliceCoverageByHeader, isCohortModeValue, parseDate } from './windowAggregationService';
+import { computePathT95, getActiveEdges, type GraphForPath } from './statisticalEnhancementService';
+import { computeCohortRetrievalHorizon, type CohortHorizonResult } from './cohortRetrievalHorizon';
 import type { ParameterValue } from './paramRegistryService';
 import { sessionLogService } from './sessionLogService';
 import type { Graph, DateRange } from '../types';
@@ -73,6 +75,12 @@ export interface PlannerItem {
   
   /** For latency items: t95 or path_t95 used in staleness test */
   effectiveT95?: number;
+  
+  /** For cohort queries on latency edges: bounded retrieval window (Phase 3) */
+  boundedCohortWindow?: DateRange;
+  
+  /** For cohort queries: horizon calculation result (for logging/debugging) */
+  cohortHorizon?: CohortHorizonResult;
 }
 
 /** Analysis trigger context for logging */
@@ -142,6 +150,10 @@ class WindowFetchPlannerService {
   private cachedResult: PlannerResult | null = null;
   private cachedDSL: string | null = null;
   private cachedGraphHash: string | null = null;
+  
+  /** Cached path_t95 map for the current analysis (computed on-demand, not persisted) */
+  private cachedPathT95: Map<string, number> | null = null;
+  private cachedPathT95GraphHash: string | null = null;
   
   private constructor() {}
   
@@ -224,11 +236,21 @@ class WindowFetchPlannerService {
           continue;
         }
         
+        // For cohort queries on latency edges: compute bounded retrieval window
+        // This uses path_t95 to limit how far back we fetch cohorts
+        let cohortHorizon: CohortHorizonResult | undefined;
+        if (isCohortQuery && connectable.type === 'parameter') {
+          cohortHorizon = this.computeBoundedCohortWindow(connectable, window, graph);
+        }
+        
         if (needsFetch) {
           items.push({
             ...this.toBaseItem(connectable),
             classification: 'needs_fetch',
             missingDates: this.countMissingDates(connectable, window, dsl),
+            // Include bounded window for cohort queries (Phase 3)
+            boundedCohortWindow: cohortHorizon?.boundedWindow,
+            cohortHorizon,
           });
           continue;
         }
@@ -242,6 +264,9 @@ class WindowFetchPlannerService {
             stalenessReason: staleness.reason,
             retrievedAt: staleness.retrievedAt,
             effectiveT95: staleness.effectiveT95,
+            // Include bounded window for stale cohort refresh
+            boundedCohortWindow: cohortHorizon?.boundedWindow,
+            cohortHorizon,
           });
         } else {
           items.push({
@@ -375,7 +400,10 @@ class WindowFetchPlannerService {
       const allItemsToFetch = [...fetchItems, ...staleItems];
       if (allItemsToFetch.length > 0) {
         const fetchItemsList = allItemsToFetch.map(i => createFetchItem(
-          i.type, i.objectId, i.targetId, { paramSlot: i.paramSlot }
+          i.type, i.objectId, i.targetId, { 
+            paramSlot: i.paramSlot,
+            boundedCohortWindow: i.boundedCohortWindow 
+          }
         ));
         
         // Extract window for fetch
@@ -414,6 +442,8 @@ class WindowFetchPlannerService {
     this.cachedResult = null;
     this.cachedDSL = null;
     this.cachedGraphHash = null;
+    this.cachedPathT95 = null;
+    this.cachedPathT95GraphHash = null;
   }
   
   // ===========================================================================
@@ -450,6 +480,71 @@ class WindowFetchPlannerService {
       console.warn('[windowFetchPlannerService] Failed to parse DSL:', e);
       return null;
     }
+  }
+  
+  /**
+   * Get path_t95 for a specific edge.
+   * 
+   * If the edge already has path_t95 computed (from a recent fetch), use it.
+   * Otherwise, compute path_t95 on-demand for all edges (cached per analysis).
+   * 
+   * path_t95 is the cumulative latency from the anchor to this edge, used for
+   * cohort retrieval horizon decisions. For non-cohort queries, edge-local t95
+   * is sufficient.
+   */
+  private getPathT95ForEdge(edge: any, graph: Graph): number | undefined {
+    // If edge already has path_t95, use it (set by fetchDataService after fetch)
+    if (edge.p?.latency?.path_t95 !== undefined) {
+      return edge.p.latency.path_t95;
+    }
+    
+    // Compute on-demand if not already cached for this graph
+    const graphHash = this.computeGraphHash(graph);
+    if (this.cachedPathT95 === null || this.cachedPathT95GraphHash !== graphHash) {
+      this.cachedPathT95 = this.computePathT95ForGraph(graph);
+      this.cachedPathT95GraphHash = graphHash;
+    }
+    
+    // Look up edge in computed map
+    const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+    return this.cachedPathT95.get(edgeId);
+  }
+  
+  /**
+   * Compute path_t95 for all edges in the graph.
+   * This is a pure function that does not modify the graph.
+   */
+  private computePathT95ForGraph(graph: Graph): Map<string, number> {
+    if (!graph?.edges?.length) return new Map();
+    
+    // Build GraphForPath representation
+    const graphForPath: GraphForPath = {
+      nodes: (graph.nodes || []).map(n => ({
+        id: n.id || n.uuid || '',
+        type: n.type,
+      })),
+      edges: (graph.edges || []).map(e => ({
+        id: e.id,
+        uuid: e.uuid,
+        from: e.from,
+        to: e.to,
+        p: e.p ? {
+          latency: e.p.latency ? {
+            maturity_days: e.p.latency.maturity_days,
+            t95: e.p.latency.t95,
+            path_t95: e.p.latency.path_t95,
+          } : undefined,
+          mean: e.p.mean,
+        } : undefined,
+      })),
+    };
+    
+    // Get active edges (edges with non-zero probability)
+    const activeEdges = getActiveEdges(graphForPath);
+    if (activeEdges.size === 0) return new Map();
+    
+    // Compute path_t95
+    return computePathT95(graphForPath, activeEdges);
   }
   
   private getTodayUK(): string {
@@ -527,6 +622,54 @@ class WindowFetchPlannerService {
   }
   
   /**
+   * Compute bounded cohort retrieval window for a parameter item.
+   * 
+   * For cohort queries on latency edges, we use path_t95 (or t95 fallback)
+   * to bound how far back we retrieve cohorts. This prevents refetching
+   * mature historical cohorts that won't meaningfully change.
+   * 
+   * @param item - The fetch item (parameter only)
+   * @param window - The user's requested cohort window
+   * @param graph - The graph (for edge lookup and path_t95)
+   * @returns Cohort horizon result, or undefined if not applicable
+   */
+  private computeBoundedCohortWindow(
+    item: FetchItem,
+    window: DateRange,
+    graph: Graph
+  ): CohortHorizonResult | undefined {
+    if (item.type !== 'parameter') return undefined;
+    
+    const edge = graph.edges?.find(e => (e.uuid || e.id) === item.targetId);
+    if (!edge) return undefined;
+    
+    const latencyConfig = edge.p?.latency;
+    if (!latencyConfig?.maturity_days && !latencyConfig?.t95) {
+      // Non-latency edge: no bounding needed
+      return undefined;
+    }
+    
+    // Get existing coverage from file
+    const file = fileRegistry.getFile(`parameter-${item.objectId}`);
+    const existingDates = file?.data?.values?.[0]?.dates || [];
+    const retrievedAt = file?.data?.values?.[0]?.data_source?.retrieved_at;
+    
+    // Get path_t95 (computed on-demand if not present)
+    const pathT95 = this.getPathT95ForEdge(edge, graph);
+    
+    return computeCohortRetrievalHorizon({
+      requestedWindow: window,
+      pathT95,
+      edgeT95: latencyConfig.t95,
+      maturityDays: latencyConfig.maturity_days,
+      existingCoverage: {
+        dates: existingDates,
+        retrievedAt,
+      },
+    });
+  }
+  
+  /**
    * Check staleness for a covered item.
    * Pattern from dataOperationsService.ts lines 3646-3657.
    */
@@ -598,6 +741,9 @@ class WindowFetchPlannerService {
     // 
     // - Once query horizon is beyond t95/path_t95
     // → Treat as "reasonably mature" (covered_stable)
+    // 
+    // Phase 1: path_t95 is now computed on-demand for cohort queries,
+    // giving cumulative latency from the anchor rather than just edge-local t95.
     // ═══════════════════════════════════════════════════════════════════════
     if (refetchDecision.type === 'use_cache') {
       const retrievedAt = existingSlice.data_source?.retrieved_at;
@@ -609,9 +755,16 @@ class WindowFetchPlannerService {
       const daysSinceRetrieval = (Date.now() - retrievedDate.getTime()) / (24 * 60 * 60 * 1000);
       
       // Select effective t95 based on query mode
-      const effectiveT95 = isCohortQuery
-        ? (latencyConfig.path_t95 ?? latencyConfig.t95 ?? latencyConfig.maturity_days ?? 0)
-        : (latencyConfig.t95 ?? latencyConfig.maturity_days ?? 0);
+      // For cohort queries: use path_t95 (cumulative from anchor) if available
+      // For window queries: use edge-local t95
+      let effectiveT95: number;
+      if (isCohortQuery) {
+        // Try to get path_t95 (computed on-demand if not present on edge)
+        const pathT95 = this.getPathT95ForEdge(edge, graph);
+        effectiveT95 = pathT95 ?? latencyConfig.t95 ?? latencyConfig.maturity_days ?? 0;
+      } else {
+        effectiveT95 = latencyConfig.t95 ?? latencyConfig.maturity_days ?? 0;
+      }
       
       // Get query end date
       const queryEnd = window.end;

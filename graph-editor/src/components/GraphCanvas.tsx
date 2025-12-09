@@ -47,6 +47,10 @@ import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { NodeContextMenu } from './NodeContextMenu';
 import { EdgeContextMenu } from './EdgeContextMenu';
+import { useCopyPaste } from '../hooks/useCopyPaste';
+import { dataOperationsService } from '../services/dataOperationsService';
+import { fileRegistry } from '../contexts/TabContext';
+import toast from 'react-hot-toast';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
@@ -181,6 +185,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   }, [tabId, tabs]);
   const viewPrefs = useViewPreferencesContext();
   const scenariosContext = useScenariosContextOptional();
+  
+  // Copy-paste hook for paste node functionality
+  const { copiedItem } = useCopyPaste();
+  const copiedNode = copiedItem?.objectType === 'node' ? copiedItem : null;
   
   // Wrapped setGraph that automatically triggers query regeneration on topology changes
   const setGraph = useCallback(async (newGraph: any, oldGraph?: any) => {
@@ -4368,6 +4376,80 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 50);
   }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
 
+  // Paste node at specific position (from copy-paste clipboard)
+  const pasteNodeAtPosition = useCallback(async (x: number, y: number) => {
+    if (!graph) return;
+    
+    if (!copiedNode) {
+      toast.error('No node copied');
+      return;
+    }
+    
+    const nodeId = copiedNode.objectId;
+    const fileId = `node-${nodeId}`;
+    
+    // Check if the node file exists
+    const file = fileRegistry.getFile(fileId);
+    if (!file) {
+      toast.error(`Node file not found: ${nodeId}`);
+      return;
+    }
+    
+    const newUuid = crypto.randomUUID();
+    
+    // Create new node with the copied node ID attached
+    const newNode = {
+      uuid: newUuid,
+      id: nodeId, // Attach the copied node file
+      label: file.data?.label || nodeId, // Use label from file if available
+      absorbing: false,
+      layout: {
+        x: x,
+        y: y
+      }
+    };
+    
+    const nextGraph = structuredClone(graph);
+    nextGraph.nodes.push(newNode);
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    setGraph(nextGraph);
+    
+    if (typeof saveHistoryState === 'function') {
+      saveHistoryState('Paste node', newUuid);
+    }
+    setContextMenu(null);
+    
+    // Trigger "Get from file" to populate full node data
+    // Wait for graph update to complete first
+    setTimeout(async () => {
+      try {
+        await dataOperationsService.getNodeFromFile({
+          nodeId: nodeId,
+          graph: nextGraph,
+          setGraph: setGraph as any,
+          targetNodeUuid: newUuid,
+        });
+        toast.success(`Pasted node: ${nodeId}`);
+      } catch (error) {
+        console.error('[GraphCanvas] Failed to get node from file:', error);
+        toast.error('Failed to load node data from file');
+      }
+      
+      // Select the new node
+      setNodes((nodes) => 
+        nodes.map((node) => ({
+          ...node,
+          selected: node.id === newUuid
+        }))
+      );
+      onSelectedNodeChange(newUuid);
+    }, 100);
+  }, [graph, setGraph, copiedNode, saveHistoryState, setNodes, onSelectedNodeChange]);
+
   // Handle node right-click
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     event.preventDefault();
@@ -4810,6 +4892,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           >
             ➕ Add node
           </div>
+          {/* Paste node - only show when a node is copied */}
+          {copiedNode && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: '#333',
+                borderRadius: '2px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              📋 Paste node: {copiedNode.objectId}
+            </div>
+          )}
         </div>
       )}
       

@@ -77,48 +77,70 @@ The corrected design should:
   - `p.forecast.mean` answers: “What should we expect eventually, based on mature data and/or broader windows?”
   - `p.mean` answers: “Given lag and what we’ve seen, where do we think this window will land?”
 
-Blending Strategy (Conceptual)
-------------------------------
+Blending Strategy (Concrete Spec)
+---------------------------------
 
-Define:
+We want p.mean to be an explicit weighted average of the evidence and the forecast:
 
-- \( p_\text{evidence} \) – evidence mean for the query window.
-- \( p_\text{forecast} \) – baseline forecast (either LAG p∞ when available, or the file’s window-level forecast).
+- \( p_\text{mean} = w_\text{evidence} \cdot p_\text{evidence} + (1 - w_\text{evidence}) \cdot p_\text{forecast} \).
+
+with a weight \( w_\text{evidence} \in [0, 1] \) that:
+
+- Stays **small** when completeness is low and the window is immature, so that p.mean is anchored near the forecast.
+- Grows towards **1** as completeness approaches 1 and the window has enough mature observations, so that p.mean converges towards the raw evidence.
+- Adapts to the **information density of the edge** (high-volume vs low-volume) so that a “one size fits all” threshold is not hard-coded.
+
+Definitions:
+
+- \( p_\text{evidence} \) – evidence mean for the query window, already computed for `p.evidence.mean` (k / n over the query window).
+- \( p_\text{forecast} \) – baseline forecast (either from the window-level `forecast` scalar or, if there is no window slice, from LAG’s p∞ fallback).
 - \( c \in [0, 1] \) – completeness for the query window from the LAG engine.
-- \( n \) – effective sample size in the query window (total n across cohorts).
+- \( n_q \) – total sample size in the query window (sum of n over included cohorts or days).
+- \( n_\text{baseline} \) – baseline mature sample size for the edge (derived from the data that produced the forecast).
+- \( \lambda \in (0, 1] \) – a single global calibration constant (fixed in design, not user-facing) that scales the strength of the forecast baseline.
 
-Then define a weight \( w_\text{evidence}(c, n) \in [0, 1] \) with the following properties:
+We then define an **edge-specific prior strength**:
 
-- For low completeness, the weight on evidence should be small and p.mean should be pulled **towards forecast**.
-- As completeness approaches 1 (and n is reasonable), the weight on evidence should approach 1 so that p.mean converges to p.evidence.
-- For extremely small n, even at moderate completeness, the weight on evidence should be down-weighted to avoid over-trusting noise.
+- \( m_0(\text{edge}) = \lambda \cdot n_\text{baseline} \).
 
-A simple, monotone scheme that obeys these properties:
+and an **effective mature sample size** for the query window:
 
-- Base weight on completeness:
+- \( n_\text{eff} = c \cdot n_q \).
 
-  - \( w_0 = c^\alpha \) with \( \alpha > 1 \) (for example, \( \alpha = 2 \)).
-  - This makes evidence contribute slowly at low c and accelerate as cohorts mature.
+The evidence weight is:
 
-- Optionally modulate by sample size:
+- \( w_\text{evidence} = \dfrac{n_\text{eff}}{m_0(\text{edge}) + n_\text{eff}} = \dfrac{c \cdot n_q}{\lambda \cdot n_\text{baseline} + c \cdot n_q} \).
 
-  - Clamp an evidence confidence factor based on n:
-    - \( w_n = \min(1, n / n_0) \) with \( n_0 \) a tuning constant (e.g. around 100).
+This has the desired properties:
 
-- Combined weight:
+- When completeness is low (small c), \( n_\text{eff} \) is small even if raw n is moderate, so \( w_\text{evidence} \) is small and p.mean stays close to p.forecast.
+- As completeness approaches 1 and the query window accumulates more mature observations, \( n_\text{eff} \) grows and \( w_\text{evidence} \) smoothly approaches 1, so p.mean converges towards p.evidence.
+- For high-volume edges (large \( n_\text{baseline} \)), \( m_0(\text{edge}) \) is large and the forecast behaves as a strong prior; for low-volume edges, \( m_0(\text{edge}) \) is smaller and new evidence dominates earlier.
 
-  - \( w_\text{evidence} = w_0 \times w_n \).
+Concrete derivation of \( n_\text{baseline} \):
 
-Then:
+- **Window-based forecast (normal path):**
+  - When `p.forecast.mean` is sourced from a `window()` slice in the parameter file (the primary path today), set \( n_\text{baseline} \) to the header n of that window slice (its total mature sample size at fetch time).
+  - If there are multiple candidate window slices, use the same “best window” that was chosen to provide the forecast scalar (most recent by `retrieved_at` / `window_to` with a non-null `forecast`).
 
-- When a meaningful forecast is available:
+- **Cohort-based p∞ fallback (no window baseline):**
+  - When there is no suitable window slice and `p.forecast.mean` was obtained by running `computeEdgeLatencyStats` on cohort data (cohort-only forecast fallback), set \( n_\text{baseline} \) to the sum of n across the **mature cohorts** that the latency engine used to estimate p∞.
+  - “Mature cohorts” here follows the same maturity criteria as in the latency engine (age relative to `maturity_days`, t95 etc.); the implementation should reuse whatever subset of cohorts `computeEdgeLatencyStats` already identifies as mature for p∞ estimation.
 
-  - \( p_\text{mean} = w_\text{evidence} \cdot p_\text{evidence} + (1 - w_\text{evidence}) \cdot p_\text{forecast} \).
+Calibration:
 
-- When no usable forecast exists (no window forecast and no reliable p∞ from LAG):
+- We choose a single global \( \lambda \) and fix it in the design.
+- **Starting value: \( \lambda = 0.25 \).**
+- Rationale: with the shipped-to-delivered sample data (\(c = 0.6\), \(n_q = 97\), \(n_\text{baseline} = 412\)), this yields \(w_\text{evidence} \approx 0.36\), placing p.mean at ~88% — materially above evidence (71%) and below forecast (98%).
+- This constant (and any other statistical tuning constants) should be defined in a dedicated constants file:
+  - **Location:** `graph-editor/src/constants/statisticalConstants.ts`
+  - **Naming:** `FORECAST_BLEND_LAMBDA = 0.25`
+  - The file should include a comment explaining what the constant controls and referencing this design doc.
 
-  - Fall back to the current behaviour:
-    - \( p_\text{mean} = p_\text{evidence} \) (or the simple aggregate mean from the enhancement step).
+Fallback behaviour when no usable forecast exists:
+
+- If there is **no usable forecast** (no window-level `forecast` and no reliable p∞ from LAG), we keep the existing behaviour:
+  - \( p_\text{mean} = p_\text{evidence} \) (or the simple aggregate mean from the enhancement step for non-latency edges).
 
 Interpretation:
 
@@ -160,15 +182,26 @@ Concrete Implementation Changes (High Level)
      - Treat `latencyStats` as:
        - A source of lag diagnostics (`t95`, completeness).
        - An optional source of a baseline p∞ (when it has enough mature cohorts).
-
-   - Introduce a clear blending step when building `aggregatedValue`:
-     - Compute or reuse:
-       - Evidence mean (`p_evidence`).
-       - Forecast baseline (`p_forecast`), choosing from:
-         - LAG’s `p_infinity` if `forecast_available` is true.
-         - The parameter file’s window-level `forecast` if present.
-     - Compute completeness (`c`) and effective n from the aggregation results.
-     - Combine them via the blending function described above to obtain the final `p.mean` for this query.
+ 
+   - Introduce an explicit **blending step** when building `aggregatedValue` for latency-enabled edges:
+     - Ensure that evidence scalars have been attached:
+       - `p_evidence` is taken from the evidence mean already computed for `p.evidence.mean` (k / n over the query window).
+       - The query sample size \( n_q \) is the same n used to compute that evidence mean.
+     - Ensure that a forecast baseline is available:
+       - Prefer the parameter file’s window-level `forecast` scalar when present (primary path).
+       - If no suitable window slice exists, use LAG’s `p_infinity` when `forecast_available` is true (cohort-based fallback).
+     - Derive completeness and effective n:
+       - Take completeness \( c \) from the LAG latency stats for the query window.
+       - Compute \( n_\text{eff} = c \cdot n_q \).
+     - Derive the edge-specific prior strength:
+       - If the forecast came from a window slice, set \( n_\text{baseline} \) to that slice’s header n.
+       - If the forecast came from a cohort-based p∞ fallback, set \( n_\text{baseline} \) to the sum of n over the mature cohorts that contributed to p∞.
+       - Compute \( m_0(\text{edge}) = \lambda \cdot n_\text{baseline} \) using the globally configured \( \lambda \).
+     - Compute the evidence weight:
+       - \( w_\text{evidence} = \dfrac{n_\text{eff}}{m_0(\text{edge}) + n_\text{eff}} \), clamped to [0, 1].
+     - Compute the final blended mean:
+       - \( p_\text{mean} = w_\text{evidence} \cdot p_\text{evidence} + (1 - w_\text{evidence}) \cdot p_\text{forecast} \).
+     - Persist this blended `p.mean` as the canonical edge probability for the query in the param pack, instead of the raw LAG `p_mean`.
 
 2. **StatisticalEnhancementService – keep p_mean internal**
 
