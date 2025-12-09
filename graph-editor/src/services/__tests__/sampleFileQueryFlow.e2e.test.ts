@@ -256,13 +256,17 @@ describe('Sample File Query Flow E2E', () => {
       console.log('[E2E TEST] Param pack keys:', Object.keys(paramPack).filter(k => k.includes('checkout-to-payment')));
       
       // === CORE FIELDS (IN param pack) ===
-      // p.mean is the BLENDED probability (from slice, already computed by Formula A)
-      expect(paramPack['e.checkout-to-payment.p.mean']).toBe(CHECKOUT_TO_PAYMENT_COHORT.mean);
-      expect(paramPack['e.checkout-to-payment.p.stdev']).toBe(CHECKOUT_TO_PAYMENT_COHORT.stdev);
+      // p.mean is the BLENDED probability (evidence/forecast blend per forecast-fix.md)
+      // With high completeness (0.92), p.mean should be close to evidence but between evidence and forecast
+      const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_COHORT.k / CHECKOUT_TO_PAYMENT_COHORT.n;
+      const pMean = paramPack['e.checkout-to-payment.p.mean'];
+      expect(pMean).toBeCloseTo(expectedEvidenceMean, 2); // Close to evidence at high completeness
+      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_COHORT.forecast));
+      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_COHORT.forecast));
+      expect(paramPack['e.checkout-to-payment.p.stdev']).toBeCloseTo(CHECKOUT_TO_PAYMENT_COHORT.stdev, 2);
       
       // === EVIDENCE.MEAN (IN param pack - RAW k/n) ===
       // This comes from UpdateManager mapping: values[latest].evidence.mean -> p.evidence.mean
-      const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_COHORT.k / CHECKOUT_TO_PAYMENT_COHORT.n;
       expect(paramPack['e.checkout-to-payment.p.evidence.mean']).toBeCloseTo(expectedEvidenceMean, 3);
       
       // === EVIDENCE.STDEV (IN param pack - binomial uncertainty) ===
@@ -285,8 +289,8 @@ describe('Sample File Query Flow E2E', () => {
       expect(paramPack['e.checkout-to-payment.p.latency.mean_lag_days']).toBeUndefined();
       
       // === MATHEMATICAL VERIFICATION ===
-      // For this MATURE cohort (completeness=0.92), blended p.mean should be close to evidence
-      expect(Math.abs(expectedEvidenceMean - CHECKOUT_TO_PAYMENT_COHORT.mean)).toBeLessThan(0.01);
+      // For this MATURE cohort (completeness=0.92), blended p.mean should be very close to evidence
+      expect(Math.abs(pMean - expectedEvidenceMean)).toBeLessThan(0.01);
     });
 
     it('should fail cleanly for a cohort() window completely outside sample coverage (\"today\"-like)', async () => {
@@ -560,11 +564,16 @@ describe('Sample File Query Flow E2E', () => {
       const paramPack = flattenParams(params);
       
       // === CORE FIELDS (IN param pack) ===
-      expect(paramPack['e.checkout-to-payment.p.mean']).toBe(CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.mean);
-      expect(paramPack['e.checkout-to-payment.p.stdev']).toBe(CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.stdev);
+      // p.mean is the BLENDED probability (evidence/forecast blend per forecast-fix.md)
+      // With high completeness (0.94), p.mean should be close to evidence but between evidence and forecast
+      const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.k / CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.n;
+      const pMean = paramPack['e.checkout-to-payment.p.mean'];
+      expect(pMean).toBeCloseTo(expectedEvidenceMean, 2); // Close to evidence at high completeness
+      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.forecast));
+      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.forecast));
+      expect(paramPack['e.checkout-to-payment.p.stdev']).toBeCloseTo(CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.stdev, 2);
       
       // === EVIDENCE.MEAN (IN param pack - RAW k/n) ===
-      const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.k / CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.n;
       expect(paramPack['e.checkout-to-payment.p.evidence.mean']).toBeCloseTo(expectedEvidenceMean, 3);
       
       // === EVIDENCE.STDEV (IN param pack - binomial uncertainty) ===
@@ -584,8 +593,8 @@ describe('Sample File Query Flow E2E', () => {
       expect(paramPack['e.checkout-to-payment.p.evidence.k']).toBeUndefined();
       
       // === MATHEMATICAL VERIFICATION ===
-      // For context-filtered data (completeness=0.94), evidence should be close to blended
-      expect(Math.abs(expectedEvidenceMean - CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.mean)).toBeLessThan(0.01);
+      // For context-filtered data (completeness=0.94), blended p.mean should be very close to evidence
+      expect(Math.abs(pMean - expectedEvidenceMean)).toBeLessThan(0.01);
     });
   });
   

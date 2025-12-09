@@ -23,6 +23,7 @@ import {
   LATENCY_EPSILON,
   LATENCY_T95_PERCENTILE,
 } from '../constants/latency';
+import { RECENCY_HALF_LIFE_DAYS } from '../constants/statisticalConstants';
 
 export interface EnhancedAggregation {
   method: string;
@@ -631,36 +632,64 @@ export function computeT95(fit: LagDistributionFit, maturityDays: number): numbe
 }
 
 // =============================================================================
-// P-Infinity Estimation (§5.6)
+// P-Infinity Estimation (§5.6, Appendix C.1)
 // =============================================================================
+
+/**
+ * Compute recency weight for a cohort.
+ * 
+ * w = exp(-age / H)
+ * 
+ * where H is the half-life in days (RECENCY_HALF_LIFE_DAYS).
+ * A cohort H days old has half the weight of a brand-new cohort.
+ * 
+ * @param age - Cohort age in days
+ * @returns Weight in (0, 1]
+ */
+function computeRecencyWeight(age: number): number {
+  return Math.exp(-age / RECENCY_HALF_LIFE_DAYS);
+}
 
 /**
  * Estimate asymptotic conversion probability from mature cohorts.
  * 
- * p_∞ = Σ(k_i) / Σ(n_i) for cohorts where age > t95
+ * Uses recency-weighted averaging (design.md Appendix C.1):
+ *   p_∞ = Σ(w_i × k_i) / Σ(w_i × n_i)
  * 
- * See design.md §5.6
+ * where w_i = exp(-age_i / H) and H = RECENCY_HALF_LIFE_DAYS.
+ * 
+ * This favours recent mature cohorts over older ones, making p_∞ responsive
+ * to changes in conversion behaviour while still being based on mature data.
+ * 
+ * See design.md §5.6, Appendix C.1
  * 
  * @param cohorts - Array of cohort data
  * @param t95 - Maturity threshold (cohorts older than this are "mature")
  * @returns Asymptotic probability, or undefined if no mature cohorts
  */
 export function estimatePInfinity(cohorts: CohortData[], t95: number): number | undefined {
-  // Filter to mature cohorts (age > t95)
+  // Filter to mature cohorts (age >= t95)
   const matureCohorts = cohorts.filter(c => c.age >= t95);
   
   if (matureCohorts.length === 0) {
     return undefined;
   }
 
-  const totalN = matureCohorts.reduce((sum, c) => sum + c.n, 0);
-  const totalK = matureCohorts.reduce((sum, c) => sum + c.k, 0);
+  // Recency-weighted sums (design.md Appendix C.1)
+  let weightedN = 0;
+  let weightedK = 0;
+  
+  for (const c of matureCohorts) {
+    const w = computeRecencyWeight(c.age);
+    weightedN += w * c.n;
+    weightedK += w * c.k;
+  }
 
-  if (totalN === 0) {
+  if (weightedN === 0) {
     return undefined;
   }
 
-  return totalK / totalN;
+  return weightedK / weightedN;
 }
 
 // =============================================================================

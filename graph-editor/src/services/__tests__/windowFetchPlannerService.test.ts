@@ -877,5 +877,8 @@ describe('WindowFetchPlannerService', () => {
       expect(callCount2).toBeGreaterThan(callCount1);
     });
   });
+
+  // (No explicit executeFetchPlan tests yet – Planner analysis and fetch plumbing
+  // are covered via fetchDataService and cohort horizon integration tests.)
 });
 

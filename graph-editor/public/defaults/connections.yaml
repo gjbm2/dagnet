@@ -420,10 +420,11 @@ connections:
           # === LAG (Latency) Data Extraction ===
           # These fields are extracted for latency-tracked edges (cohort mode)
           # Per-day transition time arrays (parallel to dayFunnels.series)
+          # NOTE: Extract .series to get array format expected by JSONata transform
           - name: day_median_trans_times
-            jmes: "data[0].dayMedianTransTimes"
+            jmes: "data[0].dayMedianTransTimes.series"
           - name: day_avg_trans_times
-            jmes: "data[0].dayAvgTransTimes"
+            jmes: "data[0].dayAvgTransTimes.series"
           # Aggregate transition times per step
           - name: median_trans_times
             jmes: "data[0].medianTransTimes"

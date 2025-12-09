@@ -20,6 +20,7 @@ import { gitService } from './services/gitService';
 import { getEditorComponent } from './components/editors';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useCommitHandler } from './hooks/useCommitHandler';
+import { CopyPasteProvider } from './hooks/useCopyPaste';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
@@ -1879,7 +1880,9 @@ export function AppShell() {
           <TabProvider>
             <NavigatorProvider>
               <VisibleTabsProvider>
-                <AppShellContent />
+                <CopyPasteProvider>
+                  <AppShellContent />
+                </CopyPasteProvider>
               </VisibleTabsProvider>
             </NavigatorProvider>
           </TabProvider>

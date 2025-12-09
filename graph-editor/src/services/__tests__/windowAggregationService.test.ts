@@ -435,8 +435,11 @@ describe('WindowAggregationService', () => {
           query_signature: 'existing-sig'
         }
       ];
+      // Multiple dates to test proper cohort range
       const newTimeSeries = [
-        { date: '2024-11-01', n: 1000, k: 300, p: 0.3 },
+        { date: '2024-11-01', n: 500, k: 150, p: 0.3 },
+        { date: '2024-11-15', n: 500, k: 150, p: 0.3 },
+        { date: '2024-11-30', n: 500, k: 150, p: 0.3 },
       ];
       const newWindow = { start: '1-Nov-24', end: '30-Nov-24' };
       
@@ -455,8 +458,9 @@ describe('WindowAggregationService', () => {
       // Should have both existing and new values
       expect(result.length).toBe(2);
       expect(result[0].window_from).toBe('1-Oct-24'); // Existing value preserved
-      expect(result[1].cohort_from).toBe('1-Nov-24'); // New value with cohort dates
-      expect(result[1].cohort_to).toBe('30-Nov-24');
+      // Cohort dates reflect actual data range
+      expect(result[1].cohort_from).toBe('1-Nov-24'); // First date with data
+      expect(result[1].cohort_to).toBe('30-Nov-24');  // Last date with data
     });
   });
 });

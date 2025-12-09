@@ -3,7 +3,7 @@ import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
 import { NavigatorControls, FilterMode, SortMode, GroupMode } from './NavigatorControls';
-import { ObjectTypeSection } from './ObjectTypeSection';
+import { ObjectTypeSection, NavigatorEntry } from './ObjectTypeSection';
 import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
 import { NavigatorSectionContextMenu } from '../NavigatorSectionContextMenu';
 import { RepositoryItem, ObjectType } from '../../types';
@@ -11,28 +11,11 @@ import { registryService, RegistryItem } from '../../services/registryService';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
 import './Navigator.css';
 
-/**
- * Navigator Entry - Internal representation with all state flags
- */
-interface NavigatorEntry {
-  id: string;
-  fileId: string; // Full fileId (e.g., 'node-household-created') used as unique key
-  name: string;
-  type: ObjectType;
-  hasFile: boolean;
-  isLocal: boolean;
-  inIndex: boolean;
-  isDirty: boolean;
-  isOpen: boolean;
-  isOrphan: boolean;
-  tags?: string[];
-  path?: string;
+// NavigatorEntry is imported from ObjectTypeSection
+// Extended locally with lastModified/lastOpened for sorting
+interface NavigatorEntryWithMeta extends NavigatorEntry {
   lastModified?: number;
   lastOpened?: number;
-  // Type-specific metadata for sub-categorization
-  parameter_type?: 'probability' | 'cost_gbp' | 'labour_cost' | 'standard_deviation';
-  node_type?: string;
-  case_type?: string;
 }
 
 /**
@@ -142,7 +125,7 @@ export function NavigatorContent() {
         entriesMap.set(fileId, { // CRITICAL: Use fileId as map key to avoid type collisions
           id: item.id,
           fileId: fileId,
-          name: item.name || item.id,
+          name: item.id, // Always use id for consistency (friendly name goes in tooltip)
           type: item.type,
           hasFile: item.hasFile,
           isLocal: item.isLocal,
@@ -167,7 +150,6 @@ export function NavigatorContent() {
     addRegistryItems(registryItems.cases);
     
     addRegistryItems(registryItems.nodes);
-    
     addRegistryItems(registryItems.events);
     
     // 2. Add graph files from NavigatorContext (graphs don't have indexes)
@@ -354,8 +336,10 @@ export function NavigatorContent() {
     }
   };
 
-  const handleItemContextMenu = (entry: NavigatorEntry, x: number, y: number) => {
-    setContextMenu({ item: convertToRepositoryItem(entry), x, y });
+  // Entry is passed directly from the component
+  const handleItemContextMenu = (entry: NavigatorEntry, event: React.MouseEvent) => {
+    const item = convertToRepositoryItem(entry);
+    setContextMenu({ item, x: event.clientX, y: event.clientY });
   };
 
   const handleSectionContextMenu = (type: ObjectType, x: number, y: number) => {
