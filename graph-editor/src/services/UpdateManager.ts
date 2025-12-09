@@ -1835,6 +1835,18 @@ export class UpdateManager {
         targetField: 'p.evidence.debug_trace',
         condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.data_source?.debug_trace
       },
+      // LAG FIX (lag-fixes.md §4.3): Map evidence scalars to edge
+      // evidence.mean = raw observed rate (k/n), evidence.stdev = binomial uncertainty
+      { 
+        sourceField: 'values[latest].evidence.mean', 
+        targetField: 'p.evidence.mean',
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.evidence?.mean !== undefined
+      },
+      { 
+        sourceField: 'values[latest].evidence.stdev', 
+        targetField: 'p.evidence.stdev',
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.evidence?.stdev !== undefined
+      },
       
       // LAG: Latency CONFIG fields (file → graph, bidirectional)
       { 

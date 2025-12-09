@@ -2380,18 +2380,34 @@ interface ProbabilityParam {
 
 **Principle:** Scenario param packs contain **values you might vary in a what-if analysis**, not structural/modelling specifications. Changing `distribution` from "beta" to "normal" is a modelling decision, not a scenario.
 
-**Change required:**
+**Change required (updated to match nested DSL conventions):**
+
+In scenario param packs, LAG fields are represented as **nested objects** under `p.forecast` and `p.evidence`, to align with the human‑readable notation used elsewhere in the system (e.g. `e.edge-id.p.forecast.mean`, `e.edge-id.p.evidence.mean`):
 
 ```typescript
-// CLEANED UP
+// CLEANED UP (conceptual shape – see src/types/scenarios.ts)
 interface ProbabilityParam {
   mean?: number;
   stdev?: number;
-  // NEW (LAG):
-  forecast_mean?: number;
-  forecast_stdev?: number;
-  evidence_mean?: number;
-  evidence_stdev?: number;
+
+  // NEW (LAG) – scenario-specific baseline from window() slices:
+  forecast?: {
+    mean?: number;   // HRN: e.<edge>.p.forecast.mean
+    stdev?: number;  // HRN: e.<edge>.p.forecast.stdev
+  };
+
+  // NEW (LAG) – scenario-specific observed rate from evidence:
+  evidence?: {
+    mean?: number;   // HRN: e.<edge>.p.evidence.mean
+    stdev?: number;  // HRN: e.<edge>.p.evidence.stdev
+  };
+
+  // NEW (LAG) – latency display scalars (bead / lag visuals):
+  latency?: {
+    median_lag_days?: number; // HRN: e.<edge>.p.latency.median_lag_days
+    completeness?: number;    // HRN: e.<edge>.p.latency.completeness
+    // (t95 is stored on p.latency at graph level and may be included in packs where needed)
+  };
 }
 
 interface CostParam {
@@ -2414,15 +2430,16 @@ Scenarios can each have their own **query DSL** (e.g., `window(-90d:-60d)`, `coh
 
 **Per-scenario param packs must contain, per edge:**
 
-- `p.mean`, `p.stdev` — scenario-specific probability and uncertainty (already present).
-- `forecast_mean`, `forecast_stdev` — scenario-specific mature baseline (from window() slices for that scenario's fetch DSL).
-- `evidence_mean`, `evidence_stdev` — scenario-specific observed rate (from cohort/window evidence for that scenario's fetch DSL).
+- `p.mean`, `p.stdev` — scenario-specific blended probability and uncertainty (already present).
+- `p.forecast.mean`, `p.forecast.stdev` — scenario-specific mature baseline (from window() slices for that scenario's fetch DSL).
+- `p.evidence.mean`, `p.evidence.stdev` — scenario-specific observed rate (from cohort/window evidence for that scenario's fetch DSL).
+- `p.latency.median_lag_days`, `p.latency.completeness` (and, where included, `p.latency.t95`) — scenario-specific latency display scalars.
 
-These four lag fields are sufficient to reconstruct, per scenario and per edge:
+These nested lag fields are sufficient to reconstruct, per scenario and per edge:
 
-- `p.evidence` = `evidence_mean` (inner solid width).
-- `p.forecast` = `forecast_mean` (outer forecast-only width in F mode).
-- `p.mean` = scenario's blended value (outer width in F+E mode; can be `p.mean` itself or recomputed from forecast/evidence if needed).
+- `p.evidence` = object with `mean`/`stdev` taken from `p.evidence.*` (inner solid width).
+- `p.forecast` = object with `mean`/`stdev` taken from `p.forecast.*` (outer forecast-only width in F mode).
+- `p.mean` = scenario's blended value (outer width in F+E mode; can be taken directly from `p.mean` or, if needed, recomputed from forecast/evidence).
 
 **Scenario regeneration flow with latency:**
 
@@ -2438,12 +2455,12 @@ These four lag fields are sufficient to reconstruct, per scenario and per edge:
 3. **Extract into ScenarioParams:**
    - `GraphParamExtractor` + `extractDiffParams` include:
      - `p.mean`, `p.stdev` (as today).
-     - `forecast_mean`, `forecast_stdev`, `evidence_mean`, `evidence_stdev` where they differ from Base or are newly available.
+     - `p.forecast.mean`, `p.forecast.stdev`, `p.evidence.mean`, `p.evidence.stdev`, and the latency scalars where they differ from Base or are newly available.
 4. **Render-time composition:**
    - ScenariosContext composes `Scenario.params` over the Base graph.
    - For each visible scenario layer and edge, the renderer reads from the composed params:
      - Scenario `p.mean` / `p.stdev` for edge width & CI.
-     - Scenario `forecast_mean` / `evidence_mean` to derive `p.forecast` and `p.evidence` for that layer's latency display.
+     - Scenario `p.forecast.mean` / `p.evidence.mean` to derive `p.forecast` and `p.evidence` for that layer's latency display.
    - The base latency machinery (Formula A, completeness, lag fit) is **not** rerun at render time for scenarios; it has already been baked into scenario param packs at regeneration.
 
 **Important constraints:**

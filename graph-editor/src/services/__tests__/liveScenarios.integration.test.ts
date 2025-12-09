@@ -391,13 +391,21 @@ describe('Live Scenarios Integration Tests', () => {
         edges: [{ uuid: 'edge-1', p: { id: 'param-1', connection: {} } }],
       });
       
-      // First DSL cached, second needs fetch
-      let callCount = 0;
-      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        callCount++;
-        return callCount === 1 ? { data: { connection: {} } } : null;
+      // Param file has a single window slice covering 1–7 Nov.
+      // - First DSL (1–7 Nov) is fully covered → no fetch needed.
+      // - Second DSL (8–14 Nov) lies outside header range → needs fetch.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          connection: {},
+          values: [
+            {
+              sliceDSL: 'window(1-Nov-25:7-Nov-25)',
+              window_from: '1-Nov-25',
+              window_to: '7-Nov-25',
+            },
+          ],
+        },
       });
-      (calculateIncrementalFetch as ReturnType<typeof vi.fn>).mockReturnValue({ needsFetch: false });
       
       const results = checkMultipleDSLsNeedFetch([
         'window(1-Nov-25:7-Nov-25)',

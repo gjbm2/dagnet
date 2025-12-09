@@ -404,6 +404,13 @@ export interface DateRange {
 export interface Evidence {
   n?: number; // Sample size (total trials)
   k?: number; // Number of successes
+  
+  // === Query-time scalars (computed from n/k, see design.md §4.8) ===
+  /** Evidence probability: raw observed rate = k/n (query-time scalar) */
+  mean?: number;
+  /** Evidence uncertainty: binomial stdev for the evidence rate */
+  stdev?: number;
+  
   window_from?: string; // Time window start (ISO date-time)
   window_to?: string; // Time window end (ISO date-time)
   retrieved_at?: string; // When data was retrieved (ISO date-time)

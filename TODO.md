@@ -9,6 +9,24 @@
 
 ---
 
+## Query/Fetch System Issues (URGENT)
+
+Window fetch logic is still a complete fucking trainwreck. we're going to have to rip it out and completely re-think it because it's been coded into a fucking hole by stupid fucking gpt.
+
+docs/current/project-lag/auto-fetch-redux.md
+
+### 1. Sample data files need complete daily data & sensible completeness datasets
+The sample files in `/param-registry/test/` have sparse daily data (only a few representative dates). This makes testing impossible. Need to populate with complete daily entries for the cohort date ranges, OR ensure aggregate values work properly without daily data.
+
+### 2. Silent query failures are unacceptable
+When a query fails to fetch/aggregate, there is NO UI feedback whatsoever. The user sees nothing happen. This is unforgivable UX. Must add:
+- Toast notification when query fails
+- Error state in WindowSelector
+- Session log entries for failed queries
+- Clear indication of WHY it failed (no data, no connection, slice mismatch, etc.)
+
+---
+
 - Edge bead tooltips: add hover tooltips explaining each bead (latency: median lag + completeness; probability; costs)
 
 - Could we / should we show a wide edge that fades out x% of the way along the edge (to indicate completeness)?

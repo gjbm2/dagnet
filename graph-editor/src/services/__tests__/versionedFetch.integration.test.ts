@@ -338,6 +338,8 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
     it('should only count dates from the correct context slice', () => {
       
       // Simulate param file with data for multiple contexts
+      // NOTE: Do NOT include `mean`/`n` - that would trigger the FAST PATH
+      // which only checks "does aggregate exist?" not "what dates are missing?"
       const paramFileData = {
         values: [
           {
@@ -345,14 +347,12 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
             dates: ['2025-10-01', '2025-10-02', '2025-10-03'],
             n_daily: [100, 100, 100],
             k_daily: [50, 50, 50],
-            mean: 0.5, n: 300, k: 150,
           },
           {
             sliceDSL: 'context(channel:google)',
             dates: ['2025-10-02'], // Only has Oct 2, missing Oct 1 and Oct 3
             n_daily: [200],
             k_daily: [100],
-            mean: 0.5, n: 200, k: 100,
           }
         ]
       };
@@ -500,6 +500,7 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
     
     it('should require fetch when one contextAny slice is missing a date', () => {
       // Same as above but google is missing 30-Nov-25
+      // NOTE: Do NOT include `mean`/`n` - that would trigger the FAST PATH
       const paramFileData = {
         values: [
           {
@@ -507,14 +508,12 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
             dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25'], // Missing 30-Nov-25!
             n_daily: [20, 23, 10, 16, 19, 24],
             k_daily: [9, 12, 8, 12, 12, 17],
-            mean: 0.648, n: 112, k: 70,
           },
           {
             sliceDSL: 'context(channel:influencer)',
             dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25', '27-Nov-25', '28-Nov-25', '29-Nov-25', '30-Nov-25'],
             n_daily: [143, 64, 43, 201, 553, 537, 25],
             k_daily: [68, 40, 20, 117, 270, 286, 15],
-            mean: 0.52, n: 1566, k: 816,
           },
         ]
       };
@@ -537,6 +536,7 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
     
     it('should require fetch when one entire contextAny slice is missing', () => {
       // google exists but influencer doesn't exist at all
+      // NOTE: Do NOT include `mean`/`n` - that would trigger the FAST PATH
       const paramFileData = {
         values: [
           {
@@ -544,7 +544,6 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
             dates: ['24-Nov-25', '25-Nov-25', '26-Nov-25'],
             n_daily: [20, 23, 10],
             k_daily: [9, 12, 8],
-            mean: 0.648, n: 53, k: 29,
           },
           // No influencer data at all!
         ]
