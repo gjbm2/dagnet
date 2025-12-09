@@ -10,7 +10,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import type { DateRange } from '../types';
 import { dataOperationsService } from '../services/dataOperationsService';
-import { calculateIncrementalFetch } from '../services/windowAggregationService';
+import { calculateIncrementalFetch, hasFullSliceCoverageByHeader } from '../services/windowAggregationService';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
 import { FileText, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
@@ -40,6 +40,8 @@ interface CoverageCacheEntry {
   dslKey: string; // DSL string (contains window + context)
   hasMissingData: boolean;
   hasAnyConnection: boolean;
+  /** True when there are coverage gaps in file-only parameters (no connection, so cannot be fetched) */
+  hasUnfetchableGaps: boolean;
   paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'labour_cost' }>;
   graphHash: string; // Hash of graph structure to invalidate when graph changes
 }
@@ -128,6 +130,17 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const contextButtonRef = useRef<HTMLButtonElement>(null);
   const contextDropdownRef = useRef<HTMLDivElement>(null);
   const windowSelectorRef = useRef<HTMLDivElement>(null);
+
+  // DEBUG: Log core state whenever WindowSelector renders
+  useEffect(() => {
+    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
+    console.log('[WindowSelector] RENDER snapshot:', {
+      authoritativeDSL,
+      graphCurrentQueryDSL: graph?.currentQueryDSL,
+      window,
+      lastAggregatedWindow,
+    });
+  }, [graphStore, graph?.currentQueryDSL, window, lastAggregatedWindow]);
   
   // Calculate default window dates (last 7 days) - needed early for initialization
   const defaultWindowDates = useMemo(() => {
@@ -417,26 +430,21 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     // Note: lastAggregatedDSLRef is set directly when aggregation happens
   }, [lastAggregatedWindow]);
   
-  // Handle button appearance/disappearance animations
+  // Handle button appearance/disappearance animations.
+  // NOTE: The fetch button is now always rendered when the graph has parameter
+  // files; this effect only controls the shimmer animation state, not visibility.
   useEffect(() => {
-    if (needsFetch && !showButton) {
-      // Button appearing: show it with fade-in
-      setShowButton(true);
+    if (needsFetch) {
       // Trigger shimmer after a short delay to ensure button is visible
+      setShowButton(true);
       setTimeout(() => {
         setShowShimmer(true);
         setTimeout(() => setShowShimmer(false), 600); // Match shimmer animation duration
       }, 100);
-    } else if (!needsFetch && showButton) {
-      // Button disappearing: fade out and shrink width smoothly
+    } else {
       setShowShimmer(false);
-      // Wait for fade-out animation (300ms) before removing from DOM
-      // This allows width animation to complete smoothly
-      setTimeout(() => {
-        setShowButton(false);
-      }, 300);
     }
-  }, [needsFetch, showButton]);
+  }, [needsFetch]);
   
   // Trigger shimmer whenever DSL changes and fetch is required
   // Use authoritative DSL from graphStore for consistency
@@ -533,64 +541,25 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       // DSL differs from last aggregated - check coverage
       setIsCheckingCoverage(true);
       
-      // Cache key uses DSL (contains window + context) and graph hash
+      // Compute coverage for this DSL / window.
+      // NOTE: We intentionally do NOT short-circuit on cached results here –
+      // every user-initiated DSL change must either:
+      // - auto-aggregate from cache,
+      // - surface an enabled/disabled Fetch button, and/or
+      // - show a toast explaining the coverage situation.
       const currentGraphHash = getGraphHash(currentGraph);
       const cacheKey = `${dslFromState}|${currentGraphHash}`;
-      const cachedResult = coverageCache.get(cacheKey);
-      
-      // If cache hit and graph hash matches, use cached result
-      if (cachedResult && cachedResult.graphHash === currentGraphHash) {
-        console.log(`[WindowSelector] Using cached coverage result for DSL:`, dslFromState);
-        setNeedsFetch(cachedResult.hasAnyConnection && cachedResult.hasMissingData);
-        
-        // If we have params to aggregate and no missing data, trigger aggregation
-        if (cachedResult.paramsToAggregate.length > 0 && !cachedResult.hasMissingData) {
-          // Use hook for auto-aggregation (one code path)
-          isAggregatingRef.current = true;
-          lastAggregatedDSLRef.current = dslFromState;
-          
-          try {
-            // Build FetchItems from paramsToAggregate
-            const items = cachedResult.paramsToAggregate.map(({ paramId, edgeId, slot }) =>
-              createFetchItem('parameter', paramId, edgeId, { paramSlot: slot })
-            );
-            
-            // Use hook's fetchItems with from-file mode (no API call)
-            await fetchItems(items, { mode: 'from-file' });
-            
-            // Apply accumulated changes (ref was updated by setGraph callback)
-            const updatedGraph = graphRef.current;
-            if (updatedGraph && updatedGraph !== currentGraph) {
-              setGraph(updatedGraph);
-            }
-            
-            setTimeout(() => {
-              setLastAggregatedWindow(currentWindow); // Store in UK format
-              isAggregatingRef.current = false;
-            }, 0);
-          } catch (error) {
-            isAggregatingRef.current = false;
-            lastAggregatedDSLRef.current = null;
-            throw error;
-          }
-        } else {
-          isAggregatingRef.current = false;
-        }
-        
-        setIsCheckingCoverage(false);
-        return;
-      }
-      
-      // Cache miss - compute coverage
       console.log(`[WindowSelector] Computing coverage check for DSL:`, dslFromState);
       
       try {
         let hasMissingData = false;
         let hasAnyConnection = false;
+        // Tracks gaps in file-only parameters (no connection, so cannot be fetched)
+        let hasUnfetchableGaps = false;
         const paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'labour_cost' }> = [];
         
         // Check all parameters in graph (use ref to avoid dependency)
-        if (currentGraph.edges) {
+            if (currentGraph.edges) {
           for (const edge of currentGraph.edges) {
             const edgeId = edge.uuid || edge.id || '';
             
@@ -604,37 +573,64 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
             for (const { slot, param } of paramSlots) {
               const paramId = param.id;
               
-              // Check if parameter has connection (file or direct)
+              // Check if parameter has connection (file or direct) OR has file data
               const paramFile = paramId ? fileRegistry.getFile(`parameter-${paramId}`) : null;
               const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
+              const hasFileData = !!paramFile?.data;
+              const isFetchable = hasConnection; // Only connected params can actually be fetched
               
-              if (!hasConnection) continue; // Skip if no connection
+              // DEBUG: Log every parameter check
+              console.log(`[WindowSelector] Checking param ${paramId} (${slot}):`, {
+                paramId,
+                hasConnection,
+                hasFileData,
+                paramFileFound: !!paramFile,
+                paramFileDataFound: !!paramFile?.data
+              });
               
-              hasAnyConnection = true; // We have at least one connected parameter
+              // Skip if no connection AND no file data (nothing to fetch from or aggregate)
+              if (!hasConnection && !hasFileData) {
+                console.log(`[WindowSelector] SKIPPED ${paramId} - no connection and no file data`);
+                continue;
+              }
+              
+              // Track whether there is at least one FETCHABLE parameter. File-only
+              // parameters do not make sense for "needs fetch" signalling.
+              if (isFetchable) {
+                hasAnyConnection = true;
+              }
               
               // Strict validation: check if data exists for this window
               if (paramFile?.data) {
-                const incrementalResult = calculateIncrementalFetch(
+                const targetSlice = currentGraph.currentQueryDSL || '';
+                const hasFullCoverage = hasFullSliceCoverageByHeader(
                   paramFile.data,
-                  currentWindow, // Pass UK format dates - function handles normalization
-                  undefined, // querySignature
-                  false, // bustCache
-                  currentGraph.currentQueryDSL || '' // targetSlice
+                  currentWindow,
+                  targetSlice,
                 );
-                
-                // Strict: if ANY days are missing, require fetch
-                if (incrementalResult.needsFetch) {
-                  console.log(`[WindowSelector] Param ${paramId} (${slot}) needs fetch:`, {
+
+                // Auto-fetch behaviour:
+                // - If the requested window is fully covered by slice headers, we treat it
+                //   as previously fetched and can auto-aggregate from cache.
+                // - If not fully covered AND the parameter is fetchable, we require an
+                //   explicit Fetch from source.
+                // - If not fetchable (file-only), lack of coverage should NOT block
+                //   auto-aggregation for other parameters; it simply means this param
+                //   will not be auto-updated for this DSL.
+                if (!hasFullCoverage) {
+                  console.log(`[WindowSelector] Param ${paramId} (${slot}) NOT fully covered by cache`, {
                     dsl: dslFromState,
-                    totalDays: incrementalResult.totalDays,
-                    daysAvailable: incrementalResult.daysAvailable,
-                    daysToFetch: incrementalResult.daysToFetch,
-                    missingDates: incrementalResult.missingDates.slice(0, 5),
+                    window: currentWindow,
                   });
-                  hasMissingData = true;
+                  if (isFetchable) {
+                    hasMissingData = true;
+                  } else {
+                    // File-only parameter missing coverage – cannot be fixed by fetching,
+                    // but we should still surface this as "no cached data" for the user.
+                    hasUnfetchableGaps = true;
+                  }
                 } else {
-                  // All data exists - add to aggregation list
-                  // Only aggregate if parameter has daily data
+                  // Header coverage is complete - safe to auto-aggregate from cache
                   const hasDailyData = paramFile.data.values?.some((v: any) => 
                     v.n_daily && v.k_daily && v.dates && v.dates.length > 0
                   );
@@ -664,10 +660,17 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               const caseId = node.case.id;
               const caseFile = fileRegistry.getFile(`case-${caseId}`);
               const hasConnection = !!caseFile?.data?.connection || !!node.case?.connection;
+              const hasFileData = !!caseFile?.data;
+              const isFetchable = hasConnection;
               
-              if (hasConnection) {
+              // Skip if no connection AND no file data
+              if (!hasConnection && !hasFileData) continue;
+              
+              // ONLY truly fetchable cases (with a connection) should affect hasAnyConnection
+              // and needsFetch. File-only cases (no connection) must NOT block coverage UX.
+              if (isFetchable) {
                 hasAnyConnection = true;
-                if (!caseFile) {
+                if (!hasFileData) {
                   // Has connection but no file - check if we've already fetched for this DSL
                   const lastDSL = lastAggregatedDSLRef.current;
                   if (!lastDSL || dslFromState !== lastDSL) {
@@ -676,26 +679,70 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   }
                   // If DSL matches last aggregated, assume data exists (don't set hasMissingData)
                 }
+              } else if (hasFileData) {
+                // File-only case data: treat as an unfetchable gap for this DSL.
+                // This contributes to the "sample files / no data source" toast but
+                // does NOT cause needsFetch=true.
+                hasUnfetchableGaps = true;
               }
             }
           }
         }
         
-        // Set needsFetch flag
-        setNeedsFetch(hasAnyConnection && hasMissingData);
+        // Set needsFetch flag:
+        // - Only parameters with REAL connections (isFetchable) influence this.
+        // - File-only parameters should never cause a "needs fetch" state.
+        const needsFetch = hasAnyConnection && hasMissingData;
+        setNeedsFetch(needsFetch);
+
+        // User experience rules:
+        //
+        // 1. If there ARE fetchable parameters and at least one of them is missing
+        //    coverage for this window, we must NEVER fail silently. Surface a toast
+        //    explaining that some items need fetching and that the Fetch button
+        //    can be used to retrieve data.
+        if (needsFetch) {
+          console.log('[WindowSelector] Coverage UX: fetchable gaps detected - showing fetch-needed toast', {
+            dsl: dslFromState,
+          });
+          toast(`Some items need fetching for ${dslFromState || 'this window'}. Click Fetch to retrieve data from source.`, {
+            icon: '⚠️',
+            duration: 4000,
+          });
+        }
+
+        // 2. If there are NO fetchable parameters but we detected gaps in file-only
+        //    slices, we are in a "sample / file-only" situation: there is no cached
+        //    data for this window and no way to fetch more. Do NOT fail silently –
+        //    surface a clear toast to the user.
+        if (!needsFetch && !hasAnyConnection && hasUnfetchableGaps) {
+          console.log('[WindowSelector] Coverage UX: unfetchable gaps in file-only params - showing sample-files toast', {
+            dsl: dslFromState,
+          });
+          toast(`No cached data for ${dslFromState || 'this window'} in sample files. Try a different date range.`, {
+            icon: '⚠️',
+            duration: 4000,
+          });
+        }
         
         // Phase 3: Cache the computed result
         const cacheEntry: CoverageCacheEntry = {
           dslKey: dslFromState,
           hasMissingData,
           hasAnyConnection,
+          hasUnfetchableGaps,
           paramsToAggregate: [...paramsToAggregate], // Copy array
           graphHash: currentGraphHash,
         };
         coverageCache.set(cacheKey, cacheEntry);
         console.log(`[WindowSelector] Cached coverage result for DSL:`, dslFromState);
         
-        // Auto-aggregate parameters that have all data for this window
+        // Auto-aggregate parameters that have all data for this window.
+        // IMPORTANT:
+        // - We only block auto-aggregation when there is missing data for at least
+        //   one FETCHABLE parameter (i.e., something the user could fix by fetching).
+        // - File-only parameters with incomplete coverage do NOT prevent
+        //   auto-aggregation for other parameters.
         if (paramsToAggregate.length > 0 && !hasMissingData) {
           console.log(`[WindowSelector] Auto-aggregating ${paramsToAggregate.length} parameters via hook for DSL:`, dslFromState);
           
@@ -734,6 +781,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         }
       } catch (error) {
         console.error('[WindowSelector] Error checking data coverage:', error);
+        // NEVER fail silently – surface a clear toast so the user knows
+        // the coverage check failed instead of just doing nothing.
+        const message =
+          error instanceof Error ? error.message : String(error ?? 'Unknown error');
+        toast.error(`Failed to check data coverage: ${message}`);
         setNeedsFetch(false);
       } finally {
         setIsCheckingCoverage(false);
@@ -747,6 +799,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   
   // Helper: Update window state, currentQueryDSL (historic), AND authoritative DSL
   const updateWindowAndDSL = (start: string, end: string) => {
+    console.log('[WindowSelector] updateWindowAndDSL called:', { start, end });
     setWindow({ start, end });
     
     // Use getLatestGraph() to avoid stale closure
@@ -771,6 +824,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     const newDSL = contextParts.length > 0 
       ? `${contextParts.join('.')}.${dateRangePart}`
       : dateRangePart;
+    
+    console.log('[WindowSelector] DSL update:', {
+      previousGraphDSL: currentGraph?.currentQueryDSL,
+      newDSL,
+    });
     
     // CRITICAL: Update AUTHORITATIVE DSL on graphStore (for all fetch operations)
     setCurrentDSL(newDSL);
@@ -977,9 +1035,24 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     
     return items;
   }, [graph, needsFetch, currentWindow]);
+
+  // DEBUG: Log coverage outcome and fetchability whenever these change
+  useEffect(() => {
+    console.log('[WindowSelector] Coverage outcome:', {
+      needsFetch,
+      hasParameterFiles,
+      batchItemsToFetchCount: batchItemsToFetch.length,
+    });
+  }, [needsFetch, hasParameterFiles, batchItemsToFetch.length]);
   
   const handleFetchData = async () => {
-    if (!graph || batchItemsToFetch.length === 0) return;
+    if (!graph) return;
+    if (batchItemsToFetch.length === 0) {
+      // User explicitly clicked Fetch but there are no items configured
+      // to be fetched (no connections / data sources). NEVER fail silently.
+      toast.error('No items are configured to fetch for this query (no data sources on parameters).');
+      return;
+    }
     
     setIsFetching(true);
     
@@ -1389,19 +1462,22 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       </div>{/* End window-selector-main */}
       
       {/* Fetch button column (right side) - spans full height */}
-      {/* Only show when we have items to fetch - prevents race condition where showButton is true but batchItemsToFetch is empty */}
-      {showButton && batchItemsToFetch.length > 0 && (
+      {/* Always show when graph has parameter files. If there are no fetchable items,
+          clicking the button will surface an explicit toast instead of doing nothing. */}
+      {hasParameterFiles && (
         <div className="window-selector-fetch-column">
           <button
             onClick={handleFetchData}
             disabled={isCheckingCoverage || isFetching}
-            className={`window-selector-button ${showShimmer ? 'shimmer' : ''}`}
+            className={`window-selector-button ${showShimmer && batchItemsToFetch.length > 0 ? 'shimmer' : ''}`}
             title={
               isCheckingCoverage
                 ? "Checking data coverage..."
                 : isFetching
                   ? "Fetching data..."
-                  : `Fetch ${batchItemsToFetch.length} item${batchItemsToFetch.length > 1 ? 's' : ''} from external sources`
+                  : batchItemsToFetch.length === 0
+                    ? "No items are configured to fetch for this query (no data sources on parameters)."
+                    : `Fetch ${batchItemsToFetch.length} item${batchItemsToFetch.length > 1 ? 's' : ''} from external sources`
             }
           >
             {isCheckingCoverage ? 'Checking...' : isFetching ? 'Fetching...' : 'Fetch data'}

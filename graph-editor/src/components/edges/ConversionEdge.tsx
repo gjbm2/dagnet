@@ -27,6 +27,8 @@ import {
   CHEVRON_OPACITY,
   CHEVRON_FADE_IN_FRACTION,
   CHEVRON_BLUR,
+  CHEVRON_LAG_D0,
+  CHEVRON_LAG_K,
   LAG_STRIPE_WIDTH,
   LAG_STRIPE_ANGLE,
   LAG_STRIPE_OPACITY,
@@ -71,6 +73,24 @@ const USE_GROUP_BASED_BLENDING = false; // Enable scenario-specific blending
 // DIAGNOSTIC: Check for nobeads mode (?nobeads URL parameter)
 const NO_BEADS_MODE = new URLSearchParams(window.location.search).has('nobeads');
 
+/**
+ * Compute chevron animation speed factor based on lag/maturity days.
+ * Uses power-law decay: f(d) = (1 + d/D0)^(-k)
+ * 
+ * Anchor points (with D0=3, k=0.6):
+ *   d=0  → f(0)  = 1.0   (baseline speed)
+ *   d=7  → f(7)  ≈ 0.49  (≈ half speed)
+ *   d=30 → f(30) ≈ 0.24  (≈ quarter speed)
+ * 
+ * @param lagDays - median_lag_days or maturity_days for the edge
+ * @returns Speed multiplier (0..1], where 1 = baseline CHEVRON_SPEED
+ */
+function computeChevronSpeedFactor(lagDays: number | undefined): number {
+  if (lagDays === undefined || lagDays <= 0) {
+    return 1; // No lag data → baseline speed
+  }
+  return Math.pow(1 + lagDays / CHEVRON_LAG_D0, -CHEVRON_LAG_K);
+}
 
 interface ConversionEdgeData {
   uuid: string;
@@ -2212,7 +2232,13 @@ export default function ConversionEdge({
             // Calculate path length to determine number of chevrons
             const pathLength = pathRef.current.getTotalLength?.() || 100;
             const numChevrons = Math.max(1, Math.floor(pathLength / CHEVRON_SPACING));
-            const animationDuration = pathLength / CHEVRON_SPEED;
+            
+            // Lag-adjusted speed: slower chevrons for edges with higher lag/maturity
+            // Use median_lag_days from display data, fall back to maturity_days from config
+            const lagDays = data?.edgeLatencyDisplay?.median_days ?? fullEdge?.p?.latency?.maturity_days;
+            const effectiveSpeed = CHEVRON_SPEED * computeChevronSpeedFactor(lagDays);
+            
+            const animationDuration = pathLength / effectiveSpeed;
             const staggerDelay = animationDuration / numChevrons;
             
             // Create chevron shape - use middle CI width if in CI mode, otherwise normal strokeWidth

@@ -52,6 +52,7 @@ vi.mock('../../services/dataOperationsService', () => ({
 // Mock windowAggregationService
 vi.mock('../../services/windowAggregationService', () => ({
   calculateIncrementalFetch: vi.fn(),
+  hasFullSliceCoverageByHeader: vi.fn(),
   WindowAggregationService: class {
     aggregateWindow = vi.fn();
     getCaseWeightsForWindow = vi.fn();

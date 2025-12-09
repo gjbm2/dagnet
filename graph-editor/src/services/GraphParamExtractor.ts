@@ -51,40 +51,95 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
 /**
  * Extract parameters from a single edge
  * Only include defined (non-undefined) values
+ * 
+ * PARAM PACK FIELDS (scenario-visible, user-overridable):
+ * - p.mean, p.stdev
+ * - p.forecast.mean, p.forecast.stdev
+ * - p.evidence.mean, p.evidence.stdev
+ * - p.latency.completeness, p.latency.t95, p.latency.median_lag_days
+ * 
+ * NOT IN PARAM PACK (internal/config):
+ * - distribution, min, max, alpha, beta
+ * - evidence.n, evidence.k, evidence.window_from/to, evidence.retrieved_at, evidence.source
+ * - latency.maturity_days, latency.anchor_node_id, latency.mean_lag_days
  */
 function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
   const params: EdgeParamDiff = {};
 
-  // Extract base probability (only defined fields)
+  // Extract base probability (only scenario-visible fields)
   if (edge.p) {
     const p: any = {};
-    const pAny = edge.p as any; // Type assertion for optional properties
+    const pAny = edge.p as any;
     if (pAny.mean !== undefined) p.mean = pAny.mean;
     if (pAny.stdev !== undefined) p.stdev = pAny.stdev;
-    if (pAny.distribution !== undefined) p.distribution = pAny.distribution;
-    if (pAny.min !== undefined) p.min = pAny.min;
-    if (pAny.max !== undefined) p.max = pAny.max;
-    if (pAny.alpha !== undefined) p.alpha = pAny.alpha;
-    if (pAny.beta !== undefined) p.beta = pAny.beta;
+    // NOTE: distribution, min, max, alpha, beta are NOT in param packs
+    
+    // === EVIDENCE: Only mean and stdev (scenario-overridable) ===
+    // NOTE: n, k, window_from/to, retrieved_at, source are NOT in param packs
+    if (pAny.evidence) {
+      const evidence: any = {};
+      if (pAny.evidence.mean !== undefined) evidence.mean = pAny.evidence.mean;
+      if (pAny.evidence.stdev !== undefined) evidence.stdev = pAny.evidence.stdev;
+      if (Object.keys(evidence).length > 0) p.evidence = evidence;
+    }
+    
+    // === FORECAST: Projected final conversion (p_∞) ===
+    if (pAny.forecast) {
+      const forecast: any = {};
+      if (pAny.forecast.mean !== undefined) forecast.mean = pAny.forecast.mean;
+      if (pAny.forecast.stdev !== undefined) forecast.stdev = pAny.forecast.stdev;
+      if (Object.keys(forecast).length > 0) p.forecast = forecast;
+    }
+    
+    // === LATENCY: Only completeness, t95, median_lag_days (display-relevant) ===
+    // NOTE: maturity_days, anchor_node_id, mean_lag_days are NOT in param packs
+    if (pAny.latency) {
+      const latency: any = {};
+      if (pAny.latency.completeness !== undefined) latency.completeness = pAny.latency.completeness;
+      if (pAny.latency.t95 !== undefined) latency.t95 = pAny.latency.t95;
+      if (pAny.latency.median_lag_days !== undefined) latency.median_lag_days = pAny.latency.median_lag_days;
+      if (Object.keys(latency).length > 0) p.latency = latency;
+    }
     
     if (Object.keys(p).length > 0) {
       params.p = p;
     }
   }
 
-  // Extract conditional probabilities (only defined fields)
+  // Extract conditional probabilities (only scenario-visible fields)
   if (edge.conditional_p && edge.conditional_p.length > 0) {
     params.conditional_p = {};
     for (const cond of edge.conditional_p) {
       const condP: any = {};
-      const condPAny = cond.p as any; // Type assertion for optional properties
+      const condPAny = cond.p as any;
       if (condPAny?.mean !== undefined) condP.mean = condPAny.mean;
       if (condPAny?.stdev !== undefined) condP.stdev = condPAny.stdev;
-      if (condPAny?.distribution !== undefined) condP.distribution = condPAny.distribution;
-      if (condPAny?.min !== undefined) condP.min = condPAny.min;
-      if (condPAny?.max !== undefined) condP.max = condPAny.max;
-      if (condPAny?.alpha !== undefined) condP.alpha = condPAny.alpha;
-      if (condPAny?.beta !== undefined) condP.beta = condPAny.beta;
+      // NOTE: distribution, min, max, alpha, beta are NOT in param packs
+      
+      // === EVIDENCE: Only mean and stdev ===
+      if (condPAny?.evidence) {
+        const evidence: any = {};
+        if (condPAny.evidence.mean !== undefined) evidence.mean = condPAny.evidence.mean;
+        if (condPAny.evidence.stdev !== undefined) evidence.stdev = condPAny.evidence.stdev;
+        if (Object.keys(evidence).length > 0) condP.evidence = evidence;
+      }
+      
+      // === FORECAST ===
+      if (condPAny?.forecast) {
+        const forecast: any = {};
+        if (condPAny.forecast.mean !== undefined) forecast.mean = condPAny.forecast.mean;
+        if (condPAny.forecast.stdev !== undefined) forecast.stdev = condPAny.forecast.stdev;
+        if (Object.keys(forecast).length > 0) condP.forecast = forecast;
+      }
+      
+      // === LATENCY: Only completeness, t95, median_lag_days ===
+      if (condPAny?.latency) {
+        const latency: any = {};
+        if (condPAny.latency.completeness !== undefined) latency.completeness = condPAny.latency.completeness;
+        if (condPAny.latency.t95 !== undefined) latency.t95 = condPAny.latency.t95;
+        if (condPAny.latency.median_lag_days !== undefined) latency.median_lag_days = condPAny.latency.median_lag_days;
+        if (Object.keys(latency).length > 0) condP.latency = latency;
+      }
       
       if (Object.keys(condP).length > 0) {
         params.conditional_p[cond.condition] = condP;

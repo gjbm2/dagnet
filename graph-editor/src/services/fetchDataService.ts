@@ -13,7 +13,7 @@
  */
 
 import { dataOperationsService, setBatchMode } from './dataOperationsService';
-import { calculateIncrementalFetch, parseDate } from './windowAggregationService';
+import { calculateIncrementalFetch, hasFullSliceCoverageByHeader, parseDate } from './windowAggregationService';
 import { fileRegistry } from '../contexts/TabContext';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
@@ -185,7 +185,7 @@ export function extractWindowFromDSL(dsl: string): DateRange | null {
  * @param window - The date range to check coverage for
  * @param graph - The current graph
  * @param dsl - The target DSL (for slice matching)
- * @returns true if the item needs to be fetched from source
+ * @returns true if the item needs to be fetched (from source OR from file)
  */
 export function itemNeedsFetch(
   item: FetchItem,
@@ -205,38 +205,51 @@ export function itemNeedsFetch(
     const edge = graph.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
     const param = edge?.[item.paramSlot || 'p'];
     const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
+    const hasFileData = !!paramFile?.data;
     
-    if (!hasConnection) return false;
+    // If no connection AND no file data, nothing to fetch from
+    if (!hasConnection && !hasFileData) return false;
     
-    // If we're not checking cache, we just wanted to know if it's connectable
+    // If we're not checking cache, we just wanted to know if it's fetchable
     if (!checkCache) return true;
     
-    if (!paramFile?.data) {
-      // No file exists - assume we need to fetch
+    // If we have file data but no connection, this is a file-only parameter:
+    // we can read from cache but there is no external source to fetch from.
+    if (hasFileData && !hasConnection) {
+      return false;
+    }
+    
+    if (!hasFileData) {
+      // No file exists but has connection - need to fetch from source
       return true;
     }
     
-    // File exists - check if data is missing for this window
-    const incrementalResult = calculateIncrementalFetch(
+    // File exists - check if this window has been previously fetched for this slice family
+    // Auto-fetch behaviour contract:
+    // - If the requested window is fully covered by slice headers for this family,
+    //   we consider it "previously fetched" and DO NOT require a new fetch.
+    // - If any part of the window lies outside all matching slice headers,
+    //   we require an explicit fetch from source.
+    const hasFullCoverage = hasFullSliceCoverageByHeader(
       paramFile.data,
       normalizedWindow,
-      undefined, // querySignature
-      false, // bustCache
       dsl // targetSlice
     );
-    
-    return incrementalResult.needsFetch;
+
+    return !hasFullCoverage;
   } else if (item.type === 'case') {
     const caseFile = fileRegistry.getFile(`case-${item.objectId}`);
     const node = graph.nodes?.find((n: any) => n.uuid === item.targetId || n.id === item.targetId);
     const hasConnection = !!caseFile?.data?.connection || !!node?.case?.connection;
+    const hasFileData = !!caseFile?.data;
     
-    if (!hasConnection) return false;
+    // If no connection AND no file data, nothing to fetch from
+    if (!hasConnection && !hasFileData) return false;
     
     if (!checkCache) return true;
     
-    // For cases, check if file exists
-    return !caseFile?.data;
+    // For cases, check if file exists with data
+    return !hasFileData;
   }
   
   return false;
@@ -471,7 +484,7 @@ export async function fetchItem(
     if (mode === 'from-file') {
       // ===== FROM FILE: No API call, just load from file =====
       if (item.type === 'parameter') {
-        await dataOperationsService.getParameterFromFile({
+        const result = await dataOperationsService.getParameterFromFile({
           paramId: item.objectId,
           edgeId: item.targetId,
           graph: graph,
@@ -480,6 +493,14 @@ export async function fetchItem(
           setAutoUpdating: options?.setAutoUpdating,
           conditionalIndex: item.conditionalIndex, // For conditional_p entries
         });
+        // If getParameterFromFile returned a failure or warning, propagate it
+        if (!result.success) {
+          return { success: false, item, error: new Error(result.warning || 'Operation failed') };
+        }
+        if (result.warning) {
+          // Aggregation fallback - treat as partial success for batch counting
+          details = `(warning: ${result.warning})`;
+        }
       } else if (item.type === 'case') {
         await dataOperationsService.getCaseFromFile({
           caseId: item.objectId,

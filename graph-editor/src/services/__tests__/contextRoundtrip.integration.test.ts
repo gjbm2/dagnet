@@ -68,9 +68,9 @@ describe('Context Roundtrip Integration Tests', () => {
         sliceDSL  // CRITICAL: This must be passed!
       );
       
-      // 4. Verify sliceDSL was set
+      // 4. Verify sliceDSL was set to canonical window+context form
       expect(afterWrite.length).toBe(1);
-      expect(afterWrite[0].sliceDSL).toBe('context(channel:google)');
+      expect(afterWrite[0].sliceDSL).toBe('window(1-Oct-25:2-Oct-25).context(channel:google)');
       
       // 5. Read back with isolateSlice
       const targetSlice = 'context(channel:google).window(1-Oct-25:2-Oct-25)';
@@ -141,10 +141,13 @@ describe('Context Roundtrip Integration Tests', () => {
       expect(metaIsolated[0].n).toBe(200);
     });
 
-    it('CRITICAL: each fetch creates a SEPARATE entry (append-only for audit trail)', () => {
-      // NEW DESIGN: mergeTimeSeriesIntoParameter APPENDS entries, doesn't merge
-      // Deduplication of overlapping dates happens at AGGREGATION time (in dataOperationsService)
-      // Benefits: audit trail, rollback capability, k may vary over time
+    it('CRITICAL: repeated fetches for SAME slice family merge by date canonically', () => {
+      // NEW DESIGN: mergeTimeSeriesIntoParameter performs a canonical merge
+      // for a given slice family (same context/case dimensions).
+      //
+      // - Dates in the new fetch override existing dates for that slice.
+      // - Dates outside the new window are preserved.
+      // - A single merged value entry exists per slice family.
       
       // 1. Initial data: Oct 1-2 with n=100, k=15 per day
       const initialData = mergeTimeSeriesIntoParameter(
@@ -162,7 +165,7 @@ describe('Context Roundtrip Integration Tests', () => {
       expect(initialData[0].n).toBe(200); // 100 + 100
       
       // 2. Re-fetch same dates with DIFFERENT values (simulating updated API data)
-      // This APPENDS a new entry (doesn't merge at write time)
+      // This MERGES into the canonical slice for this family
       const updatedData = mergeTimeSeriesIntoParameter(
         initialData,
         [
@@ -174,23 +177,22 @@ describe('Context Roundtrip Integration Tests', () => {
         '' // same slice
       );
       
-      // NEW: Should have 2 entries (one per fetch, for audit trail)
-      expect(updatedData.length).toBe(2);
+      // NEW: Should still have 1 canonical entry for this slice family
+      expect(updatedData.length).toBe(1);
       
-      // First entry: original data (preserved for audit)
-      expect(updatedData[0].n).toBe(200); // 100 + 100
-      expect(updatedData[0].k).toBe(30);  // 15 + 15
+      // Canonical entry now reflects the latest values for both days:
+      // n = 150 + 150 = 300, k = 20 + 25 = 45
+      expect(updatedData[0].n).toBe(300);
+      expect(updatedData[0].k).toBe(45);
       
-      // Second entry: new data
-      expect(updatedData[1].n).toBe(300); // 150 + 150
-      expect(updatedData[1].k).toBe(45);  // 20 + 25
-      
-      // At AGGREGATION time (dataOperationsService), overlapping dates use most recent retrieved_at
+      // At aggregation time, this canonical entry already encodes the merged series
     });
 
-    it('CRITICAL: partial overlap creates separate entries (append-only)', () => {
-      // NEW DESIGN: Each fetch creates a separate entry for audit trail
-      // Overlapping dates are resolved at aggregation time using retrieved_at
+    it('CRITICAL: partial overlap merges into a single canonical entry', () => {
+      // NEW DESIGN: Each slice family has a single canonical entry.
+      // Partial overlaps merge by date:
+      // - Existing dates preserved unless overridden.
+      // - New dates added.
       
       // Existing data: Oct 1-2
       const existingData = mergeTimeSeriesIntoParameter(
@@ -214,21 +216,18 @@ describe('Context Roundtrip Integration Tests', () => {
         'sig2', {}, 'q1', 'amplitude', ''
       );
       
-      // NEW: Should have 2 entries (append-only for audit trail)
-      expect(afterSecondFetch.length).toBe(2);
+      // NEW: Should have 1 canonical entry for this slice family
+      expect(afterSecondFetch.length).toBe(1);
       
-      // First entry: Oct 1-2 (original, preserved)
-      expect(afterSecondFetch[0].dates?.length).toBe(2);
-      expect(afterSecondFetch[0].n).toBe(200); // 100 + 100
-      expect(afterSecondFetch[0].k).toBe(20);  // 10 + 10
-      
-      // Second entry: Oct 2-3 (new fetch)
-      expect(afterSecondFetch[1].dates?.length).toBe(2);
-      expect(afterSecondFetch[1].n).toBe(350); // 150 + 200
-      expect(afterSecondFetch[1].k).toBe(50);  // 20 + 30
-      
-      // At aggregation time: Oct 1 from entry 1, Oct 2 from entry 2 (newer), Oct 3 from entry 2
-      // Total would be: n = 100 + 150 + 200 = 450, k = 10 + 20 + 30 = 60
+      // Canonical series now covers Oct 1-3 with:
+      // Oct 1: n=100,k=10 (from first fetch)
+      // Oct 2: n=150,k=20 (from second fetch, overrides first)
+      // Oct 3: n=200,k=30 (from second fetch)
+      //
+      // Totals: n = 450, k = 60
+      expect(afterSecondFetch[0].dates?.length).toBe(3);
+      expect(afterSecondFetch[0].n).toBe(450);
+      expect(afterSecondFetch[0].k).toBe(60);
     });
   });
 

@@ -257,6 +257,97 @@ values:
       retrieved_at: '2025-12-01T08:00:00Z'
       full_query: 'from(landing-page).to(checkout).to(payment).cohort(1-Sep-25:30-Nov-25).context(channel:organic)'
 
+  # ============================================================
+  # CONTEXT WINDOW SLICE: channel:google
+  # Provides p_∞ baseline for cohort(...).context(channel:google)
+  # ============================================================
+  - sliceDSL: 'window(25-Nov-25:1-Dec-25).context(channel:google)'
+    mean: 0.705
+    stdev: 0.045
+    n: 140
+    k: 99
+    window_from: '25-Nov-25'
+    window_to: '1-Dec-25'
+    
+    dates:
+      - '25-Nov-25'
+      - '26-Nov-25'
+      - '27-Nov-25'
+      - '28-Nov-25'
+      - '29-Nov-25'
+      - '30-Nov-25'
+      - '1-Dec-25'
+    
+    n_daily: [20, 21, 22, 19, 18, 20, 20]
+    k_daily: [14, 15, 16, 13, 11, 15, 15]
+    
+    # Forecast (mature baseline p∞) for google channel
+    forecast: 0.772
+    
+    latency:
+      median_lag_days: 3.0
+      mean_lag_days: 3.5
+      t95: 10.0
+      histogram:
+        total_converters: 99
+        bins:
+          - { day: 1, count: 9 }
+          - { day: 2, count: 32 }
+          - { day: 3, count: 30 }
+          - { day: 4, count: 16 }
+          - { day: 5, count: 8 }
+          - { day_range: [6, 10], count: 4 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T08:00:00Z'
+      full_query: 'from(checkout).to(payment).window(25-Nov-25:1-Dec-25).context(channel:google)'
+
+  # ============================================================
+  # CONTEXT WINDOW SLICE: channel:organic
+  # Provides p_∞ baseline for cohort(...).context(channel:organic)
+  # ============================================================
+  - sliceDSL: 'window(25-Nov-25:1-Dec-25).context(channel:organic)'
+    mean: 0.675
+    stdev: 0.048
+    n: 110
+    k: 74
+    window_from: '25-Nov-25'
+    window_to: '1-Dec-25'
+    
+    dates:
+      - '25-Nov-25'
+      - '26-Nov-25'
+      - '27-Nov-25'
+      - '28-Nov-25'
+      - '29-Nov-25'
+      - '30-Nov-25'
+      - '1-Dec-25'
+    
+    n_daily: [15, 17, 18, 16, 14, 15, 15]
+    k_daily: [10, 12, 12, 11, 10, 10, 9]
+    
+    forecast: 0.695
+    
+    latency:
+      median_lag_days: 3.3
+      mean_lag_days: 3.7
+      t95: 11.0
+      histogram:
+        total_converters: 74
+        bins:
+          - { day: 1, count: 6 }
+          - { day: 2, count: 24 }
+          - { day: 3, count: 22 }
+          - { day: 4, count: 11 }
+          - { day: 5, count: 7 }
+          - { day_range: [6, 11], count: 4 }
+    
+    data_source:
+      type: amplitude
+      retrieved_at: '2025-12-02T08:00:00Z'
+      full_query: 'from(checkout).to(payment).window(25-Nov-25:1-Dec-25).context(channel:organic)'
+
 metadata:
   description: >
     Checkout-to-payment conversion with full latency tracking. Short-lag edge 

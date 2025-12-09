@@ -29,6 +29,7 @@ vi.mock('../../services/windowAggregationService', () => ({
     daysToFetch: 0,
     missingDates: [],
   }),
+  hasFullSliceCoverageByHeader: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../../contexts/TabContext', () => ({
