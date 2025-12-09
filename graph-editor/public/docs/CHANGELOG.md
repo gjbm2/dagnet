@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 0.99.19b
+**Released:** December 09, 2025
+
+1.0 pre-release (drag & drop, exclude test users features)
+
+---
+
 ## Version 0.99.15b
 **Released:** December 04, 2025
 
