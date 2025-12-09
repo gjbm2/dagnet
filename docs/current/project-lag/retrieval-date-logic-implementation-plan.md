@@ -51,6 +51,37 @@ Each phase below describes:
 
 ---
 
+## 3. Current Code State (Window Selector and Planner)
+
+Before describing the target design, this section summarises the current implementation as of this plan.
+
+- **WindowSelector:**
+  - Maintains the current window and authoritative DSL (`graphStore.currentDSL`), updating both when the user changes the date range or presets.
+  - Has a feature flag (`USE_PLANNER`) that switches between:
+    - **Legacy path** (flag false): coverage and `needsFetch` are computed inside WindowSelector using `hasFullSliceCoverageByHeader`, `calculateIncrementalFetch`, and a separate `batchItemsToFetch` list.
+    - **Planner path** (flag true): the component calls `windowFetchPlannerService.analyse()` for analysis and `windowFetchPlannerService.executeFetchPlan()` when the user clicks Fetch, while still retaining some legacy coverage logic alongside it.
+
+- **WindowFetchPlannerService:**
+  - Already implemented as a real service, not just a stub.
+  - Delegates coverage classification to `fetchDataService.getItemsNeedingFetch()` / `getItemsNeedingFetch()` so that its `needs_fetch` view matches execution.
+  - Uses `shouldRefetch` and the current graph edge latency config to classify covered items as stale vs stable, and produces:
+    - `autoAggregationItems`, `fetchPlanItems`, `staleCandidates`, `unfetchableGaps`.
+  - Does **not yet** use `path_t95`; all maturity decisions are edge‑local (`t95`/`maturity_days`), and cohort retrieval horizons are still implicitly “full slice” rather than horizon‑bounded.
+
+- **Path `t95` computation:**
+  - TypeScript helpers for `computePathT95` / `applyPathT95ToGraph` exist in `statisticalEnhancementService.ts`.
+  - They are **not currently wired** into any production flow (no calls from planner, `fetchDataService`, or `dataOperationsService`).
+
+- **Execution path:**
+  - All real fetches still go through `fetchDataService.fetchItem(s)` and `dataOperationsService.getFromSource`, which:
+    - Handle incremental window gap detection.
+    - Apply maturity‑aware refetch policy (`shouldRefetch`) per edge.
+    - Merge time series into parameter files and propagate updated scalars (including `t95`) back to the graph.
+
+The phases below describe how to move from this mixed state (legacy + planner behind a flag, no `path_t95` wiring, no horizon‑aware cohorts) to the target architecture in a controlled way.
+
+---
+
 ## 3. Phase 0 – Ground Truth Consolidation
 
 ### 3.1 Clarify invariants in design docs
@@ -92,6 +123,9 @@ Currently, the TypeScript functions to compute and apply `path_t95` exist but ar
 - After a batch of latency‑relevant window slices has been fetched and their `t95` values recomputed:
   - Compute `path_t95` **from persisted `t95` and the current scenario topology** for active edges under that scenario.
   - Apply `path_t95` to the in‑memory graph’s `p.latency.path_t95` fields as **transient, per‑scenario data**.
+- When computing `path_t95`, respect cohort anchoring as described in `design.md`:
+  - For latency edges with `latency.anchor_node_id`, treat that node as the cohort anchor A and only propagate `path_t95` along paths that are reachable from that anchor under the current scenario.
+  - For non‑latency edges or edges without an anchor, treat their effective lag as zero for the purposes of path maturity.
 - Ensure this happens:
   - Once per relevant batch fetch or query evaluation where retrieval decisions are needed, not per individual edge.
   - In a way that does not introduce extra external calls or expensive recomputation (the DP is linear in the number of active edges).
@@ -163,7 +197,7 @@ Within the planner service:
 - Reuse:
   - Coverage helpers from `windowAggregationService` and any existing case coverage utilities.
   - Refetch policy decisions (`shouldRefetch`) as a building block to understand latency‑driven refetch needs, without re‑implementing the state machine.
-  - Latency metadata (`t95`) from the graph as the persisted source of truth, and `path_t95` as a **per‑call, recomputed** view derived from `t95` and the current scenario topology.
+  - Latency metadata (`t95`) from the graph as the persisted source of truth, and `path_t95` as a **per‑call, recomputed** view derived from the active edges and active parameters under the current scenario and their `t95` values.
 - Ensure the planner is **side‑effect free**:
   - No direct calls to external APIs.
   - No file system or IndexedDB writes.
@@ -191,7 +225,10 @@ Initially, introduce the planner as an **analysis tool only**:
 
 ## 6. Phase 3 – Align Cohort Retrieval Horizons with `t95` / `path_t95`
 
-This is the main behavioural change for cohort queries. The goal is to stop refetching full `-90d` cohorts by default and instead respect cumulative lag horizons.
+This is the main behavioural change for cohort queries. The goal is to stop refetching full historical cohorts by default and instead:
+
+- Respect cumulative lag horizons along the path (anchored at `latency.anchor_node_id` for latency edges).
+- Still honour the user’s `cohort()` DSL window as the outer envelope.
 
 ### 6.1 Define a retrieval‑horizon helper
 
@@ -220,6 +257,15 @@ The helper should be pure and return a clear description of:
 
 - Original cohort window from the DSL.
 - Bounded cohort retrieval window actually recommended for fetch.
+
+In addition, for clarity, the helper must:
+
+- Derive, per edge, the **incremental A‑entry band** introduced by the new query relative to existing coverage (for example, `[-9d, 0d]` when moving from `cohort(-100d:-10d)` to `cohort(-90d:)`).
+- Use that incremental band together with the edge’s `path_t95` to determine how far back along A‑entry time that edge needs cohort data so that the new band is correctly represented at that edge.
+- From that derived horizon and existing coverage, separate:
+  - Strictly missing cohorts that must be fetched now.
+  - Older cohorts inside the horizon that may be refreshed if `retrieved_at + path_t95` indicates they were previously immature or are now stale.
+- Never shrink or widen the user’s `cohort()` DSL window; it only decides which cohorts within that window (and its implied horizon) actually require retrieval or refresh for each individual edge.
 
 ### 6.2 Integrate horizon helper into fetch planning
 
@@ -342,10 +388,30 @@ Ensure `useFetchData`:
 
 - Explicit `cohort(-90d:)` where `path_t95` is much shorter:
   - Verify that the horizon helper bounds retrieval to something closer to `path_t95`, not the full 90 days.
+  - Use graphs where earlier cohorts are already fully covered in the file, and assert that only a short tail is refetched.
 - Cohorts where `path_t95` is longer than the requested range:
   - Verify no widening occurs; the original window is used.
 - Mixed cases where some portions of the requested range are older than the horizon:
   - Ensure the bounded retrieval window still covers all cohorts that are expected to contribute materially.
+- Non‑latency vs latency edges on the same path:
+  - Construct a path `a→b→c→d` with:
+    - Upstream edge with `maturity_days = 0` (non‑latency).
+    - Middle edge with a moderate `t95` (for example, around 10 days).
+    - Downstream edge with a shorter `t95`, so that `path_t95` grows along the path.
+  - Pre‑populate cohort data so that:
+    - Files contain a wider historical window (for example, `cohort(-100d:-10d)` or `cohort(-91d:-1d)`).
+    - New queries request a slightly different range (for example, `cohort(-90d:)`).
+  - Assert that the planner produces **distinct per‑edge fetch plans**, such as:
+    - Non‑latency edges fetching only strictly missing cohorts inside the requested window.
+    - Mid‑path latency edges fetching a short tail close to their own `t95` horizon.
+    - Deepest latency edges using a longer tail derived from `path_t95`, but still never refetching the entire historical range when not warranted.
+- Staleness vs immaturity:
+  - Vary the retrieval timestamps so that:
+    - In some cases, recent immature cohorts have never been refreshed since they were first fetched.
+    - In others, cohorts that were once immature have now “aged past” the `t95` / `path_t95` horizon.
+  - Verify that the planner:
+    - Treats previously immature cohorts that are now well beyond the horizon as **covered and stable** (no repeated refresh pressure).
+    - Treats genuinely recent or stale cohorts as **covered but potentially stale**, recommending a refresh for only the relevant horizon segment.
 - Scenario where prior coverage stops just before a new query window (for example, files contain `cohort(-100d:-10d)` and the new query is `cohort(-9d:)`):
   - Verify that all edges correctly classify the entire requested window as “not covered”, and that the horizon helper does **not** shrink or widen the retrieval window when the requested range already lies wholly inside the `path_t95` band.
 - Graphs with mixed latency configurations along a path (for example, non‑latency `a→b`, latency `b→c`, shorter‑latency `c→d`):
@@ -388,7 +454,54 @@ Ensure `useFetchData`:
 
 ---
 
-## 9. Summary
+## 9. Open Decisions
+
+The following points require explicit resolution before or during implementation:
+
+### 9.1 Exact staleness thresholds
+
+- **Decision needed:** What is the precise inequality for "stale"?
+  - Proposed: A covered slice is **stale** if `days_since_retrieval > 1` **and** the slice's cohort/window end date is within `t95` (or `path_t95` for cohorts) of today.
+  - Cohorts and windows use the same rule, substituting `path_t95` for cohorts and edge-level `t95` for windows.
+- **Fallback:** When `t95` is missing or zero, use `maturity_days`; if that is also missing, treat the slice as **stable** (no refresh pressure).
+
+### 9.2 Per-anchor `path_t95` computation
+
+- **Decision needed:** How do we run the DP when a graph has multiple anchors?
+  - Proposed: Run the DP **once per distinct `anchor_node_id`** found on latency edges in the active scenario. Each run yields `path_t95` values only for edges reachable from that anchor; edges not reachable from a given anchor are ignored for that anchor's horizon calculations.
+- **Edges with no anchor:** Treat as non-latency for cohort horizon purposes (`path_t95 = 0`); they still use edge-level `t95` for staleness of their own slices.
+
+### 9.3 Planner vs `shouldRefetch` ownership
+
+- **Decision needed:** Which layer is authoritative for the final retrieval window when `shouldRefetch` returns `replace_slice`?
+  - Proposed: The **horizon helper** (called by the planner) determines the bounded cohort window; `shouldRefetch` only decides the *policy* (`gaps_only`, `partial`, `replace_slice`, `use_cache`). Execution uses the planner's bounded window, not the raw DSL window.
+- **Conflict resolution:** If the planner says "no fetch needed" but `shouldRefetch` would have said `replace_slice`, the planner wins (it has already incorporated staleness). This avoids double-checking.
+
+### 9.4 Baseline vs query window interaction
+
+- **Decision needed:** Is `t95` always derived from an implicit baseline window, or can it be recomputed from arbitrary user queries?
+  - Proposed: `t95` is **only updated** when the baseline latency-detection window is fetched (Flow A in `design.md`). Ad-hoc user queries with narrower or shifted windows **read** `t95` but do not overwrite it.
+- **`path_t95`:** Always recomputed per scenario/query from persisted `t95` values; not affected by the baseline vs query distinction.
+
+### 9.5 Anchoring semantics in the horizon helper
+
+- **Decision needed:** What happens when `latency.anchor_node_id` is missing, invalid, or not the graph's global start node?
+  - Proposed:
+    - Missing/invalid anchor: Treat edge as non-latency for cohort horizons (`path_t95 = 0`), but still use edge `t95` for staleness.
+    - Mid-path anchors: The DP starts at the anchor node; edges upstream of the anchor are unreachable and therefore have no `path_t95` contribution from that anchor.
+- **DSL date mapping:** Cohort DSL dates are always interpreted in the coordinate system of the edge's anchor. If different edges have different anchors, their horizon windows are computed independently.
+
+### 9.6 Test coverage for multi-anchor and what-if scenarios
+
+- **Decision needed:** Are the test scenarios in section 8.2 sufficient, or do we need explicit tests for:
+  - Graphs with two or more distinct `anchor_node_id` values on different edges.
+  - What-if scenarios where edge activation changes `path_t95` mid-session.
+  - Edges that become unreachable from their anchor due to scenario toggling.
+- **Proposed:** Add explicit tests for these cases in section 8.2 before implementation begins.
+
+---
+
+## 10. Summary
 
 This plan deliberately separates:
 
@@ -396,6 +509,6 @@ This plan deliberately separates:
 - **Decision logic** (planner analysis, refetch policy, retrieval horizons) and
 - **UI wiring** (WindowSelector and menus),
 
-and routes them all through a single planner‑centric architecture. The key behavioural shift is that cohort and window retrieval are no longer driven solely by the DSL and simple header/daily coverage checks, but are **bounded and classified using `t95` and `path_t95`**, with clear, testable distinctions between “missing”, “stale”, and “stable” states.
+and routes them all through a single planner‑centric architecture. The key behavioural shift is that cohort and window retrieval are no longer driven solely by the DSL and simple header/daily coverage checks, but are **bounded and classified using `t95` and `path_t95`**, with clear, testable distinctions between "missing", "stale", and "stable" states.
 
 

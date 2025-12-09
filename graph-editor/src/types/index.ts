@@ -271,6 +271,10 @@ export interface SettingsData {
     showLineNumbers?: boolean;
     wordWrap?: boolean;
   };
+  data?: {
+    /** When true, exclude test accounts (nousemates cohort) from Amplitude queries */
+    excludeTestAccounts?: boolean;
+  };
 }
 
 /**

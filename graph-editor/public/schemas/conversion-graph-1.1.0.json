@@ -313,6 +313,8 @@
           "properties": {
             "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials) - required for probability data with observations" },
             "k": { "type": "integer", "minimum": 0, "description": "Number of successes - optional, can be derived from n × mean" },
+            "mean": { "type": "number", "minimum": 0, "maximum": 1, "description": "Evidence probability: raw observed rate = k/n (query-time computed scalar)" },
+            "stdev": { "type": "number", "minimum": 0, "description": "Evidence uncertainty: binomial stdev for the evidence rate (query-time computed scalar)" },
             "window_from": { "type": "string", "description": "Time window start (UK format d-MMM-yy or ISO)" },
             "window_to": { "type": "string", "description": "Time window end (UK format d-MMM-yy or ISO)" },
             "retrieved_at": { "type": "string", "description": "When this data was retrieved from source (UK format or ISO)" },
@@ -397,6 +399,8 @@
           "properties": {
             "n": { "type": "integer", "minimum": 0, "description": "Sample size (total trials) - required for cost data with observations" },
             "k": { "type": "integer", "minimum": 0, "description": "Number of successes/observations - optional" },
+            "mean": { "type": "number", "minimum": 0, "description": "Evidence mean value (query-time computed scalar)" },
+            "stdev": { "type": "number", "minimum": 0, "description": "Evidence standard deviation (query-time computed scalar)" },
             "window_from": { "type": "string", "description": "Time window start (UK format d-MMM-yy or ISO)" },
             "window_to": { "type": "string", "description": "Time window end (UK format d-MMM-yy or ISO)" },
             "retrieved_at": { "type": "string", "description": "When this data was retrieved from source (UK format or ISO)" },

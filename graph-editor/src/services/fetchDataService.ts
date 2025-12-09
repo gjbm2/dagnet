@@ -47,6 +47,8 @@ export interface FetchOptions {
   versionedCase?: boolean;
   /** Callback to trigger auto-updating animation */
   setAutoUpdating?: (updating: boolean) => void;
+  /** Parent log ID for session log hierarchy linkage */
+  parentLogId?: string;
 }
 
 export interface FetchResult {
@@ -633,11 +635,15 @@ export async function fetchItems(
   const progressToastId = 'batch-fetch-progress';
   
   // SESSION LOG: Start batch fetch operation (only for batch mode)
-  const batchLogId = shouldUseBatchMode 
-    ? sessionLogService.startOperation('info', 'data-fetch', 'BATCH_FETCH',
-        `Batch fetch: ${items.length} items`,
-        { dsl, itemCount: items.length, mode: itemOptions?.mode || 'versioned' })
-    : undefined;
+  // If parentLogId is provided, add children to that instead of creating new operation
+  const useParentLog = !!itemOptions?.parentLogId;
+  const batchLogId = useParentLog
+    ? itemOptions.parentLogId
+    : shouldUseBatchMode 
+      ? sessionLogService.startOperation('info', 'data-fetch', 'BATCH_FETCH',
+          `Batch fetch: ${items.length} items`,
+          { dsl, itemCount: items.length, mode: itemOptions?.mode || 'versioned' })
+      : undefined;
   
   if (shouldUseBatchMode) {
     setBatchMode(true);
@@ -698,6 +704,7 @@ export async function fetchItems(
     console.log(`[TIMING] fetchItems batch: ${batchTime.toFixed(1)}ms total, ${avgTime.toFixed(1)}ms avg per item (${items.length} items)`);
     
     // SESSION LOG: End batch fetch operation with summary
+    // If using parent log, add summary as child instead of ending operation
     if (batchLogId) {
       // Build summary of what was fetched
       const successItems = results.filter(r => r.success);
@@ -735,16 +742,31 @@ export async function fetchItems(
         ? `${successCount}/${items.length} succeeded, ${errorCount} failed` 
         : `${successCount} item${successCount !== 1 ? 's' : ''} updated`;
       
-      sessionLogService.endOperation(batchLogId, status, summary, 
-        {
-          successCount,
-          errorCount,
-          itemCount: items.length,
-          duration: Math.round(batchTime),
-          byType,
-          details: detailLines.join('\n'),
-        }
-      );
+      if (useParentLog) {
+        // Add summary as child entry - parent will end operation
+        sessionLogService.addChild(batchLogId, status, 'FETCH_COMPLETE', summary, 
+          detailLines.join('\n'),
+          {
+            successCount,
+            errorCount,
+            itemCount: items.length,
+            duration: Math.round(batchTime),
+            byType,
+          }
+        );
+      } else {
+        // End our own operation
+        sessionLogService.endOperation(batchLogId, status, summary, 
+          {
+            successCount,
+            errorCount,
+            itemCount: items.length,
+            duration: Math.round(batchTime),
+            byType,
+            details: detailLines.join('\n'),
+          }
+        );
+      }
     }
   }
   

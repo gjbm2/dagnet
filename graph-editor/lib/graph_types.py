@@ -21,6 +21,8 @@ class Evidence(BaseModel):
     """Observations from data sources (n/k for probabilities)."""
     n: Optional[int] = Field(None, ge=0, description="Sample size (total trials)")
     k: Optional[int] = Field(None, ge=0, description="Number of successes")
+    mean: Optional[float] = Field(None, ge=0, description="Evidence probability: raw observed rate = k/n (query-time computed scalar)")
+    stdev: Optional[float] = Field(None, ge=0, description="Evidence uncertainty: binomial stdev for the evidence rate (query-time computed scalar)")
     window_from: Optional[str] = Field(None, description="Time window start (UK format: d-MMM-yy or ISO)")
     window_to: Optional[str] = Field(None, description="Time window end (UK format: d-MMM-yy or ISO)")
     retrieved_at: Optional[str] = Field(None, description="When this data was retrieved (UK format or ISO)")

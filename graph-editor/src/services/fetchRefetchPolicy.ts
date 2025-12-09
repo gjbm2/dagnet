@@ -43,6 +43,7 @@ export interface LatencyConfig {
   maturity_days?: number;
   anchor_node_id?: string;
   t95?: number;
+  path_t95?: number;  // Cumulative latency from anchor, computed by statisticalEnhancementService
 }
 
 export interface RefetchPolicyInput {
@@ -128,7 +129,7 @@ export function shouldRefetch(input: RefetchPolicyInput): RefetchDecision {
  * @param latencyConfig Latency configuration from edge
  * @returns Effective maturity in days
  */
-function computeEffectiveMaturity(latencyConfig?: LatencyConfig): number {
+export function computeEffectiveMaturity(latencyConfig?: LatencyConfig): number {
   const maturityDays = latencyConfig?.maturity_days ?? 0;
   const t95 = latencyConfig?.t95;
   
