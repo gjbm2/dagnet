@@ -22,6 +22,7 @@ import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
 import { useGraphStore } from '../contexts/GraphStoreContext';
+import { useCopyPaste } from '../hooks/useCopyPaste';
 
 interface NodeContextMenuProps {
   x: number;
@@ -151,11 +152,69 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
     currentDSL,  // AUTHORITATIVE DSL from graphStore
   });
 
+  // Copy-paste hook for paste node functionality
+  const { copiedItem } = useCopyPaste();
+  const copiedNode = copiedItem?.objectType === 'node' ? copiedItem : null;
+
   const handleGetNodeFromFile = () => {
     if (nodeData?.id) {
       const item = createFetchItem('node', nodeData.id, nodeId);
       fetchItem(item, { mode: 'from-file' });
     }
+    onClose();
+  };
+
+  // Paste node - attach copied node file to this node and trigger get from file
+  const handlePasteNode = async () => {
+    if (!copiedNode) {
+      toast.error('No node copied');
+      onClose();
+      return;
+    }
+    
+    const copiedNodeId = copiedNode.objectId;
+    const fileId = `node-${copiedNodeId}`;
+    
+    // Check if the node file exists
+    const file = fileRegistry.getFile(fileId);
+    if (!file) {
+      toast.error(`Node file not found: ${copiedNodeId}`);
+      onClose();
+      return;
+    }
+    
+    // Update the node's id field to attach the copied node file
+    if (graph) {
+      const nextGraph = structuredClone(graph);
+      const nodeIndex = nextGraph.nodes.findIndex((n: any) => 
+        n.uuid === nodeId || n.id === nodeId
+      );
+      
+      if (nodeIndex >= 0) {
+        nextGraph.nodes[nodeIndex].id = copiedNodeId;
+        if (nextGraph.metadata) {
+          nextGraph.metadata.updated_at = new Date().toISOString();
+        }
+        setGraph(nextGraph);
+        
+        // Trigger "Get from file" to populate node data
+        setTimeout(async () => {
+          try {
+            await dataOperationsService.getNodeFromFile({
+              nodeId: copiedNodeId,
+              graph: nextGraph,
+              setGraph,
+              targetNodeUuid: nodeId,
+            });
+            toast.success(`Pasted node: ${copiedNodeId}`);
+          } catch (error) {
+            console.error('[NodeContextMenu] Failed to get node from file:', error);
+            toast.error('Failed to load node data from file');
+          }
+        }, 100);
+      }
+    }
+    
     onClose();
   };
 
@@ -400,6 +459,26 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       >
         Properties
       </div>
+
+      {/* Paste node - only show when a node is copied */}
+      {copiedNode && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            handlePasteNode();
+          }}
+          style={{
+            padding: '8px 12px',
+            cursor: 'pointer',
+            fontSize: '13px',
+            borderRadius: '2px'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        >
+          📋 Paste node: {copiedNode.objectId}
+        </div>
+      )}
 
       {/* Case Variant Weights (if case node) */}
       {!!nodeData?.case && nodeData?.case?.variants && nodeData.case.variants.length > 0 && (

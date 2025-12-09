@@ -22,6 +22,7 @@ import {
   type FetchItem,
 } from '../fetchDataService';
 import type { Graph, DateRange } from '../../types';
+import { dataOperationsService } from '../dataOperationsService';
 
 // Mock dependencies
 vi.mock('../../contexts/TabContext', () => ({
@@ -400,6 +401,76 @@ describe('FetchDataService', () => {
         expect(result!.start).toMatch(/^\d{1,2}-[A-Za-z]{3}-\d{2}$/);
         expect(result!.end).toMatch(/^\d{1,2}-[A-Za-z]{3}-\d{2}$/);
       });
+    });
+  });
+
+  // ==========================================================================
+  // Bounded cohort window plumbing tests
+  // ==========================================================================
+
+  describe('boundedCohortWindow plumbing', () => {
+    it('passes boundedCohortWindow from FetchItem to dataOperationsService.getFromSource (versioned)', async () => {
+      const graph: Graph = { nodes: [], edges: [] } as any;
+      const setGraph = vi.fn();
+      const boundedWindow: DateRange = { start: '1-Nov-25', end: '9-Dec-25' };
+
+      const item: FetchItem = {
+        id: 'param-param1-p-edge1',
+        type: 'parameter',
+        name: 'p: param1',
+        objectId: 'param1',
+        targetId: 'edge1',
+        paramSlot: 'p',
+        boundedCohortWindow: boundedWindow,
+      };
+
+      const getFromSourceSpy = vi
+        .spyOn(dataOperationsService, 'getFromSource')
+        .mockResolvedValue(Promise.resolve());
+
+      await fetchDataService.fetchItem(
+        item,
+        { mode: 'versioned' },
+        graph,
+        setGraph,
+        'cohort(1-Nov-25:9-Dec-25)'
+      );
+
+      expect(getFromSourceSpy).toHaveBeenCalledTimes(1);
+      const args = getFromSourceSpy.mock.calls[0][0];
+      expect(args.boundedCohortWindow).toEqual(boundedWindow);
+    });
+
+    it('passes boundedCohortWindow from FetchItem to dataOperationsService.getFromSourceDirect (direct)', async () => {
+      const graph: Graph = { nodes: [], edges: [] } as any;
+      const setGraph = vi.fn();
+      const boundedWindow: DateRange = { start: '1-Nov-25', end: '9-Dec-25' };
+
+      const item: FetchItem = {
+        id: 'param-param1-p-edge1',
+        type: 'parameter',
+        name: 'p: param1',
+        objectId: 'param1',
+        targetId: 'edge1',
+        paramSlot: 'p',
+        boundedCohortWindow: boundedWindow,
+      };
+
+      const getFromSourceDirectSpy = vi
+        .spyOn(dataOperationsService, 'getFromSourceDirect')
+        .mockResolvedValue(Promise.resolve());
+
+      await fetchDataService.fetchItem(
+        item,
+        { mode: 'direct' },
+        graph,
+        setGraph,
+        'cohort(1-Nov-25:9-Dec-25)'
+      );
+
+      expect(getFromSourceDirectSpy).toHaveBeenCalledTimes(1);
+      const args = getFromSourceDirectSpy.mock.calls[0][0];
+      expect(args.boundedCohortWindow).toEqual(boundedWindow);
     });
   });
 

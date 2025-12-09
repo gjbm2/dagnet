@@ -23,6 +23,9 @@ import { copyVarsToClipboard } from '../services/copyVarsService';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
+import { useCopyPaste } from '../hooks/useCopyPaste';
+import { fileRegistry } from '../contexts/TabContext';
+import { dataOperationsService } from '../services/dataOperationsService';
 import toast from 'react-hot-toast';
 
 interface EdgeContextMenuProps {
@@ -186,6 +189,79 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     setGraph,
     currentDSL,  // AUTHORITATIVE DSL from graphStore
   });
+  
+  // Copy-paste hook for paste parameter functionality
+  const { copiedItem } = useCopyPaste();
+  const copiedParameter = copiedItem?.objectType === 'parameter' ? copiedItem : null;
+  
+  // Paste parameter - attach copied parameter file to this edge
+  const handlePasteParameter = async () => {
+    if (!copiedParameter) {
+      toast.error('No parameter copied');
+      onClose();
+      return;
+    }
+    
+    const copiedParamId = copiedParameter.objectId;
+    const fileId = `parameter-${copiedParamId}`;
+    
+    // Check if the parameter file exists
+    const file = fileRegistry.getFile(fileId);
+    if (!file) {
+      toast.error(`Parameter file not found: ${copiedParamId}`);
+      onClose();
+      return;
+    }
+    
+    // Determine which slot to use based on parameter_type
+    const paramType = file.data?.parameter_type;
+    let paramSlot: 'p' | 'cost_gbp' | 'labour_cost' = 'p'; // Default to probability
+    if (paramType === 'cost_gbp') {
+      paramSlot = 'cost_gbp';
+    } else if (paramType === 'labour_cost') {
+      paramSlot = 'labour_cost';
+    }
+    
+    // Update the edge's parameter slot
+    if (graph && edge) {
+      const nextGraph = structuredClone(graph);
+      const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+        e.uuid === edgeId || e.id === edgeId
+      );
+      
+      if (edgeIndex >= 0) {
+        // Initialize the parameter slot if it doesn't exist
+        if (!nextGraph.edges[edgeIndex][paramSlot]) {
+          nextGraph.edges[edgeIndex][paramSlot] = {};
+        }
+        nextGraph.edges[edgeIndex][paramSlot].id = copiedParamId;
+        
+        if (nextGraph.metadata) {
+          nextGraph.metadata.updated_at = new Date().toISOString();
+        }
+        onUpdateGraph(nextGraph, `Paste parameter: ${copiedParamId}`);
+        
+        // Trigger "Get from file" to populate parameter data
+        setTimeout(async () => {
+          try {
+            await dataOperationsService.getParameterFromFile({
+              paramId: copiedParamId,
+              edgeId: edgeId,
+              graph: nextGraph,
+              setGraph: (g: any) => onUpdateGraph(g),
+              targetSlice: currentDSL,
+            });
+            toast.success(`Pasted ${paramSlot === 'p' ? 'probability' : paramSlot} parameter: ${copiedParamId}`);
+          } catch (error) {
+            console.error('[EdgeContextMenu] Failed to get parameter from file:', error);
+            toast.error('Failed to load parameter data from file');
+          }
+        }, 100);
+      }
+    }
+    
+    onClose();
+  };
   
   // Generic section-based handlers for data operations
   const handleSectionGetFromFile = (section: DataOperationSection) => {
@@ -795,6 +871,26 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         <Copy size={14} />
         <span>Copy vars{isMultiSelect ? ` (${selectedEdges.length} edges)` : ''}</span>
       </div>
+
+      {/* Paste parameter - only show when a parameter is copied */}
+      {copiedParameter && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            handlePasteParameter();
+          }}
+          style={{
+            padding: '8px 12px',
+            cursor: 'pointer',
+            fontSize: '13px',
+            borderRadius: '2px'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        >
+          📋 Paste parameter: {copiedParameter.objectId}
+        </div>
+      )}
 
       <RemoveOverridesMenuItem graph={graph} onUpdateGraph={onUpdateGraph} edgeId={edgeId} onClose={onClose} />
 

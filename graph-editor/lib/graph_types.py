@@ -65,6 +65,7 @@ class LatencyConfig(BaseModel):
     anchor_node_id: Optional[str] = Field(None, description="Anchor node for cohort queries (furthest upstream START)")
     anchor_node_id_overridden: bool = Field(False, description="If true, user manually set anchor_node_id")
     t95: Optional[float] = Field(None, ge=0, description="95th percentile lag in days (computed from fitted CDF)")
+    path_t95: Optional[float] = Field(None, ge=0, description="Critical path t95 in days (max t95 from anchor to this edge)")
     median_lag_days: Optional[float] = Field(None, ge=0, description="Weighted median lag in days (display only)")
     mean_lag_days: Optional[float] = Field(None, ge=0, description="Weighted mean lag in days (used with median to compute t95)")
     completeness: Optional[float] = Field(None, ge=0, le=1, description="Maturity progress 0-1 (display only)")

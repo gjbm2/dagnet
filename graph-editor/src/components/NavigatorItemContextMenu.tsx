@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import YAML from 'yaml';
 import { useTabContext } from '../contexts/TabContext';
@@ -21,6 +21,7 @@ import { useRenameFile } from '../hooks/useRenameFile';
 import { useViewHistory } from '../hooks/useViewHistory';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useWhereUsed } from '../hooks/useWhereUsed';
+import { useCopyPaste } from '../hooks/useCopyPaste';
 import { HistoryModal } from './modals/HistoryModal';
 
 interface NavigatorItemContextMenuProps {
@@ -34,6 +35,15 @@ interface NavigatorItemContextMenuProps {
  * Context menu for Navigator item right-click
  */
 export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemContextMenuProps) {
+  // CRITICAL DEBUG: Log what item this context menu received
+  console.log('🟢 [NavigatorItemContextMenu] MOUNTED with item:', {
+    type: item.type,
+    id: item.id,
+    name: item.name,
+    path: item.path,
+    fullItem: item,
+  });
+  
   const { tabs, operations } = useTabContext();
   const { state: navState, operations: navOps } = useNavigatorContext();
   const { showConfirm } = useDialog();
@@ -82,6 +92,12 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
 
   // Where used hook
   const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(fileId);
+
+  // Copy-paste hook
+  const { copyToClipboard } = useCopyPaste();
+  
+  // Check if this item type can be copied (nodes, parameters, cases)
+  const canCopy = item.type === 'node' || item.type === 'parameter' || item.type === 'case';
 
   // Commit modal state
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
@@ -138,194 +154,208 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     }
   };
   
-  const menuItems: ContextMenuItem[] = useMemo(() => {
-    const items: ContextMenuItem[] = [];
-    
-    // Open actions - ALWAYS open new tabs (force=true)
-    items.push({
-      label: 'Open in Editor',
-      onClick: () => {
-        operations.openTab(item, 'interactive', true);
+  // Build menu items fresh on each render to avoid stale closures on `item`
+  const menuItems: ContextMenuItem[] = [];
+
+  // Open actions - ALWAYS open new tabs (force=true)
+  menuItems.push({
+    label: 'Open in Editor',
+    onClick: () => {
+      operations.openTab(item, 'interactive', true);
+    }
+  });
+  menuItems.push({
+    label: 'Open as JSON',
+    onClick: () => {
+      operations.openTab(item, 'raw-json', true);
+    }
+  });
+  menuItems.push({
+    label: 'Open as YAML',
+    onClick: () => {
+      operations.openTab(item, 'raw-yaml', true);
+    }
+  });
+
+  // Copy action (for nodes, parameters, cases - can be pasted onto graph elements)
+  if (canCopy) {
+    menuItems.push({
+      label: 'Copy',
+      onClick: async () => {
+        console.log('[NavigatorItemContextMenu] Copy clicked for', {
+          type: item.type,
+          id: item.id,
+          fileId,
+        });
+        await copyToClipboard(item.type as 'node' | 'parameter' | 'case', item.id);
+        onClose();
       }
     });
-    items.push({
-      label: 'Open as JSON',
-      onClick: () => {
-        operations.openTab(item, 'raw-json', true);
-      }
-    });
-    items.push({
-      label: 'Open as YAML',
-      onClick: () => {
-        operations.openTab(item, 'raw-yaml', true);
-      }
-    });
-    items.push({ label: '', onClick: () => {}, divider: true });
-    
-    // Close actions (only if there are open tabs)
-    if (openTabs.length > 0) {
-      items.push({
-        label: `Close All Views (${openTabs.length})`,
-        onClick: async () => {
-          console.log('Close All Views: Closing', openTabs.length, 'tabs for', fileId);
-          // Close each tab with force=false to allow dirty checks
-          for (const tab of openTabs) {
-            console.log('Closing tab:', tab.id);
-            await operations.closeTab(tab.id, false);
-          }
+  }
+
+  menuItems.push({ label: '', onClick: () => {}, divider: true });
+
+  // Close actions (only if there are open tabs)
+  if (openTabs.length > 0) {
+    menuItems.push({
+      label: `Close All Views (${openTabs.length})`,
+      onClick: async () => {
+        console.log('Close All Views: Closing', openTabs.length, 'tabs for', fileId);
+        // Close each tab with force=false to allow dirty checks
+        for (const tab of openTabs) {
+          console.log('Closing tab:', tab.id);
+          await operations.closeTab(tab.id, false);
         }
-      });
-      items.push({ label: '', onClick: () => {}, divider: true });
-    }
-    
-    // File operations
-    items.push({
-      label: 'Rename...',
-      onClick: () => {
-        showRenameModal();
-      },
-      keepMenuOpen: true,
-      disabled: !canRename
+      }
     });
-    items.push({
-      label: 'Duplicate...',
-      onClick: () => {
-        setIsDuplicateModalOpen(true);
-      },
-      keepMenuOpen: true
-    });
-    items.push({ label: '', onClick: () => {}, divider: true });
-    
-    // Git actions - only show if file is committable
-    if (fileRegistry.isFileCommittableById(fileId)) {
-      items.push({
-        label: 'Commit This File...',
-        onClick: () => {
-          // Open commit modal - remote-ahead check happens inside commitFiles
-          setCommitModalPreselectedFiles([fileId]);
-          setIsCommitModalOpen(true);
-        },
-        keepMenuOpen: true // Keep menu open so modal can render
-      });
-    }
-    items.push({
-      label: 'Commit All Changes...',
+    menuItems.push({ label: '', onClick: () => {}, divider: true });
+  }
+
+  // File operations
+  menuItems.push({
+    label: 'Rename...',
+    onClick: () => {
+      showRenameModal();
+    },
+    keepMenuOpen: true,
+    disabled: !canRename
+  });
+  menuItems.push({
+    label: 'Duplicate...',
+    onClick: () => {
+      setIsDuplicateModalOpen(true);
+    },
+    keepMenuOpen: true
+  });
+  menuItems.push({ label: '', onClick: () => {}, divider: true });
+
+  // Git actions - only show if file is committable
+  if (fileRegistry.isFileCommittableById(fileId)) {
+    menuItems.push({
+      label: 'Commit This File...',
       onClick: () => {
         // Open commit modal - remote-ahead check happens inside commitFiles
-        setCommitModalPreselectedFiles([]);
+        setCommitModalPreselectedFiles([fileId]);
         setIsCommitModalOpen(true);
       },
       keepMenuOpen: true // Keep menu open so modal can render
     });
-    if (canViewHistory) {
-      items.push({
-        label: 'View History',
-        onClick: () => {
-          showHistoryModal();
-        },
-        keepMenuOpen: true
-      });
-    }
-    
-    // Where Used - find all references to this file
-    if (canSearchWhereUsed) {
-      items.push({
-        label: isSearchingWhereUsed ? 'Searching...' : 'Where Used...',
-        onClick: async () => {
-          await findWhereUsed();
-          onClose();
-        },
-        disabled: isSearchingWhereUsed
-      });
-    }
-    
-    // Clear data file (only for parameter/case files with data)
-    if (isDataFile) {
-      items.push({
-        label: 'Clear data file',
-        onClick: async () => {
-          if (fileId) {
-            await clearDataFile(fileId);
-          }
-          onClose();
-        },
-        disabled: !hasDataToClear
-      });
-    }
-    
-    items.push({ label: '', onClick: () => {}, divider: true });
-    
-    // Pull Latest - fetch latest version from remote (uses usePullFile hook)
-    if (canPull) {
-      items.push({
-        label: 'Pull Latest',
-        onClick: async () => {
-          await pullFile();
-          onClose();
-        }
-      });
-    }
-    
-    // Pull All Latest - fetch all latest from remote
-    items.push({
-      label: 'Pull All Latest',
+  }
+  menuItems.push({
+    label: 'Commit All Changes...',
+    onClick: () => {
+      // Open commit modal - remote-ahead check happens inside commitFiles
+      setCommitModalPreselectedFiles([]);
+      setIsCommitModalOpen(true);
+    },
+    keepMenuOpen: true // Keep menu open so modal can render
+  });
+  if (canViewHistory) {
+    menuItems.push({
+      label: 'View History',
+      onClick: () => {
+        showHistoryModal();
+      },
+      keepMenuOpen: true
+    });
+  }
+
+  // Where Used - find all references to this file
+  if (canSearchWhereUsed) {
+    menuItems.push({
+      label: isSearchingWhereUsed ? 'Searching...' : 'Where Used...',
       onClick: async () => {
-        await pullAll();
+        await findWhereUsed();
+        onClose();
+      },
+      disabled: isSearchingWhereUsed
+    });
+  }
+
+  // Clear data file (only for parameter/case files with data)
+  if (isDataFile) {
+    menuItems.push({
+      label: 'Clear data file',
+      onClick: async () => {
+        if (fileId) {
+          await clearDataFile(fileId);
+        }
+        onClose();
+      },
+      disabled: !hasDataToClear
+    });
+  }
+
+  menuItems.push({ label: '', onClick: () => {}, divider: true });
+
+  // Pull Latest - fetch latest version from remote (uses usePullFile hook)
+  if (canPull) {
+    menuItems.push({
+      label: 'Pull Latest',
+      onClick: async () => {
+        await pullFile();
         onClose();
       }
     });
-    
-    // Revert - always show (same as tab context menu "Revert")
-    items.push({
-      label: 'Revert',
+  }
+
+  // Pull All Latest - fetch all latest from remote
+  menuItems.push({
+    label: 'Pull All Latest',
+    onClick: async () => {
+      await pullAll();
+      onClose();
+    }
+  });
+
+  // Revert - always show (same as tab context menu "Revert")
+  menuItems.push({
+    label: 'Revert',
+    onClick: async () => {
+      await fileOperationsService.revertFile(fileId);
+      onClose();
+    }
+  });
+
+  // Discard Changes (if dirty) - same as Revert but more explicit label
+  const currentFile = fileRegistry.getFile(fileId);
+  if (currentFile?.isDirty) {
+    menuItems.push({
+      label: 'Discard Changes',
       onClick: async () => {
         await fileOperationsService.revertFile(fileId);
         onClose();
       }
     });
-    
-    // Discard Changes (if dirty) - same as Revert but more explicit label
-    const currentFile = fileRegistry.getFile(fileId);
-    if (currentFile?.isDirty) {
-      items.push({
-        label: 'Discard Changes',
-        onClick: async () => {
-          await fileOperationsService.revertFile(fileId);
+  }
+  menuItems.push({ label: '', onClick: () => {}, divider: true });
+
+  // Danger actions
+  menuItems.push({
+    label: 'Delete',
+    onClick: async () => {
+      try {
+        const success = await fileOperationsService.deleteFile(fileId);
+        if (success) {
           onClose();
         }
-      });
-    }
-    items.push({ label: '', onClick: () => {}, divider: true });
-    
-    // Danger actions
-    items.push({
-      label: 'Delete',
-      onClick: async () => {
-        try {
-          const success = await fileOperationsService.deleteFile(fileId);
-          if (success) {
-            onClose();
-          }
-        } catch (error) {
-          console.error('Failed to delete file:', error);
-          alert(`Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
+      } catch (error) {
+        console.error('Failed to delete file:', error);
+        alert(`Failed to delete file: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
-    });
-    items.push({ label: '', onClick: () => {}, divider: true });
-    
-    // Info
-    items.push({
-      label: 'Copy Name',
-      onClick: () => navigator.clipboard.writeText(item.name)
-    });
-    items.push({
-      label: 'Copy Path',
-      onClick: () => navigator.clipboard.writeText(item.path)
-    });
-    
-    return items;
-  }, [item, openTabs, operations, canRename, showRenameModal, canPull, pullFile, pullAll, fileId, canViewHistory, showHistoryModal, isDataFile, hasDataToClear, clearDataFile, canSearchWhereUsed, isSearchingWhereUsed, findWhereUsed]);
+    }
+  });
+  menuItems.push({ label: '', onClick: () => {}, divider: true });
+
+  // Info
+  menuItems.push({
+    label: 'Copy Name',
+    onClick: () => navigator.clipboard.writeText(item.name)
+  });
+  menuItems.push({
+    label: 'Copy Path',
+    onClick: () => navigator.clipboard.writeText(item.path)
+  });
 
   const handleCreateFile = async (name: string, type: ObjectType) => {
     await fileOperationsService.createFile(name, type, {

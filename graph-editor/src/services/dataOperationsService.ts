@@ -51,7 +51,9 @@ import {
   analyzeSliceCoverage,
   computeFetchWindow,
   type RefetchDecision,
+  type LatencyConfig,
 } from './fetchRefetchPolicy';
+import { computeCohortRetrievalHorizon } from './cohortRetrievalHorizon';
 import { 
   statisticalEnhancementService,
   computeEdgeLatencyStats,
@@ -69,6 +71,7 @@ import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
+import { FORECAST_BLEND_LAMBDA, DIAGNOSTIC_LOG } from '../constants/statisticalConstants';
 
 // Cached DAS runner instance for connection lookups (avoid recreating per-call)
 let cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
@@ -2568,8 +2571,9 @@ class DataOperationsService {
     bustCache?: boolean; // If true, ignore existing dates and re-fetch everything
     targetSlice?: string; // Optional: DSL for specific slice (default '' = uncontexted)
     currentDSL?: string;  // Explicit DSL for window/context (e.g. from WindowSelector / scenario)
+    boundedCohortWindow?: DateRange; // Optional: Pre-calculated bounded window from planner
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL, boundedCohortWindow } = options;
     sessionLogService.info('data-fetch', 'DATA_GET_FROM_SOURCE', `Get from Source (versioned): ${objectType} ${objectId}`,
       undefined, { fileId: `${objectType}-${objectId}`, fileType: objectType });
     
@@ -2601,6 +2605,7 @@ class DataOperationsService {
           bustCache,       // Pass through bust cache flag
           currentDSL,
           targetSlice,
+          boundedCohortWindow,
         });
         
         // NOTE: getFromSourceDirect already calls getParameterFromFile internally
@@ -2811,6 +2816,7 @@ class DataOperationsService {
     versionedCase?: boolean;  // If true AND objectType==='case', append schedule to case file instead of direct graph update
     currentDSL?: string;      // Explicit DSL for window/context (e.g. from WindowSelector / scenario)
     targetSlice?: string;     // Optional: DSL for specific slice (default '' = uncontexted)
+    boundedCohortWindow?: DateRange; // Optional: Pre-calculated bounded window
   }): Promise<void> {
       const {
         objectType,
@@ -2825,6 +2831,7 @@ class DataOperationsService {
         versionedCase,
         currentDSL,
         targetSlice = '',
+        boundedCohortWindow,
       } = options;
     
     // DEBUG: Log conditionalIndex at entry point
@@ -3643,7 +3650,7 @@ class DataOperationsService {
         const targetEdgeForPolicy = targetId && graph 
           ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) 
           : undefined;
-        const latencyConfig = targetEdgeForPolicy?.p?.latency;
+        const latencyConfig = targetEdgeForPolicy?.p?.latency as LatencyConfig | undefined;
         
         // Check if this edge has latency tracking enabled
         if (latencyConfig?.maturity_days && latencyConfig.maturity_days > 0) {
@@ -3695,14 +3702,67 @@ class DataOperationsService {
             batchableToastSuccess('Data is mature and cached - no refetch needed', { id: 'das-fetch' });
             console.log('[DataOps:REFETCH_POLICY] Skipping fetch - data is mature and cached');
           }
-          // Handle replace_slice policy: bypass incremental, fetch full window
+          // Handle replace_slice policy: for cohorts, use bounded window based on path_t95
           else if (refetchPolicy.type === 'replace_slice') {
-            actualFetchWindows = [requestedWindow];
+            // ═══════════════════════════════════════════════════════════════════════════
+            // BOUNDED COHORT WINDOW (retrieval-date-logic §6.2)
+            // For cohort queries on latency edges, bound the retrieval window using
+            // path_t95 (cumulative latency from anchor). This prevents refetching
+            // mature historical cohorts that won't meaningfully change.
+            // ═══════════════════════════════════════════════════════════════════════════
+            let fetchWindow = requestedWindow;
+            
+            // 1. Prefer pre-calculated window from planner (uses on-demand path_t95)
+            if (boundedCohortWindow) {
+              fetchWindow = boundedCohortWindow;
+              console.log('[DataOps:COHORT_HORIZON] Using pre-calculated bounded window from planner:', fetchWindow);
+              sessionLogService.addChild(logOpId, 'info', 'COHORT_HORIZON_PLANNER',
+                `Using planner-provided bounded window`,
+                undefined,
+                { boundedWindow: fetchWindow }
+              );
+            }
+            // 2. Fallback: recalculate using edge path_t95 (may be undefined on first load)
+            else if (isCohortQuery && latencyConfig) {
+              const horizonResult = computeCohortRetrievalHorizon({
+                requestedWindow,
+                pathT95: latencyConfig.path_t95,
+                edgeT95: latencyConfig.t95,
+                maturityDays: latencyConfig.maturity_days,
+              });
+              
+              if (horizonResult.wasBounded) {
+                fetchWindow = horizonResult.boundedWindow;
+                console.log('[DataOps:COHORT_HORIZON] Bounded cohort window:', {
+                  original: requestedWindow,
+                  bounded: fetchWindow,
+                  daysTrimmed: horizonResult.daysTrimmed,
+                  effectiveT95: horizonResult.effectiveT95,
+                  source: horizonResult.t95Source,
+                });
+                
+                sessionLogService.addChild(logOpId, 'info', 'COHORT_HORIZON_BOUNDED',
+                  `Cohort window bounded: ${horizonResult.daysTrimmed}d trimmed`,
+                  horizonResult.summary,
+                  {
+                    originalStart: requestedWindow.start,
+                    originalEnd: requestedWindow.end,
+                    boundedStart: fetchWindow.start,
+                    boundedEnd: fetchWindow.end,
+                    daysTrimmed: horizonResult.daysTrimmed,
+                    effectiveT95: horizonResult.effectiveT95,
+                    t95Source: horizonResult.t95Source,
+                  }
+                );
+              }
+            }
+            
+            actualFetchWindows = [fetchWindow];
             toast.loading(
               `Refetching ${isCohortQuery ? 'cohort' : 'window'} slice (immature data)...`,
               { id: 'das-fetch' }
             );
-            console.log('[DataOps:REFETCH_POLICY] Full slice replacement - will fetch:', requestedWindow);
+            console.log('[DataOps:REFETCH_POLICY] Slice replacement - will fetch:', fetchWindow);
             // Skip incremental fetch logic below
           }
           // Handle partial policy: modify window to immature portion only
@@ -4420,15 +4480,18 @@ class DataOperationsService {
           });
           
           // Capture DAS execution history for session logs (request/response details)
-          const dasHistory = runner.getExecutionHistory();
-          for (const entry of dasHistory) {
-            // Add each DAS execution step as a child log entry
-            const level = entry.phase === 'error' ? 'error' : 'info';
-            sessionLogService.addChild(logOpId, level, `DAS_${entry.phase.toUpperCase()}`,
-              entry.message,
-              undefined,
-              entry.data as Record<string, unknown> | undefined
-            );
+          // Only include verbose data when DIAGNOSTIC_LOG is enabled to avoid bloating logs
+          if (DIAGNOSTIC_LOG) {
+            const dasHistory = runner.getExecutionHistory();
+            for (const entry of dasHistory) {
+              // Add each DAS execution step as a child log entry
+              const level = entry.phase === 'error' ? 'error' : 'info';
+              sessionLogService.addChild(logOpId, level, `DAS_${entry.phase.toUpperCase()}`,
+                entry.message,
+                undefined,
+                entry.data as Record<string, unknown> | undefined
+              );
+            }
           }
           
           if (!result.success) {
@@ -5839,6 +5902,7 @@ class DataOperationsService {
           })[0] as any;
           
           const forecastValue = bestWindow.forecast;
+          const nBaseline = bestWindow.n; // Sample size behind the forecast
           
           if (forecastValue !== undefined) {
             nextAggregated = {
@@ -5846,9 +5910,49 @@ class DataOperationsService {
               values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
                 // Do not overwrite an existing forecast on the value
                 if (v.forecast !== undefined) return v;
+                
+                // === FORECAST BLEND (forecast-fix.md) ===
+                // If we have completeness and evidence, compute blended p.mean
+                const completeness = v.latency?.completeness;
+                const evidenceMean = v.evidence?.mean;
+                const nQuery = v.n;
+                
+                let blendedMean: number | undefined;
+                if (
+                  completeness !== undefined &&
+                  evidenceMean !== undefined &&
+                  nQuery !== undefined &&
+                  nQuery > 0 &&
+                  nBaseline !== undefined &&
+                  nBaseline > 0
+                ) {
+                  // w_evidence = (c * n_q) / (λ * n_baseline + c * n_q)
+                  const nEff = completeness * nQuery;
+                  const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
+                  const wEvidence = nEff / (m0 + nEff);
+                  
+                  // p.mean = w_evidence * p.evidence + (1 - w_evidence) * p.forecast
+                  blendedMean = wEvidence * evidenceMean + (1 - wEvidence) * forecastValue;
+                  
+                  console.log('[addEvidenceAndForecastScalars] Computed forecast blend:', {
+                    completeness,
+                    nQuery,
+                    nBaseline,
+                    lambda: FORECAST_BLEND_LAMBDA,
+                    nEff,
+                    m0,
+                    wEvidence: wEvidence.toFixed(3),
+                    evidenceMean: evidenceMean.toFixed(3),
+                    forecastMean: forecastValue.toFixed(3),
+                    blendedMean: blendedMean.toFixed(3),
+                  });
+                }
+                
                 return {
                   ...v,
                   forecast: forecastValue,
+                  // Update mean to blended value if computed
+                  ...(blendedMean !== undefined ? { mean: blendedMean } : {}),
                 };
               }),
             };
@@ -5890,11 +5994,17 @@ class DataOperationsService {
               );
               
               if (latencyStats.forecast_available && latencyStats.p_infinity !== undefined) {
+                // Compute n_baseline from mature cohorts (age >= maturityDays)
+                const matureCohorts = allCohorts.filter(c => c.age >= maturityDays);
+                const nBaselineFallback = matureCohorts.reduce((sum, c) => sum + c.n, 0);
+                
                 console.log('[addEvidenceAndForecastScalars] Using cohort-based forecast fallback:', {
                   p_infinity: latencyStats.p_infinity,
                   t95: latencyStats.t95,
                   completeness: latencyStats.completeness,
                   cohortCount: allCohorts.length,
+                  matureCohortCount: matureCohorts.length,
+                  nBaselineFallback,
                   maturityDays,
                 });
                 
@@ -5902,9 +6012,41 @@ class DataOperationsService {
                   ...nextAggregated,
                   values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
                     if (v.forecast !== undefined) return v;
+                    
+                    // === FORECAST BLEND (forecast-fix.md) – cohort fallback path ===
+                    const completeness = v.latency?.completeness ?? latencyStats.completeness;
+                    const evidenceMean = v.evidence?.mean;
+                    const nQuery = v.n;
+                    const forecastValue = latencyStats.p_infinity!;
+                    
+                    let blendedMean: number | undefined;
+                    if (
+                      completeness !== undefined &&
+                      evidenceMean !== undefined &&
+                      nQuery !== undefined &&
+                      nQuery > 0 &&
+                      nBaselineFallback > 0
+                    ) {
+                      const nEff = completeness * nQuery;
+                      const m0 = FORECAST_BLEND_LAMBDA * nBaselineFallback;
+                      const wEvidence = nEff / (m0 + nEff);
+                      blendedMean = wEvidence * evidenceMean + (1 - wEvidence) * forecastValue;
+                      
+                      console.log('[addEvidenceAndForecastScalars] Computed forecast blend (cohort fallback):', {
+                        completeness,
+                        nQuery,
+                        nBaselineFallback,
+                        wEvidence: wEvidence.toFixed(3),
+                        evidenceMean: evidenceMean.toFixed(3),
+                        forecastMean: forecastValue.toFixed(3),
+                        blendedMean: blendedMean.toFixed(3),
+                      });
+                    }
+                    
                     return {
                       ...v,
-                      forecast: latencyStats.p_infinity,
+                      forecast: forecastValue,
+                      ...(blendedMean !== undefined ? { mean: blendedMean } : {}),
                     };
                   }),
                 };

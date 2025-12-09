@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { EditorProps } from '../../types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { EditorProps, RepositoryItem } from '../../types';
 import { useFileState, useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import Form from '@rjsf/mui';
@@ -8,6 +8,12 @@ import { RJSFSchema, RegistryWidgetsType, UiSchema, TemplatesType } from '@rjsf/
 import { getFileTypeConfig, getSchemaFile, getUiSchemaFile } from '../../config/fileTypeRegistry';
 import { GuardedOperationModal } from '../modals/GuardedOperationModal';
 import { MonacoWidget, TabbedArrayWidget, AccordionObjectFieldTemplate, ThreeColumnFieldTemplate } from '../widgets';
+import { FileCode } from 'lucide-react';
+
+// Threshold for "large" file warning (in characters when JSON stringified)
+const LARGE_FILE_WARNING_THRESHOLD = 20000;
+// Threshold above which we DON'T render the form at all (too slow)
+const LARGE_FILE_BLOCK_THRESHOLD = 100000;
 
 /**
  * Form Editor
@@ -20,6 +26,60 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   const { data, isDirty, updateData } = useFileState(fileId);
   const { operations: navOperations } = useNavigatorContext();
   const { activeTabId, operations: tabOperations } = useTabContext();
+  
+  // Detect file size for performance warnings
+  const fileSize = useMemo(() => {
+    if (!data) return 0;
+    try {
+      return JSON.stringify(data).length;
+    } catch {
+      return 0;
+    }
+  }, [data]);
+  
+  // Track if user has explicitly chosen to load the form despite size warning
+  const [forceLoadForm, setForceLoadForm] = useState(false);
+  
+  const isLargeFile = fileSize > LARGE_FILE_WARNING_THRESHOLD;
+  // Block form unless user explicitly chooses to load it
+  const blockFormRendering = isLargeFile && !forceLoadForm;
+  
+  // Handler to open as YAML view
+  const handleOpenAsYAML = () => {
+    const fileIdParts = fileId.split('-');
+    const type = fileIdParts[0] as RepositoryItem['type'];
+    const id = fileIdParts.slice(1).join('-');
+    
+    const item: RepositoryItem = {
+      id,
+      type,
+      name: `${id}.yaml`,
+      path: `${type}s/${id}.yaml`
+    };
+    
+    tabOperations.openTab(item, 'raw-yaml', true);
+  };
+  
+  // Handler to open as JSON view
+  const handleOpenAsJSON = () => {
+    const fileIdParts = fileId.split('-');
+    const type = fileIdParts[0] as RepositoryItem['type'];
+    const id = fileIdParts.slice(1).join('-');
+    
+    const item: RepositoryItem = {
+      id,
+      type,
+      name: `${id}.json`,
+      path: `${type}s/${id}.yaml`
+    };
+    
+    tabOperations.openTab(item, 'raw-json', true);
+  };
+  
+  // Handler to force load the form anyway
+  const handleLoadFormAnyway = () => {
+    setForceLoadForm(true);
+  };
   const [schema, setSchema] = useState<RJSFSchema | null>(null);
   const [uiSchema, setUiSchema] = useState<UiSchema | null>(null);
   const [formData, setFormData] = useState<any>(null);
@@ -415,6 +475,91 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
         overflow: 'auto'
       }}>
         {renderContextualTopbar()}
+        
+        {/* Large file - show options instead of auto-loading form */}
+        {blockFormRendering && (
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '20px',
+            padding: '48px 24px',
+            background: '#FFFBEB',
+            border: '1px solid #FCD34D',
+            borderRadius: '8px',
+            margin: '24px',
+            textAlign: 'center'
+          }}>
+            <div style={{ fontSize: '48px' }}>⚠️</div>
+            <div style={{ fontSize: '16px', fontWeight: 600, color: '#92400E' }}>
+              Large file detected ({Math.round(fileSize / 1000)}KB)
+            </div>
+            <div style={{ fontSize: '14px', color: '#78350F', maxWidth: '450px' }}>
+              Form view may be slow for this file size. 
+              We recommend using YAML or JSON view for better performance.
+            </div>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button
+                onClick={handleOpenAsYAML}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 20px',
+                  background: '#059669',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: '#fff',
+                  cursor: 'pointer'
+                }}
+              >
+                <FileCode size={16} />
+                Open as YAML
+              </button>
+              <button
+                onClick={handleOpenAsJSON}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 20px',
+                  background: '#2563EB',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: '#fff',
+                  cursor: 'pointer'
+                }}
+              >
+                <FileCode size={16} />
+                Open as JSON
+              </button>
+              <button
+                onClick={handleLoadFormAnyway}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 20px',
+                  background: '#fff',
+                  border: '1px solid #D97706',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: '#92400E',
+                  cursor: 'pointer'
+                }}
+              >
+                Load Form Anyway
+              </button>
+            </div>
+          </div>
+        )}
+        
         <div style={{
           padding: '24px',
           maxWidth: '100%',
@@ -517,7 +662,7 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
             }
           `}</style>
           <div className="form-editor-wrapper">
-          {schema && formData ? (
+          {blockFormRendering ? null : schema && formData ? (
             <Form
               schema={schema}
               formData={formData}
@@ -535,7 +680,7 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
                 }
               }}
             />
-          ) : (
+          ) : !blockFormRendering ? (
             <div style={{
               display: 'flex',
               alignItems: 'center',
@@ -546,7 +691,7 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
             }}>
               Loading schema...
             </div>
-          )}
+          ) : null}
           </div>
         </div>
       </div>

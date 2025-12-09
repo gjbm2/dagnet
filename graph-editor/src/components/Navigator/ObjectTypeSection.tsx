@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, createContext, useContext } from 'react';
 import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
@@ -9,7 +9,7 @@ import '../../styles/file-state-indicators.css';
 /**
  * Navigator Entry - Internal representation
  */
-interface NavigatorEntry {
+export interface NavigatorEntry {
   id: string;
   fileId: string; // Full fileId (e.g., 'node-household-created') used as unique key
   name: string;
@@ -28,86 +28,157 @@ interface NavigatorEntry {
   case_type?: string;
 }
 
-interface ObjectTypeSectionProps {
-  title: string;
-  icon: LucideIcon;
+// ============================================================================
+// ENTRIES REGISTRY - Single source of truth for all navigator entries
+// ============================================================================
+
+/**
+ * Context to provide stable entry lookup.
+ * This avoids passing entries through props/closures which can become stale.
+ */
+interface EntriesRegistryContextValue {
+  getEntry: (fileId: string) => NavigatorEntry | undefined;
+  onItemClick: (fileId: string) => void;
+  onItemContextMenu: (fileId: string, event: React.MouseEvent) => void;
+}
+
+const EntriesRegistryContext = createContext<EntriesRegistryContextValue | null>(null);
+
+export function EntriesRegistryProvider({ 
+  entries, 
+  onEntryClick, 
+  onEntryContextMenu,
+  children 
+}: { 
   entries: NavigatorEntry[];
-  sectionType: ObjectType;
-  isExpanded: boolean;
-  onToggle: () => void;
   onEntryClick: (entry: NavigatorEntry) => void;
-  onEntryContextMenu?: (entry: NavigatorEntry, x: number, y: number) => void;
-  onSectionContextMenu?: (type: ObjectType, x: number, y: number) => void;
-  onIndexClick?: () => void;
-  indexIsDirty?: boolean;
-  groupBySubCategories?: boolean;
+  onEntryContextMenu?: (entry: NavigatorEntry, event: React.MouseEvent) => void;
+  children: React.ReactNode;
+}) {
+  // Build a stable Map from entries - rebuild when entries change
+  const entriesMap = useRef(new Map<string, NavigatorEntry>());
+  
+  // Update the map whenever entries change
+  useEffect(() => {
+    entriesMap.current.clear();
+    for (const entry of entries) {
+      entriesMap.current.set(entry.fileId, entry);
+    }
+  }, [entries]);
+  
+  const getEntry = useCallback((fileId: string): NavigatorEntry | undefined => {
+    return entriesMap.current.get(fileId);
+  }, []);
+  
+  const handleItemClick = useCallback((fileId: string) => {
+    const entry = entriesMap.current.get(fileId);
+    if (entry) {
+      onEntryClick(entry);
+    } else {
+      console.error(`[EntriesRegistry] No entry found for fileId: ${fileId}`);
+    }
+  }, [onEntryClick]);
+  
+  const handleItemContextMenu = useCallback((fileId: string, event: React.MouseEvent) => {
+    const entry = entriesMap.current.get(fileId);
+    if (entry && onEntryContextMenu) {
+      onEntryContextMenu(entry, event);
+    }
+  }, [onEntryContextMenu]);
+  
+  const value: EntriesRegistryContextValue = {
+    getEntry,
+    onItemClick: handleItemClick,
+    onItemContextMenu: handleItemContextMenu,
+  };
+  
+  return (
+    <EntriesRegistryContext.Provider value={value}>
+      {children}
+    </EntriesRegistryContext.Provider>
+  );
+}
+
+function useEntriesRegistry() {
+  const ctx = useContext(EntriesRegistryContext);
+  if (!ctx) {
+    throw new Error('useEntriesRegistry must be used within EntriesRegistryProvider');
+  }
+  return ctx;
+}
+
+// ============================================================================
+// NAVIGATOR ITEM - Simple component that only knows its fileId
+// ============================================================================
+
+interface NavigatorItemProps {
+  fileId: string;
+  isActive: boolean;
+  tabCount: number;
 }
 
 // Cache for where-used tooltips to avoid repeated fetches
 const tooltipCache = new Map<string, string>();
 
-/**
- * Navigator Item Component
- * 
- * Renders a single navigator item with hover tooltip showing where it's used.
- * Fetches "where used" info on hover with debounce.
- */
-interface NavigatorItemProps {
-  entry: NavigatorEntry;
-  isActive: boolean;
-  tabCount: number;
-  onClick: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
-}
-
-function NavigatorItem({ entry, isActive, tabCount, onClick, onContextMenu }: NavigatorItemProps) {
+function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
+  const { getEntry, onItemClick, onItemContextMenu } = useEntriesRegistry();
   const [tooltip, setTooltip] = useState<string | null>(null);
   const [isHovering, setIsHovering] = useState(false);
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const fetchedRef = useRef(false);
+  const fileRegistry = useFileRegistry();
   
-  const fileId = `${entry.type}-${entry.id}`;
+  // Get entry data fresh from the registry
+  const entry = getEntry(fileId);
   
-  // Generate base tooltip (status info)
-  const baseTooltip = entry.isOrphan 
-    ? `⚠️ Orphan file (not in index)\n\n${entry.name}` 
-    : entry.isLocal 
-      ? `${entry.name} (local only)` 
-      : entry.name;
+  // Compute values that depend on entry (but hooks must still be called)
+  const baseTooltip = entry ? `${entry.name}${entry.path ? `\n${entry.path}` : ''}` : '';
   
-  // Fetch where-used info on hover
+  // Function to fetch where-used information
   const fetchWhereUsed = useCallback(async () => {
+    if (fetchedRef.current) return;
+    if (!entry) return;
+    
+    // Only fetch for parameters, nodes, and events
+    if (!['parameter', 'node', 'event'].includes(entry.type)) return;
+    
     // Check cache first
     if (tooltipCache.has(fileId)) {
       setTooltip(tooltipCache.get(fileId)!);
       return;
     }
     
-    // Skip for files that don't make sense (graphs aren't typically referenced)
-    if (entry.type === 'graph') {
-      const graphTooltip = `${entry.name}\n\n(Graphs are not referenced by other files)`;
-      tooltipCache.set(fileId, graphTooltip);
-      setTooltip(graphTooltip);
-      return;
+    try {
+      const whereUsedService = WhereUsedService.getInstance(fileRegistry);
+      const result = await whereUsedService.getWhereUsed(entry.type, entry.id);
+      const currentBaseTooltip = `${entry.name}${entry.path ? `\n${entry.path}` : ''}`;
+      
+      if (result.graphs.length === 0) {
+        const newTooltip = `${currentBaseTooltip}\n\n⚠️ Not used in any graphs`;
+        tooltipCache.set(fileId, newTooltip);
+        setTooltip(newTooltip);
+      } else {
+        const graphNames = result.graphs.slice(0, 5).join(', ');
+        const suffix = result.graphs.length > 5 ? ` and ${result.graphs.length - 5} more` : '';
+        const newTooltip = `${currentBaseTooltip}\n\n📊 Used in: ${graphNames}${suffix}`;
+        tooltipCache.set(fileId, newTooltip);
+        setTooltip(newTooltip);
+      }
+    } catch (error) {
+      // Silently fail - use base tooltip
     }
     
-    try {
-      const summary = await WhereUsedService.getTooltipSummary(fileId);
-      tooltipCache.set(fileId, summary.tooltip);
-      setTooltip(summary.tooltip);
-    } catch {
-      // Silently fail - just show base tooltip
-    }
-  }, [fileId, entry.name, entry.type]);
+    fetchedRef.current = true;
+  }, [fileId, entry, fileRegistry]);
   
   const handleMouseEnter = useCallback(() => {
     setIsHovering(true);
     
-    // Debounce the fetch - wait 300ms before fetching
-    if (!fetchedRef.current) {
+    // Delay fetch to avoid unnecessary API calls on quick hovers
+    if (!fetchedRef.current && !hoverTimeoutRef.current) {
       hoverTimeoutRef.current = setTimeout(() => {
         fetchWhereUsed();
-        fetchedRef.current = true;
+        hoverTimeoutRef.current = null;
       }, 300);
     }
   }, [fetchWhereUsed]);
@@ -131,18 +202,32 @@ function NavigatorItem({ entry, isActive, tabCount, onClick, onContextMenu }: Na
     };
   }, []);
   
+  // Click handler uses fileId to look up entry from registry
+  const handleClick = useCallback(() => {
+    onItemClick(fileId);
+  }, [fileId, onItemClick]);
+  
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onItemContextMenu(fileId, e);
+  }, [fileId, onItemContextMenu]);
+  
+  // Early return AFTER all hooks
+  if (!entry) {
+    console.error(`[NavigatorItem] No entry found for fileId: ${fileId}`);
+    return null;
+  }
+  
   // Use cached/fetched tooltip if available, otherwise base tooltip
   const displayTooltip = tooltip || baseTooltip;
   
   return (
     <div
       className={`navigator-item ${isActive ? 'active' : ''}`}
-      onClick={onClick}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onContextMenu(e);
-      }}
+      data-file-id={fileId}
+      onClick={handleClick}
+      onContextMenu={handleContextMenu}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       title={displayTooltip}
@@ -150,25 +235,43 @@ function NavigatorItem({ entry, isActive, tabCount, onClick, onContextMenu }: Na
       <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
         {entry.name}
       </span>
-      
-      <span className="navigator-item-status">
-        {tabCount > 1 && <span className="tab-count" title={`${tabCount} tabs open`}>{tabCount}</span>}
-        {!entry.hasFile && entry.inIndex && <span className="file-badge create" title="Create file">[create]</span>}
-        {entry.isOrphan && <span className="file-badge orphan" title="Orphan file (not in index)">⚠️</span>}
-        {entry.isLocal && entry.hasFile && <span className="file-badge local">local</span>}
-      </span>
+      {tabCount > 1 && (
+        <span className="navigator-tab-count">{tabCount}</span>
+      )}
     </div>
   );
 }
 
-/**
- * Object Type Section
- * 
- * Renders a collapsible section for each object type with proper visual indicators.
- */
+// ============================================================================
+// OBJECT TYPE SECTION - Groups entries by type
+// ============================================================================
+
+interface ObjectTypeSectionProps {
+  title: string;
+  icon: LucideIcon;
+  entries: NavigatorEntry[];
+  sectionType: ObjectType;
+  isExpanded: boolean;
+  onToggle: () => void;
+  onEntryClick: (entry: NavigatorEntry) => void;
+  onEntryContextMenu?: (entry: NavigatorEntry, event: React.MouseEvent) => void;
+  onSectionContextMenu?: (type: ObjectType, x: number, y: number) => void;
+  onIndexClick?: () => void;
+  indexIsDirty?: boolean;
+  groupBySubCategories?: boolean;
+}
+
+// Sub-category configuration for parameters
+const subCategoryConfig: Record<string, { name: string; icon: LucideIcon }> = {
+  probability: { name: 'Probability', icon: TrendingUp },
+  cost_gbp: { name: 'Cost (GBP)', icon: Coins },
+  labour_cost: { name: 'Labour Cost', icon: Clock },
+  standard_deviation: { name: 'Std Dev', icon: Package },
+};
+
 export function ObjectTypeSection({
   title,
-  icon: IconComponent,
+  icon: Icon,
   entries,
   sectionType,
   isExpanded,
@@ -177,231 +280,105 @@ export function ObjectTypeSection({
   onEntryContextMenu,
   onSectionContextMenu,
   onIndexClick,
-  indexIsDirty = false,
-  groupBySubCategories = false
+  indexIsDirty,
+  groupBySubCategories = false,
 }: ObjectTypeSectionProps) {
-  const { tabs, activeTabId } = useTabContext();
-  const fileRegistry = useFileRegistry();
-  const [subCategoryStates, setSubCategoryStates] = React.useState<Record<string, boolean>>({});
-  const contentRef = React.useRef<HTMLDivElement>(null);
-  const sectionRef = React.useRef<HTMLDivElement>(null);
-  const [contentHeight, setContentHeight] = React.useState<number>(0);
+  const { tabs } = useTabContext();
+  const [expandedSubCategories, setExpandedSubCategories] = useState<Set<string>>(new Set(['probability', 'cost_gbp', 'labour_cost', 'standard_deviation']));
   
-  // Get theme colours for this object type
   const theme = getObjectTypeTheme(sectionType);
   
-  // Get the fileId of the active tab for comparison
-  const activeTab = tabs.find(t => t.id === activeTabId);
-  const activeFileId = activeTab?.fileId;
+  // Get active file ID
+  const activeFileId = tabs.find(t => t.isActive)?.fileId || null;
   
-  // Scroll to active item when it changes
-  React.useEffect(() => {
-    if (!activeFileId || !isExpanded) return;
-    
-    setTimeout(() => {
-      // Find the active item element
-      const activeElement = sectionRef.current?.querySelector('.navigator-item.active');
-      if (!activeElement) return;
-      
-      // Find the actual scrollable container (the one with overflow: auto)
-      let scrollContainer = sectionRef.current?.parentElement;
-      while (scrollContainer && scrollContainer !== document.body) {
-        const overflowY = window.getComputedStyle(scrollContainer).overflowY;
-        if (overflowY === 'auto' || overflowY === 'scroll') {
-          break;
-        }
-        scrollContainer = scrollContainer.parentElement;
-      }
-      
-      if (!scrollContainer || scrollContainer === document.body) return;
-      
-      const containerRect = scrollContainer.getBoundingClientRect();
-      const elementRect = activeElement.getBoundingClientRect();
-      
-      // Account for sticky header height (approx 45px)
-      const stickyHeaderHeight = 45;
-      const effectiveTop = containerRect.top + stickyHeaderHeight;
-      
-      // Check if element is out of view (accounting for sticky header)
-      const isOutOfView = elementRect.top < effectiveTop || 
-                         elementRect.bottom > containerRect.bottom;
-      
-      if (isOutOfView) {
-        // Calculate scroll position needed
-        const scrollOffset = elementRect.top - effectiveTop;
-        scrollContainer.scrollBy({ 
-          top: scrollOffset,
-          behavior: 'smooth'
-        });
-      }
-    }, 100); // Small delay to ensure DOM is ready
-  }, [activeFileId, isExpanded]);
-
-  // Load sub-category collapse states from localStorage
-  React.useEffect(() => {
-    const saved = localStorage.getItem(`navigator-subcategory-${sectionType}`);
-    if (saved) {
-      setSubCategoryStates(JSON.parse(saved));
-    }
-  }, [sectionType]);
-
-  // Measure content height for smooth animation
-  React.useEffect(() => {
-    if (contentRef.current && isExpanded) {
-      // Use a small delay to ensure DOM has updated
-      const timeoutId = setTimeout(() => {
-        if (contentRef.current) {
-          const height = contentRef.current.scrollHeight;
-          setContentHeight(height);
-        }
-      }, 10);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [entries, isExpanded, subCategoryStates, sectionType]);
-
-  // Scroll section into view when expanded
-  React.useEffect(() => {
-    if (isExpanded && sectionRef.current) {
-      // Small delay to allow animation to start
-      setTimeout(() => {
-        if (sectionRef.current) {
-          const rect = sectionRef.current.getBoundingClientRect();
-          const isVisible = (
-            rect.top >= 0 &&
-            rect.bottom <= window.innerHeight
-          );
-          
-          // Only scroll if the section is not fully visible
-          if (!isVisible) {
-            sectionRef.current.scrollIntoView({ 
-              behavior: 'smooth', 
-              block: 'nearest'
-            });
-          }
-        }
-      }, 50);
-    }
-  }, [isExpanded]);
-
-  // Save sub-category collapse states to localStorage
-  const toggleSubCategory = (subCatName: string) => {
-    setSubCategoryStates(prev => {
-      const newState = { ...prev, [subCatName]: !prev[subCatName] };
-      localStorage.setItem(`navigator-subcategory-${sectionType}`, JSON.stringify(newState));
-      return newState;
-    });
-  };
-
-  // Get tab count for an entry
-  const getTabCount = (entry: NavigatorEntry): number => {
-    const fileId = `${entry.type}-${entry.id}`;
-    return tabs.filter(t => t.fileId === fileId).length;
-  };
-
-  // Group entries by sub-category
-  const groupedEntries = React.useMemo(() => {
-    if (!groupBySubCategories || sectionType !== 'parameter') {
-      return { 'all': entries };
-    }
-
-    const groups: Record<string, NavigatorEntry[]> = {
-      'probability': [],
-      'cost_gbp': [],
-      'labour_cost': [],
-      'other': []
-    };
-
-    for (const entry of entries) {
-      if (entry.parameter_type === 'probability') {
-        groups.probability.push(entry);
-      } else if (entry.parameter_type === 'cost_gbp') {
-        groups.cost_gbp.push(entry);
-      } else if (entry.parameter_type === 'labour_cost') {
-        groups.labour_cost.push(entry);
+  const toggleSubCategory = useCallback((key: string) => {
+    setExpandedSubCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        groups.other.push(entry);
+        next.add(key);
       }
+      return next;
+    });
+  }, []);
+  
+  // Get tab count for an entry
+  const getTabCount = useCallback((entry: NavigatorEntry) => {
+    return tabs.filter(t => t.fileId === entry.fileId).length;
+  }, [tabs]);
+  
+  // Handle section right-click
+  const handleSectionContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onSectionContextMenu) {
+      onSectionContextMenu(sectionType, e.clientX, e.clientY);
     }
-
-    return groups;
-  }, [entries, groupBySubCategories, sectionType]);
-
-  // Sub-category display names with icons
-  const subCategoryConfig: Record<string, { name: string; icon: React.ElementType }> = {
-    'probability': { name: 'Probability', icon: TrendingUp },
-    'cost_gbp': { name: 'Cost (GBP)', icon: Coins },
-    'labour_cost': { name: 'Cost (Time)', icon: Clock },
-    'other': { name: 'Other', icon: Package }
-  };
-
+  }, [onSectionContextMenu, sectionType]);
+  
+  // Group entries by sub-category if enabled
+  const groupedBySubCategory = groupBySubCategories && sectionType === 'parameter'
+    ? Object.keys(subCategoryConfig).reduce((acc, key) => {
+        acc[key] = entries.filter(e => e.parameter_type === key);
+        return acc;
+      }, {} as Record<string, NavigatorEntry[]>)
+    : null;
+  
   return (
     <div 
-      ref={sectionRef} 
-      className="object-type-section"
+      className="object-type-section" 
       data-type={sectionType}
-      style={{
-        '--section-accent-colour': theme.accentColour,
-        '--section-light-colour': theme.lightColour
-      } as React.CSSProperties}
+      style={{ borderLeftColor: theme.accentColour }}
     >
       <div 
         className={`section-header ${isExpanded ? 'is-expanded' : ''}`}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (onSectionContextMenu) {
-            onSectionContextMenu(sectionType, e.clientX, e.clientY);
-          }
-        }}
+        onContextMenu={handleSectionContextMenu}
       >
         <div className="section-header-left" onClick={onToggle}>
           <ChevronRight 
-            className={`section-expand-icon ${isExpanded ? 'expanded' : ''}`}
-            size={14}
-            strokeWidth={2}
-          />
-          <IconComponent 
-            className="section-icon" 
-            size={16} 
-            strokeWidth={2}
+            size={14} 
+            className={`chevron ${isExpanded ? 'expanded' : ''}`}
             style={{ color: theme.accentColour }}
           />
-          <span className="section-title">{title}</span>
+          <Icon 
+            size={16} 
+            strokeWidth={2}
+            style={{ color: theme.accentColour, marginRight: '6px' }}
+          />
+          <span className="section-title" style={{ color: theme.accentColour }}>{title}</span>
           <span className="section-count">{entries.length}</span>
         </div>
         
-        {/* Index file icon - only for types that have indexes */}
-        {(sectionType === 'parameter' || sectionType === 'context' || sectionType === 'case' || sectionType === 'node' || sectionType === 'event') && onIndexClick && (
+        {onIndexClick && (
           <div className="section-header-right">
-            <FileText 
-              className={`section-index-icon ${indexIsDirty ? 'dirty' : ''}`}
-              size={16}
-              strokeWidth={2}
+            <button 
+              className={`index-button ${indexIsDirty ? 'is-dirty' : ''}`}
               onClick={(e) => {
                 e.stopPropagation();
                 onIndexClick();
               }}
-              aria-label={`Open ${title} Index${indexIsDirty ? ' (modified)' : ''}`}
-            />
-            {indexIsDirty && <span className="status-dot dirty" style={{ marginLeft: '4px' }} />}
+              title={`Open ${sectionType}s index file`}
+            >
+              <FileText size={14} />
+            </button>
           </div>
         )}
       </div>
-
-      <div 
-        ref={contentRef}
-        className={`section-items ${isExpanded ? 'expanded' : 'collapsed'}`}
-        style={{
-          maxHeight: isExpanded ? `${contentHeight}px` : '0px'
-        }}
-      >
-          {entries.length === 0 ? (
-            <div className="section-empty">No {title.toLowerCase()} found</div>
-          ) : groupBySubCategories && sectionType === 'parameter' ? (
-            // Render with sub-categories
-            Object.entries(groupedEntries).map(([subCatKey, subCatEntries]) => {
+      
+      <div className={`section-content ${isExpanded ? 'expanded' : ''}`}>
+        <EntriesRegistryProvider
+          entries={entries}
+          onEntryClick={onEntryClick}
+          onEntryContextMenu={onEntryContextMenu}
+        >
+          {!isExpanded ? null : groupedBySubCategory ? (
+            // Render with sub-categories (for parameters)
+            Object.entries(groupedBySubCategory).map(([subCatKey, subCatEntries]) => {
               if (subCatEntries.length === 0) return null;
-              const isSubCatExpanded = subCategoryStates[subCatKey] !== false; // Default: expanded
+              
+              const isSubCatExpanded = expandedSubCategories.has(subCatKey);
+              const SubCatIcon = subCategoryConfig[subCatKey].icon;
               
               return (
                 <div key={subCatKey} className="sub-category">
@@ -410,11 +387,11 @@ export function ObjectTypeSection({
                     onClick={() => toggleSubCategory(subCatKey)}
                   >
                     <ChevronRight 
-                      className={`section-expand-icon ${isSubCatExpanded ? 'expanded' : ''}`}
-                      size={14}
-                      strokeWidth={2}
+                      size={12} 
+                      className={`chevron ${isSubCatExpanded ? 'expanded' : ''}`}
+                      style={{ color: theme.accentColour, opacity: 0.7 }}
                     />
-                    {React.createElement(subCategoryConfig[subCatKey].icon, { 
+                    {React.createElement(SubCatIcon, { 
                       size: 14,
                       strokeWidth: 2,
                       style: { flexShrink: 0, marginRight: '4px' }
@@ -427,21 +404,14 @@ export function ObjectTypeSection({
                     <div className="sub-category-items">
                       {subCatEntries.map(entry => {
                         const tabCount = getTabCount(entry);
-                        const entryFileId = `${entry.type}-${entry.id}`;
-                        const isActive = activeFileId === entryFileId;
+                        const isActive = activeFileId === entry.fileId;
                         
                         return (
                           <NavigatorItem
-                            key={`${entry.type}-${entry.id}`}
-                            entry={entry}
+                            key={entry.fileId}
+                            fileId={entry.fileId}
                             isActive={isActive}
                             tabCount={tabCount}
-                            onClick={() => onEntryClick(entry)}
-                            onContextMenu={(e) => {
-                              if (onEntryContextMenu) {
-                                onEntryContextMenu(entry, e.clientX, e.clientY);
-                              }
-                            }}
                           />
                         );
                       })}
@@ -454,25 +424,19 @@ export function ObjectTypeSection({
             // Render flat list (no sub-categories)
             entries.map(entry => {
               const tabCount = getTabCount(entry);
-              const entryFileId = `${entry.type}-${entry.id}`;
-              const isActive = activeFileId === entryFileId;
+              const isActive = activeFileId === entry.fileId;
               
               return (
                 <NavigatorItem
-                  key={`${entry.type}-${entry.id}`}
-                  entry={entry}
+                  key={entry.fileId}
+                  fileId={entry.fileId}
                   isActive={isActive}
                   tabCount={tabCount}
-                  onClick={() => onEntryClick(entry)}
-                  onContextMenu={(e) => {
-                    if (onEntryContextMenu) {
-                      onEntryContextMenu(entry, e.clientX, e.clientY);
-                    }
-                  }}
                 />
               );
             })
           )}
+        </EntriesRegistryProvider>
       </div>
     </div>
   );
