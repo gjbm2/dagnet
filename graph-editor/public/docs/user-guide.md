@@ -97,43 +97,62 @@ Hover over any edge to see a tooltip with:
 - **Set Conditions**: Define when different probabilities apply
 - **Test Scenarios**: Use What-If to test different conditional states
 
-## Cohort Windows (New in 1.0)
+## Cohort Windows & Latency (Project LAG)
 
-### Understanding Cohorts
-A **cohort** is a group of users who entered the funnel during a specific date range. Cohort-based analysis allows you to:
-- Track conversion rates for specific time periods
-- Compare cohort performance over time
-- See how recent changes affect new users
+### The Big Idea
 
-### Setting a Cohort Window
-1. **Open the Date Picker**: Click the date range selector in the toolbar
-2. **Select Start Date**: Choose when the cohort period begins
-3. **Select End Date**: Choose when the cohort period ends
-4. **Apply**: Click Apply to fetch data for the selected window
+Traditional funnel analytics answer: *"What percentage converted?"*
 
-### Cohort DSL Syntax
-You can also set cohort windows in the Query DSL:
+DagNet answers: *"What percentage converted **by when**?"*
+
+This distinction matters because many conversions take **days**. A 7-day-old cohort might show 40% conversion, but by day 30 it reaches 55%. Without latency modelling, you'd think conversion dropped — when really, you're just looking at an immature cohort.
+
+### Cohort Windows
+
+A **cohort** is a group of users who entered the funnel during a specific date range.
+
+**Setting a Window:**
+1. Click the date range selector in the toolbar
+2. Select start and end dates
+3. Click Apply — all edge probabilities recalculate instantly
+
+**DSL Syntax:**
 ```
 cohort(1-Dec-25:7-Dec-25)
 ```
-This selects users who entered the funnel between 1st and 7th December 2025.
+This analyses users who entered between 1st–7th December 2025.
 
-### Viewing Cohort Evidence
-When a cohort window is active:
-- **Edge Tooltips**: Show aggregated n, k, and mean for the window
-- **Properties Panel**: Displays detailed evidence with window dates
-- **Evidence Fields**: `window_from` and `window_to` show the date range
+### Evidence Fields
 
-### Daily Aggregation
-Data is automatically aggregated from daily breakdowns:
-- Daily n/k values are summed within the window
-- Mean probability is recalculated: k ÷ n
-- Standard deviation is computed from the aggregated data
+When a cohort window is active, each edge displays:
 
-### Tips for Cohort Analysis
-- **Exclude Recent Days**: Very recent cohorts may have incomplete conversions
-- **Consistent Windows**: Use the same window size when comparing periods
-- **Check Evidence**: Larger n values give more reliable probability estimates
+| Field | Description |
+|-------|-------------|
+| `n` | Total users who reached this step (sample size) |
+| `k` | Users who completed the transition (successes) |
+| `mean` | Observed conversion rate: k ÷ n |
+| `window_from` | Cohort start date |
+| `window_to` | Cohort end date |
+| `retrieved_at` | When data was fetched |
+
+### Latency Tracking (Preview)
+
+For edges where conversion takes time:
+
+1. **Enable Latency**: Check "Track Latency" in the edge Properties panel
+2. **Set Maturity Days**: How long until a cohort is considered "mature" (default: 30)
+3. **View Latency Beads**: Edges show median lag time as a visual indicator
+
+**What you get:**
+- `median_lag_days`: Typical time to convert
+- `completeness`: What % of eventual conversions have occurred
+- `p_evidence`: Observed rate (including immature cohorts)
+- `p_forecast`: Projected rate when cohort matures
+
+### Tips
+- **Exclude recent days**: Immature cohorts undercount true conversion
+- **Consistent windows**: Use same window size for period comparisons
+- **Watch completeness**: Low completeness means the cohort is still converting
 
 ## File Management
 
