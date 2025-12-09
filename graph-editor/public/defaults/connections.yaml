@@ -95,13 +95,18 @@ connections:
           // before the funnel building code runs
           const segments = [];
           
-          // Add cohort exclusions (if any)
-          if (connection.excluded_cohorts && connection.excluded_cohorts.length > 0) {
+          // Add cohort exclusions (if any) - controlled by excludeTestAccounts setting
+          // When context.excludeTestAccounts is false, skip adding the cohort exclusions
+          const shouldExcludeTestAccounts = context && context.excludeTestAccounts !== false;  // Default to true
+          if (shouldExcludeTestAccounts && connection.excluded_cohorts && connection.excluded_cohorts.length > 0) {
+            console.log('[Amplitude Adapter] Excluding test account cohorts:', connection.excluded_cohorts);
             segments.push(...connection.excluded_cohorts.map(cohortId => ({
               prop: "userdata_cohort",
               op: "is not",  // "is not" for exclude
               values: [cohortId]
             })));
+          } else if (!shouldExcludeTestAccounts) {
+            console.log('[Amplitude Adapter] Test account exclusion DISABLED - including all users');
           }
           
           // ═══════════════════════════════════════════════════════════════════════

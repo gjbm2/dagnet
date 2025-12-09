@@ -366,9 +366,6 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       case 'e':
         // Solid background (evidence only) - no overlay needed
         return null;
-      case 'hidden':
-        // Hidden - no overlay, but opacity handled elsewhere
-        return null;
       default:
         return null;
     }

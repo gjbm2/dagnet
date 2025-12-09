@@ -16,6 +16,7 @@ import { useClearDataFile } from '../../hooks/useClearDataFile';
 import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
 import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
 import { PinnedQueryModal } from '../modals/PinnedQueryModal';
+import { db } from '../../db/appDatabase';
 
 /**
  * Data Menu
@@ -85,6 +86,37 @@ export function DataMenu() {
   // Track selection state (will be wired up later)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  
+  // Exclude test accounts setting (temporary hack - will be replaced with proper contexts)
+  const [excludeTestAccounts, setExcludeTestAccounts] = useState<boolean>(true);  // Default to true
+  
+  // Load excludeTestAccounts setting on mount
+  useEffect(() => {
+    const loadSetting = async () => {
+      const settings = await db.getSettings();
+      // Default to true if not set
+      setExcludeTestAccounts(settings?.data?.excludeTestAccounts ?? true);
+    };
+    loadSetting();
+  }, []);
+  
+  // Handler to toggle exclude test accounts
+  const handleToggleExcludeTestAccounts = async () => {
+    const newValue = !excludeTestAccounts;
+    setExcludeTestAccounts(newValue);
+    
+    // Persist to settings
+    const settings = await db.getSettings();
+    await db.saveSettings({
+      ...settings,
+      data: {
+        ...settings?.data,
+        excludeTestAccounts: newValue,
+      },
+    });
+    
+    toast.success(newValue ? 'Test accounts will be excluded' : 'Test accounts will be included');
+  };
   
   // Use refs to track current values for comparison without causing re-renders
   const selectedNodeIdRef = React.useRef<string | null>(null);
@@ -680,6 +712,16 @@ export function DataMenu() {
             onSelect={handleConnections}
           >
             Connections...
+          </Menubar.Item>
+          
+          <Menubar.Separator className="menubar-separator" />
+          
+          {/* Exclude test accounts toggle (temporary hack) */}
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={handleToggleExcludeTestAccounts}
+          >
+            {excludeTestAccounts ? '✓ ' : ''}Exclude test accounts
           </Menubar.Item>
         </Menubar.Content>
       </Menubar.Portal>
