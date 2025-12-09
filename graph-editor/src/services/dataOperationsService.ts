@@ -3580,26 +3580,7 @@ class DataOperationsService {
       const sevenDaysAgoDate = new Date(nowDate);
       sevenDaysAgoDate.setUTCDate(nowDate.getUTCDate() - 7);
       
-      // CRITICAL: Use window dates from DSL object if available (already ISO format from buildDslFromEdge)
-      // This is the authoritative source - buildDslFromEdge has already parsed and normalized the window
-      let requestedWindow: DateRange;
-      if (queryPayload.start && queryPayload.end) {
-        // DSL object has window dates (already ISO format from buildDslFromEdge)
-        requestedWindow = {
-          start: queryPayload.start,
-          end: queryPayload.end
-        };
-        console.log('[DataOps] Using window from DSL object:', requestedWindow);
-      } else {
-        // No window in DSL, use default last 7 days (aligned to date boundaries)
-        requestedWindow = {
-          start: sevenDaysAgoDate.toISOString(),
-          end: nowDate.toISOString()
-        };
-        console.log('[DataOps] No window in DSL, using default last 7 days:', requestedWindow);
-      }
-      
-      // Extract cohort from queryPayload if present (for latency-tracked edges)
+      // Extract cohort from queryPayload FIRST (needed to determine if we're in cohort mode)
       // Cohort mode uses A-anchored entry dates rather than X-anchored event dates
       interface CohortOptions {
         start?: string;
@@ -3620,6 +3601,35 @@ class DataOperationsService {
           };
           console.log('[DataOps] Using cohort from DSL object:', requestedCohort);
         }
+      }
+      
+      // CRITICAL: Use window dates from DSL object if available (already ISO format from buildDslFromEdge)
+      // This is the authoritative source - buildDslFromEdge has already parsed and normalized the window
+      // BUG FIX: For cohort mode, use cohort dates - NOT the default 7-day window!
+      let requestedWindow: DateRange;
+      if (queryPayload.start && queryPayload.end) {
+        // DSL object has window dates (already ISO format from buildDslFromEdge)
+        requestedWindow = {
+          start: queryPayload.start,
+          end: queryPayload.end
+        };
+        console.log('[DataOps] Using window from DSL object:', requestedWindow);
+      } else if (requestedCohort?.start && requestedCohort?.end) {
+        // COHORT MODE: Use cohort entry dates as the fetch window
+        // The cohort dates specify which cohort entry dates to fetch, and these ARE the dates
+        // we need to send to the API for cohort-based queries
+        requestedWindow = {
+          start: requestedCohort.start,
+          end: requestedCohort.end
+        };
+        console.log('[DataOps] Using cohort dates as window (cohort mode):', requestedWindow);
+      } else {
+        // No window in DSL, use default last 7 days (aligned to date boundaries)
+        requestedWindow = {
+          start: sevenDaysAgoDate.toISOString(),
+          end: nowDate.toISOString()
+        };
+        console.log('[DataOps] No window in DSL, using default last 7 days:', requestedWindow);
       }
       
       let actualFetchWindows: DateRange[] = [requestedWindow];

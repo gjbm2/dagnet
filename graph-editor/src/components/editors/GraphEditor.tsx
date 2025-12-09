@@ -1345,12 +1345,22 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Track data object reference to detect changes
   const prevDataRef = React.useRef(data);
   
+  // Time-based suppression for file→store sync after a store→file sync
+  // This prevents the race condition where stale data from FileRegistry overwrites fresh store data
+  const suppressFileToStoreUntilRef = React.useRef<number>(0);
+  
   // Sync file data TO graph store when file changes (from JSON editor, revert, etc.)
   // This effect ONLY runs when `data` changes (external file changes)
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#12: Sync file→store triggered`);
     if (Date.now() < suspendLayoutUntilRef.current) {
       console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (suspended)`);
+      return;
+    }
+    
+    // Skip if we just did a store→file sync (prevents race condition with stale data)
+    if (Date.now() < suppressFileToStoreUntilRef.current) {
+      console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (suppressed after store→file)`);
       return;
     }
     
@@ -1423,6 +1433,11 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     
     // Update sync tracking and sync to file
     lastSyncedContentRef.current = graphStr;
+    
+    // Suppress file→store sync for 500ms to prevent race condition where
+    // stale data from FileRegistry callback overwrites the fresh store data
+    suppressFileToStoreUntilRef.current = Date.now() + 500;
+    
     console.log(`[${new Date().toISOString()}] [GraphEditor] Store→File: SYNCING (nodes: ${graph.nodes.length})`);
     updateData(graph);
   }, [graph, updateData]);
