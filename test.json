@@ -1,137 +1,305 @@
 {
   "nodes": [
     {
-      "uuid": "f9cc9b6f-3e47-4a84-aeda-7ea554fe0a22",
+      "uuid": "86469c9f-2f83-49ca-a154-589231be5511",
       "id": "household-created",
       "label": "Household created",
       "absorbing": false,
-      "description": "",
       "entry": {
         "is_start": true,
         "entry_weight": 1
       },
       "layout": {
-        "x": -329,
-        "y": 66
+        "x": -598,
+        "y": -122
       },
-      "event_id": "household-created",
-      "event_id_overridden": true,
-      "images": [
-        {
-          "image_id": "household-created-img",
-          "caption": "Dagnet time",
-          "file_extension": "jpg",
-          "caption_overridden": false
-        }
-      ],
-      "images_overridden": true
+      "description": "",
+      "event_id": "household-created"
     },
     {
-      "uuid": "b4a7bca5-34ab-4d0b-a68f-3568bf4d839c",
-      "id": "household-delegated",
-      "label": "Household delegated",
+      "uuid": "addb99b6-5773-482c-a437-4661c8433ff7",
+      "id": "abandonned-before-delegation",
+      "label": "abandonned-before-delegation",
       "absorbing": true,
-      "description": "",
       "layout": {
-        "x": 104,
-        "y": -6
+        "x": -351,
+        "y": -40
       },
+      "description": "",
+      "outcome_type": "failure",
+      "outcome_type_overridden": true
+    },
+    {
+      "uuid": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "id": "household-delegated",
+      "label": "household-delegated",
+      "absorbing": false,
+      "layout": {
+        "x": -407,
+        "y": -177
+      },
+      "description": "",
+      "tags": [],
       "event_id": "household-delegated",
-      "event_id_overridden": true,
+      "event_id_overridden": false
+    },
+    {
+      "uuid": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "id": "switch-registered",
+      "label": "Switch registered",
+      "absorbing": false,
+      "layout": {
+        "x": -31,
+        "y": -153
+      },
+      "event_id": "switch-registered",
+      "event_id_overridden": false
+    },
+    {
+      "uuid": "30aabc44-e448-4359-b0d0-338a231edb92",
+      "id": "switch-success",
+      "label": "Switch success",
+      "absorbing": true,
+      "layout": {
+        "x": 159,
+        "y": -231
+      },
+      "event_id": "switch-success",
+      "event_id_overridden": false,
+      "label_overridden": false,
       "outcome_type": "success",
       "outcome_type_overridden": true
     },
     {
-      "uuid": "2419bd76-d0f7-4688-a2ef-fc53865413cc",
-      "id": "abandonned-before-delegation",
-      "label": "Abandonned before delegation",
+      "uuid": "386e6cf6-ccc7-412a-81b3-ee730b8bf775",
+      "id": "post-registration-failure",
+      "label": "Post registration failure",
       "absorbing": true,
       "layout": {
-        "x": 101,
-        "y": 182
+        "x": 160,
+        "y": -52
       },
       "outcome_type": "failure",
       "outcome_type_overridden": true
+    },
+    {
+      "uuid": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "id": "energy-rec",
+      "label": "Energy rec",
+      "absorbing": false,
+      "layout": {
+        "x": -222,
+        "y": -197
+      },
+      "event_id": "energy-rec",
+      "event_id_overridden": false
     }
   ],
   "edges": [
     {
-      "uuid": "household-createda-to-abandonned",
-      "id": "household-created-to-abandonned-before-delegation",
-      "from": "f9cc9b6f-3e47-4a84-aeda-7ea554fe0a22",
-      "to": "2419bd76-d0f7-4688-a2ef-fc53865413cc",
+      "uuid": "532a304a-c435-4ea5-aa6a-44714b40adab",
+      "id": "switch-registered-to-post-registration-failure",
+      "from": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "to": "386e6cf6-ccc7-412a-81b3-ee730b8bf775",
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.47
+        "mean": 0.896
+      },
+      "query": "from(switch-registered).to(post-registration-failure)",
+      "description": ""
+    },
+    {
+      "uuid": "household-created-to-abandonned-before-delegation",
+      "id": "86469c9f-2f83-49ca-a154-589231be5511->addb99b6-5773-482c-a437-4661c8433ff7",
+      "from": "86469c9f-2f83-49ca-a154-589231be5511",
+      "to": "addb99b6-5773-482c-a437-4661c8433ff7",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.475
       },
       "query": "from(household-created).to(abandonned-before-delegation)",
       "description": ""
     },
     {
-      "uuid": "start-to-end",
-      "id": "household-created-to-household-delegated",
-      "from": "f9cc9b6f-3e47-4a84-aeda-7ea554fe0a22",
-      "to": "b4a7bca5-34ab-4d0b-a68f-3568bf4d839c",
+      "uuid": "370dce1d-3a36-4109-9711-204c301478c8",
+      "id": "switch-registered-to-switch-success",
+      "from": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "to": "30aabc44-e448-4359-b0d0-338a231edb92",
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.53,
-        "connection": "amplitude-prod",
-        "connection_overridden": true,
-        "stdev": 0.008,
+        "mean": 0.104,
+        "stdev": 0.030550504633038936,
+        "id": "registration-to-success",
         "evidence": {
-          "n": 3952,
-          "k": 2096,
-          "window_from": "2025-11-12T00:00:00Z",
-          "window_to": "2025-11-19T23:59:59Z",
-          "retrieved_at": "2025-11-19T23:51:27.841Z",
+          "window_from": "1-Dec-25",
           "source": "amplitude",
-          "full_query": "{\"from\":\"Household Created\",\"to\":\"Household DelegationStatusChanged\",\"context\":[],\"case\":[],\"event_filters\":{\"Household Created\":[],\"Household DelegationStatusChanged\":[{\"property\":\"newDelegationStatus\",\"operator\":\"is any of\",\"values\":[\"ON\"]}]}}"
+          "n": 182,
+          "k": 19,
+          "window_to": "7-Dec-25",
+          "retrieved_at": "2025-12-09T18:59:27.991Z",
+          "full_query": "from(switch-registered).to(switch-success)",
+          "mean": 0.1043956043956044,
+          "stdev": 0.022665406930173004
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-11-19T23:51:27.841Z",
-          "query": {
-            "from": "Household Created",
-            "to": "Household DelegationStatusChanged",
-            "context": [],
-            "case": [],
-            "event_filters": {
-              "Household Created": [],
-              "Household DelegationStatusChanged": [
-                {
-                  "property": "newDelegationStatus",
-                  "operator": "is any of",
-                  "values": [
-                    "ON"
-                  ]
-                }
-              ]
-            },
-            "query_params": "e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251112&end=20251119&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D",
-            "from_step_index": 0,
-            "to_step_index": 1
-          },
-          "full_query": "{\"from\":\"Household Created\",\"to\":\"Household DelegationStatusChanged\",\"context\":[],\"case\":[],\"event_filters\":{\"Household Created\":[],\"Household DelegationStatusChanged\":[{\"property\":\"newDelegationStatus\",\"operator\":\"is any of\",\"values\":[\"ON\"]}]}}"
+          "retrieved_at": "2025-12-09T18:59:27.991Z",
+          "full_query": "from(switch-registered).to(switch-success)"
         },
-        "id": "household-delegation-rate"
+        "connection": "amplitude-prod",
+        "connection_overridden": true
+      },
+      "query": "from(switch-registered).to(switch-success)",
+      "description": ""
+    },
+    {
+      "uuid": "3d0a0757-8224-4cf0-a841-4ad17cd48d91",
+      "id": "household-created-to-household-delegated",
+      "from": "86469c9f-2f83-49ca-a154-589231be5511",
+      "to": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.525,
+        "id": "household-delegation-rate",
+        "connection": "amplitude-prod",
+        "connection_overridden": true,
+        "stdev": 0.013182326919658751,
+        "evidence": {
+          "n": 1620,
+          "k": 850,
+          "window_from": "1-Dec-25",
+          "window_to": "7-Dec-25",
+          "retrieved_at": "2025-12-09T18:59:30.958Z",
+          "source": "amplitude",
+          "full_query": "from(household-created).to(household-delegated)",
+          "mean": 0.5246913580246914,
+          "stdev": 0.012407443426012034
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2025-12-09T18:59:30.958Z",
+          "full_query": "from(household-created).to(household-delegated)"
+        }
       },
       "query": "from(household-created).to(household-delegated)",
+      "description": ""
+    },
+    {
+      "uuid": "d45debd8-939b-4abb-b0d0-c5ef62412add",
+      "id": "energy-rec-to-switch-registered",
+      "from": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "to": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.04,
+        "id": "rec-with-bdos-to-registration",
+        "connection": "amplitude-prod",
+        "connection_overridden": true,
+        "stdev": 0.008285539194549076,
+        "evidence": {
+          "n": 692,
+          "k": 28,
+          "window_from": "1-Dec-25",
+          "window_to": "7-Dec-25",
+          "retrieved_at": "2025-12-09T18:59:50.363Z",
+          "source": "amplitude",
+          "full_query": "from(energy-rec).to(switch-registered)",
+          "mean": 0.04046242774566474,
+          "stdev": 0.007490381084808208
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2025-12-09T18:59:50.363Z",
+          "full_query": "from(energy-rec).to(switch-registered)"
+        }
+      },
       "description": "",
-      "parameter_id": "household-delegation-rate"
+      "query": "from(energy-rec).to(switch-registered)",
+      "query_overridden": false,
+      "conditional_p": [
+        {
+          "condition": "visited(gave-bds-in-onboarding)",
+          "query": "from(energy-rec).to(switch-registered).visited(gave-bds-in-onboarding)",
+          "query_overridden": false,
+          "p": {
+            "mean": 0.36257309941520466,
+            "stdev": 0.03676333723816272
+          },
+          "colour": "#16a34a"
+        },
+        {
+          "condition": "exclude(gave-gave-bds-in-onboarding)",
+          "query": "from(energy-rec).to(switch-registered)",
+          "query_overridden": false,
+          "p": {
+            "mean": 0.1964573268921095,
+            "stdev": 0.015943834875444898,
+            "connection": "amplitude-prod",
+            "connection_overridden": true,
+            "evidence": {
+              "n": 621,
+              "k": 122
+            },
+            "data_source": {
+              "type": "amplitude",
+              "retrieved_at": "2025-12-05T09:13:17.801Z",
+              "full_query": "{\"from\":\"energy-rec\",\"to\":\"switch-registered\",\"context\":[],\"case\":[],\"start\":\"2025-11-09T00:00:00.000Z\",\"end\":\"2025-11-15T00:00:00.000Z\",\"query_params\":\"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251109&end=20251115&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D\",\"from_step_index\":0,\"to_step_index\":1}"
+            }
+          },
+          "colour": "#dc2626"
+        }
+      ]
+    },
+    {
+      "uuid": "8c23ea34-9c7e-40b3-ade3-291590774bfc",
+      "id": "household-delegated-to-energy-rec",
+      "from": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "to": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.188,
+        "id": "delegation-straight-to-energy-rec",
+        "stdev": 0.013096701703315151,
+        "connection": "amplitude-prod",
+        "connection_overridden": true,
+        "evidence": {
+          "n": 890,
+          "k": 167,
+          "window_from": "2-Dec-25",
+          "window_to": "8-Dec-25",
+          "retrieved_at": "2025-12-09T20:04:16.248Z",
+          "source": "amplitude",
+          "full_query": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)",
+          "mean": 0.18764044943820224,
+          "stdev": 0.01308706845967997
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2025-12-09T20:04:16.248Z",
+          "full_query": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)"
+        }
+      },
+      "query": "from(household-delegated).to(energy-rec)",
+      "description": ""
     }
   ],
   "policies": {
     "default_outcome": "success"
   },
   "metadata": {
-    "name": "hello-world",
+    "name": "conversion-flow-v0-ezra",
     "description": "",
-    "created_at": "2025-11-19T00:48:15.088Z",
-    "updated_at": "2025-12-02T18:14:05.624Z",
+    "created_at": "2025-11-20T16:28:04.980Z",
+    "updated_at": "2025-12-09T20:04:56.236Z",
     "version": "1.0.0",
-    "updated": "2025-11-27T03:41:03.940Z"
+    "updated": "2025-11-25T18:25:17.542Z"
   },
-  "currentQueryDSL": "cohort(1-Dec-25:8-Dec-25)"
+  "currentQueryDSL": "cohort(2-Dec-25:8-Dec-25)",
+  "dataInterestsDSL": "window(-14d:-1d);cohort(-14d:-1d)"
 }

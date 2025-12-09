@@ -538,15 +538,23 @@ export default function ConversionEdge({
   // For overlay edges, use originalEdgeId stored in data
   // Memoize to ensure it updates when graph changes
   const lookupId = data?.originalEdgeId || id;
+  // Create a string key that changes when any relevant edge data changes
+  // This ensures fullEdge updates when evidence, mean, etc. change
+  const edgeDataKey = useMemo(() => {
+    const edge = graph?.edges?.find((e: any) => 
+      e.uuid === lookupId || e.id === lookupId || `${e.from}->${e.to}` === lookupId
+    );
+    if (!edge) return 'none';
+    return `${edge.uuid}-${edge.p?.mean}-${edge.p?.stdev}-${edge.p?.evidence?.n}-${edge.p?.evidence?.k}-${edge.p?.evidence?.mean}-${edge.p?.latency?.completeness}`;
+  }, [graph, lookupId, graph?.metadata?.updated_at]);
+  
   const fullEdge = useMemo(() => {
     return graph?.edges.find((e: any) => 
       e.uuid === lookupId ||           // ReactFlow uses UUID as edge ID
       e.id === lookupId ||             // Human-readable ID
       `${e.from}->${e.to}` === lookupId  // Fallback format
     );
-  }, [graph, lookupId, 
-    // Use updated_at to catch ALL graph changes (rebalance, overrides, etc.)
-    graph?.metadata?.updated_at]);
+  }, [graph, lookupId, edgeDataKey]);
   
   // Get variant weights string for dependency tracking (for case edges)
   // This must be calculated directly from graph, not from fullEdge, to ensure it updates

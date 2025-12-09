@@ -1,6 +1,8 @@
 # DagNet - Directed Acyclic Graph Network Editor
 
-A web-based visual editor for creating and analyzing directed acyclic graphs (DAGs) with support for conditional probabilities, file-backed parameters, and advanced graph analytics.
+**Version 1.0.0-alpha** | [Changelog](graph-editor/public/docs/CHANGELOG.md)
+
+A web-based visual editor for creating and analyzing directed acyclic graphs (DAGs) with support for conditional probabilities, file-backed parameters, cohort-based analytics, and latency-aware forecasting.
 
 ## Quick Start
 
@@ -120,18 +122,36 @@ dagnet/
 
 ## Features
 
-- **Visual Graph Editor**: Drag-and-drop nodes and edges
-- **Conditional Probabilities**: Define probabilities based on graph state
-- **File-Backed Parameters**: Link parameters to external data sources
-- **Data Connections & Adapters**: Connect to Amplitude, Google Sheets, PostgreSQL, and more via DAS (Data Adapter Service)
-- **Contexts**: Segment data by dimensions like channel, device, browser with MECE partitions and weighted aggregation
-- **Time-Series Data**: Daily breakdowns with incremental fetching and window aggregation
-- **Query DSL**: Powerful query language for graph traversal with context and window support
-- **What-If Analysis**: Simulate different scenarios
+### 🕐 Project LAG: Temporal Probability (1.0)
+
+The 1.0 release introduces **Latency-Aware Graphs** — a shift from static snapshots to time-indexed flow models.
+
+| Capability | Description |
+|------------|-------------|
+| **Cohort Windows** | Analyse users by *entry date* with `cohort(1-Dec-25:7-Dec-25)` DSL |
+| **Daily Time-Series** | Full `n_daily`, `k_daily` arrays stored per parameter file |
+| **On-the-fly Aggregation** | Select any date range; evidence recalculates instantly |
+| **Latency Tracking** | Model time-to-convert with `maturity_days` configuration |
+| **Evidence vs Forecast** | Distinguish observed ($p_{evidence}$) from projected ($p_{\infty}$) |
+
+### Visual Graph Editor
+- **Drag-and-Drop Canvas**: Create nodes, connect edges, visualise probability flow
+- **Copy & Paste / Drag & Drop**: Rapid graph construction from registry files
+- **Multiple Views**: Graph canvas, raw JSON/YAML, schema-driven forms
+- **Latency Beads**: Visual indicators showing median lag and cohort completeness
+
+### Probability & Analytics
+- **Conditional Probabilities**: `visited()`, `exclude()` modifiers per edge
+- **What-If Analysis**: Change any parameter, see downstream impact instantly
 - **Scenarios**: Save, compare, and overlay parameter configurations
-- **Graph Analytics**: MSMDC, mutations, pruning (Python/NetworkX)
-- **Case Variants**: A/B testing and multivariate scenarios
-- **Batch Operations**: Bulk data fetching and updates across multiple parameters
+- **MSMDC Engine**: Multi-path probability calculations (Python/NetworkX)
+- **Case Variants**: A/B testing with weighted variant splits
+
+### Data Connections
+- **DAS Adapters**: Amplitude, Google Sheets, PostgreSQL, and custom HTTP sources
+- **Contexts**: Segment by channel, device, browser with MECE partition handling
+- **Incremental Fetch**: Only retrieve missing days when expanding windows
+- **Query DSL**: `from().to().visited().context().cohort()` chaining
 
 ## Documentation
 
