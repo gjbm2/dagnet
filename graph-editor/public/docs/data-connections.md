@@ -351,6 +351,53 @@ This allows:
 - **Incremental Fetching**: Only fetch missing days when expanding the window
 - **Query Consistency**: Detect when query parameters change (via `query_signature`)
 
+## Cohort Windows (New in 1.0)
+
+**Cohort windows** let you analyse conversion data for users who entered the funnel during a specific date range.
+
+### Setting a Cohort Window
+
+Use the date picker in the toolbar, or set it via DSL:
+```
+cohort(1-Dec-25:7-Dec-25)
+```
+
+### How Cohort Aggregation Works
+
+When you select a cohort window:
+
+1. **Daily data is filtered** to include only days within the window
+2. **Values are aggregated**: `n = Σ(n_daily)`, `k = Σ(k_daily)`
+3. **Mean is recalculated**: `p = k / n`
+4. **Evidence is updated** with `window_from`, `window_to`, and counts
+
+### Example
+
+If you have daily data:
+```yaml
+dates: ["1-Dec-25", "2-Dec-25", "3-Dec-25", "4-Dec-25", "5-Dec-25"]
+n_daily: [100, 120, 110, 95, 105]
+k_daily: [45, 54, 50, 42, 48]
+```
+
+Selecting `cohort(1-Dec-25:3-Dec-25)` aggregates the first 3 days:
+- n = 100 + 120 + 110 = **330**
+- k = 45 + 54 + 50 = **149**
+- p = 149 / 330 = **0.4515**
+
+### Real-Time Updates
+
+When you change the cohort window:
+- Edge probabilities update immediately
+- Tooltips show the aggregated evidence
+- Properties panel displays the full evidence breakdown
+
+### Tips
+
+- **Exclude recent days**: Users need time to convert; don't include today
+- **Consistent window sizes**: Makes period-over-period comparison meaningful
+- **Check sample sizes**: Narrow windows may have insufficient data for reliable estimates
+
 ## Creating Custom Adapters
 
 To add a new data source:

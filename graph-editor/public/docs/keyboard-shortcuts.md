@@ -1,5 +1,7 @@
 # DagNet Keyboard Shortcuts
 
+**Version 1.0.0-alpha**
+
 ## Global Shortcuts
 
 | Shortcut | Action | Description |
@@ -28,6 +30,18 @@
 | `Escape` | Deselect | Clear selection |
 | `Ctrl/Cmd + C` | Copy | Copy selected elements |
 | `Ctrl/Cmd + V` | Paste | Paste copied elements |
+
+## Navigator & Copy/Paste (New in 1.0)
+
+| Action | How to Use |
+|--------|-----------|
+| **Copy from Navigator** | Right-click any file → Copy |
+| **Paste node on canvas** | Right-click canvas → Paste node |
+| **Paste node on node** | Right-click node → Paste node |
+| **Paste parameter on edge** | Right-click edge → Paste parameter |
+| **Drag to canvas** | Drag node file from Navigator onto canvas |
+| **Drag to node** | Drag node/case/event file onto existing node |
+| **Drag to edge** | Drag parameter file onto edge |
 
 ## Navigation Shortcuts
 

@@ -1,6 +1,55 @@
 # DagNet Release Notes
+
+## Version 1.0.0-alpha
+**Released:** 9-Dec-25
+
+### 🚀 Project LAG: The Temporal Shift
+
+This release marks a key architectural evolution in DagNet's history. We are moving from a **static probability model** to a **temporal flow model**.
+
+Previously, edges were instantaneous transitions ($P(B|A)$). With Project LAG, edges become time-consuming processes ($P(B|A, t)$). This enables:
+
+- **Latency-Aware Forecasting**: We can now answer *"When will they convert?"* not just *"Will they convert?"*.
+- **Partial Cohort Projection**: Distinguish between "users who haven't converted *yet*" (immature) and "users who churned".
+- **Maturity Curves**: Visualise how conversion rates develop over time for each cohort.
+
+#### Key Lag Features
+- **Cohort Windows**: Select users by *entry date* using `cohort(start:end)`.
+- **Daily Aggregation**: Automatically aggregates daily time-series data into windowed evidence ($n, k$).
+- **Latency Beads**: New edge visualisation showing median lag days and cohort completeness.
+- **Evidence vs Forecast**: Parameters now track both observed evidence ($p_{evidence}$) and projected mature probability ($p_{\infty}$).
+- **Time-Series Storage**: Parameter files now store full daily histories (`n_daily`, `k_daily`) for historical analysis.
+
+### ⚡ Workflow Accelerators
+
+To support the rapid iteration required for temporal modelling, we've overhauled the graph construction workflow:
+
+- **Drag & Drop**:
+  - Drag **Node files** from Navigator → Canvas to instantiate.
+  - Drag **Node/Case files** → Existing nodes to re-bind/update.
+  - Drag **Parameter files** → Edges to instantly attach data sources.
+- **Copy & Paste**:
+  - Full clipboard support for nodes, parameters, and cases.
+  - Smart pasting onto edges (auto-attaches parameter).
+- **Navigator 2.0**:
+  - Fixed structural identity issues (no more stale closures).
+  - Sticky headers and smooth animations.
+  - Clear visual hierarchy with coloured section indicators.
+
+### 🛠️ Core Improvements
+
+- **Large File Handling**: Smart blocking prevents browser freeze on massive parameter files (>100KB), with "Open as YAML/JSON" fallbacks.
+- **Data Sync Integrity**: Fixed race conditions where file-sync could overwrite fresh graph state.
+- **Form Editor**: Performance optimisations for large schemas.
+
+### ⚠️ Known Issues (Alpha)
+- Latency convolution (projecting delays downstream) is in preview.
+- Very large graphs (>50 nodes) may see render lag during drag operations.
+
+---
+
 ## Version 0.99.19b
-**Released:** December 09, 2025
+**Released:** 9-Dec-25
 
 1.0 pre-release (drag & drop, exclude test users features)
 
