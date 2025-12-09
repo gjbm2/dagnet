@@ -152,9 +152,6 @@ export function ScenarioLegend({
       case 'e':
         // Solid background (evidence only)
         return { backgroundColor: baseColour };
-      case 'hidden':
-        // Semi-transparent (handled via opacity in className)
-        return { backgroundColor: baseColour };
       default:
         return { backgroundColor: baseColour };
     }

@@ -68,6 +68,7 @@ import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '.
 import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
+import { db } from '../db/appDatabase';
 
 // Cached DAS runner instance for connection lookups (avoid recreating per-call)
 let cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
@@ -2836,6 +2837,10 @@ class DataOperationsService {
       hasConditionalIndex: conditionalIndex !== undefined,
     });
     
+    // Read excludeTestAccounts setting (temporary hack - will be replaced with proper contexts)
+    const settings = await db.getSettings();
+    const excludeTestAccounts = settings?.data?.excludeTestAccounts ?? true;  // Default to true
+    
     // Get human-readable identifiers for logging
     const targetEntity = targetId && graph 
       ? (objectType === 'parameter'
@@ -4115,7 +4120,7 @@ class DataOperationsService {
               connection_string: connectionString,
               window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
               cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
-              context: { mode: contextMode },
+              context: { mode: contextMode, excludeTestAccounts },
               edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
               eventDefinitions,
             });
@@ -4281,7 +4286,7 @@ class DataOperationsService {
             connection_string: connectionString,
             window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
             cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
-            context: { mode: contextMode },
+            context: { mode: contextMode, excludeTestAccounts },
             edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
             eventDefinitions,
           });
@@ -4407,7 +4412,7 @@ class DataOperationsService {
             connection_string: connectionString,
             window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
             cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
-            context: { mode: contextMode }, // Pass mode to adapter (daily or aggregate)
+            context: { mode: contextMode, excludeTestAccounts }, // Pass mode and test account exclusion to adapter
             edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
             caseId: objectType === 'case' ? objectId : undefined, // Pass caseId for cases
             nodeId: objectType === 'node' ? (targetId || objectId) : undefined, // Pass nodeId for nodes (future)

@@ -85,6 +85,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
   const scenarios = scenariosContext.scenarios;
   const baseParams = scenariosContext.baseParams;
+  const currentParams = scenariosContext.currentParams;
   const currentColour = scenariosContext.currentColour;
   const baseColour = scenariosContext.baseColour;
 
@@ -207,13 +208,16 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     const isVisible = visibleScenarioIds.includes(scenarioId);
     const colour = getScenarioColour(scenarioId, isVisible);
 
-    // Compose params based on layer type - use centralized composition
-    // Note: 'current' layer reads from live graph at render time, so we use baseParams here
-    // but the actual probability is resolved via probResolver below
+    // Compose params based on layer type - use centralized composition.
+    // IMPORTANT:
+    // - For 'base' and scenario layers we compose from baseParams + overlays (frozen snapshots).
+    // - For 'current' we MUST use currentParams so latency / evidence / forecast fields reflect
+    //   live graph updates (e.g. retrievals from file/source). Probabilities for 'current'
+    //   still come from computeEffectiveEdgeProbability via probResolver below.
     const composedParams = getComposedParamsForLayer(
       scenarioId,
       baseParams,
-      baseParams, // currentParams not needed here - 'current' uses live graph values
+      scenarioId === 'current' ? currentParams : baseParams,
       scenarios,
       visibleScenarioIds
     );
@@ -376,6 +380,20 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
         // Scenario-level overrides from composed params (nested structure)
         const scenarioProb = edgeParams?.p || {};
+        
+        // DEBUG: Log LAG data sources for shipped-to-delivered edge
+        if (scenarioId === 'current' && (graphEdge.id === 'shipped-to-delivered' || paramsKey === 'shipped-to-delivered')) {
+          console.log('[LAG DEBUG] shipped-to-delivered:', {
+            paramsKey,
+            hasEdgeParams: !!edgeParams,
+            scenarioProb,
+            baseP,
+            'scenarioProb.evidence': scenarioProb.evidence,
+            'scenarioProb.latency': scenarioProb.latency,
+            'baseP.evidence': baseP.evidence,
+            'baseP.latency': baseP.latency,
+          });
+        }
 
         // Two-layer rendering: evidence vs forecast
         // DSL: e.X.p.evidence (scalar) or e.X.p.evidence.mean (nested)
@@ -431,6 +449,21 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
             p_forecast,
             p_mean
           };
+        }
+        
+        // DEBUG: Log final LAG decision for shipped-to-delivered
+        if (scenarioId === 'current' && (graphEdge.id === 'shipped-to-delivered' || paramsKey === 'shipped-to-delivered')) {
+          console.log('[LAG DEBUG] shipped-to-delivered FINAL:', {
+            p_mean,
+            p_evidence,
+            p_forecast,
+            median_days,
+            completeness,
+            hasTwoLayerData,
+            hasBeadData,
+            enabled,
+            latencyDisplay: latencyDisplay ? 'SET' : 'UNDEFINED'
+          });
         }
       }
 

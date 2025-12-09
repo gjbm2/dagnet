@@ -9,8 +9,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import type { DateRange } from '../types';
-import { dataOperationsService } from '../services/dataOperationsService';
-import { calculateIncrementalFetch, hasFullSliceCoverageByHeader } from '../services/windowAggregationService';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
 import { FileText, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
@@ -23,39 +21,10 @@ import { contextRegistry } from '../services/contextRegistry';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { PinnedQueryModal } from './modals/PinnedQueryModal';
 import { BulkScenarioCreationModal } from './modals/BulkScenarioCreationModal';
-import { useFetchData, fetchWithToast, createFetchItem, type FetchItem } from '../hooks/useFetchData';
+import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useBulkScenarioCreation } from '../hooks/useBulkScenarioCreation';
+import { windowFetchPlannerService, type PlannerResult } from '../services/windowFetchPlannerService';
 
-interface BatchItem {
-  id: string;
-  type: 'parameter' | 'case' | 'node';
-  name: string;
-  objectId: string;
-  targetId: string;
-  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
-}
-
-// Phase 3: Coverage cache - memoize coverage check results per window
-interface CoverageCacheEntry {
-  dslKey: string; // DSL string (contains window + context)
-  hasMissingData: boolean;
-  hasAnyConnection: boolean;
-  /** True when there are coverage gaps in file-only parameters (no connection, so cannot be fetched) */
-  hasUnfetchableGaps: boolean;
-  paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'labour_cost' }>;
-  graphHash: string; // Hash of graph structure to invalidate when graph changes
-}
-
-// Module-level cache (scoped to component instance via ref)
-const coverageCache = new Map<string, CoverageCacheEntry>();
-
-// Helper to create a simple hash of graph structure (edges/nodes IDs)
-function getGraphHash(graph: any): string {
-  if (!graph) return '';
-  const edgeIds = (graph.edges || []).map((e: any) => e.uuid || e.id).sort().join(',');
-  const nodeIds = (graph.nodes || []).map((n: any) => n.uuid || n.id).sort().join(',');
-  return `${edgeIds}|${nodeIds}`;
-}
 
 interface WindowSelectorProps {
   tabId?: string;
@@ -71,7 +40,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // CRITICAL: These refs must be defined BEFORE useFetchData hook since it uses them
   const isInitialMountRef = useRef(true);
   const isAggregatingRef = useRef(false); // Track if we're currently aggregating to prevent loops
-  const lastAggregatedDSLRef = useRef<string | null>(null); // Track DSL (single source of truth for change detection)
+  const lastAggregatedDSLRef = useRef<string | null>(null); // Track DSL used for explicit/user fetch
+  const lastAutoAggregatedDSLRef = useRef<string | null>(null); // Track DSL we have already auto-aggregated for
+  const lastAnalysedDSLRef = useRef<string | null>(null); // Track DSL we have already analysed to avoid duplicate planner runs
   const graphRef = useRef<typeof graph>(graph); // Track graph to avoid dependency loop
   const prevDSLRef = useRef<string | null>(null); // Track previous DSL for shimmer trigger
   
@@ -91,11 +62,21 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     },
     currentDSL: () => (graphStore as any).getState?.()?.currentDSL || '',  // AUTHORITATIVE DSL from graphStore
   });
-  const [needsFetch, setNeedsFetch] = useState(false);
-  const [isCheckingCoverage, setIsCheckingCoverage] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
-  const [showButton, setShowButton] = useState(false); // Track button visibility for animations
   const [showShimmer, setShowShimmer] = useState(false); // Track shimmer animation
+  
+  // Planner-based state
+  const [plannerResult, setPlannerResult] = useState<PlannerResult | null>(null);
+  const [isExecutingPlanner, setIsExecutingPlanner] = useState(false);
+  
+  // Derive UI state from planner result
+  const plannerOutcome = plannerResult?.outcome ?? 'covered_stable';
+  const buttonLabel = plannerOutcome === 'not_covered' ? 'Fetch data' 
+                    : plannerOutcome === 'covered_stale' ? 'Refresh' 
+                    : 'Up to date';
+  const buttonTooltip = plannerResult?.summaries.buttonTooltip ?? 'All data is up to date.';
+  const buttonNeedsAttention = plannerOutcome === 'not_covered' || plannerOutcome === 'covered_stale';
+  const isAnalysing = plannerResult?.status === 'pending';
   
   // Context dropdown and unroll states
   const [showContextDropdown, setShowContextDropdown] = useState(false);
@@ -161,31 +142,43 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
   }, [window, setWindow, defaultWindowDates]);
   
-  // Initialize DSL with default window if not set
-  // Sets BOTH authoritative DSL (graphStore.currentDSL) AND historic record (graph.currentQueryDSL)
-  // Also detects existing query mode (cohort vs window) from existing DSL
+  // Initialize DSL on first load.
+  // Priority:
+  // 1) If graphStore.currentDSL already set, just derive mode from it.
+  // 2) Else, if graph.currentQueryDSL exists, promote it to authoritative DSL.
+  // 3) Else, fall back to window-based default DSL.
+  // Also detects existing query mode (cohort vs window) from existing DSL.
   const isInitializedRef = useRef(false);
   useEffect(() => {
-    // Check if authoritative DSL needs initialization
+    if (isInitializedRef.current) return;
+
     const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
     
-    // Detect query mode from existing DSL
-    if (authoritativeDSL && !isInitializedRef.current) {
+    // 1) If store already has a DSL (e.g. scenarios/other code set it), just derive mode
+    if (authoritativeDSL) {
       const existingMode = authoritativeDSL.includes('cohort(') ? 'cohort' : 'window';
       setQueryMode(existingMode);
+      isInitializedRef.current = true;
+      return;
     }
-    
-    if (graph && !authoritativeDSL && !isInitializedRef.current) {
-      // Use window from store if set, otherwise use defaults
+
+    // 2) If graph has a historic DSL, promote it to authoritative DSL
+    if (graph?.currentQueryDSL) {
+      const graphDSL = graph.currentQueryDSL;
+      const existingMode = graphDSL.includes('cohort(') ? 'cohort' : 'window';
+      setQueryMode(existingMode);
+      console.log('[WindowSelector] Initializing AUTHORITATIVE DSL from graph.currentQueryDSL:', graphDSL);
+      setCurrentDSL(graphDSL);
+      isInitializedRef.current = true;
+      return;
+    }
+
+    // 3) Fallback: build DSL from window (persisted or default)
+    if (graph) {
       const windowToUse = window || defaultWindowDates;
-      // Use queryMode for DSL function (default: cohort per design §7.5)
       const defaultDSL = `${queryMode}(${formatDateUK(windowToUse.start)}:${formatDateUK(windowToUse.end)})`;
-      console.log('[WindowSelector] Initializing AUTHORITATIVE DSL:', defaultDSL);
-      
-      // Set AUTHORITATIVE DSL on graphStore
+      console.log('[WindowSelector] Initializing AUTHORITATIVE DSL from window:', defaultDSL);
       setCurrentDSL(defaultDSL);
-      
-      // Also set historic record on graph (not used for queries!)
       if (setGraph) {
         setGraph({ ...graph, currentQueryDSL: defaultDSL });
       }
@@ -278,7 +271,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
     
     return () => observer.disconnect();
-  }, [isUnrolled, graph?.currentQueryDSL, showContextDropdown, needsFetch]);
+  }, [isUnrolled, graph?.currentQueryDSL, showContextDropdown, buttonNeedsAttention]);
   
   // Load context keys from graph.dataInterestsDSL when dropdown opens
   // Also reload when graph changes (e.g., after F5)
@@ -430,24 +423,62 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     // Note: lastAggregatedDSLRef is set directly when aggregation happens
   }, [lastAggregatedWindow]);
   
-  // Handle button appearance/disappearance animations.
-  // NOTE: The fetch button is now always rendered when the graph has parameter
-  // files; this effect only controls the shimmer animation state, not visibility.
+  
+  // Show if graph has any edges with parameter files (for windowed aggregation)
+  // This includes both external connections and file-based parameters
+  const hasParameterFiles = useMemo(() => {
+    return graph?.edges?.some(e => e.p?.id || e.cost_gbp?.id || e.labour_cost?.id) || false;
+  }, [graph]);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PLANNER-BASED ANALYSIS
+  // Analyse coverage and staleness whenever DSL changes.
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
-    if (needsFetch) {
-      // Trigger shimmer after a short delay to ensure button is visible
-      setShowButton(true);
+    if (isExecutingPlanner || isAggregatingRef.current) return;
+    
+    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
+    if (!authoritativeDSL || !graph) return;
+
+    // Only run planner when the AUTHORITATIVE DSL actually changes.
+    // This prevents repeated PLANNER_ANALYSIS calls for the same DSL
+    // during workspace/graph load and other non-DSL updates.
+    if (lastAnalysedDSLRef.current === authoritativeDSL) {
+      return;
+    }
+    lastAnalysedDSLRef.current = authoritativeDSL;
+    
+    const trigger = isInitialMountRef.current ? 'initial_load' : 'dsl_change';
+    
+    windowFetchPlannerService.analyse(graph, authoritativeDSL, trigger)
+      .then(result => {
+        setPlannerResult(result);
+        isInitialMountRef.current = false;
+        
+        // Show toast if planner says to
+        if (result.summaries.showToast && result.summaries.toastMessage) {
+          toast(result.summaries.toastMessage, { icon: '⚠️', duration: 4000 });
+        }
+      })
+      .catch(err => {
+        console.error('[WindowSelector] Planner analysis failed:', err);
+      });
+      
+  }, [graph, (graphStore as any).getState?.()?.currentDSL, isExecutingPlanner]);
+  
+  // Shimmer effect when button needs attention
+  useEffect(() => {
+    if (buttonNeedsAttention) {
       setTimeout(() => {
         setShowShimmer(true);
-        setTimeout(() => setShowShimmer(false), 600); // Match shimmer animation duration
+        setTimeout(() => setShowShimmer(false), 600);
       }, 100);
     } else {
       setShowShimmer(false);
     }
-  }, [needsFetch]);
+  }, [buttonNeedsAttention]);
   
-  // Trigger shimmer whenever DSL changes and fetch is required
-  // Use authoritative DSL from graphStore for consistency
+  // Re-trigger shimmer on DSL change when button needs attention
   useEffect(() => {
     const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
     if (!authoritativeDSL) {
@@ -456,25 +487,16 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
     
     const dslChanged = authoritativeDSL !== prevDSLRef.current;
-    
-    // Update ref
     prevDSLRef.current = authoritativeDSL;
     
-    // If DSL changed and button is visible and fetch is required, trigger shimmer
-    if (dslChanged && needsFetch && showButton) {
-      setShowShimmer(false); // Reset first
+    if (dslChanged && buttonNeedsAttention) {
+      setShowShimmer(false);
       setTimeout(() => {
         setShowShimmer(true);
         setTimeout(() => setShowShimmer(false), 600);
       }, 50);
     }
-  }, [graph?.currentQueryDSL, needsFetch, showButton]);
-  
-  // Show if graph has any edges with parameter files (for windowed aggregation)
-  // This includes both external connections and file-based parameters
-  const hasParameterFiles = useMemo(() => {
-    return graph?.edges?.some(e => e.p?.id || e.cost_gbp?.id || e.labour_cost?.id) || false;
-  }, [graph]);
+  }, [(graphStore as any).getState?.()?.currentDSL, buttonNeedsAttention]);
   
   // Always show - window selector is useful for any parameter-based aggregation
   
@@ -487,315 +509,56 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     end: endDate,
   }), [startDate, endDate]);
   
-  // Check data coverage and auto-aggregate when window changes
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTO-AGGREGATION (planner-driven)
+  // When planner says covered (stable or stale), aggregate from cache.
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
-    // Check refs BEFORE scheduling debounced function to prevent multiple queued executions
-    if (isAggregatingRef.current) {
-      return; // Already aggregating, skip
-    }
-    
-    // CRITICAL: Build DSL from AUTHORITATIVE sources NOW, before async runs.
-    // - window: from graphStore (authoritative date range)
-    // - context: extracted from graph.currentQueryDSL (where user's selection is stored)
-    // We NEVER use graph.currentQueryDSL directly as the query - it's just a record.
-    const currentWindowState = window;
-    const dslFromState = currentWindowState ? buildDSLFromState(currentWindowState) : '';
-    
-    const checkDataCoverageAndAggregate = async () => {
-      // Use ref for graph structure but DSL from closure (which is fresh)
-      const currentGraph = graphRef.current;
-      if (!currentGraph || !window) {
-        setNeedsFetch(false);
-        return;
-      }
-      
-      // Skip on initial mount - wait for lastAggregatedWindow to load from persistence
-      if (isInitialMountRef.current) {
-        isInitialMountRef.current = false;
-        return;
-      }
-      
-      // Double-check aggregation flag (in case it was set between scheduling and execution)
-      if (isAggregatingRef.current) {
-        return;
-      }
-      
-      // Use DSL as single source of truth (contains both window and context)
-      const currentDSL = dslFromState;
-      const lastDSL = lastAggregatedDSLRef.current || '';
-      
-      // DSL contains everything - if it matches, nothing has changed
-      if (currentDSL && currentDSL === lastDSL) {
-        setNeedsFetch(false);
-        return;
-      }
-      
-      // Log what changed
-      if (lastDSL && currentDSL !== lastDSL) {
-        console.log('[WindowSelector] DSL changed, triggering coverage check:', {
-          currentDSL,
-          lastDSL
-        });
-      }
-      
-      // DSL differs from last aggregated - check coverage
-      setIsCheckingCoverage(true);
-      
-      // Compute coverage for this DSL / window.
-      // NOTE: We intentionally do NOT short-circuit on cached results here –
-      // every user-initiated DSL change must either:
-      // - auto-aggregate from cache,
-      // - surface an enabled/disabled Fetch button, and/or
-      // - show a toast explaining the coverage situation.
-      const currentGraphHash = getGraphHash(currentGraph);
-      const cacheKey = `${dslFromState}|${currentGraphHash}`;
-      console.log(`[WindowSelector] Computing coverage check for DSL:`, dslFromState);
-      
-      try {
-        let hasMissingData = false;
-        let hasAnyConnection = false;
-        // Tracks gaps in file-only parameters (no connection, so cannot be fetched)
-        let hasUnfetchableGaps = false;
-        const paramsToAggregate: Array<{ paramId: string; edgeId: string; slot: 'p' | 'cost_gbp' | 'labour_cost' }> = [];
-        
-        // Check all parameters in graph (use ref to avoid dependency)
-            if (currentGraph.edges) {
-          for (const edge of currentGraph.edges) {
-            const edgeId = edge.uuid || edge.id || '';
-            
-            // Check each parameter slot
-            // Check all parameter slots (including those with direct connections but no file)
-            const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'labour_cost'; param: any }> = [];
-            if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
-            if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
-            if (edge.labour_cost) paramSlots.push({ slot: 'labour_cost', param: edge.labour_cost });
-            
-            for (const { slot, param } of paramSlots) {
-              const paramId = param.id;
-              
-              // Check if parameter has connection (file or direct) OR has file data
-              const paramFile = paramId ? fileRegistry.getFile(`parameter-${paramId}`) : null;
-              const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
-              const hasFileData = !!paramFile?.data;
-              const isFetchable = hasConnection; // Only connected params can actually be fetched
-              
-              // DEBUG: Log every parameter check
-              console.log(`[WindowSelector] Checking param ${paramId} (${slot}):`, {
-                paramId,
-                hasConnection,
-                hasFileData,
-                paramFileFound: !!paramFile,
-                paramFileDataFound: !!paramFile?.data
-              });
-              
-              // Skip if no connection AND no file data (nothing to fetch from or aggregate)
-              if (!hasConnection && !hasFileData) {
-                console.log(`[WindowSelector] SKIPPED ${paramId} - no connection and no file data`);
-                continue;
-              }
-              
-              // Track whether there is at least one FETCHABLE parameter. File-only
-              // parameters do not make sense for "needs fetch" signalling.
-              if (isFetchable) {
-                hasAnyConnection = true;
-              }
-              
-              // Strict validation: check if data exists for this window
-              if (paramFile?.data) {
-                const targetSlice = currentGraph.currentQueryDSL || '';
-                const hasFullCoverage = hasFullSliceCoverageByHeader(
-                  paramFile.data,
-                  currentWindow,
-                  targetSlice,
-                );
+    if (!plannerResult || plannerResult.status !== 'complete') return;
+    // On initial load we trust the persisted graph state (graph already reflects
+    // the last aggregation for its stored DSL). Do NOT auto-aggregate on
+    // initial_load, otherwise we risk noisy from-file fetches before the user
+    // has changed the query in any way.
+    if (plannerResult.analysisContext?.trigger === 'initial_load') return;
+    // Auto-aggregate for BOTH stable and stale (not for not_covered)
+    if (plannerResult.outcome === 'not_covered') return;
+    if (plannerResult.autoAggregationItems.length === 0) return;
+    if (isAggregatingRef.current) return;
 
-                // Auto-fetch behaviour:
-                // - If the requested window is fully covered by slice headers, we treat it
-                //   as previously fetched and can auto-aggregate from cache.
-                // - If not fully covered AND the parameter is fetchable, we require an
-                //   explicit Fetch from source.
-                // - If not fetchable (file-only), lack of coverage should NOT block
-                //   auto-aggregation for other parameters; it simply means this param
-                //   will not be auto-updated for this DSL.
-                if (!hasFullCoverage) {
-                  console.log(`[WindowSelector] Param ${paramId} (${slot}) NOT fully covered by cache`, {
-                    dsl: dslFromState,
-                    window: currentWindow,
-                  });
-                  if (isFetchable) {
-                    hasMissingData = true;
-                  } else {
-                    // File-only parameter missing coverage – cannot be fixed by fetching,
-                    // but we should still surface this as "no cached data" for the user.
-                    hasUnfetchableGaps = true;
-                  }
-                } else {
-                  // Header coverage is complete - safe to auto-aggregate from cache
-                  const hasDailyData = paramFile.data.values?.some((v: any) => 
-                    v.n_daily && v.k_daily && v.dates && v.dates.length > 0
-                  );
-                  if (hasDailyData) {
-                    paramsToAggregate.push({ paramId, edgeId, slot });
-                  }
-                }
-              } else {
-                // No file exists - check if we've already fetched for this DSL
-                // For direct connections, we can't verify data existence, so we check
-                // if the current DSL matches the last aggregated DSL
-                const lastDSL = lastAggregatedDSLRef.current;
-                if (!lastDSL || dslFromState !== lastDSL) {
-                  // DSL doesn't match last aggregated - need to fetch
-                  hasMissingData = true;
-                }
-                // If DSL matches last aggregated, assume data exists (don't set hasMissingData)
-              }
-            }
-          }
-        }
-        
-        // Check cases (use ref to avoid dependency)
-        if (currentGraph.nodes) {
-          for (const node of currentGraph.nodes) {
-            if (node.case?.id) {
-              const caseId = node.case.id;
-              const caseFile = fileRegistry.getFile(`case-${caseId}`);
-              const hasConnection = !!caseFile?.data?.connection || !!node.case?.connection;
-              const hasFileData = !!caseFile?.data;
-              const isFetchable = hasConnection;
-              
-              // Skip if no connection AND no file data
-              if (!hasConnection && !hasFileData) continue;
-              
-              // ONLY truly fetchable cases (with a connection) should affect hasAnyConnection
-              // and needsFetch. File-only cases (no connection) must NOT block coverage UX.
-              if (isFetchable) {
-                hasAnyConnection = true;
-                if (!hasFileData) {
-                  // Has connection but no file - check if we've already fetched for this DSL
-                  const lastDSL = lastAggregatedDSLRef.current;
-                  if (!lastDSL || dslFromState !== lastDSL) {
-                    // DSL doesn't match last aggregated - need to fetch
-                    hasMissingData = true;
-                  }
-                  // If DSL matches last aggregated, assume data exists (don't set hasMissingData)
-                }
-              } else if (hasFileData) {
-                // File-only case data: treat as an unfetchable gap for this DSL.
-                // This contributes to the "sample files / no data source" toast but
-                // does NOT cause needsFetch=true.
-                hasUnfetchableGaps = true;
-              }
-            }
-          }
-        }
-        
-        // Set needsFetch flag:
-        // - Only parameters with REAL connections (isFetchable) influence this.
-        // - File-only parameters should never cause a "needs fetch" state.
-        const needsFetch = hasAnyConnection && hasMissingData;
-        setNeedsFetch(needsFetch);
+    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
+    if (!authoritativeDSL) return;
 
-        // User experience rules:
-        //
-        // 1. If there ARE fetchable parameters and at least one of them is missing
-        //    coverage for this window, we must NEVER fail silently. Surface a toast
-        //    explaining that some items need fetching and that the Fetch button
-        //    can be used to retrieve data.
-        if (needsFetch) {
-          console.log('[WindowSelector] Coverage UX: fetchable gaps detected - showing fetch-needed toast', {
-            dsl: dslFromState,
-          });
-          toast(`Some items need fetching for ${dslFromState || 'this window'}. Click Fetch to retrieve data from source.`, {
-            icon: '⚠️',
-            duration: 4000,
-          });
-        }
-
-        // 2. If there are NO fetchable parameters but we detected gaps in file-only
-        //    slices, we are in a "sample / file-only" situation: there is no cached
-        //    data for this window and no way to fetch more. Do NOT fail silently –
-        //    surface a clear toast to the user.
-        if (!needsFetch && !hasAnyConnection && hasUnfetchableGaps) {
-          console.log('[WindowSelector] Coverage UX: unfetchable gaps in file-only params - showing sample-files toast', {
-            dsl: dslFromState,
-          });
-          toast(`No cached data for ${dslFromState || 'this window'} in sample files. Try a different date range.`, {
-            icon: '⚠️',
-            duration: 4000,
-          });
-        }
-        
-        // Phase 3: Cache the computed result
-        const cacheEntry: CoverageCacheEntry = {
-          dslKey: dslFromState,
-          hasMissingData,
-          hasAnyConnection,
-          hasUnfetchableGaps,
-          paramsToAggregate: [...paramsToAggregate], // Copy array
-          graphHash: currentGraphHash,
-        };
-        coverageCache.set(cacheKey, cacheEntry);
-        console.log(`[WindowSelector] Cached coverage result for DSL:`, dslFromState);
-        
-        // Auto-aggregate parameters that have all data for this window.
-        // IMPORTANT:
-        // - We only block auto-aggregation when there is missing data for at least
-        //   one FETCHABLE parameter (i.e., something the user could fix by fetching).
-        // - File-only parameters with incomplete coverage do NOT prevent
-        //   auto-aggregation for other parameters.
-        if (paramsToAggregate.length > 0 && !hasMissingData) {
-          console.log(`[WindowSelector] Auto-aggregating ${paramsToAggregate.length} parameters via hook for DSL:`, dslFromState);
-          
-          // Set flag to prevent re-triggering during aggregation
+    // Avoid repeated auto-aggregation loops for the same DSL
+    if (lastAutoAggregatedDSLRef.current === authoritativeDSL) {
+        return;
+      }
+      
+    // Trigger auto-aggregation using existing fetchItems with 'from-file' mode
           isAggregatingRef.current = true;
-          lastAggregatedDSLRef.current = dslFromState;
-          
-          try {
-            // Build FetchItems from paramsToAggregate
-            const items = paramsToAggregate.map(({ paramId, edgeId, slot }) =>
-              createFetchItem('parameter', paramId, edgeId, { paramSlot: slot })
-            );
-            
-            // Use hook's fetchItems with from-file mode (no API call)
-            await fetchItems(items, { mode: 'from-file' });
-            
-            // Apply all accumulated changes at once
+    
+    const items = plannerResult.autoAggregationItems.map(i => 
+      createFetchItem(i.type, i.objectId, i.targetId, { paramSlot: i.paramSlot })
+    );
+    
+    fetchItems(items, { mode: 'from-file' })
+      .then(() => {
+        // CRITICAL: Apply accumulated graph changes to React state
+        // fetchItems updates graphRef.current, we must trigger re-render
             const updatedGraph = graphRef.current;
-            if (updatedGraph && updatedGraph !== currentGraph) {
+        if (updatedGraph && setGraph) {
               setGraph(updatedGraph);
             }
             
-            // Update state (deferred to prevent re-triggering)
-            setTimeout(() => {
-              setLastAggregatedWindow(currentWindow); // Store in UK format
+        setLastAggregatedWindow(currentWindow);
+        // Track both auto-aggregation DSL and last aggregated DSL
+        lastAutoAggregatedDSLRef.current = authoritativeDSL;
+        lastAggregatedDSLRef.current = authoritativeDSL;
+      })
+      .finally(() => {
               isAggregatingRef.current = false;
-            }, 0);
-          } catch (error) {
-            isAggregatingRef.current = false;
-            lastAggregatedDSLRef.current = null;
-            throw error;
-          }
-        } else {
-          // No aggregation needed - clear flag if it was set
-          isAggregatingRef.current = false;
-        }
-      } catch (error) {
-        console.error('[WindowSelector] Error checking data coverage:', error);
-        // NEVER fail silently – surface a clear toast so the user knows
-        // the coverage check failed instead of just doing nothing.
-        const message =
-          error instanceof Error ? error.message : String(error ?? 'Unknown error');
-        toast.error(`Failed to check data coverage: ${message}`);
-        setNeedsFetch(false);
-      } finally {
-        setIsCheckingCoverage(false);
-      }
-    };
-    
-    // Debounce coverage check
-    const timeoutId = setTimeout(checkDataCoverageAndAggregate, 300);
-    return () => clearTimeout(timeoutId);
-  }, [currentWindow, window, setGraph, setLastAggregatedWindow, graph?.currentQueryDSL]); // Added currentQueryDSL to trigger check when context changes
+      });
+      
+  }, [plannerResult, graphStore, currentWindow, setGraph, fetchItems]);
   
   // Helper: Update window state, currentQueryDSL (historic), AND authoritative DSL
   const updateWindowAndDSL = (start: string, end: string) => {
@@ -949,161 +712,42 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   
   const activePreset = getActivePreset();
   
-  // Collect batch items that need fetching (have connections but missing data)
-  const batchItemsToFetch = useMemo(() => {
-    if (!graph || !needsFetch) return [];
-    
-    const items: BatchItem[] = [];
-    // Use authoritative DSL from graphStore
-    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
-    
-    // Collect parameters that need fetching
-    if (graph.edges) {
-      for (const edge of graph.edges) {
-        const edgeId = edge.uuid || edge.id || '';
-        
-        // Check all parameter slots (including those with direct connections but no file)
-        const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'labour_cost'; param: any }> = [];
-        if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
-        if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
-        if (edge.labour_cost) paramSlots.push({ slot: 'labour_cost', param: edge.labour_cost });
-        
-        for (const { slot, param } of paramSlots) {
-          const paramId = param.id;
-          
-          // Check if parameter has connection (file or direct)
-          const paramFile = paramId ? fileRegistry.getFile(`parameter-${paramId}`) : null;
-          const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
-          
-          if (!hasConnection) continue;
-          
-          // Check if this parameter needs fetching for the DSL
-          let needsFetchForThis = false;
-          if (!paramFile?.data) {
-            // No file exists - check if we've already fetched for this DSL
-            const lastDSL = lastAggregatedDSLRef.current;
-            if (!lastDSL || authoritativeDSL !== lastDSL) {
-              needsFetchForThis = true;
-            }
-          } else {
-            // File exists - check if data is missing (pass UK format, function normalizes)
-            const incrementalResult = calculateIncrementalFetch(
-              paramFile.data,
-              currentWindow,
-              undefined, // querySignature
-              false, // bustCache  
-              authoritativeDSL // targetSlice - uses authoritative DSL from graphStore
-            );
-            needsFetchForThis = incrementalResult.needsFetch;
-          }
-          
-          if (needsFetchForThis) {
-            // For direct connections without paramId, use edgeId as objectId
-            items.push({
-              id: `param-${paramId || 'direct'}-${slot}-${edgeId}`,
-              type: 'parameter',
-              name: `${slot}: ${paramId || 'direct connection'}`,
-              objectId: paramId || '', // Empty string for direct connections
-              targetId: edgeId,
-              paramSlot: slot,
-            });
-          }
-        }
-      }
-    }
-    
-    // Collect cases that need fetching
-    if (graph.nodes) {
-      for (const node of graph.nodes) {
-        if (node.case?.id) {
-          const caseId = node.case.id;
-          const caseFile = fileRegistry.getFile(`case-${caseId}`);
-          const hasConnection = !!caseFile?.data?.connection || !!node.case?.connection;
-          
-          if (hasConnection && !caseFile) {
-            items.push({
-              id: `case-${caseId}-${node.uuid || node.id}`,
-              type: 'case',
-              name: `case: ${caseId}`,
-              objectId: caseId,
-              targetId: node.uuid || node.id || '',
-            });
-          }
-        }
-      }
-    }
-    
-    return items;
-  }, [graph, needsFetch, currentWindow]);
-
-  // DEBUG: Log coverage outcome and fetchability whenever these change
-  useEffect(() => {
-    console.log('[WindowSelector] Coverage outcome:', {
-      needsFetch,
-      hasParameterFiles,
-      batchItemsToFetchCount: batchItemsToFetch.length,
-    });
-  }, [needsFetch, hasParameterFiles, batchItemsToFetch.length]);
-  
   const handleFetchData = async () => {
     if (!graph) return;
-    if (batchItemsToFetch.length === 0) {
-      // User explicitly clicked Fetch but there are no items configured
-      // to be fetched (no connections / data sources). NEVER fail silently.
-      toast.error('No items are configured to fetch for this query (no data sources on parameters).');
+    
+    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
+    if (!authoritativeDSL) {
+      toast.error('No query DSL set');
       return;
     }
     
+    setIsExecutingPlanner(true);
     setIsFetching(true);
     
     try {
-      // Convert BatchItem to FetchItem (filter out 'node' type which isn't used here)
-      const fetchItemsList: FetchItem[] = batchItemsToFetch
-        .filter(item => item.type === 'parameter' || item.type === 'case')
-        .map(item => ({
-          id: item.id,
-          type: item.type as 'parameter' | 'case',
-          name: item.name,
-          objectId: item.objectId,
-          targetId: item.targetId,
-          paramSlot: item.paramSlot,
-        }));
-      
-      // Use centralized fetch hook with toast notifications
-      const results = await fetchWithToast(
-        () => fetchItems(fetchItemsList, {
-          onProgress: (current, total) => {
-            // Progress is handled by fetchWithToast
-          }
-        }),
-        fetchItemsList.length
+      const result = await windowFetchPlannerService.executeFetchPlan(
+        graph,
+        (g) => { if (g) setGraph(g); },
+        authoritativeDSL
       );
+      setPlannerResult(result);
       
-      const successCount = results.filter(r => r.success).length;
-      
-      // Update lastAggregatedWindow after successful fetch (store in UK format)
-      if (successCount > 0) {
+      // Update lastAggregatedWindow after successful fetch
         setLastAggregatedWindow(currentWindow);
-        // Use authoritative DSL from graphStore for tracking what we aggregated
-        lastAggregatedDSLRef.current = (graphStore as any).getState?.()?.currentDSL || '';
-        
-        // CRITICAL: Invalidate coverage cache after successful fetch
-        // Otherwise, cached result with hasMissingData may be stale
-        coverageCache.clear();
-        console.log('[WindowSelector] Cleared coverage cache after successful fetch');
-      }
+      lastAggregatedDSLRef.current = authoritativeDSL;
       
-      // Trigger coverage check by updating window (will detect if still needs fetch)
-      setWindow({ ...window! });
-    } catch (error) {
-      console.error('[WindowSelector] Batch fetch failed:', error);
+      toast.success('Data fetched successfully');
+    } catch (err: any) {
+      console.error('[WindowSelector] Planner fetch failed:', err);
+      toast.error(`Fetch failed: ${err.message}`);
     } finally {
+      setIsExecutingPlanner(false);
       setIsFetching(false);
     }
   };
   
   return (
-    <div ref={windowSelectorRef} className={`window-selector ${!needsFetch ? 'window-selector-compact' : ''}`}>
+    <div ref={windowSelectorRef} className={`window-selector ${!buttonNeedsAttention ? 'window-selector-compact' : ''}`}>
       {/* Main area (left side) */}
       <div className="window-selector-main">
       <div className="window-selector-content">
@@ -1468,19 +1112,17 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         <div className="window-selector-fetch-column">
           <button
             onClick={handleFetchData}
-            disabled={isCheckingCoverage || isFetching}
-            className={`window-selector-button ${showShimmer && batchItemsToFetch.length > 0 ? 'shimmer' : ''}`}
+            disabled={isAnalysing || isFetching}
+            className={`window-selector-button ${showShimmer && buttonNeedsAttention ? 'shimmer' : ''}`}
             title={
-              isCheckingCoverage
+              isAnalysing
                 ? "Checking data coverage..."
                 : isFetching
                   ? "Fetching data..."
-                  : batchItemsToFetch.length === 0
-                    ? "No items are configured to fetch for this query (no data sources on parameters)."
-                    : `Fetch ${batchItemsToFetch.length} item${batchItemsToFetch.length > 1 ? 's' : ''} from external sources`
+                  : buttonTooltip
             }
           >
-            {isCheckingCoverage ? 'Checking...' : isFetching ? 'Fetching...' : 'Fetch data'}
+            {isAnalysing ? 'Checking...' : isFetching ? 'Fetching...' : buttonLabel}
           </button>
         </div>
       )}

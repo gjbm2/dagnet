@@ -292,24 +292,39 @@ export default function ConversionEdge({
       }
     }
     
-    // === PARAM: e.<edgeId>.p ===
+    // === PARAM: e.<edgeId>.p (BLENDED) ===
     lines.push(`e.${edgeId}.p`);
     
-    // Mean ± stdev
+    // Mean ± stdev (blended probability)
     const pVal = (effectiveProbability * 100).toFixed(1);
     const pStd = data.stdev ? ` ±${(data.stdev * 100).toFixed(1)}` : '';
     lines.push(`  ${pVal}%${pStd}`);
     
-    // Evidence or rebalanced indicator
-    const pEvidence = fullEdge?.p?.evidence;
-    const hasEvidence = pEvidence && (pEvidence.n !== undefined || pEvidence.k !== undefined);
+    // === PARAM: e.<edgeId>.p.evidence (RAW) ===
+    const pEvidence = fullEdge?.p?.evidence as any;
+    lines.push('');
+    lines.push(`e.${edgeId}.p.evidence`);
     
-    if (hasEvidence && pEvidence) {
+    if (pEvidence) {
+      const evMean = typeof pEvidence.mean === 'number'
+        ? pEvidence.mean
+        : (typeof pEvidence.n === 'number' && typeof pEvidence.k === 'number' && pEvidence.n > 0
+            ? pEvidence.k / pEvidence.n
+            : undefined);
+      const evStdev = typeof pEvidence.stdev === 'number' ? pEvidence.stdev : undefined;
+      
+      if (evMean !== undefined) {
+        const evVal = (evMean * 100).toFixed(1);
+        const evStd = evStdev ? ` ±${(evStdev * 100).toFixed(1)}` : '';
+        lines.push(`  ${evVal}%${evStd}`);
+      }
+      
       if (pEvidence.n !== undefined && pEvidence.k !== undefined) {
         lines.push(`  n=${pEvidence.n} k=${pEvidence.k}`);
       }
       if (pEvidence.window_from && pEvidence.window_to) {
-        const fmtDate = (d: Date) => `${d.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}`;
+        const fmtDate = (d: Date) =>
+          `${d.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}`;
         lines.push(`  ${fmtDate(new Date(pEvidence.window_from))} to ${fmtDate(new Date(pEvidence.window_to))}`);
       }
       if (pEvidence.source) lines.push(`  source: ${pEvidence.source}`);
@@ -819,7 +834,8 @@ export default function ConversionEdge({
     // If no valid evidence → fall back to F mode (single stripe at p.forecast)
     if (typeof pEvidence !== 'number' || pEvidence <= 0) {
       // Use forecast width (same calculation as F-only mode)
-      const forecastRatio = Math.max(0, pForecast / pMean);
+      const safeForecast = typeof pForecast === 'number' && pForecast > 0 ? pForecast : pMean;
+      const forecastRatio = Math.max(0, safeForecast / pMean);
       const forecastWidth = Math.max(1, baseWidth * forecastRatio);
       return {
         mode: 'f' as const,
@@ -827,18 +843,13 @@ export default function ConversionEdge({
         meanWidth: forecastWidth,
         evidenceRatio: 0,
         evidence: 0,
-        mean: pForecast
+        mean: safeForecast
       };
     }
     
     const evidenceRatio = Math.min(1, Math.max(0, pEvidence / pMean));
     const evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
     const meanWidth = baseWidth;
-
-    // If evidence and mean are effectively equal, use solid rendering
-    if (Math.abs(pEvidence - pMean) < 0.001) {
-      return null;
-    }
 
     return {
       mode: 'f+e' as const,
