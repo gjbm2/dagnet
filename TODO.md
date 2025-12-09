@@ -1,5 +1,7 @@
 # TODO
 
+- Highlighting / selcting latency edges (not showing up properly)
+
 ## Major components
 - Dashboarding views
 - Tabulated & graphing analytics output
