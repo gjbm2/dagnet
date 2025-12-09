@@ -711,8 +711,12 @@ class DataOperationsService {
         return { success: false };
       }
       
-      // Find the target edge
-      const targetEdge = graph.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
+      // Find the target edge (check uuid, id, and from->to format)
+      const targetEdge = graph.edges?.find((e: any) => 
+        e.uuid === edgeId || 
+        e.id === edgeId ||
+        `${e.from}->${e.to}` === edgeId
+      );
       markTime('findEdge');
       if (!targetEdge) {
         toast.error(`Edge not found in graph`);
@@ -1613,7 +1617,11 @@ class DataOperationsService {
       
       // Apply changes to graph
       const nextGraph = structuredClone(graph);
-      const edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
+      const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+        e.uuid === edgeId || 
+        e.id === edgeId ||
+        `${e.from}->${e.to}` === edgeId
+      );
       
       console.log('[DataOperationsService] BEFORE applyChanges:', {
         edgeId,
@@ -4803,15 +4811,19 @@ class DataOperationsService {
                     fullQueryForStorage,
                     dataSourceType,
                     sliceDSL, // CRITICAL: Pass context slice for isolateSlice matching
-                    // LAG: Pass merge options for forecast recomputation
-                    shouldRecomputeForecast ? {
+                    // CRITICAL: Always pass isCohortMode to ensure correct storage mode
+                    // isCohortMode determines sliceDSL format (cohort vs window), independent of forecast
+                    {
                       isCohortMode: isCohortQuery,
-                      latencyConfig: {
-                        maturity_days: latencyConfigForMerge?.maturity_days,
-                        anchor_node_id: latencyConfigForMerge?.anchor_node_id,
-                      },
-                      recomputeForecast: true,
-                    } : undefined
+                      // LAG: Pass latency config for forecast recomputation if available
+                      ...(shouldRecomputeForecast && {
+                        latencyConfig: {
+                          maturity_days: latencyConfigForMerge?.maturity_days,
+                          anchor_node_id: latencyConfigForMerge?.anchor_node_id,
+                        },
+                        recomputeForecast: true,
+                      }),
+                    }
                   );
                   
                   console.log(`[DataOperationsService] Prepared daily time-series data for gap ${gapIndex + 1}:`, {

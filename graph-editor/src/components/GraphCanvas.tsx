@@ -4450,6 +4450,106 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 100);
   }, [graph, setGraph, copiedNode, saveHistoryState, setNodes, onSelectedNodeChange]);
 
+  // Drop node at specific position (from drag & drop)
+  const dropNodeAtPosition = useCallback(async (nodeId: string, x: number, y: number) => {
+    if (!graph) return;
+    
+    const fileId = `node-${nodeId}`;
+    
+    // Check if the node file exists
+    const file = fileRegistry.getFile(fileId);
+    if (!file) {
+      toast.error(`Node file not found: ${nodeId}`);
+      return;
+    }
+    
+    const newUuid = crypto.randomUUID();
+    
+    // Create new node with the dropped node ID attached
+    const newNode = {
+      uuid: newUuid,
+      id: nodeId,
+      label: file.data?.label || nodeId,
+      absorbing: false,
+      layout: {
+        x: x,
+        y: y
+      }
+    };
+    
+    const nextGraph = structuredClone(graph);
+    nextGraph.nodes.push(newNode);
+    
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    setGraph(nextGraph);
+    
+    if (typeof saveHistoryState === 'function') {
+      saveHistoryState('Drop node', newUuid);
+    }
+    
+    // Trigger "Get from file" to populate full node data
+    setTimeout(async () => {
+      try {
+        await dataOperationsService.getNodeFromFile({
+          nodeId: nodeId,
+          graph: nextGraph,
+          setGraph: setGraph as any,
+          targetNodeUuid: newUuid,
+        });
+        toast.success(`Added node: ${nodeId}`);
+      } catch (error) {
+        console.error('[GraphCanvas] Failed to get node from file:', error);
+        toast.error('Failed to load node data from file');
+      }
+      
+      // Select the new node
+      setNodes((nodes) => 
+        nodes.map((node) => ({
+          ...node,
+          selected: node.id === newUuid
+        }))
+      );
+      onSelectedNodeChange(newUuid);
+    }, 100);
+  }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
+
+  // Handle drag over for drop zone
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  // Handle drop from Navigator
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    
+    try {
+      const jsonData = e.dataTransfer.getData('application/json');
+      if (!jsonData) return;
+      
+      const dragData = JSON.parse(jsonData);
+      if (dragData.type !== 'dagnet-drag') return;
+      
+      // Get drop position in flow coordinates
+      const position = screenToFlowPosition({
+        x: e.clientX,
+        y: e.clientY,
+      });
+      
+      if (dragData.objectType === 'node') {
+        dropNodeAtPosition(dragData.objectId, position.x, position.y);
+      } else if (dragData.objectType === 'parameter') {
+        // For parameters, we'd need to drop onto an edge - show message
+        toast('Drop parameters onto an edge to attach them');
+      }
+    } catch (error) {
+      console.error('[GraphCanvas] Drop error:', error);
+    }
+  }, [screenToFlowPosition, dropNodeAtPosition]);
+
   // Handle node right-click
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     event.preventDefault();
@@ -4623,7 +4723,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   return (
     <DecorationVisibilityContext.Provider value={decorationVisibilityValue}>
-      <div ref={reactFlowWrapperRef} style={{ height: '100%', position: 'relative' }}>
+      <div 
+        ref={reactFlowWrapperRef} 
+        style={{ height: '100%', position: 'relative' }}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         <ReactFlow
           nodes={nodes}
           edges={renderEdges}

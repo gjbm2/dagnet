@@ -4,7 +4,9 @@ import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, 
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
-import { useTabContext } from '../../contexts/TabContext';
+import { useTabContext, fileRegistry } from '../../contexts/TabContext';
+import { dataOperationsService } from '../../services/dataOperationsService';
+import toast from 'react-hot-toast';
 import Tooltip from '@/components/Tooltip';
 import { getConditionalColour, getConditionalProbabilityColour, isConditionalEdge } from '@/lib/conditionalColours';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
@@ -416,8 +418,117 @@ export default function ConversionEdge({
     return lines.join('\n');
   };
   const { deleteElements, setEdges, getNodes, getEdges, screenToFlowPosition } = useReactFlow();
-  const { graph } = useGraphStore();
+  const { graph, setGraph, saveHistoryState } = useGraphStore();
   const viewPrefs = useViewPreferencesContext();
+  
+  // Handle drag over for drop target (added to existing path elements)
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  // Handle drop of parameter file onto this edge
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    
+    if (data?.scenarioOverlay) return; // Don't allow drops on overlay edges
+    
+    try {
+      const jsonData = e.dataTransfer.getData('application/json');
+      if (!jsonData) return;
+      
+      const dragData = JSON.parse(jsonData);
+      if (dragData.type !== 'dagnet-drag' || dragData.objectType !== 'parameter') {
+        return; // Silently ignore non-parameter drops
+      }
+      
+      const paramId = dragData.objectId;
+      const fileId = `parameter-${paramId}`;
+      
+      // Check if the parameter file exists
+      const file = fileRegistry.getFile(fileId);
+      if (!file) {
+        toast.error(`Parameter file not found: ${paramId}`);
+        return;
+      }
+      
+      if (!graph) return;
+      
+      // Find the edge in the graph
+      const edgeInGraph = graph.edges?.find((e: any) => 
+        (e.id && e.id === id) || 
+        (e.uuid && e.uuid === id) ||
+        `${e.from}->${e.to}` === id
+      );
+      
+      if (!edgeInGraph) {
+        toast.error('Could not find edge in graph');
+        return;
+      }
+      
+      // Get parameter type from file data
+      const paramType = file.data?.type;
+      
+      // Prepare the graph with the attached parameter ID
+      const nextGraph = structuredClone(graph);
+      const edgeIndex = nextGraph.edges?.findIndex((e: any) => 
+        (e.id && e.id === id) || 
+        (e.uuid && e.uuid === id) ||
+        `${e.from}->${e.to}` === id
+      );
+      
+      if (edgeIndex === undefined || edgeIndex === -1) return;
+      
+      // Attach parameter ID to the correct slot (p.id, cost_gbp.id, or labour_cost.id)
+      if (paramType === 'probability') {
+        if (!nextGraph.edges[edgeIndex].p) {
+          nextGraph.edges[edgeIndex].p = { mean: 0 };
+        }
+        nextGraph.edges[edgeIndex].p.id = paramId;
+      } else if (paramType === 'cost_gbp') {
+        if (!nextGraph.edges[edgeIndex].cost_gbp) {
+          nextGraph.edges[edgeIndex].cost_gbp = { mean: 0 };
+        }
+        nextGraph.edges[edgeIndex].cost_gbp.id = paramId;
+      } else if (paramType === 'labour_cost') {
+        if (!nextGraph.edges[edgeIndex].labour_cost) {
+          nextGraph.edges[edgeIndex].labour_cost = { mean: 0 };
+        }
+        nextGraph.edges[edgeIndex].labour_cost.id = paramId;
+      } else {
+        // Default to probability parameter slot
+        if (!nextGraph.edges[edgeIndex].p) {
+          nextGraph.edges[edgeIndex].p = { mean: 0 };
+        }
+        nextGraph.edges[edgeIndex].p.id = paramId;
+      }
+      
+      if (nextGraph.metadata) {
+        nextGraph.metadata.updated_at = new Date().toISOString();
+      }
+      
+      // Let getParameterFromFile handle the graph update - it will set p.id and fetch data
+      try {
+        await dataOperationsService.getParameterFromFile({
+          paramId: paramId,
+          edgeId: id,
+          graph: nextGraph,
+          setGraph: setGraph as any,
+        });
+        
+        if (typeof saveHistoryState === 'function') {
+          saveHistoryState('Attach parameter file', id);
+        }
+        
+        toast.success(`Attached parameter: ${paramId}`);
+      } catch (error) {
+        console.error('[ConversionEdge] Failed to get parameter from file:', error);
+        toast.error('Failed to load parameter data from file');
+      }
+    } catch (error) {
+      console.error('[ConversionEdge] Drop error:', error);
+    }
+  }, [graph, id, data?.scenarioOverlay, setGraph, saveHistoryState]);
   
   // What-if DSL is now passed through edge.data (from tab state)
   const whatIfDSL = data?.whatIfDSL;
@@ -1949,6 +2060,8 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
               {/* Hidden path for beads - follows the top edge of the ribbon */}
               <path
@@ -1987,6 +2100,8 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
               {/* Middle band (mean) - normal width, base colour */}
               <path
@@ -2013,6 +2128,8 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
               {/* Inner band (lower bound) - narrowest, darkest colour */}
               <path
@@ -2041,6 +2158,8 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
             </>
           ) : shouldShowLagLayers && lagLayerData ? (
@@ -2073,6 +2192,8 @@ export default function ConversionEdge({
                     onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                     onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                     onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                   />
                   {/* Chevrons along the path - filled shapes */}
                   {splineChevrons.map((chevron, i) => (
@@ -2119,6 +2240,8 @@ export default function ConversionEdge({
                   onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                   onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                   onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                 />
               )}
               {lagLayerData.mode === 'e' ? (
@@ -2148,6 +2271,8 @@ export default function ConversionEdge({
                   onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                   onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                   onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                 />
               ) : (
                 // F and F+E modes: striped rendering
@@ -2175,6 +2300,8 @@ export default function ConversionEdge({
                     onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                     onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                     onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                   />
                   {/* Inner layer (evidence) - striped NO offset, narrower width - only for F+E mode */}
                   {lagLayerData.mode === 'f+e' && (
@@ -2201,6 +2328,8 @@ export default function ConversionEdge({
                       onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                       onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                       onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                     />
                   )}
                 </>
@@ -2234,6 +2363,8 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
             </>
           )}
@@ -2518,6 +2649,7 @@ export default function ConversionEdge({
           </div>
         </div>
       )}
+      
       
       {/* Description text - rendered last to appear on top of all other edge elements */}
       <g className="edge-description-text" style={{ isolation: 'isolate' }}>
