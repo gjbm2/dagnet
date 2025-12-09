@@ -456,17 +456,22 @@ describe('FetchDataService', () => {
     const mockWindow: DateRange = { start: '2025-11-01', end: '2025-11-07' };
     const mockDSL = 'window(1-Nov-25:7-Nov-25)';
 
-    it('should return needsFetch=false when param file contains all requested dates', () => {
+    it('should return needsFetch=false when param file slice header fully covers requested window', () => {
       const graph = createMockGraph({
         edges: [{ uuid: 'edge-1', p: { id: 'param-1', connection: {} } }],
       });
       
       (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
-        data: { connection: {} },
-      });
-      
-      (calculateIncrementalFetch as ReturnType<typeof vi.fn>).mockReturnValue({
-        needsFetch: false,
+        data: {
+          connection: {},
+          values: [
+            {
+              sliceDSL: 'window(1-Nov-25:7-Nov-25)',
+              window_from: '1-Nov-25',
+              window_to: '7-Nov-25',
+            },
+          ],
+        },
       });
 
       const item: FetchItem = {
@@ -483,17 +488,22 @@ describe('FetchDataService', () => {
       expect(result).toBe(false);
     });
 
-    it('should return needsFetch=true when requested dates are outside param file range', () => {
+    it('should return needsFetch=true when requested window extends beyond slice header range', () => {
       const graph = createMockGraph({
         edges: [{ uuid: 'edge-1', p: { id: 'param-1', connection: {} } }],
       });
       
       (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
-        data: { connection: {} },
-      });
-      
-      (calculateIncrementalFetch as ReturnType<typeof vi.fn>).mockReturnValue({
-        needsFetch: true,
+        data: {
+          connection: {},
+          values: [
+            {
+              sliceDSL: 'window(1-Nov-25:3-Nov-25)',
+              window_from: '1-Nov-25',
+              window_to: '3-Nov-25',
+            },
+          ],
+        },
       });
 
       const item: FetchItem = {
@@ -653,18 +663,17 @@ describe('FetchDataService', () => {
       // First param needs fetch, second doesn't
       (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
         if (id === 'parameter-param-1') return null; // No file = needs fetch
-        if (id === 'parameter-param-2') return { data: { connection: {} } };
+        if (id === 'parameter-param-2') {
+          // File exists but has no slices for this DSL -> not previously fetched
+          return { data: { connection: {}, values: [] } };
+        }
         return null;
-      });
-      
-      (calculateIncrementalFetch as ReturnType<typeof vi.fn>).mockReturnValue({
-        needsFetch: false,
       });
 
       const result = getItemsNeedingFetch(mockWindow, graph, mockDSL);
       
-      expect(result.length).toBe(1);
-      expect(result[0].objectId).toBe('param-1');
+      expect(result.length).toBe(2);
+      expect(result.map(r => r.objectId).sort()).toEqual(['param-1', 'param-2']);
     });
 
     it('should include all param slots (p, cost_gbp, labour_cost) that need fetch', () => {
@@ -809,17 +818,20 @@ describe('FetchDataService', () => {
         edges: [{ uuid: 'edge-1', p: { id: 'param-1', connection: {} } }],
       });
       
-      // Mock: first DSL cached, second needs fetch
-      let callCount = 0;
-      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        callCount++;
-        // First call (for first DSL) returns cached data
-        // Second call (for second DSL) returns null (needs fetch)
-        return callCount <= 1 ? { data: { connection: {} } } : null;
-      });
-      
-      (calculateIncrementalFetch as ReturnType<typeof vi.fn>).mockReturnValue({
-        needsFetch: false,
+      // Mock param file with a single slice covering only 1–7 Nov
+      // - First DSL (1–7 Nov) is fully covered → no fetch needed
+      // - Second DSL (8–14 Nov) is outside header range → needs fetch
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          connection: {},
+          values: [
+            {
+              sliceDSL: 'window(1-Nov-25:7-Nov-25)',
+              window_from: '1-Nov-25',
+              window_to: '7-Nov-25',
+            },
+          ],
+        },
       });
 
       const results = checkMultipleDSLsNeedFetch([
@@ -845,10 +857,21 @@ describe('FetchDataService', () => {
       });
       
       (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
-        data: { connection: {} },
-      });
-      (calculateIncrementalFetch as ReturnType<typeof vi.fn>).mockReturnValue({
-        needsFetch: false,
+        data: {
+          connection: {},
+          values: [
+            {
+              sliceDSL: 'window(1-Nov-25:7-Nov-25)',
+              window_from: '1-Nov-25',
+              window_to: '7-Nov-25',
+            },
+            {
+              sliceDSL: 'window(8-Nov-25:14-Nov-25)',
+              window_from: '8-Nov-25',
+              window_to: '14-Nov-25',
+            },
+          ],
+        },
       });
 
       const results = checkMultipleDSLsNeedFetch([

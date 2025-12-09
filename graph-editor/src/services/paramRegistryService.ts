@@ -76,6 +76,19 @@ export interface ParameterValue {
     t95?: number;             // 95th percentile lag (days)
   };
   
+  // Evidence block (query-time scalars derived from n/k, stored on latest value)
+  // Used by UpdateManager to populate edge.p.evidence.* (design.md §4.8, §5.3).
+  evidence?: {
+    mean?: number;         // Raw observed rate (k/n) for the aggregated window
+    stdev?: number;        // Binomial uncertainty sqrt(p*(1-p)/n)
+    n?: number;            // Optional: aggregate n for diagnostics
+    k?: number;            // Optional: aggregate k for diagnostics
+    window_from?: string;  // Optional: UK date / ISO for evidence window start
+    window_to?: string;    // Optional: UK date / ISO for evidence window end
+    retrieved_at?: string; // Optional: ISO timestamp for when evidence computed
+    source?: string;       // Optional: human-readable source label
+  };
+  
   context_id?: string;
   data_source?: {
     type: 'sheets' | 'api' | 'file' | 'manual' | 'calculated' | 'analytics' | 'amplitude' | 'statsig' | 'optimizely';

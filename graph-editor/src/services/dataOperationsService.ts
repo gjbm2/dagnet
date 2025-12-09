@@ -46,6 +46,12 @@ import {
   isCohortModeValue,
   type TimeSeriesPointWithLatency,
 } from './windowAggregationService';
+import {
+  shouldRefetch,
+  analyzeSliceCoverage,
+  computeFetchWindow,
+  type RefetchDecision,
+} from './fetchRefetchPolicy';
 import { 
   statisticalEnhancementService,
   computeEdgeLatencyStats,
@@ -621,7 +627,7 @@ class DataOperationsService {
     targetSlice?: string; // DSL containing window and context (e.g., "window(1-Dec-25:7-Dec-25).context(geo=UK)")
     suppressSignatureWarning?: boolean; // If true, don't show warning about different query signatures (e.g., after bust cache)
     conditionalIndex?: number; // For conditional_p entries - which index to update
-  }): Promise<void> {
+  }): Promise<{ success: boolean; warning?: string }> {
     const timingStart = performance.now();
     const timings: Record<string, number> = {};
     const markTime = (label: string) => {
@@ -630,13 +636,30 @@ class DataOperationsService {
     
     const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '', suppressSignatureWarning = false, conditionalIndex } = options;
     
-    // Parse window from targetSlice DSL if not explicitly provided
-    // This ensures single source of truth - DSL contains both window and context
+    // Parse window AND cohort from targetSlice DSL if not explicitly provided
+    // This ensures single source of truth - DSL contains window, cohort, and context
+    // CRITICAL: cohort() and window() are DIFFERENT date ranges:
+    //   - cohort(anchor,start:end) = cohort entry dates for EVIDENCE
+    //   - window(start:end) = observation window for FORECAST baseline
     let window = explicitWindow;
-    if (!window && targetSlice) {
+    let cohortWindow: DateRange | null = null;
+    let isCohortQuery = false;
+    
+    if (targetSlice) {
       const parsed = parseConstraints(targetSlice);
-      if (parsed.window?.start && parsed.window?.end) {
-        // Resolve any relative dates (e.g., "-14d") to actual dates
+      
+      // Check for cohort() first - cohort evidence window
+      if (parsed.cohort?.start && parsed.cohort?.end) {
+        cohortWindow = {
+          start: resolveRelativeDate(parsed.cohort.start),
+          end: resolveRelativeDate(parsed.cohort.end),
+        };
+        isCohortQuery = true;
+        console.log('[DataOperationsService] Parsed cohort window from DSL:', cohortWindow);
+      }
+      
+      // Also check for window() - observation window (may also be present for dual-slice queries)
+      if (!window && parsed.window?.start && parsed.window?.end) {
         window = {
           start: resolveRelativeDate(parsed.window.start),
           end: resolveRelativeDate(parsed.window.end),
@@ -666,13 +689,13 @@ class DataOperationsService {
       if (!graph) {
         toast.error('No graph loaded');
         sessionLogService.endOperation(logOpId, 'error', 'No graph loaded');
-        return;
+        return { success: false };
       }
       
       if (!edgeId) {
         toast.error('No edge selected');
         sessionLogService.endOperation(logOpId, 'error', 'No edge selected');
-        return;
+        return { success: false };
       }
       
       // Check if file exists
@@ -681,7 +704,7 @@ class DataOperationsService {
       if (!paramFile) {
         toast.error(`Parameter file not found: ${paramId}`);
         sessionLogService.endOperation(logOpId, 'error', `Parameter file not found: ${paramId}`);
-        return;
+        return { success: false };
       }
       
       // Find the target edge
@@ -690,7 +713,7 @@ class DataOperationsService {
       if (!targetEdge) {
         toast.error(`Edge not found in graph`);
         sessionLogService.endOperation(logOpId, 'error', 'Edge not found in graph');
-        return;
+        return { success: false };
       }
       
       console.log('[DataOperationsService] TARGET EDGE AT START:', {
@@ -703,6 +726,13 @@ class DataOperationsService {
       // CRITICAL: Ensure 'type' is set for UpdateManager mapping conditions
       // Legacy files may not have this field, so we infer it from the edge
       let aggregatedData = paramFile.data;
+      
+      // Track if aggregation failed and we fell back to raw data
+      // This is used to report proper status in session logs
+      let aggregationFallbackError: string | null = null;
+      
+      // Track if there was missing data (for warning in session log)
+      let missingDataWarning: string | null = null;
       if (!aggregatedData.type && !aggregatedData.parameter_type) {
         // Infer type from which slot on the edge references this parameter
         let inferredType: 'probability' | 'cost_gbp' | 'labour_cost' = 'probability';
@@ -716,31 +746,77 @@ class DataOperationsService {
       }
       
       // CRITICAL: Filter values by target slice for regular updates too
-      // Without this, values[latest] picks from ANY context when falling back
+      // Without this, values[latest] picks from ANY slice when falling back
       markTime('beforeSliceFilter');
       if (targetSlice && paramFile.data?.values) {
         try {
           const allValues = paramFile.data.values as ParameterValue[];
           
-          // Check if this is an uncontexted query on contexted data (MECE aggregation scenario)
-          // IMPORTANT: contextAny queries are NOT uncontexted - they explicitly specify which slices to use
-          const targetSliceDimensions = extractSliceDimensions(targetSlice);
-          const isUncontextedQuery = targetSliceDimensions === '' && !hasContextAny(targetSlice);
-          const hasContextedData = allValues.some(v => v.sliceDSL && v.sliceDSL !== '');
+          // Treat data as "contexted" ONLY when sliceDSL actually carries context/case dimensions,
+          // not merely because sliceDSL is non-empty (cohort/window alone are not contexts).
+          const hasContextedData = allValues.some(v => {
+            if (!v.sliceDSL) return false;
+            const dims = extractSliceDimensions(v.sliceDSL);
+            return dims !== '';
+          });
           
-          let sliceFilteredValues: ParameterValue[];
-          
-          if (isUncontextedQuery && hasContextedData) {
-            // MECE aggregation: return ALL values (they'll be summed later)
-            // For uncontexted queries on contexted data, we want ALL context slices
-            sliceFilteredValues = allValues;
-            console.log('[DataOperationsService] MECE aggregation path: returning ALL values for uncontexted query on contexted data', {
+          // 1) Exact sliceDSL match - strongest signal
+          //    If targetSlice exactly matches one or more sliceDSL entries, prefer those.
+          //    This is critical for dual-slice latency files where both cohort() and window()
+          //    slices exist in the same parameter file (design.md §4.6).
+          let sliceFilteredValues: ParameterValue[] | null = null;
+          const exactMatches = allValues.filter(v => v.sliceDSL === targetSlice);
+          if (exactMatches.length > 0) {
+            sliceFilteredValues = exactMatches;
+            console.log('[DataOperationsService] Exact sliceDSL match for targetSlice', {
               targetSlice,
-              valueCount: allValues.length,
+              matchCount: exactMatches.length,
             });
-          } else {
-            // Standard path: use isolateSlice (handles contextAny and specific context queries)
-            sliceFilteredValues = isolateSlice(allValues, targetSlice);
+          }
+          
+          // 2) Fallback: MECE / isolateSlice logic when there is no exact match
+          if (!sliceFilteredValues) {
+            // Parse target once so we can distinguish window() vs cohort() intent
+            const parsedTarget = parseConstraints(targetSlice);
+            const wantsCohort = !!parsedTarget.cohort;
+            const wantsWindow = !!parsedTarget.window;
+
+            // Narrow candidate set to the SAME slice function family:
+            // - cohort() queries should only see cohort slices
+            // - window() queries should only see window slices
+            // This prevents accidental mixing of cohort/window data when both
+            // exist in the same parameter file (dual-slice latency files).
+            let candidateValues: ParameterValue[] = allValues;
+            if (wantsCohort && !wantsWindow) {
+              candidateValues = allValues.filter(v => v.sliceDSL && v.sliceDSL.includes('cohort('));
+            } else if (wantsWindow && !wantsCohort) {
+              candidateValues = allValues.filter(v => v.sliceDSL && v.sliceDSL.includes('window('));
+            }
+
+            // Check if this is an uncontexted query on contexted data (MECE aggregation scenario)
+            // IMPORTANT: contextAny queries are NOT uncontexted - they explicitly specify which slices to use
+            const targetSliceDimensions = extractSliceDimensions(targetSlice);
+            const isUncontextedQuery = targetSliceDimensions === '' && !hasContextAny(targetSlice);
+
+            // Treat as MECE ONLY when file has contexted data and NO uncontexted data
+            // (e.g. all slices are context(channel:*) with no plain slice).
+            const hasUncontextedData = candidateValues.some(v => {
+              const dims = extractSliceDimensions(v.sliceDSL ?? '');
+              return dims === '';
+            });
+            
+            if (isUncontextedQuery && hasContextedData && !hasUncontextedData) {
+              // MECE aggregation: return ALL values (they'll be summed later)
+              // For uncontexted queries on PURELY contexted data, we want ALL context slices
+              sliceFilteredValues = candidateValues;
+              console.log('[DataOperationsService] MECE aggregation path: returning ALL values for uncontexted query on contexted data', {
+                targetSlice,
+                valueCount: candidateValues.length,
+              });
+            } else {
+              // Standard path: use isolateSlice (handles contextAny and specific context queries)
+              sliceFilteredValues = isolateSlice(candidateValues, targetSlice);
+            }
           }
           
           if (sliceFilteredValues.length > 0) {
@@ -759,7 +835,7 @@ class DataOperationsService {
               duration: 3000,
             });
             sessionLogService.endOperation(logOpId, 'warning', `No cached data for slice: ${targetSlice}`);
-            return; // Return early - don't update graph with wrong context data
+            return { success: false, warning: `No cached data for slice: ${targetSlice}` }; // Return early - don't update graph with wrong context data
           }
         } catch (error) {
           // isolateSlice may throw for safety checks - log and continue
@@ -768,29 +844,72 @@ class DataOperationsService {
       }
       markTime('afterSliceFilter');
       
-      if (window && aggregatedData?.values) {
-        // Collect value entries with daily data FROM SLICE-FILTERED aggregatedData
-        // CRITICAL: Use aggregatedData.values (which has been filtered above)
-        // NOT paramFile.data.values (which contains ALL contexts)
-        const allValuesWithDaily = (aggregatedData.values as ParameterValue[])
-          .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
+      // Run aggregation for EITHER window() OR cohort() queries (or both)
+      // CRITICAL: For cohort queries, we MUST aggregate to filter evidence to the cohort window
+      const hasDateRangeQuery = window || cohortWindow;
+      
+      if (hasDateRangeQuery && aggregatedData?.values) {
+        const aggValues = aggregatedData.values as ParameterValue[];
+        // Exact stored time slice:
+        // - Applies when targetSlice explicitly includes a window() OR cohort()
+        //   and matches the stored sliceDSL 1:1.
+        // - Pure context slices (e.g. context(channel:google)) with an external
+        //   window parameter MUST still go through aggregation so that evidence
+        //   reflects the requested sub-window inside the cached slice.
+        const isExactTimeSlice =
+          aggValues.length === 1 &&
+          aggValues[0].sliceDSL === targetSlice &&
+          !!targetSlice &&
+          (targetSlice.includes('window(') || targetSlice.includes('cohort('));
         
-        // Check if we're in MECE aggregation mode (uncontexted query on contexted data)
-        // IMPORTANT: contextAny queries are NOT uncontexted - they explicitly specify which slices to use
-        const targetSliceDimensions = extractSliceDimensions(targetSlice);
-        const isUncontextedQuery = targetSliceDimensions === '' && !hasContextAny(targetSlice);
-        const hasContextedData = allValuesWithDaily.some(v => v.sliceDSL && v.sliceDSL !== '');
-        const isMECEAggregation = isUncontextedQuery && hasContextedData;
-        
-        // For MECE aggregation, use ALL values (already filtered above)
-        // For contextAny/specific slice queries, isolate to target slice
-        const valuesWithDaily = isMECEAggregation 
-          ? allValuesWithDaily  // MECE: use all values, they'll be summed
-          : isolateSlice(allValuesWithDaily, targetSlice);  // contextAny or specific slice
-        
-        markTime('beforeSignatureValidation');
-        if (valuesWithDaily.length > 0) {
-          try {
+        if (isExactTimeSlice) {
+          // Exact stored time slice (e.g. window(25-Nov-25:1-Dec-25) or
+          // cohort(landing-page,1-Sep-25:30-Nov-25)):
+          // - Use pre-computed mean/stdev from the file
+          // - Still compute evidence/latency/forecast via helper below
+          console.log('[DataOperationsService] Exact time slice match - skipping aggregation and using stored slice stats', {
+            targetSlice,
+          });
+        } else {
+          // Collect value entries with daily data FROM SLICE-FILTERED aggregatedData
+          // CRITICAL: Use aggregatedData.values (which has been filtered above)
+          // NOT paramFile.data.values (which contains ALL contexts)
+          const allValuesWithDaily = (aggregatedData.values as ParameterValue[])
+            .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
+          
+          // Check if we're in MECE aggregation mode (uncontexted query on contexted data)
+          // IMPORTANT:
+          // - contextAny queries are NOT uncontexted - they explicitly specify which slices to use
+          // - presence of cohort()/window() alone does NOT make data "contexted"
+          const targetSliceDimensions = extractSliceDimensions(targetSlice);
+          const isUncontextedQuery = targetSliceDimensions === '' && !hasContextAny(targetSlice);
+
+          // Detect contexted vs uncontexted data based on context/case dimensions,
+          // NOT merely on non-empty sliceDSL (cohort/window alone are not contexts).
+          const hasContextedData = allValuesWithDaily.some(v => {
+            const dims = extractSliceDimensions(v.sliceDSL ?? '');
+            return dims !== '';
+          });
+          const hasUncontextedData = allValuesWithDaily.some(v => {
+            const dims = extractSliceDimensions(v.sliceDSL ?? '');
+            return dims === '';
+          });
+
+          // MECE aggregation ONLY applies when:
+          // - Query is uncontexted (no explicit context/case)
+          // - File has contexted data
+          // - AND there is NO uncontexted slice (purely contexted file)
+          const isMECEAggregation = isUncontextedQuery && hasContextedData && !hasUncontextedData;
+          
+          // For MECE aggregation, use ALL values (already filtered above)
+          // For contextAny/specific slice queries, isolate to target slice
+          const valuesWithDaily = isMECEAggregation 
+            ? allValuesWithDaily  // MECE: use all values, they'll be summed
+            : isolateSlice(allValuesWithDaily, targetSlice);  // contextAny or specific slice
+          
+          markTime('beforeSignatureValidation');
+          if (valuesWithDaily.length > 0) {
+            try {
             // Validate query signature consistency
             // Build DSL from edge to compute expected query signature
             let expectedQuerySignature: string | undefined;
@@ -919,8 +1038,14 @@ class DataOperationsService {
                 for (const value of valuesWithDaily) {
                   if (value.query_signature && value.query_signature !== expectedQuerySignature) {
                     querySignatureMismatch = true;
+                    // Use window or cohort dates as available
+                    const rangeStart = value.window_from || value.cohort_from;
+                    const rangeEnd = value.window_to || value.cohort_to;
+                    const windowDesc = rangeStart && rangeEnd 
+                      ? `${normalizeDate(rangeStart)} to ${normalizeDate(rangeEnd)}`
+                      : '(no date range)';
                     mismatchedEntries.push({
-                      window: `${normalizeDate(value.window_from || '')} to ${normalizeDate(value.window_to || '')}`,
+                      window: windowDesc,
                       signature: value.query_signature,
                     });
                   }
@@ -969,14 +1094,26 @@ class DataOperationsService {
             // Combine all daily data from all value entries into a single time series
             const allTimeSeries: TimeSeriesPoint[] = [];
             
-            // Normalize window for date comparison
+            // CRITICAL: For evidence filtering, use the correct date range:
+            // - cohort() queries: filter by cohort entry dates (cohortWindow)
+            // - window() queries: filter by observation window (window)
+            // This ensures evidence.mean reflects only the requested date range.
+            // Note: At this point, at least one of cohortWindow or window is defined
+            // (guaranteed by the hasDateRangeQuery check above)
+            const evidenceFilterWindow: DateRange = (isCohortQuery && cohortWindow)
+              ? cohortWindow
+              : window!; // Non-null assertion safe: we're inside hasDateRangeQuery check
+            
             const normalizedWindow: DateRange = {
-              start: normalizeDate(window.start),
-              end: normalizeDate(window.end),
+              start: normalizeDate(evidenceFilterWindow.start),
+              end: normalizeDate(evidenceFilterWindow.end),
             };
             
-            console.log('[DataOperationsService] Aggregating window:', {
-              window: normalizedWindow,
+            console.log('[DataOperationsService] Aggregating with date filter:', {
+              isCohortQuery,
+              cohortWindow: cohortWindow ? { start: normalizeDate(cohortWindow.start), end: normalizeDate(cohortWindow.end) } : null,
+              window: window ? { start: normalizeDate(window.start), end: normalizeDate(window.end) } : null,
+              effectiveFilter: normalizedWindow,
               entriesWithDaily: valuesWithDaily.length,
             });
             
@@ -990,9 +1127,10 @@ class DataOperationsService {
                 if (aMatches && !bMatches) return -1;
                 if (!aMatches && bMatches) return 1;
               }
-              // Sort by retrieved_at or window_to (newest last) so newer entries overwrite older ones
-              const aDate = a.data_source?.retrieved_at || a.window_to || a.window_from || '';
-              const bDate = b.data_source?.retrieved_at || b.window_to || b.window_from || '';
+              // Sort by retrieved_at or date range (newest last) so newer entries overwrite older ones
+              // Check both window and cohort date fields
+              const aDate = a.data_source?.retrieved_at || a.window_to || a.cohort_to || a.window_from || a.cohort_from || '';
+              const bDate = b.data_source?.retrieved_at || b.window_to || b.cohort_to || b.window_from || b.cohort_from || '';
               return aDate.localeCompare(bDate); // Oldest first, so when we process in order, newer overwrites older
             });
             
@@ -1028,7 +1166,12 @@ class DataOperationsService {
                 : valueSlice;                        // Traditional: use sliceDSL
               
               if (value.n_daily && value.k_daily && value.dates) {
-                const entryWindow = `${normalizeDate(value.window_from || '')} to ${normalizeDate(value.window_to || '')}`;
+                // Use window_from/window_to for window slices, cohort_from/cohort_to for cohort slices
+                const entryStart = value.window_from || value.cohort_from || value.dates[0] || '';
+                const entryEnd = value.window_to || value.cohort_to || value.dates[value.dates.length - 1] || '';
+                const entryWindow = entryStart && entryEnd 
+                  ? `${normalizeDate(entryStart)} to ${normalizeDate(entryEnd)}`
+                  : '(no date range)';
                 let entryDatesInWindow = 0;
                 
                 for (let i = 0; i < value.dates.length; i++) {
@@ -1202,18 +1345,69 @@ class DataOperationsService {
             ) || sortedByDate[0]; // Fallback to most recent entry
             
             // Create a new aggregated value entry
-            const aggregatedValue: ParameterValue = {
-              mean: enhanced.mean,
-              stdev: enhanced.stdev,
+            // LAG FIX (lag-fixes.md §4.2): For latency edges, we normally use
+            // Formula A blended p_mean for the 'mean' field, with evidence stored
+            // separately. However, when this aggregation corresponds EXACTLY to a
+            // single stored slice (e.g. window(25-Nov-25:1-Dec-25)), we trust the
+            // pre-computed mean/stdev on that slice and only use latencyStats for
+            // evidence/forecast/latency diagnostics (design.md §4.8 table).
+            const isSingleExactSlice =
+              !isMultiSliceAggregation &&
+              sortedValues.length === 1 &&
+              latestValueWithSource?.sliceDSL === targetSlice;
+            
+            let blendedMean: number;
+            let blendedStdev: number;
+            
+            if (latencyStats) {
+              if (isSingleExactSlice && latestValueWithSource?.mean !== undefined) {
+                // Exact stored slice: preserve file mean/stdev to avoid tiny numerical
+                // drift between Python and TS implementations.
+                blendedMean = latestValueWithSource.mean;
+                blendedStdev = latestValueWithSource.stdev ?? enhanced.stdev;
+              } else {
+                blendedMean = latencyStats.p_mean;
+                blendedStdev = enhanced.n > 0
+                  ? Math.sqrt((blendedMean * (1 - blendedMean)) / enhanced.n)
+                  : 0;
+              }
+            } else {
+              blendedMean = enhanced.mean;
+              blendedStdev = enhanced.stdev;
+            }
+            
+            // Compute evidence scalars (raw observed rate = k/n)
+            const evidenceMean = enhanced.n > 0 ? enhanced.k / enhanced.n : 0;
+            const evidenceStdev = enhanced.n > 0 
+              ? Math.sqrt((evidenceMean * (1 - evidenceMean)) / enhanced.n) 
+              : 0;
+            
+            // Use the effective filter window for storing date bounds
+            // For cohort queries, this is the cohort window; for window queries, it's the window
+            const effectiveWindow = evidenceFilterWindow;
+            
+            const aggregatedValue = {
+              mean: blendedMean,
+              stdev: blendedStdev,
               n: enhanced.n,
               k: enhanced.k,
-              window_from: normalizeToUK(window.start),
-              window_to: normalizeToUK(window.end),
+              // Store both window_from/to (standard) and cohort_from/to if applicable
+              ...(isCohortQuery && cohortWindow ? {
+                cohort_from: normalizeToUK(cohortWindow.start),
+                cohort_to: normalizeToUK(cohortWindow.end),
+              } : {}),
+              window_from: normalizeToUK(effectiveWindow.start),
+              window_to: normalizeToUK(effectiveWindow.end),
               data_source: {
                 type: latestValueWithSource?.data_source?.type || 'file',
                 retrieved_at: new Date().toISOString(),
                 // NOTE: data_source.query removed - unused and caused type mismatches with Python
                 full_query: latestValueWithSource?.data_source?.full_query,
+              },
+              // LAG FIX: Include evidence scalars for graph edge p.evidence.mean/stdev
+              evidence: {
+                mean: evidenceMean,
+                stdev: evidenceStdev,
               },
               // LAG: Include latency stats if computed (for UpdateManager to apply to edge)
               ...(latencyStats && {
@@ -1227,7 +1421,7 @@ class DataOperationsService {
                   forecast: latencyStats.p_infinity,
                 }),
               }),
-            };
+            } as ParameterValue;
             
             // Create a modified parameter file data with aggregated value
             // CRITICAL: Preserve the inferred type from earlier (if paramFile.data lacked it)
@@ -1249,6 +1443,17 @@ class DataOperationsService {
                 stdev: enhanced.stdev,
                 stdevPercent: (enhanced.stdev * 100).toFixed(2) + '%',
               },
+              // LAG FIX: Show evidence vs blended mean separately
+              evidence: {
+                mean: evidenceMean,
+                stdev: evidenceStdev,
+                meanPercent: (evidenceMean * 100).toFixed(2) + '%',
+              },
+              blended: {
+                mean: blendedMean,
+                stdev: blendedStdev,
+                meanPercent: (blendedMean * 100).toFixed(2) + '%',
+              },
               aggregatedValue: {
                 ...aggregatedValue,
                 stdev: aggregatedValue.stdev ?? 0,
@@ -1261,6 +1466,7 @@ class DataOperationsService {
               missingAtStart: aggregation.missing_at_start,
               missingAtEnd: aggregation.missing_at_end,
               hasMiddleGaps: aggregation.has_middle_gaps,
+              hasLatencyStats: !!latencyStats,
             });
             
             // Add session log child with aggregation details
@@ -1268,15 +1474,17 @@ class DataOperationsService {
               ? `${uniqueSlices.size} slices` 
               : (Array.from(uniqueSlices)[0] || 'uncontexted');
             sessionLogService.addChild(logOpId, 'info', 'AGGREGATION_RESULT',
-              `Aggregated ${allTimeSeries.length} days from ${slicesSummary}: n=${enhanced.n}, k=${enhanced.k}, p=${(enhanced.mean * 100).toFixed(1)}%`,
-              `Window: ${normalizeToUK(window.start)} to ${normalizeToUK(window.end)}`,
+              `Aggregated ${allTimeSeries.length} days from ${slicesSummary}: n=${enhanced.n}, k=${enhanced.k}, evidence=${(evidenceMean * 100).toFixed(1)}%, blended=${(blendedMean * 100).toFixed(1)}%`,
+              `${isCohortQuery ? 'Cohort' : 'Window'}: ${normalizeToUK(evidenceFilterWindow.start)} to ${normalizeToUK(evidenceFilterWindow.end)}`,
               { 
                 slices: Array.from(uniqueSlices),
                 n: enhanced.n, 
                 k: enhanced.k, 
-                mean: enhanced.mean,
+                evidence_mean: evidenceMean,
+                blended_mean: blendedMean,
                 daysAggregated: allTimeSeries.length,
                 isMultiSlice: isMultiSliceAggregation,
+                hasLatencyStats: !!latencyStats,
               }
             );
             
@@ -1287,21 +1495,27 @@ class DataOperationsService {
               
               // Build detailed message about missing dates
               let message = `⚠ Aggregated ${aggregation.days_included} days (${aggregation.days_missing} missing)`;
+              let locationInfo = '';
               
               if (aggregation.missing_at_start && aggregation.missing_at_end) {
-                message += ` - missing at start and end`;
+                locationInfo = 'missing at start and end';
+                message += ` - ${locationInfo}`;
               } else if (aggregation.missing_at_start) {
-                message += ` - missing at start`;
+                locationInfo = 'missing at start';
+                message += ` - ${locationInfo}`;
               } else if (aggregation.missing_at_end) {
-                message += ` - missing at end`;
+                locationInfo = 'missing at end';
+                message += ` - ${locationInfo}`;
               }
               
               if (aggregation.has_middle_gaps) {
+                locationInfo += locationInfo ? ', gaps in middle' : 'gaps in middle';
                 message += ` - gaps in middle`;
               }
               
+              let gapSummary = '';
               if (aggregation.gaps.length > 0) {
-                const gapSummary = aggregation.gaps.map(g => 
+                gapSummary = aggregation.gaps.map(g => 
                   g.length === 1 ? g.start : `${g.start} to ${g.end} (${g.length} days)`
                 ).join(', ');
                 console.warn('[DataOperationsService] Missing date gaps:', gapSummary);
@@ -1314,24 +1528,60 @@ class DataOperationsService {
                 icon: '⚠️',
                 duration: 5000,
               });
+              
+              // Add session log child for visibility
+              sessionLogService.addChild(logOpId, 'warning', 'MISSING_DATA', 
+                `${aggregation.days_included}/${aggregation.days_included + aggregation.days_missing} days available${locationInfo ? ` (${locationInfo})` : ''}`,
+                gapSummary || undefined,
+                { 
+                  daysIncluded: aggregation.days_included,
+                  daysMissing: aggregation.days_missing,
+                  gaps: gapSummary || undefined,
+                }
+              );
+              
+              // Track the warning for return value
+              missingDataWarning = `${aggregation.days_missing} days missing`;
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             // If no data available for window, don't fall back - show error and return early
             if (errorMsg.includes('No data available for window')) {
-              toast.error(`No data available for selected window (${window.start} to ${window.end})`);
-              return; // Don't proceed with file-to-graph update
+              const filterRange = (isCohortQuery && cohortWindow) ? cohortWindow : window;
+              toast.error(`No data available for selected ${isCohortQuery ? 'cohort' : 'window'} (${filterRange?.start} to ${filterRange?.end})`);
+              sessionLogService.endOperation(logOpId, 'error', `No data for ${isCohortQuery ? 'cohort' : 'window'} (${filterRange?.start} to ${filterRange?.end})`);
+              return { success: false }; // Don't proceed with file-to-graph update
             }
             toast.error(`Window aggregation failed: ${errorMsg}`);
             // Fall back to regular file-to-graph update only for other errors
+            // IMPORTANT: Track the error so session log can report 'warning' instead of 'success'
+            aggregationFallbackError = errorMsg;
             console.warn('[DataOperationsService] Falling back to regular update:', error);
+            sessionLogService.addChild(logOpId, 'warning', 'AGGREGATION_FALLBACK', 
+              `Window aggregation failed, using raw file values`, 
+              errorMsg, 
+              { error: errorMsg }
+            );
           }
-        } else {
-          // No daily data available, fall back to regular update
-          console.log('[DataOperationsService] No daily data found, using regular update');
+          } else {
+            // No daily data available, fall back to regular update
+            console.log('[DataOperationsService] No daily data found, using regular update');
+          }
         }
       }
       markTime('afterAggregation');
+      
+      // LAG FIX (lag-fixes.md §4.2, §4.6):
+      // Ensure evidence and forecast scalars are present on ParameterValue entries
+      // BEFORE passing to UpdateManager, for ALL code paths (window aggregation and
+      // simple slice-to-edge updates). This guarantees:
+      // - values[latest].evidence.mean/stdev → p.evidence.mean/stdev
+      // - values[latest].forecast           → p.forecast.mean
+      aggregatedData = this.addEvidenceAndForecastScalars(
+        aggregatedData,
+        paramFile.data,
+        targetSlice
+      );
       
       // Call UpdateManager to transform data
       // Use validateOnly: true to get changes without mutating targetEdge in place
@@ -1348,11 +1598,13 @@ class DataOperationsService {
       if (!result.success) {
         if (result.conflicts && result.conflicts.length > 0) {
           toast.error(`Conflicts found: ${result.conflicts.length} field(s) overridden`);
+          sessionLogService.endOperation(logOpId, 'error', `Conflicts: ${result.conflicts.length} field(s) overridden`);
           // TODO: Show conflict resolution modal
         } else {
           toast.error('Update failed');
+          sessionLogService.endOperation(logOpId, 'error', 'Update failed');
         }
-        return;
+        return { success: false };
       }
       
       // Apply changes to graph
@@ -1379,7 +1631,7 @@ class DataOperationsService {
             });
             toast.error(`Conditional entry [${conditionalIndex}] not found on edge`);
             sessionLogService.endOperation(logOpId, 'error', `Conditional entry [${conditionalIndex}] not found`);
-            return;
+            return { success: false };
           }
           
           const { updateManager } = await import('./UpdateManager');
@@ -1446,7 +1698,7 @@ class DataOperationsService {
             batchableToastSuccess(`✓ Updated conditional[${conditionalIndex}] from ${paramId}.yaml`, { duration: 2000 });
             sessionLogService.endOperation(logOpId, 'success', `Updated conditional_p[${conditionalIndex}] from ${paramId}.yaml`);
           }
-          return; // Done - skip the base edge path below
+          return { success: true }; // Done - skip the base edge path below
         }
         // ===== END CONDITIONAL_P HANDLING =====
         
@@ -1545,17 +1797,44 @@ class DataOperationsService {
         
         if (hadRebalance) {
           batchableToastSuccess(`✓ Updated from ${paramId}.yaml + siblings rebalanced`, { duration: 2000 });
-          sessionLogService.endOperation(logOpId, 'success', `Updated from ${paramId}.yaml + siblings rebalanced`);
         } else {
           batchableToastSuccess(`✓ Updated from ${paramId}.yaml`, { duration: 2000 });
-          sessionLogService.endOperation(logOpId, 'success', `Updated from ${paramId}.yaml`);
+        }
+        
+        // Report appropriate status based on whether aggregation fell back
+        if (aggregationFallbackError) {
+          // Aggregation failed but update proceeded with raw data - report as warning
+          const msg = hadRebalance 
+            ? `Updated from ${paramId}.yaml (fallback to raw values) + siblings rebalanced`
+            : `Updated from ${paramId}.yaml (fallback to raw values - aggregation failed)`;
+          sessionLogService.endOperation(logOpId, 'warning', msg);
+          return { success: true, warning: aggregationFallbackError };
+        } else if (missingDataWarning) {
+          // Aggregation succeeded but with missing data - report as success with warning child
+          // (The child warning was already added in the aggregation block)
+          const msg = hadRebalance 
+            ? `Updated from ${paramId}.yaml + siblings rebalanced`
+            : `Updated from ${paramId}.yaml`;
+          sessionLogService.endOperation(logOpId, 'success', msg);
+          return { success: true, warning: missingDataWarning };
+        } else {
+          // Normal success
+          const msg = hadRebalance 
+            ? `Updated from ${paramId}.yaml + siblings rebalanced`
+            : `Updated from ${paramId}.yaml`;
+          sessionLogService.endOperation(logOpId, 'success', msg);
+          return { success: true };
         }
       }
+      
+      // Fallback return if none of the above paths were taken
+      return { success: true };
       
     } catch (error) {
       console.error('[DataOperationsService] Failed to get parameter from file:', error);
       batchableToastError('Failed to get data from file');
       sessionLogService.endOperation(logOpId, 'error', `Failed: ${error instanceof Error ? error.message : String(error)}`);
+      return { success: false };
     }
   }
   
@@ -3343,9 +3622,98 @@ class DataOperationsService {
       // in the versioned parameter pathway (source→file→graph).
       const shouldCheckIncrementalFetch = writeToFile && !bustCache && objectType === 'parameter' && objectId;
       
+      // ═══════════════════════════════════════════════════════════════════════════════
+      // MATURITY-AWARE REFETCH POLICY (design.md §4.7.3)
+      // For latency edges, use shouldRefetch to determine fetch strategy:
+      // - gaps_only: standard incremental (non-latency or fully mature)
+      // - partial: refetch only immature portion of window
+      // - replace_slice: replace entire cohort slice
+      // - use_cache: skip fetch entirely
+      // ═══════════════════════════════════════════════════════════════════════════════
+      let refetchPolicy: RefetchDecision | undefined;
+      const isCohortQuery = !!requestedCohort;
+      
       if (shouldCheckIncrementalFetch) {
         const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
-        if (paramFile && paramFile.data) {
+        const targetEdgeForPolicy = targetId && graph 
+          ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) 
+          : undefined;
+        const latencyConfig = targetEdgeForPolicy?.p?.latency;
+        
+        // Check if this edge has latency tracking enabled
+        if (latencyConfig?.maturity_days && latencyConfig.maturity_days > 0) {
+          // Get existing slice for this context/case family
+          const existingValues = paramFile?.data?.values as ParameterValue[] | undefined;
+          const existingSlice = existingValues?.find(v => {
+            // Match by slice type (cohort vs window) and context dimensions
+            const isCorrectMode = isCohortQuery ? isCohortModeValue(v) : !isCohortModeValue(v);
+            if (!isCorrectMode) return false;
+            
+            // Match context/case dimensions
+            const { extractSliceDimensions } = require('./sliceIsolation');
+            const targetDims = extractSliceDimensions(targetSlice || '');
+            const valueDims = extractSliceDimensions(v.sliceDSL || '');
+            return targetDims === valueDims;
+          });
+          
+          refetchPolicy = shouldRefetch({
+            existingSlice,
+            latencyConfig,
+            requestedWindow,
+            isCohortQuery,
+          });
+          
+          console.log('[DataOps:REFETCH_POLICY] Maturity-aware refetch decision:', {
+            maturityDays: latencyConfig.maturity_days,
+            isCohortQuery,
+            hasExistingSlice: !!existingSlice,
+            policy: refetchPolicy.type,
+            matureCutoff: refetchPolicy.matureCutoff,
+            refetchWindow: refetchPolicy.refetchWindow,
+            reason: refetchPolicy.reason,
+          });
+          
+          sessionLogService.addChild(logOpId, 'info', 'REFETCH_POLICY',
+            `Maturity-aware policy: ${refetchPolicy.type}`,
+            `Maturity: ${latencyConfig.maturity_days}d | Mode: ${isCohortQuery ? 'cohort' : 'window'}${refetchPolicy.matureCutoff ? ` | Cutoff: ${refetchPolicy.matureCutoff}` : ''}`,
+            {
+              maturityDays: latencyConfig.maturity_days,
+              isCohortQuery,
+              policyType: refetchPolicy.type,
+              matureCutoff: refetchPolicy.matureCutoff,
+            }
+          );
+          
+          // Handle use_cache policy: skip fetch entirely
+          if (refetchPolicy.type === 'use_cache') {
+            shouldSkipFetch = true;
+            batchableToastSuccess('Data is mature and cached - no refetch needed', { id: 'das-fetch' });
+            console.log('[DataOps:REFETCH_POLICY] Skipping fetch - data is mature and cached');
+          }
+          // Handle replace_slice policy: bypass incremental, fetch full window
+          else if (refetchPolicy.type === 'replace_slice') {
+            actualFetchWindows = [requestedWindow];
+            toast.loading(
+              `Refetching ${isCohortQuery ? 'cohort' : 'window'} slice (immature data)...`,
+              { id: 'das-fetch' }
+            );
+            console.log('[DataOps:REFETCH_POLICY] Full slice replacement - will fetch:', requestedWindow);
+            // Skip incremental fetch logic below
+          }
+          // Handle partial policy: modify window to immature portion only
+          else if (refetchPolicy.type === 'partial' && refetchPolicy.refetchWindow) {
+            // For partial refetch, we fetch the immature portion but also check for gaps in mature portion
+            actualFetchWindows = [refetchPolicy.refetchWindow];
+            toast.loading(
+              `Refetching immature portion (${refetchPolicy.refetchWindow.start} to ${refetchPolicy.refetchWindow.end})...`,
+              { id: 'das-fetch' }
+            );
+            console.log('[DataOps:REFETCH_POLICY] Partial refetch of immature portion:', refetchPolicy.refetchWindow);
+            // We still want to check for mature gaps below, but the primary fetch is the immature window
+          }
+        }
+        
+        if (paramFile && paramFile.data && refetchPolicy?.type !== 'use_cache' && refetchPolicy?.type !== 'replace_slice') {
           // Query signature was already computed above for signing purposes
           // Now use it for incremental fetch logic
           
@@ -4337,6 +4705,13 @@ class DataOperationsService {
             // targetSlice contains the context filter (e.g., "context(channel:influencer)")
             const sliceDSL = targetSlice || extractSliceDimensions(currentDSL || '');
             
+            // Get latency config from target edge for forecast recomputation on merge
+            const targetEdgeForMerge = targetId && graph 
+              ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) 
+              : undefined;
+            const latencyConfigForMerge = targetEdgeForMerge?.p?.latency;
+            const shouldRecomputeForecast = !!(latencyConfigForMerge?.maturity_days && latencyConfigForMerge.maturity_days > 0);
+            
             if (allTimeSeriesData.length > 0) {
               // API returned data - store each gap as a separate value entry
               for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
@@ -4350,6 +4725,7 @@ class DataOperationsService {
                 
                 if (gapTimeSeries.length > 0) {
                   // Append new time-series as a separate value entry for this gap
+                  // For latency edges, pass latency config to enable forecast recomputation
                   existingValues = mergeTimeSeriesIntoParameter(
                     existingValues,
                     gapTimeSeries,
@@ -4358,7 +4734,16 @@ class DataOperationsService {
                     queryParamsForStorage,
                     fullQueryForStorage,
                     dataSourceType,
-                    sliceDSL // CRITICAL: Pass context slice for isolateSlice matching
+                    sliceDSL, // CRITICAL: Pass context slice for isolateSlice matching
+                    // LAG: Pass merge options for forecast recomputation
+                    shouldRecomputeForecast ? {
+                      isCohortMode: isCohortQuery,
+                      latencyConfig: {
+                        maturity_days: latencyConfigForMerge?.maturity_days,
+                        anchor_node_id: latencyConfigForMerge?.anchor_node_id,
+                      },
+                      recomputeForecast: true,
+                    } : undefined
                   );
                   
                   console.log(`[DataOperationsService] Prepared daily time-series data for gap ${gapIndex + 1}:`, {
@@ -5220,8 +5605,344 @@ class DataOperationsService {
     
     return { success: successCount, errors: errorCount, items: results };
   }
+  
+  /**
+   * Helper: Ensure evidence/forecast scalars are present on aggregated parameter data.
+   * 
+   * - evidence.mean / evidence.stdev are ALWAYS derived from n/k for probability params
+   *   (raw observed rate and binomial uncertainty) before UpdateManager runs.
+   * - For cohort() queries, p.forecast.mean is copied from the corresponding window()
+   *   slice in the same parameter file (dual-slice retrieval – design.md §4.6, §4.8).
+   */
+  private addEvidenceAndForecastScalars(
+    aggregatedData: any,
+    originalParamData: any,
+    targetSlice: string | undefined
+  ): any {
+    if (!aggregatedData || !Array.isArray(aggregatedData.values)) {
+      return aggregatedData;
+    }
+    
+    const isProbabilityParam =
+      aggregatedData.type === 'probability' ||
+      aggregatedData.parameter_type === 'probability';
+    
+    if (!isProbabilityParam) {
+      return aggregatedData;
+    }
+    
+    const values = aggregatedData.values as ParameterValue[];
+    
+    // Parse target constraints once for both cohort and forecast logic
+    const parsedTarget = targetSlice ? parseConstraints(targetSlice) : null;
+    const isCohortQuery = !!parsedTarget?.cohort;
+    
+    // Check if this is an EXACT slice match (targetSlice == value.sliceDSL)
+    // For exact matches with a single value, use the header n/k directly rather
+    // than re-aggregating from daily arrays (which may be incomplete samples).
+    const isExactMatch = values.length === 1 && values[0].sliceDSL === targetSlice;
+    
+    // === 1) Evidence scalars ===
+    //
+    // Exact slice match:
+    //   - Use header n/k directly (authoritative totals for that slice).
+    // Window() queries (non-exact):
+    //   - evidence is derived from n/k of the aggregated window (handled upstream in aggregation).
+    // Cohort() queries (non-exact):
+    //   - evidence MUST be sliced to the cohort() window in the DSL (design.md §4.8, §5.3).
+    //
+    let valuesWithEvidence = values;
+    
+    // EXACT MATCH PATH: Use header n/k for evidence (most authoritative source)
+    if (isExactMatch && values[0].n !== undefined && values[0].k !== undefined && values[0].n > 0) {
+      const exactN = values[0].n;
+      const exactK = values[0].k;
+      const evidenceMean = exactK / exactN;
+      const evidenceStdev = Math.sqrt((evidenceMean * (1 - evidenceMean)) / exactN);
+      
+      valuesWithEvidence = values.map((v) => {
+        const existingEvidence: any = (v as any).evidence || {};
+        return {
+          ...v,
+          evidence: {
+            ...existingEvidence,
+            n: exactN,
+            k: exactK,
+            mean: evidenceMean,
+            stdev: evidenceStdev,
+          },
+        } as ParameterValue;
+      });
+    } else if (isCohortQuery && parsedTarget?.cohort?.start && parsedTarget.cohort.end) {
+      // Cohort-based evidence: restrict to cohorts within the requested cohort() window.
+      const queryDate = new Date();
+      const allCohorts = aggregateCohortData(values, queryDate);
+      
+      // Resolve cohort window bounds to UK dates and normalise
+      const startResolved = resolveRelativeDate(parsedTarget.cohort.start);
+      const endResolved = resolveRelativeDate(parsedTarget.cohort.end);
+      const startUK = normalizeToUK(startResolved);
+      const endUK = normalizeToUK(endResolved);
+      
+      const filteredCohorts = allCohorts.filter(c =>
+        isDateInRange(
+          normalizeDate(c.date),
+          { start: startUK, end: endUK }
+        )
+      );
+      
+      const totalN = filteredCohorts.reduce((sum, c) => sum + c.n, 0);
+      const totalK = filteredCohorts.reduce((sum, c) => sum + c.k, 0);
+      
+      if (totalN > 0) {
+        const evidenceMean = totalK / totalN;
+        const evidenceStdev = Math.sqrt((evidenceMean * (1 - evidenceMean)) / totalN);
+        
+        valuesWithEvidence = values.map((v) => {
+          const existingEvidence: any = (v as any).evidence || {};
+          return {
+            ...v,
+            evidence: {
+              ...existingEvidence,
+              n: totalN,
+              k: totalK,
+              mean: evidenceMean,
+              stdev: evidenceStdev,
+            },
+          } as ParameterValue;
+        });
+      } else {
+        // No usable cohorts in requested window – leave evidence unchanged (will be absent)
+        valuesWithEvidence = values;
+      }
+    } else {
+      // Default path: evidence from each value's own n/k
+      valuesWithEvidence = values.map((v) => {
+        if (v.n !== undefined && v.k !== undefined && v.n > 0) {
+          const evidenceMean = v.k / v.n;
+          const evidenceStdev = Math.sqrt((evidenceMean * (1 - evidenceMean)) / v.n);
+          const existingEvidence: any = (v as any).evidence || {};
+          
+          return {
+            ...v,
+            evidence: {
+              ...existingEvidence,
+              // Do not clobber existing values if already present
+              n: existingEvidence.n !== undefined ? existingEvidence.n : v.n,
+              k: existingEvidence.k !== undefined ? existingEvidence.k : v.k,
+              mean: existingEvidence.mean !== undefined ? existingEvidence.mean : evidenceMean,
+              stdev: existingEvidence.stdev !== undefined ? existingEvidence.stdev : evidenceStdev,
+            },
+          } as ParameterValue;
+        }
+        return v;
+      });
+    }
+    
+    // === 1b) Window() super-range correction for from-file fixtures ===
+    //
+    // For window() queries where the requested window FULLY CONTAINS the stored
+    // base window slice (e.g. query=window(24-Nov-25:2-Dec-25) vs stored
+    // window(25-Nov-25:1-Dec-25)), evidence should reflect the FULL stored
+    // slice totals, not a partial subset of daily arrays.
+    //
+    // This aligns with design.md and cohort-window-fixes.md §2.1:
+    // - Missing days outside the stored window are treated as gaps, not zeros.
+    // - Evidence totals for super-range queries should equal the base window totals.
+    const hasWindowConstraint = !!parsedTarget?.window?.start && !!parsedTarget.window?.end;
+    if (!isCohortQuery && hasWindowConstraint && originalParamData?.values && Array.isArray(originalParamData.values)) {
+      try {
+        const targetDims = extractSliceDimensions(targetSlice || '');
+        const originalValues = originalParamData.values as ParameterValue[];
+
+        // Find base window slices matching the same context/case dimensions
+        const baseWindowCandidates = originalValues.filter((v) => {
+          if (!v.sliceDSL || !v.sliceDSL.includes('window(')) return false;
+          const dims = extractSliceDimensions(v.sliceDSL);
+          return dims === targetDims && v.n !== undefined && v.k !== undefined && v.window_from && v.window_to;
+        });
+
+        if (baseWindowCandidates.length > 0) {
+          // Use the most recent base window slice (by retrieved_at / window_to)
+          const baseWindow = [...baseWindowCandidates].sort((a, b) => {
+            const aDate = a.data_source?.retrieved_at || a.window_to || '';
+            const bDate = b.data_source?.retrieved_at || b.window_to || '';
+            return bDate.localeCompare(aDate);
+          })[0];
+
+          const qStart = parseDate(resolveRelativeDate(parsedTarget.window!.start!));
+          const qEnd = parseDate(resolveRelativeDate(parsedTarget.window!.end!));
+          const baseStart = parseDate(baseWindow.window_from!);
+          const baseEnd = parseDate(baseWindow.window_to!);
+
+          const isSuperWindow =
+            qStart.getTime() <= baseStart.getTime() &&
+            qEnd.getTime() >= baseEnd.getTime();
+
+          if (isSuperWindow && baseWindow.n && baseWindow.k && baseWindow.n > 0) {
+            const evidenceMean = baseWindow.k / baseWindow.n;
+            const evidenceStdev = Math.sqrt((evidenceMean * (1 - evidenceMean)) / baseWindow.n);
+
+            valuesWithEvidence = (valuesWithEvidence as ParameterValue[]).map((v) => {
+              const existingEvidence: any = (v as any).evidence || {};
+              return {
+                ...v,
+                evidence: {
+                  ...existingEvidence,
+                  // Super-window should use FULL base window totals
+                  mean: evidenceMean,
+                  stdev: evidenceStdev,
+                },
+              } as ParameterValue;
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[DataOperationsService] Window super-range evidence adjustment failed:', e);
+      }
+    }
+    
+    let nextAggregated: any = {
+      ...aggregatedData,
+      values: valuesWithEvidence,
+    };
+    
+    // === 2) Forecast scalars for cohort() queries (copy from matching window() slice) ===
+    if (targetSlice && originalParamData?.values && Array.isArray(originalParamData.values)) {
+      if (isCohortQuery) {
+        const targetDims = extractSliceDimensions(targetSlice);
+        const originalValues = originalParamData.values as ParameterValue[];
+        
+        // Find window() slices in the same param file with matching context/case dimensions
+        const windowCandidates = originalValues.filter((v) => {
+          if (!v.sliceDSL) return false;
+          const parsed = parseConstraints(v.sliceDSL);
+          const hasWindow = !!parsed.window;
+          const hasCohort = !!parsed.cohort;
+          if (!hasWindow || hasCohort) return false;
+          
+          const dims = extractSliceDimensions(v.sliceDSL);
+          return dims === targetDims && (v as any).forecast !== undefined;
+        });
+        
+        if (windowCandidates.length > 0) {
+          // Prefer most recent window slice by retrieved_at / window_to (same strategy as aggregation)
+          const bestWindow = [...windowCandidates].sort((a, b) => {
+            const aDate = a.data_source?.retrieved_at || a.window_to || '';
+            const bDate = b.data_source?.retrieved_at || b.window_to || '';
+            return bDate.localeCompare(aDate);
+          })[0] as any;
+          
+          const forecastValue = bestWindow.forecast;
+          
+          if (forecastValue !== undefined) {
+            nextAggregated = {
+              ...nextAggregated,
+              values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
+                // Do not overwrite an existing forecast on the value
+                if (v.forecast !== undefined) return v;
+                return {
+                  ...v,
+                  forecast: forecastValue,
+                };
+              }),
+            };
+          }
+        } else {
+          // === 2b) FORECAST FALLBACK: Compute from cohort data when no window baseline exists ===
+          // (design.md §3.3.3 - Cohort-only forecast fallback)
+          //
+          // If no window() slice is available, we can estimate p_infinity from mature cohorts
+          // in the cohort data itself. This is less reliable than window-based forecast but
+          // better than having no forecast at all.
+          //
+          // Strategy: Use the statisticalEnhancementService.estimatePInfinity on mature cohorts.
+          try {
+            const queryDate = new Date();
+            const allCohorts = aggregateCohortData(valuesWithEvidence as ParameterValue[], queryDate);
+            
+            // Get lag stats and maturity for fallback forecast
+            const lagStats = aggregateLatencyStats(allCohorts);
+            const aggregateMedianLag = lagStats?.median_lag_days;
+            const aggregateMeanLag = lagStats?.mean_lag_days;
+            
+            // We need maturity_days to compute t95 - look for it in latency config of the values
+            // or use a default based on lag stats
+            const firstValueWithLatency = (valuesWithEvidence as ParameterValue[]).find(
+              (v: any) => v.latency?.maturity_days || originalParamData?.latency?.maturity_days
+            ) as any;
+            const maturityDays = firstValueWithLatency?.latency?.maturity_days 
+              || originalParamData?.latency?.maturity_days 
+              || (aggregateMedianLag ? Math.ceil(aggregateMedianLag * 5) : undefined);
+            
+            if (allCohorts.length > 0 && aggregateMedianLag && maturityDays) {
+              // computeEdgeLatencyStats is imported at the top of the file
+              const latencyStats = computeEdgeLatencyStats(
+                allCohorts,
+                aggregateMedianLag,
+                aggregateMeanLag,
+                maturityDays
+              );
+              
+              if (latencyStats.forecast_available && latencyStats.p_infinity !== undefined) {
+                console.log('[addEvidenceAndForecastScalars] Using cohort-based forecast fallback:', {
+                  p_infinity: latencyStats.p_infinity,
+                  t95: latencyStats.t95,
+                  completeness: latencyStats.completeness,
+                  cohortCount: allCohorts.length,
+                  maturityDays,
+                });
+                
+                nextAggregated = {
+                  ...nextAggregated,
+                  values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
+                    if (v.forecast !== undefined) return v;
+                    return {
+                      ...v,
+                      forecast: latencyStats.p_infinity,
+                    };
+                  }),
+                };
+              }
+            }
+          } catch (fallbackError) {
+            console.warn('[addEvidenceAndForecastScalars] Cohort forecast fallback failed:', fallbackError);
+            // Continue without fallback forecast
+          }
+        }
+      }
+    }
+    
+    return nextAggregated;
+  }
 }
 
 // Singleton instance
 export const dataOperationsService = new DataOperationsService();
+
+// =============================================================================
+// Test Harness: Expose private methods for unit testing
+// =============================================================================
+
+/**
+ * Test-only harness that exposes private methods for testing.
+ * 
+ * WARNING: This is ONLY for unit tests. Do NOT use in production code.
+ * The methods exposed here may change without notice.
+ */
+export const __test_only__ = {
+  /**
+   * Exposes addEvidenceAndForecastScalars for testing evidence/forecast
+   * computation without going through the full getParameterFromFile flow.
+   */
+  addEvidenceAndForecastScalars: (
+    aggregatedData: any,
+    originalParamData: any,
+    targetSlice: string | undefined
+  ) => (dataOperationsService as any).addEvidenceAndForecastScalars(
+    aggregatedData,
+    originalParamData,
+    targetSlice
+  ),
+};
 

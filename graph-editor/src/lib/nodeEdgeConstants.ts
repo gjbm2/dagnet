@@ -138,6 +138,22 @@ export const CHEVRON_FADE_IN_FRACTION = 0.1;
 /** Blur amount for chevron edges (pixels) - 0 = sharp, 1-3 = soft glow */
 export const CHEVRON_BLUR = 5;
 
+/**
+ * Lag-based chevron speed scaling parameters.
+ * Speed decays as a power law: speed(d) = CHEVRON_SPEED * (1 + d/D0)^(-k)
+ * 
+ * Anchor points:
+ *   d=0  → speed = CHEVRON_SPEED (baseline)
+ *   d=7  → speed ≈ CHEVRON_SPEED / 2
+ *   d=30 → speed ≈ CHEVRON_SPEED / 4
+ */
+
+/** D0 parameter: characteristic lag scale in days (lower = faster decay) */
+export const CHEVRON_LAG_D0 = 3;
+
+/** k parameter: decay exponent (higher = faster decay) */
+export const CHEVRON_LAG_K = 0.6;
+
 // ===== LAG (LATENCY) TWO-LAYER RENDERING =====
 
 /** Width of each stripe in LAG pattern (pixels) */

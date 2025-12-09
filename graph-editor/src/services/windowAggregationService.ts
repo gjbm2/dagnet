@@ -15,6 +15,9 @@ import type { ParameterValue } from './paramRegistryService';
 import { isolateSlice, hasContextAny, expandContextAny, extractSliceDimensions } from './sliceIsolation';
 import { parseConstraints } from '../lib/queryDSL';
 import { normalizeToUK, isUKDate, parseUKDate } from '../lib/dateFormat';
+// LAG: Import statistical enhancement for forecast recomputation on merge
+import type { CohortData, EdgeLatencyStats } from './statisticalEnhancementService';
+import { computeEdgeLatencyStats } from './statisticalEnhancementService';
 
 export interface RawAggregation {
   method: 'naive';
@@ -106,6 +109,133 @@ export interface IncrementalFetchResult {
   daysAvailable: number;
   /** Days that need fetching */
   daysToFetch: number;
+}
+
+/**
+ * Check whether a given requested window is fully covered by previously
+ * fetched slices in the appropriate slice family, based on slice header
+ * date ranges (window_from/window_to or cohort_from/cohort_to) and
+ * context/case dimensions.
+ *
+ * This is used to drive **auto-fetch behaviour** (read-from-cache vs
+ * show Fetch button), and therefore:
+ *
+ * - Considers **only** slice header ranges for coverage.
+ * - Enforces context / MECE semantics via slice isolation.
+ * - Ignores maturity, sparsity, and per-day n_daily/k_daily gaps.
+ */
+export function hasFullSliceCoverageByHeader(
+  paramFileData: { values?: ParameterValue[] },
+  requestedWindow: DateRange,
+  targetSlice: string,
+): boolean {
+  const values = paramFileData.values ?? [];
+  if (values.length === 0) return false;
+
+  const wantsCohort = targetSlice.includes('cohort(');
+  const wantsWindow = targetSlice.includes('window(');
+
+  // Normalise requested window to UK dates for comparison
+  const queryStart = normalizeDate(requestedWindow.start);
+  const queryEnd = normalizeDate(requestedWindow.end);
+  const queryStartDate = parseDate(queryStart);
+  const queryEndDate = parseDate(queryEnd);
+
+  const coversWindow = (slice: ParameterValue): boolean => {
+    // Choose appropriate header fields based on query mode
+    let sliceStartRaw: string | undefined | null;
+    let sliceEndRaw: string | undefined | null;
+
+    if (wantsCohort) {
+      sliceStartRaw = (slice as any).cohort_from ?? (slice as any).window_from;
+      sliceEndRaw = (slice as any).cohort_to ?? (slice as any).window_to;
+    } else if (wantsWindow) {
+      sliceStartRaw = (slice as any).window_from ?? (slice as any).cohort_from;
+      sliceEndRaw = (slice as any).window_to ?? (slice as any).cohort_to;
+    } else {
+      // Fallback: treat as window-style coverage using whatever headers exist
+      sliceStartRaw = (slice as any).window_from ?? (slice as any).cohort_from;
+      sliceEndRaw = (slice as any).window_to ?? (slice as any).cohort_to;
+    }
+
+    if (!sliceStartRaw || !sliceEndRaw) {
+      // If no header dates, we cannot assert coverage based on headers alone.
+      return false;
+    }
+
+    const sliceStart = normalizeDate(String(sliceStartRaw));
+    const sliceEnd = normalizeDate(String(sliceEndRaw));
+    const sliceStartDate = parseDate(sliceStart);
+    const sliceEndDate = parseDate(sliceEnd);
+
+    // Coverage: query window is entirely inside slice header range
+    return sliceStartDate <= queryStartDate && sliceEndDate >= queryEndDate;
+  };
+
+  // Detect MECE scenario: uncontexted query, file has only contexted data
+  const normalizedTarget = extractSliceDimensions(targetSlice);
+  const hasContextedData = values.some(v => {
+    const id = extractSliceDimensions(v.sliceDSL ?? '');
+    return id !== '';
+  });
+  const hasUncontextedData = values.some(v => {
+    const id = extractSliceDimensions(v.sliceDSL ?? '');
+    return id === '';
+  });
+
+  if (normalizedTarget === '' && hasContextedData && !hasUncontextedData) {
+    // MECE aggregation: uncontexted query over contexted-only file.
+    // Coverage requires ALL component slices to cover the requested window.
+    const uniqueSlices = new Set<string>();
+    for (const value of values) {
+      const sliceId = extractSliceDimensions(value.sliceDSL ?? '');
+      if (sliceId) uniqueSlices.add(sliceId);
+    }
+
+    // For each MECE slice, require at least one header that covers the window
+    for (const sliceId of uniqueSlices) {
+      const sliceValues = values.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === sliceId);
+
+      // Filter by slice type where possible
+      const typeFiltered = sliceValues.filter(v => {
+        const dsl = v.sliceDSL ?? '';
+        if (wantsCohort) return dsl.includes('cohort(');
+        if (wantsWindow) return dsl.includes('window(');
+        return true;
+      });
+
+      const anyCovering = typeFiltered.some(coversWindow);
+      if (!anyCovering) {
+        return false;
+      }
+    }
+
+    return uniqueSlices.size > 0;
+  }
+
+  // Standard slice family coverage:
+  // - For contexted queries, isolate to that slice family.
+  // - For contextAny, isolateSlice already returns union of matching slices.
+  const sliceValues = isolateSlice(values, targetSlice);
+
+  if (sliceValues.length === 0) {
+    return false;
+  }
+
+  // Filter by slice type where possible
+  const typeFiltered = sliceValues.filter(v => {
+    const dsl = v.sliceDSL ?? '';
+    if (wantsCohort) return dsl.includes('cohort(');
+    if (wantsWindow) return dsl.includes('window(');
+    return true;
+  });
+
+  if (typeFiltered.length === 0) {
+    return false;
+  }
+
+  // Coverage if ANY header in the family fully contains the requested window
+  return typeFiltered.some(coversWindow);
 }
 
 /**
@@ -657,6 +787,74 @@ export function calculateIncrementalFetch(
     currentDateIter.setDate(currentDateIter.getDate() + 1);
   }
 
+  // FAST PATH: Check if any matching slice has AGGREGATE values (mean, n)
+  // If a slice has aggregate values, we don't need daily data - data is "available".
+  // IMPORTANT: If slice isolation fails (e.g. uncontexted query on contexted-only file),
+  // we SKIP this fast path and fall back to the full MECE / incremental logic below.
+  // CRITICAL: Also verify the slice's date range overlaps with the requested window!
+  // Otherwise we'd incorrectly report "data available" for dates outside the cached range.
+  if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
+    try {
+      const sliceValues = isolateSlice(paramFileData.values, targetSlice);
+      
+      // Check if any slice has aggregate data AND covers the requested window
+      const hasAggregateDataWithCoverage = sliceValues.some(v => {
+        // Must have aggregate values
+        const hasAggregate = v.mean !== undefined && v.mean !== null && 
+          (v.n !== undefined || (v as any).evidence?.n !== undefined);
+        if (!hasAggregate) return false;
+        
+        // Must have date coverage that overlaps with requested window
+        // Check window_from/window_to or cohort_from/cohort_to
+        const sliceStart = v.window_from || v.cohort_from;
+        const sliceEnd = v.window_to || v.cohort_to;
+        
+        if (!sliceStart || !sliceEnd) {
+          // No date range info - check if dates array covers the window
+          if (v.dates && Array.isArray(v.dates) && v.dates.length > 0) {
+            const sliceDates = new Set(v.dates.map((d: string) => normalizeDate(d)));
+            // Check if ANY of the requested dates are in the slice
+            const hasOverlap = allDatesInWindow.some(reqDate => sliceDates.has(reqDate));
+            return hasOverlap;
+          }
+          // No date information at all - can't verify coverage, skip fast path
+          return false;
+        }
+        
+        // Check if windows overlap
+        const reqStart = parseDate(normalizedWindow.start);
+        const reqEnd = parseDate(normalizedWindow.end);
+        const sStart = parseDate(sliceStart);
+        const sEnd = parseDate(sliceEnd);
+        
+        // Windows overlap if: reqStart <= sEnd AND reqEnd >= sStart
+        const overlaps = reqStart <= sEnd && reqEnd >= sStart;
+        return overlaps;
+      });
+      
+      if (hasAggregateDataWithCoverage) {
+        console.log(`[calculateIncrementalFetch] FAST PATH: Found aggregate data with coverage for slice`, {
+          targetSlice,
+          matchingSlicesCount: sliceValues.length,
+        });
+        // Data available - no fetch needed
+        return {
+          existingDates: new Set(allDatesInWindow),
+          missingDates: [],
+          fetchWindows: [],
+          fetchWindow: null,
+          needsFetch: false,
+          totalDays: allDatesInWindow.length,
+          daysAvailable: allDatesInWindow.length,
+          daysToFetch: 0,
+        };
+      }
+    } catch (error) {
+      console.warn('[calculateIncrementalFetch] FAST PATH slice isolation failed, falling back to full path:', error);
+      // Continue to full incremental/MECE logic
+    }
+  }
+
   // Extract all existing dates from parameter file values
   const existingDates = new Set<string>();
   let missingDates: string[];
@@ -931,33 +1129,52 @@ export interface MergeOptions {
     median_lag_days?: number;
     mean_lag_days?: number;
   };
+  
+  // === LAG: Latency configuration for forecast recomputation (design.md §3.2) ===
+  latencyConfig?: {
+    maturity_days?: number;   // Cohorts younger than this are "immature"
+    anchor_node_id?: string;  // Anchor node for cohort queries
+  };
+  
+  /** 
+   * If true, recompute forecast (p_infinity) and latency scalars after merge.
+   * Only applies to window mode with latencyConfig present.
+   * When false, preserves existing forecast/latency on the slice.
+   */
+  recomputeForecast?: boolean;
 }
 
 /**
- * Append new time-series data to a parameter's values array.
+ * Merge new time-series data into a parameter's values array.
  * 
- * IMPORTANT: This function APPENDS a new entry, it does NOT merge with existing entries.
- * This preserves the audit trail of when each piece of data was fetched.
+ * DESIGN ALIGNMENT:
+ * - For `window()` slices (non-cohort mode), this function now performs a
+ *   **canonical merge** for the target slice family (same context/case dims):
+ *   - Dates from the new fetch REPLACE existing dates for that slice.
+ *   - Dates outside the new window are preserved from existing data.
+ *   - A SINGLE merged value entry is written for that slice family, with:
+ *     - `dates[]`, `n_daily[]`, `k_daily[]` covering the full union of dates.
+ *     - `window_from` / `window_to` set to `<earliest>:<latest>` (UK format).
+ *     - `sliceDSL` canonicalised to `window(<earliest>:<latest>)[.context(...)]`.
  * 
- * At aggregation time (in dataOperationsService.getParameterFromFile), overlapping
- * dates are resolved by using the most recent `retrieved_at` timestamp.
+ * - For `cohort()` slices (cohort mode), this function REPLACES the existing
+ *   cohort slice for the same context/case dims:
+ *   - Existing cohort-mode values for that dims are dropped.
+ *   - A single new value entry is written with updated `cohort_from`/`cohort_to`.
  * 
- * Benefits of append-only:
- * 1. Audit trail: Know when each piece of data was fetched
- * 2. Data integrity: Bad fetches don't overwrite good data
- * 3. Rollback: Can discard bad entries without losing prior data
- * 4. Completeness tracking: k may vary over time as events complete
+ * - Values for OTHER slice families (different context/case dims or other modes)
+ *   are preserved unchanged.
  * 
  * @param existingValues Existing values[] array from parameter file
- * @param newTimeSeries New time-series data to append (may include latency fields for cohort mode)
+ * @param newTimeSeries New time-series data to merge (may include latency fields for cohort mode)
  * @param newWindow Window for the new data (the actual fetch window)
  * @param newQuerySignature Query signature for the new data
  * @param queryParams Optional query parameters (DSL object) for debugging
  * @param fullQuery Optional full query string for debugging
  * @param dataSourceType Type of data source (e.g., 'amplitude', 'api')
- * @param sliceDSL Context slice (e.g., 'context(channel:google)') for isolateSlice matching
+ * @param sliceDSL Context slice / DSL (e.g., 'context(channel:google)' or full DSL)
  * @param mergeOptions Additional options (cohort mode, latency summary)
- * @returns Values array with new entry APPENDED (existing entries preserved)
+ * @returns Values array with merged entry for this slice family
  */
 export function mergeTimeSeriesIntoParameter(
   existingValues: ParameterValue[],
@@ -995,48 +1212,217 @@ export function mergeTimeSeriesIntoParameter(
     ? sortedTimeSeries.map(p => p.mean_lag_days ?? 0) 
     : undefined;
   
-  // Calculate aggregate totals for THIS fetch only
-  const totalN = n_daily.reduce((sum, n) => sum + n, 0);
-  const totalK = k_daily.reduce((sum, k) => sum + k, 0);
-  // Round mean to 3 decimal places
-  const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
+  // Helper: build canonical context suffix from slice dimensions
+  const targetDims = extractSliceDimensions(normalizedSlice);
+  const contextSuffix = targetDims ? `.${targetDims}` : '';
 
-  // Create NEW value entry for this fetch (does NOT replace existing entries)
-  const newValue: ParameterValue = {
-    mean,
-    n: totalN,
-    k: totalK,
-    n_daily,
-    k_daily,
-    dates,
-    // Use cohort_from/cohort_to for cohort mode, window_from/window_to for window mode
-    ...(isCohortMode 
-      ? { cohort_from: normalizeToUK(newWindow.start), cohort_to: normalizeToUK(newWindow.end) }
-      : { window_from: normalizeToUK(newWindow.start), window_to: normalizeToUK(newWindow.end) }
-    ),
+  // COHORT MODE: replace entire slice for this context/case family
+  if (isCohortMode) {
+    // Calculate aggregate totals for THIS fetch only
+    const totalN = n_daily.reduce((sum, n) => sum + n, 0);
+    const totalK = k_daily.reduce((sum, k) => sum + k, 0);
+    const mean = totalN > 0 ? Math.round((totalK / totalN) * 1000) / 1000 : 0;
+
+    const cohortFrom = normalizeToUK(newWindow.start);
+    const cohortTo = normalizeToUK(newWindow.end);
+
+    // Build canonical cohort sliceDSL: cohort(<anchor>,<earliest>:<latest>)[.context(...)]
+    // Anchor comes from latencyConfig if available, otherwise empty (edge case: non-latency cohort)
+    const anchorNodeId = mergeOptions?.latencyConfig?.anchor_node_id || '';
+    const anchorPart = anchorNodeId ? `${anchorNodeId},` : '';
+    const canonicalSliceDSL = `cohort(${anchorPart}${cohortFrom}:${cohortTo})${contextSuffix}`;
+
+    const newValue: ParameterValue = {
+      mean,
+      n: totalN,
+      k: totalK,
+      n_daily,
+      k_daily,
+      dates,
+      cohort_from: cohortFrom,
+      cohort_to: cohortTo,
+      query_signature: newQuerySignature,
+      sliceDSL: canonicalSliceDSL,
+      ...(median_lag_days && { median_lag_days }),
+      ...(mean_lag_days && { mean_lag_days }),
+      ...(mergeOptions?.latencySummary && { 
+        latency: mergeOptions.latencySummary 
+      }),
+      data_source: {
+        type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
+        retrieved_at: new Date().toISOString(),
+        ...(fullQuery && { full_query: fullQuery }),
+      },
+    };
+
+    // Drop existing cohort-mode values for this context/case family
+    const remaining = existingValues.filter(v => {
+      if (!isCohortModeValue(v)) return true;
+      const dims = extractSliceDimensions(v.sliceDSL ?? '');
+      return dims !== targetDims;
+    });
+
+    return [...remaining, newValue];
+  }
+
+  // WINDOW MODE: canonical merge by date for this context/case family
+  // 1) Collect existing window-mode values for this slice family
+  const existingForSlice = existingValues.filter(v => {
+    if (isCohortModeValue(v)) return false;
+    const dims = extractSliceDimensions(v.sliceDSL ?? '');
+    return dims === targetDims;
+  });
+
+  // 2) Build date → { n, k } map
+  const dateMap = new Map<string, { n: number; k: number }>();
+
+  // Helper to add existing data without overriding newer data
+  const addExistingFromValue = (v: ParameterValue) => {
+    if (!v.dates || !v.n_daily || !v.k_daily) return;
+    for (let i = 0; i < v.dates.length; i++) {
+      const ukDate = normalizeDate(v.dates[i]);
+      if (!dateMap.has(ukDate)) {
+        dateMap.set(ukDate, { n: v.n_daily[i], k: v.k_daily[i] });
+      }
+    }
+  };
+
+  // Seed map from existing window-mode values
+  for (const v of existingForSlice) {
+    addExistingFromValue(v);
+  }
+
+  // 3) Overlay new time-series data (new fetch wins for overlapping dates)
+  for (const point of sortedTimeSeries) {
+    const ukDate = normalizeDate(point.date);
+    dateMap.set(ukDate, { n: point.n, k: point.k });
+  }
+
+  // 4) Build merged arrays sorted by date
+  const mergedDates = Array.from(dateMap.keys()).sort((a, b) =>
+    parseDate(a).getTime() - parseDate(b).getTime()
+  );
+
+  const mergedN = mergedDates.map(d => dateMap.get(d)!.n);
+  const mergedK = mergedDates.map(d => dateMap.get(d)!.k);
+
+   // Propagate latency arrays where provided in new time series (if any)
+   let mergedMedianLag: number[] | undefined;
+   let mergedMeanLag: number[] | undefined;
+   if (hasLatencyData) {
+     const latencyMap = new Map<string, { median?: number; mean?: number }>();
+     for (const point of sortedTimeSeries) {
+       const ukDate = normalizeDate(point.date);
+       latencyMap.set(ukDate, {
+         median: point.median_lag_days,
+         mean: point.mean_lag_days,
+       });
+     }
+     mergedMedianLag = mergedDates.map(d => latencyMap.get(d)?.median ?? 0);
+     mergedMeanLag = mergedDates.map(d => latencyMap.get(d)?.mean ?? 0);
+   }
+
+  const mergedTotalN = mergedN.reduce((sum, n) => sum + n, 0);
+  const mergedTotalK = mergedK.reduce((sum, k) => sum + k, 0);
+  const mergedMean = mergedTotalN > 0 ? Math.round((mergedTotalK / mergedTotalN) * 1000) / 1000 : 0;
+
+  const windowFrom = mergedDates.length > 0 ? mergedDates[0] : normalizeToUK(newWindow.start);
+  const windowTo = mergedDates.length > 0 ? mergedDates[mergedDates.length - 1] : normalizeToUK(newWindow.end);
+
+  const canonicalWindowSliceDSL = `window(${windowFrom}:${windowTo})${contextSuffix}`;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LAG: Recompute forecast and latency scalars after merge (design.md §3.2)
+  // For latency edges, the merged window slice must have an up-to-date forecast
+  // (p_infinity) and latency summary based on the newly merged data.
+  // ═══════════════════════════════════════════════════════════════════════════
+  let recomputedForecast: number | undefined;
+  let recomputedLatencySummary: { median_lag_days?: number; mean_lag_days?: number; completeness?: number; t95?: number } | undefined;
+  
+  if (mergeOptions?.recomputeForecast && mergeOptions?.latencyConfig?.maturity_days && mergeOptions.latencyConfig.maturity_days > 0) {
+    try {
+      // Build cohort data from merged window data for LAG calculations
+      const queryDate = new Date();
+      const cohortData: CohortData[] = [];
+      
+      for (let i = 0; i < mergedDates.length; i++) {
+        const cohortDate = parseDate(mergedDates[i]);
+        const ageMs = queryDate.getTime() - cohortDate.getTime();
+        const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+        
+        cohortData.push({
+          date: mergedDates[i],
+          n: mergedN[i],
+          k: mergedK[i],
+          age: Math.max(0, ageDays),
+          median_lag_days: mergedMedianLag?.[i],
+          mean_lag_days: mergedMeanLag?.[i],
+        });
+      }
+      
+      // Compute aggregate lag stats from cohort data
+      // Note: aggregateLatencyStats is defined later in this file, but hoisting makes it available
+      const lagStats = aggregateLatencyStats(cohortData);
+      const aggregateMedianLag = lagStats?.median_lag_days ?? mergeOptions.latencyConfig.maturity_days / 2;
+      const aggregateMeanLag = lagStats?.mean_lag_days;
+      
+      // Call the statistical enhancement service (imported at top of file)
+      const latencyStats: EdgeLatencyStats = computeEdgeLatencyStats(
+        cohortData,
+        aggregateMedianLag,
+        aggregateMeanLag,
+        mergeOptions.latencyConfig.maturity_days
+      );
+      
+      // Extract recomputed values
+      recomputedForecast = latencyStats.p_infinity;
+      recomputedLatencySummary = {
+        median_lag_days: aggregateMedianLag,
+        mean_lag_days: aggregateMeanLag,
+        completeness: latencyStats.completeness,
+        t95: latencyStats.t95,
+      };
+      
+      console.log('[mergeTimeSeriesIntoParameter] Recomputed forecast after merge:', {
+        p_infinity: recomputedForecast,
+        t95: latencyStats.t95,
+        completeness: latencyStats.completeness,
+        cohortCount: cohortData.length,
+        maturityDays: mergeOptions.latencyConfig.maturity_days,
+      });
+    } catch (error) {
+      console.warn('[mergeTimeSeriesIntoParameter] Failed to recompute forecast:', error);
+      // Continue without recomputed forecast - preserve existing or omit
+    }
+  }
+
+  const mergedValue: ParameterValue = {
+    mean: mergedMean,
+    n: mergedTotalN,
+    k: mergedTotalK,
+    n_daily: mergedN,
+    k_daily: mergedK,
+    dates: mergedDates,
+    window_from: windowFrom,
+    window_to: windowTo,
     query_signature: newQuerySignature,
-    // CRITICAL: sliceDSL enables isolateSlice to find this value entry
-    // Without this, contexted data would be invisible to queries!
-    sliceDSL: normalizedSlice,
-    // Include latency arrays if present (cohort mode)
-    ...(median_lag_days && { median_lag_days }),
-    ...(mean_lag_days && { mean_lag_days }),
-    // Include aggregate latency summary if provided
-    ...(mergeOptions?.latencySummary && { 
-      latency: mergeOptions.latencySummary 
-    }),
+    ...(mergedMedianLag && { median_lag_days: mergedMedianLag }),
+    ...(mergedMeanLag && { mean_lag_days: mergedMeanLag }),
+    sliceDSL: canonicalWindowSliceDSL,
+    // LAG: Include recomputed forecast if available
+    ...(recomputedForecast !== undefined && { forecast: recomputedForecast }),
+    // LAG: Include recomputed latency summary if available
+    ...(recomputedLatencySummary && { latency: recomputedLatencySummary }),
     data_source: {
       type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
       retrieved_at: new Date().toISOString(),
-      // NOTE: data_source.query removed - it's unused and caused type mismatches
-      // full_query (string) is sufficient for provenance/debugging
       ...(fullQuery && { full_query: fullQuery }),
     },
   };
 
-  // APPEND new entry, preserving ALL existing entries
-  // Aggregation logic will handle overlapping dates by using most recent retrieved_at
-  return [...existingValues, newValue];
+  // 5) Remove existing window-mode values for this slice family and append merged value
+  const remainingValues = existingValues.filter(v => !existingForSlice.includes(v));
+  return [...remainingValues, mergedValue];
 }
 
 // =============================================================================
@@ -1044,7 +1430,7 @@ export function mergeTimeSeriesIntoParameter(
 // Design reference: design.md §5.3-5.6
 // =============================================================================
 
-import type { CohortData } from './statisticalEnhancementService';
+// NOTE: CohortData type is imported at the top of the file
 
 /**
  * Convert stored parameter values to CohortData array for LAG statistical calculations.
