@@ -690,26 +690,33 @@ class WindowFetchPlannerService {
           coverageStatus = 'NO_SLICE_MATCH';
           details.push('⚠ No cached entries match the query context/slice');
         } else {
-          // Check header coverage for matching slices
-          const headerField = isCohortQuery ? 'cohort' : 'window';
-          const coveredHeaders: string[] = [];
-          const uncoveredHeaders: string[] = [];
+          // Check coverage by parsing sliceDSL (the canonical source of truth)
+          const coveredSlices: string[] = [];
+          const uncoveredSlices: string[] = [];
+          const queryMode = isCohortQuery ? 'cohort' : 'window';
           
           for (const slice of sliceValues) {
-            const fromField = isCohortQuery 
-              ? ((slice as any).cohort_from ?? (slice as any).window_from)
-              : ((slice as any).window_from ?? (slice as any).cohort_from);
-            const toField = isCohortQuery 
-              ? ((slice as any).cohort_to ?? (slice as any).window_to)
-              : ((slice as any).window_to ?? (slice as any).cohort_to);
+            const sliceDSL = slice.sliceDSL ?? '';
             
-            if (!fromField || !toField) {
-              uncoveredHeaders.push(`[no ${headerField} headers]`);
+            // Parse date range from sliceDSL
+            const windowMatch = sliceDSL.match(/window\(([^:]+):([^)]+)\)/);
+            const cohortMatch = sliceDSL.match(/cohort\(([^:]+):([^)]+)\)/);
+            const match = isCohortQuery ? cohortMatch : windowMatch;
+            
+            if (!match) {
+              // Check if it's the wrong mode
+              if (isCohortQuery && windowMatch) {
+                uncoveredSlices.push(`[window slice, need cohort]`);
+              } else if (!isCohortQuery && cohortMatch) {
+                uncoveredSlices.push(`[cohort slice, need window]`);
+              } else {
+                uncoveredSlices.push(`[no ${queryMode} range in sliceDSL]`);
+              }
               continue;
             }
             
-            const sliceFrom = normalizeDate(String(fromField));
-            const sliceTo = normalizeDate(String(toField));
+            const sliceFrom = normalizeDate(match[1]);
+            const sliceTo = normalizeDate(match[2]);
             const sliceRange = `${sliceFrom} → ${sliceTo}`;
             
             // Check if this slice covers the requested window
@@ -723,24 +730,24 @@ class WindowFetchPlannerService {
               const coversEnd = sliceEndDate >= queryEndDate;
               
               if (coversStart && coversEnd) {
-                coveredHeaders.push(`✓ ${sliceRange} (FULL coverage)`);
+                coveredSlices.push(`✓ ${sliceRange} (FULL)`);
               } else if (coversStart || coversEnd) {
                 const missing = !coversStart ? 'start' : 'end';
-                uncoveredHeaders.push(`◐ ${sliceRange} (PARTIAL - missing ${missing})`);
+                uncoveredSlices.push(`◐ ${sliceRange} (PARTIAL - missing ${missing})`);
               } else {
-                uncoveredHeaders.push(`✗ ${sliceRange} (NO coverage)`);
+                uncoveredSlices.push(`✗ ${sliceRange} (NO coverage)`);
               }
             } catch {
-              uncoveredHeaders.push(`? ${sliceRange} (parse error)`);
+              uncoveredSlices.push(`? ${sliceRange} (parse error)`);
             }
           }
           
-          if (coveredHeaders.length > 0) {
+          if (coveredSlices.length > 0) {
             coverageStatus = 'COVERED';
-            details.push(`HEADERS: ${coveredHeaders.join('; ')}`);
+            details.push(`SLICES: ${coveredSlices.join('; ')}`);
           } else {
-            coverageStatus = 'HEADER_GAP';
-            details.push(`HEADERS: ${uncoveredHeaders.join('; ')}`);
+            coverageStatus = 'SLICE_GAP';
+            details.push(`SLICES: ${uncoveredSlices.join('; ')}`);
           }
         }
       }
