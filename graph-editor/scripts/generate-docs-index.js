@@ -13,8 +13,13 @@ const INDEX_FILE = path.join(PUBLIC_DOCS_DIR, 'index.json');
 
 console.log('Generating documentation index...');
 
-// Get all .md files except excluded ones
-const excludedFiles = ['about.md', 'keyboard-shortcuts.md', 'index.json'];
+// Files excluded from index (still accessible, just not listed in doc browser)
+const excludedFiles = ['index.json'];
+
+// Category labels for subdirectories
+const categoryLabels = {
+  'dev': 'Developer Documentation'
+};
 
 try {
   // Ensure public/docs directory exists
@@ -22,32 +27,63 @@ try {
     fs.mkdirSync(PUBLIC_DOCS_DIR, { recursive: true });
   }
 
-  // Get all markdown files from src/docs
-  const files = fs.readdirSync(SRC_DOCS_DIR)
+  // Copy all markdown files from src/docs to public/docs
+  if (fs.existsSync(SRC_DOCS_DIR)) {
+    const srcFiles = fs.readdirSync(SRC_DOCS_DIR)
+      .filter(file => file.endsWith('.md'));
+    
+    srcFiles.forEach(file => {
+      const srcPath = path.join(SRC_DOCS_DIR, file);
+      const destPath = path.join(PUBLIC_DOCS_DIR, file);
+      fs.copyFileSync(srcPath, destPath);
+    });
+    console.log(`Copied ${srcFiles.length} files from src/docs to public/docs`);
+  }
+
+  // Scan public/docs for ALL markdown files at root level
+  const rootFiles = fs.readdirSync(PUBLIC_DOCS_DIR)
     .filter(file => file.endsWith('.md'))
     .filter(file => !excludedFiles.includes(file))
     .sort();
 
-  // Copy all markdown files to public/docs (including excluded ones)
-  const allMdFiles = fs.readdirSync(SRC_DOCS_DIR)
-    .filter(file => file.endsWith('.md'));
-  
-  allMdFiles.forEach(file => {
-    const srcPath = path.join(SRC_DOCS_DIR, file);
-    const destPath = path.join(PUBLIC_DOCS_DIR, file);
-    fs.copyFileSync(srcPath, destPath);
+  // Scan subdirectories for categorised docs
+  const categories = {};
+  const subdirs = fs.readdirSync(PUBLIC_DOCS_DIR, { withFileTypes: true })
+    .filter(dirent => dirent.isDirectory())
+    .map(dirent => dirent.name);
+
+  subdirs.forEach(subdir => {
+    const subdirPath = path.join(PUBLIC_DOCS_DIR, subdir);
+    const subdirFiles = fs.readdirSync(subdirPath)
+      .filter(file => file.endsWith('.md'))
+      .sort()
+      .map(file => `${subdir}/${file}`);
+    
+    if (subdirFiles.length > 0) {
+      categories[subdir] = {
+        label: categoryLabels[subdir] || subdir,
+        files: subdirFiles
+      };
+    }
   });
 
   const indexData = {
-    files: files,
+    files: rootFiles,
+    categories: categories,
     exclude: excludedFiles,
     generated_at: new Date().toISOString()
   };
 
   fs.writeFileSync(INDEX_FILE, JSON.stringify(indexData, null, 2));
 
-  console.log(`Generated ${INDEX_FILE} with ${files.length} documentation files:`);
-  files.forEach(file => console.log(`  - ${file}`));
+  const totalFiles = rootFiles.length + Object.values(categories).reduce((sum, cat) => sum + cat.files.length, 0);
+  console.log(`Generated ${INDEX_FILE} with ${totalFiles} documentation files:`);
+  console.log(`  Root: ${rootFiles.length} files`);
+  rootFiles.forEach(file => console.log(`    - ${file}`));
+  Object.entries(categories).forEach(([cat, data]) => {
+    console.log(`  ${data.label}: ${data.files.length} files`);
+    data.files.forEach(file => console.log(`    - ${file}`));
+  });
 } catch (error) {
   console.error('Error generating docs index:', error);
   process.exit(1);
