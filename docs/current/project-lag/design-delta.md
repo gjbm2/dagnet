@@ -238,3 +238,4 @@ The **remaining gap** is entirely on the **write‑side caching and merge policy
 Implementing the items in §4 will close this gap and bring the caching layer fully into line with the original design.
 
 
+

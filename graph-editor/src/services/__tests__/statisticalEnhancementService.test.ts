@@ -30,11 +30,16 @@ import {
   computeInboundN,
   applyInboundNToGraph,
   getActiveEdges,
+  // Graph-level LAG enhancement
+  enhanceGraphLatencies,
   // LAG types
   type CohortData,
   type LagDistributionFit,
   type GraphForInboundN,
   type InboundNResult,
+  type LAGHelpers,
+  type ParameterValueForLAG,
+  type GraphForPath,
 } from '../statisticalEnhancementService';
 import type { RawAggregation } from '../windowAggregationService';
 import type { DateRange } from '../../types';
@@ -1264,6 +1269,374 @@ describe('computeInboundN', () => {
 
       // Should use 0 as default when no evidence.n
       expect(result.get('a-to-x')?.n).toBe(0);
+    });
+  });
+});
+
+// =============================================================================
+// enhanceGraphLatencies Tests (Graph-Level Topo Pass)
+// =============================================================================
+
+describe('enhanceGraphLatencies', () => {
+  // Mock helpers that simulate windowAggregationService functions
+  const mockHelpers: LAGHelpers = {
+    aggregateCohortData: (values: ParameterValueForLAG[], queryDate: Date) => {
+      // Simple mock: create one cohort per value with dates
+      return values.flatMap(v => {
+        if (!v.dates) return [];
+        return v.dates.map((date, i) => ({
+          date,
+          n: v.n_daily?.[i] ?? 100,
+          k: v.k_daily?.[i] ?? 50,
+          age: Math.floor((queryDate.getTime() - new Date(date).getTime()) / (1000 * 60 * 60 * 24)),
+          median_lag_days: v.median_lag_days?.[i],
+          mean_lag_days: v.mean_lag_days?.[i],
+        }));
+      });
+    },
+    aggregateLatencyStats: (cohorts) => {
+      const withLag = cohorts.filter(c => c.median_lag_days !== undefined && c.median_lag_days > 0);
+      if (withLag.length === 0) return undefined;
+      const totalK = withLag.reduce((sum, c) => sum + c.k, 0);
+      const weightedMedian = withLag.reduce((sum, c) => sum + c.k * (c.median_lag_days || 0), 0);
+      const weightedMean = withLag.reduce((sum, c) => sum + c.k * (c.mean_lag_days || c.median_lag_days || 0), 0);
+      return {
+        median_lag_days: totalK > 0 ? weightedMedian / totalK : 0,
+        mean_lag_days: totalK > 0 ? weightedMean / totalK : 0,
+      };
+    },
+  };
+
+  function createLatencyGraph(): GraphForPath {
+    return {
+      nodes: [
+        { id: 'start', entry: { is_start: true } },
+        { id: 'a' },
+        { id: 'b' },
+        { id: 'c' },
+      ],
+      edges: [
+        { id: 'start-to-a', from: 'start', to: 'a', p: { mean: 0.8, latency: { maturity_days: 30 } } },
+        { id: 'a-to-b', from: 'a', to: 'b', p: { mean: 0.6, latency: { maturity_days: 30 } } },
+        { id: 'b-to-c', from: 'b', to: 'c', p: { mean: 0.4, latency: { maturity_days: 30 } } },
+      ],
+    };
+  }
+
+  function createParamLookup(): Map<string, ParameterValueForLAG[]> {
+    const now = new Date();
+    const dates = [
+      new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    ];
+
+    return new Map([
+      ['start-to-a', [{
+        mean: 0.8,
+        n: 300,
+        k: 240,
+        dates,
+        n_daily: [100, 100, 100],
+        k_daily: [80, 80, 80],
+        median_lag_days: [5, 5, 5],
+        mean_lag_days: [6, 6, 6],
+      }]],
+      ['a-to-b', [{
+        mean: 0.6,
+        n: 240,
+        k: 144,
+        dates,
+        n_daily: [80, 80, 80],
+        k_daily: [48, 48, 48],
+        median_lag_days: [7, 7, 7],
+        mean_lag_days: [8, 8, 8],
+      }]],
+      ['b-to-c', [{
+        mean: 0.4,
+        n: 144,
+        k: 58,
+        dates,
+        n_daily: [48, 48, 48],
+        k_daily: [19, 19, 20],
+        median_lag_days: [10, 10, 10],
+        mean_lag_days: [12, 12, 12],
+      }]],
+    ]);
+  }
+
+  it('should compute t95 for each edge', () => {
+    const graph = createLatencyGraph();
+    const paramLookup = createParamLookup();
+
+    const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+    expect(result.edgesWithLAG).toBe(3);
+    
+    // Each edge should have t95 computed
+    for (const edge of graph.edges) {
+      expect(edge.p?.latency?.t95).toBeGreaterThan(0);
+      expect(Number.isFinite(edge.p?.latency?.t95)).toBe(true);
+    }
+  });
+
+  it('should compute cumulative path_t95 for downstream edges', () => {
+    const graph = createLatencyGraph();
+    const paramLookup = createParamLookup();
+
+    enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+    const startToA = graph.edges.find(e => e.id === 'start-to-a');
+    const aToB = graph.edges.find(e => e.id === 'a-to-b');
+    const bToC = graph.edges.find(e => e.id === 'b-to-c');
+
+    // path_t95 should accumulate along the chain
+    expect(startToA?.p?.latency?.path_t95).toBeGreaterThan(0);
+    expect(aToB?.p?.latency?.path_t95).toBeGreaterThan(startToA?.p?.latency?.path_t95 || 0);
+    expect(bToC?.p?.latency?.path_t95).toBeGreaterThan(aToB?.p?.latency?.path_t95 || 0);
+  });
+
+  it('should compute lower completeness for downstream edges', () => {
+    const graph = createLatencyGraph();
+    const paramLookup = createParamLookup();
+
+    enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+    const startToA = graph.edges.find(e => e.id === 'start-to-a');
+    const aToB = graph.edges.find(e => e.id === 'a-to-b');
+    const bToC = graph.edges.find(e => e.id === 'b-to-c');
+
+    // Completeness should decrease for downstream edges due to path adjustment
+    // (effective age is reduced by upstream path_t95)
+    expect(startToA?.p?.latency?.completeness).toBeGreaterThan(0);
+    expect(aToB?.p?.latency?.completeness).toBeLessThanOrEqual(startToA?.p?.latency?.completeness || 1);
+    expect(bToC?.p?.latency?.completeness).toBeLessThanOrEqual(aToB?.p?.latency?.completeness || 1);
+  });
+
+  it('should skip edges without maturity_days', () => {
+    const graph: GraphForPath = {
+      nodes: [
+        { id: 'start', entry: { is_start: true } },
+        { id: 'a' },
+      ],
+      edges: [
+        { id: 'start-to-a', from: 'start', to: 'a', p: { mean: 0.8 } }, // No latency config
+      ],
+    };
+
+    const paramLookup = new Map([
+      ['start-to-a', [{ mean: 0.8, n: 100, k: 80 }]],
+    ]);
+
+    const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+    expect(result.edgesWithLAG).toBe(0);
+  });
+
+  it('should skip edges without param data', () => {
+    const graph = createLatencyGraph();
+    const emptyLookup = new Map<string, ParameterValueForLAG[]>();
+
+    const result = enhanceGraphLatencies(graph, emptyLookup, new Date(), mockHelpers);
+
+    expect(result.edgesWithLAG).toBe(0);
+  });
+
+  it('should handle empty graph', () => {
+    const graph: GraphForPath = { nodes: [], edges: [] };
+    const paramLookup = new Map<string, ParameterValueForLAG[]>();
+
+    const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+    expect(result.edgesProcessed).toBe(0);
+    expect(result.edgesWithLAG).toBe(0);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FORECAST BLEND TESTS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('forecast blending', () => {
+    function createGraphWithForecast(): GraphForPath {
+      return {
+        nodes: [
+          { id: 'start', entry: { is_start: true } },
+          { id: 'end' },
+        ],
+        edges: [
+          {
+            id: 'start-to-end',
+            from: 'start',
+            to: 'end',
+            p: {
+              mean: 0.5,  // Initial mean (will be overwritten by blend)
+              latency: { maturity_days: 30 },
+              evidence: { mean: 0.3, n: 1000 },
+              forecast: { mean: 0.7 },
+            },
+          },
+        ],
+      };
+    }
+
+    function createMatureCohorts() {
+      const now = new Date();
+      // All cohorts are 30+ days old (mature)
+      const dates = [
+        new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        new Date(now.getTime() - 32 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      ];
+      return new Map([
+        ['start-to-end', [{
+          mean: 0.3,
+          n: 300,
+          k: 90,
+          dates,
+          n_daily: [100, 100, 100],
+          k_daily: [30, 30, 30],
+          median_lag_days: [5, 5, 5],
+          mean_lag_days: [6, 6, 6],
+        }]],
+      ]);
+    }
+
+    function createImmatureCohorts() {
+      const now = new Date();
+      // All cohorts are very recent (1-2 days old) with high lag → very immature
+      const dates = [
+        new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        new Date(now.getTime() - 0.5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      ];
+      return new Map([
+        ['start-to-end', [{
+          mean: 0.3,
+          n: 300,
+          k: 90,
+          dates,
+          n_daily: [100, 100, 100],
+          k_daily: [30, 30, 30],
+          // Higher lag means lower completeness for young cohorts
+          median_lag_days: [10, 10, 10],
+          mean_lag_days: [12, 12, 12],
+        }]],
+      ]);
+    }
+
+    it('should blend evidence and forecast based on completeness', () => {
+      const graph = createGraphWithForecast();
+      const paramLookup = createMatureCohorts();
+
+      enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+      const edge = graph.edges[0];
+      
+      // With evidence.mean=0.3, forecast.mean=0.7, high completeness should 
+      // produce a blended mean closer to evidence
+      expect(edge.p?.mean).toBeDefined();
+      expect(edge.p?.mean).toBeGreaterThan(0.3);  // Not pure evidence
+      expect(edge.p?.mean).toBeLessThan(0.7);     // Not pure forecast
+    });
+
+    it('should weight evidence more heavily when completeness is high', () => {
+      const graph = createGraphWithForecast();
+      const paramLookup = createMatureCohorts();
+
+      enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+      const edge = graph.edges[0];
+      const evidenceMean = 0.3;
+      const forecastMean = 0.7;
+      const blendedMean = edge.p?.mean;
+
+      // High completeness → blended mean closer to evidence
+      // Distance to evidence should be less than distance to forecast
+      const distToEvidence = Math.abs((blendedMean ?? 0) - evidenceMean);
+      const distToForecast = Math.abs((blendedMean ?? 0) - forecastMean);
+      
+      expect(distToEvidence).toBeLessThan(distToForecast);
+    });
+
+    it('should weight forecast more heavily when completeness is low', () => {
+      const graph = createGraphWithForecast();
+      const paramLookup = createImmatureCohorts();
+
+      enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+      const edge = graph.edges[0];
+      const evidenceMean = 0.3;
+      const forecastMean = 0.7;
+      const completeness = edge.p?.latency?.completeness;
+      const blendedMean = edge.p?.mean;
+
+      // Low completeness → blended mean closer to forecast
+      // With very immature cohorts, completeness should be low
+      expect(completeness).toBeLessThan(0.5);
+      
+      // Distance to forecast should be less than distance to evidence
+      const distToEvidence = Math.abs((blendedMean ?? 0) - evidenceMean);
+      const distToForecast = Math.abs((blendedMean ?? 0) - forecastMean);
+      
+      expect(distToForecast).toBeLessThan(distToEvidence);
+    });
+
+    it('should not blend if evidence is missing', () => {
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'start', entry: { is_start: true } },
+          { id: 'end' },
+        ],
+        edges: [
+          {
+            id: 'start-to-end',
+            from: 'start',
+            to: 'end',
+            p: {
+              mean: 0.5,
+              latency: { maturity_days: 30 },
+              // No evidence
+              forecast: { mean: 0.7 },
+            },
+          },
+        ],
+      };
+      const paramLookup = createMatureCohorts();
+
+      enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+      const edge = graph.edges[0];
+      // Mean should remain unchanged (no blend without evidence)
+      expect(edge.p?.mean).toBe(0.5);
+    });
+
+    it('should not blend if forecast is missing', () => {
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'start', entry: { is_start: true } },
+          { id: 'end' },
+        ],
+        edges: [
+          {
+            id: 'start-to-end',
+            from: 'start',
+            to: 'end',
+            p: {
+              mean: 0.5,
+              latency: { maturity_days: 30 },
+              evidence: { mean: 0.3, n: 1000 },
+              // No forecast
+            },
+          },
+        ],
+      };
+      const paramLookup = createMatureCohorts();
+
+      enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+      const edge = graph.edges[0];
+      // Mean should remain unchanged (no blend without forecast)
+      expect(edge.p?.mean).toBe(0.5);
     });
   });
 });

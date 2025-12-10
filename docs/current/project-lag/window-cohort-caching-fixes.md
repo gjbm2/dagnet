@@ -229,3 +229,4 @@ The remaining work described here is focused on:
 Once these fixes are in place, the caching layer will match the design’s expectations end‑to‑end, and query‑time code will no longer need to compensate for missing or inconsistent retrieval‑time semantics.
 
 
+
