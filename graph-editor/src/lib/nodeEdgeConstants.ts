@@ -68,6 +68,12 @@ export const EDGE_INSET = 20; // HALO_WIDTH
  */
 export const EDGE_INITIAL_OFFSET = 0;
 
+/** Base opacity for all edges (0-1) */
+export const EDGE_OPACITY = 0.7;
+
+/** Blend mode for edges ('normal', 'multiply', 'screen', 'difference') */
+export const EDGE_BLEND_MODE = 'multiply';
+
 /** 
  * Additional spacing between visible edge start and first bead (pixels)
  * This is added ON TOP of visibleStartOffset (which accounts for source node concavity)
@@ -98,10 +104,10 @@ export const SANKEY_EDGE_CURVATURE = 0.3;
 // ===== TYPOGRAPHY =====
 
 /** Font size for node labels (pixels) */
-export const NODE_LABEL_FONT_SIZE = 9;
+export const NODE_LABEL_FONT_SIZE = 8;
 
 /** Font size for node secondary text (pixels) */
-export const NODE_SECONDARY_FONT_SIZE = 8;
+export const NODE_SECONDARY_FONT_SIZE = 7;
 
 /** Font size for node small text/badges (pixels) */
 export const NODE_SMALL_FONT_SIZE = 8;
@@ -165,7 +171,7 @@ export const CHEVRON_LAG_K = 0.6;
 export const LAG_ANCHOR_USE_SPLINE_CHEVRONS = true;
 
 /** Length of each chevron in pixels (from back to front point) */
-export const LAG_ANCHOR_SPLINE_CHEVRON_LENGTH = 5;
+export const LAG_ANCHOR_SPLINE_CHEVRON_LENGTH = 6;
 
 /** Visible gap between chevrons in pixels */
 export const LAG_ANCHOR_SPLINE_CHEVRON_GAP = 4;
@@ -179,30 +185,30 @@ export const LAG_ANCHOR_SPLINE_CHEVRON_ANGLE = 30;
  * Minimum half-width of completeness chevron (pixels).
  * Should be larger than BEAD_HEIGHT / 2 (~6.3) so chevron is visible above beads.
  */
-export const COMPLETENESS_CHEVRON_MIN_HALF_WIDTH = 12;
+export const COMPLETENESS_CHEVRON_MIN_HALF_WIDTH = 14;
 
 /**
  * Padding added to the max layer width for completeness chevron (pixels).
  * Ensures chevron extends beyond all visible layers.
  */
-export const COMPLETENESS_CHEVRON_WIDTH_PADDING = 2;
+export const COMPLETENESS_CHEVRON_WIDTH_PADDING = 3;
 
 /**
  * Pixel offset from source node where completeness chevron can start (pixels).
  * At 0% completeness, chevron appears this far from the edge start.
  * Should account for node overlap / visual edge boundary.
  */
-export const COMPLETENESS_CHEVRON_START_OFFSET = 16;
+export const COMPLETENESS_CHEVRON_START_OFFSET = 6;
 
 /**
  * Pixel offset from target node where completeness chevron can end (pixels).
  * At 100% completeness, chevron appears this far from the edge end.
  * Should account for node overlap / visual edge boundary.
  */
-export const COMPLETENESS_CHEVRON_END_OFFSET = 16;
+export const COMPLETENESS_CHEVRON_END_OFFSET = 6;
 
 /** Base opacity for completeness chevron (0-1) */
-export const COMPLETENESS_CHEVRON_OPACITY = 0.6;
+export const COMPLETENESS_CHEVRON_OPACITY = 0.3;
 
 /** Opacity for completeness chevron when SELECTED (0-1) */
 export const COMPLETENESS_CHEVRON_SELECTED_OPACITY = 0.8;
@@ -226,17 +232,47 @@ export const LAG_ANCHOR_CHEVRON_STROKE = 5;
 
 // ===== LAG (LATENCY) TWO-LAYER RENDERING =====
 
-/** Width of each stripe in LAG pattern (pixels) */
-export const LAG_STRIPE_WIDTH = 3;
+// --- Forecast (outer) layer stripes ---
+/** Width of each stripe in FORECAST layer (pixels) */
+export const LAG_FORECAST_STRIPE_WIDTH = 3;
 
-/** Angle of LAG stripes (degrees) - 135° (perpendicular to edge direction) */
-export const LAG_STRIPE_ANGLE = 45;
+/** Gap between stripes in FORECAST layer (pixels) */
+export const LAG_FORECAST_STRIPE_GAP = 1;
 
-/** Opacity of the stripe fill in LAG patterns */
-export const LAG_STRIPE_OPACITY = 0.85;
+/** Angle of FORECAST stripes (degrees) */
+export const LAG_FORECAST_STRIPE_ANGLE = 45;
 
-/** Gap between stripes in LAG pattern (pixels) */
-export const LAG_STRIPE_GAP = 3;
+/** Opacity of FORECAST stripe fill */
+export const LAG_FORECAST_STRIPE_OPACITY =1;
+
+/** Offset for FORECAST stripe pattern (pixels) - shifts stripes along pattern */
+export const LAG_FORECAST_STRIPE_OFFSET = 0;
+
+// --- Evidence (inner) layer stripes ---
+/** Width of each stripe in EVIDENCE layer (pixels) */
+export const LAG_EVIDENCE_STRIPE_WIDTH = 1;
+
+/** Gap between stripes in EVIDENCE layer (pixels) */
+export const LAG_EVIDENCE_STRIPE_GAP = 3;
+
+/** Angle of EVIDENCE stripes (degrees) */
+export const LAG_EVIDENCE_STRIPE_ANGLE = 45;
+
+/** Opacity of EVIDENCE stripe fill */
+export const LAG_EVIDENCE_STRIPE_OPACITY = 1;
+
+/** Offset for EVIDENCE stripe pattern (pixels) - shifts stripes along pattern */
+export const LAG_EVIDENCE_STRIPE_OFFSET = 3;
+
+// --- Legacy aliases (for existing code) ---
+/** @deprecated Use LAG_FORECAST_STRIPE_WIDTH or LAG_EVIDENCE_STRIPE_WIDTH */
+export const LAG_STRIPE_WIDTH = LAG_FORECAST_STRIPE_WIDTH;
+/** @deprecated Use LAG_FORECAST_STRIPE_ANGLE or LAG_EVIDENCE_STRIPE_ANGLE */
+export const LAG_STRIPE_ANGLE = LAG_FORECAST_STRIPE_ANGLE;
+/** @deprecated Use LAG_FORECAST_STRIPE_OPACITY or LAG_EVIDENCE_STRIPE_OPACITY */
+export const LAG_STRIPE_OPACITY = LAG_FORECAST_STRIPE_OPACITY;
+/** @deprecated Use LAG_FORECAST_STRIPE_GAP or LAG_EVIDENCE_STRIPE_GAP */
+export const LAG_STRIPE_GAP = LAG_FORECAST_STRIPE_GAP;
 
 /** Base opacity for p.mean anchor edge (0-1) */
 export const LAG_ANCHOR_OPACITY = 0.15;

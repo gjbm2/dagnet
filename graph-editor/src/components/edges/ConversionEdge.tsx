@@ -31,10 +31,18 @@ import {
   CHEVRON_BLUR,
   CHEVRON_LAG_D0,
   CHEVRON_LAG_K,
-  LAG_STRIPE_WIDTH,
-  LAG_STRIPE_ANGLE,
-  LAG_STRIPE_OPACITY,
-  LAG_STRIPE_GAP,
+  LAG_FORECAST_STRIPE_WIDTH,
+  LAG_FORECAST_STRIPE_GAP,
+  LAG_FORECAST_STRIPE_ANGLE,
+  LAG_FORECAST_STRIPE_OPACITY,
+  LAG_FORECAST_STRIPE_OFFSET,
+  LAG_EVIDENCE_STRIPE_WIDTH,
+  LAG_EVIDENCE_STRIPE_GAP,
+  LAG_EVIDENCE_STRIPE_ANGLE,
+  LAG_EVIDENCE_STRIPE_OPACITY,
+  LAG_EVIDENCE_STRIPE_OFFSET,
+  EDGE_OPACITY,
+  EDGE_BLEND_MODE,
   LAG_ANCHOR_OPACITY,
   LAG_ANCHOR_SELECTED_OPACITY,
   LAG_ANCHOR_HIGHLIGHTED_OPACITY,
@@ -80,9 +88,7 @@ const SANKEY_EDGE_CURVATURE = 0.3;
 // Toggle between bezier (false) or smooth step (true) paths
 const USE_SMOOTH_STEP = false;
 
-// Edge blending configuration
-const EDGE_OPACITY = 0.8; // Adjustable transparency (0-1)
-const EDGE_BLEND_MODE = 'multiply'; // 'normal', 'multiply', 'screen', 'difference'
+// Edge blending configuration (EDGE_OPACITY and EDGE_BLEND_MODE imported from nodeEdgeConstants)
 const USE_GROUP_BASED_BLENDING = false; // Enable scenario-specific blending
 
 // DIAGNOSTIC: Check for nobeads mode (?nobeads URL parameter)
@@ -1600,16 +1606,19 @@ export default function ConversionEdge({
 
   // Single completeness chevron at the completeness % position along the edge
   // Width = max(meanWidth, evidenceWidth) + padding, with minimum for visibility over beads
+  // Suppress at 100% completeness - no need to show marker when fully complete
   const completenessChevron = React.useMemo(() => {
     if (!shouldShowLagLayers || !lagLayerData || data?.useSankeyView) return null;
+    
+    const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
+    // Suppress chevron at 100% completeness
+    if (completeness >= 0.999) return null;
     
     try {
       const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
       if (!nums || nums.length < 8) return null;
       
       const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
-      
-      const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
       
       const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
       
@@ -2074,8 +2083,9 @@ export default function ConversionEdge({
     
     // Compute completeness marker line (VERTICAL dashed line at t% along VISIBLE ribbon)
     // Always compute for F+E and E modes - completeness is about latency, not k
+    // Suppress at 100% completeness - no need to show marker when fully complete
     let completenessLine: { x1: number; y1: number; x2: number; y2: number } | null = null;
-    if (lagLayerData.mode !== 'f') {  // Show whenever evidence is being tracked
+    if (lagLayerData.mode !== 'f' && completeness < 0.999) {  // Show whenever evidence is being tracked, but not at 100%
       const point = bezierPoint(t);
       // Vertical line with overhang beyond ribbon edges for visibility
       // halfHeight = ribbon half-width + overhang, but at least min height
@@ -2248,30 +2258,30 @@ export default function ConversionEdge({
                 </linearGradient>
               </>
             )}
-            {/* Inner stripe pattern (evidence layer) - offset 0 */}
+            {/* Inner stripe pattern (evidence layer) */}
             <pattern
               id={`lag-stripe-inner-${id}`}
               patternUnits="userSpaceOnUse"
-              width={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP}
-              height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP}
-              patternTransform={`rotate(${LAG_STRIPE_ANGLE})`}
+              width={LAG_EVIDENCE_STRIPE_WIDTH + LAG_EVIDENCE_STRIPE_GAP}
+              height={LAG_EVIDENCE_STRIPE_WIDTH + LAG_EVIDENCE_STRIPE_GAP}
+              patternTransform={`rotate(${LAG_EVIDENCE_STRIPE_ANGLE})${LAG_EVIDENCE_STRIPE_OFFSET ? ` translate(${LAG_EVIDENCE_STRIPE_OFFSET}, 0)` : ''}`}
             >
-              <rect x="0" y="0" width={LAG_STRIPE_WIDTH} height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP} 
+              <rect x="0" y="0" width={LAG_EVIDENCE_STRIPE_WIDTH} height={LAG_EVIDENCE_STRIPE_WIDTH + LAG_EVIDENCE_STRIPE_GAP} 
                 fill={(effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())}
-                fillOpacity={LAG_STRIPE_OPACITY}
+                fillOpacity={LAG_EVIDENCE_STRIPE_OPACITY}
               />
             </pattern>
-            {/* Outer stripe pattern (forecast layer) - offset by half stripe width */}
+            {/* Outer stripe pattern (forecast layer) */}
             <pattern
               id={`lag-stripe-outer-${id}`}
               patternUnits="userSpaceOnUse"
-              width={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP}
-              height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP}
-              patternTransform={`rotate(${LAG_STRIPE_ANGLE}) translate(${(LAG_STRIPE_WIDTH + LAG_STRIPE_GAP) / 2}, 0)`}
+              width={LAG_FORECAST_STRIPE_WIDTH + LAG_FORECAST_STRIPE_GAP}
+              height={LAG_FORECAST_STRIPE_WIDTH + LAG_FORECAST_STRIPE_GAP}
+              patternTransform={`rotate(${LAG_FORECAST_STRIPE_ANGLE})${LAG_FORECAST_STRIPE_OFFSET ? ` translate(${LAG_FORECAST_STRIPE_OFFSET}, 0)` : ''}`}
             >
-              <rect x="0" y="0" width={LAG_STRIPE_WIDTH} height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP} 
+              <rect x="0" y="0" width={LAG_FORECAST_STRIPE_WIDTH} height={LAG_FORECAST_STRIPE_WIDTH + LAG_FORECAST_STRIPE_GAP} 
                 fill={(effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())} 
-                fillOpacity={LAG_STRIPE_OPACITY} />
+                fillOpacity={LAG_FORECAST_STRIPE_OPACITY} />
             </pattern>
           </>
         )}
@@ -2295,7 +2305,7 @@ export default function ConversionEdge({
               {shouldShowSankeyFE && sankeyFERibbons ? (
                 // Sankey latency mode: F/F+E use striped, E uses solid
                 <>
-                  {/* Outer ribbon - striped for F and F+E modes, solid for E mode */}
+                  {/* Outer ribbon - forecast stripes for F/F+E modes, solid for E mode */}
                   <path
                     id={`${id}-sankey-outer`}
                     style={{
@@ -2320,14 +2330,12 @@ export default function ConversionEdge({
                     onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                     onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                   />
-                  {/* Inner ribbon (evidence) - solid, only for F+E mode */}
+                  {/* Inner ribbon (evidence) - striped, only for F+E mode */}
                   {sankeyFERibbons.innerRibbon && (
                     <path
                       id={`${id}-sankey-inner`}
                       style={{
-                        fill: (effectiveSelected || data?.isHighlighted) 
-                          ? getEdgeColour() 
-                          : (data?.scenarioColour || getEdgeColour()),
+                        fill: `url(#lag-stripe-inner-${id})`,
                         fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                         mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                         stroke: 'none',
@@ -2400,7 +2408,7 @@ export default function ConversionEdge({
                     ? `url(#lag-anchor-stipple-${id})` 
                     : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.upper,
-                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.outer * ((data?.strokeOpacity ?? 0.8) / 0.8)),
+                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.outer * ((data?.strokeOpacity ?? EDGE_OPACITY) / EDGE_OPACITY)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'round',
@@ -2428,7 +2436,7 @@ export default function ConversionEdge({
                     ? `url(#lag-anchor-stipple-${id})` 
                     : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.middle,
-                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.middle * ((data?.strokeOpacity ?? 0.8) / 0.8)),
+                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.middle * ((data?.strokeOpacity ?? EDGE_OPACITY) / EDGE_OPACITY)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'round',
@@ -2457,7 +2465,7 @@ export default function ConversionEdge({
                     ? `url(#lag-anchor-stipple-${id})` 
                     : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.lower,
-                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.inner * ((data?.strokeOpacity ?? 0.8) / 0.8)),
+                  strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.inner * ((data?.strokeOpacity ?? EDGE_OPACITY) / EDGE_OPACITY)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                   fill: 'none',
                   strokeLinecap: 'round',
