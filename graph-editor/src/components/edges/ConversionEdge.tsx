@@ -302,6 +302,12 @@ export default function ConversionEdge({
     const pStd = data.stdev ? ` ±${(data.stdev * 100).toFixed(1)}` : '';
     lines.push(`  ${pVal}%${pStd}`);
     
+    // Forecast population (p.n) - from inbound-n convolution
+    const pN = fullEdge?.p?.n;
+    if (pN !== undefined && pN > 0) {
+      lines.push(`  p.n=${pN.toFixed(0)} (forecast population)`);
+    }
+    
     // === PARAM: e.<edgeId>.p.evidence (RAW) ===
     const pEvidence = fullEdge?.p?.evidence as any;
     lines.push('');

@@ -73,8 +73,13 @@ class LatencyConfig(BaseModel):
 
 class ForecastParams(BaseModel):
     """Forecast probability parameters from mature cohorts."""
-    mean: Optional[float] = Field(None, ge=0, le=1, description="Forecast mean probability (p_∞)")
+    # NOTE: mean can exceed 1.0 in edge cases when extrapolating from immature cohort data
+    # This is a known artifact of Formula A when completeness is low - the forecast
+    # is still useful as an indicator even if > 1.0 (will be clamped at display time)
+    mean: Optional[float] = Field(None, ge=0, description="Forecast mean probability (p_∞)")
     stdev: Optional[float] = Field(None, ge=0, description="Forecast standard deviation")
+    # Expected converters: p.mean * p.n - used for propagating population downstream
+    k: Optional[float] = Field(None, ge=0, description="Expected converters on this edge (p.mean * p.n)")
 
 
 class ProbabilityParam(BaseModel):
@@ -93,6 +98,8 @@ class ProbabilityParam(BaseModel):
     # LAG fields
     latency: Optional[LatencyConfig] = Field(None, description="Latency configuration for this probability")
     forecast: Optional[ForecastParams] = Field(None, description="Forecast probability from mature cohorts")
+    # Inbound-n: Forecast population (see inbound-n-fix.md)
+    n: Optional[float] = Field(None, ge=0, description="Forecast population for this edge under current DSL. NOT evidence.n. Derived via step-wise convolution of upstream p.mean values.")
 
 
 class CostParam(BaseModel):

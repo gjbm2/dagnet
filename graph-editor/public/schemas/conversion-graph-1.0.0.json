@@ -315,9 +315,9 @@
     "ForecastParams": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Forecast probability parameters from mature cohorts.",
+      "$comment": "Forecast probability parameters from mature cohorts. Note: mean can exceed 1.0 in edge cases when extrapolating from immature cohort data.",
       "properties": {
-        "mean": { "type": "number", "minimum": 0, "maximum": 1, "description": "Forecast mean probability (p_∞)" },
+        "mean": { "type": "number", "minimum": 0, "description": "Forecast mean probability (p_∞) - can exceed 1.0 in edge cases" },
         "stdev": { "type": "number", "minimum": 0, "description": "Forecast standard deviation" }
       }
     },

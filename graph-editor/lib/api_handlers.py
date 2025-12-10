@@ -63,6 +63,10 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
             conditional_index=conditional_index  # Pass conditional filter directly to MSMDC
         )
     
+    # Compute anchor_node_id for all edges (furthest upstream START node)
+    from msmdc import compute_all_anchor_nodes
+    anchor_map = compute_all_anchor_nodes(graph)
+    
     # Format response
     parameters = []
     stats_by_type = {}
@@ -84,6 +88,7 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
     
     return {
         "parameters": parameters,
+        "anchors": anchor_map,  # Edge UUID → anchor_node_id (for cohort queries)
         "stats": {
             "total": len(parameters),
             "byType": stats_by_type

@@ -24,13 +24,29 @@ export const LATENCY_MIN_FIT_CONVERTERS = 30;
 /**
  * Minimum acceptable mean/median ratio for log-normal fitting.
  * 
- * For a log-normal distribution, mean > median always (right-skewed).
- * A ratio < 1.0 indicates data issues (e.g., outliers, bimodal distribution).
+ * For a true log-normal distribution, mean > median always (right-skewed),
+ * and σ = sqrt(2 * ln(mean/median)) requires mean > median for real σ.
  * 
- * Rationale: σ = sqrt(2 * ln(mean/median)) requires mean > median.
- * Ratio of 1.0 means σ = 0 (degenerate case, all lags identical).
+ * However, in practice:
+ * - Real-world lag data often has mean ≈ median (low skew)
+ * - Amplitude's per-day lag statistics have sampling noise
+ * - A ratio of 0.99 doesn't indicate "broken data", just low variance
+ * 
+ * When ratio < 1.0, we cannot compute σ from the formula (would need ln of
+ * a negative number), so we use LATENCY_DEFAULT_SIGMA instead. This is fine
+ * for practical purposes—it just means the distribution has low spread.
+ * 
+ * Previous value (1.0) was too strict and rejected valid data where mean ≈ median.
+ * 
+ * CALIBRATION NOTE (Dec 2025):
+ * - Observed Amplitude data with ratio = 0.9993 (mean=6.020d, median=6.024d)
+ * - This was incorrectly rejected, causing fallback to maturity_days for t95
+ * - Lowered to 0.9 to allow mean ≈ median cases while still catching bad data
+ * 
+ * When ratio is in [0.9, 1.0), we mark empirical_quality_ok = false but still
+ * use the median-based μ with default σ, which is reasonable behaviour.
  */
-export const LATENCY_MIN_MEAN_MEDIAN_RATIO = 1.0;
+export const LATENCY_MIN_MEAN_MEDIAN_RATIO = 0.9;
 
 /**
  * Maximum acceptable mean/median ratio for log-normal fitting.
