@@ -22,7 +22,7 @@
 
 import { fileRegistry } from '../contexts/TabContext';
 import { parseConstraints } from '../lib/queryDSL';
-import { resolveRelativeDate } from '../lib/dateFormat';
+import { resolveRelativeDate, normalizeToUK } from '../lib/dateFormat';
 import { 
   fetchDataService, 
   getItemsNeedingFetch,
@@ -30,12 +30,13 @@ import {
   type FetchItem,
 } from './fetchDataService';
 import { shouldRefetch, type LatencyConfig } from './fetchRefetchPolicy';
-import { extractSliceDimensions } from './sliceIsolation';
-import { hasFullSliceCoverageByHeader, isCohortModeValue, parseDate } from './windowAggregationService';
+import { extractSliceDimensions, isolateSlice } from './sliceIsolation';
+import { hasFullSliceCoverageByHeader, isCohortModeValue, parseDate, normalizeDate } from './windowAggregationService';
 import { computePathT95, getActiveEdges, type GraphForPath } from './statisticalEnhancementService';
 import { computeCohortRetrievalHorizon, type CohortHorizonResult } from './cohortRetrievalHorizon';
 import type { ParameterValue } from './paramRegistryService';
 import { sessionLogService } from './sessionLogService';
+import { DIAGNOSTIC_LOG } from '../constants/statisticalConstants';
 import type { Graph, DateRange } from '../types';
 
 // =============================================================================
@@ -315,6 +316,11 @@ class WindowFetchPlannerService {
         undefined,
         { itemCount: items.length, covered: autoAggregationItems.length - staleCandidates.length, needsFetch: fetchPlanItems.length, stale: staleCandidates.length, unfetchable: unfetchableGaps.length }
       );
+      
+      // DIAGNOSTIC: Detailed per-item coverage analysis
+      if (DIAGNOSTIC_LOG && items.length > 0) {
+        this.logDetailedCoverageAnalysis(logOpId, items, window, dsl, graph);
+      }
       
       sessionLogService.endOperation(logOpId, 'success', `Outcome: ${outcome}`, { outcome, durationMs });
       
@@ -628,6 +634,140 @@ class WindowFetchPlannerService {
       return Math.max(1, days);
     } catch {
       return 1;
+    }
+  }
+  
+  /**
+   * DIAGNOSTIC: Log detailed per-item coverage analysis to session log.
+   * 
+   * This helps debug cache miss scenarios by showing exactly why each item
+   * was classified as needing a fetch or not.
+   */
+  private logDetailedCoverageAnalysis(
+    logOpId: string,
+    items: PlannerItem[],
+    window: DateRange,
+    dsl: string,
+    graph: Graph
+  ): void {
+    const windowDesc = `${normalizeToUK(window.start)} → ${normalizeToUK(window.end)}`;
+    const isCohortQuery = dsl.includes('cohort(');
+    const queryType = isCohortQuery ? 'cohort' : 'window';
+    
+    for (const item of items) {
+      if (item.type !== 'parameter') continue;
+      
+      const fileId = `parameter-${item.objectId}`;
+      const file = fileRegistry.getFile(fileId);
+      const edge = graph.edges?.find(e => (e.uuid || e.id) === item.targetId);
+      
+      // Build diagnostic details
+      const details: string[] = [];
+      let coverageStatus = 'UNKNOWN';
+      
+      // Check file existence
+      if (!file?.data) {
+        details.push('NO_FILE: Parameter file does not exist');
+        coverageStatus = 'NO_FILE';
+      } else {
+        const values = file.data.values ?? [];
+        details.push(`FILE_EXISTS: ${values.length} value entries`);
+        
+        // Check connection
+        const param = edge?.p;
+        const hasConnection = !!file.data.connection || !!param?.connection;
+        if (!hasConnection) {
+          details.push('FILE_ONLY: No connection configured (read-only from file)');
+        } else {
+          details.push(`CONNECTION: ${file.data.connection?.id || param?.connection || 'edge-defined'}`);
+        }
+        
+        // Analyse slice coverage
+        const sliceValues = isolateSlice(values, dsl);
+        details.push(`SLICE_MATCH: ${sliceValues.length}/${values.length} entries match DSL context`);
+        
+        if (sliceValues.length === 0) {
+          coverageStatus = 'NO_SLICE_MATCH';
+          details.push('⚠ No cached entries match the query context/slice');
+        } else {
+          // Check header coverage for matching slices
+          const headerField = isCohortQuery ? 'cohort' : 'window';
+          const coveredHeaders: string[] = [];
+          const uncoveredHeaders: string[] = [];
+          
+          for (const slice of sliceValues) {
+            const fromField = isCohortQuery 
+              ? ((slice as any).cohort_from ?? (slice as any).window_from)
+              : ((slice as any).window_from ?? (slice as any).cohort_from);
+            const toField = isCohortQuery 
+              ? ((slice as any).cohort_to ?? (slice as any).window_to)
+              : ((slice as any).window_to ?? (slice as any).cohort_to);
+            
+            if (!fromField || !toField) {
+              uncoveredHeaders.push(`[no ${headerField} headers]`);
+              continue;
+            }
+            
+            const sliceFrom = normalizeDate(String(fromField));
+            const sliceTo = normalizeDate(String(toField));
+            const sliceRange = `${sliceFrom} → ${sliceTo}`;
+            
+            // Check if this slice covers the requested window
+            try {
+              const sliceStartDate = parseDate(sliceFrom);
+              const sliceEndDate = parseDate(sliceTo);
+              const queryStartDate = parseDate(window.start);
+              const queryEndDate = parseDate(window.end);
+              
+              const coversStart = sliceStartDate <= queryStartDate;
+              const coversEnd = sliceEndDate >= queryEndDate;
+              
+              if (coversStart && coversEnd) {
+                coveredHeaders.push(`✓ ${sliceRange} (FULL coverage)`);
+              } else if (coversStart || coversEnd) {
+                const missing = !coversStart ? 'start' : 'end';
+                uncoveredHeaders.push(`◐ ${sliceRange} (PARTIAL - missing ${missing})`);
+              } else {
+                uncoveredHeaders.push(`✗ ${sliceRange} (NO coverage)`);
+              }
+            } catch {
+              uncoveredHeaders.push(`? ${sliceRange} (parse error)`);
+            }
+          }
+          
+          if (coveredHeaders.length > 0) {
+            coverageStatus = 'COVERED';
+            details.push(`HEADERS: ${coveredHeaders.join('; ')}`);
+          } else {
+            coverageStatus = 'HEADER_GAP';
+            details.push(`HEADERS: ${uncoveredHeaders.join('; ')}`);
+          }
+        }
+      }
+      
+      // Final classification reason
+      const classificationReason = item.classification === 'needs_fetch'
+        ? `NEEDS_FETCH (${coverageStatus})`
+        : item.classification === 'covered_stable'
+          ? `COVERED_STABLE`
+          : item.classification === 'stale_candidate'
+            ? `STALE (${item.stalenessReason})`
+            : `${item.classification.toUpperCase()}`;
+      
+      sessionLogService.addChild(
+        logOpId,
+        item.classification === 'needs_fetch' ? 'warning' : 'info',
+        'COVERAGE_DETAIL',
+        `${item.objectId}: ${classificationReason}`,
+        `Query: ${queryType}(${windowDesc})\n${details.join('\n')}`,
+        {
+          itemId: item.objectId,
+          classification: item.classification,
+          coverageStatus,
+          hasFile: !!file?.data,
+          sliceCount: file?.data?.values?.length ?? 0,
+        }
+      );
     }
   }
   
