@@ -113,7 +113,10 @@ export const CASE_NODE_FONT_SIZE = 10;
 export const EDGE_LABEL_FONT_SIZE = 12;
 
 /** Font size for edge bead text (pixels) */
-export const BEAD_FONT_SIZE = 10;
+export const BEAD_FONT_SIZE = 9;
+
+/** Height for edge beads/lozenges (pixels) - typically ~1.4× font size for comfortable padding */
+export const BEAD_HEIGHT = 1.4 * BEAD_FONT_SIZE;
 
 // ===== ANIMATED CHEVRONS =====
 

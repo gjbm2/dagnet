@@ -347,15 +347,10 @@ describe('Amplitude 3-Step Funnel Integration', () => {
       // So from_step_index shifts to 1, to_step_index shifts to 2
       mockHttpExecutor.mockResponse = loadReferenceResponse();
       
+      // NOTE: cohort must be in OPTIONS (3rd arg), not queryPayload
       const result = await runner.execute('amplitude-prod', {
         from: 'switch-registered',
         to: 'switch-success',
-        cohort: {
-          start: '2025-09-01T00:00:00Z',
-          end: '2025-09-05T23:59:59Z',
-          anchor_event_id: 'household-created',
-          maturity_days: 30
-        }
       }, {
         window: { start: '2025-09-01T00:00:00Z', end: '2025-09-05T23:59:59Z' },
         edgeId: 'test-edge',
@@ -364,7 +359,13 @@ describe('Amplitude 3-Step Funnel Integration', () => {
           'switch-registered': { provider_event_names: { amplitude: 'Blueprint CheckpointReached (SwitchRegistered)' } },
           'switch-success': { provider_event_names: { amplitude: 'Blueprint SwitchSuccess' } }
         },
-        context: { mode: 'daily', excludeTestAccounts: false }
+        context: { mode: 'daily', excludeTestAccounts: false },
+        cohort: {
+          start: '2025-09-01T00:00:00Z',
+          end: '2025-09-05T23:59:59Z',
+          anchor_event_id: 'household-created',
+          maturity_days: 30
+        }
       });
       
       // Diagnostics
@@ -396,15 +397,10 @@ describe('Amplitude 3-Step Funnel Integration', () => {
     it('should extract X→Y latency from 3-step funnel (step index 2)', async () => {
       mockHttpExecutor.mockResponse = loadReferenceResponse();
       
+      // NOTE: cohort must be in OPTIONS (3rd arg)
       const result = await runner.execute('amplitude-prod', {
         from: 'switch-registered',
         to: 'switch-success',
-        cohort: {
-          start: '2025-09-01T00:00:00Z',
-          end: '2025-09-05T23:59:59Z',
-          anchor_event_id: 'household-created',
-          maturity_days: 30
-        }
       }, {
         window: { start: '2025-09-01T00:00:00Z', end: '2025-09-05T23:59:59Z' },
         edgeId: 'test-edge',
@@ -413,7 +409,13 @@ describe('Amplitude 3-Step Funnel Integration', () => {
           'switch-registered': { provider_event_names: { amplitude: 'Blueprint CheckpointReached (SwitchRegistered)' } },
           'switch-success': { provider_event_names: { amplitude: 'Blueprint SwitchSuccess' } }
         },
-        context: { mode: 'daily', excludeTestAccounts: false }
+        context: { mode: 'daily', excludeTestAccounts: false },
+        cohort: {
+          start: '2025-09-01T00:00:00Z',
+          end: '2025-09-05T23:59:59Z',
+          anchor_event_id: 'household-created',
+          maturity_days: 30
+        }
       });
       
       expect(result.success).toBe(true);
@@ -427,6 +429,98 @@ describe('Amplitude 3-Step Funnel Integration', () => {
       expect(typeof raw.mean_lag_days).toBe('number');
       expect(raw.median_lag_days).toBeGreaterThan(0);
       expect(raw.mean_lag_days).toBeGreaterThan(0);
+    });
+
+    it('should extract anchor lag (A→X) for downstream completeness calculation', async () => {
+      // In 3-step A→X→Y funnel, we need A→X lag to adjust effective cohort ages
+      // for downstream edges. This is CRITICAL for correct completeness calculation.
+      mockHttpExecutor.mockResponse = loadReferenceResponse();
+      
+      // NOTE: `cohort` must be in OPTIONS (3rd arg), not queryPayload (2nd arg)
+      // The DASRunner passes options.cohort to the pre_request script
+      const result = await runner.execute('amplitude-prod', {
+        from: 'switch-registered',
+        to: 'switch-success',
+      }, {
+        window: { start: '2025-09-01T00:00:00Z', end: '2025-09-05T23:59:59Z' },
+        edgeId: 'test-edge',
+        eventDefinitions: {
+          'household-created': { provider_event_names: { amplitude: 'Household Created' } },
+          'switch-registered': { provider_event_names: { amplitude: 'Blueprint CheckpointReached (SwitchRegistered)' } },
+          'switch-success': { provider_event_names: { amplitude: 'Blueprint SwitchSuccess' } }
+        },
+        context: { mode: 'daily', excludeTestAccounts: false },
+        // CRITICAL: cohort must be in options for DASRunner to pass to pre_request script
+        cohort: {
+          start: '2025-09-01T00:00:00Z',
+          end: '2025-09-05T23:59:59Z',
+          anchor_event_id: 'household-created',
+          maturity_days: 30
+        }
+      });
+      
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error(`Execution failed: ${result.error}`);
+      
+      const raw = result.raw as any;
+
+      // Diagnostics for anchor lag extraction
+      console.log('[TEST] Anchor lag extraction:', {
+        anchor_median_lag_days: raw.anchor_median_lag_days,
+        anchor_mean_lag_days: raw.anchor_mean_lag_days,
+        time_series_first: raw.time_series?.[0],
+        from_step_index: raw._debug_from_step_index,
+        to_step_index: raw._debug_to_step_index,
+      });
+      
+      // For 3-step A→X→Y funnel:
+      //   - from_step_index = 1 (X), to_step_index = 2 (Y)
+      //   - medianTransTimes[1] = A→X = 11.41 days (anchor lag)
+      //   - medianTransTimes[2] = X→Y = 6.02 days (edge lag)
+      //
+      // Reference data medianTransTimes: [1560114000, 985545000, 520021000]
+      //   - Index 0: 18.06 days (entry → A)
+      //   - Index 1: 11.41 days (A → X)  ← anchor_median_lag_days
+      //   - Index 2: 6.02 days (X → Y)   ← median_lag_days
+      
+      expect(typeof raw.anchor_median_lag_days).toBe('number');
+      expect(typeof raw.anchor_mean_lag_days).toBe('number');
+      
+      // Both should be positive
+      expect(raw.anchor_median_lag_days).toBeGreaterThan(0);
+      expect(raw.anchor_mean_lag_days).toBeGreaterThan(0);
+      
+      // SEMANTIC CHECK: For a 3-step funnel with correct index shifting:
+      // - anchor_median_lag_days = A→X (~11.4 days)
+      // - median_lag_days = X→Y (~6.0 days)
+      // - A→X transition takes LONGER than X→Y, so anchor > edge
+      //
+      // If this fails, the pre_request script isn't setting from_step_index=1, to_step_index=2
+      console.log('[TEST] Semantic check values:', {
+        anchor_median_lag_days: raw.anchor_median_lag_days,
+        median_lag_days: raw.median_lag_days,
+        expected_anchor: 11.41,  // medianTransTimes[1] / 86400000
+        expected_edge: 6.02,     // medianTransTimes[2] / 86400000
+        from_step_index: raw._debug_from_step_index,
+        to_step_index: raw._debug_to_step_index,
+      });
+      
+      // Verify correct indices are being used (1 and 2, not 0 and 1)
+      expect(raw.anchor_median_lag_days).toBeCloseTo(11.41, 1);  // A→X = ~11.4 days
+      expect(raw.median_lag_days).toBeCloseTo(6.02, 1);           // X→Y = ~6.0 days
+      
+      // Semantic: upstream (A→X) transition takes longer than downstream (X→Y)
+      expect(raw.anchor_median_lag_days).toBeGreaterThan(raw.median_lag_days);
+      
+      // Time series should also have per-day anchor lag data
+      if (raw.time_series && raw.time_series.length > 0) {
+        const firstDay = raw.time_series[0];
+        expect(firstDay.anchor_median_lag_days).toBeDefined();
+        expect(firstDay.anchor_mean_lag_days).toBeDefined();
+        // anchor_n should be the step 0 count (anchor entry count)
+        expect(firstDay.anchor_n).toBeDefined();
+        expect(typeof firstDay.anchor_n).toBe('number');
+      }
     });
   });
 

@@ -30,6 +30,7 @@ import { getSiblingEdges } from '../lib/conditionalColours';
 import { normalizeConstraintString } from '../lib/queryDSL';
 import { sessionLogService } from './sessionLogService';
 import { normalizeToUK } from '../lib/dateFormat';
+import { PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
 
 // ============================================================
 // TYPES & INTERFACES
@@ -140,10 +141,12 @@ export class UpdateManager {
   }
   
   /**
-   * Round a number to 3 decimal places to avoid floating-point precision issues
+   * Round a number to standard precision (PRECISION_DECIMAL_PLACES) to avoid
+   * floating-point noise and ensure consistent values across the application.
    */
-  private roundTo3DP(value: number): number {
-    return Math.round(value * 1000) / 1000;
+  private roundToDP(value: number): number {
+    const factor = Math.pow(10, PRECISION_DECIMAL_PLACES);
+    return Math.round(value * factor) / factor;
   }
   
   /**
@@ -288,6 +291,47 @@ export class UpdateManager {
   }
   
   /**
+   * Find sibling edges for rebalancing (same source, same case_variant if applicable, has p.mean).
+   * Extracted to consolidate sibling-finding logic across rebalancing methods.
+   * 
+   * @param graph - The graph to search
+   * @param edgeId - ID of the origin edge
+   * @returns Object with originEdge, siblings array, and originValue
+   */
+  private findSiblingsForRebalance(graph: any, edgeId: string): {
+    originEdge: any | null;
+    siblings: any[];
+    originValue: number;
+  } {
+    const edgeIndex = graph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) {
+      return { originEdge: null, siblings: [], originValue: 0 };
+    }
+    
+    const currentEdge = graph.edges[edgeIndex];
+    const sourceNodeId = currentEdge.from;
+    const currentEdgeId = currentEdge.uuid || currentEdge.id || `${currentEdge.from}->${currentEdge.to}`;
+    const originValue = this.roundToDP(currentEdge.p?.mean ?? 0);
+    
+    // Find siblings (same source, different edge, has p.mean)
+    const siblings = graph.edges.filter((e: any) => {
+      const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+      if (eId === currentEdgeId) return false;
+      if (e.from !== sourceNodeId) return false;
+      if (e.p?.mean === undefined) return false;
+      // For case edges, match case_variant
+      if (currentEdge.case_variant && e.case_variant !== currentEdge.case_variant) return false;
+      if (!currentEdge.case_variant && e.case_variant) return false;
+      return true;
+    });
+    
+    return { originEdge: currentEdge, siblings, originValue };
+  }
+
+  /**
    * Distribute remainingWeight proportionally among items, ensuring sum equals exactly remainingWeight.
    * Rounds all but the last item, then sets the last to make up the difference.
    * 
@@ -315,14 +359,14 @@ export class UpdateManager {
     
     if (currentTotal === 0) {
       // Equal distribution
-      const equalShare = this.roundTo3DP(remainingWeight / items.length);
+      const equalShare = this.roundToDP(remainingWeight / items.length);
       let sum = 0;
       const newValues: number[] = [];
       items.forEach((item, index) => {
         if (index === items.length - 1) {
           // Last item gets the remainder to ensure exact sum
           const lastValue = remainingWeight - sum;
-          const roundedLast = this.roundTo3DP(lastValue);
+          const roundedLast = this.roundToDP(lastValue);
           newValues.push(roundedLast);
           setValue(item, roundedLast);
         } else {
@@ -357,11 +401,11 @@ export class UpdateManager {
         if (index === items.length - 1) {
           // Last item gets the remainder to ensure exact sum
           const lastValue = remainingWeight - sum;
-          const roundedLast = this.roundTo3DP(lastValue);
+          const roundedLast = this.roundToDP(lastValue);
           newValues.push(roundedLast);
           setValue(item, roundedLast);
         } else {
-          const rounded = this.roundTo3DP(unroundedValues[index]);
+          const rounded = this.roundToDP(unroundedValues[index]);
           newValues.push(rounded);
           setValue(item, rounded);
           sum += rounded;
@@ -390,7 +434,7 @@ export class UpdateManager {
    * - Slider edits
    * - Number input edits
    * 
-   * Applies consistent transforms (rounding to 3dp) and override handling.
+   * Applies consistent transforms (rounding to PRECISION_DECIMAL_PLACES) and override handling.
    * 
    * @param graph - Current graph (immutable - returns new graph)
    * @param edgeId - Edge UUID or ID
@@ -435,7 +479,7 @@ export class UpdateManager {
     if (updates.mean !== undefined) {
       const shouldSkip = respectOverrides && edge.p.mean_overridden;
       if (!shouldSkip) {
-        edge.p.mean = this.roundTo3DP(updates.mean);
+        edge.p.mean = this.roundToDP(updates.mean);
         if (setOverrideFlag) {
           edge.p.mean_overridden = true;
         }
@@ -447,7 +491,7 @@ export class UpdateManager {
     if (updates.stdev !== undefined) {
       const shouldSkip = respectOverrides && edge.p.stdev_overridden;
       if (!shouldSkip) {
-        edge.p.stdev = this.roundTo3DP(updates.stdev);
+        edge.p.stdev = this.roundToDP(updates.stdev);
         if (setOverrideFlag) {
           edge.p.stdev_overridden = true;
         }
@@ -471,7 +515,7 @@ export class UpdateManager {
    * - Data from parameter files (getParameterFromFile)
    * - Data from external sources (getFromSourceDirect)
    * 
-   * Applies consistent transforms (rounding to 3dp) and override handling.
+   * Applies consistent transforms (rounding to PRECISION_DECIMAL_PLACES) and override handling.
    * 
    * @param graph - Current graph (immutable - returns new graph)
    * @param edgeId - Edge UUID or ID
@@ -531,7 +575,7 @@ export class UpdateManager {
     if (updates.mean !== undefined) {
       const shouldSkip = respectOverrides && condEntry.p.mean_overridden;
       if (!shouldSkip) {
-        condEntry.p.mean = this.roundTo3DP(updates.mean);
+        condEntry.p.mean = this.roundToDP(updates.mean);
         if (setOverrideFlag) {
           condEntry.p.mean_overridden = true;
         }
@@ -545,7 +589,7 @@ export class UpdateManager {
     if (updates.stdev !== undefined) {
       const shouldSkip = respectOverrides && condEntry.p.stdev_overridden;
       if (!shouldSkip) {
-        condEntry.p.stdev = this.roundTo3DP(updates.stdev);
+        condEntry.p.stdev = this.roundToDP(updates.stdev);
         if (setOverrideFlag) {
           condEntry.p.stdev_overridden = true;
         }
@@ -2182,13 +2226,13 @@ export class UpdateManager {
           // Prefer explicit mean if provided (may be adjusted/rounded)
           // Only recalculate if explicit mean not available
           if (mean !== undefined && mean !== null) {
-            return this.roundTo3DP(mean);
+            return this.roundToDP(mean);
           }
           // Fallback: calculate from n/k if both are available
           if (source.n > 0 && source.k !== undefined) {
             // Calculate mean, clamping to [0, 1] in case of data errors
             const calculated = source.k / source.n;
-            return this.roundTo3DP(Math.max(0, Math.min(1, calculated)));
+            return this.roundToDP(Math.max(0, Math.min(1, calculated)));
           }
           // No mean data available - don't update mean
           return undefined;
@@ -2199,9 +2243,9 @@ export class UpdateManager {
         targetField: 'p.stdev',
         overrideFlag: 'p.stdev_overridden',
         transform: (stdev, source) => {
-          // Round stdev to 3dp for consistency
+          // Round stdev to standard precision for consistency
           if (stdev !== undefined && stdev !== null) {
-            return this.roundTo3DP(stdev);
+            return this.roundToDP(stdev);
           }
           return undefined;
         }
@@ -3259,17 +3303,29 @@ export class UpdateManager {
       if (update.blendedMean !== undefined) {
         const oldMean = edge.p.mean;
         if (oldMean !== update.blendedMean) {
-          edge.p.mean = this.roundTo3DP(update.blendedMean);
+          edge.p.mean = this.roundToDP(update.blendedMean);
           edgesToRebalance.push(update.edgeId);
         }
       }
     }
     
-    // STEP 3: Rebalance all affected edges ONCE
-    // Note: We call rebalanceSiblingEdges directly on nextGraph (no clone)
-    // to avoid losing the latency values we just wrote
+    // STEP 3: Rebalance all affected edges ONCE using consolidated rebalancing logic
+    // Uses findSiblingsForRebalance + rebalanceSiblingEdges (same path as rebalanceEdgeProbabilities)
     for (const edgeId of edgesToRebalance) {
-      this.rebalanceSiblingsInPlace(nextGraph, edgeId);
+      const { originEdge, siblings, originValue } = this.findSiblingsForRebalance(nextGraph, edgeId);
+      if (!originEdge || siblings.length === 0) continue;
+      
+      // Filter to non-overridden siblings (normal rebalance mode)
+      const freeEdges = siblings.filter((e: any) => !e.p?.mean_overridden);
+      if (freeEdges.length === 0) continue;
+      
+      // Calculate remaining weight after accounting for origin and overridden siblings
+      const overriddenTotal = siblings
+        .filter((e: any) => e.p?.mean_overridden)
+        .reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
+      const remainingForFree = Math.max(0, 1 - originValue - overriddenTotal);
+      
+      this.rebalanceSiblingEdges(nextGraph, freeEdges, remainingForFree, false);
     }
     
     // Update metadata
@@ -3301,66 +3357,6 @@ export class UpdateManager {
     return nextGraph;
   }
   
-  /**
-   * Rebalance sibling edges IN PLACE (no clone).
-   * Used internally by applyBatchLAGValues to avoid clone-induced data loss.
-   * 
-   * @param graph - Graph to modify IN PLACE
-   * @param edgeId - ID of the edge whose siblings should be rebalanced
-   */
-  private rebalanceSiblingsInPlace(graph: any, edgeId: string): void {
-    const edgeIndex = graph.edges.findIndex((e: any) => 
-      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
-    );
-    
-    if (edgeIndex < 0) return;
-    
-    const currentEdge = graph.edges[edgeIndex];
-    const sourceNodeId = currentEdge.from;
-    const currentEdgeId = currentEdge.uuid || currentEdge.id || `${currentEdge.from}->${currentEdge.to}`;
-    
-    // Get current edge's value (already set)
-    const originValue = currentEdge.p?.mean ?? 0;
-    
-    // Find siblings (same source, different edge, has p.mean)
-    const siblings = graph.edges.filter((e: any) => {
-      const eId = e.uuid || e.id || `${e.from}->${e.to}`;
-      if (eId === currentEdgeId) return false;
-      if (e.from !== sourceNodeId) return false;
-      if (e.p?.mean === undefined) return false;
-      // For case edges, match case_variant
-      if (currentEdge.case_variant && e.case_variant !== currentEdge.case_variant) return false;
-      if (!currentEdge.case_variant && e.case_variant) return false;
-      return true;
-    });
-    
-    if (siblings.length === 0) return;
-    
-    // Remaining weight to distribute
-    const remainingWeight = Math.max(0, 1 - originValue);
-    
-    // Current total of siblings
-    const currentTotal = siblings.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
-    
-    if (currentTotal <= 0) {
-      // Distribute evenly
-      const evenShare = remainingWeight / siblings.length;
-      for (const sibling of siblings) {
-        if (!sibling.p.mean_overridden) {
-          sibling.p.mean = this.roundTo3DP(evenShare);
-        }
-      }
-    } else {
-      // Distribute proportionally
-      const scale = remainingWeight / currentTotal;
-      for (const sibling of siblings) {
-        if (!sibling.p.mean_overridden) {
-          sibling.p.mean = this.roundTo3DP((sibling.p.mean || 0) * scale);
-        }
-      }
-    }
-  }
-
   /**
    * Delete a node from the graph and clean up associated edges.
    * Uses smart image GC - only deletes images with zero references across all files.
@@ -3649,8 +3645,8 @@ export class UpdateManager {
     }
     
     // IMPORTANT: Preserve the origin edge's current value - don't change it
-    // Round to 3dp to ensure consistent precision (external data may have many decimal places)
-    const originValue = this.roundTo3DP(currentEdge.p?.mean ?? 0);
+    // Round to standard precision (external data may have many decimal places)
+    const originValue = this.roundToDP(currentEdge.p?.mean ?? 0);
     
     // Find all sibling edges with the same parameter subtype (p, cost_gbp, or labour_cost)
     // For case edges: only rebalance edges with the same case_variant and case_id
@@ -3875,10 +3871,10 @@ export class UpdateManager {
     }
     
     // IMPORTANT: Preserve the origin condition's current value - don't change it
-    // Round to 3dp to ensure consistent precision (external data may have many decimal places)
+    // Round to standard precision (external data may have many decimal places)
     const condition = currentEdge.conditional_p[condIndex];
     const conditionStr = typeof condition.condition === 'string' ? condition.condition : '';
-    const originValue = this.roundTo3DP(condition.p?.mean ?? 0);
+    const originValue = this.roundToDP(condition.p?.mean ?? 0);
     
     
     if (!conditionStr) return nextGraph;
@@ -4028,9 +4024,9 @@ export class UpdateManager {
     }
     
     // IMPORTANT: Preserve the origin variant's current value - don't change it
-    // Round to 3dp to ensure consistent precision (external data may have many decimal places)
+    // Round to standard precision (external data may have many decimal places)
     const originVariant = caseNode.case.variants[variantIndex];
-    const originValue = this.roundTo3DP(originVariant.weight ?? 0);
+    const originValue = this.roundToDP(originVariant.weight ?? 0);
     
     // Calculate remaining weight (1 - origin variant value)
     const remainingWeight = Math.max(0, 1 - originValue);

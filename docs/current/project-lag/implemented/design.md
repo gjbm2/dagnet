@@ -1,8 +1,8 @@
 # Project LAG: Latency-Aware Graph Analytics
 
-**Status:** Design Draft  
+**Status:** Implementation Complete (Alpha v1.0 Ready)  
 **Created:** 1-Dec-25  
-**Last Updated:** 7-Dec-25  
+**Last Updated:** 10-Dec-25  
 
 ---
 
@@ -3142,6 +3142,160 @@ When multiple edges leave the same node (siblings), they compete for the unconve
 - `notes.md` — Previous discussion summary (6 conceptual areas)
 - `data-fetch-refactoring-proposal.md` — Data retrieval architecture
 - `data-retrieval-detailed-flow.md` — Current fetch implementation
+
+---
+
+## Appendix E: Incremental Design Documents (7-Dec-25 to 10-Dec-25)
+
+During implementation, several incremental design documents were created to address specific issues that emerged during testing and refinement. These documents supplement the core design and should be consulted for detailed rationale on specific subsystems.
+
+All paths below are relative to `docs/current/project-lag/` unless otherwise noted.
+
+### E.1 LAG Statistics Reference (Canonical)
+
+**Location:** `graph-editor/public/docs/lag-statistics-reference.md`
+
+The canonical reference for LAG statistics and convolution logic. Includes:
+- Visual schematics of data flow from Amplitude to blended probabilities
+- Mathematical foundations for completeness, forecasting, and blending
+- Scenario and what-if interaction semantics
+- Detailed section-by-section breakdown of all LAG concepts
+
+**Key sections:**
+- §3: Lag fitting (μ, σ, t95)
+- §4: Completeness calculation
+- §5: p.forecast.mean and p∞ estimation
+- §6: Inbound-N convolution (p.n flow)
+- §7: Blend formula (p.mean)
+- §8: path_t95 calculation
+- §11: Scenario/what-if interactions
+
+### E.2 Inbound-N Ontology
+
+**Location:** `docs/current/project-lag/inbound-n-fix.md`
+
+Specifies the semantics for `p.n` (forecast population) and `p.forecast.k` (expected converters) on downstream latency edges:
+- Why raw anchor counts or partial arrivals are inadequate as edge population
+- The step-wise convolution model for propagating expected arrivals
+- Relationship between `p.n`, `p.mean`, and `p.forecast.k`
+
+**Implementation plan:** `docs/current/project-lag/inbound-n-implementation.md`
+
+### E.3 Forecast Blending Fix
+
+**Location:** `docs/current/project-lag/forecast-fix.md`
+
+Specifies the blend formula for `p.mean` from evidence and forecast:
+- The weighted average `p.mean = w × p.evidence + (1-w) × p.forecast`
+- Derivation of evidence weight from completeness, n, and baseline sample size
+- The `FORECAST_BLEND_LAMBDA` calibration constant
+- Fallback behaviour when no forecast baseline exists
+
+### E.4 LAG Fixes Implementation Plan
+
+**Location:** `docs/current/project-lag/lag-fixes-implementation-plan.md`
+
+Detailed implementation plan created 10-Dec-25 to address bugs discovered during testing:
+- Phase 0: Design-driven tests (T1–T6) encoding correct behaviour
+- Phase 1: Critical calculation fixes (effective age, analysis date)
+- Phase 2: Design alignment (p∞ fallback, anchor lag wiring)
+- Phase 3: Scenario correctness (active edges, path_t95)
+- Phase 4–5: Recency weighting verification and documentation
+
+**Status:** All phases complete as of 10-Dec-25.
+
+### E.5 Incremental Test Plan
+
+**Location:** `docs/current/project-lag/incremental-test-plan.md`
+
+Systematic review of test coverage against the LAG statistics reference, with a phased proposal for additional tests:
+- Phase A: Scenario / `conditional_p` testing (highest priority)
+- Phase B: Recency weighting E2E
+- Phase C: End-to-end golden path
+- Phase D: Logging / observability
+- Phase E: Complex topologies
+
+### E.6 Latency Topological Pass Refactor
+
+**Location:** `implemented/latency-topo-pass-implementation.md`
+
+Implementation plan for computing t95, path_t95, and completeness in a single topological pass:
+- Problem: completeness calculated before path_t95 exists
+- Solution: unified topo pass in `statisticalEnhancementService`
+- File responsibilities and change details
+
+### E.7 Window Fetch Planner
+
+**Location:** `implemented/window-fetch-planner-service.md` (high-level)  
+**Detailed design:** `implemented/window-fetch-planner-detailed-design.md`  
+**Implementation:** `implemented/window-fetch-planner-implementation-plan.md`
+
+Design for intelligent fetch planning based on cached slice coverage:
+- Slice family concepts and coverage analysis
+- Auto-read vs explicit fetch decisions
+- Maturity-aware refetch policy
+
+### E.8 Cohort & Window Query Fixes
+
+**Location:** `implemented/cohort-window-fixes.md`
+
+Specifies the concrete test and code changes for window/cohort evidence semantics:
+- `window()` evidence from dates inside requested window only
+- `cohort()` evidence from cohorts inside requested cohort window only
+- `p.forecast.*` may use best available baseline window
+
+### E.9 Auto-Fetch Behaviour
+
+**Location:** `implemented/auto-fetch-behaviour.md`  
+**Redux:** `implemented/auto-fetch-redux.md`
+
+Behavioural contract for when to auto-read from cache vs require explicit fetch:
+- Slice family definitions
+- Coverage determination rules
+- MECE and context handling
+
+### E.10 Retrieval Date Logic
+
+**Location:** `implemented/retrieval-date-logic-implementation-plan.md`  
+**Redux:** `implemented/retrieval-date-logic-redux.md`
+
+Analysis and implementation of retrieval windows, maturity, and staleness decisions:
+- t95 vs maturity_days usage
+- path_t95 for downstream edges
+- Horizon and caching decisions
+
+### E.11 Design Delta & Gap Analysis
+
+**Location:** `implemented/design-delta.md`
+
+Documents where implementation diverges from design, specifically:
+- Write-side caching and merge policy
+- Canonicalisation of `sliceDSL` and date bounds
+- What is implemented vs what remains
+
+### E.12 Scope Review Summary
+
+**Location:** `implemented/scope-review-summary.md`
+
+Documents which portions of design.md have been deeply reviewed:
+- ~40% of Phase C3 (Data Storage & Aggregation) reviewed
+- ~20% of Phase C4 (Edge Rendering) reviewed
+- Core DSL parsing, Amplitude adapter, UI rendering not yet reviewed
+
+### E.13 Residual Open Issues
+
+**Location:** `implemented/residual-open-issues.md`
+
+Synthesised from earlier issue trackers, verified against design:
+- Amplitude rate limits (monitor)
+- Mock Amplitude data generator (future)
+- Other resolved and deferred items
+
+### E.14 Lag Fixes Proposal (Superseded)
+
+**Location:** `lag-fixes.md`
+
+Earlier proposal for wiring fixes between param files, graph edges, and param packs. Largely superseded by `lag-fixes-implementation-plan.md` but contains useful context on the distinction between query-time and retrieval-time values.
 
 ---
 

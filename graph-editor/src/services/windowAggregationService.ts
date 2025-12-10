@@ -1110,6 +1110,11 @@ export function calculateIncrementalFetch(
 
 /**
  * Extended time-series point with optional latency data (for cohort mode)
+ * 
+ * For 3-step A→X→Y funnels:
+ *   - median_lag_days / mean_lag_days: X→Y transition time (edge latency)
+ *   - anchor_median_lag_days / anchor_mean_lag_days: A→X transition time (upstream lag)
+ *   - anchor_n: Cohort entry count at anchor (step 0)
  */
 export interface TimeSeriesPointWithLatency {
   date: string;
@@ -1118,6 +1123,10 @@ export interface TimeSeriesPointWithLatency {
   p: number;
   median_lag_days?: number;  // For cohort mode: X→Y median lag
   mean_lag_days?: number;    // For cohort mode: X→Y mean lag
+  // Anchor lag data for downstream completeness calculation
+  anchor_n?: number;                 // Cohort entry count at anchor (step 0)
+  anchor_median_lag_days?: number;   // A→X median lag (upstream transition time)
+  anchor_mean_lag_days?: number;     // A→X mean lag (upstream transition time)
 }
 
 /**
@@ -1213,6 +1222,18 @@ export function mergeTimeSeriesIntoParameter(
     ? sortedTimeSeries.map(p => p.mean_lag_days ?? 0) 
     : undefined;
   
+  // Extract anchor lag arrays if present (3-step funnels for downstream completeness)
+  const hasAnchorData = sortedTimeSeries.some(p => p.anchor_median_lag_days !== undefined);
+  const anchor_n_daily = hasAnchorData
+    ? sortedTimeSeries.map(p => p.anchor_n ?? 0)
+    : undefined;
+  const anchor_median_lag_days = hasAnchorData
+    ? sortedTimeSeries.map(p => p.anchor_median_lag_days ?? 0)
+    : undefined;
+  const anchor_mean_lag_days = hasAnchorData
+    ? sortedTimeSeries.map(p => p.anchor_mean_lag_days ?? 0)
+    : undefined;
+  
   // Helper: build canonical context suffix from slice dimensions
   const targetDims = extractSliceDimensions(normalizedSlice);
   const contextSuffix = targetDims ? `.${targetDims}` : '';
@@ -1228,18 +1249,27 @@ export function mergeTimeSeriesIntoParameter(
       return dims === targetDims;
     });
     
-    // 2) Build date → { n, k, median_lag, mean_lag } map, starting with existing data
+    // 2) Build date → { n, k, median_lag, mean_lag, anchor_* } map, starting with existing data
     const cohortDateMap = new Map<string, { 
       n: number; 
       k: number; 
       median_lag?: number;
       mean_lag?: number;
+      anchor_n?: number;
+      anchor_median_lag?: number;
+      anchor_mean_lag?: number;
     }>();
     
     // Add existing cohort data first (will be overwritten by new data for overlapping dates)
     if (existingCohortSlice?.dates && existingCohortSlice?.n_daily && existingCohortSlice?.k_daily) {
       const existingMedianLag = existingCohortSlice.median_lag_days;
       const existingMeanLag = existingCohortSlice.mean_lag_days;
+      // Cast to access anchor fields which may exist on the value
+      const existingWithAnchor = existingCohortSlice as ParameterValue & {
+        anchor_n_daily?: number[];
+        anchor_median_lag_days?: number[];
+        anchor_mean_lag_days?: number[];
+      };
       for (let i = 0; i < existingCohortSlice.dates.length; i++) {
         const ukDate = normalizeDate(existingCohortSlice.dates[i]);
         cohortDateMap.set(ukDate, {
@@ -1248,6 +1278,10 @@ export function mergeTimeSeriesIntoParameter(
           // Preserve per-date lag if stored, else use slice-level
           median_lag: Array.isArray(existingMedianLag) ? existingMedianLag[i] : existingMedianLag,
           mean_lag: Array.isArray(existingMeanLag) ? existingMeanLag[i] : existingMeanLag,
+          // Preserve anchor data if stored
+          anchor_n: existingWithAnchor.anchor_n_daily?.[i],
+          anchor_median_lag: existingWithAnchor.anchor_median_lag_days?.[i],
+          anchor_mean_lag: existingWithAnchor.anchor_mean_lag_days?.[i],
         });
       }
     }
@@ -1260,6 +1294,9 @@ export function mergeTimeSeriesIntoParameter(
         k: k_daily[i] ?? 0,
         median_lag: Array.isArray(median_lag_days) ? median_lag_days[i] : median_lag_days,
         mean_lag: Array.isArray(mean_lag_days) ? mean_lag_days[i] : mean_lag_days,
+        anchor_n: anchor_n_daily?.[i],
+        anchor_median_lag: anchor_median_lag_days?.[i],
+        anchor_mean_lag: anchor_mean_lag_days?.[i],
       });
     }
     
@@ -1273,7 +1310,11 @@ export function mergeTimeSeriesIntoParameter(
     const mergedK: number[] = [];
     const mergedMedianLag: (number | undefined)[] = [];
     const mergedMeanLag: (number | undefined)[] = [];
+    const mergedAnchorN: (number | undefined)[] = [];
+    const mergedAnchorMedianLag: (number | undefined)[] = [];
+    const mergedAnchorMeanLag: (number | undefined)[] = [];
     let hasAnyLagData = false;
+    let hasAnyAnchorData = false;
     
     for (const d of sortedDates) {
       const entry = cohortDateMap.get(d)!;
@@ -1283,7 +1324,11 @@ export function mergeTimeSeriesIntoParameter(
       // Always push (even undefined) to maintain array alignment with dates
       mergedMedianLag.push(entry.median_lag);
       mergedMeanLag.push(entry.mean_lag);
+      mergedAnchorN.push(entry.anchor_n);
+      mergedAnchorMedianLag.push(entry.anchor_median_lag);
+      mergedAnchorMeanLag.push(entry.anchor_mean_lag);
       if (entry.median_lag !== undefined) hasAnyLagData = true;
+      if (entry.anchor_median_lag !== undefined) hasAnyAnchorData = true;
     }
     
     // 5) Calculate aggregate totals from MERGED data
@@ -1324,6 +1369,7 @@ export function mergeTimeSeriesIntoParameter(
             age: Math.max(0, ageDays),
             median_lag_days: mergedMedianLag[i],
             mean_lag_days: mergedMeanLag[i],
+            anchor_median_lag_days: mergedAnchorMedianLag[i],
           });
         }
         
@@ -1382,6 +1428,10 @@ export function mergeTimeSeriesIntoParameter(
       // Include lag data if we have ANY lag data (filter out undefined values for type safety)
       ...(hasAnyLagData && { median_lag_days: mergedMedianLag.map(v => v ?? 0) }),
       ...(hasAnyLagData && { mean_lag_days: mergedMeanLag.map(v => v ?? 0) }),
+      // Include anchor lag data for downstream completeness calculation (3-step funnels)
+      ...(hasAnyAnchorData && { anchor_n_daily: mergedAnchorN.map(v => v ?? 0) }),
+      ...(hasAnyAnchorData && { anchor_median_lag_days: mergedAnchorMedianLag.map(v => v ?? 0) }),
+      ...(hasAnyAnchorData && { anchor_mean_lag_days: mergedAnchorMeanLag.map(v => v ?? 0) }),
       // LAG: Include recomputed forecast if available
       ...(recomputedForecast !== undefined && { forecast: recomputedForecast }),
       // LAG: Include recomputed latency summary if available, or fall back to passed-in latencySummary
@@ -1593,7 +1643,16 @@ export function parameterValueToCohortData(
   value: ParameterValue,
   queryDate: Date
 ): CohortData[] {
-  const { dates, n_daily, k_daily, median_lag_days, mean_lag_days } = value;
+  const {
+    dates,
+    n_daily,
+    k_daily,
+    median_lag_days,
+    mean_lag_days,
+    anchor_median_lag_days,
+  } = value as ParameterValue & {
+    anchor_median_lag_days?: number[];
+  };
 
   if (!dates || !n_daily || !k_daily) {
     return [];
@@ -1618,6 +1677,7 @@ export function parameterValueToCohortData(
       age: Math.max(0, ageDays), // Ensure non-negative
       median_lag_days: median_lag_days?.[i],
       mean_lag_days: mean_lag_days?.[i],
+      anchor_median_lag_days: anchor_median_lag_days?.[i],
     });
   }
 
@@ -1631,25 +1691,70 @@ export function parameterValueToCohortData(
  * that need to be combined. This function handles the combination by:
  * 1. Collecting all cohorts from all slices
  * 2. For overlapping dates/contexts, using the most recent retrieved_at
- * 3. Returning a unified CohortData array
+ * 3. Filtering to only cohorts within the query window (if provided)
+ * 4. Returning a unified CohortData array
  * 
  * @param values - Array of ParameterValue entries (cohort mode)
- * @param queryDate - The date to use for computing cohort ages
+ * @param queryDate - The date to use for computing cohort ages (typically cohort window end)
+ * @param cohortWindow - Optional cohort window to filter dates (only include dates within this range)
  * @returns Aggregated CohortData array
  */
 export function aggregateCohortData(
   values: ParameterValue[],
-  queryDate: Date
+  queryDate: Date,
+  cohortWindow?: { start: Date; end: Date }
 ): CohortData[] {
-  // Collect all cohorts from all values
-  const allCohorts: CohortData[] = [];
+  // IMPORTANT: Only use COHORT slices for LAG calculations!
+  // WINDOW slices have different n_daily/k_daily semantics and should NOT be used
+  // for computing completeness (which requires per-cohort population data).
+  //
+  // Forecast baseline (from WINDOW slices) is handled separately in enhanceGraphLatencies
+  // via the nBaseline calculation which looks at window slices directly.
+  
+  const cohortValues = values.filter(v => {
+    const sliceDSL = (v as any).sliceDSL ?? '';
+    const isCohort = sliceDSL.includes('cohort(');
+    const isWindow = sliceDSL.includes('window(') && !isCohort;
+    // Only include cohort slices for LAG calculations
+    return isCohort && !isWindow;
+  });
+  
+  console.log('[LAG_DEBUG] aggregateCohortData filtering:', {
+    totalValues: values.length,
+    cohortValues: cohortValues.length,
+    cohortWindow: cohortWindow ? {
+      start: cohortWindow.start.toISOString().split('T')[0],
+      end: cohortWindow.end.toISOString().split('T')[0],
+    } : 'none (using all)',
+    sliceDSLs: values.map((v: any) => v.sliceDSL?.substring(0, 50) ?? 'none'),
+  });
+  
+  // Collect all cohorts from COHORT values only
   const dateMap = new Map<string, { cohort: CohortData; retrieved_at: string }>();
 
-  for (const value of values) {
+  for (const value of cohortValues) {
     const cohorts = parameterValueToCohortData(value, queryDate);
     const retrievedAt = value.data_source?.retrieved_at || '';
 
     for (const cohort of cohorts) {
+      // Filter by cohort window if provided
+      if (cohortWindow) {
+        const cohortDate = parseDate(cohort.date);
+        if (cohortDate < cohortWindow.start || cohortDate > cohortWindow.end) {
+          continue; // Skip cohorts outside the query window
+        }
+      }
+      
+      // Sanity check: k should never exceed n
+      if (cohort.k > cohort.n) {
+        console.warn('[LAG_DEBUG] INVALID COHORT: k > n!', {
+          date: cohort.date,
+          n: cohort.n,
+          k: cohort.k,
+          sliceDSL: (value as any).sliceDSL,
+        });
+      }
+      
       const existing = dateMap.get(cohort.date);
       
       // Keep the more recent data for each date
@@ -1663,6 +1768,24 @@ export function aggregateCohortData(
   const result = Array.from(dateMap.values())
     .map(item => item.cohort)
     .sort((a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime());
+  
+  console.log('[LAG_DEBUG] aggregateCohortData result:', {
+    inputCount: values.length,
+    cohortSliceCount: cohortValues.length,
+    outputCohortCount: result.length,
+    filteredByWindow: !!cohortWindow,
+    dateRange: result.length > 0 
+      ? `${result[0].date} to ${result[result.length - 1].date}`
+      : 'none',
+    totalN: result.reduce((sum, c) => sum + c.n, 0),
+    totalK: result.reduce((sum, c) => sum + c.k, 0),
+    sampleCohorts: result.slice(0, 3).map(c => ({
+      date: c.date,
+      n: c.n,
+      k: c.k,
+      kLessThanN: c.k <= c.n,
+    })),
+  });
 
   return result;
 }

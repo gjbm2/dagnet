@@ -1539,6 +1539,23 @@ class DataOperationsService {
         targetSlice
       );
       
+      // Log forecast data if present
+      const latestValue = aggregatedData?.values?.[aggregatedData.values.length - 1];
+      if (latestValue?.forecast !== undefined) {
+        sessionLogService.addChild(logOpId, 'info', 'FORECAST_ATTACHED',
+          `Forecast: ${(latestValue.forecast * 100).toFixed(1)}%, evidence: ${((latestValue.evidence?.mean ?? latestValue.k / latestValue.n) * 100).toFixed(1)}%`,
+          undefined,
+          {
+            forecastMean: latestValue.forecast,
+            evidenceMean: latestValue.evidence?.mean,
+            blendedMean: latestValue.mean,
+            completeness: latestValue.latency?.completeness,
+            n: latestValue.n,
+            k: latestValue.k,
+          }
+        );
+      }
+      
       // Call UpdateManager to transform data
       // Use validateOnly: true to get changes without mutating targetEdge in place
       // (we apply changes ourselves to nextGraph after cloning)

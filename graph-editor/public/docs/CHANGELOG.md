@@ -1,7 +1,7 @@
 # DagNet Release Notes
 
 ## Version 1.0.0-alpha
-**Released:** 9-Dec-25
+**Released:** 10-Dec-25
 
 ### 🚀 Project LAG: The Temporal Shift
 
@@ -18,7 +18,12 @@ Previously, edges were instantaneous transitions ($P(B|A)$). With Project LAG, e
 - **Daily Aggregation**: Automatically aggregates daily time-series data into windowed evidence ($n, k$).
 - **Latency Beads**: New edge visualisation showing median lag days and cohort completeness.
 - **Evidence vs Forecast**: Parameters now track both observed evidence ($p_{evidence}$) and projected mature probability ($p_{\infty}$).
+- **Blended Probability**: Intelligent weighting of evidence and forecast based on completeness and sample size.
+- **Inbound-N Convolution**: Forecast population (`p.n`) propagates step-wise through the graph.
 - **Time-Series Storage**: Parameter files now store full daily histories (`n_daily`, `k_daily`) for historical analysis.
+
+#### Documentation
+- **LAG Statistics Reference**: Comprehensive technical reference available at `Help → Documentation → LAG Statistics Reference`.
 
 ### ⚡ Workflow Accelerators
 
@@ -43,188 +48,59 @@ To support the rapid iteration required for temporal modelling, we've overhauled
 - **Form Editor**: Performance optimisations for large schemas.
 
 ### ⚠️ Known Issues (Alpha)
-- Latency convolution (projecting delays downstream) is in preview.
+- Scenario interactions with LAG (conditional probabilities, case allocations) have limited test coverage; treat as preview.
 - Very large graphs (>50 nodes) may see render lag during drag operations.
 
 ---
 
-## Version 0.99.19b
-**Released:** 9-Dec-25
+## Version 0.99.x Series (1-Dec to 9-Dec-25)
+**Pre-Alpha Stabilisation**
 
-1.0 pre-release (drag & drop, exclude test users features)
+Final push towards 1.0-alpha, focusing on LAG infrastructure and workflow polish:
 
----
+### Features
+- **Drag & Drop**: Nodes and parameters from Navigator to Canvas
+- **Live Scenarios**: Real-time scenario switching with param pack updates
+- **Graph Issues Viewer**: Visual display of graph integrity problems
+- **"Where Used" Feature**: Track parameter and node references across files
+- **Sample Files**: Production-quality example data for onboarding
 
-## Version 0.99.15b
-**Released:** December 04, 2025
-
-Proper sample files
-
----
-
-## Version 0.99.13b
-**Released:** December 03, 2025
-
-Rebalancing regression fix
-
----
-
-## Version 0.99.12b
-**Released:** December 03, 2025
-
-Finally: fixes to conditional ps (among other things)
+### Fixes
+- Conditional probability handling completely overhauled
+- MSMDC query generation fixes
+- Python schema parity issues resolved
+- Data retrieval pipeline stabilised (multiple rounds of fixes)
 
 ---
 
-## Version 0.99.11b
-**Released:** December 03, 2025
+## Version 0.98.x Series (27-Nov to 30-Nov-25)
+**Super Funnels & Data Pipeline**
 
-GRaph issues viewer
+Major improvements to Amplitude query generation:
 
----
+### Features
+- **Super Funnels**: Automatic dual-query execution for complex parent nodes
+- **n_query Logic**: Handles non-discriminable parent node situations
+- **Session Logging**: DAS run visibility for debugging
 
-## Version 0.99.10b
-**Released:** December 03, 2025
-
-Fixes to MSMDC
-
----
-
-## Version 0.99.9b
-**Released:** December 03, 2025
-
-Live scenarios
+### Fixes
+- Extensive data fetching bug fixes
+- Menu consolidation and UI cleanup
 
 ---
 
-## Version 0.99.8b
-**Released:** December 02, 2025
+## Version 0.96–0.97 Series (26-Nov to 27-Nov-25)
+**Analytics & Conditional Queries**
 
-Fixed py Schema issues which was preventing query generation
-
----
-
-## Version 0.99.6b
-**Released:** December 02, 2025
-
-Where used feature
+### Features
+- **Analytics v2.0**: Redesigned analytics panel
+- **Super Funnel Mode**: Upstream `visited()` conditional_p DSL queries
+- Edge conditionality through query DSL (no `excludes()` terms)
 
 ---
 
-## Version 0.99.5b
-**Released:** December 02, 2025
-
-Lots of further data retrieval fixes; sketch of lag convolution
-
----
-
-## Version 0.99.3b
-**Released:** December 01, 2025
-
-Fetch logic bug fixes
-
----
-
-## Version 0.99.1b
-**Released:** December 01, 2025
-
-Significantly cleared up messes in data retrieval
-
----
-
-## Version 0.99.0b
-**Released:** November 30, 2025
-
-Menu clear up, various fetch fixes (some still outtanding), chevron-a-go-go
-
----
-
-## Version 0.98.6b
-**Released:** November 29, 2025
-
-Many fixes of fetching behaviour which was buggy af
-
----
-
-## Version 0.98.2b
-**Released:** November 28, 2025
-
-Fixed algo
-
----
-
-## Version 0.98.1b
-**Released:** November 28, 2025
-
-Added n_query logic to accommodate complex non-discriminaable parent node situations
-
----
-
-## Version 0.98.0b
-**Released:** November 27, 2025
-
-Super funnels now run dual queries automatically to aggregate for incipient N.
-
----
-
-## Version 0.97.1b
-**Released:** November 27, 2025
-
-Add Session logging for DAS runs
-
----
-
-## Version 0.97.0b
-**Released:** November 27, 2025
-
-Super-funnels now recompile without excludes() terms, allowing direct edge conditionality through the query dsl
-
----
-
-## Version 0.96.3-beta
-**Released:** November 27, 2025
-
-Ezra bugs: added new 'super funnel' mode for upstream visited() conditional_p dsl queries
-
----
-
-## Version 0.96b
-**Released:** November 26, 2025
-
-Analytics v2.0 up and running
-
----
-
-## Version 0.95.5-beta
-**Released:** November 25, 2025
-
-Repo and dirty fixes. Reduced verbose logs
-
----
-
-## Version 0.95.4-beta
-**Released:** November 25, 2025
-
-Commit bug fix
-
----
-
-## Version 0.95.3-beta
-**Released:** November 25, 2025
-
-Commit bug fix
-
----
-
-## Version 0.95.2-beta
-**Released:** November 25, 2025
-
-Logging & full data retrieval feature.
-
----
-
-## Version 0.95b
-**Released:** November 25, 2025
+## Version 0.95b (25-Nov-25)
+**Contexts & Time Windows**
 
 ### 🎯 Major Features
 - **Contexts v1.0**: Full context support for data segmentation
@@ -232,91 +108,42 @@ Logging & full data retrieval feature.
   - Use `context()` in DSL to filter by single values
   - Use `contextAny()` to aggregate multiple values
   - MECE partition support with configurable `otherPolicy`
-  - Weighted aggregation across context segments
 - **Time Windows**: `window()` function for time-bounded queries
   - Relative windows: `window(-30d:)` for last 30 days
   - Absolute windows: `window(2025-01-01:2025-03-31)`
-- **SHA-Based Commit Detection**: More reliable detection of uncommitted changes
-  - Compares local content SHA to stored remote SHA
-  - Works reliably across page refreshes
+- **SHA-Based Commit Detection**: Reliable uncommitted change detection
 
 ### 🐛 Bug Fixes
-- Fixed commit modal not showing all changed files after page refresh
-- Fixed duplicate files appearing in commit modal
-
-We are nearing RC1!
+- Commit modal reliability improvements
+- Logging and verbose output reduction
 
 ---
 
-## Version 0.94.2-beta
-**Released:** November 24, 2025
+## Version 0.93–0.94 Series (21-Nov to 24-Nov-25)
+**Data Pipeline & Node Features**
 
-Cleaned up project significantly. Fixes. 
+### Features
+- **Images & URLs on Nodes**: Visual node customisation
+- **Multi-Parental Nodes**: Amplitude retrieval for complex graph structures
 
----
-
-## Version 0.94.1-beta
-**Released:** November 24, 2025
-
-Many registry and git fixes
-
----
-
-## Version 0.94b
-**Released:** November 23, 2025
-
-Images and URLs on nodes
+### Fixes
+- Registry and git synchronisation improvements
+- Caching signature cleanup
+- Numerous data pipeline bugs resolved
 
 ---
 
-## Version 0.93b
-**Released:** November 21, 2025
+## Version 0.92.x Series (19-Nov to 20-Nov-25)
+**Google Sheets Integration**
 
-Fairly significant debugging. Amplitude retrieve now works for complex multi-parental nodes. Also resolved a number of dsync defects, cleaned up caching signatures and fixed a ton of smaller data pipeline bugs. 
+### Features
+- **Google Sheets v2**: Sophisticated programmatic retrieval with param pack labelling
+- **Reindexing**: Node and edge param pack copying
+- **Form Editor**: Improved aesthetics
 
----
-
-## Version 0.92.4-beta
-**Released:** November 20, 2025
-
-Fixed Google sheets, Added reindexing and copying of node and edge param packs.
-
----
-
-## Version 0.92.1-beta
-**Released:** November 20, 2025
-
-Prettier forms. Just for you, Ezra.
-
----
-
-## Version 0.92b
-**Released:** November 20, 2025
-
-Fairly significant update to allow much more sophisticated programmatic retrieval from Google Sheets -- makes it possible to pull in data ranges with param packs properly labelled.
-
-Also fixed a whole spate of bugs related to file interactions and event management. Still nea better UI schema for events and params, but... progress.
-
----
-
-## Version 0.91.10-beta
-**Released:** November 19, 2025
-
-Bug: file registries weren't updating properly. Now resolved.
-
----
-
-## Version 0.91.9-beta
-**Released:** November 19, 2025
-
-Added _this_ changelog. Meta.
-
----
-
-## Version 0.91.7-beta
-**Released:** November 19, 2025
-
-Fixing init stuff to make it all nice & easy to get started. So never say I don't do nice stuff for you.
+### Fixes
+- File registry update bugs
+- File interaction and event management issues
 
 ---
 

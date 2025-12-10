@@ -438,9 +438,19 @@ connections:
         - name: mode
           jsonata: "$context.mode ? $context.mode : 'aggregate'"
         # Build time_series with per-day n/k/p and latency data
-        # Build time_series with per-day n/k/p and latency data
         # NOTE: Amplitude returns -1 for lag when there are no converters on that day.
         # We convert -1 to null to avoid tiny negative numbers in our data.
+        #
+        # For 3-step A→X→Y funnels (cohort mode with anchor):
+        #   - from_step_index = 1 (X), to_step_index = 2 (Y)
+        #   - median_lag_days at to_step_index = A→Y transition time (used for X→Y lag fit)
+        #   - anchor_median_lag_days at from_step_index = A→X transition time
+        #     (used to adjust effective age for downstream completeness calculation)
+        #   - anchor_n at step 0 = anchor cohort entry count
+        #
+        # For 2-step X→Y funnels (no anchor):
+        #   - from_step_index = 0, to_step_index = 1
+        #   - anchor_* values will be 0/null (first latency edge, no upstream)
         - name: time_series
           jsonata: |
             (
@@ -457,13 +467,18 @@ connections:
                   $avgRow := $avgLags[$idx];
                   $medianMs := $medianRow ? $medianRow[$toIdx] : null;
                   $avgMs := $avgRow ? $avgRow[$toIdx] : null;
+                  $anchorMedianMs := $medianRow ? $medianRow[$fromIdx] : null;
+                  $anchorAvgMs := $avgRow ? $avgRow[$fromIdx] : null;
                   {
                     "date": $dates[$idx],
                     "n": $dayData[$fromIdx],
                     "k": $dayData[$toIdx],
                     "p": $dayData[$fromIdx] > 0 ? $dayData[$toIdx] / $dayData[$fromIdx] : 0,
                     "median_lag_days": $medianMs != null and $medianMs > 0 ? $medianMs / 86400000 : null,
-                    "mean_lag_days": $avgMs != null and $avgMs > 0 ? $avgMs / 86400000 : null
+                    "mean_lag_days": $avgMs != null and $avgMs > 0 ? $avgMs / 86400000 : null,
+                    "anchor_n": $dayData[0],
+                    "anchor_median_lag_days": $anchorMedianMs != null and $anchorMedianMs > 0 ? $anchorMedianMs / 86400000 : null,
+                    "anchor_mean_lag_days": $anchorAvgMs != null and $anchorAvgMs > 0 ? $anchorAvgMs / 86400000 : null
                   }
                 )}) : []
             )
@@ -487,6 +502,21 @@ connections:
           jsonata: |
             (
               $ms := avg_trans_times[$number($queryPayload.to_step_index)];
+              $ms != null and $ms > 0 ? $ms / 86400000 : null
+            )
+        # === Anchor LAG (A→X transition for downstream edges) ===
+        # For 3-step funnels, extract A→X lag at from_step_index
+        # Used by completeness calculation to adjust effective cohort ages
+        - name: anchor_median_lag_days
+          jsonata: |
+            (
+              $ms := median_trans_times[$number($queryPayload.from_step_index)];
+              $ms != null and $ms > 0 ? $ms / 86400000 : null
+            )
+        - name: anchor_mean_lag_days
+          jsonata: |
+            (
+              $ms := avg_trans_times[$number($queryPayload.from_step_index)];
               $ms != null and $ms > 0 ? $ms / 86400000 : null
             )
         # Extract histogram for the X→Y transition (for lag CDF fitting)

@@ -650,7 +650,8 @@ export async function fetchItem(
 export function computeAndApplyPathT95(
   graph: Graph,
   setGraph: (g: Graph | null) => void,
-  logOpId?: string
+  logOpId?: string,
+  whatIfDSL?: string
 ): void {
   if (!graph?.edges?.length) return;
   
@@ -678,7 +679,8 @@ export function computeAndApplyPathT95(
   };
   
   // Get active edges (edges with non-zero probability)
-  const activeEdges = getActiveEdges(graphForPath);
+  // Pass whatIfDSL for scenario-aware active edge determination (B4 fix)
+  const activeEdges = getActiveEdges(graphForPath, whatIfDSL);
   
   console.log('[fetchDataService] path_t95 prep:', {
     nodeCount: graphForPath.nodes.length,
@@ -840,8 +842,23 @@ export function computeAndApplyInboundN(
   
   if (inboundNMap.size === 0) {
     console.log('[fetchDataService] inbound-n computation returned empty map');
+    // IMPORTANT: Even if inbound-n is empty, we must still call setGraph
+    // to persist any LAG values that were applied to the graph before this function was called.
+    // Without this, LAG-enhanced p.mean values would be lost when inbound-n returns empty.
+    setGraph({ ...graph });
     return;
   }
+  
+  // DEBUG: Log p.mean values BEFORE inbound-n (should have LAG values)
+  const latencyEdgesInput = graph.edges?.filter((e: any) => e.p?.latency?.completeness !== undefined) || [];
+  console.log('[fetchDataService] computeAndApplyInboundN INPUT graph:', {
+    latencyEdgeCount: latencyEdgesInput.length,
+    sample: latencyEdgesInput.slice(0, 3).map((e: any) => ({
+      id: e.uuid || e.id,
+      pMean: e.p?.mean,
+      completeness: e.p?.latency?.completeness,
+    })),
+  });
   
   // Apply to in-memory graph (clone to trigger React update)
   const updatedGraph = { ...graph };
@@ -866,6 +883,17 @@ export function computeAndApplyInboundN(
       };
     }
     return edge;
+  });
+  
+  // DEBUG: Log p.mean values AFTER inbound-n (should still have LAG values)
+  const latencyEdgesOutput = updatedGraph.edges?.filter((e: any) => e.p?.latency?.completeness !== undefined) || [];
+  console.log('[fetchDataService] computeAndApplyInboundN OUTPUT graph (calling setGraph):', {
+    latencyEdgeCount: latencyEdgesOutput.length,
+    sample: latencyEdgesOutput.slice(0, 3).map((e: any) => ({
+      id: e.uuid || e.id,
+      pMean: e.p?.mean,
+      completeness: e.p?.latency?.completeness,
+    })),
   });
   
   setGraph(updatedGraph);
@@ -1126,11 +1154,25 @@ export async function fetchItems(
             aggregateLatencyStats,
           };
           
+          // Use the *analysis date* (now) for age calculations.
+          // Cohort dates come from Amplitude; as time passes, cohorts age and
+          // completeness should converge towards 1 for long-ago cohorts,
+          // independent of the cohort() window bounds.
+          const queryDateForLAG = new Date();
+          
+          // Pass cohort window so LAG uses ONLY cohorts from the query window
+          // This ensures completeness reflects "what fraction of THIS cohort's conversions have arrived"
+          // rather than mixing in historical cohort data.
+          const cohortWindowForLAG = (cohortStart && cohortEnd) 
+            ? { start: cohortStart, end: cohortEnd }
+            : undefined;
+          
           const lagResult = enhanceGraphLatencies(
             finalGraph as GraphForPath,
             paramLookup,
-            new Date(),
-            lagHelpers
+            queryDateForLAG,
+            lagHelpers,
+            cohortWindowForLAG
           );
           
           console.log('[fetchDataService] LAG enhancement result:', {
@@ -1150,6 +1192,18 @@ export async function fetchItems(
           if (lagResult.edgeValues.length > 0 && finalGraph?.edges) {
             const updateManager = new UpdateManager();
             
+            // DEBUG: Log p.mean values BEFORE LAG application
+            console.log('[fetchDataService] BEFORE applyBatchLAGValues:', {
+              edgeMeans: lagResult.edgeValues.slice(0, 3).map(ev => {
+                const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+                return {
+                  id: ev.edgeUuid,
+                  currentMean: edge?.p?.mean,
+                  targetBlendedMean: ev.blendedMean,
+                };
+              }),
+            });
+            
             finalGraph = updateManager.applyBatchLAGValues(
               finalGraph,
               lagResult.edgeValues.map(ev => ({
@@ -1160,6 +1214,19 @@ export async function fetchItems(
                 evidence: ev.evidence,
               }))
             );
+            
+            // DEBUG: Log p.mean values AFTER LAG application
+            console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
+              edgeMeans: lagResult.edgeValues.slice(0, 3).map(ev => {
+                const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+                return {
+                  id: ev.edgeUuid,
+                  newMean: edge?.p?.mean,
+                  expectedBlendedMean: ev.blendedMean,
+                  match: edge?.p?.mean === Math.round((ev.blendedMean ?? 0) * 1000) / 1000,
+                };
+              }),
+            });
           }
           
           if (batchLogId) {
@@ -1169,14 +1236,68 @@ export async function fetchItems(
               { 
                 edgesProcessed: lagResult.edgesProcessed, 
                 edgesWithLAG: lagResult.edgesWithLAG,
+                queryDate: queryDateForLAG.toISOString().split('T')[0],
                 sample: lagResult.edgeValues.slice(0, 3).map(v => ({
                   id: v.edgeUuid,
                   t95: v.latency.t95.toFixed(1),
                   pathT95: v.latency.path_t95.toFixed(1),
                   completeness: (v.latency.completeness * 100).toFixed(1) + '%',
+                  forecastMean: v.forecast?.mean?.toFixed(3),
+                  evidenceMean: v.evidence?.mean?.toFixed(3),
+                  blendedMean: v.blendedMean?.toFixed(3),
                 })),
               }
             );
+            
+            // Add detailed debug entries for each edge (for debugging completeness calc)
+            for (const v of lagResult.edgeValues) {
+              if (v.debug) {
+                // Check for data quality issues
+                const hasKGreaterThanN = v.debug.sampleCohorts.some(c => c.k > c.n);
+                const dataQuality = hasKGreaterThanN ? '⚠️ k>n detected!' : '✓';
+                const windowInfo = v.debug.cohortWindow || 'all history';
+                
+                // Build anchor lag indicator for message
+                const anchorLagInfo = v.debug.anchorMedianLag > 0
+                  ? ` anchorLag=${v.debug.anchorMedianLag.toFixed(1)}d`
+                  : v.debug.cohortsWithAnchorLag === 0 ? ' (no anchor data)' : '';
+                
+                sessionLogService.addChild(batchLogId, 'info', 'LAG_CALC_DETAIL',
+                  `${v.edgeUuid.substring(0, 8)}...: completeness=${(v.latency.completeness * 100).toFixed(1)}%${anchorLagInfo} ${dataQuality}`,
+                  `Window: ${windowInfo} → ${v.debug.cohortCount} cohorts, n=${v.debug.totalN}, k=${v.debug.totalK}`,
+                  {
+                    edgeId: v.edgeUuid,
+                    queryDate: v.debug.queryDate,
+                    cohortWindow: v.debug.cohortWindow || 'all history (no filter)',
+                    inputSlices: {
+                      cohort: v.debug.inputCohortSlices,
+                      window: v.debug.inputWindowSlices,
+                    },
+                    cohortCount: v.debug.cohortCount,
+                    rawAgeRange: v.debug.rawAgeRange,
+                    adjustedAgeRange: v.debug.adjustedAgeRange,
+                    anchorMedianLag: v.debug.anchorMedianLag?.toFixed(2) ?? '0 (first edge)',
+                    cohortsWithAnchorLag: `${v.debug.cohortsWithAnchorLag ?? 0}/${v.debug.cohortCount}`,
+                    pathT95: v.latency.path_t95.toFixed(1),
+                    mu: v.debug.mu.toFixed(3),
+                    sigma: v.debug.sigma.toFixed(3),
+                    totalN: v.debug.totalN,
+                    totalK: v.debug.totalK,
+                    dataQuality: hasKGreaterThanN ? 'ERROR: k > n in some cohorts' : 'OK',
+                    sampleCohorts: v.debug.sampleCohorts.map(c => ({
+                      date: c.date,
+                      rawAge: c.rawAge,
+                      adjAge: c.adjustedAge,
+                      anchorLag: c.anchorLag?.toFixed(1) ?? '-',
+                      n: c.n,
+                      k: c.k,
+                      kOk: c.k <= c.n ? '✓' : '⚠️',
+                      cdf: (c.cdf * 100).toFixed(1) + '%',
+                    })),
+                  }
+                );
+              }
+            }
           }
         }
         

@@ -389,6 +389,10 @@ export type ScenarioVisibilityMode = 'f+e' | 'f' | 'e';
 
 /**
  * Time-series data point (daily breakdown)
+ * 
+ * For 3-step A→X→Y funnels:
+ *   - median_lag_days / mean_lag_days: X→Y transition time (edge latency)
+ *   - anchor_n / anchor_median_lag_days / anchor_mean_lag_days: A→X upstream data
  */
 export interface TimeSeriesPoint {
   date: string; // YYYY-MM-DD
@@ -397,6 +401,10 @@ export interface TimeSeriesPoint {
   p: number;
   median_lag_days?: number;  // For cohort mode: X→Y median lag (days)
   mean_lag_days?: number;    // For cohort mode: X→Y mean lag (days)
+  // Anchor data for downstream completeness (3-step funnels)
+  anchor_n?: number;                 // Cohort entry count at anchor (step 0)
+  anchor_median_lag_days?: number;   // A→X median lag (upstream transition time)
+  anchor_mean_lag_days?: number;     // A→X mean lag (upstream transition time)
 }
 
 /**
