@@ -1,11 +1,23 @@
 # Project LAG: Implementation Plan
 
-**Status:** Active
-**Based on:** `docs/current/project-lag/design.md`
+**Status:** Complete (Alpha v1.0)  
+**Based on:** `docs/current/project-lag/implemented/design.md`  
+**Statistics Reference:** `graph-editor/public/docs/lag-statistics-reference.md`
 
 This document outlines the phased implementation plan for Project LAG (Latency-Aware Graph Analytics).
 
-*** Ref. status.md for progress. ***
+**Ref. status.md for detailed progress tracking.**
+
+### Related Incremental Design Documents
+
+The following documents were created during implementation to address specific issues. See `design.md` Appendix E for summaries:
+
+- `stats-convolution-schematic.md` → Published as `lag-statistics-reference.md`
+- `lag-fixes-implementation-plan.md` — TDD-based fixes for LAG statistics (10-Dec-25)
+- `inbound-n-fix.md` — Forecast population semantics
+- `inbound-n-implementation.md` — Inbound-N implementation details
+- `forecast-fix.md` — Blend formula specification
+- `incremental-test-plan.md` — Test coverage roadmap
 
 ---
 

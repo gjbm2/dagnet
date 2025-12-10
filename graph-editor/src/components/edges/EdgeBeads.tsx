@@ -10,7 +10,7 @@ import { EdgeLabelRenderer } from 'reactflow';
 import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
-import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
+import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_HEIGHT, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
 
 // Helper to extract text content from React node for SVG textPath
 function extractTextFromReactNode(node: React.ReactNode): string {
@@ -206,7 +206,6 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   
   // In Sankey view, beads follow the top edge spline of the ribbon
   // Apply a small inward offset to position beads just below the top line
-  const BEAD_HEIGHT = 14; // Match LOZENGE_HEIGHT
   const VERTICAL_PADDING = 8; // Margin below the top edge
   let sankeyVerticalOffset = 0;
   
@@ -241,15 +240,14 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       // Create unique path ID for this bead's textPath
       const beadPathId = `${pathId}-bead-${bead.index}`;
       
-      // Calculate lozenge dimensions
-      const LOZENGE_HEIGHT = 14; // Match collapsed bead diameter
+      // Calculate lozenge dimensions (BEAD_HEIGHT from constants)
       const LOZENGE_PADDING = 4; // Padding on each side (increased for larger text)
       const TEXT_TO_ICON_GAP = 8; // ← THIS controls spacing between text and first icon
       // Measure text width accurately using canvas
       const measuredTextWidth = measureTextWidth(textContent, BEAD_FONT_SIZE, '500');
-      // Add space for plug icon if present (~10px) and zap-off icon if present (~10px)
-      const plugIconWidth = hasPlug ? 10 : 0;
-      const zapOffIconWidth = hasOverride ? 10 : 0;
+      // Add space for icons (sized to match font)
+      const plugIconWidth = hasPlug ? BEAD_FONT_SIZE : 0;
+      const zapOffIconWidth = hasOverride ? BEAD_FONT_SIZE : 0;
       // Treat this as the FULL lozenge length along the path
       const lozengeLength = (measuredTextWidth + LOZENGE_PADDING * 2 + plugIconWidth + zapOffIconWidth) * 1;
       
@@ -498,7 +496,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           <use
             href={`#${beadPathId}`}
             stroke={bead.backgroundColor}
-            strokeWidth={LOZENGE_HEIGHT}
+            strokeWidth={BEAD_HEIGHT}
             strokeLinecap="round"
             strokeDasharray={`${lozengeLength} ${pathLength}`}
             strokeDashoffset={-strokeStartDistance}
@@ -547,21 +545,21 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
               style={{ pointerEvents: 'none' }}
             >
               <foreignObject
-                x={-5}
-                y={-5}
-                width={10}
-                height={10}
+                x={-BEAD_FONT_SIZE / 2}
+                y={-BEAD_FONT_SIZE / 2}
+                width={BEAD_FONT_SIZE}
+                height={BEAD_FONT_SIZE}
                 style={{ overflow: 'visible' }}
               >
                 <div style={{ 
                   display: 'flex', 
                   alignItems: 'center', 
                   justifyContent: 'center',
-                  width: '10px',
-                  height: '10px'
+                  width: `${BEAD_FONT_SIZE}px`,
+                  height: `${BEAD_FONT_SIZE}px`
                 }}>
                   <Plug 
-                    size={10} 
+                    size={BEAD_FONT_SIZE} 
                     strokeWidth={2}
                     color="#FFFFFF"
                     style={{ 
@@ -594,21 +592,21 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
                 style={{ pointerEvents: 'none' }}
               >
                 <foreignObject
-                  x={-5}
-                  y={-5}
-                  width={10}
-                  height={10}
+                  x={-BEAD_FONT_SIZE / 2}
+                  y={-BEAD_FONT_SIZE / 2}
+                  width={BEAD_FONT_SIZE}
+                  height={BEAD_FONT_SIZE}
                   style={{ overflow: 'visible' }}
                 >
                   <div style={{ 
                     display: 'flex', 
                     alignItems: 'center', 
                     justifyContent: 'center',
-                    width: '10px',
-                    height: '10px'
+                    width: `${BEAD_FONT_SIZE}px`,
+                    height: `${BEAD_FONT_SIZE}px`
                   }}>
                     <ZapOff 
-                      size={10} 
+                      size={BEAD_FONT_SIZE} 
                       strokeWidth={2}
                       color="#FFFFFF"
                       style={{ 
@@ -631,7 +629,6 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     } else {
       // Collapsed bead: use the SAME geometry path as lozenges, but with no content width.
       // Conceptually: WIDTH = BASE_WIDTH (caps + padding), CONTENT_WIDTH = 0.
-      const LOZENGE_HEIGHT = 14;
       const LOZENGE_PADDING = 0;
       const beadPathId = `${pathId}-bead-collapsed-${bead.index}`;
       
@@ -702,7 +699,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           <use
             href={`#${beadPathId}`}
             stroke={bead.backgroundColor}
-            strokeWidth={LOZENGE_HEIGHT}
+            strokeWidth={BEAD_HEIGHT}
             strokeLinecap="round"
             strokeDasharray={`${strokeLength} ${pathLength}`}
             strokeDashoffset={-strokeStartDistance}

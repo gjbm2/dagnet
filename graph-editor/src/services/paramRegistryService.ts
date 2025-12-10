@@ -65,8 +65,11 @@ export interface ParameterValue {
   cohort_to?: string;   // UK date (d-MMM-yy) - cohort entry end
   
   // Latency data arrays (cohort mode) - parallel to dates[]
-  median_lag_days?: number[]; // X→Y median lag per cohort day
-  mean_lag_days?: number[];   // X→Y mean lag per cohort day
+  median_lag_days?: number[];        // X→Y median lag per cohort day
+  mean_lag_days?: number[];          // X→Y mean lag per cohort day
+  anchor_n_daily?: number[];         // Anchor A population per cohort day
+  anchor_median_lag_days?: number[]; // A→(source) cumulative median lag per cohort day
+  anchor_mean_lag_days?: number[];   // A→(source) cumulative mean lag per cohort day
   
   // Aggregate latency summary (cohort mode)
   latency?: {

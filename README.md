@@ -1,8 +1,10 @@
 # DagNet - Directed Acyclic Graph Network Editor
 
-**Version 1.0.0-alpha** | [Changelog](graph-editor/public/docs/CHANGELOG.md)
+**Version 1.0.0-alpha** | [Changelog](graph-editor/public/docs/CHANGELOG.md) | [About](graph-editor/public/docs/about.md)
 
 A web-based visual editor for creating and analyzing directed acyclic graphs (DAGs) with support for conditional probabilities, file-backed parameters, cohort-based analytics, and latency-aware forecasting.
+
+> 📖 **New to DagNet?** See [About DagNet](graph-editor/public/docs/about.md) for an overview of capabilities and the [User Guide](graph-editor/public/docs/user-guide.md) to get started. Full documentation is in [`graph-editor/public/docs/`](graph-editor/public/docs/).
 
 ## Quick Start
 
@@ -161,6 +163,7 @@ The 1.0 release introduces **Latency-Aware Graphs** — a shift from static snap
 
 User-facing documentation accessible both in the app and on GitHub:
 
+- **[About DagNet](graph-editor/public/docs/about.md)** - Project overview, capabilities, and independent assessment
 - [User Guide](graph-editor/public/docs/user-guide.md) - Getting started and core concepts
 - [Contexts](graph-editor/public/docs/contexts.md) - Data segmentation by channel, device, browser, etc.
 - [Data Connections & Adapters](graph-editor/public/docs/data-connections.md) - Connect to external data sources
@@ -169,6 +172,7 @@ User-facing documentation accessible both in the app and on GitHub:
 - [Scenarios](graph-editor/public/docs/scenarios.md) - Parameter overlays and A/B testing
 - [API Reference](graph-editor/public/docs/api-reference.md) - Programmatic access
 - [Keyboard Shortcuts](graph-editor/public/docs/keyboard-shortcuts.md) - Productivity tips
+- [LAG Statistics Reference](graph-editor/public/docs/lag-statistics-reference.md) - Latency-aware graph statistics (canonical)
 - [CHANGELOG](graph-editor/public/docs/CHANGELOG.md) - Release history
 
 ### 🔧 Technical Documentation

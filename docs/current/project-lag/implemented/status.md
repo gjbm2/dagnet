@@ -1,8 +1,8 @@
 # Project LAG: Implementation Status
 
-**Started:** 8-Dec-25
-**Last Updated:** 8-Dec-25
-**Phase:** C3 ✅ Complete — Ready for C4 (UI & Rendering)
+**Started:** 8-Dec-25  
+**Last Updated:** 10-Dec-25  
+**Phase:** All Core Phases Complete — Alpha v1.0 Ready
 
 ---
 
@@ -115,7 +115,7 @@ Pre-requisite cleanup before introducing latency complexity.
 - `fetchDataService.ts`: Added topological sorting for batch fetches
 - Tests: 75 LAG statistical tests covering CDF bounds, monotonicity, Formula A, completeness, p_infinity
 
-### Phase C4: UI & Rendering ⏳ IN PROGRESS
+### Phase C4: UI & Rendering ✅ COMPLETE
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -128,7 +128,25 @@ Pre-requisite cleanup before introducing latency complexity.
 | C4.7 Scenario Chip & Legend UI | ✅ Done | `ScenariosPanel.tsx`, `ScenarioLegend.tsx` - 4-state icons (Eye/View/EyeClosed/EyeOff) |
 | C4.8 Sibling Probability Warnings | ✅ Done | `integrityCheckService.ts` - Σp>1 warning logic |
 
-### Phase A: Analytics (Post-Core) ⏸️ BLOCKED (by C4)
+### LAG Stats Fixes (10-Dec-25) ✅ COMPLETE
+
+Critical fixes to align implementation with design, implemented via TDD:
+
+| Task | Status | Notes |
+|------|--------|-------|
+| A1: Completeness uses anchor_median_lag | ✅ Done | `statisticalEnhancementService.ts` - replaced path_t95 with anchor lag |
+| A2: queryDateForLAG = analysis date | ✅ Done | `fetchDataService.ts` - ages relative to today |
+| A3: calculateCompleteness formula | ✅ Done | Verified correct (n-weighted CDF average) |
+| B2: p_infinity → p.forecast.mean fallback | ✅ Done | `enhanceGraphLatencies` uses p∞ when no window slice |
+| B3: getActiveEdges scenario-aware | ✅ Done | Uses `computeEffectiveEdgeProbability` |
+| B4: path_t95 scenario-specific | ✅ Done | Via active edges |
+| C1: anchor_median_lag_days wiring | ✅ Done | Full pipeline: Amplitude → param files → stats service |
+| C2: Recency weighting verified | ✅ Done | `RECENCY_HALF_LIFE_DAYS` applied in p∞ |
+| Precision enforcement | ✅ Done | `PRECISION_DECIMAL_PLACES = 4` in UpdateManager |
+
+**Reference:** `docs/current/project-lag/lag-fixes-implementation-plan.md`
+
+### Phase A: Analytics (Post-Core) ⏸️ DEFERRED
 
 ---
 
@@ -141,6 +159,30 @@ Pre-requisite cleanup before introducing latency complexity.
 ---
 
 ## Session Log
+
+### 10-Dec-25
+
+**Session Focus:** LAG statistics alignment and alpha readiness
+
+**Actions:**
+1. Created `stats-convolution-schematic.md` as canonical LAG reference
+2. Developed TDD test suite (T1–T6) encoding design-correct behaviour
+3. Identified and fixed critical bugs:
+   - Completeness using `path_t95` instead of `anchor_median_lag` (A1)
+   - Cohort ages relative to DSL window end, not analysis date (A2)
+   - Missing `p_infinity` → `p.forecast.mean` fallback (B2)
+   - `getActiveEdges` not scenario-aware (B3)
+   - `anchor_median_lag_days` not wired through pipeline (C1)
+4. Fixed Amplitude adapter: 3-step funnel indices for anchor lag extraction
+5. Added precision enforcement (`PRECISION_DECIMAL_PLACES = 4`)
+6. Published `lag-statistics-reference.md` to public docs
+7. Created `incremental-test-plan.md` for ongoing test coverage
+8. Updated `design.md` with Appendix E referencing all incremental docs
+9. Verified all 130+ LAG tests passing
+
+**Outcome:** Project LAG implementation complete. Alpha v1.0 ready with documented caveats (scenario/conditional_p under-tested at full graph level).
+
+---
 
 ### 8-Dec-25
 

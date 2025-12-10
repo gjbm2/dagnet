@@ -1,6 +1,12 @@
 # TODO
 
+
+
 - Highlighting / selcting latency edges (not showing up properly)
+- Not remembering graph dsl on load/refresh property (desync issue)
+- show 'completeness indicator' chevron as darker than the others
+- Sankey view: add F/E handling 
+- 'Refresh' showing too eagerly (only if >1 day has passed since last query)
 
 ## Major components
 - Dashboarding views
@@ -431,3 +437,57 @@ Let's add font size for Post Its S M L XL; default to Medium which should be a b
 handle needs to be dragable
 a light drop shadow prob. appropriate
 
+
+
+### Individual Edge Fetch vs Batch Fetch Behaviour Difference
+
+**Status**: Investigating
+
+**Summary**: Fetching a single edge produces different `p.mean` values than batch fetching all edges.
+
+**Root Cause**: The forecast blend (evidence + forecast weighted by completeness) requires `completeness` to be available. But:
+
+1. **Individual fetch path** (`dataOperationsService.getParameterFromFile`):
+   - Calls `addEvidenceAndForecastScalars` which attempts to compute blendedMean
+   - But `completeness` is NOT available yet (it's computed during LAG enhancement)
+   - So `blendedMean` is undefined → `p.mean` remains as evidence mean
+
+2. **Batch fetch path** (`fetchItems` → LAG enhancement):
+   - All individual fetches complete first (each sets `p.mean = evidenceMean`)
+   - Then LAG enhancement runs in topological order
+   - Computes `completeness` and `blendedMean` for each latency edge
+   - Updates `p.mean = blendedMean` via `applyBatchLAGValues`
+
+**Result**: 
+- Single edge fetch: `p.mean = evidenceMean` (no blend)
+- Batch fetch: `p.mean = blendedMean` (evidence + forecast weighted by completeness)
+
+**Potential Fixes**:
+1. Run LAG enhancement after every single-edge fetch (expensive)
+2. Store completeness on parameter values so it's available for single-edge blending
+3. Accept the difference and document that batch fetch is required for correct blended values
+
+**Related Files**:
+- `dataOperationsService.ts` - `addEvidenceAndForecastScalars()`
+- `fetchDataService.ts` - batch LAG enhancement
+- `statisticalEnhancementService.ts` - `computeEdgeLatencyStats()`, `enhanceGraphLatencies()`
+
+---
+
+### FIXED: LAG-Enhanced Graph Not Persisted When Inbound-N Empty
+
+**Status**: Fixed (10-Dec-25)
+
+**Symptom**: After batch fetch, `p.mean` showed evidence mean (0.454) instead of blended mean (0.531) despite LAG enhancement correctly computing the blend.
+
+**Root Cause**: Race condition in `fetchDataService.ts`:
+
+1. `applyBatchLAGValues()` creates a NEW graph object with correct blended `p.mean` values
+2. This graph is passed to `computeAndApplyInboundN(finalGraph, setGraph, ...)`
+3. **BUG**: If `computeInboundN()` returns empty (no start nodes with n > 0), the function returned early WITHOUT calling `setGraph`
+4. The LAG-enhanced graph was never persisted to React state
+5. WindowSelector's `.then()` handler used `graphRef.current` which had stale values
+
+**Fix**: Added `setGraph({ ...graph })` before early return in `computeAndApplyInboundN` so LAG values are always persisted, even when inbound-n computation returns empty.
+
+**Code Location**: `fetchDataService.ts` line ~841-844
