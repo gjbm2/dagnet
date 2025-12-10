@@ -3,9 +3,10 @@
  * 
  * Tests the copy-paste hook functionality including:
  * - Context provider
- * - Copy operations
+ * - Copy operations (single items and subgraphs)
  * - Get operations
  * - Clear operations
+ * - canPaste context validation
  * 
  * @vitest-environment happy-dom
  */
@@ -13,7 +14,13 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { ReactNode } from 'react';
-import { CopyPasteProvider, useCopyPaste, DagNetClipboardData } from '../useCopyPaste';
+import { 
+  CopyPasteProvider, 
+  useCopyPaste, 
+  DagNetClipboardData,
+  DagNetSubgraphClipboardData,
+  canPasteInContext 
+} from '../useCopyPaste';
 
 // Mock toast
 vi.mock('react-hot-toast', () => ({
@@ -364,6 +371,289 @@ describe('useCopyPaste Hook', () => {
       expect(result.current.getCopiedNode()).toBeNull();
       expect(result.current.getCopiedParameter()).toBeNull();
       expect(result.current.getCopiedCase()).not.toBeNull();
+    });
+  });
+
+  describe('copySubgraph', () => {
+    it('should copy nodes and edges as subgraph', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      const nodes = [
+        { uuid: 'node-1', id: 'landing-page', label: 'Landing Page' },
+        { uuid: 'node-2', id: 'checkout', label: 'Checkout' },
+      ];
+      const edges = [
+        { uuid: 'edge-1', id: 'landing-to-checkout', from: 'node-1', to: 'node-2', p: { mean: 0.5 } },
+      ];
+      
+      await act(async () => {
+        const success = await result.current.copySubgraph(nodes as any, edges as any, 'graph-test');
+        expect(success).toBe(true);
+      });
+      
+      expect(result.current.copiedItem?.type).toBe('dagnet-subgraph');
+      const subgraph = result.current.getCopiedSubgraph();
+      expect(subgraph).not.toBeNull();
+      expect(subgraph?.nodes).toHaveLength(2);
+      expect(subgraph?.edges).toHaveLength(1);
+      expect(subgraph?.sourceGraphId).toBe('graph-test');
+    });
+
+    it('should return false when copying empty nodes', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      await act(async () => {
+        const success = await result.current.copySubgraph([], [], 'graph-test');
+        expect(success).toBe(false);
+      });
+      
+      expect(result.current.copiedItem).toBeNull();
+    });
+
+    it('should deep clone nodes and edges', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      const nodes = [{ uuid: 'node-1', id: 'test', label: 'Test' }];
+      const edges: any[] = [];
+      
+      await act(async () => {
+        await result.current.copySubgraph(nodes as any, edges);
+      });
+      
+      // Modify original
+      nodes[0].label = 'Modified';
+      
+      // Clipboard should still have original
+      const subgraph = result.current.getCopiedSubgraph();
+      expect(subgraph?.nodes[0].label).toBe('Test');
+    });
+
+    it('should write subgraph to system clipboard', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      const nodes = [{ uuid: 'node-1', id: 'test', label: 'Test' }];
+      
+      await act(async () => {
+        await result.current.copySubgraph(nodes as any, []);
+      });
+      
+      expect(mockClipboard.writeText).toHaveBeenCalled();
+      const clipboardArg = mockClipboard.writeText.mock.calls[0][0];
+      const parsed = JSON.parse(clipboardArg);
+      expect(parsed.type).toBe('dagnet-subgraph');
+    });
+  });
+
+  describe('getCopiedSubgraph', () => {
+    it('should return null when nothing is copied', () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      expect(result.current.getCopiedSubgraph()).toBeNull();
+    });
+
+    it('should return null when single item is copied', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      await act(async () => {
+        await result.current.copyToClipboard('node', 'landing-page');
+      });
+      
+      expect(result.current.getCopiedSubgraph()).toBeNull();
+    });
+
+    it('should return subgraph when subgraph is copied', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      const nodes = [{ uuid: 'node-1', id: 'test', label: 'Test' }];
+      
+      await act(async () => {
+        await result.current.copySubgraph(nodes as any, []);
+      });
+      
+      const subgraph = result.current.getCopiedSubgraph();
+      expect(subgraph).not.toBeNull();
+      expect(subgraph?.nodes).toHaveLength(1);
+    });
+  });
+
+  describe('canPaste', () => {
+    it('should return false when nothing is copied', () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      expect(result.current.canPaste('graph')).toBe(false);
+      expect(result.current.canPaste('node')).toBe(false);
+      expect(result.current.canPaste('edge')).toBe(false);
+    });
+
+    it('should return true for graph context when subgraph is copied', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      const nodes = [{ uuid: 'node-1', id: 'test', label: 'Test' }];
+      
+      await act(async () => {
+        await result.current.copySubgraph(nodes as any, []);
+      });
+      
+      expect(result.current.canPaste('graph')).toBe(true);
+      expect(result.current.canPaste('edge')).toBe(false);
+    });
+
+    it('should return true for graph context when single node is copied', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      await act(async () => {
+        await result.current.copyToClipboard('node', 'landing-page');
+      });
+      
+      expect(result.current.canPaste('graph')).toBe(true);
+    });
+
+    it('should return true for edge context when parameter is copied', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      await act(async () => {
+        await result.current.copyToClipboard('parameter', 'checkout-rate');
+      });
+      
+      expect(result.current.canPaste('edge')).toBe(true);
+      expect(result.current.canPaste('graph')).toBe(false);
+    });
+
+    it('should return true for node context when case is copied', async () => {
+      const { result } = renderHook(() => useCopyPaste(), { wrapper });
+      
+      await act(async () => {
+        await result.current.copyToClipboard('case', 'ab-test');
+      });
+      
+      expect(result.current.canPaste('node')).toBe(true);
+      expect(result.current.canPaste('graph')).toBe(false);
+    });
+  });
+});
+
+describe('canPasteInContext', () => {
+  it('should return false for null content', () => {
+    expect(canPasteInContext(null, 'graph')).toBe(false);
+    expect(canPasteInContext(null, 'node')).toBe(false);
+    expect(canPasteInContext(null, 'edge')).toBe(false);
+  });
+
+  describe('graph context', () => {
+    it('should allow subgraph paste', () => {
+      const subgraph: DagNetSubgraphClipboardData = {
+        type: 'dagnet-subgraph',
+        nodes: [],
+        edges: [],
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(subgraph, 'graph')).toBe(true);
+    });
+
+    it('should allow single node paste', () => {
+      const node: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'node',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(node, 'graph')).toBe(true);
+    });
+
+    it('should not allow parameter paste', () => {
+      const param: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'parameter',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(param, 'graph')).toBe(false);
+    });
+  });
+
+  describe('edge context', () => {
+    it('should allow parameter paste', () => {
+      const param: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'parameter',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(param, 'edge')).toBe(true);
+    });
+
+    it('should not allow node paste', () => {
+      const node: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'node',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(node, 'edge')).toBe(false);
+    });
+
+    it('should not allow subgraph paste', () => {
+      const subgraph: DagNetSubgraphClipboardData = {
+        type: 'dagnet-subgraph',
+        nodes: [],
+        edges: [],
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(subgraph, 'edge')).toBe(false);
+    });
+  });
+
+  describe('node context', () => {
+    it('should allow node paste', () => {
+      const node: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'node',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(node, 'node')).toBe(true);
+    });
+
+    it('should allow case paste', () => {
+      const caseItem: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'case',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(caseItem, 'node')).toBe(true);
+    });
+
+    it('should allow event paste', () => {
+      const event: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'event',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(event, 'node')).toBe(true);
+    });
+
+    it('should not allow parameter paste', () => {
+      const param: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'parameter',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(param, 'node')).toBe(false);
+    });
+  });
+
+  describe('navigator context', () => {
+    it('should not allow any paste', () => {
+      const node: DagNetClipboardData = {
+        type: 'dagnet-copy',
+        objectType: 'node',
+        objectId: 'test',
+        timestamp: Date.now(),
+      };
+      expect(canPasteInContext(node, 'navigator')).toBe(false);
     });
   });
 });

@@ -191,8 +191,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   });
   
   // Copy-paste hook for paste parameter functionality
-  const { copiedItem } = useCopyPaste();
-  const copiedParameter = copiedItem?.objectType === 'parameter' ? copiedItem : null;
+  const { getCopiedParameter } = useCopyPaste();
+  const copiedParameter = getCopiedParameter();
   
   // Paste parameter - attach copied parameter file to this edge
   const handlePasteParameter = async () => {

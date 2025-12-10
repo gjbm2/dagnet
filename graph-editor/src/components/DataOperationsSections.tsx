@@ -8,6 +8,10 @@
  * - DataMenu (top menu bar items)
  * 
  * This ensures all three menus show IDENTICAL options based on the same logic.
+ * 
+ * NOTE: hasFile now means "file EXISTS or COULD exist" based on having an objectId.
+ * The actual file content check happens at operation time (in useClearDataFile).
+ * This allows menu items to be enabled even if files aren't loaded into memory.
  */
 
 import { fileRegistry } from '../contexts/TabContext';
@@ -53,7 +57,9 @@ export function getNodeDataSections(
   // 1. Node file section (if node has an id)
   if (node.id) {
     const file = fileRegistry.getFile(`node-${node.id}`);
-    const hasFile = !!file;
+    const hasFileLoaded = !!file;
+    // hasFile = true if objectId exists (file COULD exist, even if not loaded)
+    const hasFile = true; // node.id exists, so file could exist
     
     sections.push({
       id: 'node-file',
@@ -66,7 +72,7 @@ export function getNodeDataSections(
       hasFileConnection: false,
       canPutToFile: true, // Can always put if node.id exists
       operations: {
-        getFromFile: hasFile,
+        getFromFile: hasFileLoaded, // Need loaded file to get from it
         getFromSource: false,
         getFromSourceDirect: false,
         putToFile: true,
@@ -80,9 +86,11 @@ export function getNodeDataSections(
   if (node.case) {
     const caseId = node.case.id;
     const file = caseId ? fileRegistry.getFile(`case-${caseId}`) : null;
-    const hasFile = !!file;
+    const hasFileLoaded = !!file;
+    // hasFile = true if caseId exists (file COULD exist, even if not loaded)
+    const hasFile = !!caseId;
     // For case files, connection is at file.data.case.connection (per case-parameter-schema)
-    const hasFileConnection = hasFile && !!file.data?.case?.connection;
+    const hasFileConnection = hasFileLoaded && !!file.data?.case?.connection;
     const hasDirectConnection = !!node.case.connection;
     const hasAnyConnection = hasDirectConnection || hasFileConnection;
     const canPutToFile = !!caseId;
@@ -98,12 +106,12 @@ export function getNodeDataSections(
       hasFileConnection,
       canPutToFile,
       operations: {
-        getFromFile: hasFile,
+        getFromFile: hasFileLoaded, // Need loaded file to get from it
         getFromSource: hasFileConnection,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
-        clearCache: hasFile, // Cases have schedules cache
-        clearDataFile: hasFile, // Cases have schedule data to clear
+        clearCache: hasFile, // Can clear cache if file could exist
+        clearDataFile: hasFile, // Can clear data if file could exist
       },
     });
   }
@@ -127,8 +135,10 @@ export function getEdgeDataSections(
   const parameterId = edge.p?.id;
   if (parameterId || edge.p?.connection) {
     const file = parameterId ? fileRegistry.getFile(`parameter-${parameterId}`) : null;
-    const hasFile = !!file;
-    const hasFileConnection = hasFile && !!file.data?.connection;
+    const hasFileLoaded = !!file;
+    // hasFile = true if parameterId exists (file COULD exist, even if not loaded)
+    const hasFile = !!parameterId;
+    const hasFileConnection = hasFileLoaded && !!file.data?.connection;
     const hasDirectConnection = !!edge.p?.connection;
     const hasAnyConnection = hasDirectConnection || hasFileConnection;
     const canPutToFile = !!parameterId;
@@ -145,12 +155,12 @@ export function getEdgeDataSections(
       hasFileConnection,
       canPutToFile,
       operations: {
-        getFromFile: hasFile,
+        getFromFile: hasFileLoaded, // Need loaded file to get from it
         getFromSource: hasFileConnection,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
-        clearCache: hasFile, // Parameters have time-series cache
-        clearDataFile: hasFile, // Parameters have values data to clear
+        clearCache: hasFile, // Can clear cache if file could exist
+        clearDataFile: hasFile, // Can clear data if file could exist
       },
     });
   }
@@ -189,8 +199,10 @@ export function getEdgeDataSections(
       // Only create section if there's a connection (direct or inherited from base)
       if (condParamId || effectiveConnection) {
         const file = condParamId ? fileRegistry.getFile(`parameter-${condParamId}`) : null;
-        const hasFile = !!file;
-        const hasFileConnection = hasFile && !!file.data?.connection;
+        const hasFileLoaded = !!file;
+        // hasFile = true if condParamId exists (file COULD exist, even if not loaded)
+        const hasFile = !!condParamId;
+        const hasFileConnection = hasFileLoaded && !!file.data?.connection;
         const hasDirectConnection = !!effectiveConnection;
         const hasAnyConnection = hasDirectConnection || hasFileConnection;
         const canPutToFile = !!condParamId;
@@ -220,12 +232,12 @@ export function getEdgeDataSections(
           hasFileConnection,
           canPutToFile,
           operations: {
-            getFromFile: hasFile,
+            getFromFile: hasFileLoaded, // Need loaded file to get from it
             getFromSource: hasFileConnection,
             getFromSourceDirect: hasAnyConnection,
             putToFile: canPutToFile,
-            clearCache: hasFile, // Parameters have time-series cache
-            clearDataFile: hasFile, // Parameters have values data to clear
+            clearCache: hasFile, // Can clear cache if file could exist
+            clearDataFile: hasFile, // Can clear data if file could exist
           },
         });
       } else {
@@ -241,8 +253,10 @@ export function getEdgeDataSections(
   const costGbpParameterId = edge.cost_gbp?.id;
   if (costGbpParameterId || edge.cost_gbp?.connection) {
     const file = costGbpParameterId ? fileRegistry.getFile(`parameter-${costGbpParameterId}`) : null;
-    const hasFile = !!file;
-    const hasFileConnection = hasFile && !!file.data?.connection;
+    const hasFileLoaded = !!file;
+    // hasFile = true if parameterId exists (file COULD exist, even if not loaded)
+    const hasFile = !!costGbpParameterId;
+    const hasFileConnection = hasFileLoaded && !!file.data?.connection;
     const hasDirectConnection = !!edge.cost_gbp?.connection;
     const hasAnyConnection = hasDirectConnection || hasFileConnection;
     const canPutToFile = !!costGbpParameterId;
@@ -259,12 +273,12 @@ export function getEdgeDataSections(
       hasFileConnection,
       canPutToFile,
       operations: {
-        getFromFile: hasFile,
+        getFromFile: hasFileLoaded, // Need loaded file to get from it
         getFromSource: hasFileConnection,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
-        clearCache: hasFile, // Parameters have time-series cache
-        clearDataFile: hasFile, // Parameters have values data to clear
+        clearCache: hasFile, // Can clear cache if file could exist
+        clearDataFile: hasFile, // Can clear data if file could exist
       },
     });
   }
@@ -273,8 +287,10 @@ export function getEdgeDataSections(
   const costTimeParameterId = edge.labour_cost?.id;
   if (costTimeParameterId || edge.labour_cost?.connection) {
     const file = costTimeParameterId ? fileRegistry.getFile(`parameter-${costTimeParameterId}`) : null;
-    const hasFile = !!file;
-    const hasFileConnection = hasFile && !!file.data?.connection;
+    const hasFileLoaded = !!file;
+    // hasFile = true if parameterId exists (file COULD exist, even if not loaded)
+    const hasFile = !!costTimeParameterId;
+    const hasFileConnection = hasFileLoaded && !!file.data?.connection;
     const hasDirectConnection = !!edge.labour_cost?.connection;
     const hasAnyConnection = hasDirectConnection || hasFileConnection;
     const canPutToFile = !!costTimeParameterId;
@@ -291,12 +307,12 @@ export function getEdgeDataSections(
       hasFileConnection,
       canPutToFile,
       operations: {
-        getFromFile: hasFile,
+        getFromFile: hasFileLoaded, // Need loaded file to get from it
         getFromSource: hasFileConnection,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
-        clearCache: hasFile, // Parameters have time-series cache
-        clearDataFile: hasFile, // Parameters have values data to clear
+        clearCache: hasFile, // Can clear cache if file could exist
+        clearDataFile: hasFile, // Can clear data if file could exist
       },
     });
   }

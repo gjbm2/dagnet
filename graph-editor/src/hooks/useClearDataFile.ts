@@ -8,17 +8,53 @@
  * For cases: Clears schedule data
  * 
  * Preserves: id, name, type, query, connection, connection_string, metadata
+ * 
+ * NOTE: This hook now loads files from IndexedDB if they're not in memory,
+ * allowing it to work on files that haven't been opened yet.
  */
 
 import { useCallback } from 'react';
 import { fileRegistry } from '../contexts/TabContext';
+import { db } from '../db/appDatabase';
 import { useDialog } from '../contexts/DialogContext';
 import toast from 'react-hot-toast';
 import { sessionLogService } from '../services/sessionLogService';
+import type { FileState } from '../types';
 
 export interface ClearDataFileResult {
   success: boolean;
   clearedCount: number;
+}
+
+/**
+ * Helper to load a file, checking memory first then IndexedDB
+ * Also tries workspace-prefixed versions in IndexedDB
+ */
+async function loadFileFromAnywhere(fileId: string): Promise<FileState | null> {
+  // 1. Check fileRegistry (in-memory)
+  let file = fileRegistry.getFile(fileId);
+  if (file) return file;
+  
+  // 2. Check IndexedDB (unprefixed)
+  const fileFromDb = await db.files.get(fileId);
+  if (fileFromDb) {
+    // Load into memory for subsequent operations
+    (fileRegistry as any).files.set(fileId, fileFromDb);
+    return fileFromDb;
+  }
+  
+  // 3. Try workspace-prefixed versions in IndexedDB
+  // Files from Git are stored as repo-branch-fileId
+  const allFiles = await db.files.toArray();
+  const prefixedFile = allFiles.find(f => f.fileId.endsWith(`-${fileId}`));
+  if (prefixedFile) {
+    // Load into memory with canonical (unprefixed) ID
+    const canonicalFile = { ...prefixedFile, fileId };
+    (fileRegistry as any).files.set(fileId, canonicalFile);
+    return canonicalFile;
+  }
+  
+  return null;
 }
 
 export function useClearDataFile() {
@@ -31,11 +67,13 @@ export function useClearDataFile() {
     fileId: string,
     skipConfirm: boolean = false
   ): Promise<ClearDataFileResult> => {
-    const file = fileRegistry.getFile(fileId);
+    // Load file from memory or IndexedDB
+    const file = await loadFileFromAnywhere(fileId);
     
     if (!file) {
-      toast.error(`File not found: ${fileId}`);
-      return { success: false, clearedCount: 0 };
+      // File doesn't exist anywhere - not an error, just nothing to clear
+      toast('No file found to clear', { icon: 'ℹ️', duration: 2000 });
+      return { success: true, clearedCount: 0 };
     }
 
     const type = file.type;
@@ -152,6 +190,7 @@ export function useClearDataFile() {
 
   /**
    * Clear data from multiple files (batch operation)
+   * Loads files from IndexedDB if not in memory
    */
   const clearDataFiles = useCallback(async (
     fileIds: string[],
@@ -162,21 +201,43 @@ export function useClearDataFile() {
       return { success: false, totalCleared: 0, filesProcessed: 0 };
     }
 
-    // Filter to only parameter and case files
-    const validFiles = fileIds
-      .map(id => ({ id, file: fileRegistry.getFile(id) }))
-      .filter(({ file }) => file && (file.type === 'parameter' || file.type === 'case'));
+    // Load files from memory or IndexedDB, filter to only parameter and case files
+    const loadedFiles: { id: string; file: FileState }[] = [];
+    for (const id of fileIds) {
+      const file = await loadFileFromAnywhere(id);
+      if (file && (file.type === 'parameter' || file.type === 'case')) {
+        loadedFiles.push({ id, file });
+      }
+    }
 
-    if (validFiles.length === 0) {
-      toast.error('No parameter or case files found to clear');
-      return { success: false, totalCleared: 0, filesProcessed: 0 };
+    if (loadedFiles.length === 0) {
+      toast('No parameter or case files found to clear', { icon: 'ℹ️', duration: 2000 });
+      return { success: true, totalCleared: 0, filesProcessed: 0 };
+    }
+
+    // Filter to files that actually have data to clear
+    const filesWithData = loadedFiles.filter(({ file }) => {
+      if (file.type === 'parameter') {
+        const values = file.data?.values || [];
+        return values.length > 0 && values.some((v: any) => 
+          v.n !== undefined || v.k !== undefined || v.data_source || v.n_daily || v.k_daily
+        );
+      } else if (file.type === 'case') {
+        return (file.data?.case?.schedules?.length || 0) > 0;
+      }
+      return false;
+    });
+
+    if (filesWithData.length === 0) {
+      toast('No files have data to clear', { icon: 'ℹ️', duration: 2000 });
+      return { success: true, totalCleared: 0, filesProcessed: 0 };
     }
 
     // Confirm batch operation
     if (!skipConfirm) {
       const confirmed = await showConfirm({
         title: 'Clear Data Files',
-        message: `Clear fetched data from ${validFiles.length} file${validFiles.length !== 1 ? 's' : ''}?\n\n` +
+        message: `Clear fetched data from ${filesWithData.length} file${filesWithData.length !== 1 ? 's' : ''}?\n\n` +
           `This will remove values/schedules from all selected files.\n\n` +
           `Structure will be preserved (id, name, query, connection, metadata).`,
         confirmLabel: 'Clear All',
@@ -192,7 +253,7 @@ export function useClearDataFile() {
     let totalCleared = 0;
     let filesProcessed = 0;
 
-    for (const { id } of validFiles) {
+    for (const { id } of filesWithData) {
       const result = await clearDataFile(id, true); // Skip individual confirms
       if (result.success) {
         totalCleared += result.clearedCount;
@@ -208,10 +269,45 @@ export function useClearDataFile() {
   }, [clearDataFile, showConfirm]);
 
   /**
-   * Check if a file has data that can be cleared
+   * Check if a file COULD have data that can be cleared
+   * 
+   * NOTE: This is a synchronous check used for menu enablement.
+   * It returns true if the file type supports clearing, even if the file
+   * isn't loaded yet. The actual data check happens at operation time.
+   * 
+   * For accurate data checking, use canClearDataAsync instead.
    */
   const canClearData = useCallback((fileId: string): boolean => {
+    // Check if this is a parameter or case file type (which can have clearable data)
+    const isParameter = fileId.startsWith('parameter-');
+    const isCase = fileId.startsWith('case-');
+    
+    if (!isParameter && !isCase) return false;
+    
+    // Check if file is loaded and has actual data
     const file = fileRegistry.getFile(fileId);
+    if (file) {
+      if (file.type === 'parameter') {
+        const values = file.data?.values || [];
+        return values.length > 0 && values.some((v: any) => 
+          v.n !== undefined || v.k !== undefined || v.data_source || v.n_daily || v.k_daily
+        );
+      } else if (file.type === 'case') {
+        return (file.data?.case?.schedules?.length || 0) > 0;
+      }
+    }
+    
+    // File not loaded - return true to enable the menu item
+    // The actual clearing operation will load the file and check
+    return true;
+  }, []);
+
+  /**
+   * Async check if a file has data that can be cleared
+   * Loads from IndexedDB if needed for accurate checking
+   */
+  const canClearDataAsync = useCallback(async (fileId: string): Promise<boolean> => {
+    const file = await loadFileFromAnywhere(fileId);
     if (!file) return false;
     
     if (file.type === 'parameter') {
@@ -238,6 +334,7 @@ export function useClearDataFile() {
     clearDataFile,
     clearDataFiles,
     canClearData,
+    canClearDataAsync,
     getParameterFileId
   };
 }
