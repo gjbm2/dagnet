@@ -123,3 +123,4 @@ export const LATENCY_T95_PERCENTILE = 0.95;
  */
 export const LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE = 100;
 
+

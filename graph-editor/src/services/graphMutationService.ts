@@ -307,6 +307,11 @@ class GraphMutationService {
         
         setGraph(updatedGraph);
         
+        // CRITICAL: Dispatch event to suppress File→Store sync temporarily
+        // This prevents stale file data from overwriting the anchored graph in the store
+        // The sync chain (GraphEditor ↔ GraphStoreContext ↔ FileRegistry) has race conditions
+        window.dispatchEvent(new CustomEvent('dagnet:suppressFileToStoreSync', { detail: { duration: 1000 } }))
+        
         // Notify user
           toast.success(`✓ Regenerated ${applyResult.graphUpdates} queries`, { duration: 3000 });
         

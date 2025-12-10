@@ -8,7 +8,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
-import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy } from 'lucide-react';
+import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy, Scissors, Clipboard } from 'lucide-react';
 import { RemoveOverridesMenuItem } from './RemoveOverridesMenuItem';
 import { fileRegistry } from '../contexts/TabContext';
 import VariantWeightInput from './VariantWeightInput';
@@ -23,6 +23,7 @@ import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useCopyPaste } from '../hooks/useCopyPaste';
+import { updateManager } from '../services/UpdateManager';
 
 interface NodeContextMenuProps {
   x: number;
@@ -153,10 +154,13 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   });
 
   // Copy-paste hook for paste node functionality
-  const { copiedItem } = useCopyPaste();
-  const copiedNode = copiedItem?.objectType === 'node' ? copiedItem : null;
-  const copiedCase = copiedItem?.objectType === 'case' ? copiedItem : null;
-  const copiedEvent = copiedItem?.objectType === 'event' ? copiedItem : null;
+  const { copiedItem, copySubgraph } = useCopyPaste();
+  const copiedNode = copiedItem?.type === 'dagnet-copy' && copiedItem.objectType === 'node' ? copiedItem : null;
+  const copiedCase = copiedItem?.type === 'dagnet-copy' && copiedItem.objectType === 'case' ? copiedItem : null;
+  const copiedEvent = copiedItem?.type === 'dagnet-copy' && copiedItem.objectType === 'event' ? copiedItem : null;
+  
+  // Get graphStore for history
+  const graphStore = useGraphStore();
 
   const handleGetNodeFromFile = () => {
     if (nodeData?.id) {
@@ -522,6 +526,51 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
     onClose();
   };
 
+  // Copy selected nodes and edges as subgraph
+  const handleCopySelection = async () => {
+    const selectedNodeUuids = selectedNodes.map(n => n.id);
+    
+    // Extract subgraph (includes subsumed nodes and contained edges)
+    const subgraph = extractSubgraph({
+      selectedNodeIds: selectedNodeUuids,
+      graph,
+      includeConnectedEdges: true,
+    });
+    
+    await copySubgraph(subgraph.nodes, subgraph.edges, activeTabId || undefined);
+    onClose();
+  };
+
+  // Cut = Copy + Delete
+  const handleCutSelection = async () => {
+    const selectedNodeUuids = selectedNodes.map(n => n.id);
+    
+    // First, extract and copy the subgraph
+    const subgraph = extractSubgraph({
+      selectedNodeIds: selectedNodeUuids,
+      graph,
+      includeConnectedEdges: true,
+    });
+    
+    await copySubgraph(subgraph.nodes, subgraph.edges, activeTabId || undefined);
+    
+    // Then delete the nodes using UpdateManager
+    const result = updateManager.deleteNodes(graph, selectedNodeUuids);
+    
+    // Apply the change via setGraph (which handles graphMutationService internally)
+    setGraph(result.graph);
+    graphStore.saveHistoryState('Cut selection');
+    
+    const parts: string[] = [];
+    parts.push(`${result.deletedNodeCount} node${result.deletedNodeCount !== 1 ? 's' : ''}`);
+    if (result.deletedEdgeCount > 0) {
+      parts.push(`${result.deletedEdgeCount} edge${result.deletedEdgeCount !== 1 ? 's' : ''}`);
+    }
+    toast.success(`Cut ${parts.join(' and ')}`);
+    
+    onClose();
+  };
+
   return (
     <div
       ref={menuRef}
@@ -742,6 +791,51 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
 
       {/* Copy vars */}
       <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
+      {/* Copy/Cut - available when selection exists */}
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          handleCopySelection();
+        }}
+        style={{
+          padding: '8px 12px',
+          cursor: 'pointer',
+          fontSize: '13px',
+          borderRadius: '2px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+      >
+        <Clipboard size={14} />
+        <span>Copy{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
+      </div>
+
+      <div
+        onClick={(e) => {
+          e.stopPropagation();
+          handleCutSelection();
+        }}
+        style={{
+          padding: '8px 12px',
+          cursor: 'pointer',
+          fontSize: '13px',
+          borderRadius: '2px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+      >
+        <Scissors size={14} />
+        <span>Cut{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
+      </div>
+
+      <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
+
       <div
         onClick={(e) => {
           e.stopPropagation();

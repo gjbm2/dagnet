@@ -1,12 +1,12 @@
 # TODO
 
-
-
+- Check that Get all slices uses precisely same fetch logic as tested hook
+- Copy / paste: nodes, edges into graph
+   - Investigate d&d
+- Add basic graphing for analysis??
 - Highlighting / selcting latency edges (not showing up properly)
-- Not remembering graph dsl on load/refresh property (desync issue)
-- show 'completeness indicator' chevron as darker than the others
-- Sankey view: add F/E handling 
-- 'Refresh' showing too eagerly (only if >1 day has passed since last query)
+- Completeness not reporting / updating correctly on sample graph edges -- desync between bead and edge
+
 
 ## Major components
 - Dashboarding views
@@ -170,8 +170,6 @@ Reproduce the issue and share the console outpu
   - Surface a **data health indicator** in the Graph Issues panel (e.g., "data shallow", "no mature cohorts yet")
   - Treat this like other graph viewer issues: informational by default, with toggles to enable/disable
 
-- Future LAG enhancement: once `path_t95` persistence is stable, explore combining upstream `path_t95` values (e.g. traffic‑weighted expected path lag) instead of pure max over paths, for richer path‑wise maturity modelling in cohort view. See `docs/current/project-lag/cohort-view.md`.
-
 ## Background Fetch Queue (DESIGN SKETCH)
 
 **Problem:** Batch fetch operations (Get All for Slice, All Slices) block the UI for minutes due to rate limiting (3s between Amplitude API calls). With 20 items, that's 1+ minute of blocked modal.
@@ -324,7 +322,6 @@ Could use Web Worker for true background execution:
 
 ### Analytics / Model Fitting (Future)
 - speed of chevron animation scale on log lag
-- Expose λ (forecast blend weight) as user-configurable setting to control how quickly evidence overrides forecast baselines in immature windows (see `forecast-fix.md`)
 
 ### Medium 
 - Persist scenarios to graph?
@@ -345,13 +342,7 @@ Could use Web Worker for true background execution:
 - Zap drop down menu:
   - 'Connection settings' on zap drop down menu isn't working
   - Sync status' on zap drop down should show last sync, source, etc. from files/graph
-- **Copy & Paste for Nodes/Parameters** - See `docs/copy-paste.md`
-  - Copy node/parameter/case from Navigator context menu
-  - Paste node on canvas (creates new node with file attached)
-  - Paste node on existing node (attaches file to node)
-  - Paste parameter on edge (attaches to appropriate slot: p/cost_gbp/labour_cost)
-  - Uses memory cache for reliable paste (not clipboard read)
-  - Triggers "Get from file" to populate data after paste
+- Edit: copy & paste
 - Graph integrity checker report
 - Minus autocomplete not working in query/selector
 - 'Clear overrides' at context & Data menu level  
@@ -403,6 +394,7 @@ Could use Web Worker for true background execution:
   - These are not data objects -- only displayed not used for calculation, of course
 
 ### Low Priority
+- three different types of ">" indicator on menus (!!)
 - x5 etc. badges next to overriden symbols on graph
 - Check we load right querydsl on graph load
 - Missing terminal node type on node file
@@ -437,57 +429,3 @@ Let's add font size for Post Its S M L XL; default to Medium which should be a b
 handle needs to be dragable
 a light drop shadow prob. appropriate
 
-
-
-### Individual Edge Fetch vs Batch Fetch Behaviour Difference
-
-**Status**: Investigating
-
-**Summary**: Fetching a single edge produces different `p.mean` values than batch fetching all edges.
-
-**Root Cause**: The forecast blend (evidence + forecast weighted by completeness) requires `completeness` to be available. But:
-
-1. **Individual fetch path** (`dataOperationsService.getParameterFromFile`):
-   - Calls `addEvidenceAndForecastScalars` which attempts to compute blendedMean
-   - But `completeness` is NOT available yet (it's computed during LAG enhancement)
-   - So `blendedMean` is undefined → `p.mean` remains as evidence mean
-
-2. **Batch fetch path** (`fetchItems` → LAG enhancement):
-   - All individual fetches complete first (each sets `p.mean = evidenceMean`)
-   - Then LAG enhancement runs in topological order
-   - Computes `completeness` and `blendedMean` for each latency edge
-   - Updates `p.mean = blendedMean` via `applyBatchLAGValues`
-
-**Result**: 
-- Single edge fetch: `p.mean = evidenceMean` (no blend)
-- Batch fetch: `p.mean = blendedMean` (evidence + forecast weighted by completeness)
-
-**Potential Fixes**:
-1. Run LAG enhancement after every single-edge fetch (expensive)
-2. Store completeness on parameter values so it's available for single-edge blending
-3. Accept the difference and document that batch fetch is required for correct blended values
-
-**Related Files**:
-- `dataOperationsService.ts` - `addEvidenceAndForecastScalars()`
-- `fetchDataService.ts` - batch LAG enhancement
-- `statisticalEnhancementService.ts` - `computeEdgeLatencyStats()`, `enhanceGraphLatencies()`
-
----
-
-### FIXED: LAG-Enhanced Graph Not Persisted When Inbound-N Empty
-
-**Status**: Fixed (10-Dec-25)
-
-**Symptom**: After batch fetch, `p.mean` showed evidence mean (0.454) instead of blended mean (0.531) despite LAG enhancement correctly computing the blend.
-
-**Root Cause**: Race condition in `fetchDataService.ts`:
-
-1. `applyBatchLAGValues()` creates a NEW graph object with correct blended `p.mean` values
-2. This graph is passed to `computeAndApplyInboundN(finalGraph, setGraph, ...)`
-3. **BUG**: If `computeInboundN()` returns empty (no start nodes with n > 0), the function returned early WITHOUT calling `setGraph`
-4. The LAG-enhanced graph was never persisted to React state
-5. WindowSelector's `.then()` handler used `graphRef.current` which had stale values
-
-**Fix**: Added `setGraph({ ...graph })` before early return in `computeAndApplyInboundN` so LAG values are always persisted, even when inbound-n computation returns empty.
-
-**Code Location**: `fetchDataService.ts` line ~841-844

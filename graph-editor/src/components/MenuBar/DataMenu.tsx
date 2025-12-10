@@ -87,6 +87,10 @@ export function DataMenu() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   
+  // Multi-selection support: track all selected node/edge UUIDs
+  const [selectedNodeUuids, setSelectedNodeUuids] = useState<string[]>([]);
+  const [selectedEdgeUuids, setSelectedEdgeUuids] = useState<string[]>([]);
+  
   // Exclude test accounts setting (temporary hack - will be replaced with proper contexts)
   const [excludeTestAccounts, setExcludeTestAccounts] = useState<boolean>(true);  // Default to true
   
@@ -383,8 +387,72 @@ export function DataMenu() {
   };
   
   // Get all data operation sections using single source of truth
-  // For single selection context menus:
-  const dataOperationSections = getAllDataSections(selectedNodeId, selectedEdgeId, graph);
+  // For multi-selection: gather sections from all selected nodes and edges between them
+  const dataOperationSections = React.useMemo(() => {
+    const sections: DataOperationSection[] = [];
+    const seenIds = new Set<string>();
+    
+    // If we have multi-selection, gather from all selected nodes
+    if (selectedNodeUuids.length > 0 && graph) {
+      const selectedNodeSet = new Set(selectedNodeUuids);
+      
+      // Get sections from all selected nodes
+      for (const nodeUuid of selectedNodeUuids) {
+        const nodeSections = getAllDataSections(nodeUuid, null, graph);
+        for (const section of nodeSections) {
+          const sectionKey = `${section.objectType}-${section.objectId}-${section.id}`;
+          if (!seenIds.has(sectionKey)) {
+            seenIds.add(sectionKey);
+            sections.push(section);
+          }
+        }
+      }
+      
+      // Find edges where BOTH source and target are in selected nodes
+      for (const edge of (graph.edges || [])) {
+        const fromNode = graph.nodes?.find((n: any) => n.uuid === edge.from || n.id === edge.from);
+        const toNode = graph.nodes?.find((n: any) => n.uuid === edge.to || n.id === edge.to);
+        
+        const fromUuid = fromNode?.uuid || edge.from;
+        const toUuid = toNode?.uuid || edge.to;
+        
+        if (selectedNodeSet.has(fromUuid) && selectedNodeSet.has(toUuid)) {
+          const edgeId = edge.uuid || edge.id;
+          if (edgeId) {
+            const edgeSections = getAllDataSections(null, edgeId, graph);
+            for (const section of edgeSections) {
+              const sectionKey = `${section.objectType}-${section.objectId}-${section.id}`;
+              if (!seenIds.has(sectionKey)) {
+                seenIds.add(sectionKey);
+                sections.push(section);
+              }
+            }
+          }
+        }
+      }
+      
+      return sections;
+    }
+    
+    // Also include explicitly selected edges
+    if (selectedEdgeUuids.length > 0 && graph) {
+      for (const edgeUuid of selectedEdgeUuids) {
+        const edgeSections = getAllDataSections(null, edgeUuid, graph);
+        for (const section of edgeSections) {
+          const sectionKey = `${section.objectType}-${section.objectId}-${section.id}`;
+          if (!seenIds.has(sectionKey)) {
+            seenIds.add(sectionKey);
+            sections.push(section);
+          }
+        }
+      }
+      
+      if (sections.length > 0) return sections;
+    }
+    
+    // Fall back to single selection (backwards compatibility)
+    return getAllDataSections(selectedNodeId, selectedEdgeId, graph);
+  }, [selectedNodeUuids, selectedEdgeUuids, selectedNodeId, selectedEdgeId, graph]);
   
   // For batch operations: gather sections from ALL edges in the graph (not just selected)
   // This enables "Clear all data files" to work on the entire graph
@@ -469,6 +537,12 @@ export function DataMenu() {
               if (nodeId !== selectedNodeIdRef.current) setSelectedNodeId(nodeId);
               if (edgeId !== selectedEdgeIdRef.current) setSelectedEdgeId(edgeId);
             }
+            
+            // Query full multi-selection via event
+            const queryDetail: { selectedNodeUuids?: string[]; selectedEdgeUuids?: string[] } = {};
+            window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail: queryDetail }));
+            setSelectedNodeUuids(queryDetail.selectedNodeUuids || []);
+            setSelectedEdgeUuids(queryDetail.selectedEdgeUuids || []);
           }
         }}>
           Data

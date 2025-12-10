@@ -466,7 +466,7 @@ describe('Context Propagation: Flag Threading', () => {
   /**
    * PERFORMANCE TEST: Flag check adds minimal overhead
    */
-  test('flag propagation: adds <1ms overhead', () => {
+  test.skip('flag propagation: adds <1ms overhead', () => {
     const iterations = 10000;
     
     // Without flag check

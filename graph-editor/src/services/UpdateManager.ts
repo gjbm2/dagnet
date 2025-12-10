@@ -4349,6 +4349,281 @@ export class UpdateManager {
     };
   }
 
+  // ============================================================
+  // Subgraph Paste (Copy-Paste)
+  // ============================================================
+
+  /**
+   * Paste a subgraph (nodes + edges) into the current graph.
+   * 
+   * Handles:
+   * - Generating new unique IDs (both uuid and human-readable id)
+   * - Mapping old IDs to new IDs for edge references
+   * - Offsetting node positions to avoid exact overlap
+   * - Preserving all other node/edge properties
+   * 
+   * @param graph - Current graph
+   * @param nodes - Nodes to paste
+   * @param edges - Edges to paste (references will be updated to new node IDs)
+   * @param positionOffset - Optional offset for node positions { x, y }
+   * @returns Updated graph and mapping of old UUIDs to new UUIDs
+   */
+  pasteSubgraph(
+    graph: any,
+    nodes: any[],
+    edges: any[],
+    positionOffset: { x: number; y: number } = { x: 50, y: 50 }
+  ): { 
+    graph: any; 
+    uuidMapping: Map<string, string>;
+    idMapping: Map<string, string>;
+    pastedNodeUuids: string[];
+    pastedEdgeUuids: string[];
+  } {
+    const nextGraph = structuredClone(graph);
+    
+    // Collect existing IDs and UUIDs for uniqueness checks
+    const existingNodeUuids = new Set<string>(nextGraph.nodes?.map((n: any) => n.uuid) || []);
+    const existingNodeIds = nextGraph.nodes?.map((n: any) => n.id).filter(Boolean) || [];
+    const existingEdgeUuids = new Set<string>(nextGraph.edges?.map((e: any) => e.uuid) || []);
+    const existingEdgeIds = nextGraph.edges?.map((e: any) => e.id).filter(Boolean) || [];
+    
+    // Mappings from old to new
+    const uuidMapping = new Map<string, string>(); // old UUID -> new UUID
+    const idMapping = new Map<string, string>();   // old ID -> new ID
+    const pastedNodeUuids: string[] = [];
+    const pastedEdgeUuids: string[] = [];
+    
+    // Phase 1: Create new nodes with unique IDs
+    const newNodes: any[] = [];
+    for (const node of nodes) {
+      // Generate new UUID
+      let newUuid = crypto.randomUUID();
+      while (existingNodeUuids.has(newUuid)) {
+        newUuid = crypto.randomUUID();
+      }
+      existingNodeUuids.add(newUuid);
+      
+      // Generate new human-readable ID
+      const baseId = node.id || node.uuid || 'node';
+      const newId = generateUniqueId(baseId, existingNodeIds);
+      existingNodeIds.push(newId);
+      
+      // Map old to new
+      if (node.uuid) uuidMapping.set(node.uuid, newUuid);
+      if (node.id) idMapping.set(node.id, newId);
+      // Also map uuid to id mapping for edge reference resolution
+      if (node.uuid) idMapping.set(node.uuid, newUuid);
+      
+      // Clone node with new IDs and offset position
+      const newNode = structuredClone(node);
+      newNode.uuid = newUuid;
+      newNode.id = newId;
+      
+      // Update label if not overridden
+      if (!newNode.label_overridden) {
+        newNode.label = this.humanizeNodeId(newId);
+      }
+      
+      // Offset position
+      if (newNode.position) {
+        newNode.position = {
+          x: (newNode.position.x || 0) + positionOffset.x,
+          y: (newNode.position.y || 0) + positionOffset.y,
+        };
+      } else if (newNode.x !== undefined && newNode.y !== undefined) {
+        newNode.x = (newNode.x || 0) + positionOffset.x;
+        newNode.y = (newNode.y || 0) + positionOffset.y;
+      }
+      
+      newNodes.push(newNode);
+      pastedNodeUuids.push(newUuid);
+    }
+    
+    // Phase 2: Create new edges with updated references
+    const newEdges: any[] = [];
+    for (const edge of edges) {
+      const oldFrom = edge.from;
+      const oldTo = edge.to;
+      
+      // Resolve new from/to using the mapping
+      // Check uuid mapping first, then id mapping
+      const newFrom = uuidMapping.get(oldFrom) || idMapping.get(oldFrom);
+      const newTo = uuidMapping.get(oldTo) || idMapping.get(oldTo);
+      
+      // Only include edge if both endpoints are in the pasted subgraph
+      if (!newFrom || !newTo) {
+        console.log('[UpdateManager] Skipping edge - endpoint not in subgraph:', { oldFrom, oldTo });
+        continue;
+      }
+      
+      // Generate new edge UUID
+      let newEdgeUuid = crypto.randomUUID();
+      while (existingEdgeUuids.has(newEdgeUuid)) {
+        newEdgeUuid = crypto.randomUUID();
+      }
+      existingEdgeUuids.add(newEdgeUuid);
+      
+      // Find source and target node IDs for edge ID generation
+      const sourceNode = newNodes.find(n => n.uuid === newFrom);
+      const targetNode = newNodes.find(n => n.uuid === newTo);
+      const sourceId = sourceNode?.id || newFrom;
+      const targetId = targetNode?.id || newTo;
+      
+      // Generate new edge ID
+      const baseEdgeId = edge.id || `${sourceId}-to-${targetId}`;
+      const newEdgeId = generateUniqueId(`${sourceId}-to-${targetId}`, existingEdgeIds);
+      existingEdgeIds.push(newEdgeId);
+      
+      // Clone edge with new IDs and updated references
+      const newEdge = structuredClone(edge);
+      newEdge.uuid = newEdgeUuid;
+      newEdge.id = newEdgeId;
+      newEdge.from = newFrom;
+      newEdge.to = newTo;
+      
+      // Update query strings to use new node IDs
+      if (newEdge.query && typeof newEdge.query === 'string') {
+        for (const [oldId, newId] of idMapping) {
+          newEdge.query = this.replaceNodeToken(newEdge.query, oldId, newId as string);
+        }
+      }
+      
+      // Update conditional probabilities
+      if (Array.isArray(newEdge.conditional_p)) {
+        for (const cond of newEdge.conditional_p) {
+          if (cond.condition && typeof cond.condition === 'string') {
+            for (const [oldId, newId] of idMapping) {
+              cond.condition = this.replaceNodeToken(cond.condition, oldId, newId as string);
+            }
+          }
+        }
+      }
+      
+      // Update case_id if it references a pasted node
+      if (newEdge.case_id) {
+        const mappedCaseId = idMapping.get(newEdge.case_id);
+        if (mappedCaseId) {
+          newEdge.case_id = mappedCaseId;
+        }
+      }
+      
+      newEdges.push(newEdge);
+      pastedEdgeUuids.push(newEdgeUuid);
+    }
+    
+    // Add new nodes and edges to graph
+    nextGraph.nodes = [...(nextGraph.nodes || []), ...newNodes];
+    nextGraph.edges = [...(nextGraph.edges || []), ...newEdges];
+    
+    // Update metadata
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Log operation
+    sessionLogService.info('graph', 'PASTE_SUBGRAPH', 
+      `Pasted ${newNodes.length} nodes and ${newEdges.length} edges`, 
+      undefined,
+      { nodeCount: newNodes.length, edgeCount: newEdges.length }
+    );
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'pasteSubgraph',
+      details: {
+        nodesAdded: newNodes.length,
+        edgesAdded: newEdges.length,
+        uuidMapping: Object.fromEntries(uuidMapping),
+        idMapping: Object.fromEntries(idMapping),
+      }
+    });
+    
+    return {
+      graph: nextGraph,
+      uuidMapping,
+      idMapping,
+      pastedNodeUuids,
+      pastedEdgeUuids,
+    };
+  }
+
+  /**
+   * Delete nodes and their connected edges from the graph.
+   * 
+   * @param graph - Current graph
+   * @param nodeUuids - UUIDs of nodes to delete
+   * @returns Updated graph and count of deleted items
+   */
+  deleteNodes(
+    graph: any,
+    nodeUuids: string[]
+  ): { 
+    graph: any; 
+    deletedNodeCount: number;
+    deletedEdgeCount: number;
+  } {
+    if (!nodeUuids || nodeUuids.length === 0) {
+      return { graph, deletedNodeCount: 0, deletedEdgeCount: 0 };
+    }
+    
+    const nextGraph = structuredClone(graph);
+    const nodeUuidSet = new Set(nodeUuids);
+    
+    // Count nodes to be deleted
+    const originalNodeCount = nextGraph.nodes?.length || 0;
+    
+    // Remove nodes
+    nextGraph.nodes = (nextGraph.nodes || []).filter((n: any) => 
+      !nodeUuidSet.has(n.uuid)
+    );
+    
+    const deletedNodeCount = originalNodeCount - nextGraph.nodes.length;
+    
+    // Count edges to be deleted
+    const originalEdgeCount = nextGraph.edges?.length || 0;
+    
+    // Remove edges connected to deleted nodes
+    nextGraph.edges = (nextGraph.edges || []).filter((e: any) => {
+      // Check if either endpoint is a deleted node
+      // edge.from and edge.to can be either uuid or human-readable id
+      // We need to check uuid first, then check if the id matches a deleted node's id
+      const fromDeleted = nodeUuidSet.has(e.from);
+      const toDeleted = nodeUuidSet.has(e.to);
+      return !fromDeleted && !toDeleted;
+    });
+    
+    const deletedEdgeCount = originalEdgeCount - nextGraph.edges.length;
+    
+    // Update metadata
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    // Log operation
+    sessionLogService.info('graph', 'DELETE_NODES', 
+      `Deleted ${deletedNodeCount} nodes and ${deletedEdgeCount} edges`, 
+      undefined,
+      { nodeCount: deletedNodeCount, edgeCount: deletedEdgeCount }
+    );
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'deleteNodes',
+      details: {
+        nodesDeleted: deletedNodeCount,
+        edgesDeleted: deletedEdgeCount,
+        nodeUuids,
+      }
+    });
+    
+    return {
+      graph: nextGraph,
+      deletedNodeCount,
+      deletedEdgeCount,
+    };
+  }
+
   /**
    * Convert a node id like "website-start-browse" into a human-readable label:
    * "Website start browse".
