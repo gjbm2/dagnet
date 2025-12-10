@@ -36,6 +36,8 @@ import {
   LAG_STRIPE_OPACITY,
   LAG_STRIPE_GAP,
   LAG_ANCHOR_OPACITY,
+  LAG_ANCHOR_SELECTED_OPACITY,
+  LAG_ANCHOR_HIGHLIGHTED_OPACITY,
   LAG_ANCHOR_FADE_BAND,
   LAG_ANCHOR_FADE_MIN,
   LAG_ANCHOR_USE_STRIPES,
@@ -2021,7 +2023,7 @@ export default function ConversionEdge({
               patternTransform={`rotate(${LAG_STRIPE_ANGLE})`}
             >
               <rect x="0" y="0" width={LAG_STRIPE_WIDTH} height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP} 
-                fill={data?.scenarioColour || getEdgeColour()}
+                fill={(effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())}
                 fillOpacity={LAG_STRIPE_OPACITY}
               />
             </pattern>
@@ -2034,7 +2036,8 @@ export default function ConversionEdge({
               patternTransform={`rotate(${LAG_STRIPE_ANGLE}) translate(${(LAG_STRIPE_WIDTH + LAG_STRIPE_GAP) / 2}, 0)`}
             >
               <rect x="0" y="0" width={LAG_STRIPE_WIDTH} height={LAG_STRIPE_WIDTH + LAG_STRIPE_GAP} 
-                fill={data?.scenarioColour || getEdgeColour()} fillOpacity={LAG_STRIPE_OPACITY} />
+                fill={(effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())} 
+                fillOpacity={LAG_STRIPE_OPACITY} />
             </pattern>
           </>
         )}
@@ -2210,18 +2213,26 @@ export default function ConversionEdge({
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                   />
                   {/* Chevrons along the path - filled shapes */}
-                  {splineChevrons.map((chevron, i) => (
-                    <path
-                      key={`${id}-lag-chevron-${i}`}
-                      d={chevron.path}
-                      fill={(effectiveSelected || data?.isHighlighted) 
-                        ? getEdgeColour() 
-                        : (data?.scenarioColour || getEdgeColour())}
-                      fillOpacity={LAG_ANCHOR_OPACITY * chevron.opacity}
-                      stroke="none"
-                      style={{ pointerEvents: 'none' }}
-                    />
-                  ))}
+                  {splineChevrons.map((chevron, i) => {
+                    // Boost base opacity when selected/highlighted for visibility
+                    const baseOpacity = effectiveSelected 
+                      ? LAG_ANCHOR_SELECTED_OPACITY 
+                      : data?.isHighlighted 
+                        ? LAG_ANCHOR_HIGHLIGHTED_OPACITY 
+                        : LAG_ANCHOR_OPACITY;
+                    return (
+                      <path
+                        key={`${id}-lag-chevron-${i}`}
+                        d={chevron.path}
+                        fill={(effectiveSelected || data?.isHighlighted) 
+                          ? getEdgeColour() 
+                          : (data?.scenarioColour || getEdgeColour())}
+                        fillOpacity={baseOpacity * chevron.opacity}
+                        stroke="none"
+                        style={{ pointerEvents: 'none' }}
+                      />
+                    );
+                  })}
                 </>
               ) : (
                 // Pattern-based anchor (stripes, pattern chevrons, or gradient)
@@ -2237,7 +2248,12 @@ export default function ConversionEdge({
                         ? `url(#lag-anchor-stripe-${id})`  // Stripes (mask handles fade)
                         : `url(#lag-anchor-fade-${id})`,   // Plain gradient fade
                     strokeWidth: strokeWidth,  // Always p.mean width
-                    strokeOpacity: LAG_ANCHOR_OPACITY,  // Base opacity (mask fades within this)
+                    // Boost opacity when selected/highlighted for visibility
+                    strokeOpacity: effectiveSelected 
+                      ? LAG_ANCHOR_SELECTED_OPACITY 
+                      : data?.isHighlighted 
+                        ? LAG_ANCHOR_HIGHLIGHTED_OPACITY 
+                        : LAG_ANCHOR_OPACITY,
                     mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                     fill: 'none',
                     strokeLinecap: 'round',

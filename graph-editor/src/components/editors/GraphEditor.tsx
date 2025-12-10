@@ -49,7 +49,16 @@ const SelectionContext = createContext<SelectionContextType | null>(null);
 export function useSelectionContext() {
   const context = useContext(SelectionContext);
   if (!context) {
-    throw new Error('useSelectionContext must be used within SelectionContext.Provider');
+    // Return a no-op context instead of throwing
+    // This can happen during Error Boundary recovery or when component tree is being rebuilt
+    console.warn('[useSelectionContext] Context not available - returning no-op defaults');
+    return {
+      selectedNodeId: null,
+      selectedEdgeId: null,
+      onSelectedNodeChange: () => {},
+      onSelectedEdgeChange: () => {},
+      openSelectorModal: () => {},
+    } as SelectionContextType;
   }
   return context;
 }
@@ -1456,6 +1465,17 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     window.addEventListener('dagnet:suppressStoreToFileSync' as any, handler);
     return () => window.removeEventListener('dagnet:suppressStoreToFileSync' as any, handler);
   }, [data]);
+
+  // Listen for suppress file→store sync event (from MSMDC to prevent stale file data overwriting anchors)
+  useEffect(() => {
+    const handler = (e: any) => {
+      const duration = e?.detail?.duration ?? 1000;
+      console.log(`[${new Date().toISOString()}] [GraphEditor] EVENT: dagnet:suppressFileToStoreSync received (duration: ${duration}ms)`);
+      suppressFileToStoreUntilRef.current = Date.now() + duration;
+    };
+    window.addEventListener('dagnet:suppressFileToStoreSync' as any, handler);
+    return () => window.removeEventListener('dagnet:suppressFileToStoreSync' as any, handler);
+  }, []);
 
   // Phase 4: Use refs for values only checked inside handlers to avoid unnecessary effect re-runs
   const activeTabIdRef = useRef(activeTabId);

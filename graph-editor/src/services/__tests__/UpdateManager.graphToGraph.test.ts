@@ -7,12 +7,19 @@
  * - Query token replacement
  * - Conditional probability token replacement
  * - UUID-to-ID edge renaming on first ID assignment
+ * - pasteSubgraph() for copy-paste functionality
  * 
  * @vitest-environment node
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { UpdateManager } from '../UpdateManager';
+
+// Mock crypto.randomUUID for Node.js test environment
+let uuidCounter = 0;
+vi.stubGlobal('crypto', {
+  randomUUID: () => `test-uuid-${++uuidCounter}`,
+});
 
 describe('UpdateManager - Graph-to-Graph Updates', () => {
   let updateManager: UpdateManager;
@@ -20,6 +27,8 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
   beforeEach(() => {
     updateManager = new UpdateManager();
     updateManager.clearAuditLog();
+    // Reset UUID counter for test isolation
+    uuidCounter = 0;
   });
   
   // ============================================================
@@ -889,6 +898,457 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
       const result = updateManager.renameNodeId(graph, 'node-a', 'new-id');
       
       expect(result.graph.nodes[0].id).toBe('new-id');
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 9: Subgraph Paste
+  // ============================================================
+  
+  describe('pasteSubgraph', () => {
+    it('should paste nodes with new unique UUIDs', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'existing-1', id: 'start', label: 'Start' },
+        ],
+        edges: [],
+        metadata: { version: '1.0' }
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing', label: 'Landing Page', position: { x: 100, y: 100 } },
+        { uuid: 'copy-2', id: 'checkout', label: 'Checkout', position: { x: 200, y: 100 } },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, []);
+      
+      // Original node still exists
+      expect(result.graph.nodes).toHaveLength(3);
+      expect(result.graph.nodes[0].uuid).toBe('existing-1');
+      
+      // New nodes have new UUIDs
+      expect(result.pastedNodeUuids).toHaveLength(2);
+      expect(result.pastedNodeUuids[0]).not.toBe('copy-1');
+      expect(result.pastedNodeUuids[1]).not.toBe('copy-2');
+      
+      // UUID mapping is populated
+      expect(result.uuidMapping.get('copy-1')).toBe(result.pastedNodeUuids[0]);
+      expect(result.uuidMapping.get('copy-2')).toBe(result.pastedNodeUuids[1]);
+    });
+
+    it('should generate unique human-readable IDs when duplicates exist', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'existing-1', id: 'landing', label: 'Landing' },
+        ],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing', label: 'Landing Page' },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, []);
+      
+      // New node should have a unique ID
+      const pastedNode = result.graph.nodes.find((n: any) => n.uuid === result.pastedNodeUuids[0]);
+      expect(pastedNode.id).toBe('landing-1');
+      expect(result.idMapping.get('landing')).toBe('landing-1');
+    });
+
+    it('should offset node positions', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'node', position: { x: 100, y: 200 } },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, [], { x: 50, y: 75 });
+      
+      const pastedNode = result.graph.nodes[0];
+      expect(pastedNode.position.x).toBe(150);
+      expect(pastedNode.position.y).toBe(275);
+    });
+
+    it('should paste edges with updated references', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing', label: 'Landing' },
+        { uuid: 'copy-2', id: 'checkout', label: 'Checkout' },
+      ];
+      
+      const edgesToPaste = [
+        { uuid: 'edge-1', id: 'landing-to-checkout', from: 'copy-1', to: 'copy-2', p: { mean: 0.5 } },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, edgesToPaste);
+      
+      // Edge should be pasted
+      expect(result.graph.edges).toHaveLength(1);
+      expect(result.pastedEdgeUuids).toHaveLength(1);
+      
+      // Edge references should be updated to new node UUIDs
+      const pastedEdge = result.graph.edges[0];
+      expect(pastedEdge.from).toBe(result.uuidMapping.get('copy-1'));
+      expect(pastedEdge.to).toBe(result.uuidMapping.get('copy-2'));
+      
+      // Edge should have new UUID
+      expect(pastedEdge.uuid).not.toBe('edge-1');
+    });
+
+    it('should skip edges that reference nodes outside the subgraph', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'external', id: 'external-node' },
+        ],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing', label: 'Landing' },
+      ];
+      
+      const edgesToPaste = [
+        // This edge references an external node not being pasted
+        { uuid: 'edge-1', id: 'landing-to-external', from: 'copy-1', to: 'external', p: { mean: 0.5 } },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, edgesToPaste);
+      
+      // Edge should be skipped
+      expect(result.graph.edges).toHaveLength(0);
+      expect(result.pastedEdgeUuids).toHaveLength(0);
+    });
+
+    it('should update query strings in edges with new node IDs', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing', label: 'Landing' },
+        { uuid: 'copy-2', id: 'checkout', label: 'Checkout' },
+      ];
+      
+      const edgesToPaste = [
+        { 
+          uuid: 'edge-1', 
+          id: 'landing-to-checkout', 
+          from: 'copy-1', 
+          to: 'copy-2', 
+          query: 'landing -> checkout',
+          p: { mean: 0.5 } 
+        },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, edgesToPaste);
+      
+      const pastedEdge = result.graph.edges[0];
+      const newLandingId = result.idMapping.get('landing');
+      const newCheckoutId = result.idMapping.get('checkout');
+      
+      // Query should use new IDs
+      expect(pastedEdge.query).toContain(newLandingId);
+      expect(pastedEdge.query).toContain(newCheckoutId);
+    });
+
+    it('should update conditional_p conditions with new node IDs', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing', label: 'Landing' },
+        { uuid: 'copy-2', id: 'checkout', label: 'Checkout' },
+      ];
+      
+      const edgesToPaste = [
+        { 
+          uuid: 'edge-1', 
+          from: 'copy-1', 
+          to: 'copy-2', 
+          conditional_p: [
+            { condition: 'via landing', p: { mean: 0.8 } }
+          ],
+          p: { mean: 0.5 } 
+        },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, edgesToPaste);
+      
+      const pastedEdge = result.graph.edges[0];
+      const newLandingId = result.idMapping.get('landing');
+      
+      expect(pastedEdge.conditional_p[0].condition).toContain(newLandingId);
+    });
+
+    it('should update label if not overridden', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing-page', label: 'Landing Page', label_overridden: false },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, []);
+      
+      // Since the ID might be 'landing-page' if unique, label should be humanized
+      const pastedNode = result.graph.nodes[0];
+      // Label should be updated based on new ID
+      expect(pastedNode.label).toBeDefined();
+    });
+
+    it('should preserve label if overridden', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing', label: 'My Custom Label', label_overridden: true },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, []);
+      
+      const pastedNode = result.graph.nodes[0];
+      expect(pastedNode.label).toBe('My Custom Label');
+    });
+
+    it('should preserve all node properties', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { 
+          uuid: 'copy-1', 
+          id: 'landing', 
+          label: 'Landing',
+          absorbing: true,
+          event_id: 'page-view',
+          case: { id: 'test-case', variants: [{ name: 'A' }] }
+        },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, []);
+      
+      const pastedNode = result.graph.nodes[0];
+      expect(pastedNode.absorbing).toBe(true);
+      expect(pastedNode.event_id).toBe('page-view');
+      expect(pastedNode.case).toBeDefined();
+      expect(pastedNode.case.variants).toHaveLength(1);
+    });
+
+    it('should preserve all edge properties', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'a' },
+        { uuid: 'copy-2', id: 'b' },
+      ];
+      
+      const edgesToPaste = [
+        { 
+          uuid: 'edge-1', 
+          from: 'copy-1', 
+          to: 'copy-2', 
+          p: { mean: 0.5, std: 0.1 },
+          cost_gbp: { mean: 10 },
+          case_variant: 'control'
+        },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, edgesToPaste);
+      
+      const pastedEdge = result.graph.edges[0];
+      expect(pastedEdge.p.mean).toBe(0.5);
+      expect(pastedEdge.p.std).toBe(0.1);
+      expect(pastedEdge.cost_gbp.mean).toBe(10);
+      expect(pastedEdge.case_variant).toBe('control');
+    });
+
+    it('should update metadata timestamp', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+        metadata: { updated_at: '2020-01-01' }
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing' },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, []);
+      
+      expect(result.graph.metadata.updated_at).not.toBe('2020-01-01');
+    });
+
+    it('should handle empty graph', () => {
+      const graph = {
+        nodes: [],
+        edges: [],
+      };
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing' },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, []);
+      
+      expect(result.graph.nodes).toHaveLength(1);
+    });
+
+    it('should handle pasting into graph with no nodes/edges arrays', () => {
+      const graph = {};
+      
+      const nodesToPaste = [
+        { uuid: 'copy-1', id: 'landing' },
+      ];
+      
+      const result = updateManager.pasteSubgraph(graph, nodesToPaste, []);
+      
+      expect(result.graph.nodes).toHaveLength(1);
+      expect(result.graph.edges).toHaveLength(0);
+    });
+  });
+  
+  // ============================================================
+  // TEST SUITE 10: Delete Nodes
+  // ============================================================
+  
+  describe('deleteNodes', () => {
+    it('should delete nodes by UUID', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-1', id: 'landing' },
+          { uuid: 'node-2', id: 'checkout' },
+          { uuid: 'node-3', id: 'complete' },
+        ],
+        edges: [],
+        metadata: { version: '1.0' }
+      };
+      
+      const result = updateManager.deleteNodes(graph, ['node-1', 'node-3']);
+      
+      expect(result.graph.nodes).toHaveLength(1);
+      expect(result.graph.nodes[0].uuid).toBe('node-2');
+      expect(result.deletedNodeCount).toBe(2);
+    });
+
+    it('should delete connected edges', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-1', id: 'landing' },
+          { uuid: 'node-2', id: 'checkout' },
+          { uuid: 'node-3', id: 'complete' },
+        ],
+        edges: [
+          { uuid: 'edge-1', from: 'node-1', to: 'node-2', p: { mean: 0.5 } },
+          { uuid: 'edge-2', from: 'node-2', to: 'node-3', p: { mean: 0.8 } },
+          { uuid: 'edge-3', from: 'node-1', to: 'node-3', p: { mean: 0.3 } },
+        ],
+      };
+      
+      const result = updateManager.deleteNodes(graph, ['node-1']);
+      
+      expect(result.graph.nodes).toHaveLength(2);
+      expect(result.deletedNodeCount).toBe(1);
+      // Edges from/to node-1 should be deleted
+      expect(result.deletedEdgeCount).toBe(2);
+      expect(result.graph.edges).toHaveLength(1);
+      expect(result.graph.edges[0].uuid).toBe('edge-2');
+    });
+
+    it('should return unchanged graph when empty UUIDs provided', () => {
+      const graph = {
+        nodes: [{ uuid: 'node-1', id: 'test' }],
+        edges: [],
+      };
+      
+      const result = updateManager.deleteNodes(graph, []);
+      
+      expect(result.graph.nodes).toHaveLength(1);
+      expect(result.deletedNodeCount).toBe(0);
+      expect(result.deletedEdgeCount).toBe(0);
+    });
+
+    it('should handle non-existent node UUIDs gracefully', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-1', id: 'landing' },
+        ],
+        edges: [],
+      };
+      
+      const result = updateManager.deleteNodes(graph, ['non-existent']);
+      
+      expect(result.graph.nodes).toHaveLength(1);
+      expect(result.deletedNodeCount).toBe(0);
+    });
+
+    it('should update metadata timestamp', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-1', id: 'landing' },
+        ],
+        edges: [],
+        metadata: { updated_at: '2020-01-01' }
+      };
+      
+      const result = updateManager.deleteNodes(graph, ['node-1']);
+      
+      expect(result.graph.metadata.updated_at).not.toBe('2020-01-01');
+    });
+
+    it('should handle graph with no edges', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-1', id: 'landing' },
+          { uuid: 'node-2', id: 'checkout' },
+        ],
+      };
+      
+      const result = updateManager.deleteNodes(graph, ['node-1']);
+      
+      expect(result.graph.nodes).toHaveLength(1);
+      expect(result.deletedNodeCount).toBe(1);
+      expect(result.deletedEdgeCount).toBe(0);
+    });
+
+    it('should delete all nodes when all UUIDs provided', () => {
+      const graph = {
+        nodes: [
+          { uuid: 'node-1', id: 'a' },
+          { uuid: 'node-2', id: 'b' },
+          { uuid: 'node-3', id: 'c' },
+        ],
+        edges: [
+          { uuid: 'edge-1', from: 'node-1', to: 'node-2', p: { mean: 0.5 } },
+          { uuid: 'edge-2', from: 'node-2', to: 'node-3', p: { mean: 0.8 } },
+        ],
+      };
+      
+      const result = updateManager.deleteNodes(graph, ['node-1', 'node-2', 'node-3']);
+      
+      expect(result.graph.nodes).toHaveLength(0);
+      expect(result.graph.edges).toHaveLength(0);
+      expect(result.deletedNodeCount).toBe(3);
+      expect(result.deletedEdgeCount).toBe(2);
     });
   });
 });

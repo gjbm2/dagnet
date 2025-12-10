@@ -393,13 +393,15 @@ Then ensure `new_field` follows the SAME patterns in ALL the same places.
 **CRITICAL: Only run RELEVANT tests, not the full suite.**
 
 - **Default behavior**: Run only tests related to files you changed
-  - Use `npm test -- --run --testNamePattern="PatternHere"` for specific tests
-  - Use `npm test -- --run path/to/specific.test.ts` for specific file
+  - **ALWAYS use file paths, NOT patterns** - patterns are extremely slow in Vitest
+  - Use `npm test -- --run path/to/specific.test.ts` for specific file(s)
+  - Multiple files: `npm test -- --run file1.test.ts file2.test.ts`
+  - **NEVER use --testNamePattern** - it scans all files and is prohibitively slow
 - **Full suite**: Only run when user explicitly asks OR when changes are pervasive (e.g., core type changes)
 - **Never run all tests** just to "verify" - it wastes time
 
 When asked to "run tests":
-- **Frontend**: Run `npm test` with appropriate filter (Vitest)
+- **Frontend**: Run `npm test -- --run path/to/file.test.ts` (Vitest with specific files)
 - **Python**: Run `pytest tests/specific_test.py` or `pytest -k "pattern"` 
 - Run BOTH only if changes affect both frontend and Python
 

@@ -187,8 +187,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const scenariosContext = useScenariosContextOptional();
   
   // Copy-paste hook for paste node functionality
-  const { copiedItem } = useCopyPaste();
-  const copiedNode = copiedItem?.objectType === 'node' ? copiedItem : null;
+  const { copiedItem, canPaste } = useCopyPaste();
+  const copiedNode = copiedItem?.type === 'dagnet-copy' && copiedItem.objectType === 'node' ? copiedItem : null;
+  const copiedSubgraph = copiedItem?.type === 'dagnet-subgraph' ? copiedItem : null;
   
   // Wrapped setGraph that automatically triggers query regeneration on topology changes
   const setGraph = useCallback(async (newGraph: any, oldGraph?: any) => {
@@ -1402,6 +1403,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     return () => window.removeEventListener('dagnet:querySelection', handler as any);
   }, [nodes, edges]);
 
+  // Listen for select all nodes request (from Edit menu)
+  useEffect(() => {
+    const handler = () => {
+      // Select all nodes (not edges - user can select those via shift-click if needed)
+      setNodes(prevNodes => prevNodes.map(n => ({ ...n, selected: true })));
+      // Deselect all edges when selecting all nodes
+      setEdges(prevEdges => prevEdges.map(e => ({ ...e, selected: false })));
+      // Clear primary selection (multi-selection mode)
+      onSelectedNodeChange(null);
+      onSelectedEdgeChange(null);
+    };
+    window.addEventListener('dagnet:selectAllNodes', handler);
+    return () => window.removeEventListener('dagnet:selectAllNodes', handler);
+  }, [setNodes, setEdges, onSelectedNodeChange, onSelectedEdgeChange]);
+
   // Sync FROM graph TO ReactFlow when graph changes externally
   useEffect(() => {
     if (!graph) return;
@@ -2301,6 +2317,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
     
     setEdges(mergedEdges);
+    
+    // CRITICAL: Update lastSyncedReactFlowRef to prevent ReactFlow→Graph sync from
+    // re-triggering when Graph→ReactFlow sync completes. This prevents the sync loop:
+    // Graph change → Graph→ReactFlow sync → nodes/edges state change → ReactFlow→Graph sync → Graph change
+    // The fromFlow() call here matches what ReactFlow→Graph sync would produce, so we can skip it.
+    const graphFromFlow = fromFlow(newNodes, mergedEdges, graph);
+    if (graphFromFlow) {
+      lastSyncedReactFlowRef.current = JSON.stringify(graphFromFlow);
+    }
     
     // Clear rebuild flag after a brief delay to allow scenario pipeline to settle
     setTimeout(() => {
@@ -4450,6 +4475,61 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }, 100);
   }, [graph, setGraph, copiedNode, saveHistoryState, setNodes, onSelectedNodeChange]);
 
+  // Paste subgraph at specific position (from copy-paste clipboard)
+  const pasteSubgraphAtPosition = useCallback(async (x: number, y: number) => {
+    if (!graph) return;
+    
+    if (!copiedSubgraph) {
+      toast.error('No subgraph copied');
+      return;
+    }
+    
+    // Calculate offset from first node position to target position
+    const firstNode = copiedSubgraph.nodes[0];
+    const firstNodeX = firstNode?.layout?.x ?? 0;
+    const firstNodeY = firstNode?.layout?.y ?? 0;
+    const offsetX = x - firstNodeX;
+    const offsetY = y - firstNodeY;
+    
+    // Import updateManager dynamically to avoid circular dependencies
+    const { updateManager } = await import('../services/UpdateManager');
+    
+    const result = updateManager.pasteSubgraph(
+      graph,
+      copiedSubgraph.nodes,
+      copiedSubgraph.edges,
+      { x: offsetX, y: offsetY }
+    );
+    
+    setGraph(result.graph);
+    
+    if (typeof saveHistoryState === 'function') {
+      saveHistoryState('Paste subgraph');
+    }
+    setContextMenu(null);
+    
+    const parts: string[] = [];
+    parts.push(`${result.pastedNodeUuids.length} node${result.pastedNodeUuids.length !== 1 ? 's' : ''}`);
+    if (result.pastedEdgeUuids.length > 0) {
+      parts.push(`${result.pastedEdgeUuids.length} edge${result.pastedEdgeUuids.length !== 1 ? 's' : ''}`);
+    }
+    toast.success(`Pasted ${parts.join(' and ')}`);
+    
+    // Select the new nodes
+    setTimeout(() => {
+      const pastedUuidSet = new Set(result.pastedNodeUuids);
+      setNodes((nodes) => 
+        nodes.map((node) => ({
+          ...node,
+          selected: pastedUuidSet.has(node.id)
+        }))
+      );
+      if (result.pastedNodeUuids.length > 0) {
+        onSelectedNodeChange(result.pastedNodeUuids[0]);
+      }
+    }, 100);
+  }, [graph, setGraph, copiedSubgraph, saveHistoryState, setNodes, onSelectedNodeChange]);
+
   // Drop node at specific position (from drag & drop)
   const dropNodeAtPosition = useCallback(async (nodeId: string, x: number, y: number) => {
     if (!graph) return;
@@ -4997,7 +5077,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           >
             ➕ Add node
           </div>
-          {/* Paste node - only show when a node is copied */}
+          {/* Paste node - only show when a single node reference is copied */}
           {copiedNode && (
             <div
               onClick={(e) => {
@@ -5015,6 +5095,48 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
               onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
             >
               📋 Paste node: {copiedNode.objectId}
+            </div>
+          )}
+          {/* Paste subgraph - only show when a subgraph is copied */}
+          {copiedSubgraph && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: '#333',
+                borderRadius: '2px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              📋 Paste ({copiedSubgraph.nodes.length} nodes, {copiedSubgraph.edges.length} edges)
+            </div>
+          )}
+          {/* Select All - always available if there are nodes */}
+          {nodes.length > 0 && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                // Select all nodes using the same event as Edit > Select All
+                window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes'));
+                setContextMenu(null);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: '#333',
+                borderRadius: '2px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              ⬜ Select All
             </div>
           )}
         </div>

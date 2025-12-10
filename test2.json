@@ -1,2487 +1,291 @@
-[
-  {
-    "id": "log-1765306583594-175",
-    "timestamp": "2025-12-09T18:56:23.594Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "BATCH_ALL_SLICES",
-    "message": "All Slices complete: 20 operations succeeded, 0 failed across 2 slices",
-    "context": {
-      "filesAffected": [
-        "window(-14d:-1d)",
-        "cohort(-14d:-1d)"
-      ],
-      "added": 20,
-      "errors": 0,
-      "duration": 3317.8000000715256
-    },
-    "children": [
-      {
-        "id": "log-1765306585358-256",
-        "timestamp": "2025-12-09T18:56:25.358Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "SLICE_COMPLETE",
-        "message": "Slice \"window(-14d:-1d)\": 10 succeeded, 0 failed",
-        "context": {
-          "added": 10,
-          "errors": 0
-        },
-        "parentId": "log-1765306583594-175"
-      },
-      {
-        "id": "log-1765306586911-330",
-        "timestamp": "2025-12-09T18:56:26.911Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "SLICE_COMPLETE",
-        "message": "Slice \"cohort(-14d:-1d)\": 10 succeeded, 0 failed",
-        "context": {
-          "added": 10,
-          "errors": 0
-        },
-        "parentId": "log-1765306583594-175"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306583594-176",
-    "timestamp": "2025-12-09T18:56:23.594Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter coffee-to-bds",
-    "context": {
-      "fileId": "parameter-coffee-to-bds",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306583607-177",
-    "timestamp": "2025-12-09T18:56:23.607Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-coffee-to-bds",
-      "fileType": "parameter",
-      "targetId": "76e0e0f8-133d-4065-9fab-56480063d9c9",
-      "duration": 54
-    },
-    "children": [
-      {
-        "id": "log-1765306583607-178",
-        "timestamp": "2025-12-09T18:56:23.607Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306583607-177"
-      },
-      {
-        "id": "log-1765306583621-179",
-        "timestamp": "2025-12-09T18:56:23.621Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306583607-177"
-      },
-      {
-        "id": "log-1765306583624-180",
-        "timestamp": "2025-12-09T18:56:23.624Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306583607-177"
-      },
-      {
-        "id": "log-1765306583624-181",
-        "timestamp": "2025-12-09T18:56:23.624Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for viewed-coffee-screen → gave-bds-in-onboarding (coffee-to-bds)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "coffee-to-bds",
-          "targetId": "76e0e0f8-133d-4065-9fab-56480063d9c9"
-        },
-        "parentId": "log-1765306583607-177"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306583624-182",
-    "timestamp": "2025-12-09T18:56:23.624Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from coffee-to-bds.yaml",
-    "context": {
-      "fileId": "parameter-coffee-to-bds",
-      "fileType": "parameter",
-      "targetId": "76e0e0f8-133d-4065-9fab-56480063d9c9",
-      "duration": 18.200000047683716
-    },
-    "children": [
-      {
-        "id": "log-1765306583633-183",
-        "timestamp": "2025-12-09T18:56:23.633Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(2-Nov-25:8-Dec-25): n=1116, k=392, evidence=35.1%, blended=35.1%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(2-Nov-25:8-Dec-25)"
-          ],
-          "n": 1116,
-          "k": 392,
-          "evidence_mean": 0.35125448028673834,
-          "blended_mean": 0.351,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306583624-182"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306583661-184",
-    "timestamp": "2025-12-09T18:56:23.661Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter registration-to-success",
-    "context": {
-      "fileId": "parameter-registration-to-success",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306583704-185",
-    "timestamp": "2025-12-09T18:56:23.704Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-registration-to-success",
-      "fileType": "parameter",
-      "targetId": "370dce1d-3a36-4109-9711-204c301478c8",
-      "duration": 70.09999990463257
-    },
-    "children": [
-      {
-        "id": "log-1765306583705-186",
-        "timestamp": "2025-12-09T18:56:23.705Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306583704-185"
-      },
-      {
-        "id": "log-1765306583725-187",
-        "timestamp": "2025-12-09T18:56:23.725Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(switch-registered).to(switch-success)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(switch-registered).to(switch-success)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306583704-185"
-      },
-      {
-        "id": "log-1765306583740-188",
-        "timestamp": "2025-12-09T18:56:23.740Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306583704-185"
-      },
-      {
-        "id": "log-1765306583740-189",
-        "timestamp": "2025-12-09T18:56:23.740Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for switch-registered → switch-success (registration-to-success)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "registration-to-success",
-          "targetId": "370dce1d-3a36-4109-9711-204c301478c8"
-        },
-        "parentId": "log-1765306583704-185"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306583740-190",
-    "timestamp": "2025-12-09T18:56:23.740Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from registration-to-success.yaml",
-    "context": {
-      "fileId": "parameter-registration-to-success",
-      "fileType": "parameter",
-      "targetId": "370dce1d-3a36-4109-9711-204c301478c8",
-      "duration": 12.299999952316284
-    },
-    "children": [
-      {
-        "id": "log-1765306583743-191",
-        "timestamp": "2025-12-09T18:56:23.743Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(2-Nov-25:8-Dec-25): n=404, k=184, evidence=45.5%, blended=45.5%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(2-Nov-25:8-Dec-25)"
-          ],
-          "n": 404,
-          "k": 184,
-          "evidence_mean": 0.45544554455445546,
-          "blended_mean": 0.455,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306583740-190"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306583775-192",
-    "timestamp": "2025-12-09T18:56:23.775Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter household-delegation-rate",
-    "context": {
-      "fileId": "parameter-household-delegation-rate",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306583805-193",
-    "timestamp": "2025-12-09T18:56:23.805Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-household-delegation-rate",
-      "fileType": "parameter",
-      "targetId": "3d0a0757-8224-4cf0-a841-4ad17cd48d91",
-      "duration": 84.5
-    },
-    "children": [
-      {
-        "id": "log-1765306583805-194",
-        "timestamp": "2025-12-09T18:56:23.805Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306583805-193"
-      },
-      {
-        "id": "log-1765306583845-195",
-        "timestamp": "2025-12-09T18:56:23.845Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(household-created).to(household-delegated)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(household-created).to(household-delegated)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306583805-193"
-      },
-      {
-        "id": "log-1765306583859-196",
-        "timestamp": "2025-12-09T18:56:23.859Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306583805-193"
-      },
-      {
-        "id": "log-1765306583859-197",
-        "timestamp": "2025-12-09T18:56:23.859Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for household-created → household-delegated (household-delegation-rate)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "household-delegation-rate",
-          "targetId": "3d0a0757-8224-4cf0-a841-4ad17cd48d91"
-        },
-        "parentId": "log-1765306583805-193"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306583859-198",
-    "timestamp": "2025-12-09T18:56:23.859Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from household-delegation-rate.yaml",
-    "context": {
-      "fileId": "parameter-household-delegation-rate",
-      "fileType": "parameter",
-      "targetId": "3d0a0757-8224-4cf0-a841-4ad17cd48d91",
-      "duration": 11.5
-    },
-    "children": [
-      {
-        "id": "log-1765306583863-199",
-        "timestamp": "2025-12-09T18:56:23.863Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(30-Sep-25:8-Dec-25): n=4278, k=2265, evidence=52.9%, blended=52.9%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(30-Sep-25:8-Dec-25)"
-          ],
-          "n": 4278,
-          "k": 2265,
-          "evidence_mean": 0.52945301542777,
-          "blended_mean": 0.529,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306583859-198"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306583889-200",
-    "timestamp": "2025-12-09T18:56:23.889Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter non-energy-rec-to-reg",
-    "context": {
-      "fileId": "parameter-non-energy-rec-to-reg",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306583929-201",
-    "timestamp": "2025-12-09T18:56:23.929Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-non-energy-rec-to-reg",
-      "fileType": "parameter",
-      "targetId": "9624cce1-21f3-4085-9388-c155b5b657fd",
-      "duration": 157.5
-    },
-    "children": [
-      {
-        "id": "log-1765306583929-202",
-        "timestamp": "2025-12-09T18:56:23.929Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306583929-201"
-      },
-      {
-        "id": "log-1765306584037-203",
-        "timestamp": "2025-12-09T18:56:24.037Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(mobile-or-broadband-first-rec).to(switch-registered)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(mobile-or-broadband-first-rec).to(switch-registered)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306583929-201"
-      },
-      {
-        "id": "log-1765306584046-204",
-        "timestamp": "2025-12-09T18:56:24.046Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306583929-201"
-      },
-      {
-        "id": "log-1765306584047-205",
-        "timestamp": "2025-12-09T18:56:24.047Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for mobile-or-broadband-first-rec → switch-registered (non-energy-rec-to-reg)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "non-energy-rec-to-reg",
-          "targetId": "9624cce1-21f3-4085-9388-c155b5b657fd"
-        },
-        "parentId": "log-1765306583929-201"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584047-206",
-    "timestamp": "2025-12-09T18:56:24.047Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from non-energy-rec-to-reg.yaml",
-    "context": {
-      "fileId": "parameter-non-energy-rec-to-reg",
-      "fileType": "parameter",
-      "targetId": "9624cce1-21f3-4085-9388-c155b5b657fd",
-      "duration": 17.90000009536743
-    },
-    "children": [
-      {
-        "id": "log-1765306584051-207",
-        "timestamp": "2025-12-09T18:56:24.051Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(2-Nov-25:8-Dec-25): n=858, k=34, evidence=4.0%, blended=4.0%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(2-Nov-25:8-Dec-25)"
-          ],
-          "n": 858,
-          "k": 34,
-          "evidence_mean": 0.039627039627039624,
-          "blended_mean": 0.04,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306584047-206"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584087-208",
-    "timestamp": "2025-12-09T18:56:24.087Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter delegated-to-non-energy-rec",
-    "context": {
-      "fileId": "parameter-delegated-to-non-energy-rec",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306584117-209",
-    "timestamp": "2025-12-09T18:56:24.117Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-delegated-to-non-energy-rec",
-      "fileType": "parameter",
-      "targetId": "10e37cc7-0d37-4cd9-844b-653148025a51",
-      "duration": 125
-    },
-    "children": [
-      {
-        "id": "log-1765306584117-210",
-        "timestamp": "2025-12-09T18:56:24.117Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306584117-209"
-      },
-      {
-        "id": "log-1765306584196-211",
-        "timestamp": "2025-12-09T18:56:24.196Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(household-delegated).to(mobile-or-broadband-first-rec)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(household-delegated).to(mobile-or-broadband-first-rec)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306584117-209"
-      },
-      {
-        "id": "log-1765306584207-212",
-        "timestamp": "2025-12-09T18:56:24.207Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306584117-209"
-      },
-      {
-        "id": "log-1765306584208-213",
-        "timestamp": "2025-12-09T18:56:24.208Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for household-delegated → mobile-or-broadband-first-rec (delegated-to-non-energy-rec)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "delegated-to-non-energy-rec",
-          "targetId": "10e37cc7-0d37-4cd9-844b-653148025a51"
-        },
-        "parentId": "log-1765306584117-209"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584208-214",
-    "timestamp": "2025-12-09T18:56:24.208Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from delegated-to-non-energy-rec.yaml",
-    "context": {
-      "fileId": "parameter-delegated-to-non-energy-rec",
-      "fileType": "parameter",
-      "targetId": "10e37cc7-0d37-4cd9-844b-653148025a51",
-      "duration": 14.699999928474426
-    },
-    "children": [
-      {
-        "id": "log-1765306584212-215",
-        "timestamp": "2025-12-09T18:56:24.212Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(2-Nov-25:8-Dec-25): n=2265, k=306, evidence=13.5%, blended=13.5%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(2-Nov-25:8-Dec-25)"
-          ],
-          "n": 2265,
-          "k": 306,
-          "evidence_mean": 0.13509933774834437,
-          "blended_mean": 0.135,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306584208-214"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584242-216",
-    "timestamp": "2025-12-09T18:56:24.242Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter bds-to-energy-rec",
-    "context": {
-      "fileId": "parameter-bds-to-energy-rec",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306584276-217",
-    "timestamp": "2025-12-09T18:56:24.276Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-bds-to-energy-rec",
-      "fileType": "parameter",
-      "targetId": "77d0a69e-3c75-4722-932b-7f54d317d0ce",
-      "duration": 120.89999997615814
-    },
-    "children": [
-      {
-        "id": "log-1765306584276-218",
-        "timestamp": "2025-12-09T18:56:24.276Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306584276-217"
-      },
-      {
-        "id": "log-1765306584343-219",
-        "timestamp": "2025-12-09T18:56:24.343Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(gave-bds-in-onboarding).to(energy-rec)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(gave-bds-in-onboarding).to(energy-rec)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306584276-217"
-      },
-      {
-        "id": "log-1765306584362-220",
-        "timestamp": "2025-12-09T18:56:24.362Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306584276-217"
-      },
-      {
-        "id": "log-1765306584362-221",
-        "timestamp": "2025-12-09T18:56:24.362Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for gave-bds-in-onboarding → energy-rec (bds-to-energy-rec)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "bds-to-energy-rec",
-          "targetId": "77d0a69e-3c75-4722-932b-7f54d317d0ce"
-        },
-        "parentId": "log-1765306584276-217"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584362-222",
-    "timestamp": "2025-12-09T18:56:24.362Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from bds-to-energy-rec.yaml",
-    "context": {
-      "fileId": "parameter-bds-to-energy-rec",
-      "fileType": "parameter",
-      "targetId": "77d0a69e-3c75-4722-932b-7f54d317d0ce",
-      "duration": 13.299999952316284
-    },
-    "children": [
-      {
-        "id": "log-1765306584366-223",
-        "timestamp": "2025-12-09T18:56:24.366Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(9-Nov-25:8-Dec-25): n=390, k=288, evidence=73.8%, blended=73.8%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(9-Nov-25:8-Dec-25)"
-          ],
-          "n": 390,
-          "k": 288,
-          "evidence_mean": 0.7384615384615385,
-          "blended_mean": 0.738,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306584362-222"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584397-224",
-    "timestamp": "2025-12-09T18:56:24.397Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter delegated-to-coffee",
-    "context": {
-      "fileId": "parameter-delegated-to-coffee",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306584429-225",
-    "timestamp": "2025-12-09T18:56:24.429Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-delegated-to-coffee",
-      "fileType": "parameter",
-      "targetId": "64f4529c-62b8-4e7e-8479-c5289d925e58",
-      "duration": 138.79999995231628
-    },
-    "children": [
-      {
-        "id": "log-1765306584429-226",
-        "timestamp": "2025-12-09T18:56:24.429Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306584429-225"
-      },
-      {
-        "id": "log-1765306584502-227",
-        "timestamp": "2025-12-09T18:56:24.502Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(household-delegated).to(viewed-coffee-screen)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(household-delegated).to(viewed-coffee-screen)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306584429-225"
-      },
-      {
-        "id": "log-1765306584526-228",
-        "timestamp": "2025-12-09T18:56:24.526Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306584429-225"
-      },
-      {
-        "id": "log-1765306584526-229",
-        "timestamp": "2025-12-09T18:56:24.526Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for household-delegated → viewed-coffee-screen (delegated-to-coffee)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "delegated-to-coffee",
-          "targetId": "64f4529c-62b8-4e7e-8479-c5289d925e58"
-        },
-        "parentId": "log-1765306584429-225"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584526-230",
-    "timestamp": "2025-12-09T18:56:24.526Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from delegated-to-coffee.yaml",
-    "context": {
-      "fileId": "parameter-delegated-to-coffee",
-      "fileType": "parameter",
-      "targetId": "64f4529c-62b8-4e7e-8479-c5289d925e58",
-      "duration": 13.100000023841858
-    },
-    "children": [
-      {
-        "id": "log-1765306584529-231",
-        "timestamp": "2025-12-09T18:56:24.529Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(2-Nov-25:8-Dec-25): n=2265, k=972, evidence=42.9%, blended=42.9%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(2-Nov-25:8-Dec-25)"
-          ],
-          "n": 2265,
-          "k": 972,
-          "evidence_mean": 0.4291390728476821,
-          "blended_mean": 0.429,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306584526-230"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584568-232",
-    "timestamp": "2025-12-09T18:56:24.568Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter no-bdos-to-rec",
-    "context": {
-      "fileId": "parameter-no-bdos-to-rec",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306584633-233",
-    "timestamp": "2025-12-09T18:56:24.633Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-no-bdos-to-rec",
-      "fileType": "parameter",
-      "targetId": "13b5397f-9feb-453a-8e86-500c0693b4af",
-      "duration": 105.89999997615814
-    },
-    "children": [
-      {
-        "id": "log-1765306584633-234",
-        "timestamp": "2025-12-09T18:56:24.633Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306584633-233"
-      },
-      {
-        "id": "log-1765306584680-235",
-        "timestamp": "2025-12-09T18:56:24.680Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306584633-233"
-      },
-      {
-        "id": "log-1765306584706-236",
-        "timestamp": "2025-12-09T18:56:24.706Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306584633-233"
-      },
-      {
-        "id": "log-1765306584706-237",
-        "timestamp": "2025-12-09T18:56:24.706Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for viewed-coffee-screen → energy-rec (no-bdos-to-rec)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "no-bdos-to-rec",
-          "targetId": "13b5397f-9feb-453a-8e86-500c0693b4af"
-        },
-        "parentId": "log-1765306584633-233"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584706-238",
-    "timestamp": "2025-12-09T18:56:24.706Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from no-bdos-to-rec.yaml",
-    "context": {
-      "fileId": "parameter-no-bdos-to-rec",
-      "fileType": "parameter",
-      "targetId": "13b5397f-9feb-453a-8e86-500c0693b4af",
-      "duration": 13.100000023841858
-    },
-    "children": [
-      {
-        "id": "log-1765306584709-239",
-        "timestamp": "2025-12-09T18:56:24.709Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(9-Nov-25:9-Dec-25): n=957, k=545, evidence=56.9%, blended=56.9%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(9-Nov-25:9-Dec-25)"
-          ],
-          "n": 957,
-          "k": 545,
-          "evidence_mean": 0.5694879832810867,
-          "blended_mean": 0.569,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306584706-238"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584739-240",
-    "timestamp": "2025-12-09T18:56:24.739Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter rec-with-bdos-to-registration",
-    "context": {
-      "fileId": "parameter-rec-with-bdos-to-registration",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306584774-241",
-    "timestamp": "2025-12-09T18:56:24.774Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-rec-with-bdos-to-registration",
-      "fileType": "parameter",
-      "targetId": "d45debd8-939b-4abb-b0d0-c5ef62412add",
-      "duration": 113.5
-    },
-    "children": [
-      {
-        "id": "log-1765306584774-242",
-        "timestamp": "2025-12-09T18:56:24.774Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306584774-241"
-      },
-      {
-        "id": "log-1765306584844-243",
-        "timestamp": "2025-12-09T18:56:24.844Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(energy-rec).to(switch-registered)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(energy-rec).to(switch-registered)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306584774-241"
-      },
-      {
-        "id": "log-1765306584856-244",
-        "timestamp": "2025-12-09T18:56:24.856Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306584774-241"
-      },
-      {
-        "id": "log-1765306584856-245",
-        "timestamp": "2025-12-09T18:56:24.856Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for energy-rec → switch-registered (rec-with-bdos-to-registration)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "rec-with-bdos-to-registration",
-          "targetId": "d45debd8-939b-4abb-b0d0-c5ef62412add"
-        },
-        "parentId": "log-1765306584774-241"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584856-246",
-    "timestamp": "2025-12-09T18:56:24.856Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from rec-with-bdos-to-registration.yaml",
-    "context": {
-      "fileId": "parameter-rec-with-bdos-to-registration",
-      "fileType": "parameter",
-      "targetId": "d45debd8-939b-4abb-b0d0-c5ef62412add",
-      "duration": 12.199999928474426
-    },
-    "children": [
-      {
-        "id": "log-1765306584859-247",
-        "timestamp": "2025-12-09T18:56:24.859Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(15-Oct-25:8-Dec-25): n=1373, k=124, evidence=9.0%, blended=9.0%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(15-Oct-25:8-Dec-25)"
-          ],
-          "n": 1373,
-          "k": 124,
-          "evidence_mean": 0.09031318281136198,
-          "blended_mean": 0.09,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306584856-246"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306584888-248",
-    "timestamp": "2025-12-09T18:56:24.888Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter delegation-straight-to-energy-rec",
-    "context": {
-      "fileId": "parameter-delegation-straight-to-energy-rec",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306584923-249",
-    "timestamp": "2025-12-09T18:56:24.923Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-delegation-straight-to-energy-rec",
-      "fileType": "parameter",
-      "targetId": "8c23ea34-9c7e-40b3-ade3-291590774bfc",
-      "duration": 435.10000002384186
-    },
-    "children": [
-      {
-        "id": "log-1765306584923-250",
-        "timestamp": "2025-12-09T18:56:24.923Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306584923-249"
-      },
-      {
-        "id": "log-1765306585026-251",
-        "timestamp": "2025-12-09T18:56:25.026Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "edgeQuery": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)",
-          "resolvedWindow": "25-Nov-25 to 8-Dec-25",
-          "isConditional": false
-        },
-        "parentId": "log-1765306584923-249"
-      },
-      {
-        "id": "log-1765306585070-252",
-        "timestamp": "2025-12-09T18:56:25.070Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 25-Nov-25 to 8-Dec-25",
-        "details": "Fully cached: 14/14 days",
-        "context": {
-          "window": "25-Nov-25 to 8-Dec-25",
-          "totalDays": 14,
-          "daysAvailable": 14,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "window(-14d:-1d)"
-        },
-        "parentId": "log-1765306584923-249"
-      },
-      {
-        "id": "log-1765306585070-253",
-        "timestamp": "2025-12-09T18:56:25.070Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for household-delegated → energy-rec (delegation-straight-to-energy-rec)",
-        "details": "All 14 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "delegation-straight-to-energy-rec",
-          "targetId": "8c23ea34-9c7e-40b3-ade3-291590774bfc"
-        },
-        "parentId": "log-1765306584923-249"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306585070-254",
-    "timestamp": "2025-12-09T18:56:25.070Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from delegation-straight-to-energy-rec.yaml",
-    "context": {
-      "fileId": "parameter-delegation-straight-to-energy-rec",
-      "fileType": "parameter",
-      "targetId": "8c23ea34-9c7e-40b3-ade3-291590774bfc",
-      "duration": 56.39999997615814
-    },
-    "children": [
-      {
-        "id": "log-1765306585092-255",
-        "timestamp": "2025-12-09T18:56:25.092Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(25-Nov-25:9-Dec-25): n=2374, k=504, evidence=21.2%, blended=21.2%",
-        "details": "Window: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(25-Nov-25:9-Dec-25)"
-          ],
-          "n": 2374,
-          "k": 504,
-          "evidence_mean": 0.21229991575400167,
-          "blended_mean": 0.212,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306585070-254"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306585359-257",
-    "timestamp": "2025-12-09T18:56:25.359Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter coffee-to-bds",
-    "context": {
-      "fileId": "parameter-coffee-to-bds",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306585765-258",
-    "timestamp": "2025-12-09T18:56:25.765Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-coffee-to-bds",
-      "fileType": "parameter",
-      "targetId": "76e0e0f8-133d-4065-9fab-56480063d9c9",
-      "duration": 131.39999997615814
-    },
-    "children": [
-      {
-        "id": "log-1765306585765-259",
-        "timestamp": "2025-12-09T18:56:25.765Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306585765-258"
-      },
-      {
-        "id": "log-1765306585883-260",
-        "timestamp": "2025-12-09T18:56:25.883Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306585765-258"
-      },
-      {
-        "id": "log-1765306585895-261",
-        "timestamp": "2025-12-09T18:56:25.895Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306585765-258"
-      },
-      {
-        "id": "log-1765306585896-262",
-        "timestamp": "2025-12-09T18:56:25.896Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for viewed-coffee-screen → gave-bds-in-onboarding (coffee-to-bds)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "coffee-to-bds",
-          "targetId": "76e0e0f8-133d-4065-9fab-56480063d9c9"
-        },
-        "parentId": "log-1765306585765-258"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306585896-263",
-    "timestamp": "2025-12-09T18:56:25.896Z",
-    "level": "warning",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "No cached data for slice: cohort(-14d:-1d)",
-    "context": {
-      "fileId": "parameter-coffee-to-bds",
-      "fileType": "parameter",
-      "targetId": "76e0e0f8-133d-4065-9fab-56480063d9c9",
-      "duration": 0.5
-    },
-    "children": [],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306585896-264",
-    "timestamp": "2025-12-09T18:56:25.896Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter registration-to-success",
-    "context": {
-      "fileId": "parameter-registration-to-success",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306585913-265",
-    "timestamp": "2025-12-09T18:56:25.913Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-registration-to-success",
-      "fileType": "parameter",
-      "targetId": "370dce1d-3a36-4109-9711-204c301478c8",
-      "duration": 59
-    },
-    "children": [
-      {
-        "id": "log-1765306585913-266",
-        "timestamp": "2025-12-09T18:56:25.913Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306585913-265"
-      },
-      {
-        "id": "log-1765306585954-267",
-        "timestamp": "2025-12-09T18:56:25.954Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(switch-registered).to(switch-success)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(switch-registered).to(switch-success)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306585913-265"
-      },
-      {
-        "id": "log-1765306585971-268",
-        "timestamp": "2025-12-09T18:56:25.971Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306585913-265"
-      },
-      {
-        "id": "log-1765306585971-269",
-        "timestamp": "2025-12-09T18:56:25.971Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for switch-registered → switch-success (registration-to-success)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "registration-to-success",
-          "targetId": "370dce1d-3a36-4109-9711-204c301478c8"
-        },
-        "parentId": "log-1765306585913-265"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306585971-270",
-    "timestamp": "2025-12-09T18:56:25.971Z",
-    "level": "warning",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "No cached data for slice: cohort(-14d:-1d)",
-    "context": {
-      "fileId": "parameter-registration-to-success",
-      "fileType": "parameter",
-      "targetId": "370dce1d-3a36-4109-9711-204c301478c8",
-      "duration": 0.30000007152557373
-    },
-    "children": [],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306585972-271",
-    "timestamp": "2025-12-09T18:56:25.972Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter household-delegation-rate",
-    "context": {
-      "fileId": "parameter-household-delegation-rate",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306585990-272",
-    "timestamp": "2025-12-09T18:56:25.990Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-household-delegation-rate",
-      "fileType": "parameter",
-      "targetId": "3d0a0757-8224-4cf0-a841-4ad17cd48d91",
-      "duration": 65.70000004768372
-    },
-    "children": [
-      {
-        "id": "log-1765306585990-273",
-        "timestamp": "2025-12-09T18:56:25.990Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306585990-272"
-      },
-      {
-        "id": "log-1765306586034-274",
-        "timestamp": "2025-12-09T18:56:26.034Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(household-created).to(household-delegated)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(household-created).to(household-delegated)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306585990-272"
-      },
-      {
-        "id": "log-1765306586055-275",
-        "timestamp": "2025-12-09T18:56:26.055Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306585990-272"
-      },
-      {
-        "id": "log-1765306586055-276",
-        "timestamp": "2025-12-09T18:56:26.055Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for household-created → household-delegated (household-delegation-rate)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "household-delegation-rate",
-          "targetId": "3d0a0757-8224-4cf0-a841-4ad17cd48d91"
-        },
-        "parentId": "log-1765306585990-272"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586055-277",
-    "timestamp": "2025-12-09T18:56:26.055Z",
-    "level": "warning",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "No cached data for slice: cohort(-14d:-1d)",
-    "context": {
-      "fileId": "parameter-household-delegation-rate",
-      "fileType": "parameter",
-      "targetId": "3d0a0757-8224-4cf0-a841-4ad17cd48d91",
-      "duration": 0.3999999761581421
-    },
-    "children": [],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586056-278",
-    "timestamp": "2025-12-09T18:56:26.056Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter non-energy-rec-to-reg",
-    "context": {
-      "fileId": "parameter-non-energy-rec-to-reg",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306586068-279",
-    "timestamp": "2025-12-09T18:56:26.068Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-non-energy-rec-to-reg",
-      "fileType": "parameter",
-      "targetId": "9624cce1-21f3-4085-9388-c155b5b657fd",
-      "duration": 66.39999997615814
-    },
-    "children": [
-      {
-        "id": "log-1765306586068-280",
-        "timestamp": "2025-12-09T18:56:26.068Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306586068-279"
-      },
-      {
-        "id": "log-1765306586111-281",
-        "timestamp": "2025-12-09T18:56:26.111Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(mobile-or-broadband-first-rec).to(switch-registered)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(mobile-or-broadband-first-rec).to(switch-registered)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306586068-279"
-      },
-      {
-        "id": "log-1765306586133-282",
-        "timestamp": "2025-12-09T18:56:26.133Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306586068-279"
-      },
-      {
-        "id": "log-1765306586133-283",
-        "timestamp": "2025-12-09T18:56:26.133Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for mobile-or-broadband-first-rec → switch-registered (non-energy-rec-to-reg)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "non-energy-rec-to-reg",
-          "targetId": "9624cce1-21f3-4085-9388-c155b5b657fd"
-        },
-        "parentId": "log-1765306586068-279"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586134-284",
-    "timestamp": "2025-12-09T18:56:26.134Z",
-    "level": "warning",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "No cached data for slice: cohort(-14d:-1d)",
-    "context": {
-      "fileId": "parameter-non-energy-rec-to-reg",
-      "fileType": "parameter",
-      "targetId": "9624cce1-21f3-4085-9388-c155b5b657fd",
-      "duration": 0.5999999046325684
-    },
-    "children": [],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586134-285",
-    "timestamp": "2025-12-09T18:56:26.134Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter delegated-to-non-energy-rec",
-    "context": {
-      "fileId": "parameter-delegated-to-non-energy-rec",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306586147-286",
-    "timestamp": "2025-12-09T18:56:26.147Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-delegated-to-non-energy-rec",
-      "fileType": "parameter",
-      "targetId": "10e37cc7-0d37-4cd9-844b-653148025a51",
-      "duration": 77.59999990463257
-    },
-    "children": [
-      {
-        "id": "log-1765306586147-287",
-        "timestamp": "2025-12-09T18:56:26.147Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306586147-286"
-      },
-      {
-        "id": "log-1765306586189-288",
-        "timestamp": "2025-12-09T18:56:26.189Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(household-delegated).to(mobile-or-broadband-first-rec)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(household-delegated).to(mobile-or-broadband-first-rec)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306586147-286"
-      },
-      {
-        "id": "log-1765306586223-289",
-        "timestamp": "2025-12-09T18:56:26.223Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306586147-286"
-      },
-      {
-        "id": "log-1765306586224-290",
-        "timestamp": "2025-12-09T18:56:26.224Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for household-delegated → mobile-or-broadband-first-rec (delegated-to-non-energy-rec)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "delegated-to-non-energy-rec",
-          "targetId": "10e37cc7-0d37-4cd9-844b-653148025a51"
-        },
-        "parentId": "log-1765306586147-286"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586224-291",
-    "timestamp": "2025-12-09T18:56:26.224Z",
-    "level": "warning",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "No cached data for slice: cohort(-14d:-1d)",
-    "context": {
-      "fileId": "parameter-delegated-to-non-energy-rec",
-      "fileType": "parameter",
-      "targetId": "10e37cc7-0d37-4cd9-844b-653148025a51",
-      "duration": 0.5
-    },
-    "children": [],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586225-292",
-    "timestamp": "2025-12-09T18:56:26.225Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter bds-to-energy-rec",
-    "context": {
-      "fileId": "parameter-bds-to-energy-rec",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306586242-293",
-    "timestamp": "2025-12-09T18:56:26.242Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-bds-to-energy-rec",
-      "fileType": "parameter",
-      "targetId": "77d0a69e-3c75-4722-932b-7f54d317d0ce",
-      "duration": 130.10000002384186
-    },
-    "children": [
-      {
-        "id": "log-1765306586242-294",
-        "timestamp": "2025-12-09T18:56:26.242Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306586242-293"
-      },
-      {
-        "id": "log-1765306586303-295",
-        "timestamp": "2025-12-09T18:56:26.303Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(gave-bds-in-onboarding).to(energy-rec)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(gave-bds-in-onboarding).to(energy-rec)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306586242-293"
-      },
-      {
-        "id": "log-1765306586327-296",
-        "timestamp": "2025-12-09T18:56:26.327Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306586242-293"
-      },
-      {
-        "id": "log-1765306586327-297",
-        "timestamp": "2025-12-09T18:56:26.327Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for gave-bds-in-onboarding → energy-rec (bds-to-energy-rec)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "bds-to-energy-rec",
-          "targetId": "77d0a69e-3c75-4722-932b-7f54d317d0ce"
-        },
-        "parentId": "log-1765306586242-293"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586327-298",
-    "timestamp": "2025-12-09T18:56:26.327Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from bds-to-energy-rec.yaml",
-    "context": {
-      "fileId": "parameter-bds-to-energy-rec",
-      "fileType": "parameter",
-      "targetId": "77d0a69e-3c75-4722-932b-7f54d317d0ce",
-      "duration": 22.399999976158142
-    },
-    "children": [
-      {
-        "id": "log-1765306586340-299",
-        "timestamp": "2025-12-09T18:56:26.340Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(9-Nov-25:8-Dec-25): n=390, k=288, evidence=73.8%, blended=73.8%",
-        "details": "Cohort: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(9-Nov-25:8-Dec-25)"
-          ],
-          "n": 390,
-          "k": 288,
-          "evidence_mean": 0.7384615384615385,
-          "blended_mean": 0.738,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306586327-298"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586373-300",
-    "timestamp": "2025-12-09T18:56:26.373Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter delegated-to-coffee",
-    "context": {
-      "fileId": "parameter-delegated-to-coffee",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306586425-301",
-    "timestamp": "2025-12-09T18:56:26.425Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-delegated-to-coffee",
-      "fileType": "parameter",
-      "targetId": "64f4529c-62b8-4e7e-8479-c5289d925e58",
-      "duration": 100.29999995231628
-    },
-    "children": [
-      {
-        "id": "log-1765306586426-302",
-        "timestamp": "2025-12-09T18:56:26.426Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306586425-301"
-      },
-      {
-        "id": "log-1765306586502-303",
-        "timestamp": "2025-12-09T18:56:26.502Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(household-delegated).to(viewed-coffee-screen)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(household-delegated).to(viewed-coffee-screen)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306586425-301"
-      },
-      {
-        "id": "log-1765306586525-304",
-        "timestamp": "2025-12-09T18:56:26.525Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306586425-301"
-      },
-      {
-        "id": "log-1765306586525-305",
-        "timestamp": "2025-12-09T18:56:26.525Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for household-delegated → viewed-coffee-screen (delegated-to-coffee)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "delegated-to-coffee",
-          "targetId": "64f4529c-62b8-4e7e-8479-c5289d925e58"
-        },
-        "parentId": "log-1765306586425-301"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586525-306",
-    "timestamp": "2025-12-09T18:56:26.525Z",
-    "level": "warning",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "No cached data for slice: cohort(-14d:-1d)",
-    "context": {
-      "fileId": "parameter-delegated-to-coffee",
-      "fileType": "parameter",
-      "targetId": "64f4529c-62b8-4e7e-8479-c5289d925e58",
-      "duration": 0.5
-    },
-    "children": [],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586526-307",
-    "timestamp": "2025-12-09T18:56:26.526Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter no-bdos-to-rec",
-    "context": {
-      "fileId": "parameter-no-bdos-to-rec",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306586547-308",
-    "timestamp": "2025-12-09T18:56:26.547Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-no-bdos-to-rec",
-      "fileType": "parameter",
-      "targetId": "13b5397f-9feb-453a-8e86-500c0693b4af",
-      "duration": 99
-    },
-    "children": [
-      {
-        "id": "log-1765306586547-309",
-        "timestamp": "2025-12-09T18:56:26.547Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306586547-308"
-      },
-      {
-        "id": "log-1765306586592-310",
-        "timestamp": "2025-12-09T18:56:26.592Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306586547-308"
-      },
-      {
-        "id": "log-1765306586612-311",
-        "timestamp": "2025-12-09T18:56:26.612Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306586547-308"
-      },
-      {
-        "id": "log-1765306586613-312",
-        "timestamp": "2025-12-09T18:56:26.613Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for viewed-coffee-screen → energy-rec (no-bdos-to-rec)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "no-bdos-to-rec",
-          "targetId": "13b5397f-9feb-453a-8e86-500c0693b4af"
-        },
-        "parentId": "log-1765306586547-308"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586613-313",
-    "timestamp": "2025-12-09T18:56:26.613Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from no-bdos-to-rec.yaml",
-    "context": {
-      "fileId": "parameter-no-bdos-to-rec",
-      "fileType": "parameter",
-      "targetId": "13b5397f-9feb-453a-8e86-500c0693b4af",
-      "duration": 12
-    },
-    "children": [
-      {
-        "id": "log-1765306586615-314",
-        "timestamp": "2025-12-09T18:56:26.615Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(9-Nov-25:9-Dec-25): n=957, k=545, evidence=56.9%, blended=56.9%",
-        "details": "Cohort: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(9-Nov-25:9-Dec-25)"
-          ],
-          "n": 957,
-          "k": 545,
-          "evidence_mean": 0.5694879832810867,
-          "blended_mean": 0.569,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306586613-313"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586646-315",
-    "timestamp": "2025-12-09T18:56:26.646Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter rec-with-bdos-to-registration",
-    "context": {
-      "fileId": "parameter-rec-with-bdos-to-registration",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306586683-316",
-    "timestamp": "2025-12-09T18:56:26.683Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-rec-with-bdos-to-registration",
-      "fileType": "parameter",
-      "targetId": "d45debd8-939b-4abb-b0d0-c5ef62412add",
-      "duration": 99.39999997615814
-    },
-    "children": [
-      {
-        "id": "log-1765306586683-317",
-        "timestamp": "2025-12-09T18:56:26.683Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306586683-316"
-      },
-      {
-        "id": "log-1765306586764-318",
-        "timestamp": "2025-12-09T18:56:26.764Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(energy-rec).to(switch-registered)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(energy-rec).to(switch-registered)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306586683-316"
-      },
-      {
-        "id": "log-1765306586782-319",
-        "timestamp": "2025-12-09T18:56:26.782Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306586683-316"
-      },
-      {
-        "id": "log-1765306586782-320",
-        "timestamp": "2025-12-09T18:56:26.782Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for energy-rec → switch-registered (rec-with-bdos-to-registration)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "rec-with-bdos-to-registration",
-          "targetId": "d45debd8-939b-4abb-b0d0-c5ef62412add"
-        },
-        "parentId": "log-1765306586683-316"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586782-321",
-    "timestamp": "2025-12-09T18:56:26.782Z",
-    "level": "warning",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "No cached data for slice: cohort(-14d:-1d)",
-    "context": {
-      "fileId": "parameter-rec-with-bdos-to-registration",
-      "fileType": "parameter",
-      "targetId": "d45debd8-939b-4abb-b0d0-c5ef62412add",
-      "duration": 0.30000007152557373
-    },
-    "children": [],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586783-322",
-    "timestamp": "2025-12-09T18:56:26.783Z",
-    "level": "info",
-    "category": "data-fetch",
-    "operation": "DATA_GET_FROM_SOURCE",
-    "message": "Get from Source (versioned): parameter delegation-straight-to-energy-rec",
-    "context": {
-      "fileId": "parameter-delegation-straight-to-energy-rec",
-      "fileType": "parameter"
-    }
-  },
-  {
-    "id": "log-1765306586806-323",
-    "timestamp": "2025-12-09T18:56:26.806Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "DATA_FETCH_VERSIONED",
-    "message": "Applied cached data to graph",
-    "context": {
-      "fileId": "parameter-delegation-straight-to-energy-rec",
-      "fileType": "parameter",
-      "targetId": "8c23ea34-9c7e-40b3-ade3-291590774bfc",
-      "duration": 105.5
-    },
-    "children": [
-      {
-        "id": "log-1765306586806-324",
-        "timestamp": "2025-12-09T18:56:26.806Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "CONNECTION",
-        "message": "Using connection: amplitude-prod",
-        "details": "Config: {}...",
-        "context": {
-          "sourceType": "amplitude-prod"
-        },
-        "parentId": "log-1765306586806-323"
-      },
-      {
-        "id": "log-1765306586837-325",
-        "timestamp": "2025-12-09T18:56:26.837Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "QUERY_BUILT",
-        "message": "Query: from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)",
-        "details": "Window: default window",
-        "context": {
-          "edgeQuery": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)",
-          "resolvedWindow": "default window",
-          "isConditional": false
-        },
-        "parentId": "log-1765306586806-323"
-      },
-      {
-        "id": "log-1765306586875-326",
-        "timestamp": "2025-12-09T18:56:26.875Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "CACHE_HIT",
-        "message": "Cache check for window 2-Dec-25 to 9-Dec-25",
-        "details": "Fully cached: 8/8 days",
-        "context": {
-          "window": "2-Dec-25 to 9-Dec-25",
-          "totalDays": 8,
-          "daysAvailable": 8,
-          "daysToFetch": 0,
-          "gapCount": 0,
-          "bustCache": false,
-          "targetSlice": "cohort(-14d:-1d)"
-        },
-        "parentId": "log-1765306586806-323"
-      },
-      {
-        "id": "log-1765306586875-327",
-        "timestamp": "2025-12-09T18:56:26.876Z",
-        "level": "success",
-        "category": "data-fetch",
-        "operation": "USING_CACHE",
-        "message": "Using cached data for household-delegated → energy-rec (delegation-straight-to-energy-rec)",
-        "details": "All 8 days available from cache",
-        "context": {
-          "source": "cache",
-          "parameterId": "delegation-straight-to-energy-rec",
-          "targetId": "8c23ea34-9c7e-40b3-ade3-291590774bfc"
-        },
-        "parentId": "log-1765306586806-323"
-      }
-    ],
-    "expanded": false
-  },
-  {
-    "id": "log-1765306586876-328",
-    "timestamp": "2025-12-09T18:56:26.876Z",
-    "level": "success",
-    "category": "data-fetch",
-    "operation": "GET_FROM_FILE",
-    "message": "Updated from delegation-straight-to-energy-rec.yaml",
-    "context": {
-      "fileId": "parameter-delegation-straight-to-energy-rec",
-      "fileType": "parameter",
-      "targetId": "8c23ea34-9c7e-40b3-ade3-291590774bfc",
-      "duration": 15.600000023841858
-    },
-    "children": [
-      {
-        "id": "log-1765306586878-329",
-        "timestamp": "2025-12-09T18:56:26.878Z",
-        "level": "info",
-        "category": "data-fetch",
-        "operation": "AGGREGATION_RESULT",
-        "message": "Aggregated 14 days from window(25-Nov-25:9-Dec-25): n=2374, k=504, evidence=21.2%, blended=21.2%",
-        "details": "Cohort: 25-Nov-25 to 8-Dec-25",
-        "context": {
-          "slices": [
-            "window(25-Nov-25:9-Dec-25)"
-          ],
-          "n": 2374,
-          "k": 504,
-          "evidence_mean": 0.21229991575400167,
-          "blended_mean": 0.212,
-          "daysAggregated": 14,
-          "isMultiSlice": false,
-          "hasLatencyStats": false
-        },
-        "parentId": "log-1765306586876-328"
-      }
-    ],
-    "expanded": false
-  }
-]
+nodes:
+  - uuid: 86469c9f-2f83-49ca-a154-589231be5511
+    id: household-created
+    label: Household created
+    absorbing: false
+    entry:
+      is_start: true
+      entry_weight: 1
+    layout:
+      x: -630
+      'y': -130
+    description: ''
+    event_id: household-created
+  - uuid: addb99b6-5773-482c-a437-4661c8433ff7
+    id: abandonned-before-delegation
+    label: abandonned-before-delegation
+    absorbing: true
+    layout:
+      x: -435
+      'y': -63
+    description: ''
+    outcome_type: failure
+    outcome_type_overridden: true
+  - uuid: 16974652-b532-41ee-b4d5-a3ef5381591d
+    id: household-delegated
+    label: household-delegated
+    absorbing: false
+    layout:
+      x: -428
+      'y': -216
+    description: ''
+    tags: []
+    event_id: household-delegated
+    event_id_overridden: false
+  - uuid: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    id: switch-registered
+    label: Switch registered
+    absorbing: false
+    layout:
+      x: 136
+      'y': -247
+    event_id: switch-registered
+    event_id_overridden: false
+  - uuid: 30aabc44-e448-4359-b0d0-338a231edb92
+    id: switch-success
+    label: Switch success
+    absorbing: true
+    layout:
+      x: 403
+      'y': -315
+    event_id: switch-success
+    event_id_overridden: false
+    label_overridden: false
+    outcome_type: success
+    outcome_type_overridden: true
+  - uuid: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
+    id: post-registration-failure
+    label: Post registration failure
+    absorbing: true
+    layout:
+      x: 321
+      'y': -149
+    outcome_type: failure
+    outcome_type_overridden: true
+  - uuid: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    id: energy-rec
+    label: Energy rec
+    absorbing: false
+    layout:
+      x: -165
+      'y': -200
+    event_id: energy-rec
+    event_id_overridden: false
+  - uuid: 841f3509-c21c-4746-9af9-26a150411f0f
+    id: no-energy-rec
+    label: No energy rec
+    absorbing: false
+    layout:
+      x: 82
+      'y': -57
+  - uuid: 6a97718a-45d8-4fdd-b30a-517b3a92d13e
+    id: no-delegation
+    label: No delegation
+    absorbing: false
+    layout:
+      x: -212
+      'y': -51
+edges:
+  - uuid: 532a304a-c435-4ea5-aa6a-44714b40adab
+    id: switch-registered-to-post-registration-failure
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.935
+      latency:
+        anchor_node_id: household-created
+    query: from(switch-registered).to(post-registration-failure)
+    description: ''
+  - uuid: household-created-to-abandonned-before-delegation
+    id: 86469c9f-2f83-49ca-a154-589231be5511->addb99b6-5773-482c-a437-4661c8433ff7
+    from: 86469c9f-2f83-49ca-a154-589231be5511
+    to: addb99b6-5773-482c-a437-4661c8433ff7
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.473
+      latency:
+        anchor_node_id: household-created
+    query: from(household-created).to(abandonned-before-delegation)
+    description: ''
+  - uuid: 370dce1d-3a36-4109-9711-204c301478c8
+    id: switch-registered-to-switch-success
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 30aabc44-e448-4359-b0d0-338a231edb92
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.065
+      stdev: 0.025563540906062172
+      id: registration-to-success
+      evidence:
+        window_from: 23-Nov-25
+        source: amplitude
+        'n': 93
+        k: 6
+        window_to: 29-Nov-25
+        retrieved_at: '2025-12-10T01:16:59.311Z'
+        full_query: from(switch-registered).to(switch-success)
+        mean: 0.06451612903225806
+        stdev: 0.02547480267357411
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-10T01:16:59.311Z'
+        full_query: from(switch-registered).to(switch-success)
+      connection: amplitude-prod
+      connection_overridden: true
+      latency:
+        maturity_days: 30
+        maturity_days_overridden: false
+        median_lag_days: 6.020277777777778
+        completeness: 0.926439028392437
+        t95: 30
+        anchor_node_id_overridden: false
+        anchor_node_id: household-created
+      forecast:
+        mean: 0.7675618241249695
+    query: from(switch-registered).to(switch-success)
+    description: ''
+  - uuid: 3d0a0757-8224-4cf0-a841-4ad17cd48d91
+    id: household-created-to-household-delegated
+    from: 86469c9f-2f83-49ca-a154-589231be5511
+    to: 16974652-b532-41ee-b4d5-a3ef5381591d
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.527
+      id: household-delegation-rate
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.010918396499203587
+      evidence:
+        'n': 2091
+        k: 1101
+        window_from: 23-Nov-25
+        window_to: 29-Nov-25
+        retrieved_at: '2025-12-10T01:16:59.219Z'
+        source: amplitude
+        full_query: from(household-created).to(household-delegated)
+        mean: 0.5265423242467718
+        stdev: 0.01091893316208927
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-10T01:16:59.219Z'
+        full_query: from(household-created).to(household-delegated)
+      latency:
+        anchor_node_id: household-created
+    query: from(household-created).to(household-delegated)
+    description: ''
+  - uuid: 8c23ea34-9c7e-40b3-ade3-291590774bfc
+    id: household-delegated-to-energy-rec
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.578
+      id: delegation-straight-to-energy-rec
+      stdev: 0.014884233866813508
+      connection: amplitude-prod
+      connection_overridden: true
+      evidence:
+        'n': 1101
+        k: 636
+        window_from: 23-Nov-25
+        window_to: 29-Nov-25
+        retrieved_at: '2025-12-10T01:16:59.268Z'
+        source: amplitude
+        full_query: from(household-delegated).to(energy-rec)
+        mean: 0.5776566757493188
+        stdev: 0.014885864306156174
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-10T01:16:59.268Z'
+        full_query: from(household-delegated).to(energy-rec)
+      latency:
+        maturity_days: 30
+        maturity_days_overridden: true
+        median_lag_days: 2.0003243979479675
+        completeness: 0.9998322643010285
+        t95: 4.552771548008022
+        anchor_node_id: household-created
+      forecast:
+        mean: 0.5333333333333333
+      mean_overridden: false
+    query: from(household-delegated).to(energy-rec)
+    description: ''
+  - uuid: 576aac74-97b4-4075-bc5b-74e6a365a974
+    id: energy-rec-to-no-energy-rec
+    from: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    to: 841f3509-c21c-4746-9af9-26a150411f0f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.862
+      latency:
+        anchor_node_id: household-created
+    query: from(energy-rec).to(no-energy-rec)
+    description: ''
+  - uuid: afcf0a3c-be45-4783-a0f9-df9ded423d1f
+    id: household-delegated-to-no-delegation
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: 6a97718a-45d8-4fdd-b30a-517b3a92d13e
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.422
+      latency:
+        anchor_node_id: household-created
+    description: ''
+    query: from(household-delegated).to(no-delegation)
+  - uuid: d45debd8-939b-4abb-b0d0-c5ef62412add
+    id: energy-rec-to-switch-registered
+    from: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.138
+      id: rec-with-bdos-to-registration
+      connection: amplitude-prod
+      connection_overridden: true
+      stdev: 0.013676174020867701
+      evidence:
+        'n': 636
+        k: 88
+        window_from: 23-Nov-25
+        window_to: 29-Nov-25
+        retrieved_at: '2025-12-10T01:16:59.279Z'
+        source: amplitude
+        full_query: from(energy-rec).to(switch-registered)
+        mean: 0.13836477987421383
+        stdev: 0.013691339568850889
+      data_source:
+        type: amplitude
+        retrieved_at: '2025-12-10T01:16:59.279Z'
+        full_query: from(energy-rec).to(switch-registered)
+      latency:
+        maturity_days: 30
+        maturity_days_overridden: true
+        median_lag_days: 7.379082360058923
+        completeness: 0.8461974603780369
+        t95: 16.794913991824462
+        anchor_node_id: household-created
+      forecast:
+        mean: 0.286958442395679
+    description: ''
+    query: from(energy-rec).to(switch-registered)
+    query_overridden: false
+policies:
+  default_outcome: success
+metadata:
+  name: conversion-flow-v0-ezra
+  description: ''
+  created_at: '2025-11-20T16:28:04.980Z'
+  updated_at: '2025-12-10T01:21:03.528Z'
+  version: 1.0.0
+  updated: '2025-11-25T18:25:17.542Z'
+currentQueryDSL: cohort(23-Nov-25:29-Nov-25)
+dataInterestsDSL: window(-30d:-1d);cohort(-30d:-1d)

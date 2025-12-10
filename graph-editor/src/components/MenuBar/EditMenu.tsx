@@ -4,6 +4,11 @@ import { useTabContext } from '../../contexts/TabContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
 import { useValidationMode } from '../../contexts/ValidationContext';
 import { copyVarsToClipboard } from '../../services/copyVarsService';
+import { useCopyPaste } from '../../hooks/useCopyPaste';
+import { useSelectAll } from '../../hooks/useSelectAll';
+import { extractSubgraph } from '../../lib/subgraphExtractor';
+import { updateManager } from '../../services/UpdateManager';
+import { graphMutationService } from '../../services/graphMutationService';
 import toast from 'react-hot-toast';
 
 /**
@@ -31,6 +36,35 @@ export function EditMenu() {
   const [canRedo, setCanRedo] = useState(false);
   const undoFnRef = useRef<(() => void) | null>(null);
   const redoFnRef = useRef<(() => void) | null>(null);
+
+  // Copy/paste and select all hooks
+  const { copySubgraph, canPaste, getCopiedSubgraph, copiedItem } = useCopyPaste();
+  const { selectAll, canSelectAll } = useSelectAll();
+  
+  // Track selection state for copy availability
+  const [hasSelection, setHasSelection] = useState(false);
+  
+  // Update selection state periodically for graph editors
+  useEffect(() => {
+    if (!isGraphEditor) {
+      setHasSelection(false);
+      return;
+    }
+    
+    const checkSelection = () => {
+      const detail = {
+        selectedNodeUuids: [] as string[],
+        selectedEdgeUuids: [] as string[]
+      };
+      window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
+      setHasSelection(detail.selectedNodeUuids.length > 0);
+    };
+    
+    // Check on mount and periodically
+    checkSelection();
+    const interval = setInterval(checkSelection, 500);
+    return () => clearInterval(interval);
+  }, [isGraphEditor]);
 
   // Subscribe to the active tab's graph store OR form editor for undo/redo state
   useEffect(() => {
@@ -165,16 +199,158 @@ export function EditMenu() {
     }
   };
 
-  const handleCut = () => {
-    document.execCommand('cut');
+  const handleCut = async () => {
+    if (isGraphEditor && activeTab?.fileId) {
+      // Graph editor - cut = copy + delete
+      const store = getGraphStore(activeTab.fileId);
+      if (!store) {
+        toast.error('Graph not loaded');
+        return;
+      }
+      
+      const state = store.getState();
+      const graph = state.graph;
+      if (!graph) {
+        toast.error('No graph data');
+        return;
+      }
+      
+      // Query for selected nodes
+      const detail = {
+        selectedNodeUuids: [] as string[],
+        selectedEdgeUuids: [] as string[]
+      };
+      window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
+      
+      if (detail.selectedNodeUuids.length === 0) {
+        toast.error('No nodes selected to cut');
+        return;
+      }
+      
+      // First copy the selection
+      const subgraph = extractSubgraph({
+        selectedNodeIds: detail.selectedNodeUuids,
+        graph,
+        includeConnectedEdges: true,
+      });
+      
+      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId);
+      
+      // Then delete the nodes using UpdateManager
+      const result = updateManager.deleteNodes(graph, detail.selectedNodeUuids);
+      
+      // Apply the change
+      await graphMutationService.updateGraph(graph, result.graph, state.setGraph);
+      state.saveHistoryState('Cut selection');
+      
+      const parts: string[] = [];
+      parts.push(`${result.deletedNodeCount} node${result.deletedNodeCount !== 1 ? 's' : ''}`);
+      if (result.deletedEdgeCount > 0) {
+        parts.push(`${result.deletedEdgeCount} edge${result.deletedEdgeCount !== 1 ? 's' : ''}`);
+      }
+      toast.success(`Cut ${parts.join(' and ')}`);
+    } else {
+      // Non-graph view - use native cut
+      document.execCommand('cut');
+    }
   };
 
-  const handleCopy = () => {
-    document.execCommand('copy');
+  const handleCopy = async () => {
+    if (isGraphEditor && activeTab?.fileId) {
+      // Graph editor - copy selected nodes and edges as subgraph
+      const store = getGraphStore(activeTab.fileId);
+      if (!store) {
+        toast.error('Graph not loaded');
+        return;
+      }
+      
+      const graph = store.getState().graph;
+      if (!graph) {
+        toast.error('No graph data');
+        return;
+      }
+      
+      // Query for selected nodes
+      const detail = {
+        selectedNodeUuids: [] as string[],
+        selectedEdgeUuids: [] as string[]
+      };
+      window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
+      
+      if (detail.selectedNodeUuids.length === 0) {
+        toast.error('No nodes selected to copy');
+        return;
+      }
+      
+      // Extract subgraph using the existing extractor
+      const subgraph = extractSubgraph({
+        selectedNodeIds: detail.selectedNodeUuids,
+        graph,
+        includeConnectedEdges: true,
+      });
+      
+      // Copy to clipboard
+      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId);
+    } else {
+      // Non-graph view - use native copy
+      document.execCommand('copy');
+    }
   };
 
-  const handlePaste = () => {
-    document.execCommand('paste');
+  const handlePaste = async () => {
+    if (isGraphEditor && activeTab?.fileId) {
+      // Graph editor - paste subgraph
+      const subgraph = getCopiedSubgraph();
+      if (!subgraph) {
+        // No dagnet subgraph - fall back to native paste
+        document.execCommand('paste');
+        return;
+      }
+      
+      const store = getGraphStore(activeTab.fileId);
+      if (!store) {
+        toast.error('Graph not loaded');
+        return;
+      }
+      
+      const state = store.getState();
+      const currentGraph = state.graph;
+      if (!currentGraph) {
+        toast.error('No graph data');
+        return;
+      }
+      
+      // Use UpdateManager to paste with ID conflict handling
+      const result = updateManager.pasteSubgraph(
+        currentGraph,
+        subgraph.nodes,
+        subgraph.edges,
+        { x: 50, y: 50 } // Offset to avoid exact overlap
+      );
+      
+      // Apply the change
+      await graphMutationService.updateGraph(currentGraph, result.graph, state.setGraph);
+      state.saveHistoryState('Paste subgraph');
+      
+      const parts: string[] = [];
+      parts.push(`${result.pastedNodeUuids.length} node${result.pastedNodeUuids.length !== 1 ? 's' : ''}`);
+      if (result.pastedEdgeUuids.length > 0) {
+        parts.push(`${result.pastedEdgeUuids.length} edge${result.pastedEdgeUuids.length !== 1 ? 's' : ''}`);
+      }
+      toast.success(`Pasted ${parts.join(' and ')}`);
+    } else {
+      // Non-graph view - use native paste
+      document.execCommand('paste');
+    }
+  };
+  
+  const handleSelectAll = () => {
+    if (isGraphEditor) {
+      selectAll();
+    } else {
+      // Non-graph view - use native select all
+      document.execCommand('selectAll');
+    }
   };
 
   const handleFind = () => {
@@ -269,25 +445,39 @@ export function EditMenu() {
 
           <Menubar.Item 
             className="menubar-item" 
-            disabled={true}
+            onSelect={handleSelectAll}
+            disabled={isGraphEditor ? !canSelectAll() : !isRawView}
           >
-            Cut (coming soon)
+            Select All
+            <div className="menubar-right-slot">⌘A</div>
+          </Menubar.Item>
+
+          <Menubar.Separator className="menubar-separator" />
+
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={handleCut}
+            disabled={isGraphEditor ? !hasSelection : !isRawView}
+          >
+            Cut
             <div className="menubar-right-slot">⌘X</div>
           </Menubar.Item>
 
           <Menubar.Item 
             className="menubar-item" 
-            disabled={true}
+            onSelect={handleCopy}
+            disabled={isGraphEditor ? !hasSelection : !isRawView}
           >
-            Copy (coming soon)
+            Copy
             <div className="menubar-right-slot">⌘C</div>
           </Menubar.Item>
 
           <Menubar.Item 
             className="menubar-item" 
-            disabled={true}
+            onSelect={handlePaste}
+            disabled={isGraphEditor ? !canPaste('graph') : !isRawView}
           >
-            Paste (coming soon)
+            Paste
             <div className="menubar-right-slot">⌘V</div>
           </Menubar.Item>
 

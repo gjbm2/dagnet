@@ -625,6 +625,7 @@ class DataOperationsService {
     window?: DateRange; // DEPRECATED: Window is now parsed from targetSlice DSL
     targetSlice?: string; // DSL containing window and context (e.g., "window(1-Dec-25:7-Dec-25).context(geo=UK)")
     suppressSignatureWarning?: boolean; // If true, don't show warning about different query signatures (e.g., after bust cache)
+    suppressMissingDataToast?: boolean; // If true, don't show toast about missing days (e.g., after fetch from source - user knows data may be incomplete)
     conditionalIndex?: number; // For conditional_p entries - which index to update
   }): Promise<{ success: boolean; warning?: string }> {
     const timingStart = performance.now();
@@ -633,7 +634,7 @@ class DataOperationsService {
       timings[label] = performance.now() - timingStart;
     };
     
-    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '', suppressSignatureWarning = false, conditionalIndex } = options;
+    const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '', suppressSignatureWarning = false, suppressMissingDataToast = false, conditionalIndex } = options;
     
     // Parse window AND cohort from targetSlice DSL if not explicitly provided
     // This ensures single source of truth - DSL contains window, cohort, and context
@@ -1354,6 +1355,12 @@ class DataOperationsService {
             // For cohort queries, this is the cohort window; for window queries, it's the window
             const effectiveWindow = evidenceFilterWindow;
             
+            // If the latest value already has a latency summary (from previous cohort merge),
+            // preserve it on the aggregated view so UpdateManager can map it to edge.p.latency.*.
+            // This is especially important for fresh latency-enabled edges, where the topo LAG
+            // pass may not have run yet but the parameter already contains a valid summary.
+            const latestLatencySummary = (latestValueWithSource as any)?.latency;
+
             const aggregatedValue = {
               mean: storedMean,
               stdev: storedStdev,
@@ -1377,6 +1384,9 @@ class DataOperationsService {
                 mean: evidenceMean,
                 stdev: evidenceStdev,
               },
+              // Preserve any existing latency summary so values[latest].latency.* is available
+              // to UpdateManager mappings (file → graph) for p.latency.median_lag_days, etc.
+              ...(latestLatencySummary && { latency: latestLatencySummary }),
               // NOTE: Latency stats (t95, completeness, forecast) are computed in the
               // graph-level topo pass after all fetches complete. They are NOT stored
               // in the param file; the graph edge is the source of truth for these.
@@ -1477,13 +1487,15 @@ class DataOperationsService {
                 console.warn('[DataOperationsService] Missing date gaps:', gapSummary);
               }
               
-              // This is called from "get from file" - suggest getting from source
-              message += `. Try getting from source to fetch missing data.`;
-              
-              toast(message, {
-                icon: '⚠️',
-                duration: 5000,
-              });
+              // Only show toast if NOT coming from "get from source" path
+              // (when suppressMissingDataToast=true, user already fetched from source - they know data may be incomplete)
+              if (!suppressMissingDataToast) {
+                message += `. Try getting from source to fetch missing data.`;
+                toast(message, {
+                  icon: '⚠️',
+                  duration: 5000,
+                });
+              }
               
               // Add session log child for visibility
               sessionLogService.addChild(logOpId, 'warning', 'MISSING_DATA', 

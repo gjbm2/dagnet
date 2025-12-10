@@ -174,6 +174,12 @@ export const LAG_STRIPE_GAP = 3;
 /** Base opacity for p.mean anchor edge (0-1) */
 export const LAG_ANCHOR_OPACITY = 0.15;
 
+/** Opacity for p.mean anchor edge when SELECTED (0-1) - much more visible */
+export const LAG_ANCHOR_SELECTED_OPACITY = 0.7;
+
+/** Opacity for p.mean anchor edge when HIGHLIGHTED (0-1) - intermediate visibility */
+export const LAG_ANCHOR_HIGHLIGHTED_OPACITY = 0.5;
+
 /** 
  * Width of fade band for anchor gradient as fraction of path (0-1)
  * Anchor fades from full to minimum AROUND the completeness point
