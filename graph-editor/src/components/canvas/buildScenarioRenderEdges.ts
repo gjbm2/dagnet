@@ -9,7 +9,7 @@
 import { Edge } from 'reactflow';
 import { computeEffectiveEdgeProbability } from '../../lib/whatIf';
 import { getComposedParamsForLayer } from '../../services/CompositionService';
-import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, SANKEY_MAX_EDGE_WIDTH } from '../../lib/nodeEdgeConstants';
+import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, SANKEY_MAX_EDGE_WIDTH, EDGE_OPACITY } from '../../lib/nodeEdgeConstants';
 import type { EdgeLatencyDisplay } from '../../types';
 
 interface BuildScenarioRenderEdgesParams {
@@ -79,9 +79,9 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     : [...visibleScenarioIds, 'current'];  // Current is hidden, add it last
 
   // Calculate dynamic opacity based on number of visible layers
+  // Uses EDGE_OPACITY from constants as the target combined opacity
   const numVisibleLayers = visibleScenarioIds.length;
-  const baseOpacityTarget = 0.8;
-  const dynamicLayerOpacity = 1 - Math.pow(1 - baseOpacityTarget, 1 / numVisibleLayers);
+  const dynamicLayerOpacity = 1 - Math.pow(1 - EDGE_OPACITY, 1 / numVisibleLayers);
 
   const scenarios = scenariosContext.scenarios;
   const baseParams = scenariosContext.baseParams;

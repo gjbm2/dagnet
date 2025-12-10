@@ -5,7 +5,7 @@
  * Ensures inner band matches normal edge colour exactly.
  */
 
-const EDGE_OPACITY = 0.8; // Match existing edge opacity
+import { EDGE_OPACITY } from '@/lib/nodeEdgeConstants';
 
 const CONFIDENCE_SPREAD = {
   '80': 1.10,  // Subtle
