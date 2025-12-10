@@ -26,9 +26,15 @@ import {
   applyFormulaAToAll,
   calculateCompleteness,
   computeEdgeLatencyStats,
+  // Inbound-N functions
+  computeInboundN,
+  applyInboundNToGraph,
+  getActiveEdges,
   // LAG types
   type CohortData,
   type LagDistributionFit,
+  type GraphForInboundN,
+  type InboundNResult,
 } from '../statisticalEnhancementService';
 import type { RawAggregation } from '../windowAggregationService';
 import type { DateRange } from '../../types';
@@ -485,15 +491,25 @@ describe('LAG Lag Distribution Fitting (§5.4)', () => {
 
       expect(fit.mu).toBeCloseTo(Math.log(5), 6);
       expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
-      expect(fit.empirical_quality_ok).toBe(false);
+      expect(fit.empirical_quality_ok).toBe(true);  // Allow fit with valid median
       expect(fit.quality_failure_reason).toContain('Mean lag not available');
     });
 
-    it('should fail quality gate if mean/median ratio < 1', () => {
-      // mean < median is invalid for log-normal
+    it('should fall back to default sigma if mean/median ratio close to 1 but < 1 (low skew)', () => {
+      // mean slightly less than median (ratio=0.95, >= 0.9): treat as low-skew data, allow to pass
+      const fit = fitLagDistribution(10, 9.5, 100);
+
+      expect(fit.empirical_quality_ok).toBe(true);
+      expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
+      expect(fit.quality_failure_reason).toContain('< 1.0');
+    });
+
+    it('should fail quality gate if mean/median ratio too low (< 0.9)', () => {
+      // mean much less than median (ratio=0.8, < 0.9): quality failure
       const fit = fitLagDistribution(10, 8, 100);
 
       expect(fit.empirical_quality_ok).toBe(false);
+      expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
       expect(fit.quality_failure_reason).toContain('ratio too low');
     });
 
@@ -995,6 +1011,259 @@ describe('LAG Property-Based Tests', () => {
       expect(Number.isFinite(stats.p_mean)).toBe(true);
       expect(Number.isFinite(stats.completeness)).toBe(true);
       expect(Number.isFinite(stats.p_evidence)).toBe(true);
+    });
+  });
+
+  describe('Path-adjusted completeness (pathT95 parameter)', () => {
+    it('should reduce completeness for downstream edges with pathT95', () => {
+      // Cohorts with ages 30, 15, 0 days from anchor
+      const cohorts: CohortData[] = [
+        { date: '1-Nov-25', n: 100, k: 45, age: 30 },
+        { date: '15-Nov-25', n: 100, k: 30, age: 15 },
+        { date: '1-Dec-25', n: 100, k: 10, age: 0 },
+      ];
+
+      // Without pathT95 (first edge in chain)
+      const statsNoPath = computeEdgeLatencyStats(cohorts, 5, 7, 30, 0);
+
+      // With pathT95 = 15 days (downstream edge - users spent 15 days to get here)
+      const statsWithPath = computeEdgeLatencyStats(cohorts, 5, 7, 30, 15);
+
+      // Completeness should be LOWER with pathT95 because effective ages are reduced
+      // e.g., 30-day cohort becomes 15-day effective age, 15-day becomes 0-day
+      expect(statsWithPath.completeness).toBeLessThan(statsNoPath.completeness);
+    });
+
+    it('should clamp effective age to 0 when pathT95 exceeds cohort age', () => {
+      const cohorts: CohortData[] = [
+        { date: '1-Dec-25', n: 100, k: 10, age: 5 },  // 5 days old
+      ];
+
+      // pathT95 = 10 days (longer than cohort age of 5)
+      // Effective age should clamp to 0, not go negative
+      const stats = computeEdgeLatencyStats(cohorts, 5, 7, 30, 10);
+
+      // Should not throw and should produce valid completeness
+      expect(Number.isFinite(stats.completeness)).toBe(true);
+      expect(stats.completeness).toBeGreaterThanOrEqual(0);
+    });
+  });
+});
+
+// =============================================================================
+// Inbound-N Tests (forecast population propagation)
+// =============================================================================
+
+describe('computeInboundN', () => {
+  // Helper to create a simple test graph
+  function createTestGraph(config: {
+    edges: Array<{
+      id: string;
+      from: string;
+      to: string;
+      pMean: number;
+      evidenceN?: number;
+      evidenceK?: number;
+    }>;
+  }): GraphForInboundN {
+    // Extract unique node IDs
+    const nodeIds = new Set<string>();
+    for (const edge of config.edges) {
+      nodeIds.add(edge.from);
+      nodeIds.add(edge.to);
+    }
+
+    return {
+      nodes: Array.from(nodeIds).map(id => ({ id, type: id === 'start' ? 'start' : undefined })),
+      edges: config.edges.map(e => ({
+        id: e.id,
+        uuid: e.id,
+        from: e.from,
+        to: e.to,
+        p: {
+          mean: e.pMean,
+          evidence: e.evidenceN !== undefined ? { n: e.evidenceN, k: e.evidenceK ?? 0 } : undefined,
+        },
+      })),
+    };
+  }
+
+  describe('anchor edge (A=X): p.n equals evidence.n', () => {
+    it('should set p.n = evidence.n for edges from START node', () => {
+      const graph = createTestGraph({
+        edges: [
+          { id: 'start-to-x', from: 'start', to: 'x', pMean: 0.5, evidenceN: 1000, evidenceK: 500 },
+        ],
+      });
+
+      const activeEdges = new Set(['start-to-x']);
+      const getEffectiveP = (edgeId: string) => graph.edges.find(e => e.id === edgeId)?.p?.mean ?? 0;
+
+      const result = computeInboundN(graph, activeEdges, getEffectiveP);
+
+      expect(result.get('start-to-x')?.n).toBe(1000);
+      expect(result.get('start-to-x')?.forecast_k).toBe(500); // 1000 * 0.5
+      expect(result.get('start-to-x')?.effective_p).toBe(0.5);
+    });
+  });
+
+  describe('downstream edge (X→Y): p.n equals sum of inbound forecast.k', () => {
+    it('should propagate population through single path', () => {
+      // A → X → Y
+      // A=X has n=1000, p=0.5 → forecast.k=500 arrives at X
+      // X→Y should have p.n=500
+      const graph = createTestGraph({
+        edges: [
+          { id: 'a-to-x', from: 'start', to: 'x', pMean: 0.5, evidenceN: 1000, evidenceK: 500 },
+          { id: 'x-to-y', from: 'x', to: 'y', pMean: 0.8, evidenceN: 400, evidenceK: 320 },
+        ],
+      });
+
+      const activeEdges = new Set(['a-to-x', 'x-to-y']);
+      const getEffectiveP = (edgeId: string) => graph.edges.find(e => e.id === edgeId)?.p?.mean ?? 0;
+
+      const result = computeInboundN(graph, activeEdges, getEffectiveP);
+
+      // A→X: p.n=1000 (evidence.n), forecast.k=500
+      expect(result.get('a-to-x')?.n).toBe(1000);
+      expect(result.get('a-to-x')?.forecast_k).toBe(500);
+
+      // X→Y: p.n=500 (inbound forecast.k at X), forecast.k=400
+      expect(result.get('x-to-y')?.n).toBe(500);
+      expect(result.get('x-to-y')?.forecast_k).toBe(400); // 500 * 0.8
+    });
+
+    it('should sum multiple inbound edges', () => {
+      // A → X (p=0.5, n=1000) → Y
+      // A → Z (p=0.3, n=1000) → Y
+      // Y should receive 500 + 300 = 800
+      const graph = createTestGraph({
+        edges: [
+          { id: 'a-to-x', from: 'start', to: 'x', pMean: 0.5, evidenceN: 1000, evidenceK: 500 },
+          { id: 'a-to-z', from: 'start', to: 'z', pMean: 0.3, evidenceN: 1000, evidenceK: 300 },
+          { id: 'x-to-y', from: 'x', to: 'y', pMean: 1.0 },
+          { id: 'z-to-y', from: 'z', to: 'y', pMean: 1.0 },
+        ],
+      });
+
+      const activeEdges = new Set(['a-to-x', 'a-to-z', 'x-to-y', 'z-to-y']);
+      const getEffectiveP = (edgeId: string) => graph.edges.find(e => e.id === edgeId)?.p?.mean ?? 0;
+
+      const result = computeInboundN(graph, activeEdges, getEffectiveP);
+
+      // Both edges from X and Z to Y should receive their respective inbound populations
+      expect(result.get('x-to-y')?.n).toBe(500);
+      expect(result.get('z-to-y')?.n).toBe(300);
+    });
+  });
+
+  describe('scenario/conditional_p selection', () => {
+    it('should use effective probability from getEffectiveP callback', () => {
+      const graph = createTestGraph({
+        edges: [
+          { id: 'a-to-x', from: 'start', to: 'x', pMean: 0.5, evidenceN: 1000, evidenceK: 500 },
+          { id: 'x-to-y', from: 'x', to: 'y', pMean: 0.8 },
+        ],
+      });
+
+      const activeEdges = new Set(['a-to-x', 'x-to-y']);
+      
+      // Simulate scenario override: x-to-y has conditional_p activated at 0.9
+      const getEffectiveP = (edgeId: string) => {
+        if (edgeId === 'x-to-y') return 0.9; // Override!
+        return graph.edges.find(e => e.id === edgeId)?.p?.mean ?? 0;
+      };
+
+      const result = computeInboundN(graph, activeEdges, getEffectiveP);
+
+      // X→Y should use effective_p=0.9, not base p.mean=0.8
+      expect(result.get('x-to-y')?.effective_p).toBe(0.9);
+      expect(result.get('x-to-y')?.forecast_k).toBe(450); // 500 * 0.9
+    });
+
+    it('should treat deactivated edges (p=0) correctly', () => {
+      const graph = createTestGraph({
+        edges: [
+          { id: 'a-to-x', from: 'start', to: 'x', pMean: 0.5, evidenceN: 1000 },
+          { id: 'x-to-y', from: 'x', to: 'y', pMean: 0.8 },
+          { id: 'x-to-z', from: 'x', to: 'z', pMean: 0.2 }, // Will be deactivated
+        ],
+      });
+
+      const activeEdges = new Set(['a-to-x', 'x-to-y', 'x-to-z']);
+      
+      // Simulate x-to-z being deactivated by whatIf
+      const getEffectiveP = (edgeId: string) => {
+        if (edgeId === 'x-to-z') return 0; // Deactivated!
+        return graph.edges.find(e => e.id === edgeId)?.p?.mean ?? 0;
+      };
+
+      const result = computeInboundN(graph, activeEdges, getEffectiveP);
+
+      // X→Z should have forecast.k=0 because effective_p=0
+      expect(result.get('x-to-z')?.forecast_k).toBe(0);
+      expect(result.get('x-to-z')?.effective_p).toBe(0);
+    });
+  });
+
+  describe('applyInboundNToGraph', () => {
+    it('should update edge p.n values', () => {
+      const graph = createTestGraph({
+        edges: [
+          { id: 'a-to-x', from: 'start', to: 'x', pMean: 0.5, evidenceN: 1000 },
+        ],
+      });
+
+      const inboundNMap = new Map<string, InboundNResult>([
+        ['a-to-x', { n: 1000, forecast_k: 500, effective_p: 0.5 }],
+      ]);
+
+      applyInboundNToGraph(graph, inboundNMap);
+
+      expect(graph.edges[0].p?.n).toBe(1000);
+    });
+  });
+
+  describe('edge cases', () => {
+    it('should handle empty graph', () => {
+      const graph: GraphForInboundN = { nodes: [], edges: [] };
+      const activeEdges = new Set<string>();
+      const getEffectiveP = () => 0;
+
+      const result = computeInboundN(graph, activeEdges, getEffectiveP);
+
+      expect(result.size).toBe(0);
+    });
+
+    it('should handle no active edges', () => {
+      const graph = createTestGraph({
+        edges: [
+          { id: 'a-to-x', from: 'start', to: 'x', pMean: 0, evidenceN: 1000 },
+        ],
+      });
+
+      const activeEdges = new Set<string>(); // No active edges
+      const getEffectiveP = () => 0;
+
+      const result = computeInboundN(graph, activeEdges, getEffectiveP);
+
+      expect(result.size).toBe(0);
+    });
+
+    it('should handle missing evidence.n gracefully', () => {
+      const graph = createTestGraph({
+        edges: [
+          { id: 'a-to-x', from: 'start', to: 'x', pMean: 0.5 }, // No evidence
+        ],
+      });
+
+      const activeEdges = new Set(['a-to-x']);
+      const getEffectiveP = () => 0.5;
+
+      const result = computeInboundN(graph, activeEdges, getEffectiveP);
+
+      // Should use 0 as default when no evidence.n
+      expect(result.get('a-to-x')?.n).toBe(0);
     });
   });
 });

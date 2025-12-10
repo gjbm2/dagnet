@@ -477,6 +477,14 @@ describe('Amplitude 3-Step Funnel Integration', () => {
       expect(typeof raw.mean_lag_days).toBe('number');
       expect(raw.median_lag_days).toBeGreaterThan(0);
       expect(raw.mean_lag_days).toBeGreaterThan(0);
+      
+      // Per-day latency in time_series - NOW EXTRACTED!
+      expect(firstDay.median_lag_days).toBeDefined();
+      expect(typeof firstDay.median_lag_days).toBe('number');
+      expect(firstDay.median_lag_days).toBeGreaterThan(0);
+      expect(firstDay.mean_lag_days).toBeDefined();
+      expect(typeof firstDay.mean_lag_days).toBe('number');
+      expect(firstDay.mean_lag_days).toBeGreaterThan(0);
     });
 
     it('should generate correct upsert writes', async () => {

@@ -19,6 +19,7 @@ import {
   getDefaultDSL,
   extractWindowFromDSL,
   createFetchItem,
+  computeAndApplyInboundN,
   type FetchItem,
 } from '../fetchDataService';
 import type { Graph, DateRange } from '../../types';
@@ -37,6 +38,20 @@ vi.mock('../windowAggregationService', async (importOriginal) => {
     ...actual,
     calculateIncrementalFetch: vi.fn(),
     parseDate: vi.fn((dateStr: string) => new Date(dateStr)),
+  };
+});
+
+vi.mock('../lib/whatIf', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    // For inbound-n unit tests, use base p.mean as effective probability
+    computeEffectiveEdgeProbability: vi.fn((graph: Graph, edgeId: string) => {
+      const edge = graph.edges?.find(
+        (e: any) => (e.uuid || e.id || `${e.from}->${e.to}`) === edgeId
+      );
+      return edge?.p?.mean ?? 0;
+    }),
   };
 });
 
@@ -401,6 +416,69 @@ describe('FetchDataService', () => {
         expect(result!.start).toMatch(/^\d{1,2}-[A-Za-z]{3}-\d{2}$/);
         expect(result!.end).toMatch(/^\d{1,2}-[A-Za-z]{3}-\d{2}$/);
       });
+    });
+  });
+
+  // ==========================================================================
+  // computeAndApplyInboundN tests
+  // ==========================================================================
+
+  describe('computeAndApplyInboundN', () => {
+    it('should persist p.n and p.forecast.k on edges after inbound-n computation', () => {
+      // Simple A(start) → X → Y graph
+      const graph: Graph = {
+        nodes: [
+          { id: 'start', uuid: 'start-uuid', type: 'normal', entry: { is_start: true } } as any,
+          { id: 'x', uuid: 'x-uuid', type: 'normal' } as any,
+          { id: 'y', uuid: 'y-uuid', type: 'normal' } as any,
+        ],
+        edges: [
+          {
+            id: 'start-to-x',
+            uuid: 'start-to-x',
+            from: 'start',
+            to: 'x',
+            p: {
+              mean: 0.5,
+              evidence: { n: 1000, k: 500 },
+              latency: { maturity_days: 30 },
+            },
+          },
+          {
+            id: 'x-to-y',
+            uuid: 'x-to-y',
+            from: 'x',
+            to: 'y',
+            p: {
+              mean: 0.8,
+              evidence: { n: 400, k: 320 },
+              latency: { maturity_days: 30 },
+            },
+          },
+        ],
+        policies: {} as any,
+        metadata: { version: '1.1.0', created_at: '1-Jan-25' },
+      } as Graph;
+
+      const setGraph = vi.fn();
+
+      // Act
+      computeAndApplyInboundN(graph, setGraph, null, 'TEST_LOG_ID');
+
+      // Assert: setGraph called with updated graph
+      expect(setGraph).toHaveBeenCalledTimes(1);
+      const updatedGraph = (setGraph as ReturnType<typeof vi.fn>).mock.calls[0][0] as Graph;
+
+      const edgeAX = updatedGraph.edges!.find(e => e.id === 'start-to-x') as any;
+      const edgeXY = updatedGraph.edges!.find(e => e.id === 'x-to-y') as any;
+
+      // A→X: p.n should equal evidence.n, forecast.k = n * mean
+      expect(edgeAX.p.n).toBeCloseTo(1000);
+      expect(edgeAX.p.forecast?.k).toBeCloseTo(1000 * 0.5);
+
+      // X→Y: p.n should equal inbound forecast.k from A→X, forecast.k = n * mean
+      expect(edgeXY.p.n).toBeCloseTo(1000 * 0.5);
+      expect(edgeXY.p.forecast?.k).toBeCloseTo((1000 * 0.5) * 0.8);
     });
   });
 

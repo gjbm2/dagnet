@@ -418,6 +418,9 @@ export async function buildDslFromEdge(
       const { startDate: cohortStart, endDate: cohortEnd } = resolveCohortDates(constraints.cohort);
       
       // Get anchor event_id - either from explicit anchor in DSL or from edge.p.latency.anchor_node_id
+      // NOTE: anchor_node_id SHOULD be pre-computed by MSMDC for each latency-enabled edge
+      // by traversing upstream to find the START node. If it's missing, cohort queries
+      // will anchor at the edge's FROM node (which may give unexpected results for downstream edges).
       let anchorEventId: string | undefined;
       const anchorNodeId = constraints.cohort.anchor || edge.p?.latency?.anchor_node_id;
       
@@ -430,6 +433,10 @@ export async function buildDslFromEdge(
         } else {
           console.warn(`[buildQueryPayload] Anchor node "${anchorNodeId}" not found or missing event_id`);
         }
+      } else {
+        console.warn(`[buildQueryPayload] No anchor_node_id on edge - cohort will be anchored at FROM node. ` +
+          `This may produce unexpected results for downstream edges. ` +
+          `Expected: edge.p.latency.anchor_node_id should be computed by MSMDC.`);
       }
       
       // Get maturity_days from edge.p.latency

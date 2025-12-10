@@ -267,11 +267,12 @@ class GraphMutationService {
         `Duration: ${elapsed.toFixed(0)}ms`
       );
       
-      // Step 2: Apply regenerated queries to graph
+      // Step 2: Apply regenerated queries and anchors to graph
       const updatedGraph = structuredClone(graph);
       const applyResult = await queryRegenerationService.applyRegeneratedQueries(
         updatedGraph,
-        result.parameters
+        result.parameters,
+        result.anchors
       );
       
       console.log('[GraphMutation] Applied queries:', {

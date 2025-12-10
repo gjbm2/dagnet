@@ -345,7 +345,12 @@
           "required": ["type"]
         },
         "latency": { "$ref": "#/$defs/LatencyConfig" },
-        "forecast": { "$ref": "#/$defs/ForecastParams" }
+        "forecast": { "$ref": "#/$defs/ForecastParams" },
+        "n": { 
+          "type": "number", 
+          "minimum": 0, 
+          "description": "Forecast population for this edge under the current DSL. NOT the same as evidence.n (observed). Derived via step-wise convolution of upstream p.mean values. For anchor edges: equals evidence.n. For downstream edges: sum of inbound forecast.k at the from-node. Query-time value, recomputed when DSL or scenario changes."
+        }
       }
     },
 
@@ -369,10 +374,11 @@
     "ForecastParams": {
       "type": "object",
       "additionalProperties": false,
-      "$comment": "Forecast probability parameters from mature cohorts.",
+      "$comment": "Forecast probability parameters from mature cohorts. Note: mean can exceed 1.0 in edge cases when extrapolating from immature cohort data.",
       "properties": {
-        "mean": { "type": "number", "minimum": 0, "maximum": 1, "description": "Forecast mean probability (p_∞)" },
-        "stdev": { "type": "number", "minimum": 0, "description": "Forecast standard deviation" }
+        "mean": { "type": "number", "minimum": 0, "description": "Forecast mean probability (p_∞) - can exceed 1.0 in edge cases" },
+        "stdev": { "type": "number", "minimum": 0, "description": "Forecast standard deviation" },
+        "k": { "type": "number", "minimum": 0, "description": "Expected converters on this edge (p.mean * p.n). Used for propagating population downstream." }
       }
     },
 

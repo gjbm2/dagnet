@@ -112,5 +112,5 @@ export const COHORT_HORIZON_DEFAULT_DAYS = 30;
  * Set to false for normal operation to avoid bloating session log exports.
  * Set to true temporarily when debugging query execution issues.
  */
-export const DIAGNOSTIC_LOG = false;
+export const DIAGNOSTIC_LOG = true;
 

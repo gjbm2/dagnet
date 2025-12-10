@@ -1134,6 +1134,7 @@ export interface MergeOptions {
   latencyConfig?: {
     maturity_days?: number;   // Cohorts younger than this are "immature"
     anchor_node_id?: string;  // Anchor node for cohort queries
+    path_t95?: number;        // Cumulative t95 from anchor to this edge's source node
   };
   
   /** 
@@ -1270,16 +1271,19 @@ export function mergeTimeSeriesIntoParameter(
     const mergedDates: string[] = [];
     const mergedN: number[] = [];
     const mergedK: number[] = [];
-    const mergedMedianLag: number[] = [];
-    const mergedMeanLag: number[] = [];
+    const mergedMedianLag: (number | undefined)[] = [];
+    const mergedMeanLag: (number | undefined)[] = [];
+    let hasAnyLagData = false;
     
     for (const d of sortedDates) {
       const entry = cohortDateMap.get(d)!;
       mergedDates.push(d);
       mergedN.push(entry.n);
       mergedK.push(entry.k);
-      if (entry.median_lag !== undefined) mergedMedianLag.push(entry.median_lag);
-      if (entry.mean_lag !== undefined) mergedMeanLag.push(entry.mean_lag);
+      // Always push (even undefined) to maintain array alignment with dates
+      mergedMedianLag.push(entry.median_lag);
+      mergedMeanLag.push(entry.mean_lag);
+      if (entry.median_lag !== undefined) hasAnyLagData = true;
     }
     
     // 5) Calculate aggregate totals from MERGED data
@@ -1296,6 +1300,74 @@ export function mergeTimeSeriesIntoParameter(
     const anchorPart = anchorNodeId ? `${anchorNodeId},` : '';
     const canonicalSliceDSL = `cohort(${anchorPart}${cohortFrom}:${cohortTo})${contextSuffix}`;
     
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LAG: Recompute forecast and latency scalars for COHORT mode (design.md §3.2)
+    // ═══════════════════════════════════════════════════════════════════════════
+    let recomputedForecast: number | undefined;
+    let recomputedLatencySummary: { median_lag_days?: number; mean_lag_days?: number; completeness?: number; t95?: number } | undefined;
+    
+    if (mergeOptions?.recomputeForecast && mergeOptions?.latencyConfig?.maturity_days && mergeOptions.latencyConfig.maturity_days > 0 && hasAnyLagData) {
+      try {
+        // Build cohort data from merged cohort data for LAG calculations
+        const queryDate = new Date();
+        const cohortData: CohortData[] = [];
+        
+        for (let i = 0; i < mergedDates.length; i++) {
+          const cohortDate = parseDate(mergedDates[i]);
+          const ageMs = queryDate.getTime() - cohortDate.getTime();
+          const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+          
+          cohortData.push({
+            date: mergedDates[i],
+            n: mergedN[i],
+            k: mergedK[i],
+            age: Math.max(0, ageDays),
+            median_lag_days: mergedMedianLag[i],
+            mean_lag_days: mergedMeanLag[i],
+          });
+        }
+        
+        // Compute aggregate lag stats from cohort data
+        const lagStats = aggregateLatencyStats(cohortData);
+        const aggregateMedianLag = lagStats?.median_lag_days ?? mergeOptions.latencyConfig.maturity_days / 2;
+        const aggregateMeanLag = lagStats?.mean_lag_days;
+        
+        // Call the statistical enhancement service
+        // Pass pathT95 to adjust cohort ages for downstream edges
+        const pathT95 = mergeOptions.latencyConfig.path_t95 ?? 0;
+        const latencyStats: EdgeLatencyStats = computeEdgeLatencyStats(
+          cohortData,
+          aggregateMedianLag,
+          aggregateMeanLag,
+          mergeOptions.latencyConfig.maturity_days,
+          pathT95
+        );
+        
+        // Extract recomputed values - guard against NaN
+        const isValidNumber = (n: number | undefined): n is number => 
+          n !== undefined && !Number.isNaN(n) && Number.isFinite(n);
+        
+        recomputedForecast = isValidNumber(latencyStats.p_infinity) ? latencyStats.p_infinity : undefined;
+        recomputedLatencySummary = {
+          median_lag_days: isValidNumber(aggregateMedianLag) ? aggregateMedianLag : undefined,
+          mean_lag_days: isValidNumber(aggregateMeanLag) ? aggregateMeanLag : undefined,
+          completeness: isValidNumber(latencyStats.completeness) ? latencyStats.completeness : undefined,
+          t95: isValidNumber(latencyStats.t95) ? latencyStats.t95 : undefined,
+        };
+        
+        console.log('[LAG_DEBUG] COHORT_RECOMPUTE:', {
+          p_infinity: recomputedForecast,
+          t95: latencyStats.t95,
+          completeness: latencyStats.completeness,
+          cohortCount: cohortData.length,
+          maturityDays: mergeOptions.latencyConfig.maturity_days,
+          hasNaN: !isValidNumber(latencyStats.t95) || !isValidNumber(latencyStats.completeness),
+        });
+      } catch (error) {
+        console.warn('[mergeTimeSeriesIntoParameter] Failed to recompute forecast (cohort):', error);
+      }
+    }
+    
     const mergedValue: ParameterValue = {
       mean,
       n: totalN,
@@ -1307,11 +1379,14 @@ export function mergeTimeSeriesIntoParameter(
       cohort_to: cohortTo,
       query_signature: newQuerySignature,
       sliceDSL: canonicalSliceDSL,
-      // Include lag data if we have it for all dates
-      ...(mergedMedianLag.length === mergedDates.length && { median_lag_days: mergedMedianLag }),
-      ...(mergedMeanLag.length === mergedDates.length && { mean_lag_days: mergedMeanLag }),
-      ...(mergeOptions?.latencySummary && { 
-        latency: mergeOptions.latencySummary 
+      // Include lag data if we have ANY lag data (filter out undefined values for type safety)
+      ...(hasAnyLagData && { median_lag_days: mergedMedianLag.map(v => v ?? 0) }),
+      ...(hasAnyLagData && { mean_lag_days: mergedMeanLag.map(v => v ?? 0) }),
+      // LAG: Include recomputed forecast if available
+      ...(recomputedForecast !== undefined && { forecast: recomputedForecast }),
+      // LAG: Include recomputed latency summary if available, or fall back to passed-in latencySummary
+      ...((recomputedLatencySummary || mergeOptions?.latencySummary) && { 
+        latency: recomputedLatencySummary ?? mergeOptions?.latencySummary 
       }),
       data_source: {
         type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
@@ -1432,20 +1507,26 @@ export function mergeTimeSeriesIntoParameter(
       const aggregateMeanLag = lagStats?.mean_lag_days;
       
       // Call the statistical enhancement service (imported at top of file)
+      // Pass pathT95 to adjust cohort ages for downstream edges
+      const pathT95 = mergeOptions.latencyConfig.path_t95 ?? 0;
       const latencyStats: EdgeLatencyStats = computeEdgeLatencyStats(
         cohortData,
         aggregateMedianLag,
         aggregateMeanLag,
-        mergeOptions.latencyConfig.maturity_days
+        mergeOptions.latencyConfig.maturity_days,
+        pathT95
       );
       
-      // Extract recomputed values
-      recomputedForecast = latencyStats.p_infinity;
+      // Extract recomputed values - guard against NaN
+      const isValidNumber = (n: number | undefined): n is number => 
+        n !== undefined && !Number.isNaN(n) && Number.isFinite(n);
+      
+      recomputedForecast = isValidNumber(latencyStats.p_infinity) ? latencyStats.p_infinity : undefined;
       recomputedLatencySummary = {
-        median_lag_days: aggregateMedianLag,
-        mean_lag_days: aggregateMeanLag,
-        completeness: latencyStats.completeness,
-        t95: latencyStats.t95,
+        median_lag_days: isValidNumber(aggregateMedianLag) ? aggregateMedianLag : undefined,
+        mean_lag_days: isValidNumber(aggregateMeanLag) ? aggregateMeanLag : undefined,
+        completeness: isValidNumber(latencyStats.completeness) ? latencyStats.completeness : undefined,
+        t95: isValidNumber(latencyStats.t95) ? latencyStats.t95 : undefined,
       };
       
       console.log('[mergeTimeSeriesIntoParameter] Recomputed forecast after merge:', {
@@ -1454,6 +1535,7 @@ export function mergeTimeSeriesIntoParameter(
         completeness: latencyStats.completeness,
         cohortCount: cohortData.length,
         maturityDays: mergeOptions.latencyConfig.maturity_days,
+        hasNaN: !isValidNumber(latencyStats.t95) || !isValidNumber(latencyStats.completeness),
       });
     } catch (error) {
       console.warn('[mergeTimeSeriesIntoParameter] Failed to recompute forecast:', error);
@@ -1597,6 +1679,17 @@ export function aggregateCohortData(
 export function aggregateLatencyStats(
   cohorts: CohortData[]
 ): { median_lag_days: number; mean_lag_days: number } | undefined {
+  // DEBUG: Log input
+  console.log('[LAG_DEBUG] AGGREGATE_INPUT cohorts:', {
+    count: cohorts.length,
+    samples: cohorts.slice(0, 3).map(c => ({
+      date: c.date,
+      k: c.k,
+      median_lag_days: c.median_lag_days,
+      mean_lag_days: c.mean_lag_days,
+    }))
+  });
+
   // Filter to cohorts with lag data
   const withLag = cohorts.filter(c => 
     c.k > 0 && 
@@ -1604,7 +1697,18 @@ export function aggregateLatencyStats(
     c.median_lag_days > 0
   );
 
+  console.log('[LAG_DEBUG] AGGREGATE_FILTERED cohorts:', {
+    count: withLag.length,
+    samples: withLag.slice(0, 3).map(c => ({
+      date: c.date,
+      k: c.k,
+      median_lag_days: c.median_lag_days,
+      mean_lag_days: c.mean_lag_days,
+    }))
+  });
+
   if (withLag.length === 0) {
+    console.warn('[LAG_DEBUG] AGGREGATE_FAIL: No cohorts with valid lag data!');
     return undefined;
   }
 

@@ -545,6 +545,16 @@ export function fitLagDistribution(
   meanLag: number | undefined,
   totalK: number
 ): LagDistributionFit {
+  // Guard against non-finite medianLag (undefined/NaN) early to avoid NaN propagation
+  if (!Number.isFinite(medianLag)) {
+    return {
+      mu: 0,
+      sigma: LATENCY_DEFAULT_SIGMA,
+      empirical_quality_ok: false,
+      total_k: totalK,
+      quality_failure_reason: `Invalid median lag (non-finite): ${String(medianLag)}`,
+    };
+  }
   // Quality gate: minimum converters
   if (totalK < LATENCY_MIN_FIT_CONVERTERS) {
     return {
@@ -569,12 +579,13 @@ export function fitLagDistribution(
 
   const mu = Math.log(medianLag);
 
-  // If mean not available, use default sigma
+  // If mean not available, fall back to default σ but ALLOW fit to be used.
+  // We have valid median, so we can compute a reasonable t95 with default σ.
   if (meanLag === undefined || meanLag <= 0) {
     return {
       mu,
       sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
+      empirical_quality_ok: true,  // Allow fit - we have valid median
       total_k: totalK,
       quality_failure_reason: 'Mean lag not available, using default σ',
     };
@@ -583,13 +594,24 @@ export function fitLagDistribution(
   // Check mean/median ratio
   const ratio = meanLag / medianLag;
   
-  if (ratio < LATENCY_MIN_MEAN_MEDIAN_RATIO) {
+  // CRITICAL: Math requires ratio >= 1.0 for valid sigma calculation.
+  // sigma = sqrt(2 * ln(ratio)) → ln(ratio) must be >= 0 → ratio must be >= 1.0
+  // For ratios < 1.0 (mean < median, which shouldn't happen for log-normal but can
+  // occur due to data noise), use default sigma but allow fit to proceed if ratio
+  // is close to 1.0 (i.e., >= LATENCY_MIN_MEAN_MEDIAN_RATIO).
+  if (ratio < 1.0) {
+    // Ratio below 1.0 means we can't compute sigma from the formula.
+    // If it's close to 1.0 (>= 0.9), treat as valid but use default sigma.
+    // If it's too low (< 0.9), mark as quality failure.
+    const isCloseToOne = ratio >= LATENCY_MIN_MEAN_MEDIAN_RATIO;
     return {
       mu,
       sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
+      empirical_quality_ok: isCloseToOne,
       total_k: totalK,
-      quality_failure_reason: `Mean/median ratio too low: ${ratio.toFixed(3)} < ${LATENCY_MIN_MEAN_MEDIAN_RATIO}`,
+      quality_failure_reason: isCloseToOne
+        ? `Mean/median ratio ${ratio.toFixed(3)} < 1.0 (using default σ)`
+        : `Mean/median ratio too low: ${ratio.toFixed(3)} < ${LATENCY_MIN_MEAN_MEDIAN_RATIO}`,
     };
   }
 
@@ -858,25 +880,75 @@ export function calculateCompleteness(
  * @param aggregateMedianLag - Weighted aggregate median lag
  * @param aggregateMeanLag - Weighted aggregate mean lag (optional)
  * @param maturityDays - User-configured maturity threshold
+ * @param pathT95 - Cumulative t95 from anchor to this edge's source node (for downstream edges)
  * @returns Full edge latency statistics
  */
 export function computeEdgeLatencyStats(
   cohorts: CohortData[],
   aggregateMedianLag: number,
   aggregateMeanLag: number | undefined,
-  maturityDays: number
+  maturityDays: number,
+  pathT95: number = 0
 ): EdgeLatencyStats {
   // Calculate total k for quality gate
   const totalK = cohorts.reduce((sum, c) => sum + c.k, 0);
   const totalN = cohorts.reduce((sum, c) => sum + c.n, 0);
 
+  // DEBUG: Log input values
+  console.log('[LAG_DEBUG] COMPUTE_STATS input:', {
+    cohortsCount: cohorts.length,
+    aggregateMedianLag,
+    aggregateMeanLag,
+    maturityDays,
+    pathT95,
+    totalK,
+    totalN,
+    sampleCohort: cohorts[0] ? {
+      date: cohorts[0].date,
+      n: cohorts[0].n,
+      k: cohorts[0].k,
+      age: cohorts[0].age,
+      median_lag_days: cohorts[0].median_lag_days,
+      mean_lag_days: cohorts[0].mean_lag_days,
+    } : 'no cohorts'
+  });
+
+  // For downstream edges, adjust cohort ages by subtracting path_t95.
+  // This reflects that by the time users reach this edge, they've already
+  // spent path_t95 days traversing upstream edges.
+  // effectiveAge = max(0, rawAge - pathT95)
+  const adjustedCohorts: CohortData[] = pathT95 > 0
+    ? cohorts.map(c => ({
+        ...c,
+        age: Math.max(0, c.age - pathT95),
+      }))
+    : cohorts;
+  
+  if (pathT95 > 0) {
+    console.log('[LAG_DEBUG] Path-adjusted ages:', {
+      pathT95,
+      originalAges: cohorts.slice(0, 3).map(c => c.age),
+      adjustedAges: adjustedCohorts.slice(0, 3).map(c => c.age),
+    });
+  }
+
   // Step 1: Fit lag distribution
   const fit = fitLagDistribution(aggregateMedianLag, aggregateMeanLag, totalK);
+  
+  // DEBUG: Log fit result
+  console.log('[LAG_DEBUG] COMPUTE_FIT result:', {
+    mu: fit.mu,
+    sigma: fit.sigma,
+    empirical_quality_ok: fit.empirical_quality_ok,
+    quality_failure_reason: fit.quality_failure_reason,
+    total_k: fit.total_k,
+  });
 
   // Step 2: Compute t95
   const t95 = computeT95(fit, maturityDays);
 
   // Step 3: Estimate p_infinity from mature cohorts
+  // NOTE: Use ORIGINAL cohorts for p_infinity estimation (raw age determines maturity)
   const pInfinityEstimate = estimatePInfinity(cohorts, t95);
 
   // Evidence probability (observed k/n)
@@ -889,14 +961,16 @@ export function computeEdgeLatencyStats(
       t95,
       p_infinity: pEvidence, // Fall back to evidence as estimate
       p_mean: pEvidence,     // Can't forecast without p_infinity
-      completeness: calculateCompleteness(cohorts, fit.mu, fit.sigma),
+      // Use ADJUSTED cohorts for completeness (reflects effective age at this edge)
+      completeness: calculateCompleteness(adjustedCohorts, fit.mu, fit.sigma),
       p_evidence: pEvidence,
       forecast_available: false,
     };
   }
 
   // Step 4: Apply Formula A
-  const result = applyFormulaAToAll(cohorts, pInfinityEstimate, fit, maturityDays);
+  // Use ADJUSTED cohorts for completeness calculation
+  const result = applyFormulaAToAll(adjustedCohorts, pInfinityEstimate, fit, maturityDays);
 
   return {
     fit,
@@ -947,6 +1021,9 @@ export interface GraphEdgeForPath {
 export interface GraphNodeForPath {
   id: string;
   type?: string;
+  entry?: {
+    is_start?: boolean;
+  };
 }
 
 /**
@@ -1041,7 +1118,7 @@ function buildReverseAdjacency(
 }
 
 /**
- * Find START nodes (nodes with type='start' or no incoming edges).
+ * Find START nodes (nodes with entry.is_start=true or no incoming edges).
  */
 function findStartNodes(
   graph: GraphForPath,
@@ -1051,13 +1128,13 @@ function findStartNodes(
   const startNodes: string[] = [];
 
   for (const node of graph.nodes) {
-    // Explicit start type
-    if (node.type === 'start') {
+    // Explicit start via entry.is_start (the actual pattern used in graphs)
+    if (node.entry?.is_start === true) {
       startNodes.push(node.id);
       continue;
     }
     
-    // No incoming active edges
+    // No incoming active edges (fallback for graphs without explicit start markers)
     const incoming = reverseAdj.get(node.id) || [];
     if (incoming.length === 0) {
       // Check if this node has any outgoing edges (otherwise it's disconnected)
@@ -1225,5 +1302,189 @@ export function getEdgesInTopologicalOrder(
   }
 
   return sorted;
+}
+
+// =============================================================================
+// Inbound-N: Forecast Population Computation (see inbound-n-fix.md)
+// =============================================================================
+
+/**
+ * Extended edge interface for inbound-n calculations.
+ * Includes evidence.n which is needed to seed anchor edges.
+ */
+export interface GraphEdgeForInboundN extends GraphEdgeForPath {
+  p?: GraphEdgeForPath['p'] & {
+    evidence?: {
+      n?: number;
+      k?: number;
+    };
+    n?: number; // Will be set by computeInboundN
+  };
+}
+
+/**
+ * Extended graph interface for inbound-n calculations.
+ */
+export interface GraphForInboundN {
+  nodes: GraphNodeForPath[];
+  edges: GraphEdgeForInboundN[];
+}
+
+/**
+ * Result of inbound-n computation for a single edge.
+ */
+export interface InboundNResult {
+  /** Forecast population for this edge (p.n) */
+  n: number;
+  /** Internal: expected converters on this edge (p.n * p.mean) */
+  forecast_k: number;
+  /** The effective probability used (from whatIf or base p.mean) */
+  effective_p: number;
+}
+
+/**
+ * Compute inbound-n (forecast population) for all edges using topological DP.
+ * 
+ * This implements the step-wise convolution from design doc inbound-n-fix.md:
+ * - For anchor edges (from START node): p.n = evidence.n
+ * - For downstream edges: p.n = sum of inbound forecast.k at the from-node
+ * - For each edge: forecast.k = p.n * effective_probability
+ * 
+ * The effective probability accounts for scenario/whatIf overrides including
+ * conditional_p activation under the current scenario.
+ * 
+ * @param graph - The graph with edges that have evidence.n and p.mean
+ * @param activeEdges - Set of edge IDs that are active under current scenario
+ * @param getEffectiveP - Function to get effective probability for an edge under scenario
+ *                        (should wrap computeEffectiveEdgeProbability from whatIf.ts)
+ * @param anchorNodeId - Optional: specific anchor node (if omitted, uses all START nodes)
+ * @returns Map of edge ID -> InboundNResult
+ */
+export function computeInboundN(
+  graph: GraphForInboundN,
+  activeEdges: Set<string>,
+  getEffectiveP: (edgeId: string) => number,
+  anchorNodeId?: string
+): Map<string, InboundNResult> {
+  const results = new Map<string, InboundNResult>();
+  
+  // nodePopulation[nodeId] = total expected arrivals at this node
+  // For START nodes, this is the sum of evidence.n on outgoing edges
+  // For other nodes, this is the sum of inbound forecast.k
+  const nodePopulation = new Map<string, number>();
+
+  // Build adjacency structures (cast to include evidence field)
+  const adjacency = buildAdjacencyList(graph, activeEdges) as Map<string, GraphEdgeForInboundN[]>;
+  const reverseAdj = buildReverseAdjacency(graph, activeEdges) as Map<string, GraphEdgeForInboundN[]>;
+
+  // Find start nodes
+  const startNodes = anchorNodeId ? [anchorNodeId] : findStartNodes(graph, activeEdges);
+  
+  console.log('[computeInboundN] Setup:', {
+    nodeCount: graph.nodes.length,
+    edgeCount: graph.edges.length,
+    activeEdgeCount: activeEdges.size,
+    startNodes,
+    nodesWithEntry: graph.nodes.filter(n => n.entry?.is_start).map(n => n.id),
+    adjacencyKeys: Array.from(adjacency.keys()),
+  });
+
+  // Initialise start node populations from their outgoing edges' evidence.n
+  // For a START node, the population is defined by the cohort size entering
+  // We take the max evidence.n from outgoing edges as the anchor population
+  for (const startId of startNodes) {
+    const outgoing = adjacency.get(startId) || [];
+    let maxEvidenceN = 0;
+    for (const edge of outgoing) {
+      const evidenceN = edge.p?.evidence?.n ?? 0;
+      maxEvidenceN = Math.max(maxEvidenceN, evidenceN);
+    }
+    nodePopulation.set(startId, maxEvidenceN);
+  }
+
+  // Topological order traversal using Kahn's algorithm
+  // Count incoming edges for each node
+  const inDegree = new Map<string, number>();
+  for (const node of graph.nodes) {
+    const incoming = reverseAdj.get(node.id) || [];
+    inDegree.set(node.id, incoming.length);
+  }
+
+  // Queue starts with nodes that have no incoming edges (or are start nodes)
+  const queue: string[] = [];
+  for (const [nodeId, degree] of inDegree) {
+    if (degree === 0 || startNodes.includes(nodeId)) {
+      queue.push(nodeId);
+    }
+  }
+
+  // Process nodes in topological order
+  while (queue.length > 0) {
+    const nodeId = queue.shift()!;
+    const nodeN = nodePopulation.get(nodeId) ?? 0;
+
+    // Process all outgoing edges from this node
+    const outgoing = adjacency.get(nodeId) || [];
+    for (const edge of outgoing) {
+      const edgeId = getEdgeId(edge);
+      
+      // Get effective probability under current scenario
+      const effectiveP = getEffectiveP(edgeId);
+      
+      // For anchor edges (from START), p.n = evidence.n
+      // For downstream edges, p.n = nodePopulation (sum of inbound forecast.k)
+      const isAnchorEdge = startNodes.includes(nodeId);
+      const edgeN = isAnchorEdge 
+        ? (edge.p?.evidence?.n ?? nodeN) 
+        : nodeN;
+      
+      // forecast.k = p.n * effective_probability
+      const forecastK = edgeN * effectiveP;
+      
+      results.set(edgeId, {
+        n: edgeN,
+        forecast_k: forecastK,
+        effective_p: effectiveP,
+      });
+
+      // Add this edge's forecast.k to the target node's population
+      const targetNodeId = edge.to;
+      const currentTargetN = nodePopulation.get(targetNodeId) ?? 0;
+      nodePopulation.set(targetNodeId, currentTargetN + forecastK);
+
+      // Decrease in-degree and add to queue if ready
+      const newInDegree = (inDegree.get(targetNodeId) ?? 1) - 1;
+      inDegree.set(targetNodeId, newInDegree);
+      if (newInDegree === 0 && !queue.includes(targetNodeId)) {
+        queue.push(targetNodeId);
+      }
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Apply computed inbound-n values to edges.
+ * 
+ * This updates the in-memory graph edges with p.n for display/caching.
+ * The values are scenario-specific and should be recomputed when the
+ * scenario or DSL changes.
+ * 
+ * @param graph - Graph to update (mutated in place)
+ * @param inboundNMap - Map of edge ID -> InboundNResult
+ */
+export function applyInboundNToGraph(
+  graph: GraphForInboundN,
+  inboundNMap: Map<string, InboundNResult>
+): void {
+  for (const edge of graph.edges) {
+    const edgeId = getEdgeId(edge);
+    const result = inboundNMap.get(edgeId);
+
+    if (result !== undefined && edge.p) {
+      edge.p.n = result.n;
+    }
+  }
 }
 

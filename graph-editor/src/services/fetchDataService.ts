@@ -25,8 +25,12 @@ import {
   getActiveEdges, 
   computePathT95, 
   applyPathT95ToGraph,
-  type GraphForPath 
+  computeInboundN,
+  applyInboundNToGraph,
+  type GraphForPath,
+  type GraphForInboundN 
 } from './statisticalEnhancementService';
+import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -644,6 +648,7 @@ export function computeAndApplyPathT95(
     nodes: (graph.nodes || []).map(n => ({
       id: n.id || n.uuid || '',
       type: n.type,
+      entry: n.entry, // Include entry.is_start for START node detection
     })),
     edges: (graph.edges || []).map(e => ({
       id: e.id,
@@ -664,6 +669,14 @@ export function computeAndApplyPathT95(
   // Get active edges (edges with non-zero probability)
   const activeEdges = getActiveEdges(graphForPath);
   
+  console.log('[fetchDataService] path_t95 prep:', {
+    nodeCount: graphForPath.nodes.length,
+    edgeCount: graphForPath.edges.length,
+    activeCount: activeEdges.size,
+    startNodes: graphForPath.nodes.filter(n => n.entry?.is_start).map(n => n.id),
+    edgesWithT95: graphForPath.edges.filter(e => e.p?.latency?.t95).length,
+  });
+  
   if (activeEdges.size === 0) {
     console.log('[fetchDataService] No active edges for path_t95 computation');
     return;
@@ -671,6 +684,11 @@ export function computeAndApplyPathT95(
   
   // Compute path_t95 for all active edges
   const pathT95Map = computePathT95(graphForPath, activeEdges);
+  
+  console.log('[fetchDataService] path_t95 result:', {
+    mapSize: pathT95Map.size,
+    entries: Array.from(pathT95Map.entries()).slice(0, 5),
+  });
   
   if (pathT95Map.size === 0) {
     console.log('[fetchDataService] path_t95 computation returned empty map');
@@ -710,6 +728,147 @@ export function computeAndApplyPathT95(
       `Computed path_t95 for ${edgesWithPathT95.length} edges`,
       undefined,
       { edgeCount: edgesWithPathT95.length, sample: Object.fromEntries(edgesWithPathT95.slice(0, 3)) }
+    );
+  }
+}
+
+/**
+ * Compute and apply inbound-n (forecast population) to the graph.
+ * 
+ * p.n is the forecast population for each edge under the current DSL,
+ * derived by step-wise convolution of upstream p.mean values. This enables
+ * correct completeness calculations for downstream latency edges.
+ * 
+ * See inbound-n-fix.md for the full design.
+ * 
+ * @param graph - The graph with edges that have evidence.n and p.mean
+ * @param setGraph - Graph setter to apply the updated p.n values
+ * @param whatIfDSL - Optional scenario DSL for computing effective probabilities
+ * @param logOpId - Optional parent log operation ID for session logging
+ */
+export function computeAndApplyInboundN(
+  graph: Graph,
+  setGraph: (g: Graph | null) => void,
+  whatIfDSL?: string | null,
+  logOpId?: string
+): void {
+  console.log('[fetchDataService] computeAndApplyInboundN called', {
+    hasGraph: !!graph,
+    edgeCount: graph?.edges?.length ?? 0,
+    whatIfDSL,
+    logOpId,
+  });
+  
+  if (!graph?.edges?.length) {
+    console.log('[fetchDataService] computeAndApplyInboundN: no edges, returning early');
+    return;
+  }
+  
+  // Build GraphForInboundN representation
+  const graphForInboundN: GraphForInboundN = {
+    nodes: (graph.nodes || []).map(n => ({
+      id: n.id || n.uuid || '',
+      type: n.type,
+      entry: n.entry, // Include entry.is_start for START node detection
+    })),
+    edges: (graph.edges || []).map(e => ({
+      id: e.id,
+      uuid: e.uuid,
+      from: e.from,
+      to: e.to,
+      p: e.p
+        ? {
+            latency: e.p.latency
+              ? {
+                  maturity_days: e.p.latency.maturity_days,
+                  t95: e.p.latency.t95,
+                  path_t95: e.p.latency.path_t95,
+                }
+              : undefined,
+            mean: e.p.mean,
+            evidence: e.p.evidence
+              ? {
+                  n: e.p.evidence.n,
+                  k: e.p.evidence.k,
+                }
+              : undefined,
+            // Carry through any existing cached inbound-n results so that
+            // computeInboundN can be incremental if needed.
+            n: e.p.n,
+          }
+        : undefined,
+    })),
+  };
+  
+  // Get active edges (edges with non-zero probability)
+  const activeEdges = getActiveEdges(graphForInboundN);
+  
+  console.log('[fetchDataService] Active edges for inbound-n:', {
+    activeCount: activeEdges.size,
+    totalEdges: graphForInboundN.edges.length,
+    edgeMeans: graphForInboundN.edges.slice(0, 5).map(e => ({ 
+      id: e.id || e.uuid, 
+      mean: e.p?.mean,
+      evidenceN: e.p?.evidence?.n 
+    })),
+  });
+  
+  if (activeEdges.size === 0) {
+    console.log('[fetchDataService] No active edges for inbound-n computation');
+    return;
+  }
+  
+  // Create effective probability getter using whatIf logic
+  const whatIfOverrides: WhatIfOverrides = { whatIfDSL: whatIfDSL ?? null };
+  const getEffectiveP = (edgeId: string): number => {
+    return computeEffectiveEdgeProbability(graph, edgeId, whatIfOverrides);
+  };
+  
+  // Compute inbound-n for all active edges
+  const inboundNMap = computeInboundN(graphForInboundN, activeEdges, getEffectiveP);
+  
+  if (inboundNMap.size === 0) {
+    console.log('[fetchDataService] inbound-n computation returned empty map');
+    return;
+  }
+  
+  // Apply to in-memory graph (clone to trigger React update)
+  const updatedGraph = { ...graph };
+  updatedGraph.edges = graph.edges.map(edge => {
+    const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+    const result = inboundNMap.get(edgeId);
+
+    if (result !== undefined && edge.p) {
+      return {
+        ...edge,
+        p: {
+          ...edge.p,
+          // Persist inbound-n forecast population
+          n: result.n,
+          // Persist expected converters so single-edge fetches can
+          // reconstruct p.n by summing inbound forecast.k.
+          forecast: {
+            ...edge.p.forecast,
+            k: result.forecast_k,
+          },
+        },
+      };
+    }
+    return edge;
+  });
+  
+  setGraph(updatedGraph);
+  
+  // Log summary
+  const edgesWithN = Array.from(inboundNMap.entries()).filter(([_, v]) => v.n > 0);
+  console.log(`[fetchDataService] Computed inbound-n for ${edgesWithN.length} edges:`, 
+    Object.fromEntries(edgesWithN.slice(0, 5).map(([id, r]) => [id, { n: r.n, forecast_k: r.forecast_k }])));
+  
+  if (logOpId) {
+    sessionLogService.addChild(logOpId, 'info', 'INBOUND_N_COMPUTED',
+      `Computed inbound-n for ${edgesWithN.length} edges`,
+      undefined,
+      { edgeCount: edgesWithN.length, sample: Object.fromEntries(edgesWithN.slice(0, 3).map(([id, r]) => [id, r.n])) }
     );
   }
 }
@@ -825,16 +984,55 @@ export async function fetchItems(
       const finalGraph = getUpdatedGraph?.() ?? graph;
       if (finalGraph) {
         // Check if any fetched items were parameters on latency edges
-        const hasLatencyItems = items.some(item => {
-          if (item.type !== 'parameter') return false;
+        const latencyCheck = items.map(item => {
+          if (item.type !== 'parameter') return { item: item.name, hasLatency: false, reason: 'not parameter' };
           const edge = finalGraph.edges?.find((e: any) => 
             (e.uuid || e.id) === item.targetId
           );
-          return edge?.p?.latency?.maturity_days || edge?.p?.latency?.t95;
+          if (!edge) return { item: item.name, hasLatency: false, reason: 'edge not found' };
+          const hasLatency = !!(edge?.p?.latency?.maturity_days || edge?.p?.latency?.t95);
+          return { 
+            item: item.name, 
+            hasLatency, 
+            maturity_days: edge?.p?.latency?.maturity_days,
+            t95: edge?.p?.latency?.t95
+          };
         });
+        const hasLatencyItems = latencyCheck.some(c => c.hasLatency);
+        
+        console.log('[fetchDataService] Latency items check:', { hasLatencyItems, details: latencyCheck });
         
         if (hasLatencyItems) {
           computeAndApplyPathT95(finalGraph, setGraph, batchLogId);
+        }
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // INBOUND-N COMPUTATION (forecast population propagation)
+        // 
+        // After path_t95 is computed, compute p.n for each edge via step-wise
+        // convolution of upstream p.mean values. This enables correct
+        // completeness calculations for downstream latency edges.
+        // 
+        // p.n is transient (not persisted) - it's recomputed whenever
+        // the scenario, DSL, or graph changes.
+        // ═══════════════════════════════════════════════════════════════════
+        // Get fresh graph after path_t95 update
+        console.log('[fetchDataService] About to compute inbound-n', { 
+          hasGetUpdatedGraph: !!getUpdatedGraph, 
+          hasFinalGraph: !!finalGraph,
+          batchLogId 
+        });
+        const graphAfterPathT95 = getUpdatedGraph?.() ?? finalGraph;
+        console.log('[fetchDataService] graphAfterPathT95:', { 
+          hasGraph: !!graphAfterPathT95, 
+          edgeCount: graphAfterPathT95?.edges?.length 
+        });
+        if (graphAfterPathT95) {
+          // Extract whatIfDSL from the DSL if present (for scenario-effective probabilities)
+          // For now, pass dsl as the whatIfDSL - it may contain case() clauses
+          computeAndApplyInboundN(graphAfterPathT95, setGraph, dsl, batchLogId);
+        } else {
+          console.log('[fetchDataService] No graph for inbound-n computation');
         }
       }
     }

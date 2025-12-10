@@ -1174,6 +1174,17 @@ class DataOperationsService {
                 : valueSlice;                        // Traditional: use sliceDSL
               
               if (value.n_daily && value.k_daily && value.dates) {
+                // DEBUG: Log what's in the value entry
+                console.log(`[LAG_DEBUG] READ_VALUE entry ${entryIdx}:`, {
+                  datesCount: value.dates?.length,
+                  hasMedianLagArray: !!value.median_lag_days,
+                  medianLagArrayLength: value.median_lag_days?.length,
+                  medianLagSample: value.median_lag_days?.slice(0, 3),
+                  hasMeanLagArray: !!value.mean_lag_days,
+                  meanLagArrayLength: value.mean_lag_days?.length,
+                  meanLagSample: value.mean_lag_days?.slice(0, 3),
+                });
+                
                 // Use window_from/window_to for window slices, cohort_from/cohort_to for cohort slices
                 const entryStart = value.window_from || value.cohort_from || value.dates[0] || '';
                 const entryEnd = value.window_to || value.cohort_to || value.dates[value.dates.length - 1] || '';
@@ -1199,11 +1210,24 @@ class DataOperationsService {
                         const oldK = allTimeSeries[existingIndex].k;
                         const newN = oldN + value.n_daily[i];
                         const newK = oldK + value.k_daily[i];
+                        // For lag data in multi-slice: use weighted average if both have data, else use whichever has data
+                        const oldLag = allTimeSeries[existingIndex].median_lag_days;
+                        const newLag = value.median_lag_days?.[i];
+                        const combinedMedianLag = (oldLag !== undefined && newLag !== undefined)
+                          ? (oldLag * oldK + newLag * value.k_daily[i]) / newK  // Weighted average by k
+                          : (newLag ?? oldLag);
+                        const oldMeanLag = allTimeSeries[existingIndex].mean_lag_days;
+                        const newMeanLag = value.mean_lag_days?.[i];
+                        const combinedMeanLag = (oldMeanLag !== undefined && newMeanLag !== undefined)
+                          ? (oldMeanLag * oldK + newMeanLag * value.k_daily[i]) / newK
+                          : (newMeanLag ?? oldMeanLag);
                         allTimeSeries[existingIndex] = {
                           date: value.dates[i],
                           n: newN,
                           k: newK,
                           p: newN > 0 ? newK / newN : 0,
+                          median_lag_days: combinedMedianLag,
+                          mean_lag_days: combinedMeanLag,
                         };
                         existingSlices.add(sliceIdentifier);
                         dateSliceMap.set(date, existingSlices);
@@ -1216,6 +1240,9 @@ class DataOperationsService {
                           n: value.n_daily[i],
                           k: value.k_daily[i],
                           p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
+                          // Include lag data if available (cohort mode)
+                          median_lag_days: value.median_lag_days?.[i],
+                          mean_lag_days: value.mean_lag_days?.[i],
                         };
                         console.log(`[DataOperationsService] Entry ${entryIdx} [${valueSlice || 'no-slice'}]: Overwrote ${date} (n: ${oldN} → ${value.n_daily[i]})`);
                       }
@@ -1226,10 +1253,13 @@ class DataOperationsService {
                         n: value.n_daily[i],
                         k: value.k_daily[i],
                         p: value.n_daily[i] > 0 ? value.k_daily[i] / value.n_daily[i] : 0,
+                        // Include lag data if available (cohort mode)
+                        median_lag_days: value.median_lag_days?.[i],
+                        mean_lag_days: value.mean_lag_days?.[i],
                       });
                       const sliceSet = new Set([sliceIdentifier]);
                       dateSliceMap.set(date, sliceSet);
-                      console.log(`[DataOperationsService] Entry ${entryIdx} [${valueSlice || 'no-slice'}]: Added ${date} (n: ${value.n_daily[i]})`);
+                      console.log(`[DataOperationsService] Entry ${entryIdx} [${valueSlice || 'no-slice'}]: Added ${date} (n: ${value.n_daily[i]}, lag: ${value.median_lag_days?.[i]?.toFixed(1) ?? 'N/A'})`);
                     }
                   }
                 }
@@ -1282,6 +1312,7 @@ class DataOperationsService {
             // See design.md §5.3-5.6 for the statistical model
             let latencyStats: EdgeLatencyStats | undefined;
             const maturityDays = targetEdge?.p?.latency?.maturity_days;
+            const pathT95 = targetEdge?.p?.latency?.path_t95 ?? 0;
             
             if (maturityDays && maturityDays > 0 && valuesWithDaily.length > 0) {
               try {
@@ -1300,8 +1331,9 @@ class DataOperationsService {
                     n: point.n,
                     k: point.k,
                     age: Math.max(0, ageDays),
-                    // Note: per-cohort lag data would come from cohort mode values
-                    // For window mode, we use aggregate lag stats
+                    // Include per-cohort lag data if available (cohort mode)
+                    median_lag_days: point.median_lag_days,
+                    mean_lag_days: point.mean_lag_days,
                   });
                 }
                 
@@ -1311,11 +1343,13 @@ class DataOperationsService {
                 const aggregateMeanLag = lagStats?.mean_lag_days;
                 
                 // Compute full latency statistics using Formula A and CDF fitting
+                // Pass pathT95 to adjust cohort ages for downstream edges
                 latencyStats = computeEdgeLatencyStats(
                   cohortData,
                   aggregateMedianLag,
                   aggregateMeanLag,
-                  maturityDays
+                  maturityDays,
+                  pathT95
                 );
                 
                 console.log('[DataOperationsService] LAG statistics computed:', {
@@ -1367,6 +1401,10 @@ class DataOperationsService {
             let blendedMean: number;
             let blendedStdev: number;
             
+            // Helper to check for valid numbers (not NaN/Infinity)
+            const isValidNumber = (n: number | undefined): n is number => 
+              n !== undefined && !Number.isNaN(n) && Number.isFinite(n);
+            
             if (latencyStats) {
               if (isSingleExactSlice && latestValueWithSource?.mean !== undefined) {
                 // Exact stored slice: preserve file mean/stdev to avoid tiny numerical
@@ -1374,7 +1412,8 @@ class DataOperationsService {
                 blendedMean = latestValueWithSource.mean;
                 blendedStdev = latestValueWithSource.stdev ?? enhanced.stdev;
               } else {
-                blendedMean = latencyStats.p_mean;
+                // Guard against NaN from latencyStats - fall back to evidence if NaN
+                blendedMean = isValidNumber(latencyStats.p_mean) ? latencyStats.p_mean : enhanced.mean;
                 blendedStdev = enhanced.n > 0
                   ? Math.sqrt((blendedMean * (1 - blendedMean)) / enhanced.n)
                   : 0;
@@ -1383,6 +1422,10 @@ class DataOperationsService {
               blendedMean = enhanced.mean;
               blendedStdev = enhanced.stdev;
             }
+            
+            // Final NaN guard
+            if (!isValidNumber(blendedMean)) blendedMean = enhanced.mean;
+            if (!isValidNumber(blendedStdev)) blendedStdev = enhanced.stdev;
             
             // Compute evidence scalars (raw observed rate = k/n)
             const evidenceMean = enhanced.n > 0 ? enhanced.k / enhanced.n : 0;
@@ -3150,12 +3193,17 @@ class DataOperationsService {
               console.log('[DataOps] Query used for DSL:', effectiveQuery);
               console.log('[DataOps] Context filters:', queryPayload.context_filters);
               console.log('[DataOps] Window dates:', queryPayload.start, queryPayload.end);
+              console.log('[DataOps] Cohort info:', queryPayload.cohort);
+              console.log('[DataOps] Edge anchor_node_id:', edgeForDsl.p?.latency?.anchor_node_id);
               
               // Log query details for user
               const queryDesc = effectiveQuery || 'no query';
-              const windowDesc = (queryPayload.start && queryPayload.end) 
-                ? `${normalizeDate(queryPayload.start)} to ${normalizeDate(queryPayload.end)}`
-                : 'default window';
+              // Check cohort dates first (for latency-enabled edges), then window dates
+              const windowDesc = (queryPayload.cohort?.start && queryPayload.cohort?.end)
+                ? `Cohort: ${normalizeDate(queryPayload.cohort.start)} to ${normalizeDate(queryPayload.cohort.end)}${queryPayload.cohort.anchor_event_id ? ` (anchor: ${queryPayload.cohort.anchor_event_id})` : ''}`
+                : (queryPayload.start && queryPayload.end) 
+                  ? `Window: ${normalizeDate(queryPayload.start)} to ${normalizeDate(queryPayload.end)}`
+                  : 'default window';
               sessionLogService.addChild(logOpId, 'info', 'QUERY_BUILT',
                 `Query: ${queryDesc}`,
                 `Window: ${windowDesc}${queryPayload.context_filters?.length ? `, Filters: ${queryPayload.context_filters.length}` : ''}`,
@@ -3679,8 +3727,7 @@ class DataOperationsService {
             const isCorrectMode = isCohortQuery ? isCohortModeValue(v) : !isCohortModeValue(v);
             if (!isCorrectMode) return false;
             
-            // Match context/case dimensions
-            const { extractSliceDimensions } = require('./sliceIsolation');
+            // Match context/case dimensions (extractSliceDimensions is imported at top of file)
             const targetDims = extractSliceDimensions(targetSlice || '');
             const valueDims = extractSliceDimensions(v.sliceDSL || '');
             return targetDims === valueDims;
@@ -4538,7 +4585,7 @@ class DataOperationsService {
             rateLimiter.reportSuccess(connectionName);
           }
           
-          console.log(`[DataOperationsService] DAS result for gap ${gapIndex + 1}:`, {
+          console.log(`[LAG_DEBUG] DAS_RESULT gap ${gapIndex + 1}:`, {
             updates: result.updates.length,
             hasTimeSeries: !!result.raw?.time_series,
             timeSeriesType: typeof result.raw?.time_series,
@@ -4548,7 +4595,19 @@ class DataOperationsService {
               : result.raw?.time_series
               ? 'not array'
               : 'null/undefined',
-            timeSeriesValue: result.raw?.time_series,
+            // Show first time_series entry to check if lag data is present
+            firstTimeSeriesEntry: Array.isArray(result.raw?.time_series) && result.raw.time_series.length > 0
+              ? result.raw.time_series[0]
+              : 'no time_series',
+            // Check if lag data is in the time_series
+            hasLagInTimeSeries: Array.isArray(result.raw?.time_series) && result.raw.time_series.length > 0
+              ? {
+                  hasMedianLag: 'median_lag_days' in result.raw.time_series[0],
+                  hasMeanLag: 'mean_lag_days' in result.raw.time_series[0],
+                  medianLagValue: result.raw.time_series[0]?.median_lag_days,
+                  meanLagValue: result.raw.time_series[0]?.mean_lag_days,
+                }
+              : 'no time_series to check',
             window: fetchWindow,
           });
           
@@ -4810,6 +4869,12 @@ class DataOperationsService {
                 });
                 
                 if (gapTimeSeries.length > 0) {
+                  // DEBUG: Log time series BEFORE merge to check lag data
+                  console.log(`[LAG_DEBUG] BEFORE_MERGE gap ${gapIndex + 1}:`, {
+                    timeSeriesCount: gapTimeSeries.length,
+                    firstEntry: gapTimeSeries[0],
+                  });
+                  
                   // Append new time-series as a separate value entry for this gap
                   // For latency edges, pass latency config to enable forecast recomputation
                   existingValues = mergeTimeSeriesIntoParameter(
@@ -4836,12 +4901,21 @@ class DataOperationsService {
                     }
                   );
                   
-                  console.log(`[DataOperationsService] Prepared daily time-series data for gap ${gapIndex + 1}:`, {
+                  // DEBUG: Log what was stored AFTER merge
+                  const lastValue = existingValues[existingValues.length - 1];
+                  console.log(`[LAG_DEBUG] AFTER_MERGE gap ${gapIndex + 1}:`, {
                     paramId: objectId,
                     newDays: gapTimeSeries.length,
                     fetchWindow,
-                    querySignature,
-                    sliceDSL, // Log for debugging
+                    sliceDSL,
+                    storedValue: {
+                      datesCount: lastValue?.dates?.length,
+                      hasMedianLagArray: !!lastValue?.median_lag_days,
+                      medianLagArrayLength: lastValue?.median_lag_days?.length,
+                      medianLagSample: lastValue?.median_lag_days?.slice?.(0, 3),
+                      hasMeanLagArray: !!lastValue?.mean_lag_days,
+                      meanLagArrayLength: lastValue?.mean_lag_days?.length,
+                    },
                   });
                 }
               }
@@ -5802,8 +5876,44 @@ class DataOperationsService {
           } as ParameterValue;
         });
       } else {
-        // No usable cohorts in requested window – leave evidence unchanged (will be absent)
-        valuesWithEvidence = values;
+        // totalN === 0 can mean:
+        // 1. No daily arrays present (should fall back to header n/k)
+        // 2. Daily arrays exist but query window doesn't match (should leave evidence unchanged)
+        const hasDailyArrays = values.some(v => v.dates && v.n_daily && v.k_daily && v.dates.length > 0);
+        
+        if (!hasDailyArrays) {
+          // No daily cohort arrays found - fall back to header-level n/k if present
+          // This handles param files that have flat n/k totals without dates/n_daily/k_daily arrays
+          // (design.md §4.8: evidence.mean = Σk/Σn should always be computable from stored data)
+          const headerN = values.reduce((sum, v) => sum + (v.n || 0), 0);
+          const headerK = values.reduce((sum, v) => sum + (v.k || 0), 0);
+          
+          if (headerN > 0) {
+            const evidenceMean = headerK / headerN;
+            const evidenceStdev = Math.sqrt((evidenceMean * (1 - evidenceMean)) / headerN);
+            
+            valuesWithEvidence = values.map((v) => {
+              const existingEvidence: any = (v as any).evidence || {};
+              return {
+                ...v,
+                evidence: {
+                  ...existingEvidence,
+                  n: headerN,
+                  k: headerK,
+                  mean: evidenceMean,
+                  stdev: evidenceStdev,
+                },
+              } as ParameterValue;
+            });
+          } else {
+            // Truly no usable data – leave evidence unchanged
+            valuesWithEvidence = values;
+          }
+        } else {
+          // Daily arrays exist but query window doesn't match stored data
+          // Leave evidence unchanged (no valid data for requested window)
+          valuesWithEvidence = values;
+        }
       }
     } else {
       // Default path: evidence from each value's own n/k
@@ -6006,13 +6116,24 @@ class DataOperationsService {
               || originalParamData?.latency?.maturity_days 
               || (aggregateMedianLag ? Math.ceil(aggregateMedianLag * 5) : undefined);
             
-            if (allCohorts.length > 0 && aggregateMedianLag && maturityDays) {
+            // Guard: if we don't have a valid median lag OR maturity, skip cohort fallback entirely
+            if (
+              allCohorts.length > 0 &&
+              aggregateMedianLag !== undefined &&
+              Number.isFinite(aggregateMedianLag) &&
+              maturityDays !== undefined &&
+              Number.isFinite(maturityDays)
+            ) {
+              // Get path_t95 for downstream edges (if available)
+              const pathT95ForFallback = originalParamData?.latency?.path_t95 ?? 0;
+              
               // computeEdgeLatencyStats is imported at the top of the file
               const latencyStats = computeEdgeLatencyStats(
                 allCohorts,
                 aggregateMedianLag,
                 aggregateMeanLag,
-                maturityDays
+                maturityDays,
+                pathT95ForFallback
               );
               
               if (latencyStats.forecast_available && latencyStats.p_infinity !== undefined) {
