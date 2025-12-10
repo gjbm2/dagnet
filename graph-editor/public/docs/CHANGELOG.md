@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.0.2b
+**Released:** December 10, 2025
+
+Added the other clipboard staples; general fetch fixes
+
+---
+
 
 ## Version 1.0.0-alpha
 **Released:** 10-Dec-25
