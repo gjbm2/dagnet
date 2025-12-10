@@ -57,6 +57,13 @@ import {
   HIDDEN_CURRENT_STIPPLE_ANGLE,
   HIDDEN_CURRENT_OPACITY,
   SANKEY_NODE_INSET,
+  COMPLETENESS_CHEVRON_MIN_HALF_WIDTH,
+  COMPLETENESS_CHEVRON_WIDTH_PADDING,
+  COMPLETENESS_CHEVRON_START_OFFSET,
+  COMPLETENESS_CHEVRON_END_OFFSET,
+  COMPLETENESS_CHEVRON_OPACITY,
+  COMPLETENESS_CHEVRON_SELECTED_OPACITY,
+  COMPLETENESS_CHEVRON_HIGHLIGHTED_OPACITY,
   SANKEY_COMPLETENESS_LINE_MIN_HEIGHT,
   SANKEY_COMPLETENESS_LINE_OVERHANG,
   SANKEY_COMPLETENESS_LINE_STROKE,
@@ -1591,6 +1598,114 @@ export default function ConversionEdge({
     }
   }, [edgePath, strokeWidth, shouldShowLagLayers, data?.edgeLatencyDisplay?.completeness_pct]);
 
+  // Single completeness chevron at the completeness % position along the edge
+  // Width = max(meanWidth, evidenceWidth) + padding, with minimum for visibility over beads
+  const completenessChevron = React.useMemo(() => {
+    if (!shouldShowLagLayers || !lagLayerData || data?.useSankeyView) return null;
+    
+    try {
+      const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+      if (!nums || nums.length < 8) return null;
+      
+      const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
+      
+      const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
+      
+      const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+      
+      // Helper to get point on bezier at parameter t
+      const getBezierPoint = (t: number) => {
+        const p01x = lerp(sx, c1x, t);
+        const p01y = lerp(sy, c1y, t);
+        const p12x = lerp(c1x, c2x, t);
+        const p12y = lerp(c1y, c2y, t);
+        const p23x = lerp(c2x, ex, t);
+        const p23y = lerp(c2y, ey, t);
+        const p012x = lerp(p01x, p12x, t);
+        const p012y = lerp(p01y, p12y, t);
+        const p123x = lerp(p12x, p23x, t);
+        const p123y = lerp(p12y, p23y, t);
+        const x = lerp(p012x, p123x, t);
+        const y = lerp(p012y, p123y, t);
+        const tangentX = p123x - p012x;
+        const tangentY = p123y - p012y;
+        return { x, y, tangentX, tangentY };
+      };
+      
+      // Approximate path length for converting pixel offsets to t values
+      const dx = ex - sx;
+      const dy = ey - sy;
+      const approxLength = Math.sqrt(dx * dx + dy * dy);
+      
+      // Calculate half-width first (needed for rendered length calculation)
+      const maxLayerWidth = Math.max(lagLayerData.meanWidth, lagLayerData.evidenceWidth);
+      const halfWidth = Math.max(
+        COMPLETENESS_CHEVRON_MIN_HALF_WIDTH,
+        (maxLayerWidth / 2) + COMPLETENESS_CHEVRON_WIDTH_PADDING
+      );
+      
+      // Chevron geometry - wider chevrons have longer front/back indents
+      const chevronLength = LAG_ANCHOR_SPLINE_CHEVRON_LENGTH;
+      const chevronIndent = halfWidth * Math.tan(LAG_ANCHOR_SPLINE_CHEVRON_ANGLE * Math.PI / 180);
+      // Total rendered length from back notch to front point
+      const renderedLength = chevronLength + 2 * chevronIndent;
+      
+      // Convert pixel offsets to t values, adjusting for rendered chevron length
+      // At 0%: front tip at start boundary → center offset by -halfRenderedLength
+      // At 100%: back notch at end boundary → end offset increased by +halfRenderedLength
+      const effectiveStartOffset = COMPLETENESS_CHEVRON_START_OFFSET - renderedLength / 2;
+      const effectiveEndOffset = COMPLETENESS_CHEVRON_END_OFFSET + renderedLength / 2;
+      const tStart = Math.min(0.4, Math.max(0, effectiveStartOffset) / approxLength);
+      const tEnd = Math.max(0.6, 1 - effectiveEndOffset / approxLength);
+      
+      // Get position at completeness % (mapped to visible range)
+      const tRange = tEnd - tStart;
+      const t = tStart + completeness * tRange;
+      const { x: cx, y: cy, tangentX, tangentY } = getBezierPoint(t);
+      
+      const angle = Math.atan2(tangentY, tangentX);
+      const dirX = Math.cos(angle);
+      const dirY = Math.sin(angle);
+      const normalX = -Math.sin(angle);
+      const normalY = Math.cos(angle);
+      
+      // Back center (upstream)
+      const backCenterX = cx - (chevronLength / 2) * dirX;
+      const backCenterY = cy - (chevronLength / 2) * dirY;
+      
+      // Front center (downstream)
+      const frontCenterX = cx + (chevronLength / 2) * dirX;
+      const frontCenterY = cy + (chevronLength / 2) * dirY;
+      
+      // Back corners at full width
+      const backLeftX = backCenterX + halfWidth * normalX;
+      const backLeftY = backCenterY + halfWidth * normalY;
+      const backRightX = backCenterX - halfWidth * normalX;
+      const backRightY = backCenterY - halfWidth * normalY;
+      
+      // Back indent (V notch pointing backward/upstream)
+      const backIndentX = backCenterX + chevronIndent * dirX;
+      const backIndentY = backCenterY + chevronIndent * dirY;
+      
+      // Front corners at full width
+      const frontLeftX = frontCenterX + halfWidth * normalX;
+      const frontLeftY = frontCenterY + halfWidth * normalY;
+      const frontRightX = frontCenterX - halfWidth * normalX;
+      const frontRightY = frontCenterY - halfWidth * normalY;
+      
+      // Front point (tip pointing forward/downstream)
+      const frontPointX = frontCenterX + chevronIndent * dirX;
+      const frontPointY = frontCenterY + chevronIndent * dirY;
+      
+      return {
+        path: `M ${backLeftX},${backLeftY} L ${backIndentX},${backIndentY} L ${backRightX},${backRightY} L ${frontRightX},${frontRightY} L ${frontPointX},${frontPointY} L ${frontLeftX},${frontLeftY} Z`,
+        completeness
+      };
+    } catch {
+      return null;
+    }
+  }, [edgePath, shouldShowLagLayers, lagLayerData, data?.useSankeyView, data?.edgeLatencyDisplay?.completeness_pct]);
+
   const handleDelete = useCallback(() => {
     deleteElements({ edges: [{ id }] });
   }, [id, deleteElements]);
@@ -2373,8 +2488,8 @@ export default function ConversionEdge({
               {/* p.mean visual anchor - always at full p.mean width, fades based on completeness
                   This provides visual reference for total mass and is the interactive element
                   Can render as: spline chevrons, pattern stripes/chevrons, or gradient fade */}
-              {LAG_ANCHOR_USE_SPLINE_CHEVRONS && splineChevrons && !isHiddenCurrent ? (
-                // Spline-following chevrons - individual paths along the curve
+              {LAG_ANCHOR_USE_SPLINE_CHEVRONS && completenessChevron && !isHiddenCurrent ? (
+                // Single completeness chevron at the % complete position
                 <>
                   {/* Invisible interaction path (carries ref and events) */}
                   <path
@@ -2393,30 +2508,24 @@ export default function ConversionEdge({
                     onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                     onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                     onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
-                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
-                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
+                    onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                    onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                   />
-                  {/* Chevrons along the path - filled shapes */}
-                  {splineChevrons.map((chevron, i) => {
-                    // Boost base opacity when selected/highlighted for visibility
-                    const baseOpacity = effectiveSelected 
-                      ? LAG_ANCHOR_SELECTED_OPACITY 
+                  {/* Single completeness chevron - filled shape at % position */}
+                  <path
+                    key={`${id}-completeness-chevron`}
+                    d={completenessChevron.path}
+                    fill={(effectiveSelected || data?.isHighlighted) 
+                      ? getEdgeColour() 
+                      : (data?.scenarioColour || getEdgeColour())}
+                    fillOpacity={effectiveSelected 
+                      ? COMPLETENESS_CHEVRON_SELECTED_OPACITY 
                       : data?.isHighlighted 
-                        ? LAG_ANCHOR_HIGHLIGHTED_OPACITY 
-                        : LAG_ANCHOR_OPACITY;
-                    return (
-                      <path
-                        key={`${id}-lag-chevron-${i}`}
-                        d={chevron.path}
-                        fill={(effectiveSelected || data?.isHighlighted) 
-                          ? getEdgeColour() 
-                          : (data?.scenarioColour || getEdgeColour())}
-                        fillOpacity={baseOpacity * chevron.opacity}
-                        stroke="none"
-                        style={{ pointerEvents: 'none' }}
-                      />
-                    );
-                  })}
+                        ? COMPLETENESS_CHEVRON_HIGHLIGHTED_OPACITY 
+                        : COMPLETENESS_CHEVRON_OPACITY}
+                    stroke="none"
+                    style={{ pointerEvents: 'none' }}
+                  />
                 </>
               ) : (
                 // Pattern-based anchor (stripes, pattern chevrons, or gradient)

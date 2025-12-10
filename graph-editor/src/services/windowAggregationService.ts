@@ -124,6 +124,25 @@ export interface IncrementalFetchResult {
  * - Enforces context / MECE semantics via slice isolation.
  * - Ignores maturity, sparsity, and per-day n_daily/k_daily gaps.
  */
+/**
+ * Helper to parse date range from sliceDSL.
+ * Extracts dates from patterns like "window(1-Nov-25:30-Nov-25)" or "cohort(-30d:-1d)"
+ */
+function parseDateRangeFromSliceDSL(sliceDSL: string): { start: string; end: string; mode: 'window' | 'cohort' | null } | null {
+  // Match window(start:end) or cohort(start:end)
+  const windowMatch = sliceDSL.match(/window\(([^:]+):([^)]+)\)/);
+  if (windowMatch) {
+    return { start: windowMatch[1], end: windowMatch[2], mode: 'window' };
+  }
+  
+  const cohortMatch = sliceDSL.match(/cohort\(([^:]+):([^)]+)\)/);
+  if (cohortMatch) {
+    return { start: cohortMatch[1], end: cohortMatch[2], mode: 'cohort' };
+  }
+  
+  return null;
+}
+
 export function hasFullSliceCoverageByHeader(
   paramFileData: { values?: ParameterValue[] },
   requestedWindow: DateRange,
@@ -132,6 +151,7 @@ export function hasFullSliceCoverageByHeader(
   const values = paramFileData.values ?? [];
   if (values.length === 0) return false;
 
+  // Parse query mode from target slice
   const wantsCohort = targetSlice.includes('cohort(');
   const wantsWindow = targetSlice.includes('window(');
 
@@ -141,35 +161,33 @@ export function hasFullSliceCoverageByHeader(
   const queryStartDate = parseDate(queryStart);
   const queryEndDate = parseDate(queryEnd);
 
+  /**
+   * Check if a slice's sliceDSL covers the requested window.
+   * Uses sliceDSL as the canonical source of truth (not separate header fields).
+   */
   const coversWindow = (slice: ParameterValue): boolean => {
-    // Choose appropriate header fields based on query mode
-    let sliceStartRaw: string | undefined | null;
-    let sliceEndRaw: string | undefined | null;
-
-    if (wantsCohort) {
-      sliceStartRaw = (slice as any).cohort_from ?? (slice as any).window_from;
-      sliceEndRaw = (slice as any).cohort_to ?? (slice as any).window_to;
-    } else if (wantsWindow) {
-      sliceStartRaw = (slice as any).window_from ?? (slice as any).cohort_from;
-      sliceEndRaw = (slice as any).window_to ?? (slice as any).cohort_to;
-    } else {
-      // Fallback: treat as window-style coverage using whatever headers exist
-      sliceStartRaw = (slice as any).window_from ?? (slice as any).cohort_from;
-      sliceEndRaw = (slice as any).window_to ?? (slice as any).cohort_to;
-    }
-
-    if (!sliceStartRaw || !sliceEndRaw) {
-      // If no header dates, we cannot assert coverage based on headers alone.
+    const sliceDSL = slice.sliceDSL ?? '';
+    const parsed = parseDateRangeFromSliceDSL(sliceDSL);
+    
+    if (!parsed) {
+      // No parseable date range in sliceDSL
       return false;
     }
-
-    const sliceStart = normalizeDate(String(sliceStartRaw));
-    const sliceEnd = normalizeDate(String(sliceEndRaw));
-    const sliceStartDate = parseDate(sliceStart);
-    const sliceEndDate = parseDate(sliceEnd);
-
-    // Coverage: query window is entirely inside slice header range
-    return sliceStartDate <= queryStartDate && sliceEndDate >= queryEndDate;
+    
+    // Query mode must match slice mode
+    // (window data and cohort data are semantically different)
+    if (wantsCohort && parsed.mode !== 'cohort') return false;
+    if (wantsWindow && parsed.mode !== 'window') return false;
+    
+    try {
+      const sliceStartDate = parseDate(normalizeDate(parsed.start));
+      const sliceEndDate = parseDate(normalizeDate(parsed.end));
+      
+      // Coverage: query window is entirely inside slice range
+      return sliceStartDate <= queryStartDate && sliceEndDate >= queryEndDate;
+    } catch {
+      return false;
+    }
   };
 
   // Detect MECE scenario: uncontexted query, file has only contexted data
@@ -192,19 +210,10 @@ export function hasFullSliceCoverageByHeader(
       if (sliceId) uniqueSlices.add(sliceId);
     }
 
-    // For each MECE slice, require at least one header that covers the window
+    // For each MECE slice, require at least one entry that covers the window
     for (const sliceId of uniqueSlices) {
       const sliceValues = values.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === sliceId);
-
-      // Filter by slice type where possible
-      const typeFiltered = sliceValues.filter(v => {
-        const dsl = v.sliceDSL ?? '';
-        if (wantsCohort) return dsl.includes('cohort(');
-        if (wantsWindow) return dsl.includes('window(');
-        return true;
-      });
-
-      const anyCovering = typeFiltered.some(coversWindow);
+      const anyCovering = sliceValues.some(coversWindow);
       if (!anyCovering) {
         return false;
       }
@@ -222,20 +231,9 @@ export function hasFullSliceCoverageByHeader(
     return false;
   }
 
-  // Filter by slice type where possible
-  const typeFiltered = sliceValues.filter(v => {
-    const dsl = v.sliceDSL ?? '';
-    if (wantsCohort) return dsl.includes('cohort(');
-    if (wantsWindow) return dsl.includes('window(');
-    return true;
-  });
-
-  if (typeFiltered.length === 0) {
-    return false;
-  }
-
-  // Coverage if ANY header in the family fully contains the requested window
-  return typeFiltered.some(coversWindow);
+  // Coverage if ANY slice in the family fully contains the requested window
+  // (parsed from sliceDSL, with matching query mode)
+  return sliceValues.some(coversWindow);
 }
 
 /**
