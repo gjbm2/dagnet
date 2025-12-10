@@ -40,9 +40,7 @@ import {
   normalizeDate,
   parseDate,
   isDateInRange,
-  parameterValueToCohortData,
   aggregateCohortData,
-  aggregateLatencyStats,
   isCohortModeValue,
   type TimeSeriesPointWithLatency,
 } from './windowAggregationService';
@@ -56,9 +54,6 @@ import {
 import { computeCohortRetrievalHorizon } from './cohortRetrievalHorizon';
 import { 
   statisticalEnhancementService,
-  computeEdgeLatencyStats,
-  type EdgeLatencyStats,
-  type CohortData,
 } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
@@ -1308,68 +1303,12 @@ class DataOperationsService {
               ? await enhancedResult 
               : enhancedResult;
             
-            // LAG: Compute latency statistics if edge has latency tracking enabled
-            // See design.md §5.3-5.6 for the statistical model
-            let latencyStats: EdgeLatencyStats | undefined;
-            const maturityDays = targetEdge?.p?.latency?.maturity_days;
-            const pathT95 = targetEdge?.p?.latency?.path_t95 ?? 0;
-            
-            if (maturityDays && maturityDays > 0 && valuesWithDaily.length > 0) {
-              try {
-                // Convert time series to cohort data for LAG calculations
-                const queryDate = new Date();
-                const cohortData: CohortData[] = [];
-                
-                // Build cohort data from all time series points
-                for (const point of allTimeSeries) {
-                  const cohortDate = parseDate(point.date);
-                  const ageMs = queryDate.getTime() - cohortDate.getTime();
-                  const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
-                  
-                  cohortData.push({
-                    date: point.date,
-                    n: point.n,
-                    k: point.k,
-                    age: Math.max(0, ageDays),
-                    // Include per-cohort lag data if available (cohort mode)
-                    median_lag_days: point.median_lag_days,
-                    mean_lag_days: point.mean_lag_days,
-                  });
-                }
-                
-                // Get aggregate lag stats from values (if available from cohort mode data)
-                const lagStats = aggregateLatencyStats(cohortData);
-                const aggregateMedianLag = lagStats?.median_lag_days ?? maturityDays / 2;
-                const aggregateMeanLag = lagStats?.mean_lag_days;
-                
-                // Compute full latency statistics using Formula A and CDF fitting
-                // Pass pathT95 to adjust cohort ages for downstream edges
-                latencyStats = computeEdgeLatencyStats(
-                  cohortData,
-                  aggregateMedianLag,
-                  aggregateMeanLag,
-                  maturityDays,
-                  pathT95
-                );
-                
-                console.log('[DataOperationsService] LAG statistics computed:', {
-                  maturityDays,
-                  cohortCount: cohortData.length,
-                  latencyStats: {
-                    t95: latencyStats.t95,
-                    p_infinity: latencyStats.p_infinity,
-                    p_mean: latencyStats.p_mean,
-                    p_evidence: latencyStats.p_evidence,
-                    completeness: latencyStats.completeness,
-                    forecast_available: latencyStats.forecast_available,
-                    fit_quality_ok: latencyStats.fit.empirical_quality_ok,
-                  },
-                });
-              } catch (error) {
-                console.warn('[DataOperationsService] LAG computation failed:', error);
-                // Continue without latency stats - non-fatal
-              }
-            }
+            // LAG: Latency statistics are computed in a separate topo pass after all
+            // fetches complete (see enhanceGraphLatencies in statisticalEnhancementService).
+            // Here we just store raw data; the graph-level pass computes t95, path_t95,
+            // and path-adjusted completeness with full knowledge of the graph topology.
+            //
+            // The graph edge's p.latency.* fields are the source of truth after the topo pass.
             
             // Find the most recent value entry with a data_source (prefer non-manual sources)
             // Sort by retrieved_at or window_to descending to get most recent
@@ -1387,45 +1326,23 @@ class DataOperationsService {
             ) || sortedByDate[0]; // Fallback to most recent entry
             
             // Create a new aggregated value entry
-            // LAG FIX (lag-fixes.md §4.2): For latency edges, we normally use
-            // Formula A blended p_mean for the 'mean' field, with evidence stored
-            // separately. However, when this aggregation corresponds EXACTLY to a
-            // single stored slice (e.g. window(25-Nov-25:1-Dec-25)), we trust the
-            // pre-computed mean/stdev on that slice and only use latencyStats for
-            // evidence/forecast/latency diagnostics (design.md §4.8 table).
+            // 
+            // NOTE: LAG computation (Formula A, completeness, t95) happens in the
+            // graph-level topo pass after all fetches complete. Here we store the
+            // raw evidence mean. The graph edge's p.mean will be updated by the
+            // topo pass with the path-adjusted blended value.
             const isSingleExactSlice =
               !isMultiSliceAggregation &&
               sortedValues.length === 1 &&
               latestValueWithSource?.sliceDSL === targetSlice;
             
-            let blendedMean: number;
-            let blendedStdev: number;
-            
-            // Helper to check for valid numbers (not NaN/Infinity)
-            const isValidNumber = (n: number | undefined): n is number => 
-              n !== undefined && !Number.isNaN(n) && Number.isFinite(n);
-            
-            if (latencyStats) {
-              if (isSingleExactSlice && latestValueWithSource?.mean !== undefined) {
-                // Exact stored slice: preserve file mean/stdev to avoid tiny numerical
-                // drift between Python and TS implementations.
-                blendedMean = latestValueWithSource.mean;
-                blendedStdev = latestValueWithSource.stdev ?? enhanced.stdev;
-              } else {
-                // Guard against NaN from latencyStats - fall back to evidence if NaN
-                blendedMean = isValidNumber(latencyStats.p_mean) ? latencyStats.p_mean : enhanced.mean;
-                blendedStdev = enhanced.n > 0
-                  ? Math.sqrt((blendedMean * (1 - blendedMean)) / enhanced.n)
-                  : 0;
-              }
-            } else {
-              blendedMean = enhanced.mean;
-              blendedStdev = enhanced.stdev;
-            }
-            
-            // Final NaN guard
-            if (!isValidNumber(blendedMean)) blendedMean = enhanced.mean;
-            if (!isValidNumber(blendedStdev)) blendedStdev = enhanced.stdev;
+            // For single exact slice, preserve pre-computed mean; otherwise use enhanced
+            const storedMean = isSingleExactSlice && latestValueWithSource?.mean !== undefined
+              ? latestValueWithSource.mean
+              : enhanced.mean;
+            const storedStdev = isSingleExactSlice && latestValueWithSource?.stdev !== undefined
+              ? latestValueWithSource.stdev
+              : enhanced.stdev;
             
             // Compute evidence scalars (raw observed rate = k/n)
             const evidenceMean = enhanced.n > 0 ? enhanced.k / enhanced.n : 0;
@@ -1438,8 +1355,8 @@ class DataOperationsService {
             const effectiveWindow = evidenceFilterWindow;
             
             const aggregatedValue = {
-              mean: blendedMean,
-              stdev: blendedStdev,
+              mean: storedMean,
+              stdev: storedStdev,
               n: enhanced.n,
               k: enhanced.k,
               // Store both window_from/to (standard) and cohort_from/to if applicable
@@ -1455,23 +1372,14 @@ class DataOperationsService {
                 // NOTE: data_source.query removed - unused and caused type mismatches with Python
                 full_query: latestValueWithSource?.data_source?.full_query,
               },
-              // LAG FIX: Include evidence scalars for graph edge p.evidence.mean/stdev
+              // Include evidence scalars for graph edge p.evidence.mean/stdev
               evidence: {
                 mean: evidenceMean,
                 stdev: evidenceStdev,
               },
-              // LAG: Include latency stats if computed (for UpdateManager to apply to edge)
-              ...(latencyStats && {
-                latency: {
-                  median_lag_days: latencyStats.fit.mu ? Math.exp(latencyStats.fit.mu) : undefined,
-                  completeness: latencyStats.completeness,
-                  t95: latencyStats.t95,
-                },
-                // Only include forecast if available (requires mature cohorts for p_infinity)
-                ...(latencyStats.forecast_available && {
-                  forecast: latencyStats.p_infinity,
-                }),
-              }),
+              // NOTE: Latency stats (t95, completeness, forecast) are computed in the
+              // graph-level topo pass after all fetches complete. They are NOT stored
+              // in the param file; the graph edge is the source of truth for these.
             } as ParameterValue;
             
             // Create a modified parameter file data with aggregated value
@@ -1494,16 +1402,15 @@ class DataOperationsService {
                 stdev: enhanced.stdev,
                 stdevPercent: (enhanced.stdev * 100).toFixed(2) + '%',
               },
-              // LAG FIX: Show evidence vs blended mean separately
               evidence: {
                 mean: evidenceMean,
                 stdev: evidenceStdev,
                 meanPercent: (evidenceMean * 100).toFixed(2) + '%',
               },
-              blended: {
-                mean: blendedMean,
-                stdev: blendedStdev,
-                meanPercent: (blendedMean * 100).toFixed(2) + '%',
+              stored: {
+                mean: storedMean,
+                stdev: storedStdev,
+                meanPercent: (storedMean * 100).toFixed(2) + '%',
               },
               aggregatedValue: {
                 ...aggregatedValue,
@@ -1517,7 +1424,6 @@ class DataOperationsService {
               missingAtStart: aggregation.missing_at_start,
               missingAtEnd: aggregation.missing_at_end,
               hasMiddleGaps: aggregation.has_middle_gaps,
-              hasLatencyStats: !!latencyStats,
             });
             
             // Add session log child with aggregation details
@@ -1525,17 +1431,16 @@ class DataOperationsService {
               ? `${uniqueSlices.size} slices` 
               : (Array.from(uniqueSlices)[0] || 'uncontexted');
             sessionLogService.addChild(logOpId, 'info', 'AGGREGATION_RESULT',
-              `Aggregated ${allTimeSeries.length} days from ${slicesSummary}: n=${enhanced.n}, k=${enhanced.k}, evidence=${(evidenceMean * 100).toFixed(1)}%, blended=${(blendedMean * 100).toFixed(1)}%`,
+              `Aggregated ${allTimeSeries.length} days from ${slicesSummary}: n=${enhanced.n}, k=${enhanced.k}, evidence=${(evidenceMean * 100).toFixed(1)}%`,
               `${isCohortQuery ? 'Cohort' : 'Window'}: ${normalizeToUK(evidenceFilterWindow.start)} to ${normalizeToUK(evidenceFilterWindow.end)}`,
               { 
                 slices: Array.from(uniqueSlices),
                 n: enhanced.n, 
                 k: enhanced.k, 
                 evidence_mean: evidenceMean,
-                blended_mean: blendedMean,
+                stored_mean: storedMean,
                 daysAggregated: allTimeSeries.length,
                 isMultiSlice: isMultiSliceAggregation,
-                hasLatencyStats: !!latencyStats,
               }
             );
             
@@ -6089,117 +5994,10 @@ class DataOperationsService {
               }),
             };
           }
-        } else {
-          // === 2b) FORECAST FALLBACK: Compute from cohort data when no window baseline exists ===
-          // (design.md §3.3.3 - Cohort-only forecast fallback)
-          //
-          // If no window() slice is available, we can estimate p_infinity from mature cohorts
-          // in the cohort data itself. This is less reliable than window-based forecast but
-          // better than having no forecast at all.
-          //
-          // Strategy: Use the statisticalEnhancementService.estimatePInfinity on mature cohorts.
-          try {
-            const queryDate = new Date();
-            const allCohorts = aggregateCohortData(valuesWithEvidence as ParameterValue[], queryDate);
-            
-            // Get lag stats and maturity for fallback forecast
-            const lagStats = aggregateLatencyStats(allCohorts);
-            const aggregateMedianLag = lagStats?.median_lag_days;
-            const aggregateMeanLag = lagStats?.mean_lag_days;
-            
-            // We need maturity_days to compute t95 - look for it in latency config of the values
-            // or use a default based on lag stats
-            const firstValueWithLatency = (valuesWithEvidence as ParameterValue[]).find(
-              (v: any) => v.latency?.maturity_days || originalParamData?.latency?.maturity_days
-            ) as any;
-            const maturityDays = firstValueWithLatency?.latency?.maturity_days 
-              || originalParamData?.latency?.maturity_days 
-              || (aggregateMedianLag ? Math.ceil(aggregateMedianLag * 5) : undefined);
-            
-            // Guard: if we don't have a valid median lag OR maturity, skip cohort fallback entirely
-            if (
-              allCohorts.length > 0 &&
-              aggregateMedianLag !== undefined &&
-              Number.isFinite(aggregateMedianLag) &&
-              maturityDays !== undefined &&
-              Number.isFinite(maturityDays)
-            ) {
-              // Get path_t95 for downstream edges (if available)
-              const pathT95ForFallback = originalParamData?.latency?.path_t95 ?? 0;
-              
-              // computeEdgeLatencyStats is imported at the top of the file
-              const latencyStats = computeEdgeLatencyStats(
-                allCohorts,
-                aggregateMedianLag,
-                aggregateMeanLag,
-                maturityDays,
-                pathT95ForFallback
-              );
-              
-              if (latencyStats.forecast_available && latencyStats.p_infinity !== undefined) {
-                // Compute n_baseline from mature cohorts (age >= maturityDays)
-                const matureCohorts = allCohorts.filter(c => c.age >= maturityDays);
-                const nBaselineFallback = matureCohorts.reduce((sum, c) => sum + c.n, 0);
-                
-                console.log('[addEvidenceAndForecastScalars] Using cohort-based forecast fallback:', {
-                  p_infinity: latencyStats.p_infinity,
-                  t95: latencyStats.t95,
-                  completeness: latencyStats.completeness,
-                  cohortCount: allCohorts.length,
-                  matureCohortCount: matureCohorts.length,
-                  nBaselineFallback,
-                  maturityDays,
-                });
-                
-                nextAggregated = {
-                  ...nextAggregated,
-                  values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
-                    if (v.forecast !== undefined) return v;
-                    
-                    // === FORECAST BLEND (forecast-fix.md) – cohort fallback path ===
-                    const completeness = v.latency?.completeness ?? latencyStats.completeness;
-                    const evidenceMean = v.evidence?.mean;
-                    const nQuery = v.n;
-                    const forecastValue = latencyStats.p_infinity!;
-                    
-                    let blendedMean: number | undefined;
-                    if (
-                      completeness !== undefined &&
-                      evidenceMean !== undefined &&
-                      nQuery !== undefined &&
-                      nQuery > 0 &&
-                      nBaselineFallback > 0
-                    ) {
-                      const nEff = completeness * nQuery;
-                      const m0 = FORECAST_BLEND_LAMBDA * nBaselineFallback;
-                      const wEvidence = nEff / (m0 + nEff);
-                      blendedMean = wEvidence * evidenceMean + (1 - wEvidence) * forecastValue;
-                      
-                      console.log('[addEvidenceAndForecastScalars] Computed forecast blend (cohort fallback):', {
-                        completeness,
-                        nQuery,
-                        nBaselineFallback,
-                        wEvidence: wEvidence.toFixed(3),
-                        evidenceMean: evidenceMean.toFixed(3),
-                        forecastMean: forecastValue.toFixed(3),
-                        blendedMean: blendedMean.toFixed(3),
-                      });
-                    }
-                    
-                    return {
-                      ...v,
-                      forecast: forecastValue,
-                      ...(blendedMean !== undefined ? { mean: blendedMean } : {}),
-                    };
-                  }),
-                };
-              }
-            }
-          } catch (fallbackError) {
-            console.warn('[addEvidenceAndForecastScalars] Cohort forecast fallback failed:', fallbackError);
-            // Continue without fallback forecast
-          }
         }
+        // NOTE: LAG computation (t95, completeness, forecast blend) is handled by
+        // enhanceGraphLatencies in statisticalEnhancementService, which runs after
+        // batch fetches in topological order. No fallback computation here.
       }
     }
     

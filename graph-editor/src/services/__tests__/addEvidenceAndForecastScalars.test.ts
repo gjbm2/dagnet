@@ -407,8 +407,14 @@ describe('Forecast: From Window Slice', () => {
 
 describe('Forecast: Fallback from Cohort Data', () => {
   
-  it('computes forecast from cohort when no window slice exists', () => {
-    // Cohort with lag data for statistical computation
+  // NOTE: The cohort-only forecast fallback has been removed from addEvidenceAndForecastScalars.
+  // Forecast computation from cohort LAG data is now handled by enhanceGraphLatencies
+  // in statisticalEnhancementService, which runs after batch fetches in topological order.
+  // This ensures path-adjusted completeness is computed correctly for downstream edges.
+  it.skip('computes forecast from cohort when no window slice exists (moved to enhanceGraphLatencies)', () => {
+    // This test is now covered by enhanceGraphLatencies tests in statisticalEnhancementService.test.ts
+    // The old behaviour computed forecast in addEvidenceAndForecastScalars as a fallback,
+    // but that approach couldn't handle path-adjusted completeness for downstream edges.
     const cohortVal = createCohortValue({
       dates: [daysAgo(90), daysAgo(80), daysAgo(70), daysAgo(60), daysAgo(50)],
       n: 500,

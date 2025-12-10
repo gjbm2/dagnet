@@ -63,9 +63,13 @@ Option A is simpler; Option B is cleaner long-term.
 
 It already accepts `pathT95` as the 5th parameter (default 0). No change needed.
 
-### 3.4 Keep `computePathT95` for other callers
+### 3.4 Remove redundant code paths
 
-`windowFetchPlannerService.ts` and `cohortRetrievalHorizon.ts` use `computePathT95` for horizon planning. Keep it available but mark it as a low-level utility; the main analysis path should use `enhanceGraphLatencies`.
+All LAG computation happens in `enhanceGraphLatencies`. Remove:
+- Any fallback LAG computation in `dataOperationsService.ts`
+- Any separate `computeAndApplyPathT95` call
+
+Horizon planning services (e.g., `cohortRetrievalHorizon.ts`) should read `path_t95` directly from `graph.edges[].p.latency.path_t95` which was set by the last run of `enhanceGraphLatencies`.
 
 
 ## 4. Changes to `fetchDataService.ts`
