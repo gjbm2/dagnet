@@ -65,12 +65,29 @@
   overflow-x: auto;
   margin: 1rem 0;
   border: 1px solid var(--border-color);
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'SF Mono', 'Consolas', 'Liberation Mono', 'Courier New', monospace !important;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre;
+  -webkit-font-feature-settings: normal;
+  font-feature-settings: normal;
+  font-variant-ligatures: none;
+  text-rendering: optimizeLegibility;
 }
 
+.markdown-pre code,
 .markdown-pre .markdown-code {
-  background: none;
-  padding: 0;
-  border-radius: 0;
+  background: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  white-space: pre !important;
+  letter-spacing: 0 !important;
+  word-spacing: normal !important;
+  -webkit-font-feature-settings: normal;
+  font-feature-settings: normal;
+  font-variant-ligatures: none;
 }
 
 /* Tables */
@@ -140,12 +157,23 @@
 
 /* Blockquotes */
 .markdown-content blockquote {
-  margin: 1rem 0;
-  padding: 0.5rem 1rem;
-  border-left: 4px solid var(--border-color);
-  background: var(--blockquote-background);
-  color: var(--text-color-secondary);
-  font-style: italic;
+  margin: 1.5rem 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(128, 128, 128, 0.08);
+  color: var(--text-color);
+  font-style: normal;
+}
+
+.markdown-content blockquote h2,
+.markdown-content blockquote h3 {
+  margin-top: 0.5rem;
+  color: var(--text-color);
+}
+
+.markdown-content blockquote p:last-child {
+  margin-bottom: 0;
 }
 
 /* Horizontal rules */
