@@ -118,7 +118,9 @@ export const BEAD_FONT_SIZE = 9;
 /** Height for edge beads/lozenges (pixels) - typically ~1.4× font size for comfortable padding */
 export const BEAD_HEIGHT = 1.4 * BEAD_FONT_SIZE;
 
-// ===== ANIMATED CHEVRONS =====
+// ===== CHEVRONS (all types) =====
+
+// --- Animated flow chevrons (directional indicators on edges) ---
 
 /** Spacing between chevrons along edge (pixels) - more = fewer chevrons */
 export const CHEVRON_SPACING = 120;
@@ -156,6 +158,71 @@ export const CHEVRON_LAG_D0 = 3;
 
 /** k parameter: decay exponent (higher = faster decay) */
 export const CHEVRON_LAG_K = 0.6;
+
+// --- Spline-following chevrons (LAG completeness indicator) ---
+
+/** Use chevrons that follow the spline path (better for curves) */
+export const LAG_ANCHOR_USE_SPLINE_CHEVRONS = true;
+
+/** Length of each chevron in pixels (from back to front point) */
+export const LAG_ANCHOR_SPLINE_CHEVRON_LENGTH = 5;
+
+/** Visible gap between chevrons in pixels */
+export const LAG_ANCHOR_SPLINE_CHEVRON_GAP = 4;
+
+/** Angle of chevron V-points from perpendicular (degrees). 0 = flat, 45 = diagonal, 90 = parallel to spline */
+export const LAG_ANCHOR_SPLINE_CHEVRON_ANGLE = 30;
+
+// --- Single completeness chevron (non-Sankey mode) ---
+
+/**
+ * Minimum half-width of completeness chevron (pixels).
+ * Should be larger than BEAD_HEIGHT / 2 (~6.3) so chevron is visible above beads.
+ */
+export const COMPLETENESS_CHEVRON_MIN_HALF_WIDTH = 12;
+
+/**
+ * Padding added to the max layer width for completeness chevron (pixels).
+ * Ensures chevron extends beyond all visible layers.
+ */
+export const COMPLETENESS_CHEVRON_WIDTH_PADDING = 2;
+
+/**
+ * Pixel offset from source node where completeness chevron can start (pixels).
+ * At 0% completeness, chevron appears this far from the edge start.
+ * Should account for node overlap / visual edge boundary.
+ */
+export const COMPLETENESS_CHEVRON_START_OFFSET = 16;
+
+/**
+ * Pixel offset from target node where completeness chevron can end (pixels).
+ * At 100% completeness, chevron appears this far from the edge end.
+ * Should account for node overlap / visual edge boundary.
+ */
+export const COMPLETENESS_CHEVRON_END_OFFSET = 16;
+
+/** Base opacity for completeness chevron (0-1) */
+export const COMPLETENESS_CHEVRON_OPACITY = 0.6;
+
+/** Opacity for completeness chevron when SELECTED (0-1) */
+export const COMPLETENESS_CHEVRON_SELECTED_OPACITY = 0.8;
+
+/** Opacity for completeness chevron when HIGHLIGHTED (0-1) */
+export const COMPLETENESS_CHEVRON_HIGHLIGHTED_OPACITY = 0.6;
+
+// --- Pattern-based chevrons (legacy, when LAG_ANCHOR_USE_SPLINE_CHEVRONS = false) ---
+
+/** Use chevrons instead of stripes for anchor pattern (directional feel) */
+export const LAG_ANCHOR_USE_CHEVRONS = false;
+
+/** Chevron size for anchor pattern (pixels) - height of the chevron */
+export const LAG_ANCHOR_CHEVRON_SIZE = 8;
+
+/** Gap between chevrons in anchor pattern (pixels) */
+export const LAG_ANCHOR_CHEVRON_GAP = 24;
+
+/** Stroke width of chevron lines (pixels) */
+export const LAG_ANCHOR_CHEVRON_STROKE = 5;
 
 // ===== LAG (LATENCY) TWO-LAYER RENDERING =====
 
@@ -198,27 +265,6 @@ export const LAG_ANCHOR_FADE_MIN = 0.15;
 /** Use stripes on anchor edge to show completeness (more visible on busy graphs) */
 export const LAG_ANCHOR_USE_STRIPES = false;
 
-/** Use chevrons instead of stripes for anchor pattern (directional feel) 
- * When true with LAG_ANCHOR_USE_STRIPES, uses pattern-based chevrons
- * When LAG_ANCHOR_USE_SPLINE_CHEVRONS is true, uses path-following chevrons instead */
-export const LAG_ANCHOR_USE_CHEVRONS = false;
-
-
-
-/** Use chevrons that follow the spline path (better for curves, overrides pattern chevrons) */
-export const LAG_ANCHOR_USE_SPLINE_CHEVRONS = true;
-
-/** Length of each chevron in pixels (from back to front point) */
-export const LAG_ANCHOR_SPLINE_CHEVRON_LENGTH = 16;
-
-/** Visible gap between chevrons in pixels */
-export const LAG_ANCHOR_SPLINE_CHEVRON_GAP = 4;
-
-/** Angle of chevron V-points from perpendicular (degrees). 0 = flat, 45 = diagonal, 90 = parallel to spline */
-export const LAG_ANCHOR_SPLINE_CHEVRON_ANGLE = 25;
-
-
-
 /** Stripe width for anchor completeness pattern (pixels) */
 export const LAG_ANCHOR_STRIPE_WIDTH = 7.5;
 
@@ -227,15 +273,6 @@ export const LAG_ANCHOR_STRIPE_GAP = 1.5;
 
 /** Angle of anchor stripes (degrees) - different from LAG stripes for distinction */
 export const LAG_ANCHOR_STRIPE_ANGLE = -30;
-
-/** Chevron size for anchor pattern (pixels) - height of the chevron */
-export const LAG_ANCHOR_CHEVRON_SIZE = 8;
-
-/** Gap between chevrons in anchor pattern (pixels) */
-export const LAG_ANCHOR_CHEVRON_GAP = 24;
-
-/** Stroke width of chevron lines (pixels) */
-export const LAG_ANCHOR_CHEVRON_STROKE = 5;
 
 /** Stipple dot spacing (pixels) for hidden current anchor - smaller = denser dots */
 export const LAG_ANCHOR_STIPPLE_SPACING = 5;
