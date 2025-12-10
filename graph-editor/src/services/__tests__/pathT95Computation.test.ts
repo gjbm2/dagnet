@@ -360,5 +360,139 @@ describe('implementation plan test scenarios (§8.2)', () => {
       expect(pathT95Map.get('e2')).toBe(10);
     });
   });
+  
+  describe('maturity_days fallback (data sufficiency)', () => {
+    it('should use maturity_days when t95 is undefined', () => {
+      // First-fetch scenario: no t95 yet, but user configured maturity_days
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B' },
+          { id: 'C' },
+        ],
+        edges: [
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { maturity_days: 10 } } },  // No t95
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { maturity_days: 14 } } },  // No t95
+        ],
+      };
+      
+      const activeEdges = getActiveEdges(graph);
+      const pathT95Map = computePathT95(graph, activeEdges);
+      
+      // e1: 0 + 10 (maturity_days) = 10
+      expect(pathT95Map.get('e1')).toBe(10);
+      // e2: 10 + 14 = 24
+      expect(pathT95Map.get('e2')).toBe(24);
+    });
+    
+    it('should prefer t95 over maturity_days when both exist', () => {
+      // t95 is more accurate (from fitted distribution), maturity_days is conservative
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B' },
+          { id: 'C' },
+        ],
+        edges: [
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 7, maturity_days: 14 } } },
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { t95: 5, maturity_days: 10 } } },
+        ],
+      };
+      
+      const activeEdges = getActiveEdges(graph);
+      const pathT95Map = computePathT95(graph, activeEdges);
+      
+      // e1: 0 + 7 (t95 preferred) = 7
+      expect(pathT95Map.get('e1')).toBe(7);
+      // e2: 7 + 5 = 12
+      expect(pathT95Map.get('e2')).toBe(12);
+    });
+    
+    it('should handle mixed data sufficiency (some t95, some maturity_days only)', () => {
+      // Real scenario: first edge has t95 from previous fetch, second is new
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B' },
+          { id: 'C' },
+          { id: 'D' },
+        ],
+        edges: [
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 8, maturity_days: 14 } } },  // Has t95
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { maturity_days: 10 } } },          // Only maturity_days
+          { id: 'e3', from: 'C', to: 'D', p: { mean: 0.5, latency: { t95: 5, maturity_days: 7 } } },   // Has t95
+        ],
+      };
+      
+      const activeEdges = getActiveEdges(graph);
+      const pathT95Map = computePathT95(graph, activeEdges);
+      
+      // e1: 0 + 8 (t95) = 8
+      expect(pathT95Map.get('e1')).toBe(8);
+      // e2: 8 + 10 (maturity_days fallback) = 18
+      expect(pathT95Map.get('e2')).toBe(18);
+      // e3: 18 + 5 (t95) = 23
+      expect(pathT95Map.get('e3')).toBe(23);
+    });
+    
+    it('should use 0 when neither t95 nor maturity_days exist', () => {
+      // Edge with latency object but no timing data
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B' },
+          { id: 'C' },
+        ],
+        edges: [
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: {} } },  // Empty latency
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { t95: 10 } } },
+        ],
+      };
+      
+      const activeEdges = getActiveEdges(graph);
+      const pathT95Map = computePathT95(graph, activeEdges);
+      
+      // e1: 0 + 0 (no data) = 0
+      expect(pathT95Map.get('e1')).toBe(0);
+      // e2: 0 + 10 = 10
+      expect(pathT95Map.get('e2')).toBe(10);
+    });
+    
+    it('should handle 3-step funnel: A → X → Y with cumulative maturity', () => {
+      // The specific use case from the bug: registration → intermediate → success
+      // Each edge has maturity_days configured but no t95 yet (first fetch)
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'registration', type: 'start' },
+          { id: 'intermediate' },
+          { id: 'success' },
+        ],
+        edges: [
+          { 
+            id: 'reg-to-int', 
+            from: 'registration', 
+            to: 'intermediate', 
+            p: { mean: 0.5, latency: { maturity_days: 10, anchor_node_id: 'registration' } } 
+          },
+          { 
+            id: 'int-to-success', 
+            from: 'intermediate', 
+            to: 'success', 
+            p: { mean: 0.3, latency: { maturity_days: 10, anchor_node_id: 'registration' } } 
+          },
+        ],
+      };
+      
+      const activeEdges = getActiveEdges(graph);
+      // Compute from the anchor node (registration)
+      const pathT95Map = computePathT95(graph, activeEdges, 'registration');
+      
+      // reg-to-int: 0 + 10 = 10
+      expect(pathT95Map.get('reg-to-int')).toBe(10);
+      // int-to-success: 10 + 10 = 20 (cumulative!)
+      // This is the critical fix: conversion window should be 20, not 10
+      expect(pathT95Map.get('int-to-success')).toBe(20);
+    });
+  });
 });
 

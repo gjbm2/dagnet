@@ -1,19 +1,19 @@
 # TODO
 
-- Check that Get all slices uses precisely same fetch logic as tested hook
-- Copy / paste: nodes, edges into graph
-   - Investigate d&d
 - Add basic graphing for analysis??
-- Highlighting / selcting latency edges (not showing up properly)
-- Completeness not reporting / updating correctly on sample graph edges -- desync between bead and edge
+- Check fetch logic properly -- some odd behaviour
+- F/E rendering for non-latency edges
+- +Contexts should show all if none pinned
+
+-I think the lines logic we build for Sankey is prob. actually better than the static chevrons in non-sankey too. Let's try this:. In non-Sankey, render just one chevron perpendicular to the spline not vertical. use the existing chevron machinery, but just one of them, and at the x% location.
 
 
 ## Major components
-- Dashboarding views
 - Tabulated & graphing analytics output
+- Dashboarding views
 - Bayesian modelling
 - Asynch / api updates
-- Cyclic graphs
+- Cyclic graphs...
 
 ---
 
@@ -269,7 +269,6 @@ Could use Web Worker for true background execution:
 
 ### Phase 3: Charts & Visualizations (BACKLOG)
 - [ ] Integrate Recharts library
-- [ ] Sankey diagrams for funnels
 - [ ] Bar charts for branch/outcome comparisons
 - [ ] Line charts for time-series with window aggregation
 - [ ] Probability heatmaps for complex branching

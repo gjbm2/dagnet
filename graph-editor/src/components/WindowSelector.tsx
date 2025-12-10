@@ -13,7 +13,7 @@ import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
 import { FileText, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
 import { parseConstraints } from '../lib/queryDSL';
-import { formatDateUK } from '../lib/dateFormat';
+import { formatDateUK, resolveRelativeDate } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
 import './WindowSelector.css';
 import { ContextValueSelector } from './ContextValueSelector';
@@ -1087,13 +1087,24 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 }
                 
                 // Also update window state separately for DateRangePicker
-                // DSL already uses UK format dates, so we can use them directly
+                // Resolve relative dates (like -60d) to absolute dates for display
                 const parsed = parseConstraints(finalDSL);
-                if (parsed.window && setWindow) {
+                const dateRange = parsed.window || parsed.cohort;
+                if (dateRange && setWindow) {
+                  // Resolve relative dates (e.g., -60d → 11-Oct-25)
+                  const resolvedStart = dateRange.start ? resolveRelativeDate(dateRange.start) : '';
+                  const resolvedEnd = dateRange.end ? resolveRelativeDate(dateRange.end) : formatDateUK(new Date());
                   setWindow({
-                    start: parsed.window.start || window?.start || '',
-                    end: parsed.window.end || window?.end || '',
+                    start: resolvedStart || window?.start || '',
+                    end: resolvedEnd || window?.end || '',
                   });
+                }
+                
+                // Update query mode based on DSL
+                if (parsed.cohort) {
+                  setQueryMode('cohort');
+                } else if (parsed.window) {
+                  setQueryMode('window');
                 }
               }}
               graph={graph}

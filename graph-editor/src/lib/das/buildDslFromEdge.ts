@@ -17,6 +17,7 @@ import { parseDSL, type ParsedConstraints } from '../queryDSL';
 import { contextRegistry } from '../../services/contextRegistry';
 import { querySignatureService } from '../../services/querySignatureService';
 import { parseUKDate, formatDateUK } from '../dateFormat';
+import { computePathT95, getActiveEdges, type GraphForPath } from '../../services/statisticalEnhancementService';
 
 export interface EventFilter {
   property: string;
@@ -439,14 +440,82 @@ export async function buildDslFromEdge(
           `Expected: edge.p.latency.anchor_node_id should be computed by MSMDC.`);
       }
       
-      // Get maturity_days from edge.p.latency
+      // Get conversion window for cohort query
+      // CRITICAL: Use path_t95 (cumulative latency from anchor) for the Amplitude conversion window,
+      // NOT maturity_days which is for cache staleness only.
+      // path_t95 tells us how long to wait for conversions from the anchor event.
+      // 
+      // Data sufficiency fallback chain:
+      // 1. path_t95 from edge (if already computed from previous fetch)
+      // 2. Compute path_t95 on-the-fly from graph (uses t95 → maturity_days → 0 per edge)
+      // 3. edge-local t95 (if only this edge has data)
+      // 4. edge-local maturity_days (user-configured)
+      // 5. Default 30 days
+      let pathT95 = edge.p?.latency?.path_t95;
+      
+      // If path_t95 not stored, compute it on-the-fly from the graph
+      // Use edge's anchor_node_id (from MSMDC) as the traversal start point
+      if (pathT95 === undefined && graph?.edges?.length) {
+        try {
+          const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+          const anchorForEdge = edge.p?.latency?.anchor_node_id;
+          
+          // Build GraphForPath representation
+          const graphForPath: GraphForPath = {
+            nodes: (graph.nodes || []).map((n: any) => ({
+              id: n.id || n.uuid || '',
+              type: n.type,
+            })),
+            edges: (graph.edges || []).map((e: any) => ({
+              id: e.id,
+              uuid: e.uuid,
+              from: e.from,
+              to: e.to,
+              p: e.p ? {
+                latency: e.p.latency ? {
+                  maturity_days: e.p.latency.maturity_days,
+                  t95: e.p.latency.t95,
+                  path_t95: e.p.latency.path_t95,
+                } : undefined,
+                mean: e.p.mean,
+              } : undefined,
+            })),
+          };
+          
+          const activeEdgesSet = getActiveEdges(graphForPath);
+          if (activeEdgesSet.size > 0) {
+            // Pass anchor_node_id so traversal starts from the correct point
+            const pathT95Map = computePathT95(graphForPath, activeEdgesSet, anchorForEdge);
+            pathT95 = pathT95Map.get(edgeId);
+            console.log('[buildQueryPayload] Computed path_t95 on-the-fly:', { 
+              edgeId, 
+              anchorForEdge,
+              pathT95 
+            });
+          }
+        } catch (error) {
+          console.warn('[buildQueryPayload] Failed to compute path_t95:', error);
+        }
+      }
+      
+      const edgeT95 = edge.p?.latency?.t95;
       const maturityDays = edge.p?.latency?.maturity_days;
+      
+      // Prefer path_t95 > t95 > maturity_days > default 30
+      const conversionWindowDays = Math.ceil(pathT95 ?? edgeT95 ?? maturityDays ?? 30);
+      
+      console.log('[buildQueryPayload] Cohort conversion window:', {
+        pathT95,
+        edgeT95,
+        maturityDays,
+        conversionWindowDays
+      });
       
       queryPayload.cohort = {
         start: cohortStart?.toISOString(),
         end: cohortEnd?.toISOString(),
         anchor_event_id: anchorEventId,
-        maturity_days: maturityDays
+        maturity_days: conversionWindowDays  // Used as Amplitude's cs (conversion window) parameter
       };
       
       console.log('[buildQueryPayload] Added cohort:', queryPayload.cohort);

@@ -18,10 +18,14 @@ export function formatDateUK(date: Date | string): string {
     throw new Error(`Invalid date: ${date}`);
   }
   
-  const day = d.getDate(); // 1-31 (no leading zero)
+  // CRITICAL: Use UTC getters to avoid timezone issues
+  // When parsing ISO date strings (e.g., "2025-10-11"), JS treats them as UTC midnight.
+  // Using getDate()/getMonth() returns LOCAL time, which can shift the date!
+  // Example: "2025-10-11" at UTC midnight = Oct 10 at 7pm EST → getDate() returns 10, not 11!
+  const day = d.getUTCDate(); // 1-31 (no leading zero), in UTC
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const month = months[d.getMonth()];
-  const year = String(d.getFullYear()).slice(-2); // Last 2 digits
+  const month = months[d.getUTCMonth()]; // 0-11, in UTC
+  const year = String(d.getUTCFullYear()).slice(-2); // Last 2 digits, in UTC
   
   return `${day}-${month}-${year}`;
 }
@@ -188,21 +192,24 @@ export function resolveRelativeDate(dateStr: string): string {
   const offset = parseInt(relativeMatch[1], 10);
   const unit = relativeMatch[2];
   
+  // CRITICAL: Use UTC throughout to match formatDateUK which uses UTC getters
+  // This avoids timezone mismatches where local midnight != UTC midnight
   const now = new Date();
-  now.setHours(0, 0, 0, 0);
+  // Set to UTC midnight
+  now.setUTCHours(0, 0, 0, 0);
   
   switch (unit) {
     case 'd':
-      now.setDate(now.getDate() + offset);
+      now.setUTCDate(now.getUTCDate() + offset);
       break;
     case 'w':
-      now.setDate(now.getDate() + (offset * 7));
+      now.setUTCDate(now.getUTCDate() + (offset * 7));
       break;
     case 'm':
-      now.setMonth(now.getMonth() + offset);
+      now.setUTCMonth(now.getUTCMonth() + offset);
       break;
     case 'y':
-      now.setFullYear(now.getFullYear() + offset);
+      now.setUTCFullYear(now.getUTCFullYear() + offset);
       break;
   }
   
