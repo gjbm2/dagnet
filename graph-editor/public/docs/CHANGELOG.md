@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.0.3b
+**Released:** December 10, 2025
+
+Further cohort path_t95 fixes
+
+---
+
 ## Version 1.0.2b
 **Released:** December 10, 2025
 
