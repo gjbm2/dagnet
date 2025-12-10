@@ -395,6 +395,8 @@ export interface TimeSeriesPoint {
   n: number;
   k: number;
   p: number;
+  median_lag_days?: number;  // For cohort mode: X→Y median lag (days)
+  mean_lag_days?: number;    // For cohort mode: X→Y mean lag (days)
 }
 
 /**
@@ -542,7 +544,26 @@ export interface ProbabilityParam {
   forecast?: {
     mean?: number;  // Forecast mean probability
     stdev?: number; // Forecast standard deviation
+    /** Expected converters on this edge = p.mean * p.n.
+     *  Used for propagating population downstream (inbound-n calculation).
+     *  Cached after batch fetch; single-edge fetches sum inbound forecast.k for p.n.
+     */
+    k?: number;
   };
+  
+  // === Inbound-n: Forecast population semantics (see inbound-n-fix.md) ===
+  
+  /** Forecast population for this edge under the current DSL.
+   *  
+   *  NOT the same as evidence.n (observed population from Amplitude).
+   *  This is derived via step-wise convolution from upstream:
+   *  - For anchor edges (A=X, where A is START): equals evidence.n
+   *  - For downstream edges: sum of inbound p.forecast.k at the from-node
+   *  
+   *  Query-time value, recomputed when DSL or scenario changes.
+   *  May be persisted for pinned DSL only.
+   */
+  n?: number;
 }
 
 export interface CostParam {

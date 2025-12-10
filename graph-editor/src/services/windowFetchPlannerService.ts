@@ -409,6 +409,15 @@ class WindowFetchPlannerService {
         // Extract window for fetch
         const window = this.extractWindowFromDSL(dsl);
         if (window) {
+          // CRITICAL: Track graph updates across sequential fetches
+          // Without this, each item uses the stale original graph and updates are lost
+          let currentGraph: Graph | null = graph;
+          const trackingSetGraph = (newGraph: Graph | null) => {
+            currentGraph = newGraph;
+            setGraph(newGraph);
+          };
+          const getUpdatedGraph = () => currentGraph;
+          
           await fetchDataService.fetchItems(
             fetchItemsList,
             { 
@@ -416,8 +425,9 @@ class WindowFetchPlannerService {
               parentLogId: triageLogId,
             },
             graph,
-            setGraph,
-            dsl
+            trackingSetGraph,
+            dsl,
+            getUpdatedGraph  // Pass graph tracker for sequential updates
           );
         }
       }

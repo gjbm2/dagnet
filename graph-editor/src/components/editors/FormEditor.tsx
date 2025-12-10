@@ -11,9 +11,12 @@ import { MonacoWidget, TabbedArrayWidget, AccordionObjectFieldTemplate, ThreeCol
 import { FileCode } from 'lucide-react';
 
 // Threshold for "large" file warning (in characters when JSON stringified)
-const LARGE_FILE_WARNING_THRESHOLD = 20000;
+const LARGE_FILE_WARNING_THRESHOLD = 15000;  // ~15KB
 // Threshold above which we DON'T render the form at all (too slow)
-const LARGE_FILE_BLOCK_THRESHOLD = 100000;
+const LARGE_FILE_BLOCK_THRESHOLD = 50000;   // ~50KB
+// Line count thresholds - form rendering is O(n) in fields, so line count matters more than size
+const LARGE_FILE_LINE_WARNING_THRESHOLD = 200;   // Warn above 300 lines
+const LARGE_FILE_LINE_BLOCK_THRESHOLD = 800;     // Block above 800 lines
 
 /**
  * Form Editor
@@ -27,22 +30,32 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   const { operations: navOperations } = useNavigatorContext();
   const { activeTabId, operations: tabOperations } = useTabContext();
   
-  // Detect file size for performance warnings
-  const fileSize = useMemo(() => {
-    if (!data) return 0;
+  // Detect file size AND line count for performance warnings
+  const { fileSize, lineCount } = useMemo(() => {
+    if (!data) return { fileSize: 0, lineCount: 0 };
     try {
-      return JSON.stringify(data).length;
+      const json = JSON.stringify(data, null, 2);
+      return {
+        fileSize: json.length,
+        lineCount: json.split('\n').length
+      };
     } catch {
-      return 0;
+      return { fileSize: 0, lineCount: 0 };
     }
   }, [data]);
   
   // Track if user has explicitly chosen to load the form despite size warning
   const [forceLoadForm, setForceLoadForm] = useState(false);
   
-  const isLargeFile = fileSize > LARGE_FILE_WARNING_THRESHOLD;
+  // Check both size AND line count - either can trigger warning/block
+  const isLargeBySize = fileSize > LARGE_FILE_WARNING_THRESHOLD;
+  const isLargeByLines = lineCount > LARGE_FILE_LINE_WARNING_THRESHOLD;
+  const isLargeFile = isLargeBySize || isLargeByLines;
+  
+  const isBlockedBySize = fileSize > LARGE_FILE_BLOCK_THRESHOLD;
+  const isBlockedByLines = lineCount > LARGE_FILE_LINE_BLOCK_THRESHOLD;
   // Block form unless user explicitly chooses to load it
-  const blockFormRendering = isLargeFile && !forceLoadForm;
+  const blockFormRendering = (isLargeFile || isBlockedBySize || isBlockedByLines) && !forceLoadForm;
   
   // Handler to open as YAML view
   const handleOpenAsYAML = () => {
@@ -493,11 +506,11 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
           }}>
             <div style={{ fontSize: '48px' }}>⚠️</div>
             <div style={{ fontSize: '16px', fontWeight: 600, color: '#92400E' }}>
-              Large file detected ({Math.round(fileSize / 1000)}KB)
+              Large file detected ({Math.round(fileSize / 1000)}KB, {lineCount.toLocaleString()} lines)
             </div>
             <div style={{ fontSize: '14px', color: '#78350F', maxWidth: '450px' }}>
-              Form view may be slow for this file size. 
-              We recommend using YAML or JSON view for better performance.
+              Form view is slow for files this size. 
+              Use YAML or JSON view instead for much better performance.
             </div>
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
               <button

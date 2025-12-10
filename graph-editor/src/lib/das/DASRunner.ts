@@ -584,44 +584,6 @@ export class DASRunner {
         // This allows transforms to reference each other (e.g., time_series can reference mode)
         const result = expression.evaluate(transformed);
         transformed[spec.name] = result;
-        
-        // Debug logging for time_series transform
-        if (spec.name === 'time_series' && context.context?.mode === 'daily') {
-          console.log(`[DASRunner] time_series transform debug:`, {
-            specName: spec.name,
-            mode: transformed.mode,
-            hasDayFunnels: !!transformed.day_funnels,
-            dayFunnels: transformed.day_funnels,
-                      dayFunnelsSeries: (transformed.day_funnels as any)?.series,
-                      dayFunnelsXValues: (transformed.day_funnels as any)?.xValues,
-                      dayFunnelsSeriesLength: Array.isArray((transformed.day_funnels as any)?.series) ? (transformed.day_funnels as any).series.length : 'not array',
-            fromStepIndex: context.queryPayload?.from_step_index,
-            toStepIndex: context.queryPayload?.to_step_index,
-            transformedKeys: Object.keys(transformed),
-            result: result,
-            resultLength: Array.isArray(result) ? result.length : 'not array',
-            resultType: typeof result,
-            expression: spec.jsonata.substring(0, 300)
-          });
-          
-          // Try evaluating parts of the expression separately to debug
-          try {
-            const testExpr1 = jsonata('$.mode');
-            const testMode = testExpr1.evaluate(transformed);
-            const testExpr2 = jsonata('$.day_funnels');
-            const testDayFunnels = testExpr2.evaluate(transformed);
-            const testExpr3 = jsonata('$.day_funnels.series');
-            const testSeries = testExpr3.evaluate(transformed);
-            console.log(`[DASRunner] JSONata field access test:`, {
-              '$.mode': testMode,
-              '$.day_funnels': testDayFunnels,
-              '$.day_funnels.series': testSeries,
-              'testSeriesLength': Array.isArray(testSeries) ? testSeries.length : 'not array'
-            });
-          } catch (e) {
-            console.error(`[DASRunner] JSONata field access test failed:`, e);
-          }
-        }
       } catch (error) {
         const errorMessage = error instanceof Error 
           ? error.message 

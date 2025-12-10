@@ -366,11 +366,12 @@ export function ParameterSection({
       
       {/* Latency Tracking (probability params only) */}
       {showLatency && (
-        <div style={{ marginBottom: '16px' }}>
+        <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Inline: [checkbox] Latency - days [input] [override] */}
           <AutomatableField
             label=""
             labelExtra={
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <input
                   type="checkbox"
                   id={`latency-track-${objectId}-${paramSlot}`}
@@ -386,14 +387,41 @@ export function ParameterSection({
                     });
                   }}
                   disabled={disabled}
-                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                  style={{ width: '14px', height: '14px', cursor: 'pointer', flexShrink: 0 }}
                 />
                 <label 
                   htmlFor={`latency-track-${objectId}-${paramSlot}`}
-                  style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#333' }}
+                  style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#333', whiteSpace: 'nowrap' }}
                 >
-                  Track Latency
+                  Latency
                 </label>
+                <span style={{ fontSize: '12px', color: '#6B7280' }}>—</span>
+                <span style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>days</span>
+                <input
+                  type="number"
+                  value={localMaturityDays}
+                  onChange={(e) => {
+                    setLocalMaturityDays(e.target.value);
+                  }}
+                  onBlur={() => {
+                    const value = parseInt(localMaturityDays);
+                    const days = isNaN(value) || value < 1 ? 30 : Math.min(365, value);
+                    setLocalMaturityDays(days.toString());
+                    onUpdate({
+                      latency: {
+                        ...param?.latency,
+                        maturity_days: days,
+                        maturity_days_overridden: true,
+                      }
+                    });
+                  }}
+                  min={1}
+                  max={365}
+                  disabled={disabled || (param?.latency?.maturity_days || 0) === 0}
+                  className="parameter-input"
+                  style={{ width: '60px' }}
+                  title="Days after cohort entry at which conversions are considered 'mature'."
+                />
                 <span title="Enable latency tracking to forecast conversions for immature cohorts. When enabled, uses cohort-based queries to measure conversion lag.">
                   <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
                 </span>
@@ -411,73 +439,53 @@ export function ParameterSection({
               });
             }}
           >
-            {/* Maturity field (only shown when tracking is enabled) */}
-            {(param?.latency?.maturity_days || 0) > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label">Maturity (days)</label>
-                  <input
-                    type="number"
-                    value={localMaturityDays}
-                    onChange={(e) => {
-                      setLocalMaturityDays(e.target.value);
-                    }}
-                    onBlur={() => {
-                      const value = parseInt(localMaturityDays);
-                      const days = isNaN(value) || value < 1 ? 30 : Math.min(365, value);
-                      setLocalMaturityDays(days.toString());
-                      onUpdate({
-                        latency: {
-                          ...param?.latency,
-                          maturity_days: days,
-                          maturity_days_overridden: true,
-                        }
-                      });
-                    }}
-                    min={1}
-                    max={365}
-                    disabled={disabled}
-                    className="parameter-input"
-                    title="Days after cohort entry at which conversions are considered 'mature'."
-                  />
-                </div>
-                
-                {/* Read-only latency stats (when data exists) */}
-                {param?.latency?.median_lag_days && (
-                  <div style={{ 
-                    padding: '8px', 
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)', 
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                    color: '#9CA3AF'
-                  }}>
-                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                      <span>
-                        <strong>Median Lag:</strong> {param.latency.median_lag_days.toFixed(1)}d
-                      </span>
-                      {param.latency.completeness !== undefined && (
-                        <span>
-                          <strong>Completeness:</strong> {(param.latency.completeness * 100).toFixed(0)}%
-                        </span>
-                      )}
-                      {param.latency.t95 !== undefined && (
-                        <span>
-                          <strong>t95:</strong> {param.latency.t95.toFixed(1)}d
-                        </span>
-                      )}
-                    </div>
-                    {param.latency.anchor_node_id && (
-                      <div style={{ marginTop: '4px' }}>
-                        <strong>Anchor:</strong> {param.latency.anchor_node_id}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div style={{ display: 'none' }} />
-            )}
+            <div style={{ display: 'none' }} />
           </AutomatableField>
+          
+          {/* Anchor Node (only shown when latency tracking is enabled) */}
+          {(param?.latency?.maturity_days || 0) > 0 && (
+            <AutomatableField
+              label=""
+              value={param?.latency?.anchor_node_id || ''}
+              overridden={param?.latency?.anchor_node_id_overridden || false}
+              onClearOverride={() => {
+                onUpdate({ 
+                  latency: { 
+                    ...param?.latency,
+                    anchor_node_id_overridden: false 
+                  } 
+                });
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <label className="parameter-section-label">Cohort anchor</label>
+                <input
+                  type="text"
+                  value={param?.latency?.anchor_node_id || ''}
+                  onChange={(e) => {
+                    onUpdate({
+                      latency: {
+                        ...param?.latency,
+                        anchor_node_id: e.target.value || undefined,
+                      }
+                    });
+                  }}
+                  onBlur={() => {
+                    onUpdate({
+                      latency: {
+                        ...param?.latency,
+                        anchor_node_id_overridden: true,
+                      }
+                    });
+                  }}
+                  disabled={disabled}
+                  className="parameter-input"
+                  placeholder="(auto)"
+                  title="Cohort entry point for this edge. Defaults to furthest upstream START node."
+                />
+              </div>
+            </AutomatableField>
+          )}
         </div>
       )}
       

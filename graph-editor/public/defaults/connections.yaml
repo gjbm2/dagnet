@@ -437,27 +437,35 @@ connections:
         # Check if we have daily data (context.mode === 'daily')
         - name: mode
           jsonata: "$context.mode ? $context.mode : 'aggregate'"
+        # Build time_series with per-day n/k/p and latency data
+        # Build time_series with per-day n/k/p and latency data
+        # NOTE: Amplitude returns -1 for lag when there are no converters on that day.
+        # We convert -1 to null to avoid tiny negative numbers in our data.
         - name: time_series
           jsonata: |
             (
-              $.mode = 'daily' and $.day_funnels and $.day_funnels.series ?
-                $.day_funnels.series ~> $map(function($dayData, $i) {
-                  $merge([
-                    {
-                      "date": $.day_funnels.xValues[$i],
-                      "n": $dayData[$number($queryPayload.from_step_index)],
-                      "k": $dayData[$number($queryPayload.to_step_index)],
-                      "p": $dayData[$number($queryPayload.to_step_index)] / $dayData[$number($queryPayload.from_step_index)]
-                    },
-                    /* Include latency data if available (cohort mode) */
-                    $.day_median_trans_times[$i] ? {
-                      "median_lag_days": $.day_median_trans_times[$i][$number($queryPayload.to_step_index)] / 86400000
-                    } : {},
-                    $.day_avg_trans_times[$i] ? {
-                      "mean_lag_days": $.day_avg_trans_times[$i][$number($queryPayload.to_step_index)] / 86400000
-                    } : {}
-                  ])
-                }) : []
+              $data := $;
+              $toIdx := $number($queryPayload.to_step_index);
+              $fromIdx := $number($queryPayload.from_step_index);
+              $dates := $data.day_funnels.xValues;
+              $medianLags := $data.day_median_trans_times;
+              $avgLags := $data.day_avg_trans_times;
+              
+              $data.mode = 'daily' and $data.day_funnels.series ?
+                $data.day_funnels.series ~> $map(function($dayData, $idx) {(
+                  $medianRow := $medianLags[$idx];
+                  $avgRow := $avgLags[$idx];
+                  $medianMs := $medianRow ? $medianRow[$toIdx] : null;
+                  $avgMs := $avgRow ? $avgRow[$toIdx] : null;
+                  {
+                    "date": $dates[$idx],
+                    "n": $dayData[$fromIdx],
+                    "k": $dayData[$toIdx],
+                    "p": $dayData[$fromIdx] > 0 ? $dayData[$toIdx] / $dayData[$fromIdx] : 0,
+                    "median_lag_days": $medianMs != null and $medianMs > 0 ? $medianMs / 86400000 : null,
+                    "mean_lag_days": $avgMs != null and $avgMs > 0 ? $avgMs / 86400000 : null
+                  }
+                )}) : []
             )
         # Handle null values gracefully - return 0 when no data
         - name: n
@@ -468,10 +476,19 @@ connections:
           jsonata: "n > 0 ? k / n : 0"
         # === LAG (Latency) Aggregate Transforms ===
         # Extract aggregate latency stats for the X→Y transition (to_step_index)
+        # NOTE: Amplitude returns -1 for lag when there are no converters. Convert to null.
         - name: median_lag_days
-          jsonata: "median_trans_times[$number($queryPayload.to_step_index)] != null ? median_trans_times[$number($queryPayload.to_step_index)] / 86400000 : null"
+          jsonata: |
+            (
+              $ms := median_trans_times[$number($queryPayload.to_step_index)];
+              $ms != null and $ms > 0 ? $ms / 86400000 : null
+            )
         - name: mean_lag_days
-          jsonata: "avg_trans_times[$number($queryPayload.to_step_index)] != null ? avg_trans_times[$number($queryPayload.to_step_index)] / 86400000 : null"
+          jsonata: |
+            (
+              $ms := avg_trans_times[$number($queryPayload.to_step_index)];
+              $ms != null and $ms > 0 ? $ms / 86400000 : null
+            )
         # Extract histogram for the X→Y transition (for lag CDF fitting)
         - name: lag_histogram
           jsonata: "step_trans_time_distribution[$number($queryPayload.to_step_index)]"

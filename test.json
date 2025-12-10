@@ -10,8 +10,8 @@
         "entry_weight": 1
       },
       "layout": {
-        "x": -598,
-        "y": -122
+        "x": -630,
+        "y": -130
       },
       "description": "",
       "event_id": "household-created"
@@ -22,8 +22,8 @@
       "label": "abandonned-before-delegation",
       "absorbing": true,
       "layout": {
-        "x": -351,
-        "y": -40
+        "x": -435,
+        "y": -63
       },
       "description": "",
       "outcome_type": "failure",
@@ -35,8 +35,8 @@
       "label": "household-delegated",
       "absorbing": false,
       "layout": {
-        "x": -407,
-        "y": -177
+        "x": -428,
+        "y": -216
       },
       "description": "",
       "tags": [],
@@ -49,8 +49,8 @@
       "label": "Switch registered",
       "absorbing": false,
       "layout": {
-        "x": -31,
-        "y": -153
+        "x": 136,
+        "y": -247
       },
       "event_id": "switch-registered",
       "event_id_overridden": false
@@ -61,8 +61,8 @@
       "label": "Switch success",
       "absorbing": true,
       "layout": {
-        "x": 159,
-        "y": -231
+        "x": 403,
+        "y": -315
       },
       "event_id": "switch-success",
       "event_id_overridden": false,
@@ -76,8 +76,8 @@
       "label": "Post registration failure",
       "absorbing": true,
       "layout": {
-        "x": 160,
-        "y": -52
+        "x": 321,
+        "y": -149
       },
       "outcome_type": "failure",
       "outcome_type_overridden": true
@@ -88,11 +88,31 @@
       "label": "Energy rec",
       "absorbing": false,
       "layout": {
-        "x": -222,
-        "y": -197
+        "x": -165,
+        "y": -200
       },
       "event_id": "energy-rec",
       "event_id_overridden": false
+    },
+    {
+      "uuid": "841f3509-c21c-4746-9af9-26a150411f0f",
+      "id": "no-energy-rec",
+      "label": "No energy rec",
+      "absorbing": false,
+      "layout": {
+        "x": 82,
+        "y": -57
+      }
+    },
+    {
+      "uuid": "6a97718a-45d8-4fdd-b30a-517b3a92d13e",
+      "id": "no-delegation",
+      "label": "No delegation",
+      "absorbing": false,
+      "layout": {
+        "x": -212,
+        "y": -51
+      }
     }
   ],
   "edges": [
@@ -104,7 +124,10 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.896
+        "mean": 0.285,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
       },
       "query": "from(switch-registered).to(post-registration-failure)",
       "description": ""
@@ -117,7 +140,10 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.475
+        "mean": 0.46,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
       },
       "query": "from(household-created).to(abandonned-before-delegation)",
       "description": ""
@@ -130,27 +156,39 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.104,
-        "stdev": 0.030550504633038936,
+        "mean": 0.7148600689112619,
+        "stdev": 0.031380103144657015,
         "id": "registration-to-success",
         "evidence": {
-          "window_from": "1-Dec-25",
+          "window_from": "9-Nov-25",
           "source": "amplitude",
-          "n": 182,
-          "k": 19,
-          "window_to": "7-Dec-25",
-          "retrieved_at": "2025-12-09T18:59:27.991Z",
+          "n": 207,
+          "k": 136,
+          "window_to": "15-Nov-25",
+          "retrieved_at": "2025-12-09T21:16:50.644Z",
           "full_query": "from(switch-registered).to(switch-success)",
-          "mean": 0.1043956043956044,
-          "stdev": 0.022665406930173004
+          "mean": 0.6570048309178744,
+          "stdev": 0.032994618436061704
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-09T18:59:27.991Z",
+          "retrieved_at": "2025-12-09T21:16:50.644Z",
           "full_query": "from(switch-registered).to(switch-success)"
         },
         "connection": "amplitude-prod",
-        "connection_overridden": true
+        "connection_overridden": true,
+        "latency": {
+          "maturity_days": 30,
+          "maturity_days_overridden": false,
+          "median_lag_days": 15,
+          "completeness": 0.8622166494325146,
+          "t95": 30,
+          "anchor_node_id_overridden": false,
+          "anchor_node_id": "household-created"
+        },
+        "forecast": {
+          "mean": 0.6
+        }
       },
       "query": "from(switch-registered).to(switch-success)",
       "description": ""
@@ -163,97 +201,33 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.525,
+        "mean": 0.54,
         "id": "household-delegation-rate",
         "connection": "amplitude-prod",
         "connection_overridden": true,
-        "stdev": 0.013182326919658751,
+        "stdev": 0.008363738766941768,
         "evidence": {
-          "n": 1620,
-          "k": 850,
-          "window_from": "1-Dec-25",
-          "window_to": "7-Dec-25",
-          "retrieved_at": "2025-12-09T18:59:30.958Z",
+          "n": 3551,
+          "k": 1918,
+          "window_from": "9-Nov-25",
+          "window_to": "15-Nov-25",
+          "retrieved_at": "2025-12-09T21:16:50.520Z",
           "source": "amplitude",
           "full_query": "from(household-created).to(household-delegated)",
-          "mean": 0.5246913580246914,
-          "stdev": 0.012407443426012034
+          "mean": 0.5401295409743734,
+          "stdev": 0.008363564014511646
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-09T18:59:30.958Z",
+          "retrieved_at": "2025-12-09T21:16:50.520Z",
           "full_query": "from(household-created).to(household-delegated)"
+        },
+        "latency": {
+          "anchor_node_id": "household-created"
         }
       },
       "query": "from(household-created).to(household-delegated)",
       "description": ""
-    },
-    {
-      "uuid": "d45debd8-939b-4abb-b0d0-c5ef62412add",
-      "id": "energy-rec-to-switch-registered",
-      "from": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
-      "to": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
-      "fromHandle": "right-out",
-      "toHandle": "left",
-      "p": {
-        "mean": 0.04,
-        "id": "rec-with-bdos-to-registration",
-        "connection": "amplitude-prod",
-        "connection_overridden": true,
-        "stdev": 0.008285539194549076,
-        "evidence": {
-          "n": 692,
-          "k": 28,
-          "window_from": "1-Dec-25",
-          "window_to": "7-Dec-25",
-          "retrieved_at": "2025-12-09T18:59:50.363Z",
-          "source": "amplitude",
-          "full_query": "from(energy-rec).to(switch-registered)",
-          "mean": 0.04046242774566474,
-          "stdev": 0.007490381084808208
-        },
-        "data_source": {
-          "type": "amplitude",
-          "retrieved_at": "2025-12-09T18:59:50.363Z",
-          "full_query": "from(energy-rec).to(switch-registered)"
-        }
-      },
-      "description": "",
-      "query": "from(energy-rec).to(switch-registered)",
-      "query_overridden": false,
-      "conditional_p": [
-        {
-          "condition": "visited(gave-bds-in-onboarding)",
-          "query": "from(energy-rec).to(switch-registered).visited(gave-bds-in-onboarding)",
-          "query_overridden": false,
-          "p": {
-            "mean": 0.36257309941520466,
-            "stdev": 0.03676333723816272
-          },
-          "colour": "#16a34a"
-        },
-        {
-          "condition": "exclude(gave-gave-bds-in-onboarding)",
-          "query": "from(energy-rec).to(switch-registered)",
-          "query_overridden": false,
-          "p": {
-            "mean": 0.1964573268921095,
-            "stdev": 0.015943834875444898,
-            "connection": "amplitude-prod",
-            "connection_overridden": true,
-            "evidence": {
-              "n": 621,
-              "k": 122
-            },
-            "data_source": {
-              "type": "amplitude",
-              "retrieved_at": "2025-12-05T09:13:17.801Z",
-              "full_query": "{\"from\":\"energy-rec\",\"to\":\"switch-registered\",\"context\":[],\"case\":[],\"start\":\"2025-11-09T00:00:00.000Z\",\"end\":\"2025-11-15T00:00:00.000Z\",\"query_params\":\"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251109&end=20251115&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D\",\"from_step_index\":0,\"to_step_index\":1}"
-            }
-          },
-          "colour": "#dc2626"
-        }
-      ]
     },
     {
       "uuid": "8c23ea34-9c7e-40b3-ade3-291590774bfc",
@@ -263,30 +237,118 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.188,
+        "mean": 0.6430938731405267,
         "id": "delegation-straight-to-energy-rec",
-        "stdev": 0.013096701703315151,
+        "stdev": 0.010939308908235629,
         "connection": "amplitude-prod",
         "connection_overridden": true,
         "evidence": {
-          "n": 890,
-          "k": 167,
-          "window_from": "2-Dec-25",
-          "window_to": "8-Dec-25",
-          "retrieved_at": "2025-12-09T20:04:16.248Z",
+          "n": 1918,
+          "k": 1131,
+          "window_from": "9-Nov-25",
+          "window_to": "15-Nov-25",
+          "retrieved_at": "2025-12-09T21:16:50.558Z",
           "source": "amplitude",
-          "full_query": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)",
-          "mean": 0.18764044943820224,
-          "stdev": 0.01308706845967997
+          "full_query": "from(household-delegated).to(energy-rec)",
+          "mean": 0.5896767466110532,
+          "stdev": 0.011231706969932214
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-09T20:04:16.248Z",
-          "full_query": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)"
+          "retrieved_at": "2025-12-09T21:16:50.558Z",
+          "full_query": "from(household-delegated).to(energy-rec)"
+        },
+        "latency": {
+          "maturity_days": 30,
+          "maturity_days_overridden": true,
+          "median_lag_days": 15,
+          "completeness": 0.8595808558591078,
+          "t95": 30,
+          "anchor_node_id": "household-created"
+        },
+        "forecast": {
+          "mean": 0.5172413793103448
         }
       },
       "query": "from(household-delegated).to(energy-rec)",
       "description": ""
+    },
+    {
+      "uuid": "576aac74-97b4-4075-bc5b-74e6a365a974",
+      "id": "energy-rec-to-no-energy-rec",
+      "from": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "to": "841f3509-c21c-4746-9af9-26a150411f0f",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.799,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(energy-rec).to(no-energy-rec)",
+      "description": ""
+    },
+    {
+      "uuid": "afcf0a3c-be45-4783-a0f9-df9ded423d1f",
+      "id": "household-delegated-to-no-delegation",
+      "from": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "to": "6a97718a-45d8-4fdd-b30a-517b3a92d13e",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.357,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "description": "",
+      "query": "from(household-delegated).to(no-delegation)"
+    },
+    {
+      "uuid": "d45debd8-939b-4abb-b0d0-c5ef62412add",
+      "id": "energy-rec-to-switch-registered",
+      "from": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "to": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.20109327783051398,
+        "id": "rec-with-bdos-to-registration",
+        "connection": "amplitude-prod",
+        "connection_overridden": true,
+        "stdev": 0.011918332899353734,
+        "evidence": {
+          "n": 1131,
+          "k": 202,
+          "window_from": "9-Nov-25",
+          "window_to": "15-Nov-25",
+          "retrieved_at": "2025-12-09T21:16:50.602Z",
+          "source": "amplitude",
+          "full_query": "from(energy-rec).to(switch-registered)",
+          "mean": 0.1786030061892131,
+          "stdev": 0.011389105982236468
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2025-12-09T21:16:50.602Z",
+          "full_query": "from(energy-rec).to(switch-registered)"
+        },
+        "latency": {
+          "maturity_days": 30,
+          "maturity_days_overridden": true,
+          "median_lag_days": 15,
+          "completeness": 0.8596208728760633,
+          "t95": 30,
+          "anchor_node_id": "household-created"
+        },
+        "forecast": {
+          "mean": 0.16666666666666669
+        }
+      },
+      "description": "",
+      "query": "from(energy-rec).to(switch-registered)",
+      "query_overridden": false
     }
   ],
   "policies": {
@@ -296,10 +358,10 @@
     "name": "conversion-flow-v0-ezra",
     "description": "",
     "created_at": "2025-11-20T16:28:04.980Z",
-    "updated_at": "2025-12-09T20:04:56.236Z",
+    "updated_at": "2025-12-09T21:18:53.285Z",
     "version": "1.0.0",
     "updated": "2025-11-25T18:25:17.542Z"
   },
-  "currentQueryDSL": "cohort(2-Dec-25:8-Dec-25)",
-  "dataInterestsDSL": "window(-14d:-1d);cohort(-14d:-1d)"
+  "currentQueryDSL": "cohort(9-Nov-25:15-Nov-25)",
+  "dataInterestsDSL": "window(-30d:-1d);cohort(-30d:-1d)"
 }

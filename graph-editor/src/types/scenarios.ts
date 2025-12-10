@@ -21,6 +21,8 @@ export interface ProbabilityParam {
   forecast?: {
     mean?: number;
     stdev?: number;
+    /** Expected converters on this edge = p.mean * p.n. DSL: e.X.p.forecast.k */
+    k?: number;
   };
   /** Evidence (observed rate including immature cohorts) — DSL: e.X.p.evidence.mean */
   evidence?: {
@@ -34,6 +36,10 @@ export interface ProbabilityParam {
     median_lag_days?: number;
     completeness?: number;
   };
+  
+  // === Inbound-n: Forecast population (see inbound-n-fix.md) ===
+  /** Forecast population for this edge under the current DSL — DSL: e.X.p.n */
+  n?: number;
 }
 
 /**

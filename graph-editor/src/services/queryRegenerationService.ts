@@ -292,6 +292,7 @@ export class QueryRegenerationService {
 
   /**
    * Regenerate queries for entire graph (or downstream of a node)
+   * Also computes anchor_node_id for each edge (furthest upstream START node)
    */
   async regenerateQueries(
     graph: Graph,
@@ -302,6 +303,7 @@ export class QueryRegenerationService {
     }
   ): Promise<{
     parameters: ParameterQuery[];
+    anchors: Record<string, string | null>;
     graphUpdates: number;
     fileUpdates: number;
   }> {
@@ -322,6 +324,7 @@ export class QueryRegenerationService {
       const elapsed = performance.now() - startTime;
       console.log(`[QueryRegeneration] Python completed in ${elapsed.toFixed(0)}ms`, {
         parametersCount: response.parameters.length,
+        anchorsCount: Object.keys(response.anchors || {}).length,
         downstreamOf: options?.downstreamOf
       });
       
@@ -329,6 +332,7 @@ export class QueryRegenerationService {
       
       return {
         parameters: response.parameters,
+        anchors: response.anchors || {},
         graphUpdates: 0,
         fileUpdates: 0
       };
@@ -340,11 +344,12 @@ export class QueryRegenerationService {
   }
   
   /**
-   * Apply regenerated queries to graph and cascade to files
+   * Apply regenerated queries and anchors to graph and cascade to files
    */
   async applyRegeneratedQueries(
     graph: Graph,
-    parameters: ParameterQuery[]
+    parameters: ParameterQuery[],
+    anchors?: Record<string, string | null>
   ): Promise<{
     graphUpdates: number;
     fileUpdates: number;
@@ -367,6 +372,35 @@ export class QueryRegenerationService {
       newQuery: string;
       location: string;
     }> = [];
+    
+    // Apply anchor_node_id to each edge (if not manually overridden)
+    if (anchors) {
+      for (const edge of graph.edges) {
+        const anchorNodeId = anchors[edge.uuid];
+        if (anchorNodeId !== undefined) {
+          // Skip if user manually set anchor_node_id
+          if (edge.p?.latency?.anchor_node_id_overridden) {
+            console.log(`[QueryRegeneration] Skipping overridden anchor: ${edge.uuid}`);
+            continue;
+          }
+          
+          // Apply anchor to edge.p.latency
+          if (!edge.p) {
+            edge.p = {};
+          }
+          if (!edge.p.latency) {
+            edge.p.latency = {};
+          }
+          
+          const oldAnchor = edge.p.latency.anchor_node_id;
+          if (oldAnchor !== anchorNodeId) {
+            edge.p.latency.anchor_node_id = anchorNodeId || undefined;
+            graphUpdates++;
+            console.log(`[QueryRegeneration] Applied anchor: ${edge.uuid} → ${anchorNodeId}`);
+          }
+        }
+      }
+    }
     
     for (const param of parameters) {
       // Get current query from graph

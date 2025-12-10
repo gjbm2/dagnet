@@ -238,6 +238,7 @@ export class GraphComputeClient {
 
   /**
    * Generate MSMDC queries for all parameters in graph
+   * Also computes anchor_node_id for each edge (furthest upstream START node)
    */
   async generateAllParameters(
     graph: any,
@@ -246,9 +247,9 @@ export class GraphComputeClient {
     preserveCondition?: boolean,
     edgeId?: string,  // Optional: filter to specific edge
     conditionalIndex?: number  // Optional: filter to specific conditional (requires edgeId)
-  ): Promise<{ parameters: ParameterQuery[] }> {
+  ): Promise<{ parameters: ParameterQuery[]; anchors: Record<string, string | null> }> {
     if (this.useMock) {
-      return { parameters: [] };
+      return { parameters: [], anchors: {} };
     }
 
     const response = await fetch(`${this.baseUrl}/api/generate-all-parameters`, {
