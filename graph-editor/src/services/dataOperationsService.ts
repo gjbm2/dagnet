@@ -1487,7 +1487,7 @@ class DataOperationsService {
                 console.warn('[DataOperationsService] Missing date gaps:', gapSummary);
               }
               
-              // Only show toast if NOT coming from "get from source" path
+              // Only show toast/warning if NOT coming from "get from source" path
               // (when suppressMissingDataToast=true, user already fetched from source - they know data may be incomplete)
               if (!suppressMissingDataToast) {
                 message += `. Try getting from source to fetch missing data.`;
@@ -1495,21 +1495,21 @@ class DataOperationsService {
                   icon: '⚠️',
                   duration: 5000,
                 });
+                
+                // Add session log child for visibility (only when showing warning)
+                sessionLogService.addChild(logOpId, 'warning', 'MISSING_DATA', 
+                  `${aggregation.days_included}/${aggregation.days_included + aggregation.days_missing} days available${locationInfo ? ` (${locationInfo})` : ''}`,
+                  gapSummary || undefined,
+                  { 
+                    daysIncluded: aggregation.days_included,
+                    daysMissing: aggregation.days_missing,
+                    gaps: gapSummary || undefined,
+                  }
+                );
+                
+                // Track the warning for return value
+                missingDataWarning = `${aggregation.days_missing} days missing`;
               }
-              
-              // Add session log child for visibility
-              sessionLogService.addChild(logOpId, 'warning', 'MISSING_DATA', 
-                `${aggregation.days_included}/${aggregation.days_included + aggregation.days_missing} days available${locationInfo ? ` (${locationInfo})` : ''}`,
-                gapSummary || undefined,
-                { 
-                  daysIncluded: aggregation.days_included,
-                  daysMissing: aggregation.days_missing,
-                  gaps: gapSummary || undefined,
-                }
-              );
-              
-              // Track the warning for return value
-              missingDataWarning = `${aggregation.days_missing} days missing`;
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
@@ -4978,6 +4978,7 @@ class DataOperationsService {
           window: requestedWindow, // Aggregate across the full requested window
           targetSlice: currentDSL || '', // Pass the DSL to ensure correct constraints
           suppressSignatureWarning: bustCache, // Don't warn about signature mismatch when busting cache
+          suppressMissingDataToast: bustCache, // Don't show missing data toast when user explicitly fetched from source
           conditionalIndex, // Pass through for conditional_p handling
         });
       }

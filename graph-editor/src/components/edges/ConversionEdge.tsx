@@ -55,7 +55,11 @@ import {
   LAG_ANCHOR_STIPPLE_SPACING,
   LAG_ANCHOR_STIPPLE_RADIUS,
   HIDDEN_CURRENT_STIPPLE_ANGLE,
-  HIDDEN_CURRENT_OPACITY
+  HIDDEN_CURRENT_OPACITY,
+  SANKEY_NODE_INSET,
+  SANKEY_COMPLETENESS_LINE_MIN_HEIGHT,
+  SANKEY_COMPLETENESS_LINE_OVERHANG,
+  SANKEY_COMPLETENESS_LINE_STROKE,
 } from '@/lib/nodeEdgeConstants';
 
 import type { EdgeLatencyDisplay, ScenarioVisibilityMode } from '../../types';
@@ -958,24 +962,11 @@ export default function ConversionEdge({
     }
 
     // F+E: two striped layers - outer (forecast) and inner (evidence)
-    // If no valid evidence → fall back to F mode (single stripe at p.forecast)
-    if (typeof pEvidence !== 'number' || pEvidence <= 0) {
-      // Use forecast width (same calculation as F-only mode)
-      const safeForecast = typeof pForecast === 'number' && pForecast > 0 ? pForecast : pMean;
-      const forecastRatio = Math.max(0, safeForecast / pMean);
-      const forecastWidth = Math.max(1, baseWidth * forecastRatio);
-      return {
-        mode: 'f' as const,
-        evidenceWidth: 0,
-        meanWidth: forecastWidth,
-        evidenceRatio: 0,
-        evidence: 0,
-        mean: safeForecast
-      };
-    }
-    
-    const evidenceRatio = Math.min(1, Math.max(0, pEvidence / pMean));
-    const evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
+    // Keep mode as 'f+e' even when evidence=0 (k=0), because completeness tracking
+    // is about latency, not conversion count. The inner ribbon will just be 0 width.
+    const safeEvidence = typeof pEvidence === 'number' && pEvidence >= 0 ? pEvidence : 0;
+    const evidenceRatio = pMean > 0 ? Math.min(1, Math.max(0, safeEvidence / pMean)) : 0;
+    const evidenceWidth = Math.max(0, baseWidth * evidenceRatio);  // Can be 0 when k=0
     const meanWidth = baseWidth;
 
     return {
@@ -983,13 +974,21 @@ export default function ConversionEdge({
       evidenceWidth,
       meanWidth,
       evidenceRatio,
-      evidence: pEvidence,
+      evidence: safeEvidence,
       mean: pMean
     };
   }, [data?.edgeLatencyDisplay, strokeWidth, tabOps, activeTabId, scenarioIdForEdge, id]);
   
   // Should we show LAG two-layer rendering?
-  const shouldShowLagLayers = lagLayerData !== null && !data?.useSankeyView && !shouldShowConfidenceIntervals;
+  // For normal edges: stroked paths with stripe patterns
+  // For Sankey: filled ribbons with nested layers
+  const shouldShowLagLayers = lagLayerData !== null && !shouldShowConfidenceIntervals;
+  const shouldShowSankeyFE = data?.useSankeyView && lagLayerData !== null;
+  
+  // DEBUG: Log Sankey F+E state
+  if (data?.useSankeyView) {
+    console.log(`[Sankey F+E] Edge ${id}: shouldShowSankeyFE=${shouldShowSankeyFE}, lagLayerData=`, lagLayerData, 'edgeLatencyDisplay=', data?.edgeLatencyDisplay);
+  }
   
   // Update stroke-width via DOM to enable CSS transitions.
   // SKIP for scenario overlays: they're never user-manipulable (no beads, no selection,
@@ -1875,6 +1874,126 @@ export default function ConversionEdge({
     };
   }, [edgePath, data?.useSankeyView, strokeWidth]);
 
+  // Generate F+E ribbon paths for Sankey mode
+  // Outer ribbon (forecast) = full width, Inner ribbon (evidence) = narrower
+  // Plus completeness marker line at x% along the path (only when evidence visible)
+  const sankeyFERibbons = React.useMemo(() => {
+    if (!data?.useSankeyView || !lagLayerData) return null;
+    
+    // Parse the bezier path to get control points
+    const nums = edgePath.match(/-?\d*\.?\d+(?:e[+-]?\d+)?/gi);
+    if (!nums || nums.length < 8) return null;
+    
+    const [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
+    
+    // Helper to compute ribbon path for a given width
+    const computeRibbon = (width: number) => {
+      const dx1 = c1x - sx;
+      const dy1 = c1y - sy;
+      const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
+      const perpX1 = -dy1 / len1;
+      const perpY1 = dx1 / len1;
+      
+      const dx2 = ex - c2x;
+      const dy2 = ey - c2y;
+      const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
+      const perpX2 = -dy2 / len2;
+      const perpY2 = dx2 / len2;
+      
+      const halfWidth = width / 2;
+      
+      const topSx = sx - perpX1 * halfWidth;
+      const topSy = sy - perpY1 * halfWidth;
+      const topC1x = c1x - perpX1 * halfWidth;
+      const topC1y = c1y - perpY1 * halfWidth;
+      const topC2x = c2x - perpX2 * halfWidth;
+      const topC2y = c2y - perpY2 * halfWidth;
+      const topEx = ex - perpX2 * halfWidth;
+      const topEy = ey - perpY2 * halfWidth;
+      
+      const botEx = ex + perpX2 * halfWidth;
+      const botEy = ey + perpY2 * halfWidth;
+      const botC2x = c2x + perpX2 * halfWidth;
+      const botC2y = c2y + perpY2 * halfWidth;
+      const botC1x = c1x + perpX1 * halfWidth;
+      const botC1y = c1y + perpY1 * halfWidth;
+      const botSx = sx + perpX1 * halfWidth;
+      const botSy = sy + perpY1 * halfWidth;
+      
+      return `M ${topSx},${topSy} C ${topC1x},${topC1y} ${topC2x},${topC2y} ${topEx},${topEy} L ${botEx},${botEy} C ${botC2x},${botC2y} ${botC1x},${botC1y} ${botSx},${botSy} Z`;
+    };
+    
+    // Compute point along bezier at t (0-1)
+    const bezierPoint = (t: number) => {
+      const mt = 1 - t;
+      const mt2 = mt * mt;
+      const mt3 = mt2 * mt;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      return {
+        x: mt3 * sx + 3 * mt2 * t * c1x + 3 * mt * t2 * c2x + t3 * ex,
+        y: mt3 * sy + 3 * mt2 * t * c1y + 3 * mt * t2 * c2y + t3 * ey
+      };
+    };
+    
+    // Get completeness from latency display data (completeness_pct is 0-100)
+    const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
+    
+    // Calculate path length to determine clipped portions
+    // Approximate: total bezier length and inset at each end (where ribbon is hidden by nodes)
+    const pathDx = ex - sx;
+    const pathDy = ey - sy;
+    const approxPathLength = Math.sqrt(pathDx * pathDx + pathDy * pathDy);
+    
+    // Inset at each end - ribbons are clipped by nodes (constant from nodeEdgeConstants)
+    const visibleLength = Math.max(approxPathLength - 2 * SANKEY_NODE_INSET, approxPathLength * 0.5);
+    
+    // Map completeness to visible portion: 0% = just after source inset, 100% = just before target inset
+    const tStart = SANKEY_NODE_INSET / approxPathLength;
+    const tEnd = 1 - (SANKEY_NODE_INSET / approxPathLength);
+    const tVisible = tStart + completeness * (tEnd - tStart);
+    const t = Math.max(tStart, Math.min(tEnd, tVisible));
+    
+    // DEBUG: Log completeness calculation
+    console.log(`[Sankey F+E] Edge ${id}: completeness_pct=${data?.edgeLatencyDisplay?.completeness_pct}, t=${t.toFixed(3)} (visible range: ${tStart.toFixed(3)}-${tEnd.toFixed(3)})`);
+    
+    // Compute completeness marker line (VERTICAL dashed line at t% along VISIBLE ribbon)
+    // Always compute for F+E and E modes - completeness is about latency, not k
+    let completenessLine: { x1: number; y1: number; x2: number; y2: number } | null = null;
+    if (lagLayerData.mode !== 'f') {  // Show whenever evidence is being tracked
+      const point = bezierPoint(t);
+      // Vertical line with overhang beyond ribbon edges for visibility
+      // halfHeight = ribbon half-width + overhang, but at least min height
+      const ribbonHalfWidth = lagLayerData.meanWidth / 2;
+      const halfHeight = Math.max(
+        ribbonHalfWidth + SANKEY_COMPLETENESS_LINE_OVERHANG,
+        SANKEY_COMPLETENESS_LINE_MIN_HEIGHT / 2
+      );
+      
+      completenessLine = {
+        x1: point.x,
+        y1: point.y - halfHeight,
+        x2: point.x,
+        y2: point.y + halfHeight
+      };
+    }
+    
+    // F mode: striped ribbon at forecast width (meanWidth)
+    // F+E mode: outer striped ribbon at mean width + inner solid ribbon at evidence width
+    // E mode: single solid ribbon at evidence width
+    const outerWidth = lagLayerData.mode === 'e' ? lagLayerData.evidenceWidth : lagLayerData.meanWidth;
+    
+    return {
+      outerRibbon: computeRibbon(outerWidth),
+      // Inner ribbon only when there's actual evidence (evidenceWidth > 0)
+      innerRibbon: lagLayerData.mode === 'f+e' && lagLayerData.evidenceWidth > 0 
+        ? computeRibbon(lagLayerData.evidenceWidth) 
+        : null,
+      completenessLine,
+      evidenceRatio: lagLayerData.evidenceRatio,
+      mode: lagLayerData.mode
+    };
+  }, [edgePath, data?.useSankeyView, lagLayerData, data?.edgeLatencyDisplay?.completeness_pct]);
 
   // Check if this is a hidden current layer (semi-transparent current when not visible)
   const isHiddenCurrent = !data?.scenarioOverlay && (data?.strokeOpacity ?? 1) < 0.1;
@@ -2056,30 +2175,95 @@ export default function ConversionEdge({
       
       {/* Edge rendering */}
           {data?.useSankeyView && ribbonPath ? (
-            // Sankey mode: render as filled ribbon
+            // Sankey mode: render as filled ribbon (with F+E layers if enabled)
             <>
-              <path
-                id={id}
-                style={{
-                  fill: isHiddenCurrent 
-                    ? `url(#lag-anchor-stipple-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
-                  fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
-                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
-                  stroke: 'none',
-                  transition: 'opacity 0.3s ease-in-out',
-                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
-                }}
-                className="react-flow__edge-path"
-                d={ribbonPath.ribbon}
-                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
-                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
-                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
-                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
-                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
-                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
-                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
-              />
+              {shouldShowSankeyFE && sankeyFERibbons ? (
+                // Sankey latency mode: F/F+E use striped, E uses solid
+                <>
+                  {/* Outer ribbon - striped for F and F+E modes, solid for E mode */}
+                  <path
+                    id={`${id}-sankey-outer`}
+                    style={{
+                      fill: sankeyFERibbons.mode === 'e' 
+                        ? ((effectiveSelected || data?.isHighlighted) 
+                            ? getEdgeColour() 
+                            : (data?.scenarioColour || getEdgeColour()))
+                        : `url(#lag-stripe-outer-${id})`,
+                      fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
+                      mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                      stroke: 'none',
+                      transition: 'opacity 0.3s ease-in-out',
+                      pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                    }}
+                    className="react-flow__edge-path"
+                    d={sankeyFERibbons.outerRibbon}
+                    onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                    onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                    onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                    onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                    onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                    onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                    onDrop={data?.scenarioOverlay ? undefined : handleDrop}
+                  />
+                  {/* Inner ribbon (evidence) - solid, only for F+E mode */}
+                  {sankeyFERibbons.innerRibbon && (
+                    <path
+                      id={`${id}-sankey-inner`}
+                      style={{
+                        fill: (effectiveSelected || data?.isHighlighted) 
+                          ? getEdgeColour() 
+                          : (data?.scenarioColour || getEdgeColour()),
+                        fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
+                        mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                        stroke: 'none',
+                        transition: 'opacity 0.3s ease-in-out',
+                        pointerEvents: 'none', // Inner ribbon doesn't capture events
+                      }}
+                      className="react-flow__edge-path"
+                      d={sankeyFERibbons.innerRibbon}
+                    />
+                  )}
+                  {/* Completeness marker - dashed vertical line at evidence boundary */}
+                  {/* Shown whenever evidence is visible (F+E or E mode), not F-only */}
+                  {sankeyFERibbons.mode !== 'f' && sankeyFERibbons.completenessLine && (
+                    <line
+                      x1={sankeyFERibbons.completenessLine.x1}
+                      y1={sankeyFERibbons.completenessLine.y1}
+                      x2={sankeyFERibbons.completenessLine.x2}
+                      y2={sankeyFERibbons.completenessLine.y2}
+                      stroke="#333"
+                      strokeWidth={SANKEY_COMPLETENESS_LINE_STROKE}
+                      strokeDasharray="4,4"
+                      strokeOpacity={0.8}
+                      pointerEvents="none"
+                    />
+                  )}
+                </>
+              ) : (
+                // Plain Sankey mode: single solid ribbon
+                <path
+                  id={id}
+                  style={{
+                    fill: isHiddenCurrent 
+                      ? `url(#lag-anchor-stipple-${id})` 
+                      : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
+                    fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
+                    mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                    stroke: 'none',
+                    transition: 'opacity 0.3s ease-in-out',
+                    pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                  }}
+                  className="react-flow__edge-path"
+                  d={ribbonPath.ribbon}
+                  onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                  onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                  onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                  onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                  onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                  onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                  onDrop={data?.scenarioOverlay ? undefined : handleDrop}
+                />
+              )}
               {/* Hidden path for beads - follows the top edge of the ribbon */}
               <path
                 ref={pathRef}
@@ -2179,8 +2363,8 @@ export default function ConversionEdge({
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
             </>
-          ) : shouldShowLagLayers && lagLayerData ? (
-            // LAG rendering modes:
+          ) : shouldShowLagLayers && lagLayerData && !data?.useSankeyView ? (
+            // LAG rendering modes (stroked paths - not used for Sankey which has ribbon-based F+E):
             // - F+E: Two striped bands with offset stripes that interleave (appears solid where overlap)
             // - F only: Single striped band for forecast
             // - E only: Solid edge with width scaled to p.evidence

@@ -241,5 +241,88 @@ describe('Cohort Query Payload Structure', () => {
   });
 });
 
+describe('Cohort Conversion Window (maturity_days / path_t95)', () => {
+  
+  describe('Conversion Window Fallback Chain', () => {
+    // The conversion window (cs parameter in Amplitude) determines how long
+    // to wait for conversions after the anchor event. It must account for
+    // CUMULATIVE latency along the path from anchor to this edge.
+    //
+    // Fallback chain (buildDslFromEdge.ts):
+    // 1. path_t95 - Cumulative t95 from anchor (from previous fetch)
+    // 2. On-the-fly computation using computePathT95 (if graph available)
+    // 3. edge-local t95 (if only this edge has data)
+    // 4. edge-local maturity_days (user-configured)
+    // 5. Default 30 days
+    
+    it('should document the 10-day bug scenario', () => {
+      // BUG: For A→X→Y path where each edge has maturity_days=10:
+      //   - WRONG: Conversion window = 10 (just edge-local maturity)
+      //   - RIGHT: Conversion window = 20 (10 + 10, cumulative from anchor)
+      //
+      // The Amplitude cs parameter (seconds) = maturity_days * 86400
+      //   - WRONG: cs = 864000 (10 days) → misses conversions after day 10
+      //   - RIGHT: cs = 1728000 (20 days) → captures conversions up to day 20
+      //
+      // Fix: computePathT95 now falls back to maturity_days when t95 is undefined:
+      //   edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.maturity_days ?? 0
+      
+      expect(true).toBe(true);
+    });
+    
+    it('should document path_t95 on-the-fly computation', () => {
+      // When edge doesn't have path_t95 stored (first fetch), buildDslFromEdge:
+      // 1. Builds GraphForPath representation from graph
+      // 2. Calls getActiveEdges to find edges with non-zero probability
+      // 3. Calls computePathT95(graph, activeEdges, anchorNodeId)
+      // 4. Looks up this edge's path_t95 in the returned map
+      //
+      // computePathT95 uses t95 → maturity_days → 0 fallback per edge,
+      // so even on first fetch it gives a reasonable approximation.
+      
+      expect(true).toBe(true);
+    });
+    
+    it('should document the data sufficiency progression', () => {
+      // First fetch (no data):
+      //   - path_t95: undefined
+      //   - t95: undefined
+      //   - maturity_days: 10 (user-configured)
+      //   - Computed path_t95: sum of maturity_days along path (e.g., 20 for 2 edges)
+      //   - Conversion window: 20 days
+      //
+      // After first fetch (has data):
+      //   - t95: 8 (fitted from observed lag distribution)
+      //   - path_t95 computed from t95 values: 8 + 6 = 14
+      //   - Conversion window: 14 days (more accurate)
+      //
+      // This progression ensures:
+      // 1. First fetch is conservative (uses user's maturity_days)
+      // 2. Subsequent fetches are accurate (uses observed t95)
+      
+      expect(true).toBe(true);
+    });
+  });
+  
+  describe('Amplitude cs Parameter', () => {
+    it('should document how maturity_days becomes cs', () => {
+      // In connections.yaml, the Amplitude adapter:
+      //   const csSeconds = (cohort.maturity_days || 30) * 86400;
+      //   url += `&cs=${csSeconds}`;
+      //
+      // cs (conversion segment) = max time in seconds for a user to convert
+      // after the first step of the funnel.
+      //
+      // For 3-step funnel [Anchor, From, To]:
+      //   - cs applies from Anchor step
+      //   - Must account for TOTAL time: A→X latency + X→Y latency
+      //
+      // This is why we use path_t95 (cumulative) not edge-local maturity_days.
+      
+      expect(true).toBe(true);
+    });
+  });
+});
+
 
 

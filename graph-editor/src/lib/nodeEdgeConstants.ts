@@ -249,3 +249,30 @@ export const HIDDEN_CURRENT_STIPPLE_ANGLE = -30;
 /** Opacity for hidden current layer stipple dots (0-1) */
 export const HIDDEN_CURRENT_OPACITY = 0.2;
 
+// =============================================================================
+// Sankey F+E (Forecast + Evidence) Constants
+// =============================================================================
+
+/** 
+ * Pixels hidden inside each node where Sankey ribbons are clipped.
+ * Controls where 0% and 100% completeness lines appear.
+ * Increase if lines appear inside nodes, decrease if too far from edges.
+ */
+export const SANKEY_NODE_INSET = 12.5;
+
+/** 
+ * Minimum height of completeness marker line (pixels).
+ * Should be larger than BEAD_HEIGHT (~12.6) so line is visible above beads.
+ */
+export const SANKEY_COMPLETENESS_LINE_MIN_HEIGHT = 24;
+
+/**
+ * Overhang of completeness line above/below the ribbon (pixels).
+ * Line extends this far beyond the ribbon edge at top and bottom for visibility.
+ */
+export const SANKEY_COMPLETENESS_LINE_OVERHANG = 7;
+
+/**
+ * Stroke width of completeness marker line (pixels).
+ */
+export const SANKEY_COMPLETENESS_LINE_STROKE = 1.5;
