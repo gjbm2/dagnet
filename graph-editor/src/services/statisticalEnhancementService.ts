@@ -23,7 +23,7 @@ import {
   LATENCY_EPSILON,
   LATENCY_T95_PERCENTILE,
 } from '../constants/latency';
-import { RECENCY_HALF_LIFE_DAYS } from '../constants/statisticalConstants';
+import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA } from '../constants/statisticalConstants';
 
 export interface EnhancedAggregation {
   method: string;
@@ -853,14 +853,35 @@ export function calculateCompleteness(
   let totalN = 0;
   let weightedSum = 0;
 
+  const cohortDetails: Array<{ date: string; age: number; n: number; F_age: number }> = [];
+
   for (const cohort of cohorts) {
     if (cohort.n === 0) continue;
     const F_age = logNormalCDF(cohort.age, mu, sigma);
     totalN += cohort.n;
     weightedSum += cohort.n * F_age;
+    cohortDetails.push({ date: cohort.date, age: cohort.age, n: cohort.n, F_age });
   }
 
-  return totalN > 0 ? weightedSum / totalN : 0;
+  const completeness = totalN > 0 ? weightedSum / totalN : 0;
+  
+  console.log('[LAG_DEBUG] COMPLETENESS calculation:', {
+    mu: mu.toFixed(3),
+    sigma: sigma.toFixed(3),
+    totalN,
+    completeness: completeness.toFixed(3),
+    cohortCount: cohorts.length,
+    ageRange: cohorts.length > 0 
+      ? `${Math.min(...cohorts.map(c => c.age))}-${Math.max(...cohorts.map(c => c.age))} days`
+      : 'no cohorts',
+    sampleCohorts: cohortDetails.slice(0, 5).map(c => ({
+      date: c.date,
+      age: c.age,
+      F_age: c.F_age.toFixed(3),
+    })),
+  });
+
+  return completeness;
 }
 
 // =============================================================================
@@ -1002,8 +1023,19 @@ export interface GraphEdgeForPath {
       maturity_days?: number;
       t95?: number;
       path_t95?: number;
+      median_lag_days?: number;
+      mean_lag_days?: number;
+      completeness?: number;
     };
     mean?: number;
+    evidence?: {
+      mean?: number;
+      n?: number;
+      k?: number;
+    };
+    forecast?: {
+      mean?: number;
+    };
   };
   conditional_p?: Array<{
     p?: {
@@ -1020,6 +1052,7 @@ export interface GraphEdgeForPath {
  */
 export interface GraphNodeForPath {
   id: string;
+  uuid?: string;
   type?: string;
   entry?: {
     is_start?: boolean;
@@ -1059,17 +1092,28 @@ export function getActiveEdges(
   epsilon: number = 1e-9
 ): Set<string> {
   const activeEdges = new Set<string>();
+  const debugInfo: Array<{ edgeId: string; pMean: number; active: boolean }> = [];
 
   for (const edge of graph.edges) {
     // Get effective probability
     // In a full implementation, this would use computeEffectiveEdgeProbability
     // from lib/whatIf.ts with the whatIfDSL. For now, use p.mean.
     const effectiveP = edge.p?.mean ?? 0;
+    const edgeId = getEdgeId(edge);
+    const isActive = effectiveP > epsilon;
 
-    if (effectiveP > epsilon) {
-      activeEdges.add(getEdgeId(edge));
+    if (isActive) {
+      activeEdges.add(edgeId);
     }
+    
+    debugInfo.push({ edgeId, pMean: effectiveP, active: isActive });
   }
+
+  console.log('[LAG_TOPO_001] getActiveEdges:', {
+    totalEdges: graph.edges.length,
+    activeCount: activeEdges.size,
+    edges: debugInfo,
+  });
 
   return activeEdges;
 }
@@ -1083,15 +1127,40 @@ function buildAdjacencyList(
   activeEdges: Set<string>
 ): Map<string, GraphEdgeForPath[]> {
   const adjacency = new Map<string, GraphEdgeForPath[]>();
+  const addedEdges: string[] = [];
+  const skippedEdges: string[] = [];
+
+  // Build a map from node UUID to node ID for normalization
+  const uuidToNodeId = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (node.uuid && node.uuid !== node.id) {
+      uuidToNodeId.set(node.uuid, node.id);
+    }
+  }
 
   for (const edge of graph.edges) {
     const edgeId = getEdgeId(edge);
-    if (!activeEdges.has(edgeId)) continue;
+    if (!activeEdges.has(edgeId)) {
+      skippedEdges.push(edgeId);
+      continue;
+    }
 
-    const outgoing = adjacency.get(edge.from) || [];
+    // Normalize edge.from: if it's a UUID, map it to node.id
+    const fromNodeId = uuidToNodeId.get(edge.from) || edge.from;
+    
+    const outgoing = adjacency.get(fromNodeId) || [];
     outgoing.push(edge);
-    adjacency.set(edge.from, outgoing);
+    adjacency.set(fromNodeId, outgoing);
+    addedEdges.push(`${fromNodeId}->[${edgeId}]->${edge.to}`);
   }
+
+  console.log('[LAG_TOPO_002] buildAdjacencyList:', {
+    activeEdgesInput: activeEdges.size,
+    addedToAdjacency: addedEdges.length,
+    skipped: skippedEdges.length,
+    uuidMappings: uuidToNodeId.size,
+    adjacencyKeys: Array.from(adjacency.keys()).join(', '),
+  });
 
   return adjacency;
 }
@@ -1105,13 +1174,24 @@ function buildReverseAdjacency(
 ): Map<string, GraphEdgeForPath[]> {
   const reverseAdj = new Map<string, GraphEdgeForPath[]>();
 
+  // Build a map from node UUID to node ID for normalization
+  const uuidToNodeId = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (node.uuid && node.uuid !== node.id) {
+      uuidToNodeId.set(node.uuid, node.id);
+    }
+  }
+
   for (const edge of graph.edges) {
     const edgeId = getEdgeId(edge);
     if (!activeEdges.has(edgeId)) continue;
 
-    const incoming = reverseAdj.get(edge.to) || [];
+    // Normalize edge.to: if it's a UUID, map it to node.id
+    const toNodeId = uuidToNodeId.get(edge.to) || edge.to;
+    
+    const incoming = reverseAdj.get(toNodeId) || [];
     incoming.push(edge);
-    reverseAdj.set(edge.to, incoming);
+    reverseAdj.set(toNodeId, incoming);
   }
 
   return reverseAdj;
@@ -1254,6 +1334,444 @@ export function applyPathT95ToGraph(
       edge.p.latency.path_t95 = pathT95;
     }
   }
+}
+
+// =============================================================================
+// Graph-Level Latency Enhancement (Topo-Ordered)
+// =============================================================================
+
+/**
+ * Parameter value structure (subset of fields needed for LAG).
+ * Matches the structure from paramRegistryService.ParameterValue.
+ */
+export interface ParameterValueForLAG {
+  mean: number;  // Required by ParameterValue, but not used in LAG
+  n?: number;
+  k?: number;
+  dates?: string[];
+  n_daily?: number[];
+  k_daily?: number[];
+  median_lag_days?: number[];
+  mean_lag_days?: number[];
+  cohort_from?: string;
+  cohort_to?: string;
+  data_source?: { retrieved_at?: string };
+  // Optional fields carried through from full ParameterValue for scoping
+  sliceDSL?: string;
+  window_from?: string;
+  window_to?: string;
+  forecast?: number;
+}
+
+/**
+ * Helpers passed to enhanceGraphLatencies to avoid circular imports.
+ * These come from windowAggregationService.
+ */
+export interface LAGHelpers {
+  /** Convert ParameterValue[] to CohortData[] */
+  aggregateCohortData: (values: ParameterValueForLAG[], queryDate: Date) => CohortData[];
+  /** Compute aggregate median/mean lag from cohorts */
+  aggregateLatencyStats: (cohorts: CohortData[]) => { median_lag_days: number; mean_lag_days: number } | undefined;
+}
+
+/**
+ * Computed values for a single edge from the LAG pass.
+ * These should be applied to the graph via UpdateManager.
+ */
+export interface EdgeLAGValues {
+  /** Edge UUID (for lookup) */
+  edgeUuid: string;
+  /** Latency values to write to edge.p.latency */
+  latency: {
+    median_lag_days?: number;
+    mean_lag_days?: number;
+    t95: number;
+    completeness: number;
+    path_t95: number;
+  };
+  /** Blended p.mean (if computed) */
+  blendedMean?: number;
+  /** Forecast data to preserve on edge.p.forecast */
+  forecast?: {
+    mean?: number;
+  };
+  /** Evidence data to preserve on edge.p.evidence */
+  evidence?: {
+    mean?: number;
+    n?: number;
+    k?: number;
+  };
+}
+
+/**
+ * Result of graph-level latency enhancement.
+ */
+export interface GraphLatencyEnhancementResult {
+  /** Number of edges processed */
+  edgesProcessed: number;
+  /** Number of edges that had LAG stats computed */
+  edgesWithLAG: number;
+  /** Per-edge computed values to apply to graph */
+  edgeValues: EdgeLAGValues[];
+}
+
+/**
+ * Enhance all latency-enabled edges in a graph with LAG statistics.
+ * 
+ * This is the primary entry point for latency computation. It runs a single
+ * topological pass over the graph, computing for each edge:
+ *   - Per-edge lag fit (median, mean, t95)
+ *   - Path-adjusted completeness (using upstream path_t95)
+ *   - Cumulative path_t95 for downstream edges
+ * 
+ * The pass ensures that upstream edges are processed before downstream ones,
+ * so that path_t95 is available when computing downstream completeness.
+ * 
+ * @param graph - The graph to enhance (mutated in place)
+ * @param paramLookup - Map from edge ID to its parameter values
+ * @param queryDate - The "now" for computing cohort ages
+ * @param helpers - Functions from windowAggregationService to avoid circular imports
+ * @returns Summary of what was processed
+ */
+export function enhanceGraphLatencies(
+  graph: GraphForPath,
+  paramLookup: Map<string, ParameterValueForLAG[]>,
+  queryDate: Date,
+  helpers: LAGHelpers
+): GraphLatencyEnhancementResult {
+  const result: GraphLatencyEnhancementResult = {
+    edgesProcessed: 0,
+    edgesWithLAG: 0,
+    edgeValues: [],
+  };
+
+  // Build a map from node UUID to node ID for normalization
+  // This handles graphs where edge.from/to are UUIDs instead of node IDs
+  const uuidToNodeId = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (node.uuid && node.uuid !== node.id) {
+      uuidToNodeId.set(node.uuid, node.id);
+    }
+  }
+  
+  // Helper to normalize a node reference (UUID -> ID)
+  const normalizeNodeRef = (ref: string): string => uuidToNodeId.get(ref) || ref;
+
+  // Debug: Log input state
+  console.log('[LAG_TOPO_003] enhanceGraphLatencies input:', {
+    nodeCount: graph.nodes?.length,
+    edgeCount: graph.edges?.length,
+    paramLookupSize: paramLookup.size,
+    paramLookupKeys: Array.from(paramLookup.keys()),
+    graphEdgeIds: graph.edges?.map(e => e.uuid || e.id || `${e.from}->${e.to}`),
+    uuidMappings: uuidToNodeId.size,
+  });
+
+  // Get active edges (those with latency config)
+  const activeEdges = getActiveEdges(graph);
+  if (activeEdges.size === 0) {
+    console.log('[enhanceGraphLatencies] No active latency edges');
+    return result;
+  }
+
+  console.log('[LAG_TOPO_004] activeEdges set:', {
+    activeCount: activeEdges.size,
+    activeIds: Array.from(activeEdges),
+  });
+
+  // Build adjacency structures for topo traversal
+  const adjacency = buildAdjacencyList(graph, activeEdges);
+  const reverseAdj = buildReverseAdjacency(graph, activeEdges);
+
+  // Find start nodes
+  const startNodes = findStartNodes(graph, activeEdges);
+  
+  console.log('[LAG_TOPO_005] topoSetup:', {
+    startNodes,
+    adjacencySize: adjacency.size,
+    adjacencyKeys: Array.from(adjacency.keys()),
+  });
+
+  // DP state: max path_t95 to reach each node
+  const nodePathT95 = new Map<string, number>();
+  for (const startId of startNodes) {
+    nodePathT95.set(startId, 0);
+  }
+
+  // Compute in-degree for Kahn's algorithm
+  const inDegree = new Map<string, number>();
+  for (const node of graph.nodes) {
+    const incoming = reverseAdj.get(node.id) || [];
+    inDegree.set(node.id, incoming.length);
+  }
+
+  // Queue starts with nodes that have no incoming edges
+  const queue: string[] = [];
+  for (const [nodeId, degree] of inDegree) {
+    if (degree === 0 || startNodes.includes(nodeId)) {
+      queue.push(nodeId);
+    }
+  }
+
+  console.log('[LAG_TOPO_006] initialQueue:', {
+    queueLength: queue.length,
+    queueNodes: queue,
+  });
+
+  // CRITICAL DEBUG: Summary of all keys for comparison
+  console.log('[LAG_TOPO_SUMMARY] KEY COMPARISON:', {
+    paramLookupKeys: Array.from(paramLookup.keys()),
+    activeEdgeIds: Array.from(activeEdges),
+    adjacencyFromNodes: Array.from(adjacency.keys()),
+    startNodes,
+    queueNodes: [...queue],
+    MATCH_CHECK: {
+      paramKeysInActive: Array.from(paramLookup.keys()).filter(k => activeEdges.has(k)),
+      paramKeysNotInActive: Array.from(paramLookup.keys()).filter(k => !activeEdges.has(k)),
+    },
+  });
+
+  // Process nodes in topological order
+  while (queue.length > 0) {
+    const nodeId = queue.shift()!;
+    const pathT95ToNode = nodePathT95.get(nodeId) ?? 0;
+
+    // Process all outgoing edges from this node
+    const outgoing = adjacency.get(nodeId) || [];
+    
+    console.log('[LAG_TOPO_007] processingNode:', {
+      nodeId,
+      adjacencyHasKey: adjacency.has(nodeId),
+      outgoingCount: outgoing.length,
+    });
+    
+    for (const edge of outgoing) {
+      const edgeId = getEdgeId(edge);
+      result.edgesProcessed++;
+
+      // Get maturity config
+      const maturityDays = edge.p?.latency?.maturity_days;
+      // Normalize edge.to for queue/inDegree operations
+      const toNodeId = normalizeNodeRef(edge.to);
+      
+      if (!maturityDays || maturityDays <= 0) {
+        console.log('[LAG_TOPO_SKIP] noMaturity:', { edgeId, maturityDays });
+        // No latency config, skip LAG computation but update topo state
+        const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
+        inDegree.set(toNodeId, newInDegree);
+        if (newInDegree === 0 && !queue.includes(toNodeId)) {
+          queue.push(toNodeId);
+        }
+        continue;
+      }
+
+      // Get parameter values for this edge
+      const paramValues = paramLookup.get(edgeId);
+      if (!paramValues || paramValues.length === 0) {
+        console.log('[LAG_TOPO_SKIP] noParamValues:', { edgeId, hasInLookup: paramLookup.has(edgeId) });
+        // No data for this edge, skip but update topo state
+        const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
+        inDegree.set(toNodeId, newInDegree);
+        if (newInDegree === 0 && !queue.includes(toNodeId)) {
+          queue.push(toNodeId);
+        }
+        continue;
+      }
+
+      // Build cohorts from parameter values
+      const cohorts = helpers.aggregateCohortData(paramValues, queryDate);
+      if (cohorts.length === 0) {
+        console.log('[LAG_TOPO_SKIP] noCohorts:', { edgeId, paramValuesCount: paramValues.length });
+        const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
+        inDegree.set(toNodeId, newInDegree);
+        if (newInDegree === 0 && !queue.includes(toNodeId)) {
+          queue.push(toNodeId);
+        }
+        continue;
+      }
+      
+      console.log('[LAG_TOPO_PROCESS] edge:', { edgeId, maturityDays, cohortsCount: cohorts.length });
+
+      // Get aggregate lag stats
+      const lagStats = helpers.aggregateLatencyStats(cohorts);
+      const aggregateMedianLag = lagStats?.median_lag_days ?? maturityDays / 2;
+      const aggregateMeanLag = lagStats?.mean_lag_days;
+
+      // Compute edge LAG stats with path-adjusted ages
+      const latencyStats = computeEdgeLatencyStats(
+        cohorts,
+        aggregateMedianLag,
+        aggregateMeanLag,
+        maturityDays,
+        pathT95ToNode  // This adjusts cohort ages for downstream edges
+      );
+
+      // Compute path_t95 for this edge
+      const edgePathT95 = pathT95ToNode + latencyStats.t95;
+      
+      console.log('[LAG_TOPO_COMPUTED] stats:', {
+        edgeId,
+        t95: latencyStats.t95,
+        completeness: latencyStats.completeness,
+        pathT95: edgePathT95,
+      });
+      
+      // Build EdgeLAGValues (don't write to graph directly)
+      const edgeUuid = edge.uuid || edgeId;
+      const edgeLAGValues: EdgeLAGValues = {
+        edgeUuid,
+        latency: {
+          median_lag_days: aggregateMedianLag,
+          mean_lag_days: aggregateMeanLag,
+          t95: latencyStats.t95,
+          completeness: latencyStats.completeness,
+          path_t95: edgePathT95,
+        },
+      };
+      
+      // Capture forecast and evidence from edge to pass through to UpdateManager
+      // These MUST be preserved on the output graph for rendering
+      if (edge.p?.forecast?.mean !== undefined) {
+        edgeLAGValues.forecast = { mean: edge.p.forecast.mean };
+      }
+      if (edge.p?.evidence) {
+        edgeLAGValues.evidence = {
+          mean: edge.p.evidence.mean,
+          n: edge.p.evidence.n,
+          k: edge.p.evidence.k,
+        };
+      }
+
+      // ═══════════════════════════════════════════════════════════════════
+      // FORECAST BLEND: Compute blended p.mean from evidence + forecast
+      // 
+      // Formula (forecast-fix.md):
+      //   w_evidence = (completeness * n) / (λ * n_baseline + completeness * n)
+      //   p.mean = w_evidence * evidence.mean + (1 - w_evidence) * forecast.mean
+      // 
+      // IMPORTANT (design.md §3.2.1):
+      //   - forecast comes from WINDOW slices (mature baseline p_∞)
+      //   - evidence comes from COHORT slices (observed rates)
+      // 
+      const completeness = latencyStats.completeness;
+      const evidenceMean = edge.p?.evidence?.mean;
+
+      // Forecast MUST come from window() data (design.md §3.2.1).
+      // We never derive forecast from cohort data here – LAG only provides
+      // completeness and t95/path_t95 for blending.
+      const forecastMean = edge.p?.forecast?.mean;
+
+      const nQuery = edge.p?.evidence?.n ?? cohorts.reduce((sum, c) => sum + c.n, 0);
+
+      // n_baseline should reflect the SAMPLE SIZE behind the WINDOW() forecast,
+      // not just the subset of cohorts that are currently "mature" under this query.
+      //
+      // Design: forecast comes from window() slices; those slices also carry n/k
+      // for the mature baseline that produced p.forecast.mean.
+      //
+      // Implementation:
+      //   1. Prefer n from window() ParameterValue entries for this edge:
+      //        - sliceDSL includes 'window(' and NOT 'cohort('
+      //        - has a scalar forecast value and n > 0
+      //   2. If no such window slice exists (legacy files), fall back to the
+      //      original behaviour: sum of n over "mature" cohorts in this query.
+      //
+      let nBaseline = 0;
+
+      // Prefer true window() baseline sample size backing the forecast
+      const windowCandidates = (paramValues as ParameterValueForLAG[]).filter(v => {
+        const dsl = v.sliceDSL;
+        if (!dsl) return false;
+        const hasWindow = dsl.includes('window(');
+        const hasCohort = dsl.includes('cohort(');
+        if (!hasWindow || hasCohort) return false;
+        return typeof v.forecast === 'number' && typeof v.n === 'number' && v.n > 0;
+      });
+
+      if (windowCandidates.length > 0) {
+        const bestWindow = [...windowCandidates].sort((a, b) => {
+          const aDate = a.data_source?.retrieved_at || a.window_to || '';
+          const bDate = b.data_source?.retrieved_at || b.window_to || '';
+          return bDate.localeCompare(aDate);
+        })[0];
+        nBaseline = typeof bestWindow.n === 'number' ? bestWindow.n : 0;
+      }
+
+      // Fallback: if no window baseline is available, approximate from mature cohorts
+      if (nBaseline === 0) {
+        const matureCohorts = cohorts.filter(c => c.age >= maturityDays);
+        nBaseline = matureCohorts.reduce((sum, c) => sum + c.n, 0);
+      }
+      
+      // Debug: Log blend inputs
+      console.log('[enhanceGraphLatencies] Blend check:', {
+        edgeId,
+        completeness,
+        evidenceMean,
+        forecastMean,
+        nQuery,
+        nBaseline,
+      });
+      
+      if (
+        completeness !== undefined &&
+        evidenceMean !== undefined &&
+        forecastMean !== undefined &&
+        Number.isFinite(forecastMean) &&
+        nQuery > 0 &&
+        nBaseline > 0
+      ) {
+        const nEff = completeness * nQuery;
+        const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
+        const wEvidence = nEff / (m0 + nEff);
+        const blendedMean = wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
+        
+        // Add blended mean to the edge values
+        edgeLAGValues.blendedMean = blendedMean;
+        
+        console.log('[enhanceGraphLatencies] Computed forecast blend:', {
+          edgeId,
+          edgeUuid,
+          completeness: completeness.toFixed(3),
+          nQuery,
+          nBaseline,
+          wEvidence: wEvidence.toFixed(3),
+          evidenceMean: evidenceMean.toFixed(3),
+          forecastMean: forecastMean.toFixed(3),
+          blendedMean: blendedMean.toFixed(3),
+        });
+      }
+
+      // Update node path_t95 for target node (needed for downstream edges)
+      const currentTargetT95 = nodePathT95.get(toNodeId) ?? 0;
+      nodePathT95.set(toNodeId, Math.max(currentTargetT95, edgePathT95));
+
+      // Add to results
+      console.log('[LAG_TOPO_PUSHING] edgeValues:', {
+        edgeUuid: edgeLAGValues.edgeUuid,
+        t95: edgeLAGValues.latency.t95,
+        completeness: edgeLAGValues.latency.completeness,
+        blendedMean: edgeLAGValues.blendedMean,
+      });
+      result.edgeValues.push(edgeLAGValues);
+      result.edgesWithLAG++;
+
+      // Update in-degree and queue
+      const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
+      inDegree.set(toNodeId, newInDegree);
+      if (newInDegree === 0 && !queue.includes(toNodeId)) {
+        queue.push(toNodeId);
+      }
+    }
+  }
+
+  console.log('[LAG_TOPO_FINAL] enhanceGraphLatencies returning:', {
+    edgesProcessed: result.edgesProcessed,
+    edgesWithLAG: result.edgesWithLAG,
+    edgeValuesCount: result.edgeValues.length,
+  });
+
+  return result;
 }
 
 /**

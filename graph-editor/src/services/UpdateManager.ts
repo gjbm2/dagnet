@@ -3130,6 +3130,238 @@ export class UpdateManager {
   }
   
   /**
+   * Apply LAG (latency) values to multiple edges in ONE atomic operation.
+   * 
+   * This is the SINGLE code path for applying computed LAG statistics to graph edges.
+   * 
+   * Processing order (all on ONE cloned graph):
+   * 1. Clone graph ONCE
+   * 2. Apply ALL latency fields to ALL edges
+   * 3. Apply ALL blended means to ALL edges
+   * 4. Rebalance ALL affected sibling groups ONCE at the end
+   * 
+   * @param graph - Current graph
+   * @param edgeUpdates - Array of edge updates to apply
+   * @returns Updated graph with all LAG values applied
+   */
+  applyBatchLAGValues(
+    graph: any,
+    edgeUpdates: Array<{
+      edgeId: string;
+      latency: {
+        median_lag_days?: number;
+        mean_lag_days?: number;
+        t95: number;
+        completeness: number;
+        path_t95: number;
+      };
+      blendedMean?: number;
+      forecast?: {
+        mean?: number;
+      };
+      evidence?: {
+        mean?: number;
+        n?: number;
+        k?: number;
+      };
+    }>
+  ): any {
+    console.log('[UpdateManager] applyBatchLAGValues called:', {
+      edgeUpdateCount: edgeUpdates?.length ?? 0,
+      graphEdgeCount: graph?.edges?.length ?? 0,
+      sampleUpdate: edgeUpdates?.[0] ? {
+        edgeId: edgeUpdates[0].edgeId,
+        t95: edgeUpdates[0].latency.t95,
+        completeness: edgeUpdates[0].latency.completeness,
+        blendedMean: edgeUpdates[0].blendedMean,
+      } : 'none',
+    });
+    
+    if (!edgeUpdates || edgeUpdates.length === 0) {
+      return graph;
+    }
+    
+    // STEP 1: Clone graph ONCE
+    const nextGraph = structuredClone(graph);
+    
+    // Track which edges need rebalancing (by source node)
+    const edgesToRebalance: string[] = [];
+    
+    // STEP 2: Apply ALL latency values and mean changes
+    for (const update of edgeUpdates) {
+      const edgeIndex = nextGraph.edges.findIndex((e: any) => 
+        e.uuid === update.edgeId || e.id === update.edgeId || `${e.from}->${e.to}` === update.edgeId
+      );
+      
+      if (edgeIndex < 0) {
+        console.warn('[UpdateManager] applyBatchLAGValues: Edge not found:', update.edgeId);
+        continue;
+      }
+      
+      const edge = nextGraph.edges[edgeIndex];
+      
+      // Ensure p and p.latency exist
+      if (!edge.p) {
+        edge.p = {};
+      }
+      if (!edge.p.latency) {
+        edge.p.latency = {};
+      }
+      
+      // Apply latency values
+      if (update.latency.median_lag_days !== undefined) {
+        edge.p.latency.median_lag_days = update.latency.median_lag_days;
+      }
+      if (update.latency.mean_lag_days !== undefined) {
+        edge.p.latency.mean_lag_days = update.latency.mean_lag_days;
+      }
+      edge.p.latency.t95 = update.latency.t95;
+      edge.p.latency.completeness = update.latency.completeness;
+      edge.p.latency.path_t95 = update.latency.path_t95;
+      
+      // Apply forecast if provided
+      if (update.forecast) {
+        if (!edge.p.forecast) {
+          edge.p.forecast = {};
+        }
+        if (update.forecast.mean !== undefined) {
+          edge.p.forecast.mean = update.forecast.mean;
+        }
+      }
+      
+      // Apply evidence if provided
+      if (update.evidence) {
+        if (!edge.p.evidence) {
+          edge.p.evidence = {};
+        }
+        if (update.evidence.mean !== undefined) {
+          edge.p.evidence.mean = update.evidence.mean;
+        }
+        if (update.evidence.n !== undefined) {
+          edge.p.evidence.n = update.evidence.n;
+        }
+        if (update.evidence.k !== undefined) {
+          edge.p.evidence.k = update.evidence.k;
+        }
+      }
+      
+      console.log('[UpdateManager] applyBatchLAGValues: Applied latency to edge:', {
+        edgeId: update.edgeId,
+        edgeIndex,
+        t95: edge.p.latency.t95,
+        completeness: edge.p.latency.completeness,
+        path_t95: edge.p.latency.path_t95,
+        forecastMean: edge.p.forecast?.mean,
+        evidenceMean: edge.p.evidence?.mean,
+      });
+      
+      // Apply blended mean if provided and different
+      if (update.blendedMean !== undefined) {
+        const oldMean = edge.p.mean;
+        if (oldMean !== update.blendedMean) {
+          edge.p.mean = this.roundTo3DP(update.blendedMean);
+          edgesToRebalance.push(update.edgeId);
+        }
+      }
+    }
+    
+    // STEP 3: Rebalance all affected edges ONCE
+    // Note: We call rebalanceSiblingEdges directly on nextGraph (no clone)
+    // to avoid losing the latency values we just wrote
+    for (const edgeId of edgesToRebalance) {
+      this.rebalanceSiblingsInPlace(nextGraph, edgeId);
+    }
+    
+    // Update metadata
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    
+    this.auditLog.push({
+      timestamp: new Date().toISOString(),
+      operation: 'applyBatchLAGValues',
+      details: {
+        edgeCount: edgeUpdates.length,
+        rebalancedCount: edgesToRebalance.length,
+      }
+    });
+    
+    // Verify latency values are on the returned graph
+    const verifyEdge = nextGraph.edges.find((e: any) => 
+      e.uuid === edgeUpdates[0]?.edgeId || e.id === edgeUpdates[0]?.edgeId
+    );
+    console.log('[UpdateManager] applyBatchLAGValues: Returning graph with edge:', {
+      edgeId: edgeUpdates[0]?.edgeId,
+      hasLatency: !!verifyEdge?.p?.latency,
+      t95: verifyEdge?.p?.latency?.t95,
+      completeness: verifyEdge?.p?.latency?.completeness,
+      pMean: verifyEdge?.p?.mean,
+    });
+    
+    return nextGraph;
+  }
+  
+  /**
+   * Rebalance sibling edges IN PLACE (no clone).
+   * Used internally by applyBatchLAGValues to avoid clone-induced data loss.
+   * 
+   * @param graph - Graph to modify IN PLACE
+   * @param edgeId - ID of the edge whose siblings should be rebalanced
+   */
+  private rebalanceSiblingsInPlace(graph: any, edgeId: string): void {
+    const edgeIndex = graph.edges.findIndex((e: any) => 
+      e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId
+    );
+    
+    if (edgeIndex < 0) return;
+    
+    const currentEdge = graph.edges[edgeIndex];
+    const sourceNodeId = currentEdge.from;
+    const currentEdgeId = currentEdge.uuid || currentEdge.id || `${currentEdge.from}->${currentEdge.to}`;
+    
+    // Get current edge's value (already set)
+    const originValue = currentEdge.p?.mean ?? 0;
+    
+    // Find siblings (same source, different edge, has p.mean)
+    const siblings = graph.edges.filter((e: any) => {
+      const eId = e.uuid || e.id || `${e.from}->${e.to}`;
+      if (eId === currentEdgeId) return false;
+      if (e.from !== sourceNodeId) return false;
+      if (e.p?.mean === undefined) return false;
+      // For case edges, match case_variant
+      if (currentEdge.case_variant && e.case_variant !== currentEdge.case_variant) return false;
+      if (!currentEdge.case_variant && e.case_variant) return false;
+      return true;
+    });
+    
+    if (siblings.length === 0) return;
+    
+    // Remaining weight to distribute
+    const remainingWeight = Math.max(0, 1 - originValue);
+    
+    // Current total of siblings
+    const currentTotal = siblings.reduce((sum: number, e: any) => sum + (e.p?.mean || 0), 0);
+    
+    if (currentTotal <= 0) {
+      // Distribute evenly
+      const evenShare = remainingWeight / siblings.length;
+      for (const sibling of siblings) {
+        if (!sibling.p.mean_overridden) {
+          sibling.p.mean = this.roundTo3DP(evenShare);
+        }
+      }
+    } else {
+      // Distribute proportionally
+      const scale = remainingWeight / currentTotal;
+      for (const sibling of siblings) {
+        if (!sibling.p.mean_overridden) {
+          sibling.p.mean = this.roundTo3DP((sibling.p.mean || 0) * scale);
+        }
+      }
+    }
+  }
+
+  /**
    * Delete a node from the graph and clean up associated edges.
    * Uses smart image GC - only deletes images with zero references across all files.
    * 

@@ -163,12 +163,15 @@ function createLinearFunnelGraph(options: {
   
   const nodeNames = 'ABCDEFGHIJ'.split('');
   for (let i = 0; i <= edgeCount; i++) {
+    const isStart = i === 0;
     nodes.push({
       id: `node-${nodeNames[i]}`,
       uuid: `node-${nodeNames[i]}-uuid`,
-      type: i === 0 ? 'start' : 'step',
+      type: isStart ? 'start' : 'step',
       label: `Node ${nodeNames[i]}`,
       event_id: `event-${nodeNames[i].toLowerCase()}`,
+      // Mark first node as START for LAG topo traversal
+      ...(isStart ? { entry: { is_start: true } } : {}),
     });
   }
   
