@@ -174,3 +174,4 @@ The core of this proposal is not to change the underlying latency maths, which i
 - Treat scenario param packs as a thin, user‑facing projection of those graph‑level scalars, exposing only `p.mean`, `p.evidence.mean`, `p.forecast.mean`, and the latency display fields required for the UI and scenario editor.
 
 Once these responsibilities and data flows are enforced consistently, both the visualisation layer and the param‑pack based scenario editing should behave in line with the design and with your expectations from the sample data and interactive queries.
+

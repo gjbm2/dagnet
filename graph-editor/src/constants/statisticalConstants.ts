@@ -114,3 +114,24 @@ export const COHORT_HORIZON_DEFAULT_DAYS = 30;
  */
 export const DIAGNOSTIC_LOG = true;
 
+/**
+ * PRECISION_DECIMAL_PLACES
+ * 
+ * Standard decimal precision for probability and statistical values stored
+ * on graph edges and in parameter files.
+ * 
+ * Used by:
+ *   - UpdateManager: rounding LAG-computed values (p.mean, completeness, etc.)
+ *   - Statistical services: rounding computed probabilities
+ *   - Data operations: rounding fetched/aggregated values
+ * 
+ * Rationale:
+ *   - 4 d.p. provides sufficient precision for probability values (0.0001 = 0.01%)
+ *   - Avoids floating-point noise that adds no meaningful information
+ *   - Balances precision against readability in logs and UI
+ *   - More than 4 d.p. is generally noise for conversion probabilities
+ * 
+ * See: UpdateManager.roundToDP() which uses this constant.
+ */
+export const PRECISION_DECIMAL_PLACES = 4;
+

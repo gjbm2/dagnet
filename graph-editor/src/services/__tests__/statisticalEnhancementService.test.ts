@@ -1291,6 +1291,7 @@ describe('enhanceGraphLatencies', () => {
           age: Math.floor((queryDate.getTime() - new Date(date).getTime()) / (1000 * 60 * 60 * 24)),
           median_lag_days: v.median_lag_days?.[i],
           mean_lag_days: v.mean_lag_days?.[i],
+          anchor_median_lag_days: v.anchor_median_lag_days?.[i],
         }));
       });
     },
@@ -1371,12 +1372,15 @@ describe('enhanceGraphLatencies', () => {
 
     const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
 
+    // First check how many edges were actually processed
+    expect(result.edgesProcessed).toBeGreaterThan(0);
     expect(result.edgesWithLAG).toBe(3);
     
-    // Each edge should have t95 computed
-    for (const edge of graph.edges) {
-      expect(edge.p?.latency?.t95).toBeGreaterThan(0);
-      expect(Number.isFinite(edge.p?.latency?.t95)).toBe(true);
+    // Each edge should have t95 computed in edgeValues (not mutated directly on graph)
+    expect(result.edgeValues.length).toBe(3);
+    for (const edgeValue of result.edgeValues) {
+      expect(edgeValue.latency.t95).toBeGreaterThan(0);
+      expect(Number.isFinite(edgeValue.latency.t95)).toBe(true);
     }
   });
 
@@ -1384,33 +1388,35 @@ describe('enhanceGraphLatencies', () => {
     const graph = createLatencyGraph();
     const paramLookup = createParamLookup();
 
-    enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+    const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
 
-    const startToA = graph.edges.find(e => e.id === 'start-to-a');
-    const aToB = graph.edges.find(e => e.id === 'a-to-b');
-    const bToC = graph.edges.find(e => e.id === 'b-to-c');
+    // Find edge values by edge ID
+    const startToA = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
+    const aToB = result.edgeValues.find(v => v.edgeUuid === 'a-to-b');
+    const bToC = result.edgeValues.find(v => v.edgeUuid === 'b-to-c');
 
     // path_t95 should accumulate along the chain
-    expect(startToA?.p?.latency?.path_t95).toBeGreaterThan(0);
-    expect(aToB?.p?.latency?.path_t95).toBeGreaterThan(startToA?.p?.latency?.path_t95 || 0);
-    expect(bToC?.p?.latency?.path_t95).toBeGreaterThan(aToB?.p?.latency?.path_t95 || 0);
+    expect(startToA?.latency.path_t95).toBeGreaterThan(0);
+    expect(aToB?.latency.path_t95).toBeGreaterThan(startToA?.latency.path_t95 || 0);
+    expect(bToC?.latency.path_t95).toBeGreaterThan(aToB?.latency.path_t95 || 0);
   });
 
   it('should compute lower completeness for downstream edges', () => {
     const graph = createLatencyGraph();
     const paramLookup = createParamLookup();
 
-    enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+    const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
 
-    const startToA = graph.edges.find(e => e.id === 'start-to-a');
-    const aToB = graph.edges.find(e => e.id === 'a-to-b');
-    const bToC = graph.edges.find(e => e.id === 'b-to-c');
+    // Find edge values by edge ID
+    const startToA = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
+    const aToB = result.edgeValues.find(v => v.edgeUuid === 'a-to-b');
+    const bToC = result.edgeValues.find(v => v.edgeUuid === 'b-to-c');
 
     // Completeness should decrease for downstream edges due to path adjustment
-    // (effective age is reduced by upstream path_t95)
-    expect(startToA?.p?.latency?.completeness).toBeGreaterThan(0);
-    expect(aToB?.p?.latency?.completeness).toBeLessThanOrEqual(startToA?.p?.latency?.completeness || 1);
-    expect(bToC?.p?.latency?.completeness).toBeLessThanOrEqual(aToB?.p?.latency?.completeness || 1);
+    // (effective age is reduced by upstream anchor_median_lag)
+    expect(startToA?.latency.completeness).toBeGreaterThan(0);
+    expect(aToB?.latency.completeness).toBeLessThanOrEqual(startToA?.latency.completeness || 1);
+    expect(bToC?.latency.completeness).toBeLessThanOrEqual(aToB?.latency.completeness || 1);
   });
 
   it('should skip edges without maturity_days', () => {
@@ -1510,17 +1516,30 @@ describe('enhanceGraphLatencies', () => {
         new Date(now.getTime() - 0.5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       ];
       return new Map([
-        ['start-to-end', [{
-          mean: 0.3,
-          n: 300,
-          k: 90,
-          dates,
-          n_daily: [100, 100, 100],
-          k_daily: [30, 30, 30],
-          // Higher lag means lower completeness for young cohorts
-          median_lag_days: [10, 10, 10],
-          mean_lag_days: [12, 12, 12],
-        }]],
+        ['start-to-end', [
+          // Cohort slice: immature cohorts for evidence
+          {
+            mean: 0.3,
+            n: 300,
+            k: 90,
+            dates,
+            n_daily: [100, 100, 100],
+            k_daily: [30, 30, 30],
+            // Higher lag means lower completeness for young cohorts
+            median_lag_days: [10, 10, 10],
+            mean_lag_days: [12, 12, 12],
+            sliceDSL: 'cohort(1-Dec-25:3-Dec-25)',  // Mark as cohort slice
+          },
+          // Window slice: provides nBaseline for the forecast
+          // In production, edge.p.forecast.mean comes FROM this window slice
+          {
+            mean: 0.7,
+            n: 500,  // nBaseline for blend formula
+            k: 350,
+            forecast: 0.7,  // The forecast value
+            sliceDSL: 'window(30d)',  // Mark as window slice
+          },
+        ]],
       ]);
     }
 
@@ -1543,12 +1562,12 @@ describe('enhanceGraphLatencies', () => {
       const graph = createGraphWithForecast();
       const paramLookup = createMatureCohorts();
 
-      enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+      const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
 
-      const edge = graph.edges[0];
+      const edgeValue = result.edgeValues.find(v => v.edgeUuid === 'start-to-end');
       const evidenceMean = 0.3;
       const forecastMean = 0.7;
-      const blendedMean = edge.p?.mean;
+      const blendedMean = edgeValue?.blendedMean;
 
       // High completeness → blended mean closer to evidence
       // Distance to evidence should be less than distance to forecast
@@ -1562,22 +1581,30 @@ describe('enhanceGraphLatencies', () => {
       const graph = createGraphWithForecast();
       const paramLookup = createImmatureCohorts();
 
-      enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+      const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
 
-      const edge = graph.edges[0];
+      // First verify we got results
+      expect(result.edgesWithLAG).toBe(1);
+      expect(result.edgeValues.length).toBe(1);
+      
+      const edgeValue = result.edgeValues[0];
+      expect(edgeValue).toBeDefined();
+      expect(edgeValue.edgeUuid).toBe('start-to-end');
+      
       const evidenceMean = 0.3;
       const forecastMean = 0.7;
-      const completeness = edge.p?.latency?.completeness;
-      const blendedMean = edge.p?.mean;
+      const completeness = edgeValue.latency.completeness;
 
       // Low completeness → blended mean closer to forecast
-      // With very immature cohorts, completeness should be low
+      // With very immature cohorts (0.5-2 days old with median lag 10), completeness should be low
       expect(completeness).toBeLessThan(0.5);
       
-      // Distance to forecast should be less than distance to evidence
-      const distToEvidence = Math.abs((blendedMean ?? 0) - evidenceMean);
-      const distToForecast = Math.abs((blendedMean ?? 0) - forecastMean);
+      // With window slice providing nBaseline, blend should now be computed
+      expect(edgeValue.blendedMean).toBeDefined();
       
+      // Distance to forecast should be less than distance to evidence
+      const distToEvidence = Math.abs(edgeValue.blendedMean! - evidenceMean);
+      const distToForecast = Math.abs(edgeValue.blendedMean! - forecastMean);
       expect(distToForecast).toBeLessThan(distToEvidence);
     });
 

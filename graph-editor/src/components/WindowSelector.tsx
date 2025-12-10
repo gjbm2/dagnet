@@ -545,6 +545,20 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         // CRITICAL: Apply accumulated graph changes to React state
         // fetchItems updates graphRef.current, we must trigger re-render
             const updatedGraph = graphRef.current;
+        
+        // DEBUG: Log what we're about to set as the graph
+        const latencyEdges = (updatedGraph?.edges || []).filter((e: any) => e.p?.latency?.completeness !== undefined);
+        console.log('[WindowSelector] fetchItems completed, about to setGraph:', {
+          hasGraph: !!updatedGraph,
+          latencyEdgeCount: latencyEdges.length,
+          sample: latencyEdges.slice(0, 3).map((e: any) => ({
+            id: e.uuid || e.id,
+            pMean: e.p?.mean,
+            completeness: e.p?.latency?.completeness,
+            forecastMean: e.p?.forecast?.mean,
+          })),
+        });
+        
         if (updatedGraph && setGraph) {
               setGraph(updatedGraph);
             }

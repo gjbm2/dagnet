@@ -23,7 +23,8 @@ import {
   LATENCY_EPSILON,
   LATENCY_T95_PERCENTILE,
 } from '../constants/latency';
-import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA } from '../constants/statisticalConstants';
+import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
+import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 
 export interface EnhancedAggregation {
   method: string;
@@ -154,7 +155,8 @@ export class InverseVarianceEnhancer implements StatisticalEnhancer {
     
     // Use simple mean: this is the actual observed conversion rate
     const simpleMean = raw.n > 0 ? raw.k / raw.n : 0;
-    const finalMean = Math.round(simpleMean * 1000) / 1000; // Round to 3 decimal places
+    const factor = Math.pow(10, PRECISION_DECIMAL_PLACES);
+    const finalMean = Math.round(simpleMean * factor) / factor;
     
     // CRITICAL: k is the actual observed success count - it's EVIDENCE, not an estimate.
     // We preserve raw.k (the sum of all k_daily values).
@@ -294,6 +296,13 @@ export interface CohortData {
   median_lag_days?: number;
   /** Mean lag in days for converters in this cohort (optional) */
   mean_lag_days?: number;
+  /** 
+   * Anchor median lag in days for this cohort (optional).
+   * For downstream edges, this is the observed median lag from anchor A
+   * to the source of this edge (cumulative upstream lag).
+   * Used for computing effective age for completeness calculation.
+   */
+  anchor_median_lag_days?: number;
 }
 
 /**
@@ -897,11 +906,20 @@ export function calculateCompleteness(
  * 3. Estimates p_infinity from mature cohorts
  * 4. Applies Formula A to compute p_mean and completeness
  * 
- * @param cohorts - Per-cohort data array
- * @param aggregateMedianLag - Weighted aggregate median lag
+ * For completeness calculation, effective age is computed as:
+ *   - First latency edge: effective_age = anchor_age (no adjustment)
+ *   - Downstream edges: effective_age = max(0, anchor_age - anchor_median_lag)
+ * 
+ * The anchor_median_lag comes from OBSERVED data (per-cohort anchor_median_lag_days
+ * or aggregate anchorMedianLag), NOT from summing t95s along the path.
+ * 
+ * @param cohorts - Per-cohort data array (may include anchor_median_lag_days)
+ * @param aggregateMedianLag - Weighted aggregate median lag for this edge
  * @param aggregateMeanLag - Weighted aggregate mean lag (optional)
  * @param maturityDays - User-configured maturity threshold
- * @param pathT95 - Cumulative t95 from anchor to this edge's source node (for downstream edges)
+ * @param anchorMedianLag - Observed median lag from anchor to this edge's source (for downstream edges).
+ *                          Use 0 for first latency edge from anchor. This is the central tendency
+ *                          of cumulative upstream lag, NOT path_t95.
  * @returns Full edge latency statistics
  */
 export function computeEdgeLatencyStats(
@@ -909,7 +927,7 @@ export function computeEdgeLatencyStats(
   aggregateMedianLag: number,
   aggregateMeanLag: number | undefined,
   maturityDays: number,
-  pathT95: number = 0
+  anchorMedianLag: number = 0
 ): EdgeLatencyStats {
   // Calculate total k for quality gate
   const totalK = cohorts.reduce((sum, c) => sum + c.k, 0);
@@ -921,7 +939,7 @@ export function computeEdgeLatencyStats(
     aggregateMedianLag,
     aggregateMeanLag,
     maturityDays,
-    pathT95,
+    anchorMedianLag,
     totalK,
     totalN,
     sampleCohort: cohorts[0] ? {
@@ -931,25 +949,37 @@ export function computeEdgeLatencyStats(
       age: cohorts[0].age,
       median_lag_days: cohorts[0].median_lag_days,
       mean_lag_days: cohorts[0].mean_lag_days,
+      anchor_median_lag_days: cohorts[0].anchor_median_lag_days,
     } : 'no cohorts'
   });
 
-  // For downstream edges, adjust cohort ages by subtracting path_t95.
-  // This reflects that by the time users reach this edge, they've already
-  // spent path_t95 days traversing upstream edges.
-  // effectiveAge = max(0, rawAge - pathT95)
-  const adjustedCohorts: CohortData[] = pathT95 > 0
-    ? cohorts.map(c => ({
-        ...c,
-        age: Math.max(0, c.age - pathT95),
-      }))
+  // For downstream edges, adjust cohort ages by subtracting anchor_median_lag.
+  // This reflects the OBSERVED central tendency of how long users take to reach
+  // this edge from the anchor, NOT the conservative 95th percentile (path_t95).
+  //
+  // Design (stats-convolution-schematic.md §4):
+  //   effective_age[d] = max(0, anchor_age[d] - anchor_median_lag[d])
+  //
+  // We use per-cohort anchor_median_lag_days if available, otherwise the
+  // aggregate anchorMedianLag passed as parameter.
+  const adjustedCohorts: CohortData[] = anchorMedianLag > 0 || cohorts.some(c => c.anchor_median_lag_days)
+    ? cohorts.map(c => {
+        // Prefer per-cohort anchor_median_lag_days, fall back to aggregate
+        const lagToSubtract = c.anchor_median_lag_days ?? anchorMedianLag;
+        return {
+          ...c,
+          age: Math.max(0, c.age - lagToSubtract),
+        };
+      })
     : cohorts;
   
-  if (pathT95 > 0) {
-    console.log('[LAG_DEBUG] Path-adjusted ages:', {
-      pathT95,
+  if (anchorMedianLag > 0 || cohorts.some(c => c.anchor_median_lag_days)) {
+    console.log('[LAG_DEBUG] Anchor-adjusted ages:', {
+      anchorMedianLag,
+      hasPerCohortAnchorLag: cohorts.some(c => c.anchor_median_lag_days),
       originalAges: cohorts.slice(0, 3).map(c => c.age),
       adjustedAges: adjustedCohorts.slice(0, 3).map(c => c.age),
+      perCohortLags: cohorts.slice(0, 3).map(c => c.anchor_median_lag_days),
     });
   }
 
@@ -1092,27 +1122,41 @@ export function getActiveEdges(
   epsilon: number = 1e-9
 ): Set<string> {
   const activeEdges = new Set<string>();
-  const debugInfo: Array<{ edgeId: string; pMean: number; active: boolean }> = [];
+  const debugInfo: Array<{ edgeId: string; baseMean: number; effectiveP: number; active: boolean; scenarioApplied: boolean }> = [];
+
+  // Build whatIfOverrides from DSL string (if provided)
+  const whatIfOverrides: WhatIfOverrides = whatIfDSL 
+    ? { whatIfDSL } 
+    : { caseOverrides: {}, conditionalOverrides: {} };
 
   for (const edge of graph.edges) {
-    // Get effective probability
-    // In a full implementation, this would use computeEffectiveEdgeProbability
-    // from lib/whatIf.ts with the whatIfDSL. For now, use p.mean.
-    const effectiveP = edge.p?.mean ?? 0;
     const edgeId = getEdgeId(edge);
+    const baseMean = edge.p?.mean ?? 0;
+    
+    // Get effective probability under the current scenario
+    // This respects:
+    // - Case variant weights (e.g., case(treatment) = 100%)
+    // - Conditional probability overrides (visited(X) conditions)
+    // - What-if DSL overrides
+    const effectiveP = whatIfDSL
+      ? computeEffectiveEdgeProbability(graph, edgeId, whatIfOverrides)
+      : baseMean;
+    
     const isActive = effectiveP > epsilon;
+    const scenarioApplied = whatIfDSL !== undefined && effectiveP !== baseMean;
 
     if (isActive) {
       activeEdges.add(edgeId);
     }
     
-    debugInfo.push({ edgeId, pMean: effectiveP, active: isActive });
+    debugInfo.push({ edgeId, baseMean, effectiveP, active: isActive, scenarioApplied });
   }
 
   console.log('[LAG_TOPO_001] getActiveEdges:', {
     totalEdges: graph.edges.length,
     activeCount: activeEdges.size,
-    edges: debugInfo,
+    hasScenario: !!whatIfDSL,
+    edges: debugInfo.filter(e => e.scenarioApplied || !e.active),  // Log scenario-affected and inactive edges
   });
 
   return activeEdges;
@@ -1368,8 +1412,12 @@ export interface ParameterValueForLAG {
  * These come from windowAggregationService.
  */
 export interface LAGHelpers {
-  /** Convert ParameterValue[] to CohortData[] */
-  aggregateCohortData: (values: ParameterValueForLAG[], queryDate: Date) => CohortData[];
+  /** Convert ParameterValue[] to CohortData[], optionally filtered to a cohort window */
+  aggregateCohortData: (
+    values: ParameterValueForLAG[], 
+    queryDate: Date,
+    cohortWindow?: { start: Date; end: Date }
+  ) => CohortData[];
   /** Compute aggregate median/mean lag from cohorts */
   aggregateLatencyStats: (cohorts: CohortData[]) => { median_lag_days: number; mean_lag_days: number } | undefined;
 }
@@ -1401,6 +1449,42 @@ export interface EdgeLAGValues {
     n?: number;
     k?: number;
   };
+  /** Debug data for session log visibility */
+  debug?: {
+    /** Query date used for age calculations */
+    queryDate: string;
+    /** Cohort window used for filtering (if any) */
+    cohortWindow?: string;
+    /** Number of input param values by slice type */
+    inputCohortSlices: number;
+    inputWindowSlices: number;
+    /** Number of cohorts used (after filtering to cohort slices and window) */
+    cohortCount: number;
+    /** Range of raw cohort ages (before path adjustment) */
+    rawAgeRange: string;
+    /** Range of adjusted ages (after subtracting pathT95) */
+    adjustedAgeRange: string;
+    /** Anchor lag used for age adjustment (0 = first edge, >0 = downstream edge) */
+    anchorMedianLag: number;
+    /** How many cohorts had anchor lag data */
+    cohortsWithAnchorLag: number;
+    /** Lognormal fit parameters */
+    mu: number;
+    sigma: number;
+    /** Total n and k across cohorts */
+    totalN: number;
+    totalK: number;
+    /** Sample of cohort data for debugging */
+    sampleCohorts: Array<{
+      date: string;
+      rawAge: number;
+      adjustedAge: number;
+      n: number;
+      k: number;
+      cdf: number;
+      anchorLag?: number;
+    }>;
+  };
 }
 
 /**
@@ -1431,19 +1515,28 @@ export interface GraphLatencyEnhancementResult {
  * @param paramLookup - Map from edge ID to its parameter values
  * @param queryDate - The "now" for computing cohort ages
  * @param helpers - Functions from windowAggregationService to avoid circular imports
+ * @param cohortWindow - Optional cohort window to filter cohorts
+ * @param whatIfDSL - Optional scenario DSL for scenario-aware active edge determination
  * @returns Summary of what was processed
  */
 export function enhanceGraphLatencies(
   graph: GraphForPath,
   paramLookup: Map<string, ParameterValueForLAG[]>,
   queryDate: Date,
-  helpers: LAGHelpers
+  helpers: LAGHelpers,
+  cohortWindow?: { start: Date; end: Date },
+  whatIfDSL?: string
 ): GraphLatencyEnhancementResult {
   const result: GraphLatencyEnhancementResult = {
     edgesProcessed: 0,
     edgesWithLAG: 0,
     edgeValues: [],
   };
+  
+  console.log('[LAG_TOPO] enhanceGraphLatencies called with cohortWindow:', cohortWindow ? {
+    start: cohortWindow.start.toISOString().split('T')[0],
+    end: cohortWindow.end.toISOString().split('T')[0],
+  } : 'none');
 
   // Build a map from node UUID to node ID for normalization
   // This handles graphs where edge.from/to are UUIDs instead of node IDs
@@ -1468,7 +1561,8 @@ export function enhanceGraphLatencies(
   });
 
   // Get active edges (those with latency config)
-  const activeEdges = getActiveEdges(graph);
+  // Pass whatIfDSL for scenario-aware active edge determination (B3 fix)
+  const activeEdges = getActiveEdges(graph, whatIfDSL);
   if (activeEdges.size === 0) {
     console.log('[enhanceGraphLatencies] No active latency edges');
     return result;
@@ -1579,7 +1673,8 @@ export function enhanceGraphLatencies(
       }
 
       // Build cohorts from parameter values
-      const cohorts = helpers.aggregateCohortData(paramValues, queryDate);
+      // Filter to cohort window if provided (so completeness reflects the query window)
+      const cohorts = helpers.aggregateCohortData(paramValues, queryDate, cohortWindow);
       if (cohorts.length === 0) {
         console.log('[LAG_TOPO_SKIP] noCohorts:', { edgeId, paramValuesCount: paramValues.length });
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
@@ -1592,18 +1687,50 @@ export function enhanceGraphLatencies(
       
       console.log('[LAG_TOPO_PROCESS] edge:', { edgeId, maturityDays, cohortsCount: cohorts.length });
 
-      // Get aggregate lag stats
+      // Get aggregate lag stats for this edge
       const lagStats = helpers.aggregateLatencyStats(cohorts);
       const aggregateMedianLag = lagStats?.median_lag_days ?? maturityDays / 2;
       const aggregateMeanLag = lagStats?.mean_lag_days;
 
-      // Compute edge LAG stats with path-adjusted ages
+      // Get anchor median lag for downstream age adjustment.
+      // This is the OBSERVED median lag from anchor (A) to this edge's source,
+      // NOT the conservative path_t95 (sum of 95th percentiles).
+      //
+      // Design (stats-convolution-schematic.md §4):
+      //   - First latency edge: anchorMedianLag = 0
+      //   - Downstream edges: anchorMedianLag from anchor_median_lag_days in cohort data
+      //
+      // We compute a k-weighted average of per-cohort anchor_median_lag_days.
+      // If cohorts don't have this field (legacy data), we use 0 (treat as first edge).
+      let anchorMedianLag = 0;
+      const cohortsWithAnchorLag = cohorts.filter(c => 
+        c.anchor_median_lag_days !== undefined && 
+        c.anchor_median_lag_days > 0 &&
+        c.k > 0
+      );
+      if (cohortsWithAnchorLag.length > 0) {
+        const totalK = cohortsWithAnchorLag.reduce((sum, c) => sum + c.k, 0);
+        anchorMedianLag = cohortsWithAnchorLag.reduce(
+          (sum, c) => sum + c.k * (c.anchor_median_lag_days ?? 0), 
+          0
+        ) / totalK;
+        
+        console.log('[LAG_TOPO_ANCHOR] computed anchorMedianLag:', {
+          edgeId,
+          anchorMedianLag: anchorMedianLag.toFixed(2),
+          cohortsWithAnchorLag: cohortsWithAnchorLag.length,
+          totalK,
+          sampleValues: cohortsWithAnchorLag.slice(0, 3).map(c => c.anchor_median_lag_days),
+        });
+      }
+
+      // Compute edge LAG stats with anchor-adjusted ages (NOT path_t95!)
       const latencyStats = computeEdgeLatencyStats(
         cohorts,
         aggregateMedianLag,
         aggregateMeanLag,
         maturityDays,
-        pathT95ToNode  // This adjusts cohort ages for downstream edges
+        anchorMedianLag  // Use observed anchor lag, NOT path_t95
       );
 
       // Compute path_t95 for this edge
@@ -1618,6 +1745,26 @@ export function enhanceGraphLatencies(
       
       // Build EdgeLAGValues (don't write to graph directly)
       const edgeUuid = edge.uuid || edgeId;
+      
+      // Compute debug data for session log visibility
+      const rawAges = cohorts.map(c => c.age);
+      // Use per-cohort anchor_median_lag_days when available, otherwise aggregate
+      const adjustedAges = cohorts.map(c => {
+        const lagToSubtract = c.anchor_median_lag_days ?? anchorMedianLag;
+        return Math.max(0, c.age - lagToSubtract);
+      });
+      const { mu, sigma } = latencyStats.fit;
+      
+      // Count input value slice types for debugging
+      const cohortSliceCount = paramValues.filter((v: any) => {
+        const dsl = v.sliceDSL ?? '';
+        return dsl.includes('cohort(') && !dsl.includes('window(');
+      }).length;
+      const windowSliceCount = paramValues.filter((v: any) => {
+        const dsl = v.sliceDSL ?? '';
+        return dsl.includes('window(') && !dsl.includes('cohort(');
+      }).length;
+      
       const edgeLAGValues: EdgeLAGValues = {
         edgeUuid,
         latency: {
@@ -1626,6 +1773,36 @@ export function enhanceGraphLatencies(
           t95: latencyStats.t95,
           completeness: latencyStats.completeness,
           path_t95: edgePathT95,
+        },
+        debug: {
+          queryDate: queryDate.toISOString().split('T')[0],
+          cohortWindow: cohortWindow 
+            ? `${cohortWindow.start.toISOString().split('T')[0]} to ${cohortWindow.end.toISOString().split('T')[0]}`
+            : undefined,
+          inputCohortSlices: cohortSliceCount,
+          inputWindowSlices: windowSliceCount,
+          cohortCount: cohorts.length,
+          rawAgeRange: rawAges.length > 0 
+            ? `${Math.min(...rawAges)}-${Math.max(...rawAges)} days`
+            : 'no cohorts',
+          adjustedAgeRange: adjustedAges.length > 0
+            ? `${Math.min(...adjustedAges)}-${Math.max(...adjustedAges)} days`
+            : 'no cohorts',
+          anchorMedianLag,
+          cohortsWithAnchorLag: cohortsWithAnchorLag.length,
+          mu,
+          sigma,
+          totalN: cohorts.reduce((sum, c) => sum + c.n, 0),
+          totalK: cohorts.reduce((sum, c) => sum + c.k, 0),
+          sampleCohorts: cohorts.slice(0, 5).map((c, i) => ({
+            date: c.date,
+            rawAge: c.age,
+            adjustedAge: adjustedAges[i],
+            n: c.n,
+            k: c.k,
+            cdf: logNormalCDF(adjustedAges[i], mu, sigma),
+            anchorLag: c.anchor_median_lag_days,
+          })),
         },
       };
       
@@ -1656,10 +1833,16 @@ export function enhanceGraphLatencies(
       const completeness = latencyStats.completeness;
       const evidenceMean = edge.p?.evidence?.mean;
 
-      // Forecast MUST come from window() data (design.md §3.2.1).
-      // We never derive forecast from cohort data here – LAG only provides
-      // completeness and t95/path_t95 for blending.
-      const forecastMean = edge.p?.forecast?.mean;
+      // Prefer forecast from WINDOW slices (design.md §3.2.1), but if no
+      // window() baseline exists and LAG has estimated a reliable p_infinity,
+      // use p_infinity as a cohort-based fallback forecast baseline.
+      //
+      // This ensures that edges with only cohort() data can still participate
+      // in the blend, rather than collapsing to pure evidence.
+      const baseForecastMean = edge.p?.forecast?.mean;
+      const fallbackForecastMean =
+        latencyStats.forecast_available ? latencyStats.p_infinity : undefined;
+      const forecastMean = baseForecastMean ?? fallbackForecastMean;
 
       const nQuery = edge.p?.evidence?.n ?? cohorts.reduce((sum, c) => sum + c.n, 0);
 
