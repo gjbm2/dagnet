@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.0.6b
+**Released:** December 11, 2025
+
+Fixes to logic & display
+
+---
+
 ## Version 1.0.3b
 **Released:** December 10, 2025
 
