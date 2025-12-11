@@ -302,7 +302,9 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       section.targetId,
       { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
     );
-    fetchItem(item, { mode: 'versioned' });
+    // CRITICAL: bustCache=true - user explicitly requested "Get from Source",
+    // so bypass cache and actually fetch from the external source
+    fetchItem(item, { mode: 'versioned', bustCache: true });
   };
   
   const handleSectionClearCache = (section: DataOperationSection) => {

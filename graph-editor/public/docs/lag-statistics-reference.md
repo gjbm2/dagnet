@@ -375,6 +375,25 @@ This document is the canonical reference for LAG statistics and convolution logi
 │                                                                                     │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                     │
+│   SCOPING BY QUERY MODE                                                             │
+│   ─────────────────────                                                             │
+│                                                                                     │
+│   Completeness is computed from cohorts whose dates match the query mode:           │
+│                                                                                     │
+│   • window(1-Dec-25:6-Dec-25):                                                      │
+│       Completeness uses only cohorts with dates in 1-Dec to 6-Dec.                  │
+│       This aligns with p.evidence, which is also window-scoped.                     │
+│                                                                                     │
+│   • cohort(1-Dec-25:6-Dec-25):                                                      │
+│       Completeness uses cohorts with anchor entry dates in 1-Dec to 6-Dec.          │
+│       This is the explicit cohort window behaviour.                                 │
+│                                                                                     │
+│   RATIONALE: In window() mode, evidence is window-based, so completeness            │
+│   should also be window-based. This ensures consistency: both metrics               │
+│   reflect the same temporal slice of data.                                          │
+│                                                                                     │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
 │   EXAMPLE: First latency edge (C→X), median=2, ages 20-24 days                      │
 │                                                                                     │
 │   ┌──────────────────────────────────────────────────────────────────────────────┐  │

@@ -75,6 +75,7 @@ import {
   SANKEY_COMPLETENESS_LINE_MIN_HEIGHT,
   SANKEY_COMPLETENESS_LINE_OVERHANG,
   SANKEY_COMPLETENESS_LINE_STROKE,
+  NO_EVIDENCE_E_MODE_OPACITY,
 } from '@/lib/nodeEdgeConstants';
 
 import type { EdgeLatencyDisplay, ScenarioVisibilityMode } from '../../types';
@@ -2607,7 +2608,13 @@ export default function ConversionEdge({
                       ? `url(#lag-anchor-stipple-${id})` 
                       : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
                     strokeWidth: lagLayerData.evidenceWidth,
-                    strokeOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
+                    strokeOpacity: isHiddenCurrent
+                      ? 1
+                      : // If there is NO evidence object at all, this is a "no-evidence edge in E mode"
+                        // → render with reduced opacity to indicate modelled-but-unproven flow.
+                        (!fullEdge?.p?.evidence
+                          ? (data?.strokeOpacity ?? EDGE_OPACITY) * NO_EVIDENCE_E_MODE_OPACITY
+                          : (data?.strokeOpacity ?? EDGE_OPACITY)),
                     mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                     fill: 'none',
                     strokeLinecap: 'round',

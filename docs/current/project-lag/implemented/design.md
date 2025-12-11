@@ -1133,6 +1133,32 @@ Aggregate (weighted by cohort size):
 
 **Note:** This replaces the naive \(\min(1, a_i / T_{\text{med}})\) approximation with the actual fitted CDF, giving a more accurate estimate.
 
+#### 5.5.1 Completeness Scoping by Query Mode
+
+**Design principle (11-Dec-25):** Completeness should be scoped to the **same temporal slice** as evidence, ensuring consistency within each query mode.
+
+| Query Mode | Evidence Source | Completeness Source |
+|------------|-----------------|---------------------|
+| `window(start:end)` | Events in that window | Cohorts whose dates fall in that window |
+| `cohort(start:end)` | Cohort entries in that range | Same cohort entries |
+
+**Rationale:**
+
+- In **window() mode**, `p.evidence` is computed from events whose timestamps fall in the window. If completeness were computed from all historical cohorts, it would reflect a different (usually larger/older) population than the evidence, creating a mismatch. By scoping completeness to the same date range, both metrics are aligned.
+
+- In **cohort() mode**, completeness is naturally tied to the explicit cohort entry dates. No change needed.
+
+**Implementation:**
+
+- When parsing the DSL, derive a **LAG slice window**:
+  - If `cohort(start:end)` is present → use cohort dates (existing behaviour).
+  - If only `window(start:end)` is present → use window dates.
+  - If neither → no LAG scoping (use all available cohorts).
+
+- Pass this LAG slice window to `aggregateCohortData`, which filters cohorts to only those whose dates fall within the range.
+
+- The blend formula (`p.mean` computation) is unaffected; it uses whatever `completeness`, `p.evidence`, and `p.forecast` values result from the scoped computation.
+
 ### 5.6 Asymptotic Probability \(p_\infty\)
 
 The asymptotic conversion rate comes from **mature cohorts** where \(F(a_i) \approx 1\):
