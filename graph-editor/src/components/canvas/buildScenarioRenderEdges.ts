@@ -445,123 +445,118 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
                           (typeof baseLatency.t95 === 'number' && baseLatency.t95 > 0) ||
                           (typeof completeness === 'number');
 
-        // Enable LAG display if we have meaningful data.
+        // IMPORTANT: For the unified rendering pipeline, we MUST populate EdgeLatencyDisplay
+        // for every edge. This prevents "legacy" rendering branches from ever activating.
         //
-        // IMPORTANT (cohort-view implementation):
-        // - Forecast/Evidence stripes (F / E / F+E modes) should be available whenever
-        //   we have a non-zero p_mean AND at least one of p_forecast / p_evidence.
-        // - Latency bead visibility should depend ONLY on latency config (median_days,
-        //   completeness, t95), not on whether the edge is treated as "latency" in DSL.
+        // The renderer then decides:
+        // - Evidence present vs evidence=0 vs no evidence block (rebalanced)
+        // - E/F/F+E modes
+        // - Opacity/dashing rules
         //
-        // This means non-latency edges with a forecast (window() baseline) should still
-        // participate fully in F / E / F+E modes even when median_days=0.
-        const hasAnyLayerData =
-          typeof p_mean === 'number' &&
-          p_mean > 0 &&
-          (hasForecast || hasEvidence);
+        // === Get scenario visibility mode ===
+        let mode: ScenarioVisibilityMode = 'f+e';
+        if (getScenarioVisibilityMode) {
+          try {
+            mode = getScenarioVisibilityMode(scenarioId);
+          } catch {
+            mode = 'f+e';
+          }
+        }
 
-        const hasBeadData = typeof median_days === 'number' && median_days > 0;
+        // === Compute widths ===
+        // preScaled is the base stroke width for this edge (before offset/layout adjustments).
+        // The renderer will ultimately scale against its own strokeWidth, but we still populate
+        // reasonable defaults here to keep the model complete.
+        const baseWidth = preScaled;
+        let evidenceWidth = 0;
+        let meanWidth = baseWidth;
+        let evidenceRatio = 0;
+
         const hasCompletenessData = typeof completeness === 'number';
 
-        const enabled = hasAnyLayerData || hasBeadData || hasCompletenessData;
-
-        if (enabled) {
-          // === Get scenario visibility mode ===
-          let mode: ScenarioVisibilityMode = 'f+e';
-          if (getScenarioVisibilityMode) {
-            try {
-              mode = getScenarioVisibilityMode(scenarioId);
-            } catch {
-              mode = 'f+e';
-            }
-          }
-
-          // === Compute widths ===
-          // preScaled is the base stroke width for this edge
-          const baseWidth = preScaled;
-          let evidenceWidth = 0;
-          let meanWidth = baseWidth;
-          let evidenceRatio = 0;
-
-          if (mode === 'e') {
-            // E-only mode: width scaled to p.evidence
-            if (hasEvidence && p_evidence! > 0) {
-              evidenceRatio = Math.min(1, Math.max(0, p_evidence! / (p_mean || 1)));
-              evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
-            }
-            meanWidth = baseWidth; // Anchor stays at full width for reference
-          } else if (mode === 'f') {
-            // F-only mode: width scaled to p.forecast
-            if (hasForecast && p_forecast! > 0) {
-              const forecastRatio = Math.max(0, p_forecast! / (p_mean || 1));
-              meanWidth = Math.max(1, baseWidth * forecastRatio);
-            }
+        if (mode === 'e') {
+          // E-only mode:
+          // - If evidence exists and is >0 → render evidence lane proportional to evidence/mean.
+          // - If evidence exists and is 0 → 0-width evidence lane (renderer shows dashed hairline).
+          // - If NO evidence block → render full width at p.mean, but low opacity (renderer applies NO_EVIDENCE_E_MODE_OPACITY).
+          if (hasEvidence && p_evidence! > 0) {
+            evidenceRatio = Math.min(1, Math.max(0, p_evidence! / (p_mean || 1)));
+            evidenceWidth = Math.max(MIN_WIDTH, baseWidth * evidenceRatio);
+          } else if (!hasEvidence && (p_mean ?? 0) > 0) {
+            evidenceRatio = 1;
+            evidenceWidth = baseWidth;
+          } else {
+            evidenceRatio = 0;
             evidenceWidth = 0;
-          } else {
-            // F+E mode: both layers
-            if (hasEvidence && p_evidence! >= 0) {
-              evidenceRatio = p_mean! > 0 ? Math.min(1, Math.max(0, p_evidence! / p_mean!)) : 0;
-              evidenceWidth = Math.max(0, baseWidth * evidenceRatio);
-            }
-            meanWidth = baseWidth;
           }
-
-          // === Compute styling flags ===
-          // isDashed: edge has no mass (p.mean=0) OR in E mode with zero evidence
-          const isDashed = edgeProb === 0 || (mode === 'e' && evidenceIsZero);
-
-          // useNoEvidenceOpacity: no evidence block but p.mean > 0 in E mode
-          // This handles rebalanced edges that have flow but no evidence data
-          const useNoEvidenceOpacity = mode === 'e' && !hasEvidence && (p_mean ?? 0) > 0;
-
-          // === Latency bead policy (based on query mode) ===
-          // - window() mode: show beads only for edges with local latency config (median_days > 0)
-          // - cohort() mode: show beads for all edges with completeness, but:
-          //   - edges with local latency: show both completeness + median-lag
-          //   - edges with path_t95 only: show completeness only (no median-lag label)
-          const hasLocalLatency = typeof median_days === 'number' && median_days > 0;
-          let showLatencyBead = false;
-          let showCompletenessOnly = false;
-
-          if (isCohortQuery) {
-            // Cohort mode: show bead if we have completeness data
-            showLatencyBead = hasCompletenessData;
-            // Show completeness only for non-latency edges (no local median_days)
-            showCompletenessOnly = hasCompletenessData && !hasLocalLatency;
+          meanWidth = baseWidth;
+        } else if (mode === 'f') {
+          // F-only mode: width is proportional to p.forecast / p.mean (can exceed mean; do not clamp).
+          const ratio =
+            (hasForecast && typeof p_forecast === 'number' && typeof p_mean === 'number' && p_mean > 0)
+              ? Math.max(0, p_forecast / p_mean)
+              : 1;
+          meanWidth = Math.max(MIN_WIDTH, baseWidth * ratio);
+          evidenceWidth = 0;
+        } else {
+          // F+E mode: outer = mean/forecast, inner = evidence (0-width if evidence=0 or missing)
+          if (hasEvidence && p_evidence! > 0 && (p_mean ?? 0) > 0) {
+            evidenceRatio = Math.min(1, Math.max(0, p_evidence! / (p_mean || 1)));
+            evidenceWidth = Math.max(0, baseWidth * evidenceRatio);
           } else {
-            // Window mode: only show bead for edges with local latency config
-            showLatencyBead = hasLocalLatency;
-            showCompletenessOnly = false;
+            evidenceRatio = 0;
+            evidenceWidth = 0;
           }
-
-          latencyDisplay = {
-            enabled: true,
-            // Raw data
-            median_days,
-            completeness_pct: typeof completeness === 'number' ? completeness * 100 : undefined,
-            t95: baseLatency.t95,
-            p_evidence,
-            p_forecast,
-            p_mean,
-            // Derived booleans
-            hasEvidence,
-            evidenceIsZero,
-            hasForecast,
-            hasLatency,
-            // Rendering mode
-            mode,
-            // Pre-computed widths
-            evidenceWidth,
-            meanWidth,
-            evidenceRatio,
-            // Styling flags
-            isDashed,
-            useNoEvidenceOpacity,
-            // Latency bead policy
-            showLatencyBead,
-            showCompletenessOnly
-          };
+          meanWidth = baseWidth;
         }
+
+        // === Compute styling flags ===
+        // isDashed: edge has no mass (p.mean=0) OR in E mode with evidence.mean = 0
+        const isDashed = edgeProb === 0 || (mode === 'e' && evidenceIsZero);
+
+        // useNoEvidenceOpacity: no evidence block but p.mean > 0 in E mode
+        const useNoEvidenceOpacity = mode === 'e' && !hasEvidence && (p_mean ?? 0) > 0;
+
+        // === Latency bead policy (based on query mode) ===
+        const hasLocalLatency = typeof median_days === 'number' && median_days > 0;
+        let showLatencyBead = false;
+        let showCompletenessOnly = false;
+
+        if (isCohortQuery) {
+          showLatencyBead = hasCompletenessData;
+          showCompletenessOnly = hasCompletenessData && !hasLocalLatency;
+        } else {
+          showLatencyBead = hasLocalLatency;
+          showCompletenessOnly = false;
+        }
+
+        latencyDisplay = {
+          enabled: true,
+          // Raw data
+          median_days,
+          completeness_pct: hasCompletenessData ? completeness! * 100 : undefined,
+          t95: baseLatency.t95,
+          p_evidence,
+          p_forecast,
+          p_mean,
+          // Derived booleans
+          hasEvidence,
+          evidenceIsZero,
+          hasForecast,
+          hasLatency,
+          // Rendering mode
+          mode,
+          // Pre-computed widths
+          evidenceWidth,
+          meanWidth,
+          evidenceRatio,
+          // Styling flags
+          isDashed,
+          useNoEvidenceOpacity,
+          // Latency bead policy
+          showLatencyBead,
+          showCompletenessOnly
+        };
         
         // DEBUG: Log final LAG decision for shipped-to-delivered
         if (scenarioId === 'current' && (graphEdge.id === 'shipped-to-delivered' || paramsKey === 'shipped-to-delivered')) {
@@ -571,9 +566,6 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
             p_forecast,
             median_days,
             completeness,
-            hasAnyLayerData,
-            hasBeadData,
-            enabled,
             latencyDisplay: latencyDisplay ? 'SET' : 'UNDEFINED'
           });
         }

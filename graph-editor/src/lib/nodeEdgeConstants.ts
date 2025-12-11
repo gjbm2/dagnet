@@ -270,8 +270,19 @@ export const LAG_EVIDENCE_STRIPE_OFFSET = 3;
  * These edges should appear faint rather than invisible or dashed, to indicate
  * that they are modelled but not yet supported by direct evidence.
  */
-export const NO_EVIDENCE_E_MODE_OPACITY = 0.9;
+export const NO_EVIDENCE_E_MODE_OPACITY = 0.2;
 
+/**
+ * Opacity multiplier (0-1) applied to the **p.mean anchor lane** when rendering in **E mode**
+ * for edges that have **no p.evidence block at all** (i.e. "rebalanced" edges).
+ *
+ * This exists because the anchor lane is a separate visual element from the E-mode lane.
+ * Without this, rebalanced edges can remain visible in E mode even when the evidence lane
+ * is fully hidden via NO_EVIDENCE_E_MODE_OPACITY.
+ *
+ * Default: 0 (hide anchor for rebalanced edges in E mode). Raise this if you want the anchor
+ * to remain faintly visible while still signalling "no evidence".
+ */
 // --- Legacy aliases (for existing code) ---
 /** @deprecated Use LAG_FORECAST_STRIPE_WIDTH or LAG_EVIDENCE_STRIPE_WIDTH */
 export const LAG_STRIPE_WIDTH = LAG_FORECAST_STRIPE_WIDTH;
@@ -283,7 +294,7 @@ export const LAG_STRIPE_OPACITY = LAG_FORECAST_STRIPE_OPACITY;
 export const LAG_STRIPE_GAP = LAG_FORECAST_STRIPE_GAP;
 
 /** Base opacity for p.mean anchor edge (0-1) */
-export const LAG_ANCHOR_OPACITY = 0.15;
+export const LAG_ANCHOR_OPACITY = 0.05;
 
 /** Opacity for p.mean anchor edge when SELECTED (0-1) - much more visible */
 export const LAG_ANCHOR_SELECTED_OPACITY = 0.7;
