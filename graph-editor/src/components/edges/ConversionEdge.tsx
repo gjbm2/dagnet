@@ -1607,8 +1607,12 @@ export default function ConversionEdge({
   // Single completeness chevron at the completeness % position along the edge
   // Width = max(meanWidth, evidenceWidth) + padding, with minimum for visibility over beads
   // Suppress at 100% completeness - no need to show marker when fully complete
+  // Only show when scenario is tracking evidence (F+E or E mode, not F-only)
   const completenessChevron = React.useMemo(() => {
     if (!shouldShowLagLayers || !lagLayerData || data?.useSankeyView) return null;
+    
+    // Don't show completeness chevron in F-only mode (no evidence tracking)
+    if (lagLayerData.mode === 'f') return null;
     
     const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
     // Suppress chevron at 100% completeness

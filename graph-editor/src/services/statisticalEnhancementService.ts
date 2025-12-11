@@ -26,6 +26,65 @@ import {
 import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 
+// =============================================================================
+// Shared Blend Calculation (Single Source of Truth)
+// =============================================================================
+
+/**
+ * Inputs for the forecast blend calculation.
+ * Used by both addEvidenceAndForecastScalars and enhanceGraphLatencies.
+ */
+export interface BlendInputs {
+  /** Observed conversion rate from cohort evidence */
+  evidenceMean: number | undefined;
+  /** Forecast conversion rate from mature window baseline */
+  forecastMean: number;
+  /** Completeness fraction (0-1) from LAG CDF. undefined = not computed, skip blend */
+  completeness: number | undefined;
+  /** Query population: p.n (forecast) or evidence.n (observed) */
+  nQuery: number;
+  /** Baseline sample size from window slice */
+  nBaseline: number;
+}
+
+/**
+ * Compute blended p.mean from evidence and forecast.
+ * 
+ * Formula (forecast-fix.md):
+ *   w_evidence = (completeness × n_query) / (λ × n_baseline + completeness × n_query)
+ *   p.mean = w_evidence × evidence.mean + (1 - w_evidence) × forecast.mean
+ * 
+ * When n_query = 0 (no arrivals yet):
+ *   w_evidence = 0 → returns pure forecast.mean
+ * 
+ * This is the SINGLE source of truth for blend calculation.
+ * Called by both:
+ *   - addEvidenceAndForecastScalars (single-edge path)
+ *   - enhanceGraphLatencies (batch path)
+ * 
+ * @returns Blended mean, or undefined if blend cannot be computed
+ */
+export function computeBlendedMean(inputs: BlendInputs): number | undefined {
+  const { evidenceMean, forecastMean, completeness, nQuery, nBaseline } = inputs;
+  
+  // Guard: need valid forecast baseline
+  if (nBaseline <= 0 || !Number.isFinite(forecastMean)) {
+    return undefined;
+  }
+  
+  // Guard: need valid inputs
+  if (completeness === undefined || evidenceMean === undefined) {
+    return undefined;
+  }
+  
+  // With nQuery=0, wEvidence=0, returns pure forecast (correct for no-arrivals case)
+  const nEff = completeness * nQuery;
+  const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
+  const wEvidence = nEff / (m0 + nEff);
+  
+  return wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
+}
+
 export interface EnhancedAggregation {
   method: string;
   n: number;
@@ -1049,6 +1108,8 @@ export interface GraphEdgeForPath {
   from: string;
   to: string;
   p?: {
+    /** Forecast population for this edge under the current DSL (inbound-n result). */
+    n?: number;
     latency?: {
       maturity_days?: number;
       t95?: number;
@@ -1849,7 +1910,12 @@ export function enhanceGraphLatencies(
         latencyStats.forecast_available ? latencyStats.p_infinity : undefined;
       const forecastMean = baseForecastMean ?? fallbackForecastMean;
 
-      const nQuery = edge.p?.evidence?.n ?? cohorts.reduce((sum, c) => sum + c.n, 0);
+      // nQuery: forecast population for this edge
+      // Prefer p.n (computed by computeInboundN from upstream forecast_k),
+      // then fall back to evidence.n (raw from Amplitude), then cohort sum.
+      // This ensures downstream edges with n=0 from Amplitude still get
+      // a proper population estimate from upstream forecasts.
+      const nQuery = edge.p?.n ?? edge.p?.evidence?.n ?? cohorts.reduce((sum, c) => sum + c.n, 0);
 
       // n_baseline should reflect the SAMPLE SIZE behind the WINDOW() forecast,
       // not just the subset of cohorts that are currently "mature" under this query.
@@ -1899,33 +1965,30 @@ export function enhanceGraphLatencies(
         forecastMean,
         nQuery,
         nBaseline,
+        hasPN: edge.p?.n !== undefined,
       });
       
-      if (
-        completeness !== undefined &&
-        evidenceMean !== undefined &&
-        forecastMean !== undefined &&
-        Number.isFinite(forecastMean) &&
-        nQuery > 0 &&
-        nBaseline > 0
-      ) {
-        const nEff = completeness * nQuery;
-        const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
-        const wEvidence = nEff / (m0 + nEff);
-        const blendedMean = wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
-        
-        // Add blended mean to the edge values
+      // Use shared blend function (single source of truth)
+      // Pass actual values - undefined means "not available, skip blend"
+      const blendedMean = computeBlendedMean({
+        evidenceMean,
+        forecastMean: forecastMean ?? 0,
+        completeness,
+        nQuery,
+        nBaseline,
+      });
+      
+      if (blendedMean !== undefined) {
         edgeLAGValues.blendedMean = blendedMean;
         
         console.log('[enhanceGraphLatencies] Computed forecast blend:', {
           edgeId,
           edgeUuid,
-          completeness: completeness.toFixed(3),
+          completeness: (completeness ?? 0).toFixed(3),
           nQuery,
           nBaseline,
-          wEvidence: wEvidence.toFixed(3),
-          evidenceMean: evidenceMean.toFixed(3),
-          forecastMean: forecastMean.toFixed(3),
+          evidenceMean: (evidenceMean ?? 0).toFixed(3),
+          forecastMean: (forecastMean ?? 0).toFixed(3),
           blendedMean: blendedMean.toFixed(3),
         });
       }

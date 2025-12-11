@@ -1,11 +1,49 @@
 ## Cohort View – Implementation Plan (Cohort for All Lagged Paths)
 
-This plan implements the simplified rule for cohort mode:
+This plan implements the simplified rule for cohort mode as a **planner / retrieval optimisation**, while keeping the **probability semantics (E / F / blended `p.mean`) uniform across all edges**:
 
 - In **cohort() mode**, **every edge whose maximum upstream path lag from the anchor is non‑zero** is treated as a cohort edge and fetched via `cohort()`.
-- Only edges whose **max cumulative path lag from the anchor is zero** remain “simple” edges without LAG treatment.
+- Only edges whose **max cumulative path lag from the anchor is zero** remain "simple" from a **retrieval and latency‑completeness** perspective (no anchor‑based A→…→X→Y cohort query is required).
 
-The goal is to remove bespoke “path‑wise F/E hacks” and instead rely on the normal LAG pipeline everywhere it matters, while keeping window() behaviour unchanged.
+The goal is to remove bespoke "path‑wise F/E hacks" and instead rely on the normal LAG pipeline everywhere it matters, while keeping window() behaviour unchanged.
+
+---
+
+### 0. Implementation Constraints (Risk Reduction)
+
+**No new persisted params.** This plan uses only existing fields:
+
+- `p.mean`, `p.evidence.*`, `p.forecast.*`
+- `p.latency.{t95, path_t95, completeness, maturity_days, median_lag_days}`
+
+The LAG topo pass (`enhanceGraphLatencies`) **already computes `path_t95`** per edge and writes it to `p.latency.path_t95`. The planner simply reads this value to classify edges; no new schema or storage is required.
+
+**No new code paths.** This plan reuses existing services end‑to‑end:
+
+- **`statisticalEnhancementService.enhanceGraphLatencies`** – already computes `path_t95`, completeness, blended `p.mean`, and populates `p.latency.*`.
+- **`dataOperationsService.addEvidenceAndForecastScalars`** – already computes `p.evidence.*` and attaches `p.forecast.*` via dual‑slice lookup.
+- **`fetchDataService.fetchItems`** – already orchestrates batch fetches with cohort vs window logic and calls `enhanceGraphLatencies`.
+- **`windowFetchPlannerService`** – already classifies items; we add a branch that reads existing `path_t95` to decide cohort vs simple.
+
+The viewer (`ConversionEdge`, `buildScenarioRenderEdges`) already keys rendering on field presence (`p.latency`, `p.evidence`, `p.forecast`) and scenario mode; no viewer changes are required.
+
+**Summary:** This plan is pure **planner wiring** – connecting existing data (`path_t95`) to existing classification logic, so more edges flow through the existing LAG pipeline in cohort mode.
+
+---
+
+### 0.1 Field Semantics (Invariant)
+
+The **meaning of the fields** remains invariant regardless of whether an edge is behind a lagged path:
+
+- `p.evidence.mean` – always the raw observed rate Σk/Σn for the current query.
+- `p.forecast.mean` – always the baseline from mature window data (when available).
+- `p.mean` – always the "forecast lane": a blend of F+E for LAG‑tracked edges, and equal to evidence for edges not treated by the LAG completeness machinery.
+
+The **viewer modes** (E, F, F+E) do not special‑case latency vs non‑latency edges; they simply choose which of these fields to display:
+
+- **E mode** → `p.evidence.mean`.
+- **F mode** → `p.mean`.
+- **F+E mode** → both lanes; they coincide visually when `p.mean = p.evidence.mean`.
 
 ---
 
@@ -21,189 +59,203 @@ The goal is to remove bespoke “path‑wise F/E hacks” and instead rely on th
 
 - In **cohort() mode**:
   - If `max_path_t95(anchor → E) > 0` for edge \(E\):
-    - Treat \(E\) as a **cohort edge**:
-      - Fetch data via `cohort()` from the anchor to that edge.
-      - Run the standard LAG pipeline for this edge (fit distribution, compute t95, completeness, p_infinity, p_mean, p_evidence).
+    - Treat \(E\) as a **cohort edge** from a **latency / completeness** perspective:
+      - Fetch data via `cohort()` from the anchor to that edge (A‑anchored cohorts).
+      - Run the standard LAG pipeline for this edge (fit distribution, compute t95, completeness, p_infinity, blended `p.mean`, and evidence).
       - Store results under `p.latency` on the edge’s probability parameter as usual.
   - If `max_path_t95(anchor → E) = 0` for edge \(E\):
-    - Treat \(E\) as a **simple edge**:
-      - No LAG‑specific retrieval is required for cohort mode.
-      - It can continue to use window‑style or simple cohort retrieval and expose `p.mean` without F/E split.
+    - Treat \(E\) as a **simple edge for latency purposes**:
+      - No LAG‑specific cohort retrieval is required in cohort mode (no need for 3‑step A→…→X→Y funnels).
+      - It continues to use window‑style or simple cohort retrieval for evidence.
+      - If a suitable window baseline exists, it still obtains `p.forecast.mean` via the dual‑slice mechanism (design.md §4.6).
+      - Its `p.mean` remains equal to `p.evidence.mean` (no completeness‑based blending), so F, E, and F+E modes **all read the same underlying probability** even though both evidence and forecast fields are still available.
 
 **1.3 Viewer semantics**
 
+The cohort‑view changes are deliberately **orthogonal** to how the viewer chooses to display Forecast vs Evidence. The viewer continues to operate only in terms of the three probability “lanes” and scenario mode:
+
+- **Evidence lane**: `p.evidence.mean` (if present).
+- **Forecast lane**: `p.mean` (the “F lane” – blended for LAG edges, equal to evidence for simple edges).
+- **Baseline context**: `p.forecast.mean` (where a window baseline exists).
+
+Modes:
+
+- **E mode**:
+  - Shows the Evidence lane only: `p.evidence.mean` for all edges where evidence exists.
+- **F mode**:
+  - Shows the Forecast lane only: `p.mean` for all edges.
+  - For LAG‑treated edges, this is the blended forecast; for instantaneous edges, this naturally collapses to evidence because `p.mean = p.evidence.mean`.
+- **F+E mode**:
+  - Shows both Evidence (`p.evidence.mean`) and Forecast (`p.mean`) lanes side by side.
+  - On edges where `p.mean = p.evidence.mean` (no LAG blending), the two lanes coincide visually without any special handling.
+
+The effect of this plan on the viewer is therefore:
+
 - **Window() mode**:
-  - Unchanged: only edges with a local `latency` block and meaningful lag render F/E; others remain simple `p.mean`.
+  - Unchanged in layout and interaction; edges simply have better‑populated `p.evidence.*` and `p.forecast.*` fields, and LAG‑enabled edges have `p.latency.*` for completeness/t95 visualisation.
 - **Cohort() mode**:
-  - Edges with `p.latency` (produced by the LAG pipeline) continue to use existing F/E rendering rules.
-  - Downstream of lagged edges, once LAG has been run on those downstream edges, they also have `p.latency` and therefore F/E view “for free”.
-  - Edges with `max_path_t95 = 0` remain simple `p.mean` in cohort mode; their path is effectively instantaneous.
+  - More edges behind lag paths acquire `p.latency` via the LAG pipeline, so completeness and path‑wise maturity can be rendered consistently.
+  - Edges with `max_path_t95 = 0` still have coherent E/F/F+E behaviour (evidence, forecast baseline where available, and `p.mean = p.evidence`), they simply do not participate in path‑lag completeness logic or require anchor‑based cohort retrieval.
 
 ---
 
 ### 2. Affected Areas (High‑Level)
 
-Changes must respect the existing “services as logic, UI as access points” rule.
+Changes must respect the existing "services as logic, UI as access points" rule.
 
-- **Types & Schemas**
-  - `graph-editor/src/types/index.ts` (graph, edge parameters, latency types)
-  - YAML schemas under `graph-editor/public/param-schemas/` (persisted latency blocks)
-  - Python models in `lib/graph_types.py` if latency metadata is mirrored there
+**Services reused unchanged (no modifications required):**
 
-- **LAG / Statistical Services**
-  - `graph-editor/src/services/statisticalEnhancementService.ts`
-    - Computation of edge‑level `t95` and any helper that may participate in path lag calculations.
+- `graph-editor/src/services/statisticalEnhancementService.ts`
+  - `enhanceGraphLatencies` already computes `path_t95`, completeness, and blended `p.mean`.
+- `graph-editor/src/services/dataOperationsService.ts`
+  - `addEvidenceAndForecastScalars` already computes evidence and attaches forecast via dual‑slice.
+- `graph-editor/src/services/windowAggregationService.ts`
+  - Cohort aggregation and latency stats already implemented.
+- **Viewer / Rendering** (`buildScenarioRenderEdges.ts`, `ConversionEdge.tsx`, `ConversionNode.tsx`)
+  - Already keys rendering on field presence (`p.latency`, `p.evidence`, `p.forecast`) and scenario mode.
+  - No changes required.
 
-- **Planner & Fetch**
-  - `graph-editor/src/services/windowFetchPlannerService.ts`
-    - Path lag computation, item classification, and query planning for cohort mode.
-  - `graph-editor/src/services/fetchDataService.ts`
-    - Orchestration of fetch batches and coordination with planner decisions.
+**Services requiring wiring changes:**
 
-- **Data Operations & Aggregation**
-  - `graph-editor/src/services/dataOperationsService.ts`
-    - Execution of cohort queries, refetch policy, persistence of latency metadata.
-  - `graph-editor/src/services/windowAggregationService.ts`
-    - Aggregation of cohort time‑series and recomputation of latency stats.
+- `graph-editor/src/services/windowFetchPlannerService.ts`
+  - **Read** existing `p.latency.path_t95` from edges.
+  - **Classify** edges as cohort candidates (`path_t95 > 0`) vs simple (`path_t95 = 0`) in cohort mode.
+- `graph-editor/src/services/fetchDataService.ts`
+  - Pass planner classification to determine cohort vs window fetch shape.
+  - Ensure `enhanceGraphLatencies` runs on cohort‑candidate edges (already happens in batch flow).
 
-- **Viewer / Rendering**
-  - `graph-editor/src/components/canvas/buildScenarioRenderEdges.ts`
-  - `graph-editor/src/components/edges/ConversionEdge.tsx`
-  - `graph-editor/src/components/nodes/ConversionNode.tsx`
-    - Edge rendering and F/E display logic.
+**No schema changes:**
 
-- **Tests & Documentation**
-  - Service tests in `graph-editor/src/services/__tests__/`
-  - Viewer and canvas tests in `graph-editor/src/components/**/*.__tests__`
-  - Integration tests for horizon and merge flows (e.g. `cohortHorizonIntegration.test.ts`)
-  - Design docs: `cohort-view.md`, `retrieval-date-logic-implementation-plan.md`, `window-fetch-planner-service.md`
+- Types (`graph-editor/src/types/index.ts`) – no new fields.
+- YAML schemas (`graph-editor/public/param-schemas/`) – unchanged.
+- Python models (`lib/graph_types.py`) – unchanged.
+
+**Tests & Documentation:**
+
+- Add planner tests for `path_t95` classification logic.
+- Add integration tests for cohort‑mode edge promotion.
+- Update design docs: `cohort-view.md`, `retrieval-date-logic-implementation-plan.md`.
 
 ---
 
-### 3. Phase 1 – Compute and Cache Path Lag for All Edges
+### 3. Phase 1 – Read Existing `path_t95` in Planner
 
-**Goal:** For any active analysis (graph + cohort DSL), have a reliable `max_path_t95(anchor → E)` value for each edge E, computed once and cached, without changing viewer logic yet.
+**Goal:** For any active analysis (graph + cohort DSL), the planner reads `p.latency.path_t95` (already computed by `enhanceGraphLatencies`) to classify edges as "cohort candidates" vs "simple".
 
-**3.1 Path lag computation (planner layer)**
+**3.1 Reading path lag (planner layer)**
 
 - In `windowFetchPlannerService.ts`:
-  - Implement or refine a helper that:
-    - Takes the current graph, anchor node, and a set of “latency edges” (edges with `p.latency` and `t95 > 0`).
-    - Runs a topological‑order DP to compute `max_path_t95(anchor → node)` and then `max_path_t95(anchor → edge)`:
-      - For each path from anchor to edge, sum `t95` over latency edges along the path.
-      - For each edge, take the **maximum** such sum over all paths.
-    - Caches results for the duration of the planner’s lifetime (per analysis / DSL).
-  - Ensure recomputation is triggered when:
-    - The graph’s topology changes, or
-    - Latency `t95` values are updated by LAG recomputation after new data fetches.
+  - After a batch fetch completes (or when planning against an already‑enhanced graph):
+    - Read `edge.p.latency.path_t95` for each edge.
+    - Build an in‑memory map `{ edgeId → path_t95 }` for classification.
+  - **No new computation is required** – `enhanceGraphLatencies` already runs the topological DP and writes `path_t95` to each edge's `p.latency`.
+  - Handle the cold‑start case (first fetch, no `path_t95` yet):
+    - Either run a lightweight pre‑pass using `maturity_days` as a proxy, or
+    - Accept that the first fetch treats all edges as simple, and subsequent fetches (after LAG has run) use real `path_t95`.
 
 **3.2 Types and metadata**
 
-- In `graph-editor/src/types/index.ts` and any related service types:
-  - Ensure there is a clear place to represent path lag (in memory), even if not persisted:
-    - For example, a planner‑internal map keyed by edge id.
-  - Keep persisted latency metadata unchanged at this phase; path lag is a planner concern here.
+- **No new persisted fields.**
+- The planner may keep a transient map `Map<edgeId, number>` keyed by edge id for the duration of the analysis; this is purely in‑memory and derived from existing `p.latency.path_t95`.
 
 **3.3 Tests for Phase 1**
 
 - Add or extend planner tests to verify:
-  - Correct max‑sum behaviour when multiple paths exist (branching and merging).
-  - Edges unreachable from the anchor or on purely non‑latency paths produce `max_path_t95 = 0`.
-  - Caching and invalidation behave as expected when the graph or latency configuration changes.
+  - Planner correctly reads `path_t95` from edges where `p.latency.path_t95` exists.
+  - Edges without `p.latency` (or with `path_t95 = 0`) are classified as simple.
+  - Cold‑start behaviour is documented and tested (first fetch before LAG has run).
 
 ---
 
-### 4. Phase 2 – Cohort Planning for All Lagged Paths
+### 4. Phase 2 – Cohort Planning Using Existing `path_t95`
 
-**Goal:** In cohort mode, the planner treats every edge with `max_path_t95 > 0` as a cohort edge and plans appropriate `cohort()` queries, while leaving zero‑lag paths in simple mode.
+**Goal:** In cohort mode, the planner classifies edges based on existing `p.latency.path_t95` and routes them to appropriate fetch/LAG logic.
 
 **4.1 Planner classification in cohort mode**
 
 - In `windowFetchPlannerService.ts`:
   - For analyses where the DSL includes a top‑level `cohort()` clause:
-    - Use `max_path_t95(anchor → E)` to classify edges:
-      - If `max_path_t95 > 0`: mark the edge’s probability param (and any relevant conditional/case params) as **cohort candidates**.
-      - If `max_path_t95 = 0`: treat as **simple candidates** that do not require LAG‑style cohort fetching.
-  - Ensure that classification feeds into existing item types (e.g. `needs_fetch`, `covered_stable`, `stale_candidate`), but with the source shape (`cohort()` vs window) driven by path lag.
+    - Read `edge.p.latency.path_t95` (already computed by `enhanceGraphLatencies`).
+    - Classify:
+      - `path_t95 > 0` → **cohort candidate** (use anchor‑based cohort retrieval, run full LAG).
+      - `path_t95 = 0` or undefined → **simple candidate** (use window/simple retrieval, no LAG completeness).
+  - Feed classification into existing item types (`needs_fetch`, `covered_stable`, `stale_candidate`), with the source shape (`cohort()` vs `window()`) driven by `path_t95`.
 
 **4.2 Query planning and horizons**
 
-- For cohort candidates:
-  - Plan **anchor‑based cohort queries** for the edge, using the existing query DSL conventions (from anchor → … → edge) and the requested cohort window.
-  - Use existing retrieval‑date logic to bound horizons, with path lag as an input to horizon computation.
-- For simple candidates (max path lag = 0):
-  - Use existing window or simple retrieval logic; no special LAG behaviour is required.
+- For **cohort candidates**:
+  - Plan anchor‑based cohort queries using existing DSL conventions.
+  - Use existing retrieval‑date logic (already uses `path_t95` for horizon computation).
+- For **simple candidates**:
+  - Use existing window or simple retrieval logic; no LAG completeness behaviour.
+  - They still get `p.forecast.mean` via dual‑slice if a window baseline exists.
 
 **4.3 Tests for Phase 2**
 
 - Extend planner tests to cover:
-  - Mixed graphs where some edges lie behind latency legs and others do not.
+  - Mixed graphs where some edges have `path_t95 > 0` and others have `path_t95 = 0`.
   - Verification that in cohort mode:
-    - All edges behind lag paths are scheduled for cohort queries.
-    - Zero‑lag paths are not accidentally promoted to cohort edges.
-  - Verification that in window mode, planning stays unchanged.
+    - Edges with `path_t95 > 0` are scheduled for cohort queries.
+    - Edges with `path_t95 = 0` use simple retrieval.
+  - Verification that in window mode, planning stays unchanged (classification not applied).
 
 ---
 
-### 5. Phase 3 – Cohort Fetch Execution and LAG Application
+### 5. Phase 3 – Cohort Fetch Execution (Existing Services)
 
-**Goal:** Ensure that for all edges planned as cohort edges, the fetch layer runs cohort queries and the LAG pipeline, so that `p.latency` is populated consistently and F/E rendering works without special‑case logic.
+**Goal:** Ensure that edges classified as cohort candidates flow through the existing cohort fetch and LAG pipeline.
 
-**5.1 Fetch execution**
+**5.1 Fetch execution (existing code paths)**
 
-- In `fetchDataService.ts` and `dataOperationsService.ts`:
-  - For items marked by the planner as cohort edges:
-    - Execute anchor‑based cohort queries instead of window‑only queries.
-    - Use existing merge logic to write cohort time‑series into parameter files.
-  - For items marked as simple edges:
-    - Continue to use existing window/simple retrieval and merge behaviour.
+- In `fetchDataService.ts`:
+  - For items marked as **cohort candidates** by the planner:
+    - Use existing anchor‑based cohort fetch logic (already implemented for `maturity_days` edges).
+    - Use existing merge logic in `dataOperationsService` to write cohort time‑series into parameter files.
+  - For items marked as **simple candidates**:
+    - Use existing window/simple retrieval and merge behaviour.
+  - **No new fetch code paths** – we route cohort candidates to the existing cohort machinery.
 
-**5.2 LAG recomputation on cohort edges**
+**5.2 LAG recomputation (existing service)**
 
-- In `windowAggregationService.ts` (and associated services):
-  - After merging cohort time‑series for a cohort edge, run the standard LAG recomputation pipeline:
-    - Aggregate cohort stats.
-    - Fit lag distribution.
-    - Compute `t95`, completeness, `p_infinity`, `p_mean`, `p_evidence`.
-    - Update `p.latency` on the probability parameter.
-  - This applies equally to:
-    - Explicit latency edges (with local `maturity_days`), and
-    - Downstream edges now treated as cohort edges due to non‑zero path lag from the anchor.
+- `enhanceGraphLatencies` already runs after batch fetches and:
+  - Aggregates cohort stats.
+  - Fits lag distribution.
+  - Computes `t95`, `path_t95`, completeness, blended `p.mean`, and populates `p.latency.*`.
+- **No changes required** – cohort candidates flow through this existing pipeline.
+- The only change is that **more edges** are now routed to cohort retrieval (based on `path_t95` classification), so more edges naturally get `p.latency` populated.
 
 **5.3 Tests for Phase 3**
 
-- Extend or add integration tests to verify that in cohort mode:
-  - Edges behind lag paths receive cohort‑based data and have `p.latency` populated.
-  - LAG statistics are recomputed for those edges and written into parameter files or in‑memory representations as appropriate.
-  - Window mode remains unaffected by these changes.
+- Add integration tests to verify:
+  - Edges with `path_t95 > 0` receive cohort‑based data and have `p.latency` populated after fetch.
+  - The existing `enhanceGraphLatencies` correctly processes these edges.
+  - Window mode remains unaffected.
 
 ---
 
-### 6. Phase 4 – Viewer Semantics (Reusing Existing F/E Logic)
+### 6. Phase 4 – Viewer (No Changes Required)
 
-**Goal:** Make cohort view coherent by relying on existing F/E rendering, now that more edges have proper `p.latency` from cohort‑based LAG, without introducing new per‑edge hacks.
+**Goal:** Verify that existing F/E rendering works correctly now that more edges have `p.latency` populated.
 
-**6.1 Edge rendering**
+**6.1 Edge rendering (existing logic)**
 
-- In `buildScenarioRenderEdges.ts` and `ConversionEdge.tsx`:
-  - Keep the existing rule for enabling F/E:
-    - If an edge has `p.latency` plus evidence/forecast fields, F/E rendering is available (subject to scenario visibility mode).
-  - Rely on the fact that, after the preceding phases, more edges (those behind lag paths) will naturally have `p.latency` in cohort mode.
-  - Do **not** introduce synthetic “path‑only completeness” gates; instead, let the presence of LAG metadata drive F/E availability.
+- `buildScenarioRenderEdges.ts` and `ConversionEdge.tsx` already:
+  - Read `p.evidence.mean`, `p.forecast.mean`, `p.mean`, `p.latency.*`.
+  - Decide what to render based on field presence and scenario mode (E / F / F+E).
+- **No code changes required.**
+- After the preceding phases, more edges (those behind lag paths) naturally have `p.latency`, so F/E rendering and completeness display "just work".
 
-**6.2 Node and canvas behaviour**
+**6.2 Node and canvas behaviour (existing logic)**
 
-- In `ConversionNode.tsx` and `GraphCanvas.tsx`:
-  - Ensure any tooltips, side panels, or legends that mention completeness or t95:
-    - Display the same latency metadata now present on downstream edges in cohort mode.
-    - Continue to treat window mode as edge‑local, cohort mode as path‑wise (because the underlying cohorts are anchor‑based).
+- Tooltips, side panels, and legends that reference completeness or `t95` already read `p.latency.*`.
+- **No code changes required** – they display whatever is present.
 
 **6.3 Tests for Phase 4**
 
-- Add or update viewer tests to confirm that in cohort mode:
-  - Edges downstream of lagged edges show F/E bands once their LAG stats exist.
-  - Edges on purely instantaneous paths (max path lag = 0) remain simple `p.mean` edges.
-  - Window view snapshots or expectations remain unchanged.
+- Add or update viewer tests to confirm:
+  - Edges with `p.latency` show completeness / F/E bands.
+  - Edges with `path_t95 = 0` (simple) show `p.mean = p.evidence.mean` without F/E split.
+  - Window mode snapshots remain unchanged.
 
 ---
 
@@ -211,24 +263,32 @@ Changes must respect the existing “services as logic, UI as access points” r
 
 **7.1 Existing graphs and params**
 
-- For existing parameter files:
-  - The new behaviour is primarily a **planner and fetch change**; persisted schema need not change immediately.
-  - On first cohort‑mode runs after this change, more edges will accumulate `p.latency` fields as LAG runs on their cohorts; this is expected and desired.
+- **No schema migration required.** All changes are to planner routing, not persisted data.
+- On first cohort‑mode runs after this change, more edges will have `p.latency` populated as LAG runs on their cohorts; this is expected and desired.
+- Existing parameter files continue to work unchanged.
 
-**7.2 Guard rails**
+**7.2 Risk profile**
 
-- Optionally introduce an internal configuration flag to:
-  - Enable “cohort for all lagged paths” behaviour for selected workspaces or environments first.
-  - Allow comparison against previous behaviour during validation.
+- **Low risk:** We are wiring existing, tested services together via planner classification.
+- **No new code paths:** Cohort candidates flow through existing cohort fetch + `enhanceGraphLatencies`.
+- **No viewer changes:** Rendering already keys on field presence.
+- **Incremental rollout:** The planner classification can be gated behind a feature flag if desired, but the lack of new code paths makes this lower priority.
 
 **7.3 Documentation**
 
-- Update and keep aligned:
-  - `cohort-view.md` as the high‑level behaviour spec.
-  - `retrieval-date-logic-implementation-plan.md` to reference that cohort mode now uses cohort retrieval for all edges behind lag paths.
-  - Any planner‑specific docs describing how path lag is computed and used.
+- Update:
+  - `cohort-view.md` – high‑level behaviour spec.
+  - `retrieval-date-logic-implementation-plan.md` – reference `path_t95` classification.
 
 ---
 
-This plan is deliberately simpler than earlier versions: it removes bespoke downstream hacks and instead makes the **data itself** (cohort‑based LAG on all edges behind lag paths) carry the correct semantics, allowing the existing F/E rendering and latency UI to be reused unchanged in cohort mode.
+### Summary
+
+This plan is deliberately minimal:
+
+- **Reads** existing `p.latency.path_t95` (no new computation).
+- **Routes** edges with `path_t95 > 0` through existing cohort + LAG pipeline (no new code paths).
+- **Reuses** existing viewer logic (no changes required).
+
+The result is that more edges in cohort mode get `p.latency` populated, giving coherent F/E semantics throughout the graph without bespoke hacks.
 

@@ -54,6 +54,7 @@ import {
 import { computeCohortRetrievalHorizon } from './cohortRetrievalHorizon';
 import { 
   statisticalEnhancementService,
+  computeBlendedMean,
 } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
@@ -66,7 +67,7 @@ import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
-import { FORECAST_BLEND_LAMBDA, DIAGNOSTIC_LOG } from '../constants/statisticalConstants';
+import { DIAGNOSTIC_LOG } from '../constants/statisticalConstants';
 
 // Cached DAS runner instance for connection lookups (avoid recreating per-call)
 let cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
@@ -1362,7 +1363,18 @@ class DataOperationsService {
             const latestLatencySummary = (latestValueWithSource as any)?.latency;
 
             const aggregatedValue = {
-              mean: storedMean,
+              // DESIGN (§5.2, Non-latency row): For non-latency edges, p.mean MUST
+              // reflect the raw observed rate (Σk/Σn), not the historical stored mean.
+              // For latency edges, this evidence-based mean is a safe default that
+              // will later be replaced by the LAG topo pass with the blended value.
+              //
+              // Previous behaviour (mean: storedMean) caused a regression where
+              // simple/window-only edges kept stale mastered means even when fresh
+              // evidence was available. By using evidenceMean here, UpdateManager’s
+              // values[latest].mean → p.mean mapping does the right thing for both:
+              //   - Non-latency edges: final p.mean = evidence (no LAG pass)
+              //   - Latency edges: p.mean is later overwritten by blendedMean
+              mean: evidenceMean,
               stdev: storedStdev,
               n: enhanced.n,
               k: enhanced.k,
@@ -5978,38 +5990,22 @@ class DataOperationsService {
                 // Do not overwrite an existing forecast on the value
                 if (v.forecast !== undefined) return v;
                 
-                // === FORECAST BLEND (forecast-fix.md) ===
-                // If we have completeness and evidence, compute blended p.mean
-                const completeness = v.latency?.completeness;
-                const evidenceMean = v.evidence?.mean;
-                const nQuery = v.n;
+                // Use shared blend function (single source of truth)
+                // Pass actual values - undefined means "not available, skip blend"
+                const blendedMean = computeBlendedMean({
+                  evidenceMean: v.evidence?.mean,
+                  forecastMean: forecastValue,
+                  completeness: v.latency?.completeness,
+                  nQuery: v.n ?? 0,
+                  nBaseline: nBaseline ?? 0,
+                });
                 
-                let blendedMean: number | undefined;
-                if (
-                  completeness !== undefined &&
-                  evidenceMean !== undefined &&
-                  nQuery !== undefined &&
-                  nQuery > 0 &&
-                  nBaseline !== undefined &&
-                  nBaseline > 0
-                ) {
-                  // w_evidence = (c * n_q) / (λ * n_baseline + c * n_q)
-                  const nEff = completeness * nQuery;
-                  const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
-                  const wEvidence = nEff / (m0 + nEff);
-                  
-                  // p.mean = w_evidence * p.evidence + (1 - w_evidence) * p.forecast
-                  blendedMean = wEvidence * evidenceMean + (1 - wEvidence) * forecastValue;
-                  
+                if (blendedMean !== undefined) {
                   console.log('[addEvidenceAndForecastScalars] Computed forecast blend:', {
-                    completeness,
-                    nQuery,
+                    completeness: v.latency?.completeness,
+                    nQuery: v.n ?? 0,
                     nBaseline,
-                    lambda: FORECAST_BLEND_LAMBDA,
-                    nEff,
-                    m0,
-                    wEvidence: wEvidence.toFixed(3),
-                    evidenceMean: evidenceMean.toFixed(3),
+                    evidenceMean: (v.evidence?.mean ?? 0).toFixed(3),
                     forecastMean: forecastValue.toFixed(3),
                     blendedMean: blendedMean.toFixed(3),
                   });

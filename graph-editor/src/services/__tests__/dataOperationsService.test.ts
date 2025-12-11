@@ -118,11 +118,25 @@ describe('DataOperationsService', () => {
             type: 'probability',
             values: [
               {
+                // NOTE: Deliberately set mean ≠ k/n so tests can verify that
+                // query-time evidence (Σk/Σn) is what drives p.mean for
+                // non-latency edges under window() queries.
+                //
+                // Header n/k here are GLOBAL totals; window aggregation in
+                // dataOperationsService will compute evidence from n_daily/k_daily
+                // for a specific window and should override this stored mean.
                 mean: 0.6,
                 stdev: 0.08,
                 distribution: 'beta',
                 valid_from: '2025-01-01',
+                // Daily series for a 3-day window: 1–3 Jan 2025
+                dates: ['1-Jan-25', '2-Jan-25', '3-Jan-25'],
+                n_daily: [100, 200, 300], // total n = 600
+                k_daily: [10, 20, 30],    // total k = 60 → evidence = 0.1
+                window_from: '1-Jan-25',
+                window_to: '3-Jan-25',
                 evidence: {
+                  // Legacy header evidence; query-time evidence should win
                   n: 1000,
                   k: 600,
                   retrieved_at: '2025-01-01T00:00:00Z',
@@ -189,8 +203,35 @@ describe('DataOperationsService', () => {
       // Verify the updated graph
       const updatedGraph = (mockSetGraph as any).mock.calls[0][0];
       expect(updatedGraph).toBeDefined();
-      expect(updatedGraph.edges[0].p.mean).toBe(0.6); // Updated from file
+      // Base path (no targetSlice/window) should still use stored mean
+      expect(updatedGraph.edges[0].p.mean).toBe(0.6);
       expect(updatedGraph.metadata.updated_at).toBeDefined();
+    });
+
+    it('should set non-latency p.mean = evidence for window() queries', async () => {
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'homepage-to-product-param',
+        edgeId: 'edge-1-uuid',
+        graph: mockGraph,
+        setGraph: mockSetGraph,
+        // Window fully covering the daily series defined in the param
+        targetSlice: 'window(1-Jan-25:3-Jan-25)',
+      });
+
+      expect(mockSetGraph).toHaveBeenCalledTimes(1);
+
+      const updatedGraph = (mockSetGraph as any).mock.calls[0][0] as Graph;
+      const edge = updatedGraph.edges[0] as any;
+
+      // Evidence from daily series: n = 100 + 200 + 300 = 600, k = 10 + 20 + 30 = 60
+      const expectedEvidenceMean = 60 / 600;
+
+      // p.evidence.mean should reflect query-time evidence (Σk/Σn)
+      expect(edge.p.evidence.mean).toBeCloseTo(expectedEvidenceMean, 6);
+
+      // DESIGN (non-latency row): For non-latency edges under window() queries,
+      // p.mean MUST equal evidence, not the legacy stored mean from the file.
+      expect(edge.p.mean).toBeCloseTo(expectedEvidenceMean, 6);
     });
 
     it('should put parameter to file from graph edge', async () => {
