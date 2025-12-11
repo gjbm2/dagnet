@@ -795,39 +795,41 @@ export function calculateIncrementalFetch(
     try {
       const sliceValues = isolateSlice(paramFileData.values, targetSlice);
       
-      // Check if any slice has aggregate data AND covers the requested window
+      // Check if any slice has aggregate data AND fully covers the requested window.
+      // IMPORTANT: we require the slice window to CONTAIN the requested window, not
+      // just overlap. Otherwise we'd incorrectly declare "fully cached" when only
+      // a tail fragment (e.g. last 7 days) is available.
       const hasAggregateDataWithCoverage = sliceValues.some(v => {
         // Must have aggregate values
         const hasAggregate = v.mean !== undefined && v.mean !== null && 
           (v.n !== undefined || (v as any).evidence?.n !== undefined);
         if (!hasAggregate) return false;
         
-        // Must have date coverage that overlaps with requested window
+        // Must have date coverage that fully contains requested window
         // Check window_from/window_to or cohort_from/cohort_to
         const sliceStart = v.window_from || v.cohort_from;
         const sliceEnd = v.window_to || v.cohort_to;
         
         if (!sliceStart || !sliceEnd) {
-          // No date range info - check if dates array covers the window
+          // No aggregate window bounds – fall back to daily coverage check.
           if (v.dates && Array.isArray(v.dates) && v.dates.length > 0) {
             const sliceDates = new Set(v.dates.map((d: string) => normalizeDate(d)));
-            // Check if ANY of the requested dates are in the slice
-            const hasOverlap = allDatesInWindow.some(reqDate => sliceDates.has(reqDate));
-            return hasOverlap;
+            // Requested window is fully covered only if ALL requested dates are present
+            const allCovered = allDatesInWindow.every(reqDate => sliceDates.has(reqDate));
+            return allCovered;
           }
           // No date information at all - can't verify coverage, skip fast path
           return false;
         }
         
-        // Check if windows overlap
         const reqStart = parseDate(normalizedWindow.start);
         const reqEnd = parseDate(normalizedWindow.end);
         const sStart = parseDate(sliceStart);
         const sEnd = parseDate(sliceEnd);
         
-        // Windows overlap if: reqStart <= sEnd AND reqEnd >= sStart
-        const overlaps = reqStart <= sEnd && reqEnd >= sStart;
-        return overlaps;
+        // Full coverage if slice window fully contains requested window
+        const fullyContained = sStart <= reqStart && sEnd >= reqEnd;
+        return fullyContained;
       });
       
       if (hasAggregateDataWithCoverage) {

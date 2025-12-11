@@ -11,7 +11,9 @@ import {
   WindowAggregationService,
   parameterToTimeSeries,
   mergeTimeSeriesIntoParameter,
+  calculateIncrementalFetch,
 } from '../windowAggregationService';
+import type { ParameterValue } from '../paramRegistryService';
 
 const windowAggregationService = new WindowAggregationService();
 import type { TimeSeriesPoint, DateRange } from '../../types';
@@ -265,6 +267,52 @@ describe('WindowAggregationService', () => {
       // Binomial stdev: sqrt(p * (1-p) / n) = sqrt(0.3 * 0.7 / 100) ≈ 0.0458
       const expectedStdev = Math.sqrt((0.3 * 0.7) / 100);
       expect(result.stdev).toBeCloseTo(expectedStdev, 5);
+    });
+  });
+
+  describe('calculateIncrementalFetch – bust cache semantics', () => {
+    it('bustCache=true should ignore existing dates and force a refetch window', () => {
+      const values: ParameterValue[] = [
+        {
+          mean: 0.20,
+          n: 100,
+          k: 20,
+          dates: ['1-Nov-25', '2-Nov-25', '3-Nov-25'],
+          window_from: '1-Nov-25',
+          window_to: '3-Nov-25',
+          sliceDSL: 'window(1-Nov-25:3-Nov-25)',
+        },
+      ];
+
+      const requestedWindow: DateRange = {
+        start: '1-Nov-25',
+        end: '3-Nov-25',
+      };
+
+      // With bustCache=false, everything is cached
+      const cached = calculateIncrementalFetch(
+        { values },
+        requestedWindow,
+        undefined,
+        false,
+        'window(1-Nov-25:3-Nov-25)',
+      );
+      expect(cached.needsFetch).toBe(false);
+      expect(cached.daysToFetch).toBe(0);
+
+      // With bustCache=true, caller is explicitly asking to refetch
+      const busted = calculateIncrementalFetch(
+        { values },
+        requestedWindow,
+        undefined,
+        true,
+        'window(1-Nov-25:3-Nov-25)',
+      );
+
+      // Fierce invariants: ignore cache entirely
+      expect(busted.needsFetch).toBe(true);
+      expect(busted.daysToFetch).toBe(busted.totalDays);
+      expect(busted.daysAvailable).toBe(0);
     });
   });
 

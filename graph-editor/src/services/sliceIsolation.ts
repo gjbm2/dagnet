@@ -129,10 +129,29 @@ export function isolateSlice<T extends { sliceDSL?: string }>(
   // Extract just the slice dimensions (context/case), ignoring window
   const normalizedTarget = extractSliceDimensions(targetSlice);
   
+  // Determine if target requires a specific slice TYPE (window vs cohort)
+  // This prevents mixing data from different slice types, but still allows
+  // legacy / untyped slices to participate.
+  const targetIsWindow = targetSlice.includes('window(');
+  const targetIsCohort = targetSlice.includes('cohort(');
+  
   // Match values where sliceDSL matches the extracted dimensions
+  // AND (if target specifies a type) we do NOT cross-contaminate:
+  // - window() target must not pull from explicit cohort() slices
+  // - cohort() target must not pull from explicit window() slices
+  // - untyped slices (no window()/cohort()) are allowed in both modes
   const matched = values.filter(v => {
     const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
-    return valueSlice === normalizedTarget;
+    if (valueSlice !== normalizedTarget) return false;
+    
+    const valueSliceDSL = v.sliceDSL ?? '';
+    const valueIsWindow = valueSliceDSL.includes('window(');
+    const valueIsCohort = valueSliceDSL.includes('cohort(');
+    
+    if (targetIsWindow && valueIsCohort) return false;
+    if (targetIsCohort && valueIsWindow) return false;
+    
+    return true;
   });
   
   // Validate: if file has contexts but we got nothing, that's likely a bug
