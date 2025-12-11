@@ -215,6 +215,14 @@ export class UpdateManager {
       (item: any) => nextGraph.edges[item.index].p?.mean || 0,
       (item: any, value: number) => {
         nextGraph.edges[item.index].p.mean = value;
+        // Also set forecast to same value so F mode has something to render.
+        // For non-latency edges, p.mean = p.evidence = p.forecast (all equal).
+        // For latency edges, the real forecast comes from LAG, but rebalanced
+        // siblings need a fallback.
+        if (!nextGraph.edges[item.index].p.forecast) {
+          nextGraph.edges[item.index].p.forecast = {};
+        }
+        nextGraph.edges[item.index].p.forecast.mean = value;
         if (clearOverrides) {
           delete nextGraph.edges[item.index].p.mean_overridden;
         }
