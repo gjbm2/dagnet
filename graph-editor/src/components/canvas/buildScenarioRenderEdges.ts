@@ -10,7 +10,7 @@ import { Edge } from 'reactflow';
 import { computeEffectiveEdgeProbability } from '../../lib/whatIf';
 import { getComposedParamsForLayer } from '../../services/CompositionService';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, SANKEY_MAX_EDGE_WIDTH, EDGE_OPACITY } from '../../lib/nodeEdgeConstants';
-import type { EdgeLatencyDisplay } from '../../types';
+import type { EdgeLatencyDisplay, ScenarioVisibilityMode } from '../../types';
 
 interface BuildScenarioRenderEdgesParams {
   baseEdges: Edge[];
@@ -32,6 +32,10 @@ interface BuildScenarioRenderEdgesParams {
   };
   isPanningOrZooming?: boolean;
   isInSlowPathRebuild?: boolean;
+  /** Function to get the visibility mode (E/F/F+E) for a scenario layer */
+  getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode;
+  /** Whether current query is cohort-based (affects latency bead policy) */
+  isCohortQuery?: boolean;
 }
 
 const MIN_CHEVRON_THRESHOLD = 10;
@@ -58,7 +62,9 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     tabId,
     highlightMetadata,
     isPanningOrZooming,
-    isInSlowPathRebuild
+    isInSlowPathRebuild,
+    getScenarioVisibilityMode,
+    isCohortQuery
   } = params;
 
   // Log slow path rebuilds - these are expensive and shouldn't happen repeatedly on load
@@ -372,6 +378,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       const edgeParams = paramsKey ? composedParams.edges?.[paramsKey] : undefined;
 
       // LAG: derive EdgeLatencyDisplay for this layer from params + graph edge
+      // This now includes ALL pre-computed rendering decisions (mode, widths, styling).
       let latencyDisplay: EdgeLatencyDisplay | undefined;
       if (graphEdge) {
         // Base probabilities from graph edge
@@ -430,6 +437,14 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           ? scenarioProb.latency.completeness
           : baseLatency.completeness;
 
+        // === Derived booleans ===
+        const hasEvidence = typeof p_evidence === 'number';
+        const evidenceIsZero = hasEvidence && p_evidence === 0;
+        const hasForecast = typeof p_forecast === 'number';
+        const hasLatency = (typeof median_days === 'number' && median_days > 0) ||
+                          (typeof baseLatency.t95 === 'number' && baseLatency.t95 > 0) ||
+                          (typeof completeness === 'number');
+
         // Enable LAG display if we have meaningful data.
         //
         // IMPORTANT (cohort-view implementation):
@@ -443,26 +458,108 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         const hasAnyLayerData =
           typeof p_mean === 'number' &&
           p_mean > 0 &&
-          (typeof p_forecast === 'number' || typeof p_evidence === 'number');
+          (hasForecast || hasEvidence);
 
         const hasBeadData = typeof median_days === 'number' && median_days > 0;
-
-        // Completeness drives bead/tooltip text only; it should not gate F/E availability.
         const hasCompletenessData = typeof completeness === 'number';
 
         const enabled = hasAnyLayerData || hasBeadData || hasCompletenessData;
 
         if (enabled) {
+          // === Get scenario visibility mode ===
+          let mode: ScenarioVisibilityMode = 'f+e';
+          if (getScenarioVisibilityMode) {
+            try {
+              mode = getScenarioVisibilityMode(scenarioId);
+            } catch {
+              mode = 'f+e';
+            }
+          }
+
+          // === Compute widths ===
+          // preScaled is the base stroke width for this edge
+          const baseWidth = preScaled;
+          let evidenceWidth = 0;
+          let meanWidth = baseWidth;
+          let evidenceRatio = 0;
+
+          if (mode === 'e') {
+            // E-only mode: width scaled to p.evidence
+            if (hasEvidence && p_evidence! > 0) {
+              evidenceRatio = Math.min(1, Math.max(0, p_evidence! / (p_mean || 1)));
+              evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
+            }
+            meanWidth = baseWidth; // Anchor stays at full width for reference
+          } else if (mode === 'f') {
+            // F-only mode: width scaled to p.forecast
+            if (hasForecast && p_forecast! > 0) {
+              const forecastRatio = Math.max(0, p_forecast! / (p_mean || 1));
+              meanWidth = Math.max(1, baseWidth * forecastRatio);
+            }
+            evidenceWidth = 0;
+          } else {
+            // F+E mode: both layers
+            if (hasEvidence && p_evidence! >= 0) {
+              evidenceRatio = p_mean! > 0 ? Math.min(1, Math.max(0, p_evidence! / p_mean!)) : 0;
+              evidenceWidth = Math.max(0, baseWidth * evidenceRatio);
+            }
+            meanWidth = baseWidth;
+          }
+
+          // === Compute styling flags ===
+          // isDashed: edge has no mass (p.mean=0) OR in E mode with zero evidence
+          const isDashed = edgeProb === 0 || (mode === 'e' && evidenceIsZero);
+
+          // useNoEvidenceOpacity: no evidence block but p.mean > 0 in E mode
+          // This handles rebalanced edges that have flow but no evidence data
+          const useNoEvidenceOpacity = mode === 'e' && !hasEvidence && (p_mean ?? 0) > 0;
+
+          // === Latency bead policy (based on query mode) ===
+          // - window() mode: show beads only for edges with local latency config (median_days > 0)
+          // - cohort() mode: show beads for all edges with completeness, but:
+          //   - edges with local latency: show both completeness + median-lag
+          //   - edges with path_t95 only: show completeness only (no median-lag label)
+          const hasLocalLatency = typeof median_days === 'number' && median_days > 0;
+          let showLatencyBead = false;
+          let showCompletenessOnly = false;
+
+          if (isCohortQuery) {
+            // Cohort mode: show bead if we have completeness data
+            showLatencyBead = hasCompletenessData;
+            // Show completeness only for non-latency edges (no local median_days)
+            showCompletenessOnly = hasCompletenessData && !hasLocalLatency;
+          } else {
+            // Window mode: only show bead for edges with local latency config
+            showLatencyBead = hasLocalLatency;
+            showCompletenessOnly = false;
+          }
+
           latencyDisplay = {
             enabled: true,
+            // Raw data
             median_days,
-            completeness_pct: typeof completeness === 'number'
-              ? completeness * 100
-              : undefined,
+            completeness_pct: typeof completeness === 'number' ? completeness * 100 : undefined,
             t95: baseLatency.t95,
             p_evidence,
             p_forecast,
-            p_mean
+            p_mean,
+            // Derived booleans
+            hasEvidence,
+            evidenceIsZero,
+            hasForecast,
+            hasLatency,
+            // Rendering mode
+            mode,
+            // Pre-computed widths
+            evidenceWidth,
+            meanWidth,
+            evidenceRatio,
+            // Styling flags
+            isDashed,
+            useNoEvidenceOpacity,
+            // Latency bead policy
+            showLatencyBead,
+            showCompletenessOnly
           };
         }
         

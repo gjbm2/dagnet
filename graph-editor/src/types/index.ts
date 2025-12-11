@@ -496,10 +496,16 @@ export interface LatencyConfig {
 /**
  * Latency display data for edge rendering.
  * Used by UI components to show latency information (beads, tooltips).
+ * 
+ * This interface now includes **pre-computed rendering decisions** so that
+ * ConversionEdge doesn't need to recompute mode/widths/dashing/opacity.
+ * All decisions are made in `buildScenarioRenderEdges` for consistency.
  */
 export interface EdgeLatencyDisplay {
-  /** Whether latency tracking is enabled for this edge */
+  /** Whether LAG rendering is enabled for this edge (always true if this object exists) */
   enabled: boolean;
+  
+  // === Raw data fields ===
   
   /** Median lag in days (for bead display) */
   median_days?: number;
@@ -518,6 +524,52 @@ export interface EdgeLatencyDisplay {
   
   /** Blended probability (used for rendering) */
   p_mean?: number;
+  
+  // === Derived booleans (pre-computed) ===
+  
+  /** True when p_evidence is a number (evidence block exists) */
+  hasEvidence?: boolean;
+  
+  /** True when hasEvidence AND p_evidence === 0 (k=0 case) */
+  evidenceIsZero?: boolean;
+  
+  /** True when p_forecast is a number */
+  hasForecast?: boolean;
+  
+  /** True when median_days or t95 or completeness_pct is present and > 0 */
+  hasLatency?: boolean;
+  
+  // === Rendering mode (pre-computed) ===
+  
+  /** Final rendering mode after combining user preference + data availability */
+  mode?: ScenarioVisibilityMode;
+  
+  // === Pre-computed widths (replaces lagLayerData computation in ConversionEdge) ===
+  
+  /** Width for evidence lane (0 when no evidence or evidence=0) */
+  evidenceWidth?: number;
+  
+  /** Width for mean/forecast lane (anchor width) */
+  meanWidth?: number;
+  
+  /** Ratio of evidence to mean (0-1) */
+  evidenceRatio?: number;
+  
+  // === Styling flags (pre-computed) ===
+  
+  /** True when edge should render with dashed stroke (p.mean=0 OR evidence=0 in E mode) */
+  isDashed?: boolean;
+  
+  /** True when edge has no evidence block but p.mean > 0 (use NO_EVIDENCE_E_MODE_OPACITY) */
+  useNoEvidenceOpacity?: boolean;
+  
+  // === Latency bead policy (pre-computed based on query mode) ===
+  
+  /** True when latency bead should be shown for this edge */
+  showLatencyBead?: boolean;
+  
+  /** True when bead should show completeness only (no median-lag label) - for non-latency edges in cohort mode */
+  showCompletenessOnly?: boolean;
 }
 
 export interface ProbabilityParam {
