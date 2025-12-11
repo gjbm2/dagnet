@@ -5954,77 +5954,81 @@ class DataOperationsService {
       values: valuesWithEvidence,
     };
     
-    // === 2) Forecast scalars for cohort() queries (copy from matching window() slice) ===
+    // === 2) Forecast scalars (copy from matching window() slice) ===
+    // This applies to BOTH cohort() and window() queries:
+    // - For cohort() queries: find the window baseline slice (dual-slice retrieval, design.md §4.6)
+    // - For window() queries: the aggregated slice itself may have forecast, or find a matching window slice
+    //
+    // The presence of p.forecast.mean should NOT depend on whether the edge is "latency" or not;
+    // it should depend only on whether a window baseline with forecast exists.
     if (targetSlice && originalParamData?.values && Array.isArray(originalParamData.values)) {
-      if (isCohortQuery) {
-        const targetDims = extractSliceDimensions(targetSlice);
-        const originalValues = originalParamData.values as ParameterValue[];
+      const targetDims = extractSliceDimensions(targetSlice);
+      const originalValues = originalParamData.values as ParameterValue[];
+      
+      // Find window() slices in the same param file with matching context/case dimensions
+      const windowCandidates = originalValues.filter((v) => {
+        if (!v.sliceDSL) return false;
+        const parsed = parseConstraints(v.sliceDSL);
+        const hasWindow = !!parsed.window;
+        const hasCohort = !!parsed.cohort;
+        if (!hasWindow || hasCohort) return false;
         
-        // Find window() slices in the same param file with matching context/case dimensions
-        const windowCandidates = originalValues.filter((v) => {
-          if (!v.sliceDSL) return false;
-          const parsed = parseConstraints(v.sliceDSL);
-          const hasWindow = !!parsed.window;
-          const hasCohort = !!parsed.cohort;
-          if (!hasWindow || hasCohort) return false;
-          
-          const dims = extractSliceDimensions(v.sliceDSL);
-          return dims === targetDims && (v as any).forecast !== undefined;
-        });
+        const dims = extractSliceDimensions(v.sliceDSL);
+        return dims === targetDims && (v as any).forecast !== undefined;
+      });
+      
+      if (windowCandidates.length > 0) {
+        // Prefer most recent window slice by retrieved_at / window_to (same strategy as aggregation)
+        const bestWindow = [...windowCandidates].sort((a, b) => {
+          const aDate = a.data_source?.retrieved_at || a.window_to || '';
+          const bDate = b.data_source?.retrieved_at || b.window_to || '';
+          return bDate.localeCompare(aDate);
+        })[0] as any;
         
-        if (windowCandidates.length > 0) {
-          // Prefer most recent window slice by retrieved_at / window_to (same strategy as aggregation)
-          const bestWindow = [...windowCandidates].sort((a, b) => {
-            const aDate = a.data_source?.retrieved_at || a.window_to || '';
-            const bDate = b.data_source?.retrieved_at || b.window_to || '';
-            return bDate.localeCompare(aDate);
-          })[0] as any;
-          
-          const forecastValue = bestWindow.forecast;
-          const nBaseline = bestWindow.n; // Sample size behind the forecast
-          
-          if (forecastValue !== undefined) {
-            nextAggregated = {
-              ...nextAggregated,
-              values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
-                // Do not overwrite an existing forecast on the value
-                if (v.forecast !== undefined) return v;
-                
-                // Use shared blend function (single source of truth)
-                // Pass actual values - undefined means "not available, skip blend"
-                const blendedMean = computeBlendedMean({
-                  evidenceMean: v.evidence?.mean,
-                  forecastMean: forecastValue,
+        const forecastValue = bestWindow.forecast;
+        const nBaseline = bestWindow.n; // Sample size behind the forecast
+        
+        if (forecastValue !== undefined) {
+          nextAggregated = {
+            ...nextAggregated,
+            values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
+              // Do not overwrite an existing forecast on the value
+              if (v.forecast !== undefined) return v;
+              
+              // Use shared blend function (single source of truth)
+              // Pass actual values - undefined means "not available, skip blend"
+              const blendedMean = computeBlendedMean({
+                evidenceMean: v.evidence?.mean,
+                forecastMean: forecastValue,
+                completeness: v.latency?.completeness,
+                nQuery: v.n ?? 0,
+                nBaseline: nBaseline ?? 0,
+              });
+              
+              if (blendedMean !== undefined) {
+                console.log('[addEvidenceAndForecastScalars] Computed forecast blend:', {
                   completeness: v.latency?.completeness,
                   nQuery: v.n ?? 0,
-                  nBaseline: nBaseline ?? 0,
+                  nBaseline,
+                  evidenceMean: (v.evidence?.mean ?? 0).toFixed(3),
+                  forecastMean: forecastValue.toFixed(3),
+                  blendedMean: blendedMean.toFixed(3),
                 });
-                
-                if (blendedMean !== undefined) {
-                  console.log('[addEvidenceAndForecastScalars] Computed forecast blend:', {
-                    completeness: v.latency?.completeness,
-                    nQuery: v.n ?? 0,
-                    nBaseline,
-                    evidenceMean: (v.evidence?.mean ?? 0).toFixed(3),
-                    forecastMean: forecastValue.toFixed(3),
-                    blendedMean: blendedMean.toFixed(3),
-                  });
-                }
-                
-                return {
-                  ...v,
-                  forecast: forecastValue,
-                  // Update mean to blended value if computed
-                  ...(blendedMean !== undefined ? { mean: blendedMean } : {}),
-                };
-              }),
-            };
-          }
+              }
+              
+              return {
+                ...v,
+                forecast: forecastValue,
+                // Update mean to blended value if computed
+                ...(blendedMean !== undefined ? { mean: blendedMean } : {}),
+              };
+            }),
+          };
         }
-        // NOTE: LAG computation (t95, completeness, forecast blend) is handled by
-        // enhanceGraphLatencies in statisticalEnhancementService, which runs after
-        // batch fetches in topological order. No fallback computation here.
       }
+      // NOTE: LAG computation (t95, completeness, forecast blend) is handled by
+      // enhanceGraphLatencies in statisticalEnhancementService, which runs after
+      // batch fetches in topological order. No fallback computation here.
     }
     
     return nextAggregated;
