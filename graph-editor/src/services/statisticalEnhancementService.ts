@@ -1583,6 +1583,7 @@ export interface GraphLatencyEnhancementResult {
  * @param helpers - Functions from windowAggregationService to avoid circular imports
  * @param cohortWindow - Optional cohort window to filter cohorts
  * @param whatIfDSL - Optional scenario DSL for scenario-aware active edge determination
+ * @param pathT95Map - Pre-computed path_t95 map (from computePathT95). If not provided, computed internally.
  * @returns Summary of what was processed
  */
 export function enhanceGraphLatencies(
@@ -1591,7 +1592,8 @@ export function enhanceGraphLatencies(
   queryDate: Date,
   helpers: LAGHelpers,
   cohortWindow?: { start: Date; end: Date },
-  whatIfDSL?: string
+  whatIfDSL?: string,
+  pathT95Map?: Map<string, number>
 ): GraphLatencyEnhancementResult {
   const result: GraphLatencyEnhancementResult = {
     edgesProcessed: 0,
@@ -1652,6 +1654,20 @@ export function enhanceGraphLatencies(
     adjacencyKeys: Array.from(adjacency.keys()),
   });
 
+  // Use provided path_t95 map or compute if not provided.
+  // This allows the caller to pre-compute once and pass it in (single code path).
+  const precomputedPathT95 = pathT95Map ?? computePathT95(
+    graph as GraphForPath,
+    activeEdges,
+    startNodes[0] // Use first start node as anchor
+  );
+  
+  console.log('[LAG_TOPO_005b] precomputedPathT95:', {
+    wasProvided: !!pathT95Map,
+    edgeCount: precomputedPathT95.size,
+    sampleEntries: Array.from(precomputedPathT95.entries()).slice(0, 5),
+  });
+
   // DP state: max path_t95 to reach each node
   const nodePathT95 = new Map<string, number>();
   for (const startId of startNodes) {
@@ -1709,14 +1725,21 @@ export function enhanceGraphLatencies(
       const edgeId = getEdgeId(edge);
       result.edgesProcessed++;
 
-      // Get maturity config
+      // Get maturity config and path_t95 for classification
       const maturityDays = edge.p?.latency?.maturity_days;
+      const edgePrecomputedPathT95 = precomputedPathT95.get(edgeId) ?? 0;
       // Normalize edge.to for queue/inDegree operations
       const toNodeId = normalizeNodeRef(edge.to);
       
-      if (!maturityDays || maturityDays <= 0) {
-        console.log('[LAG_TOPO_SKIP] noMaturity:', { edgeId, maturityDays });
-        // No latency config, skip LAG computation but update topo state
+      // COHORT-VIEW: An edge needs LAG treatment if it has local latency OR
+      // is downstream of latency edges (path_t95 > 0).
+      const hasLocalLatency = maturityDays !== undefined && maturityDays > 0;
+      const isBehindLaggedPath = edgePrecomputedPathT95 > 0;
+      
+      if (!hasLocalLatency && !isBehindLaggedPath) {
+        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, maturityDays, edgePrecomputedPathT95 });
+        // Truly simple edge: no latency config AND no upstream lag
+        // Skip LAG computation but update topo state
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
         if (newInDegree === 0 && !queue.includes(toNodeId)) {
@@ -1724,6 +1747,10 @@ export function enhanceGraphLatencies(
         }
         continue;
       }
+      
+      // Effective maturity: local config if available, else use path_t95 as fallback
+      // This handles edges downstream of latency edges that have no local config.
+      const effectiveMaturity = hasLocalLatency ? maturityDays : edgePrecomputedPathT95;
 
       // Get parameter values for this edge
       const paramValues = paramLookup.get(edgeId);
@@ -1751,11 +1778,17 @@ export function enhanceGraphLatencies(
         continue;
       }
       
-      console.log('[LAG_TOPO_PROCESS] edge:', { edgeId, maturityDays, cohortsCount: cohorts.length });
+      console.log('[LAG_TOPO_PROCESS] edge:', { 
+        edgeId, 
+        hasLocalLatency, 
+        maturityDays, 
+        effectiveMaturity, 
+        cohortsCount: cohorts.length 
+      });
 
       // Get aggregate lag stats for this edge
       const lagStats = helpers.aggregateLatencyStats(cohorts);
-      const aggregateMedianLag = lagStats?.median_lag_days ?? maturityDays / 2;
+      const aggregateMedianLag = lagStats?.median_lag_days ?? effectiveMaturity / 2;
       const aggregateMeanLag = lagStats?.mean_lag_days;
 
       // Get anchor median lag for downstream age adjustment.
@@ -1791,11 +1824,12 @@ export function enhanceGraphLatencies(
       }
 
       // Compute edge LAG stats with anchor-adjusted ages (NOT path_t95!)
+      // Use effectiveMaturity for edges behind lagged paths that have no local config.
       const latencyStats = computeEdgeLatencyStats(
         cohorts,
         aggregateMedianLag,
         aggregateMeanLag,
-        maturityDays,
+        effectiveMaturity,
         anchorMedianLag  // Use observed anchor lag, NOT path_t95
       );
 
@@ -1953,7 +1987,7 @@ export function enhanceGraphLatencies(
 
       // Fallback: if no window baseline is available, approximate from mature cohorts
       if (nBaseline === 0) {
-        const matureCohorts = cohorts.filter(c => c.age >= maturityDays);
+        const matureCohorts = cohorts.filter(c => c.age >= effectiveMaturity);
         nBaseline = matureCohorts.reduce((sum, c) => sum + c.n, 0);
       }
       

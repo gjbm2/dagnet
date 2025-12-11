@@ -1167,12 +1167,22 @@ export async function fetchItems(
             ? { start: cohortStart, end: cohortEnd }
             : undefined;
           
+          // Pre-compute path_t95 for all edges ONCE (single code path)
+          // This is used by enhanceGraphLatencies to classify edges
+          const activeEdgesForLAG = getActiveEdges(finalGraph as GraphForPath);
+          const pathT95MapForLAG = computePathT95(
+            finalGraph as GraphForPath,
+            activeEdgesForLAG
+          );
+          
           const lagResult = enhanceGraphLatencies(
             finalGraph as GraphForPath,
             paramLookup,
             queryDateForLAG,
             lagHelpers,
-            cohortWindowForLAG
+            cohortWindowForLAG,
+            undefined, // whatIfDSL
+            pathT95MapForLAG
           );
           
           console.log('[fetchDataService] LAG enhancement result:', {

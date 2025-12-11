@@ -430,14 +430,27 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           ? scenarioProb.latency.completeness
           : baseLatency.completeness;
 
-        // Enable LAG display if we have meaningful data
-        // Two-layer: need p_mean and p_evidence
-        // Bead: need median_days
-        // Completeness: need completeness + p_mean (visibility mode check happens in chevron renderer)
-        const hasTwoLayerData = typeof p_mean === 'number' && p_mean > 0 && typeof p_evidence === 'number';
+        // Enable LAG display if we have meaningful data.
+        //
+        // IMPORTANT (cohort-view implementation):
+        // - Forecast/Evidence stripes (F / E / F+E modes) should be available whenever
+        //   we have a non-zero p_mean AND at least one of p_forecast / p_evidence.
+        // - Latency bead visibility should depend ONLY on latency config (median_days,
+        //   completeness, t95), not on whether the edge is treated as "latency" in DSL.
+        //
+        // This means non-latency edges with a forecast (window() baseline) should still
+        // participate fully in F / E / F+E modes even when median_days=0.
+        const hasAnyLayerData =
+          typeof p_mean === 'number' &&
+          p_mean > 0 &&
+          (typeof p_forecast === 'number' || typeof p_evidence === 'number');
+
         const hasBeadData = typeof median_days === 'number' && median_days > 0;
-        const hasCompletenessData = typeof completeness === 'number' && typeof p_mean === 'number' && p_mean > 0;
-        const enabled = hasTwoLayerData || hasBeadData || hasCompletenessData;
+
+        // Completeness drives bead/tooltip text only; it should not gate F/E availability.
+        const hasCompletenessData = typeof completeness === 'number';
+
+        const enabled = hasAnyLayerData || hasBeadData || hasCompletenessData;
 
         if (enabled) {
           latencyDisplay = {
@@ -461,7 +474,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
             p_forecast,
             median_days,
             completeness,
-            hasTwoLayerData,
+            hasAnyLayerData,
             hasBeadData,
             enabled,
             latencyDisplay: latencyDisplay ? 'SET' : 'UNDEFINED'

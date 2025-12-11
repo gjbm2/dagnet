@@ -2,10 +2,10 @@
 
 - Add basic graphing for analysis??
 - Check fetch logic properly -- some odd behaviour
-- F/E rendering for non-latency edges
 - +Contexts should show all if none pinned
-
--I think the lines logic we build for Sankey is prob. actually better than the static chevrons in non-sankey too. Let's try this:. In non-Sankey, render just one chevron perpendicular to the spline not vertical. use the existing chevron machinery, but just one of them, and at the x% location.
+- we really have to re-factor the 2x god files...
+- querydsl isn't reading from graph on refresh -- is resetting to last 7 days.
+- on F5, we're trying to fetch before files have loaded and failing. Need a guard to hold back fetch until after files are available
 
 
 ## Major components
