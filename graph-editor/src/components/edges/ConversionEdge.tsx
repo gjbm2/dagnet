@@ -936,20 +936,27 @@ export default function ConversionEdge({
     if (mode === 'e') {
       // E-only mode: solid rendering with width scaled to p.evidence
       // Design doc §7.2: "E only | Solid edge | p.evidence"
-      // If no valid evidence → fall back to normal rendering at p.mean
-      if (typeof pEvidence !== 'number' || pEvidence <= 0) {
-        return null;
+      //
+      // IMPORTANT:
+      // - If there is NO evidence yet (p.evidence <= 0), we still want LAG enabled
+      //   so that completeness chevrons and latency beads can render, but the
+      //   evidence lane itself should be 0-width.
+      // - That means we DON'T return null here; we return evidenceWidth=0.
+      let evidenceWidth = 0;
+      let evidenceRatio = 0;
+
+      if (typeof pEvidence === 'number' && pEvidence > 0) {
+        evidenceRatio = Math.min(1, Math.max(0, pEvidence / (pMean || 1)));
+        evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
       }
-      const evidenceRatio = Math.min(1, Math.max(0, pEvidence / (pMean || 1)));
-      const evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
 
       return {
         mode: 'e' as const,
         evidenceWidth,
         meanWidth: baseWidth,
         evidenceRatio,
-        evidence: pEvidence,
-        mean: pMean ?? pEvidence
+        evidence: pEvidence ?? 0,
+        mean: pMean ?? pEvidence ?? 0
       };
     }
 
@@ -2552,7 +2559,13 @@ export default function ConversionEdge({
                       : LAG_ANCHOR_USE_STRIPES
                         ? `url(#lag-anchor-stripe-${id})`  // Stripes (mask handles fade)
                         : `url(#lag-anchor-fade-${id})`,   // Plain gradient fade
-                    strokeWidth: strokeWidth,  // Always p.mean width
+                    // Anchor width:
+                    // - In E-only mode, anchor should visually follow evidence width
+                    //   (0 when there is no evidence yet).
+                    // - In F / F+E modes, anchor stays at full p.mean width.
+                    strokeWidth: lagLayerData.mode === 'e'
+                      ? Math.max(1, lagLayerData.evidenceWidth) // 0-evidence → thin hairline
+                      : strokeWidth,
                     // Boost opacity when selected/highlighted for visibility
                     strokeOpacity: effectiveSelected 
                       ? LAG_ANCHOR_SELECTED_OPACITY 
@@ -2563,7 +2576,12 @@ export default function ConversionEdge({
                     fill: 'none',
                     strokeLinecap: 'round',
                     strokeLinejoin: 'miter',
-                    strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                    strokeDasharray:
+                      // Dashed when edge has no mass (p.mean=0) OR when in E mode with zero evidence
+                      (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0 ||
+                        (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0))
+                        ? '5,5'
+                        : 'none',
                     markerEnd: 'none',
                     transition: 'stroke-width 0.3s ease-in-out',
                     pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',

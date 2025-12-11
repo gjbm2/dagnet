@@ -801,8 +801,22 @@ class WindowFetchPlannerService {
     if (!edge) return undefined;
     
     const latencyConfig = edge.p?.latency;
-    if (!latencyConfig?.maturity_days && !latencyConfig?.t95) {
-      // Non-latency edge: no bounding needed
+    
+    // Get path_t95 (computed on-demand if not present on edge)
+    // This is the key classification: edges with path_t95 > 0 are "behind a lagged path"
+    // and should use cohort-based retrieval with bounded horizon.
+    const pathT95 = this.getPathT95ForEdge(edge, graph);
+    
+    // COHORT-VIEW: Use path_t95 to classify edges, not just local latencyConfig.
+    // If path_t95 > 0, this edge is downstream of latency edges and needs
+    // cohort-based treatment. If path_t95 = 0 (or undefined on first run),
+    // treat as simple edge with no bounding.
+    const hasLocalLatency = !!(latencyConfig?.maturity_days || latencyConfig?.t95);
+    const isBehindLaggedPath = (pathT95 ?? 0) > 0;
+    
+    if (!hasLocalLatency && !isBehindLaggedPath) {
+      // Truly simple edge: no latency config AND no upstream lag
+      // No bounding needed - use window-style retrieval
       return undefined;
     }
     
@@ -811,14 +825,11 @@ class WindowFetchPlannerService {
     const existingDates = file?.data?.values?.[0]?.dates || [];
     const retrievedAt = file?.data?.values?.[0]?.data_source?.retrieved_at;
     
-    // Get path_t95 (computed on-demand if not present)
-    const pathT95 = this.getPathT95ForEdge(edge, graph);
-    
     return computeCohortRetrievalHorizon({
       requestedWindow: window,
       pathT95,
-      edgeT95: latencyConfig.t95,
-      maturityDays: latencyConfig.maturity_days,
+      edgeT95: latencyConfig?.t95,
+      maturityDays: latencyConfig?.maturity_days,
       existingCoverage: {
         dates: existingDates,
         retrievedAt,
