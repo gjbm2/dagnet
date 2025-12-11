@@ -59,6 +59,13 @@ export interface FetchItem {
   conditionalIndex?: number;
   /** Optional: Bounded window for cohort queries, calculated by Planner */
   boundedCohortWindow?: DateRange;
+  /**
+   * Optional: Override the target slice DSL for this item.
+   *
+   * Used for cohort-mode tabs to avoid forcing cohort-shaped retrieval on
+   * "simple" edges (no local latency AND not behind any lagged path).
+   */
+  targetSliceOverride?: string;
 }
 
 export interface FetchOptions {
@@ -159,6 +166,88 @@ export function extractParamDetails(param: any): string {
   if (param.mean !== undefined) parts.push(`p=${(param.mean * 100).toFixed(2)}%`);
   
   return parts.length > 0 ? parts.join(', ') : '';
+}
+
+// ============================================================================
+// Cohort-mode per-item targeting (cohort-view-implementation.md)
+// ============================================================================
+
+function stripCohortClause(dsl: string): string {
+  // Remove a single cohort(...) clause from a semicolon-separated DSL string.
+  const without = dsl.replace(/(^|;)\s*cohort\([^;]*\)\s*(;|$)/, (m, p1, p2) => (p1 && p2 ? ';' : ''));
+  return without
+    .split(';')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .join(';');
+}
+
+function buildWindowClauseFromCohort(dsl: string): string | null {
+  try {
+    const parsed: any = parseConstraints(dsl);
+    const start = parsed?.cohort?.start;
+    const end = parsed?.cohort?.end;
+    if (!start || !end) return null;
+    return `window(${start}:${end})`;
+  } catch {
+    return null;
+  }
+}
+
+function computePathT95MapForGraph(graph: Graph): Map<string, number> {
+  const graphForPath: GraphForPath = {
+    nodes: (graph.nodes || []).map((n: any) => ({
+      id: n.id || n.uuid || '',
+      type: n.type || (n.entry?.is_start ? 'start' : undefined),
+      entry: n.entry,
+    })),
+    edges: (graph.edges || [])
+      .filter((e: any) => e.from && e.to)
+      .map((e: any) => ({
+        id: e.id,
+        uuid: e.uuid,
+        from: e.from,
+        to: e.to,
+        p: e.p,
+      })),
+  };
+
+  if (graphForPath.edges.length === 0) return new Map<string, number>();
+
+  const active = getActiveEdges(graphForPath);
+  if (active.size === 0) return new Map<string, number>();
+  return computePathT95(graphForPath, active);
+}
+
+function computeTargetSliceOverrideForItem(
+  item: FetchItem,
+  graph: Graph,
+  dsl: string,
+  pathT95Map: Map<string, number>
+): string | undefined {
+  if (!dsl.includes('cohort(')) return undefined;
+  if (item.type !== 'parameter') return undefined;
+
+  const edge = graph.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
+  if (!edge) return undefined;
+
+  const latency = edge?.p?.latency;
+  const hasLocalLatency = !!(latency?.maturity_days || latency?.t95);
+
+  const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+  const computedPathT95 = pathT95Map.get(edgeId);
+  const persistedPathT95 = latency?.path_t95;
+  const pathT95 = (computedPathT95 ?? persistedPathT95 ?? 0);
+  const isBehindLaggedPath = pathT95 > 0;
+
+  if (hasLocalLatency || isBehindLaggedPath) return undefined;
+
+  const windowClause = buildWindowClauseFromCohort(dsl);
+  if (!windowClause) return undefined;
+
+  const withoutCohort = stripCohortClause(dsl);
+  if (withoutCohort.includes('window(')) return withoutCohort;
+  return withoutCohort ? `${windowClause};${withoutCohort}` : windowClause;
 }
 
 // ============================================================================
@@ -301,6 +390,10 @@ export function getItemsNeedingFetch(
 ): FetchItem[] {
   if (!graph) return [];
   
+  // COHORT-VIEW: Precompute path_t95 once so we can decide, per edge,
+  // whether cohort-mode should be overridden to window() for "simple" edges.
+  const pathT95Map = dsl.includes('cohort(') ? computePathT95MapForGraph(graph) : new Map<string, number>();
+
   const items: FetchItem[] = [];
   
   // Collect parameters
@@ -325,7 +418,11 @@ export function getItemsNeedingFetch(
           paramSlot: slot,
         };
         
-        if (itemNeedsFetch(item, window, graph, dsl, checkCache)) {
+        const override = computeTargetSliceOverrideForItem(item, graph, dsl, pathT95Map);
+        if (override) item.targetSliceOverride = override;
+
+        const targetSlice = item.targetSliceOverride ?? dsl;
+        if (itemNeedsFetch(item, window, graph, targetSlice, checkCache)) {
           items.push(item);
         }
       }
@@ -479,17 +576,10 @@ function sortFetchItemsTopologically(items: FetchItem[], graph: Graph): FetchIte
 // ============================================================================
 
 /**
- * Fetch a single item from source or file.
- * 
- * @param item - The item to fetch
- * @param options - Fetch options (mode, bustCache, etc.)
- * @param graph - The current graph
- * @param setGraph - Graph setter for updating state
- * @param dsl - The DSL to use for fetching
- * @param getUpdatedGraph - Optional getter for fresh graph after fetch (for details extraction)
- * @returns FetchResult with success status and details
+ * Internal helper: perform the actual fetch/merge work for a single item (Stage 1 only).
+ * This does NOT run the graph-level LAG / inbound-n passes.
  */
-export async function fetchItem(
+async function fetchSingleItemInternal(
   item: FetchItem,
   options: FetchOptions | undefined,
   graph: Graph,
@@ -502,6 +592,7 @@ export async function fetchItem(
   }
   
   const mode = options?.mode || 'versioned';
+  const targetSlice = item.targetSliceOverride ?? dsl;
   
   try {
     let details = '';
@@ -514,7 +605,7 @@ export async function fetchItem(
           edgeId: item.targetId,
           graph: graph,
           setGraph,
-          targetSlice: dsl,
+          targetSlice,
           setAutoUpdating: options?.setAutoUpdating,
           conditionalIndex: item.conditionalIndex, // For conditional_p entries
         });
@@ -567,7 +658,7 @@ export async function fetchItem(
           bustCache: options?.bustCache,
           versionedCase: options?.versionedCase,
           currentDSL: dsl,
-          targetSlice: dsl,
+          targetSlice,
           // Pass through any bounded cohort window calculated by the planner
           boundedCohortWindow: item.boundedCohortWindow,
         });
@@ -602,7 +693,7 @@ export async function fetchItem(
           conditionalIndex: item.conditionalIndex,
           bustCache: options?.bustCache,
           currentDSL: dsl,
-          targetSlice: dsl,
+          targetSlice,
           // Pass through any bounded cohort window calculated by the planner
           boundedCohortWindow: item.boundedCohortWindow,
         });
@@ -626,6 +717,31 @@ export async function fetchItem(
       error: error instanceof Error ? error : new Error(String(error)) 
     };
   }
+}
+
+/**
+ * Public entrypoint: Fetch a single item and then run the unified batch pipeline.
+ *
+ * This delegates to fetchItems([item], ...) so that both single-item and batch
+ * flows share the same Stage-2 LAG/inbound-n logic.
+ */
+export async function fetchItem(
+  item: FetchItem,
+  options: FetchOptions | undefined,
+  graph: Graph,
+  setGraph: (g: Graph | null) => void,
+  dsl: string,
+  getUpdatedGraph?: () => Graph | null
+): Promise<FetchResult> {
+  const results = await fetchItems(
+    [item],
+    (options || {}) as FetchOptions & { onProgress?: (current: number, total: number, item: FetchItem) => void },
+    graph,
+    setGraph,
+    dsl,
+    getUpdatedGraph
+  );
+  return results[0] ?? { success: false, item, error: new Error('fetchItems returned no result') };
 }
 
 // ============================================================================
@@ -941,12 +1057,23 @@ export async function fetchItems(
 ): Promise<FetchResult[]> {
   if (!graph || items.length === 0) return [];
   
+  // COHORT-VIEW: Apply per-item targetSlice overrides so cohort-mode tabs only use
+  // cohort-shaped retrieval for edges behind lagged paths (path_t95 > 0) or with
+  // local latency config. Truly simple edges are fetched via window().
+  const pathT95Map = dsl.includes('cohort(') ? computePathT95MapForGraph(graph) : new Map<string, number>();
+  const effectiveItems: FetchItem[] = items.map((it) => {
+    if (!dsl.includes('cohort(')) return it;
+    if (it.type !== 'parameter') return it;
+    const override = it.targetSliceOverride ?? computeTargetSliceOverrideForItem(it, graph, dsl, pathT95Map);
+    return override ? { ...it, targetSliceOverride: override } : it;
+  });
+
   const batchStart = performance.now();
   const results: FetchResult[] = [];
   const { onProgress, ...itemOptions } = options || {};
   
   // For multiple items: use batch mode with visual progress toast
-  const shouldUseBatchMode = items.length > 1;
+  const shouldUseBatchMode = effectiveItems.length > 1;
   const progressToastId = 'batch-fetch-progress';
   
   // SESSION LOG: Start batch fetch operation (only for batch mode)
@@ -956,26 +1083,26 @@ export async function fetchItems(
     ? itemOptions.parentLogId
     : shouldUseBatchMode 
       ? sessionLogService.startOperation('info', 'data-fetch', 'BATCH_FETCH',
-          `Batch fetch: ${items.length} items`,
-          { dsl, itemCount: items.length, mode: itemOptions?.mode || 'versioned' })
+          `Batch fetch: ${effectiveItems.length} items`,
+          { dsl, itemCount: effectiveItems.length, mode: itemOptions?.mode || 'versioned' })
       : undefined;
   
   if (shouldUseBatchMode) {
     setBatchMode(true);
     // Show initial progress toast with visual bar
-    showProgressToast(progressToastId, 0, items.length, 'Fetching');
+    showProgressToast(progressToastId, 0, effectiveItems.length, 'Fetching');
   }
   
   let successCount = 0;
   let errorCount = 0;
   
   try {
-    for (let i = 0; i < items.length; i++) {
-      onProgress?.(i + 1, items.length, items[i]);
+    for (let i = 0; i < effectiveItems.length; i++) {
+      onProgress?.(i + 1, effectiveItems.length, effectiveItems[i]);
       
       // Update progress toast with visual bar
       if (shouldUseBatchMode) {
-        showProgressToast(progressToastId, i, items.length, 'Fetching');
+        showProgressToast(progressToastId, i, effectiveItems.length, 'Fetching');
       }
       
       // CRITICAL: Use getUpdatedGraph() to get fresh graph for each item
@@ -983,7 +1110,7 @@ export async function fetchItems(
       // Without this, each item clones the ORIGINAL graph, losing sibling rebalancing
       const currentGraph = getUpdatedGraph?.() ?? graph;
       
-      const result = await fetchItem(items[i], itemOptions, currentGraph, setGraph, dsl, getUpdatedGraph);
+      const result = await fetchSingleItemInternal(effectiveItems[i], itemOptions, currentGraph, setGraph, dsl, getUpdatedGraph);
       results.push(result);
       
       if (result.success) {
@@ -996,12 +1123,12 @@ export async function fetchItems(
     // Show completion toast
     if (shouldUseBatchMode) {
       // Show full bar briefly before completion message
-      showProgressToast(progressToastId, items.length, items.length, 'Fetching');
+      showProgressToast(progressToastId, effectiveItems.length, effectiveItems.length, 'Fetching');
       
       // Small delay to show completed bar, then show final message
       setTimeout(() => {
         if (errorCount > 0) {
-          completeProgressToast(progressToastId, `Fetched ${successCount}/${items.length} (${errorCount} failed)`, true);
+          completeProgressToast(progressToastId, `Fetched ${successCount}/${effectiveItems.length} (${errorCount} failed)`, true);
         } else {
           completeProgressToast(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`, false);
         }
@@ -1028,7 +1155,7 @@ export async function fetchItems(
       let finalGraph = getUpdatedGraph?.() ?? graph;
       if (finalGraph) {
         // Check if any fetched items were parameters on latency edges
-        const latencyCheck = items.map(item => {
+        const latencyCheck = effectiveItems.map(item => {
           if (item.type !== 'parameter') return { item: item.name, hasLatency: false, reason: 'not parameter' };
           const edge = finalGraph.edges?.find((e: any) => 
             e.uuid === item.targetId || e.id === item.targetId
