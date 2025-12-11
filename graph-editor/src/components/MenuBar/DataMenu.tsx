@@ -350,9 +350,12 @@ export function DataMenu() {
         section.targetId,
         { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
       );
-      // CRITICAL: bustCache=true - user explicitly requested "Get from Source",
-      // so bypass cache and actually fetch from the external source
-      fetchItem(item, { mode: 'versioned', bustCache: true });
+      // IMPORTANT: By default, respect incremental/bounded cache policy.
+      // "Get from Source" follows the versioned path (source → file → graph),
+      // and will only refetch where the cache / maturity policy says it should.
+      // If the user wants to force a refetch, they should use "Unsign file cache"
+      // or a dedicated bust-cache flow, not this handler.
+      fetchItem(item, { mode: 'versioned' });
     }
     // Note: 'node' type doesn't support versioned fetch from source
   };

@@ -302,9 +302,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       section.targetId,
       { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
     );
-    // CRITICAL: bustCache=true - user explicitly requested "Get from Source",
-    // so bypass cache and actually fetch from the external source
-    fetchItem(item, { mode: 'versioned', bustCache: true });
+    // IMPORTANT: Respect incremental/bounded cache policy by default.
+    // "Get from Source" uses the versioned path (source → file → graph) and will
+    // refetch only where the cache / maturity policy says it should.
+    // Forcing a refetch is handled via explicit cache-busting tools, not here.
+    fetchItem(item, { mode: 'versioned' });
   };
   
   const handleSectionClearCache = (section: DataOperationSection) => {
