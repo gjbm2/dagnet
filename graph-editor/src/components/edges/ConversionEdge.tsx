@@ -22,6 +22,7 @@ import {
   DEFAULT_NODE_WIDTH, 
   DEFAULT_NODE_HEIGHT, 
   EDGE_LABEL_FONT_SIZE,
+  MIN_EDGE_WIDTH,
   CHEVRON_SPACING,
   CHEVRON_SPEED,
   CHEVRON_ANGLE_RATIO,
@@ -905,8 +906,10 @@ export default function ConversionEdge({
     };
   }, [shouldShowConfidenceIntervals, effectiveProbability, data?.probability, stdev, confidenceIntervalLevel, strokeWidth, id, viewPrefs?.massGenerosity, fullEdge?.p?.distribution, data?.scenarioOverlay, (data as any)?.distribution]);
   
-  // LAG two-layer rendering data - NOW PRE-COMPUTED in buildScenarioRenderEdges
-  // This useMemo just extracts and formats the pre-computed values from EdgeLatencyDisplay
+  // LAG two-layer rendering data - computed from strokeWidth using pre-computed RATIOS and flags
+  // Uses pre-computed hasEvidence/evidenceIsZero to properly distinguish:
+  //   - "not an evidential edge" (no p.evidence block) → faint full-width edge with NO_EVIDENCE_E_MODE_OPACITY
+  //   - "evidential edge with evidence.mean=0" (k=0) → thin dashed line
   const lagLayerData = useMemo(() => {
     const ld = data?.edgeLatencyDisplay;
     
@@ -915,71 +918,85 @@ export default function ConversionEdge({
       return null;
     }
 
-    // Use pre-computed mode and widths from buildScenarioRenderEdges
-    // Fall back to local computation only if pre-computed values are missing (backward compat)
     const mode = ld.mode ?? 'f+e';
-    
-    // If widths are pre-computed, use them directly
-    if (typeof ld.evidenceWidth === 'number' && typeof ld.meanWidth === 'number') {
-      return {
-        mode,
-        evidenceWidth: ld.evidenceWidth,
-        meanWidth: ld.meanWidth,
-        evidenceRatio: ld.evidenceRatio ?? 0,
-        evidence: ld.p_evidence ?? 0,
-        mean: ld.p_mean ?? ld.p_forecast ?? ld.p_evidence ?? 0
-      };
-    }
-
-    // Fallback: compute widths locally if not pre-computed (for backward compatibility)
-    // This should rarely happen after the refactor is complete
     const pEvidence = ld.p_evidence;
-    const pForecast = ld.p_forecast ?? ld.p_mean;
+    const pForecast = ld.p_forecast;
     const pMean = ld.p_mean ?? pForecast ?? pEvidence;
+    
+    // Use pre-computed evidence flags (critical for proper distinction)
+    const hasEvidence = ld.hasEvidence ?? (typeof pEvidence === 'number');
+    const evidenceIsZero = ld.evidenceIsZero ?? (hasEvidence && pEvidence === 0);
 
-    if (!pMean || pMean <= 0) {
-      return null;
-    }
-
+    // Always use strokeWidth as the base for consistency
     const baseWidth = strokeWidth;
 
     if (mode === 'e') {
+      // E mode: evidence width proportional to evidence/mean ratio
       let evidenceWidth = 0;
-      let evidenceRatio = 0;
-      if (typeof pEvidence === 'number' && pEvidence > 0) {
-        evidenceRatio = Math.min(1, Math.max(0, pEvidence / (pMean || 1)));
-        evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
+      let evidenceRatio = ld.evidenceRatio ?? 0;
+      
+      if (hasEvidence && !evidenceIsZero && pEvidence! > 0 && pMean && pMean > 0) {
+        // Evidence exists and is non-zero: compute ratio if not pre-computed
+        if (evidenceRatio === 0) {
+          evidenceRatio = Math.min(1, Math.max(0, pEvidence! / pMean));
+        }
+        evidenceWidth = Math.max(MIN_EDGE_WIDTH, baseWidth * evidenceRatio);
+      } else if (evidenceIsZero) {
+        // Evidence exists but is zero (k=0): thin dashed line
+        evidenceWidth = 0;
+        evidenceRatio = 0;
+      } else if (!hasEvidence) {
+        // No evidence block at all (e.g., rebalanced edge): 
+        // Use full width with NO_EVIDENCE_E_MODE_OPACITY (handled in rendering)
+        evidenceWidth = baseWidth;
+        evidenceRatio = 1;  // Full width, but opacity will be reduced
       }
+      
       return {
         mode: 'e' as const,
         evidenceWidth,
         meanWidth: baseWidth,
         evidenceRatio,
         evidence: pEvidence ?? 0,
-        mean: pMean ?? pEvidence ?? 0
+        mean: pMean ?? pEvidence ?? 0,
+        hasEvidence,
+        evidenceIsZero
       };
     }
 
     if (mode === 'f') {
-      if (typeof pForecast !== 'number' || pForecast <= 0) {
-        return null;
-      }
-      const forecastRatio = Math.max(0, pForecast / pMean);
-      const width = Math.max(1, baseWidth * forecastRatio);
+      // F mode: width is proportional to p.forecast / p.mean.
+      // IMPORTANT: allow forecast to exceed mean (immature edges can have p.mean pulled down by evidence),
+      // so do NOT clamp ratio to 1.
+      const ratio =
+        (typeof pForecast === 'number' && typeof pMean === 'number' && pMean > 0)
+          ? Math.max(0, pForecast / pMean)
+          : 1;
       return {
         mode: 'f' as const,
         evidenceWidth: 0,
-        meanWidth: width,
+        meanWidth: Math.max(MIN_EDGE_WIDTH, baseWidth * ratio),
         evidenceRatio: 0,
         evidence: pEvidence ?? 0,
-        mean: pForecast
+        mean: pForecast ?? pMean ?? 0,
+        hasEvidence,
+        evidenceIsZero
       };
     }
 
-    // F+E mode
-    const safeEvidence = typeof pEvidence === 'number' && pEvidence >= 0 ? pEvidence : 0;
-    const evidenceRatio = pMean > 0 ? Math.min(1, Math.max(0, safeEvidence / pMean)) : 0;
-    const evidenceWidth = Math.max(0, baseWidth * evidenceRatio);
+    // F+E mode: both layers
+    let evidenceRatio = ld.evidenceRatio ?? 0;
+    let evidenceWidth = 0;
+    
+    if (hasEvidence && !evidenceIsZero && pEvidence! > 0 && pMean && pMean > 0) {
+      // Evidence exists and is non-zero
+      if (evidenceRatio === 0) {
+        evidenceRatio = Math.min(1, Math.max(0, pEvidence! / pMean));
+      }
+      evidenceWidth = Math.max(0, baseWidth * evidenceRatio);
+    }
+    // When evidenceIsZero or !hasEvidence, evidenceWidth stays at 0
+    
     const meanWidth = baseWidth;
 
     return {
@@ -987,15 +1004,19 @@ export default function ConversionEdge({
       evidenceWidth,
       meanWidth,
       evidenceRatio,
-      evidence: safeEvidence,
-      mean: pMean
+      evidence: pEvidence ?? 0,
+      mean: pMean ?? 0,
+      hasEvidence,
+      evidenceIsZero
     };
   }, [data?.edgeLatencyDisplay, strokeWidth]);
   
   // Should we show LAG two-layer rendering?
   // For normal edges: stroked paths with stripe patterns
   // For Sankey: filled ribbons with nested layers
-  const shouldShowLagLayers = lagLayerData !== null && !shouldShowConfidenceIntervals;
+  // Unified pipeline: LAG rendering is always available, even when CI is enabled.
+  // CI and Sankey are geometry/overlay specialisations; they must not disable the LAG semantics.
+  const shouldShowLagLayers = lagLayerData !== null;
   const shouldShowSankeyFE = data?.useSankeyView && lagLayerData !== null;
   
   // DEBUG: Log Sankey F+E state
@@ -1003,18 +1024,10 @@ export default function ConversionEdge({
     console.log(`[Sankey F+E] Edge ${id}: shouldShowSankeyFE=${shouldShowSankeyFE}, lagLayerData=`, lagLayerData, 'edgeLatencyDisplay=', data?.edgeLatencyDisplay);
   }
   
-  // Update stroke-width via DOM to enable CSS transitions.
-  // SKIP for scenario overlays: they're never user-manipulable (no beads, no selection,
-  // no sliders), so there's no CSS transition to trigger. Running this on overlays
-  // was causing LAG evidence width to be overwritten with p.mean width.
-  React.useEffect(() => {
-    if (pathRef.current && !data?.scenarioOverlay) {
-      const currentWidth = (shouldShowConfidenceIntervals && confidenceData)
-        ? confidenceData.widths.lower
-        : strokeWidth;
-      pathRef.current.style.strokeWidth = `${currentWidth}px`;
-    }
-  }, [strokeWidth, shouldShowConfidenceIntervals, confidenceData?.widths.lower, data?.scenarioOverlay]);
+  // IMPORTANT: Do NOT imperatively overwrite strokeWidth via DOM.
+  // This was causing "fat dashed lines" by overriding the E-mode zero-evidence hairline
+  // after layout/drag nudges (pathRef points at the anchor/interaction path in multiple modes).
+  // Stroke widths are fully controlled by React styles on each path.
   
   const isCaseEdge = (() => {
     // Check if edge has case_variant
@@ -2303,92 +2316,67 @@ export default function ConversionEdge({
       </defs>
       
       {/* Edge rendering */}
-          {data?.useSankeyView && ribbonPath ? (
-            // Sankey mode: render as filled ribbon (with F+E layers if enabled)
+          {data?.useSankeyView && ribbonPath && sankeyFERibbons ? (
+            // Sankey mode: render as filled ribbon (SPECIALISATION of unified LAG semantics)
             <>
-              {shouldShowSankeyFE && sankeyFERibbons ? (
-                // Sankey latency mode: F/F+E use striped, E uses solid
-                <>
-                  {/* Outer ribbon - forecast stripes for F/F+E modes, solid for E mode */}
-                  <path
-                    id={`${id}-sankey-outer`}
-                    style={{
-                      fill: sankeyFERibbons.mode === 'e' 
-                        ? ((effectiveSelected || data?.isHighlighted) 
-                            ? getEdgeColour() 
-                            : (data?.scenarioColour || getEdgeColour()))
-                        : `url(#lag-stripe-outer-${id})`,
-                      fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
-                      mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
-                      stroke: 'none',
-                      transition: 'opacity 0.3s ease-in-out',
-                      pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
-                    }}
-                    className="react-flow__edge-path"
-                    d={sankeyFERibbons.outerRibbon}
-                    onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
-                    onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
-                    onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
-                    onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
-                    onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
-                    onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
-                    onDrop={data?.scenarioOverlay ? undefined : handleDrop}
-                  />
-                  {/* Inner ribbon (evidence) - striped, only for F+E mode */}
-                  {sankeyFERibbons.innerRibbon && (
-                    <path
-                      id={`${id}-sankey-inner`}
-                      style={{
-                        fill: `url(#lag-stripe-inner-${id})`,
-                        fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
-                        mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
-                        stroke: 'none',
-                        transition: 'opacity 0.3s ease-in-out',
-                        pointerEvents: 'none', // Inner ribbon doesn't capture events
-                      }}
-                      className="react-flow__edge-path"
-                      d={sankeyFERibbons.innerRibbon}
-                    />
-                  )}
-                  {/* Completeness marker - dashed vertical line at evidence boundary */}
-                  {/* Shown whenever evidence is visible (F+E or E mode), not F-only */}
-                  {sankeyFERibbons.mode !== 'f' && sankeyFERibbons.completenessLine && (
-                    <line
-                      x1={sankeyFERibbons.completenessLine.x1}
-                      y1={sankeyFERibbons.completenessLine.y1}
-                      x2={sankeyFERibbons.completenessLine.x2}
-                      y2={sankeyFERibbons.completenessLine.y2}
-                      stroke="#333"
-                      strokeWidth={SANKEY_COMPLETENESS_LINE_STROKE}
-                      strokeDasharray="4,4"
-                      strokeOpacity={0.8}
-                      pointerEvents="none"
-                    />
-                  )}
-                </>
-              ) : (
-                // Plain Sankey mode: single solid ribbon
+              {/* Outer ribbon - forecast stripes for F/F+E modes, solid for E mode */}
+              <path
+                id={`${id}-sankey-outer`}
+                style={{
+                  fill: sankeyFERibbons.mode === 'e'
+                    ? ((effectiveSelected || data?.isHighlighted)
+                        ? getEdgeColour()
+                        : (data?.scenarioColour || getEdgeColour()))
+                    : `url(#lag-stripe-outer-${id})`,
+                  // In E mode, apply NO_EVIDENCE_E_MODE_OPACITY for edges without evidence
+                  fillOpacity: isHiddenCurrent 
+                    ? 1 
+                    : (sankeyFERibbons.mode === 'e' && data?.edgeLatencyDisplay?.useNoEvidenceOpacity)
+                      ? (data?.strokeOpacity ?? EDGE_OPACITY) * NO_EVIDENCE_E_MODE_OPACITY
+                      : (data?.strokeOpacity ?? EDGE_OPACITY),
+                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                  stroke: 'none',
+                  transition: 'opacity 0.3s ease-in-out',
+                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                }}
+                className="react-flow__edge-path"
+                d={sankeyFERibbons.outerRibbon}
+                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
+                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
+                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
+                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
+                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
+              />
+              {/* Inner ribbon (evidence) - striped, only for F+E mode */}
+              {sankeyFERibbons.innerRibbon && (
                 <path
-                  id={id}
+                  id={`${id}-sankey-inner`}
                   style={{
-                    fill: isHiddenCurrent 
-                      ? `url(#lag-anchor-stipple-${id})` 
-                      : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
+                    fill: `url(#lag-stripe-inner-${id})`,
                     fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                     mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                     stroke: 'none',
                     transition: 'opacity 0.3s ease-in-out',
-                    pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
+                    pointerEvents: 'none',
                   }}
                   className="react-flow__edge-path"
-                  d={ribbonPath.ribbon}
-                  onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
-                  onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
-                  onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
-                  onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
-                  onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
-                  onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
-                  onDrop={data?.scenarioOverlay ? undefined : handleDrop}
+                  d={sankeyFERibbons.innerRibbon}
+                />
+              )}
+              {/* Completeness marker - dashed vertical line at evidence boundary */}
+              {sankeyFERibbons.mode !== 'f' && sankeyFERibbons.completenessLine && (
+                <line
+                  x1={sankeyFERibbons.completenessLine.x1}
+                  y1={sankeyFERibbons.completenessLine.y1}
+                  x2={sankeyFERibbons.completenessLine.x2}
+                  y2={sankeyFERibbons.completenessLine.y2}
+                  stroke="#333"
+                  strokeWidth={SANKEY_COMPLETENESS_LINE_STROKE}
+                  strokeDasharray="4,4"
+                  strokeOpacity={0.8}
+                  pointerEvents="none"
                 />
               )}
               {/* Hidden path for beads - follows the top edge of the ribbon */}
@@ -2502,14 +2490,27 @@ export default function ConversionEdge({
                   Can render as: spline chevrons, pattern stripes/chevrons, or gradient fade */}
               {LAG_ANCHOR_USE_SPLINE_CHEVRONS && completenessChevron && !isHiddenCurrent ? (
                 // Single completeness chevron at the % complete position
+                // PLUS: when evidence=0, also render a visible dashed line for the edge body
                 <>
-                  {/* Invisible interaction path (carries ref and events) */}
+                  {/* When evidence=0, render a visible dashed edge body so the edge is not invisible.
+                      Uses thin 1px hairline with standard dashed styling (same as pattern-based anchor). */}
                   <path
                     ref={pathRef}
                     key={`${id}-lag-anchor-interaction`}
                     style={{
-                      stroke: 'transparent',
-                      strokeWidth: strokeWidth,
+                      // When evidence=0 in E mode, show thin dashed line; otherwise transparent for interaction only
+                      stroke: (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0)
+                        ? ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour()))
+                        : 'transparent',
+                      strokeWidth: (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0)
+                        ? MIN_EDGE_WIDTH  // Thin hairline (matches pattern-based anchor for 0-evidence)
+                        : strokeWidth,
+                      strokeOpacity: (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0)
+                        ? (data?.strokeOpacity ?? EDGE_OPACITY)  // Standard opacity
+                        : 1,
+                      strokeDasharray: (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0)
+                        ? '5,5'
+                        : 'none',
                       fill: 'none',
                       pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                     }}
@@ -2530,10 +2531,10 @@ export default function ConversionEdge({
                     fill={(effectiveSelected || data?.isHighlighted) 
                       ? getEdgeColour() 
                       : (data?.scenarioColour || getEdgeColour())}
-                    fillOpacity={effectiveSelected 
-                      ? COMPLETENESS_CHEVRON_SELECTED_OPACITY 
-                      : data?.isHighlighted 
-                        ? COMPLETENESS_CHEVRON_HIGHLIGHTED_OPACITY 
+                    fillOpacity={effectiveSelected
+                      ? COMPLETENESS_CHEVRON_SELECTED_OPACITY
+                      : data?.isHighlighted
+                        ? COMPLETENESS_CHEVRON_HIGHLIGHTED_OPACITY
                         : COMPLETENESS_CHEVRON_OPACITY}
                     stroke="none"
                     style={{ pointerEvents: 'none' }}
@@ -2554,16 +2555,16 @@ export default function ConversionEdge({
                         : `url(#lag-anchor-fade-${id})`,   // Plain gradient fade
                     // Anchor width:
                     // - In E-only mode, anchor should visually follow evidence width
-                    //   (0 when there is no evidence yet).
+                    //   (MIN_EDGE_WIDTH when there is no evidence yet).
                     // - In F / F+E modes, anchor stays at full p.mean width.
                     strokeWidth: lagLayerData.mode === 'e'
-                      ? Math.max(1, lagLayerData.evidenceWidth) // 0-evidence → thin hairline
+                      ? Math.max(MIN_EDGE_WIDTH, lagLayerData.evidenceWidth) // 0-evidence → thin hairline
                       : strokeWidth,
                     // Boost opacity when selected/highlighted for visibility
-                    strokeOpacity: effectiveSelected 
-                      ? LAG_ANCHOR_SELECTED_OPACITY 
-                      : data?.isHighlighted 
-                        ? LAG_ANCHOR_HIGHLIGHTED_OPACITY 
+                    strokeOpacity: effectiveSelected
+                      ? LAG_ANCHOR_SELECTED_OPACITY
+                      : data?.isHighlighted
+                        ? LAG_ANCHOR_HIGHLIGHTED_OPACITY
                         : LAG_ANCHOR_OPACITY,
                     mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                     fill: 'none',
@@ -2689,40 +2690,7 @@ export default function ConversionEdge({
                 </>
               )}
             </>
-          ) : (
-            <>
-              {/* Normal mode: render as stroked path (fallback when no LAG/CI/Sankey) */}
-              <path
-                ref={pathRef}
-                id={id}
-                style={{
-                  stroke: isHiddenCurrent 
-                    ? `url(#lag-anchor-stipple-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
-                  strokeWidth: strokeWidth,  // Must be explicit - useEffect skips scenario overlays
-                  strokeOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
-                  mixBlendMode: 'multiply',
-                  fill: 'none',
-                  strokeLinecap: 'round',
-                  strokeLinejoin: 'miter',
-                  // Use pre-computed isDashed flag, fall back to effectiveWeight check
-                  strokeDasharray: (data?.edgeLatencyDisplay?.isDashed ?? ((data?.effectiveWeight !== undefined ? data.effectiveWeight : effectiveWeight) === 0)) ? '5,5' : 'none',
-                  markerEnd: 'none',
-                  transition: 'stroke-width 0.3s ease-in-out',
-                  pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
-                }}
-                className="react-flow__edge-path"
-                d={edgePath}
-                onContextMenu={data?.scenarioOverlay ? undefined : handleContextMenu}
-                onDoubleClick={data?.scenarioOverlay ? undefined : handleDoubleClick}
-                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
-                onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
-                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
-                onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
-                onDrop={data?.scenarioOverlay ? undefined : handleDrop}
-              />
-            </>
-          )}
+          ) : null}
           
           {/* Animated chevrons flowing along the edge - only on current layer, not Sankey or overlays */}
           {(viewPrefs?.animateFlow ?? true) && edgePath && pathRef.current && !data?.useSankeyView && !ribbonPath && !data?.scenarioOverlay && (() => {
