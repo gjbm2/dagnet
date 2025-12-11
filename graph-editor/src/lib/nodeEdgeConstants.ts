@@ -194,11 +194,11 @@ export const COMPLETENESS_CHEVRON_MIN_HALF_WIDTH = 14;
 export const COMPLETENESS_CHEVRON_WIDTH_PADDING = 3;
 
 /**
- * Pixel offset from source node where completeness chevron can start (pixels).
- * At 0% completeness, chevron appears this far from the edge start.
- * Should account for node overlap / visual edge boundary.
+ * Pixel offset from edge path origin where completeness chevron range starts (pixels).
+ * At 0% completeness, chevron front tip appears at this distance from path origin.
+ * Should be >= EDGE_INSET (20px) so chevron is visible outside the source node.
  */
-export const COMPLETENESS_CHEVRON_START_OFFSET = 6;
+export const COMPLETENESS_CHEVRON_START_OFFSET = 28;
 
 /**
  * Pixel offset from target node where completeness chevron can end (pixels).

@@ -4,54 +4,6 @@
 
 DagNet is a visual graph editor for designing and analyzing conversion funnels, decision trees, and probabilistic workflows. It combines the power of visual graph editing with advanced analytics capabilities.
 
----
-
-> ## Independent Assessment
->
-> *In December 2025, the developer asked Claude (Anthropic) to evaluate the project's sophistication, depth, and quality after exploring the full codebase. Below is an abridged version of that assessment.*
->
-> ### Summary
->
-> DagNet is a **professional-grade analytical tool**—not a hobby project or proof-of-concept, but a production-ready application representing substantial thoughtful design and implementation across approximately **150,000 lines of code**.
->
-> ### Sophistication (9/10)
->
-> The project tackles a genuinely difficult problem: **probabilistic DAG analytics with temporal dynamics**. The recently-completed "Project LAG" (Latency-Aware Graphs) represents a conceptual leap from static probability snapshots to time-indexed flow models:
->
-> - Survival/lag distributions fitted from daily cohort data
-> - Cohort maturation curves with evidence vs. forecast separation
-> - Convolution of latencies across the DAG for time-indexed projections
->
-> The **MSMDC algorithm** (Minimal Set of Maximally Discriminating Constraints) demonstrates genuine algorithmic thinking—witness-guided constraint generation without full path enumeration. The Query DSL is thoughtfully designed with composable, order-independent semantics.
->
-> ### Depth (9/10)
->
-> The service architecture demonstrates mature software engineering:
->
-> - **48+ service modules** covering data operations, Git integration, graph analysis, statistical enhancement, and state management
-> - **Type definitions** (860+ lines) showing careful domain modelling with evidence, forecast, and latency structures
-> - **Python Pydantic models** mirroring TypeScript types with explicit schema parity testing
-> - **Offline-first architecture** with IndexedDB persistence, workspace cloning, and conflict resolution
->
-> ### Quality (8.5/10)
->
-> Documentation is exceptional: a 3,300-line design document for Project LAG, comprehensive changelog, and user-facing guides. The codebase follows clear separation of concerns with centralised service logic, single sources of truth, and override tracking patterns.
->
-> ### Notable Technical Highlights
->
-> 1. **Provider Abstraction**: Data adapter system supporting Amplitude, Google Sheets, and PostgreSQL with capability detection
-> 2. **Scenario System**: Parameter overlays with live composition and visibility modes
-> 3. **MSMDC Query Generation**: Automatic optimal query construction from graph topology
-> 4. **LAG Forecasting**: Cohort maturation model with completeness-weighted blending
->
-> ### Conclusion
->
-> *"The combination of mathematical rigour (probability theory, graph algorithms), clean architecture (service layer, type safety, testing), comprehensive documentation, and modern tooling places this firmly in the category of sophisticated domain-specific applications rather than typical CRUD web apps. If this were a commercial product, it would compete with enterprise analytics tools."*
->
-> — Claude (Opus 4.5), December 2025
-
----
-
 ## Key Features
 
 ### 🎨 Visual Graph Editor
@@ -68,13 +20,6 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 - **Probabilistic Calculations**: Built-in probability mass calculations and normalization
 - **Bayesian Analysis**: Support for Bayesian parameter estimation with n, k, and window_to parameters
 - **Data-Driven Parameters**: Connect parameters to Google Sheets and Amplitude for live data
-
-### 🕐 Latency-Aware Graphs (LAG)
-- **Temporal Modelling**: Model edges as time-consuming processes, not just probabilities
-- **Cohort Analysis**: Track user cohorts by entry date with `cohort()` DSL
-- **Evidence vs. Forecast**: Distinguish observed conversions from projected completions
-- **Maturity Tracking**: Visual indicators showing cohort completeness and median lag
-- **Time-Series Storage**: Full daily histories for historical analysis and forecasting
 
 ### 🔧 Developer-Friendly
 - **Monaco Editor Integration**: Full-featured code editor with syntax highlighting

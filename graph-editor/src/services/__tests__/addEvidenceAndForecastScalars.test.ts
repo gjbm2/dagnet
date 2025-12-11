@@ -728,10 +728,10 @@ describe('Forecast Blend: p.mean Computation (forecast-fix.md)', () => {
     expect(outputValue.mean).toBe(0.5); // Original mean preserved
   });
   
-  it('does not modify mean when n is zero (cannot compute evidence)', () => {
+  it('uses pure forecast when n is zero (no arrivals yet)', () => {
     const cohortVal: ParameterValue = {
       mean: 0.5,
-      n: 0, // Zero n means no evidence can be computed
+      n: 0, // Zero n means no arrivals yet - use pure forecast
       k: 0,
       dates: [daysAgo(30)],
       n_daily: [0],
@@ -740,6 +740,7 @@ describe('Forecast Blend: p.mean Computation (forecast-fix.md)', () => {
       cohort_to: daysAgo(30),
       sliceDSL: `cohort(anchor,${daysAgo(30)}:${daysAgo(30)})`,
       latency: { completeness: 0.8 },
+      evidence: { mean: 0 }, // No evidence with n=0
     };
     
     const windowVal = createWindowValue({
@@ -758,9 +759,10 @@ describe('Forecast Blend: p.mean Computation (forecast-fix.md)', () => {
     
     const outputValue = result.values[0] as any;
     
-    // Forecast attached but mean unchanged (n=0 means no evidence to blend)
+    // With n=0, w_evidence=0, so blend returns pure forecast
+    // This is correct: when no one has arrived, use the forecast
     expect(outputValue.forecast).toBe(0.95);
-    expect(outputValue.mean).toBe(0.5);
+    expect(outputValue.mean).toBe(0.95); // Pure forecast when n=0
   });
   
   it('does not modify mean when window slice has no n', () => {
