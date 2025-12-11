@@ -905,7 +905,8 @@ export default function ConversionEdge({
     };
   }, [shouldShowConfidenceIntervals, effectiveProbability, data?.probability, stdev, confidenceIntervalLevel, strokeWidth, id, viewPrefs?.massGenerosity, fullEdge?.p?.distribution, data?.scenarioOverlay, (data as any)?.distribution]);
   
-  // LAG two-layer rendering data (evidence vs forecast) driven by EdgeLatencyDisplay + scenario visibility mode
+  // LAG two-layer rendering data - NOW PRE-COMPUTED in buildScenarioRenderEdges
+  // This useMemo just extracts and formats the pre-computed values from EdgeLatencyDisplay
   const lagLayerData = useMemo(() => {
     const ld = data?.edgeLatencyDisplay;
     
@@ -914,16 +915,24 @@ export default function ConversionEdge({
       return null;
     }
 
-    // Determine visibility mode for this scenario (F+E, F, E)
-    let mode: ScenarioVisibilityMode = 'f+e';
-    try {
-      if (activeTabId) {
-        mode = tabOps.getScenarioVisibilityMode(activeTabId, scenarioIdForEdge);
-      }
-    } catch {
-      mode = 'f+e';
+    // Use pre-computed mode and widths from buildScenarioRenderEdges
+    // Fall back to local computation only if pre-computed values are missing (backward compat)
+    const mode = ld.mode ?? 'f+e';
+    
+    // If widths are pre-computed, use them directly
+    if (typeof ld.evidenceWidth === 'number' && typeof ld.meanWidth === 'number') {
+      return {
+        mode,
+        evidenceWidth: ld.evidenceWidth,
+        meanWidth: ld.meanWidth,
+        evidenceRatio: ld.evidenceRatio ?? 0,
+        evidence: ld.p_evidence ?? 0,
+        mean: ld.p_mean ?? ld.p_forecast ?? ld.p_evidence ?? 0
+      };
     }
 
+    // Fallback: compute widths locally if not pre-computed (for backward compatibility)
+    // This should rarely happen after the refactor is complete
     const pEvidence = ld.p_evidence;
     const pForecast = ld.p_forecast ?? ld.p_mean;
     const pMean = ld.p_mean ?? pForecast ?? pEvidence;
@@ -935,22 +944,12 @@ export default function ConversionEdge({
     const baseWidth = strokeWidth;
 
     if (mode === 'e') {
-      // E-only mode: solid rendering with width scaled to p.evidence
-      // Design doc §7.2: "E only | Solid edge | p.evidence"
-      //
-      // IMPORTANT:
-      // - If there is NO evidence yet (p.evidence <= 0), we still want LAG enabled
-      //   so that completeness chevrons and latency beads can render, but the
-      //   evidence lane itself should be 0-width.
-      // - That means we DON'T return null here; we return evidenceWidth=0.
       let evidenceWidth = 0;
       let evidenceRatio = 0;
-
       if (typeof pEvidence === 'number' && pEvidence > 0) {
         evidenceRatio = Math.min(1, Math.max(0, pEvidence / (pMean || 1)));
         evidenceWidth = Math.max(1, baseWidth * evidenceRatio);
       }
-
       return {
         mode: 'e' as const,
         evidenceWidth,
@@ -962,16 +961,11 @@ export default function ConversionEdge({
     }
 
     if (mode === 'f') {
-      // F-only mode: striped rendering with width scaled to p.forecast
-      // If no valid forecast → fall back to normal rendering at p.mean
       if (typeof pForecast !== 'number' || pForecast <= 0) {
         return null;
       }
-      // Note: forecast CAN exceed mean (when evidence pulls mean down from forecast)
-      // So we don't clamp to 1.0 - allow wider than baseWidth
       const forecastRatio = Math.max(0, pForecast / pMean);
       const width = Math.max(1, baseWidth * forecastRatio);
-
       return {
         mode: 'f' as const,
         evidenceWidth: 0,
@@ -982,12 +976,10 @@ export default function ConversionEdge({
       };
     }
 
-    // F+E: two striped layers - outer (forecast) and inner (evidence)
-    // Keep mode as 'f+e' even when evidence=0 (k=0), because completeness tracking
-    // is about latency, not conversion count. The inner ribbon will just be 0 width.
+    // F+E mode
     const safeEvidence = typeof pEvidence === 'number' && pEvidence >= 0 ? pEvidence : 0;
     const evidenceRatio = pMean > 0 ? Math.min(1, Math.max(0, safeEvidence / pMean)) : 0;
-    const evidenceWidth = Math.max(0, baseWidth * evidenceRatio);  // Can be 0 when k=0
+    const evidenceWidth = Math.max(0, baseWidth * evidenceRatio);
     const meanWidth = baseWidth;
 
     return {
@@ -998,7 +990,7 @@ export default function ConversionEdge({
       evidence: safeEvidence,
       mean: pMean
     };
-  }, [data?.edgeLatencyDisplay, strokeWidth, tabOps, activeTabId, scenarioIdForEdge, id]);
+  }, [data?.edgeLatencyDisplay, strokeWidth]);
   
   // Should we show LAG two-layer rendering?
   // For normal edges: stroked paths with stripe patterns
@@ -2425,7 +2417,7 @@ export default function ConversionEdge({
                   fill: 'none',
                   strokeLinecap: 'round',
                   strokeLinejoin: 'miter',
-                  strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                  strokeDasharray: (data?.edgeLatencyDisplay?.isDashed ?? (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0)) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                   pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                 }}
@@ -2453,7 +2445,7 @@ export default function ConversionEdge({
                   fill: 'none',
                   strokeLinecap: 'round',
                   strokeLinejoin: 'miter',
-                  strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                  strokeDasharray: (data?.edgeLatencyDisplay?.isDashed ?? (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0)) ? '5,5' : 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                   pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                 }}
@@ -2482,7 +2474,7 @@ export default function ConversionEdge({
                   fill: 'none',
                   strokeLinecap: 'round',
                   strokeLinejoin: 'miter',
-                  strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                  strokeDasharray: (data?.edgeLatencyDisplay?.isDashed ?? (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0)) ? '5,5' : 'none',
                   markerEnd: 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                   pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
@@ -2578,9 +2570,11 @@ export default function ConversionEdge({
                     strokeLinecap: 'round',
                     strokeLinejoin: 'miter',
                     strokeDasharray:
-                      // Dashed when edge has no mass (p.mean=0) OR when in E mode with zero evidence
-                      (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0 ||
-                        (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0))
+                      // Use pre-computed isDashed flag from EdgeLatencyDisplay
+                      // Falls back to local computation for backward compatibility
+                      (data?.edgeLatencyDisplay?.isDashed ??
+                        (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0 ||
+                          (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0)))
                         ? '5,5'
                         : 'none',
                     markerEnd: 'none',
@@ -2610,16 +2604,16 @@ export default function ConversionEdge({
                     strokeWidth: lagLayerData.evidenceWidth,
                     strokeOpacity: isHiddenCurrent
                       ? 1
-                      : // If there is NO evidence object at all, this is a "no-evidence edge in E mode"
-                        // → render with reduced opacity to indicate modelled-but-unproven flow.
-                        (!fullEdge?.p?.evidence
+                      : // Use pre-computed useNoEvidenceOpacity flag from EdgeLatencyDisplay
+                        // Falls back to local check for backward compatibility
+                        ((data?.edgeLatencyDisplay?.useNoEvidenceOpacity ?? !fullEdge?.p?.evidence)
                           ? (data?.strokeOpacity ?? EDGE_OPACITY) * NO_EVIDENCE_E_MODE_OPACITY
                           : (data?.strokeOpacity ?? EDGE_OPACITY)),
                     mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                     fill: 'none',
                     strokeLinecap: 'round',
                     strokeLinejoin: 'miter',
-                    strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                    strokeDasharray: (data?.edgeLatencyDisplay?.isDashed ?? (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0)) ? '5,5' : 'none',
                     markerEnd: 'none',
                     transition: 'stroke-width 0.3s ease-in-out',
                     pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
@@ -2649,7 +2643,7 @@ export default function ConversionEdge({
                       fill: 'none',
                       strokeLinecap: 'round',
                       strokeLinejoin: 'miter',
-                      strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                      strokeDasharray: (data?.edgeLatencyDisplay?.isDashed ?? (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0)) ? '5,5' : 'none',
                       transition: 'stroke-width 0.3s ease-in-out',
                       pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
                     }}
@@ -2676,7 +2670,7 @@ export default function ConversionEdge({
                         fill: 'none',
                         strokeLinecap: 'round',
                         strokeLinejoin: 'miter',
-                        strokeDasharray: (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0) ? '5,5' : 'none',
+                        strokeDasharray: (data?.edgeLatencyDisplay?.isDashed ?? (effectiveWeight === undefined || effectiveWeight === null || effectiveWeight === 0)) ? '5,5' : 'none',
                         markerEnd: 'none',
                         transition: 'stroke-width 0.3s ease-in-out',
                         pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',
@@ -2697,7 +2691,7 @@ export default function ConversionEdge({
             </>
           ) : (
             <>
-              {/* Normal mode: render as stroked path */}
+              {/* Normal mode: render as stroked path (fallback when no LAG/CI/Sankey) */}
               <path
                 ref={pathRef}
                 id={id}
@@ -2711,7 +2705,8 @@ export default function ConversionEdge({
                   fill: 'none',
                   strokeLinecap: 'round',
                   strokeLinejoin: 'miter',
-                  strokeDasharray: ((data?.effectiveWeight !== undefined ? data.effectiveWeight : effectiveWeight) === 0) ? '5,5' : 'none',
+                  // Use pre-computed isDashed flag, fall back to effectiveWeight check
+                  strokeDasharray: (data?.edgeLatencyDisplay?.isDashed ?? ((data?.effectiveWeight !== undefined ? data.effectiveWeight : effectiveWeight) === 0)) ? '5,5' : 'none',
                   markerEnd: 'none',
                   transition: 'stroke-width 0.3s ease-in-out',
                   pointerEvents: data?.scenarioOverlay ? 'none' : 'auto',

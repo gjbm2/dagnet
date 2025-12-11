@@ -4734,6 +4734,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         return edges;
       }
 
+      // Determine if current query is cohort-based (affects latency bead policy)
+      const isCohortQuery = effectiveWhatIfDSL?.includes('cohort(') ?? false;
+
       const result = buildScenarioRenderEdges({
         baseEdges: edges,
         nodes,
@@ -4748,9 +4751,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         calculateEdgeOffsets,
         tabId,
         highlightMetadata,  // STEP 4: Pass highlight flags for 'current' layer
-        isInSlowPathRebuild: isInSlowPathRebuildRef.current
+        isInSlowPathRebuild: isInSlowPathRebuildRef.current,
         // ATOMIC RESTORATION: Do NOT pass isPanningOrZooming through buildScenarioRenderEdges
         // This keeps edge.data stable during decoration toggle
+        // LAG rendering: pass visibility mode getter and cohort query flag
+        getScenarioVisibilityMode: tabId 
+          ? (scenarioId: string) => tabOperations.getScenarioVisibilityMode(tabId, scenarioId)
+          : undefined,
+        isCohortQuery
       });
       
       // Track render edges (not base edges) for merge on next slow-path rebuild
@@ -4775,7 +4783,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     calculateEdgeOffsets,
     tabId,
     highlightMetadata,  // Re-render when highlight changes
-    shouldSuppressDecorations  // PERF: Re-render when suppression state changes
+    shouldSuppressDecorations,  // PERF: Re-render when suppression state changes
+    tabOperations  // LAG: needed for getScenarioVisibilityMode
   ]);
 
   // STEP 3: renderEdges is now the ONLY edge source; old base/overlay split removed
