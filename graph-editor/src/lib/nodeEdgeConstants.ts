@@ -294,7 +294,7 @@ export const LAG_STRIPE_OPACITY = LAG_FORECAST_STRIPE_OPACITY;
 export const LAG_STRIPE_GAP = LAG_FORECAST_STRIPE_GAP;
 
 /** Base opacity for p.mean anchor edge (0-1) */
-export const LAG_ANCHOR_OPACITY = 0.05;
+export const LAG_ANCHOR_OPACITY = 0.15;
 
 /** Opacity for p.mean anchor edge when SELECTED (0-1) - much more visible */
 export const LAG_ANCHOR_SELECTED_OPACITY = 0.7;
