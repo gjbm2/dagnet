@@ -1051,22 +1051,52 @@ export async function fetchItems(
           // CRITICAL: Filter to current DSL cohort window so LAG uses the right cohorts
           const paramLookup = new Map<string, ParameterValueForLAG[]>();
           
-          // Parse the cohort window from the DSL
+          // Parse the cohort/window from the DSL
           const parsedDSL = parseConstraints(dsl);
           const targetDims = extractSliceDimensions(dsl);
+          
+          // Determine LAG slice window for completeness computation.
+          // 
+          // DESIGN PRINCIPLE (11-Dec-25):
+          //   - In window() mode: evidence is window-based, so completeness should
+          //     also be window-based (only cohorts whose dates fall in the window).
+          //   - In cohort() mode: completeness is cohort-anchored as always.
+          //   - This makes both modes internally consistent and intelligible.
+          //
+          // Two separate concerns:
+          //   1. paramLookup filter: Only applies to explicit cohort() DSL (filters
+          //      which cohort slices to include in LAG calculations)
+          //   2. lagCohortWindow: Passed to aggregateCohortData to filter the 
+          //      cohort dates used for completeness computation (applies to both
+          //      cohort() and window() modes)
+          //
           let cohortStart: Date | null = null;
           let cohortEnd: Date | null = null;
           
+          // For paramLookup filtering: only use explicit cohort() DSL
           if (parsedDSL.cohort?.start && parsedDSL.cohort?.end) {
             cohortStart = parseDate(resolveRelativeDate(parsedDSL.cohort.start));
             cohortEnd = parseDate(resolveRelativeDate(parsedDSL.cohort.end));
           }
           
+          // For LAG completeness: use either cohort() or window() dates
+          let lagSliceStart: Date | null = cohortStart;
+          let lagSliceEnd: Date | null = cohortEnd;
+          let lagSliceSource: 'cohort' | 'window' | 'none' = cohortStart ? 'cohort' : 'none';
+          
+          if (!lagSliceStart && parsedDSL.window?.start && parsedDSL.window?.end) {
+            // Window() mode: use window dates for LAG completeness scoping
+            lagSliceStart = parseDate(resolveRelativeDate(parsedDSL.window.start));
+            lagSliceEnd = parseDate(resolveRelativeDate(parsedDSL.window.end));
+            lagSliceSource = 'window';
+          }
+          
           console.log('[fetchDataService] LAG filter setup:', {
             dsl,
             targetDims,
-            cohortStart: cohortStart?.toISOString().split('T')[0],
-            cohortEnd: cohortEnd?.toISOString().split('T')[0],
+            lagSliceSource,
+            cohortFilter: cohortStart ? `${cohortStart.toISOString().split('T')[0]} to ${cohortEnd?.toISOString().split('T')[0]}` : 'none',
+            lagWindow: lagSliceStart ? `${lagSliceStart.toISOString().split('T')[0]} to ${lagSliceEnd?.toISOString().split('T')[0]}` : 'none',
           });
           
           for (const item of items) {
@@ -1111,9 +1141,11 @@ export async function fetchItems(
                 // Window slices: always include for forecast baseline
                 if (isWindowSlice) return true;
                 
-                // Cohort slices: filter by date overlap with query window
+                // Cohort slices: filter by date overlap ONLY if explicit cohort() DSL
+                // (In window() mode, we don't filter cohort slices - we need all of them
+                // for LAG calculations; the completeness window is applied later)
                 if (isCohortSlice && cohortStart && cohortEnd && v.dates && v.dates.length > 0) {
-                  // Check if ANY of this value's dates fall within the query window
+                  // Check if ANY of this value's dates fall within the cohort query window
                   for (const dateStr of v.dates) {
                     const d = parseDate(dateStr);
                     if (d >= cohortStart && d <= cohortEnd) {
@@ -1130,7 +1162,9 @@ export async function fetchItems(
               console.log('[fetchDataService] Filtered param values for LAG:', {
                 edgeId,
                 targetDims,
-                hasCohortWindow: !!(cohortStart && cohortEnd),
+                lagSliceSource,
+                hasCohortFilter: !!(cohortStart && cohortEnd),
+                hasLAGWindow: !!(lagSliceStart && lagSliceEnd),
                 totalValues: allValues.length,
                 filteredValues: filteredValues.length,
                 sampleSliceDSLs: allValues.slice(0, 3).map((v: any) => v.sliceDSL),
@@ -1160,12 +1194,25 @@ export async function fetchItems(
           // independent of the cohort() window bounds.
           const queryDateForLAG = new Date();
           
-          // Pass cohort window so LAG uses ONLY cohorts from the query window
-          // This ensures completeness reflects "what fraction of THIS cohort's conversions have arrived"
-          // rather than mixing in historical cohort data.
-          const cohortWindowForLAG = (cohortStart && cohortEnd) 
-            ? { start: cohortStart, end: cohortEnd }
+          // Pass LAG slice window so completeness is computed from cohorts in the
+          // same date range as the evidence (whether from cohort() or window() DSL).
+          // 
+          // In window() mode: this ensures completeness reflects "how mature are the
+          // cohorts whose dates fall in this window?" rather than mixing in all
+          // historical cohort data, making completeness consistent with evidence.
+          //
+          // In cohort() mode: this is the explicit cohort window (unchanged).
+          const lagCohortWindow = (lagSliceStart && lagSliceEnd) 
+            ? { start: lagSliceStart, end: lagSliceEnd }
             : undefined;
+          
+          console.log('[fetchDataService] LAG cohort window:', {
+            lagSliceSource,
+            lagCohortWindow: lagCohortWindow ? {
+              start: lagCohortWindow.start.toISOString().split('T')[0],
+              end: lagCohortWindow.end.toISOString().split('T')[0],
+            } : 'none (using all cohorts)',
+          });
           
           // Pre-compute path_t95 for all edges ONCE (single code path)
           // This is used by enhanceGraphLatencies to classify edges
@@ -1180,7 +1227,7 @@ export async function fetchItems(
             paramLookup,
             queryDateForLAG,
             lagHelpers,
-            cohortWindowForLAG,
+            lagCohortWindow,
             undefined, // whatIfDSL
             pathT95MapForLAG
           );

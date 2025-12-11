@@ -178,6 +178,52 @@ describe('Slice Isolation', () => {
         'context(channel:referral)'
       ]);
     });
+
+    it('BUG FIX: should not mix window and cohort slices when target is window()', () => {
+      const values = [
+        {
+          sliceDSL: 'window(3-Dec-25:9-Dec-25)',
+          dates: ['3-Dec-25', '4-Dec-25', '5-Dec-25', '6-Dec-25', '7-Dec-25', '8-Dec-25', '9-Dec-25'],
+          n: 638,
+          k: 113,
+        },
+        {
+          sliceDSL: 'cohort(household-created,11-Oct-25:9-Dec-25)',
+          dates: ['11-Oct-25', '12-Oct-25'],
+          n: 1000,
+          k: 200,
+        },
+      ];
+
+      const result = isolateSlice(values, 'window(1-Dec-25:6-Dec-25)');
+
+      // Fierce invariant: when target is window(), only window slices are eligible
+      expect(result).toHaveLength(1);
+      expect(result[0].sliceDSL).toBe('window(3-Dec-25:9-Dec-25)');
+    });
+
+    it('BUG FIX: should not mix cohort and window slices when target is cohort()', () => {
+      const values = [
+        {
+          sliceDSL: 'window(3-Dec-25:9-Dec-25)',
+          dates: ['3-Dec-25', '4-Dec-25'],
+          n: 638,
+          k: 113,
+        },
+        {
+          sliceDSL: 'cohort(household-created,11-Oct-25:9-Dec-25)',
+          dates: ['11-Oct-25', '12-Oct-25'],
+          n: 1000,
+          k: 200,
+        },
+      ];
+
+      const result = isolateSlice(values, 'cohort(household-created,11-Oct-25:9-Dec-25)');
+
+      // Fierce invariant: when target is cohort(), only cohort slices are eligible
+      expect(result).toHaveLength(1);
+      expect(result[0].sliceDSL).toBe('cohort(household-created,11-Oct-25:9-Dec-25)');
+    });
   });
 });
 

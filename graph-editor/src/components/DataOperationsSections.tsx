@@ -156,7 +156,9 @@ export function getEdgeDataSections(
       canPutToFile,
       operations: {
         getFromFile: hasFileLoaded, // Need loaded file to get from it
-        getFromSource: hasFileConnection,
+        // Versioned fetch: needs connection (from edge OR file) AND a file to write to
+        // Connection can come from edge.p.connection even if file doesn't have it yet
+        getFromSource: hasAnyConnection && hasFile,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
         clearCache: hasFile, // Can clear cache if file could exist
@@ -233,7 +235,8 @@ export function getEdgeDataSections(
           canPutToFile,
           operations: {
             getFromFile: hasFileLoaded, // Need loaded file to get from it
-            getFromSource: hasFileConnection,
+            // Versioned fetch: needs connection (from edge OR file) AND a file to write to
+            getFromSource: hasAnyConnection && hasFile,
             getFromSourceDirect: hasAnyConnection,
             putToFile: canPutToFile,
             clearCache: hasFile, // Can clear cache if file could exist
@@ -274,7 +277,8 @@ export function getEdgeDataSections(
       canPutToFile,
       operations: {
         getFromFile: hasFileLoaded, // Need loaded file to get from it
-        getFromSource: hasFileConnection,
+        // Versioned fetch: needs connection (from edge OR file) AND a file to write to
+        getFromSource: hasAnyConnection && hasFile,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
         clearCache: hasFile, // Can clear cache if file could exist
@@ -308,7 +312,8 @@ export function getEdgeDataSections(
       canPutToFile,
       operations: {
         getFromFile: hasFileLoaded, // Need loaded file to get from it
-        getFromSource: hasFileConnection,
+        // Versioned fetch: needs connection (from edge OR file) AND a file to write to
+        getFromSource: hasAnyConnection && hasFile,
         getFromSourceDirect: hasAnyConnection,
         putToFile: canPutToFile,
         clearCache: hasFile, // Can clear cache if file could exist

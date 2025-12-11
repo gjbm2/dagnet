@@ -7,6 +7,8 @@
 - querydsl isn't reading from graph on refresh -- is resetting to last 7 days.
 - on F5, we're trying to fetch before files have loaded and failing. Need a guard to hold back fetch until after files are available
 
+- Confidence band rendering in LAG view needs checking & improving (design and polish; semantics now centralised but visuals may lag)
+
 
 ## Major components
 - Tabulated & graphing analytics output

@@ -264,6 +264,14 @@ export const LAG_EVIDENCE_STRIPE_OPACITY = 1;
 /** Offset for EVIDENCE stripe pattern (pixels) - shifts stripes along pattern */
 export const LAG_EVIDENCE_STRIPE_OFFSET = 3;
 
+/**
+ * Opacity (0-1) for edges in E-mode that have NO evidence data at all
+ * (p.evidence is missing) but still have flow (p.mean / forecast).
+ * These edges should appear faint rather than invisible or dashed, to indicate
+ * that they are modelled but not yet supported by direct evidence.
+ */
+export const NO_EVIDENCE_E_MODE_OPACITY = 0.9;
+
 // --- Legacy aliases (for existing code) ---
 /** @deprecated Use LAG_FORECAST_STRIPE_WIDTH or LAG_EVIDENCE_STRIPE_WIDTH */
 export const LAG_STRIPE_WIDTH = LAG_FORECAST_STRIPE_WIDTH;
