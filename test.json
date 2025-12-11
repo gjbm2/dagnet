@@ -88,8 +88,8 @@
       "label": "Switch success",
       "absorbing": true,
       "layout": {
-        "x": 526,
-        "y": -264
+        "x": 521,
+        "y": -224
       },
       "event_id": "switch-success",
       "event_id_overridden": false,
@@ -167,12 +167,12 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.2102,
+        "mean": 0.2515,
         "latency": {
           "anchor_node_id": "household-created"
         },
         "forecast": {
-          "mean": 0.2102
+          "mean": 0.2515
         }
       },
       "query": "from(switch-registered).to(post-registration-failure)",
@@ -186,39 +186,39 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.4187,
-        "stdev": 0.03799881807949553,
+        "mean": 0.4641,
+        "stdev": 0.014164799360773845,
         "id": "coffee-to-bds",
         "connection": "amplitude-prod",
         "connection_overridden": true,
         "evidence": {
-          "n": 171,
-          "k": 76,
-          "window_from": "1-Dec-25",
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:50.933Z",
+          "n": 1246,
+          "k": 624,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:37.377Z",
           "source": "amplitude",
           "full_query": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)",
-          "mean": 0.4444444444444444,
-          "stdev": 0.03799919822537608
+          "mean": 0.5008025682182986,
+          "stdev": 0.014164799244176142
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:50.933Z",
+          "retrieved_at": "2025-12-11T20:36:37.377Z",
           "full_query": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)"
         },
         "latency": {
           "anchor_node_id": "household-created",
           "maturity_days": 5,
           "maturity_days_overridden": true,
-          "median_lag_days": 0.0007986111111111112,
+          "median_lag_days": 0.0008435812114197531,
           "completeness": 1,
-          "t95": 0.0028801085380026166,
-          "mean_lag_days": 0.0010824074074074074,
-          "path_t95": 0.0028801085380026166
+          "t95": 5,
+          "mean_lag_days": 0.005496901449726971,
+          "path_t95": 5
         },
         "forecast": {
-          "mean": 0.4187
+          "mean": 0.4641
         }
       },
       "query": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)",
@@ -232,12 +232,12 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.4746,
+        "mean": 0.4646,
         "latency": {
           "anchor_node_id": "household-created"
         },
         "forecast": {
-          "mean": 0.4746
+          "mean": 0.4646
         }
       },
       "query": "from(household-created).to(abandonned-before-delegation)",
@@ -251,23 +251,23 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.7898,
-        "stdev": 0.04987895165479942,
+        "mean": 0.7485,
+        "stdev": 0.02587124644088613,
         "id": "registration-to-success",
         "evidence": {
-          "window_from": "1-Dec-25",
+          "window_from": "9-Nov-25",
           "source": "amplitude",
-          "n": 55,
-          "k": 46,
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:51.523Z",
+          "n": 316,
+          "k": 220,
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:38.440Z",
           "full_query": "from(switch-registered).to(switch-success)",
-          "mean": 0.8363636363636363,
-          "stdev": 0.049883410274218686
+          "mean": 0.6962025316455697,
+          "stdev": 0.025871185683261872
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:51.523Z",
+          "retrieved_at": "2025-12-11T20:36:38.440Z",
           "full_query": "from(switch-registered).to(switch-success)"
         },
         "connection": "amplitude-prod",
@@ -276,11 +276,11 @@
           "anchor_node_id": "household-created",
           "maturity_days": 10,
           "maturity_days_overridden": false,
-          "median_lag_days": 5,
-          "completeness": 0.049140383786530406,
-          "t95": 10,
-          "path_t95": 45.69004151611419,
-          "mean_lag_days": 6.809086584597634
+          "median_lag_days": 6.369466119528619,
+          "completeness": 0.9773169033580374,
+          "t95": 10.903061614803837,
+          "path_t95": 35.844422621115676,
+          "mean_lag_days": 6.718821387626263
         },
         "forecast": {
           "mean": 0.7894333890974398
@@ -297,25 +297,25 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.5253807106598984,
+        "mean": 0.5354021758516141,
         "id": "household-delegation-rate",
         "connection": "amplitude-prod",
         "connection_overridden": true,
-        "stdev": 0.017788764776798416,
+        "stdev": 0.0066606023782670625,
         "evidence": {
-          "n": 788,
-          "k": 414,
-          "window_from": "1-Dec-25",
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:50.814Z",
+          "n": 5607,
+          "k": 3002,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:36.824Z",
           "source": "amplitude",
           "full_query": "from(household-created).to(household-delegated)",
-          "mean": 0.5253807106598984,
-          "stdev": 0.017788799716059237
+          "mean": 0.5354021758516141,
+          "stdev": 0.006660600315729406
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:50.814Z",
+          "retrieved_at": "2025-12-11T20:36:36.824Z",
           "full_query": "from(household-created).to(household-delegated)"
         },
         "latency": {
@@ -334,12 +334,12 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.2286,
+        "mean": 0.2601,
         "latency": {
           "anchor_node_id": "household-created"
         },
         "forecast": {
-          "mean": 0.2286
+          "mean": 0.2601
         }
       },
       "description": "",
@@ -353,12 +353,12 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.9234,
+        "mean": 0.9345,
         "latency": {
           "anchor_node_id": "household-created"
         },
         "forecast": {
-          "mean": 0.9234
+          "mean": 0.9345
         }
       },
       "description": "",
@@ -372,36 +372,36 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.0766,
+        "mean": 0.0655,
         "id": "non-energy-rec-to-reg",
-        "stdev": 0.019346479007819484,
+        "stdev": 0.008227820748971031,
         "connection": "amplitude-prod",
         "connection_overridden": false,
         "evidence": {
-          "n": 88,
-          "k": 3,
-          "window_from": "1-Dec-25",
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:51.073Z",
+          "n": 671,
+          "k": 32,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:37.804Z",
           "source": "amplitude",
           "full_query": "from(mobile-or-broadband-first-rec).to(switch-registered)",
-          "mean": 0.03409090909090909,
-          "stdev": 0.01934399102383678
+          "mean": 0.04769001490312966,
+          "stdev": 0.008227002664943351
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:51.073Z",
+          "retrieved_at": "2025-12-11T20:36:37.804Z",
           "full_query": "from(mobile-or-broadband-first-rec).to(switch-registered)"
         },
         "latency": {
           "anchor_node_id": "household-created",
           "maturity_days": 30,
           "maturity_days_overridden": false,
-          "median_lag_days": 15,
-          "completeness": 0.10410773504110421,
-          "t95": 30,
-          "mean_lag_days": 7.830577283040706,
-          "path_t95": 35.69004151611419
+          "median_lag_days": 7.1125723379629635,
+          "completeness": 0.9329592920889583,
+          "t95": 19.25131949019765,
+          "mean_lag_days": 8.54280634910301,
+          "path_t95": 24.941361006311837
         },
         "forecast": {
           "mean": 0.0769953693919242
@@ -418,25 +418,25 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.2045,
+        "mean": 0.1637,
         "id": "delegated-to-non-energy-rec",
-        "stdev": 0.01753946275184016,
+        "stdev": 0.005956536866017336,
         "connection": "amplitude-prod",
         "connection_overridden": true,
         "evidence": {
-          "n": 414,
-          "k": 62,
-          "window_from": "1-Dec-25",
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:51.010Z",
+          "n": 2987,
+          "k": 360,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:37.667Z",
           "source": "amplitude",
           "full_query": "from(household-delegated).to(mobile-or-broadband-first-rec)",
-          "mean": 0.1497584541062802,
-          "stdev": 0.0175374588419416
+          "mean": 0.12052226314027452,
+          "stdev": 0.005957011697053194
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:51.010Z",
+          "retrieved_at": "2025-12-11T20:36:37.667Z",
           "full_query": "from(household-delegated).to(mobile-or-broadband-first-rec)"
         },
         "latency": {
@@ -444,12 +444,12 @@
           "maturity_days": 5,
           "maturity_days_overridden": false,
           "median_lag_days": 2.5,
-          "completeness": 0.997219324285447,
+          "completeness": 0.9999963608929804,
           "t95": 5.69004151611419,
           "path_t95": 5.69004151611419
         },
         "forecast": {
-          "mean": 0.2045
+          "mean": 0.1637
         }
       },
       "query": "from(household-delegated).to(mobile-or-broadband-first-rec)",
@@ -465,12 +465,12 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.2037,
+        "mean": 0.2127,
         "latency": {
           "anchor_node_id": "household-created"
         },
         "forecast": {
-          "mean": 0.2037
+          "mean": 0.2127
         }
       },
       "query": "from(household-delegated).to(no-recommendation-sent).minus(viewed-coffee-screen)",
@@ -484,36 +484,36 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.7714,
+        "mean": 0.7399,
         "id": "bds-to-energy-rec",
         "connection": "amplitude-prod",
         "connection_overridden": false,
-        "stdev": 0.04319856083129086,
+        "stdev": 0.017521627953870213,
         "evidence": {
-          "n": 76,
-          "k": 63,
-          "window_from": "1-Dec-25",
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:51.122Z",
+          "n": 650,
+          "k": 471,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:37.904Z",
           "source": "amplitude",
           "full_query": "from(gave-bds-in-onboarding).to(energy-rec)",
-          "mean": 0.8289473684210527,
-          "stdev": 0.043193814860717016
+          "mean": 0.7246153846153847,
+          "stdev": 0.01752132454573713
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:51.122Z",
+          "retrieved_at": "2025-12-11T20:36:37.904Z",
           "full_query": "from(gave-bds-in-onboarding).to(energy-rec)"
         },
         "latency": {
           "anchor_node_id": "household-created",
           "maturity_days": 30,
           "maturity_days_overridden": false,
-          "median_lag_days": 1.9993229166666666,
-          "completeness": 0.9999999999999498,
-          "t95": 2.8535787327855155,
-          "mean_lag_days": 2.046639652777778,
-          "path_t95": 2.8564588413235183
+          "median_lag_days": 1.9992449575371547,
+          "completeness": 1,
+          "t95": 3.1012707417930563,
+          "mean_lag_days": 2.071747410847684,
+          "path_t95": 8.101270741793057
         },
         "forecast": {
           "mean": 0.761791331287219
@@ -530,14 +530,14 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.8267,
+        "mean": 0.8241,
         "latency": {
           "anchor_node_id": "household-created",
           "maturity_days": 0,
           "maturity_days_overridden": true
         },
         "forecast": {
-          "mean": 0.8267
+          "mean": 0.8241
         }
       },
       "query": "from(energy-rec).to(post-recommendation-failure)",
@@ -571,32 +571,32 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.4048,
+        "mean": 0.3973,
         "id": "delegated-to-coffee",
-        "stdev": 0.02393215803904439,
+        "stdev": 0.008997205873176246,
         "connection": "amplitude-prod",
         "connection_overridden": false,
         "evidence": {
-          "n": 414,
-          "k": 160,
-          "window_from": "1-Dec-25",
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:50.887Z",
+          "n": 3002,
+          "k": 1250,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:36.964Z",
           "source": "amplitude",
           "full_query": "from(household-delegated).to(viewed-coffee-screen)",
-          "mean": 0.3864734299516908,
-          "stdev": 0.023931853628567805
+          "mean": 0.4163890739506995,
+          "stdev": 0.008997172052656105
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:50.887Z",
+          "retrieved_at": "2025-12-11T20:36:36.964Z",
           "full_query": "from(household-delegated).to(viewed-coffee-screen)"
         },
         "latency": {
           "anchor_node_id": "household-created"
         },
         "forecast": {
-          "mean": 0.4048
+          "mean": 0.3973
         }
       },
       "query": "from(household-delegated).to(viewed-coffee-screen)",
@@ -612,25 +612,25 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.5355,
+        "mean": 0.5154,
         "id": "no-bdos-to-rec",
         "connection": "amplitude-prod",
         "connection_overridden": true,
-        "stdev": 0.039979533225427695,
+        "stdev": 0.014152437413788617,
         "evidence": {
-          "n": 156,
-          "k": 74,
-          "window_from": "1-Dec-25",
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:51.182Z",
+          "n": 1246,
+          "k": 597,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:38.097Z",
           "source": "amplitude",
           "full_query": "from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)",
-          "mean": 0.47435897435897434,
-          "stdev": 0.039979364693653915
+          "mean": 0.47913322632423755,
+          "stdev": 0.01415247676275629
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:51.182Z",
+          "retrieved_at": "2025-12-11T20:36:38.097Z",
           "full_query": "from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)"
         },
         "latency": {
@@ -638,12 +638,12 @@
           "maturity_days": 5,
           "maturity_days_overridden": true,
           "median_lag_days": 2.5,
-          "completeness": 0.997219324285447,
+          "completeness": 0.999996104269728,
           "t95": 5.69004151611419,
           "path_t95": 5.69004151611419
         },
         "forecast": {
-          "mean": 0.5469347626773639
+          "mean": 0.5154
         }
       },
       "query": "from(viewed-coffee-screen).to(energy-rec).minus(gave-bds-in-onboarding)",
@@ -657,12 +657,12 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.0458,
+        "mean": 0.0205,
         "latency": {
           "anchor_node_id": "household-created"
         },
         "forecast": {
-          "mean": 0.0458
+          "mean": 0.0205
         }
       },
       "query": "from(viewed-coffee-screen).to(no-recommendation-sent).minus(gave-bds-in-onboarding)",
@@ -676,36 +676,36 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.1733,
+        "mean": 0.1759,
         "id": "rec-with-bdos-to-registration",
         "connection": "amplitude-prod",
         "connection_overridden": false,
-        "stdev": 0.023637981624024754,
+        "stdev": 0.009168360513136168,
         "evidence": {
-          "n": 194,
-          "k": 24,
-          "window_from": "1-Dec-25",
-          "window_to": "1-Dec-25",
-          "retrieved_at": "2025-12-11T15:35:51.421Z",
+          "n": 1716,
+          "k": 300,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25",
+          "retrieved_at": "2025-12-11T20:36:38.355Z",
           "source": "amplitude",
           "full_query": "from(energy-rec).to(switch-registered)",
-          "mean": 0.12371134020618557,
-          "stdev": 0.023638912148833825
+          "mean": 0.17482517482517482,
+          "stdev": 0.009168880843177539
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:35:51.421Z",
+          "retrieved_at": "2025-12-11T20:36:38.355Z",
           "full_query": "from(energy-rec).to(switch-registered)"
         },
         "latency": {
           "maturity_days": 25,
           "maturity_days_overridden": true,
           "anchor_node_id": "household-created",
-          "median_lag_days": 6.616076388888889,
-          "completeness": 0.6478251499804806,
-          "t95": 25,
-          "mean_lag_days": 6.3105480555555555,
-          "path_t95": 30.690041516114192
+          "median_lag_days": 8.563179436728397,
+          "completeness": 0.9997918184563505,
+          "t95": 12.874829473444565,
+          "mean_lag_days": 8.830444054128085,
+          "path_t95": 20.976100215237622
         },
         "forecast": {
           "mean": 0.17700782158428313
@@ -756,25 +756,25 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.18702524511393526,
+        "mean": 0.2263,
         "id": "delegation-straight-to-energy-rec",
-        "stdev": 0.015113758290219293,
+        "stdev": 0.007614103646057741,
         "connection": "amplitude-prod",
         "connection_overridden": false,
         "evidence": {
-          "n": 638,
-          "k": 113,
-          "retrieved_at": "2025-12-11T15:56:11.989Z",
+          "n": 3148,
+          "k": 756,
+          "retrieved_at": "2025-12-11T20:36:38.183Z",
           "source": "amplitude",
           "full_query": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)",
-          "mean": 0.17711598746081506,
-          "stdev": 0.015114293637922585,
-          "window_from": "9-Oct-25",
-          "window_to": "9-Dec-25"
+          "mean": 0.24015247776365947,
+          "stdev": 0.007613588492244369,
+          "window_from": "9-Nov-25",
+          "window_to": "22-Nov-25"
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2025-12-11T15:56:11.989Z",
+          "retrieved_at": "2025-12-11T20:36:38.183Z",
           "full_query": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)"
         },
         "latency": {
@@ -782,12 +782,12 @@
           "maturity_days": 5,
           "maturity_days_overridden": false,
           "median_lag_days": 2.5,
-          "completeness": 0.6974993413782601,
+          "completeness": 0.9999963554785528,
           "t95": 5.69004151611419,
           "path_t95": 5.69004151611419
         },
         "forecast": {
-          "mean": 0.21467204786033053
+          "mean": 0.2263
         }
       },
       "query": "from(household-delegated).to(energy-rec).minus(viewed-coffee-screen)",
@@ -801,10 +801,10 @@
     "name": "conversion-flow-v0-ezra",
     "description": "",
     "created_at": "2025-11-20T16:28:04.980Z",
-    "updated_at": "2025-12-11T15:56:12.032Z",
+    "updated_at": "2025-12-11T20:36:38.539Z",
     "version": "1.0.0",
     "updated": "2025-11-25T18:25:17.542Z"
   },
-  "currentQueryDSL": "window(-63d:-2d)",
+  "currentQueryDSL": "cohort(9-Nov-25:22-Nov-25)",
   "dataInterestsDSL": "window(-60d:-1d);cohort(-60d:-1d)"
 }

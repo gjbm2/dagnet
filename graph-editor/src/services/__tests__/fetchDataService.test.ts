@@ -63,6 +63,11 @@ vi.mock('../../lib/queryDSL', async (importOriginal) => {
   };
 });
 
+vi.mock('../../components/ProgressToast', () => ({
+  showProgressToast: vi.fn(),
+  completeProgressToast: vi.fn(),
+}));
+
 import { fileRegistry } from '../../contexts/TabContext';
 import { calculateIncrementalFetch, parseDate } from '../windowAggregationService';
 import { parseConstraints } from '../../lib/queryDSL';
@@ -859,6 +864,62 @@ describe('FetchDataService', () => {
       expect(result.length).toBe(1);
       expect(result[0].type).toBe('case');
       expect(result[0].objectId).toBe('case-1');
+    });
+
+    it('cohort mode: should override target slice to window() for simple edges (path_t95 = 0)', () => {
+      // cohort-mode tab selecting cohorts by entry date
+      const cohortDSL = 'cohort(1-Nov-25:7-Nov-25)';
+      (parseConstraints as ReturnType<typeof vi.fn>).mockReturnValue({
+        cohort: { start: '1-Nov-25', end: '7-Nov-25' },
+        window: null,
+        visited: [],
+        exclude: [],
+        context: [],
+        cases: [],
+        visitedAny: [],
+        contextAny: [],
+      });
+
+      // No files needed for this test (checkCache=false), but items must be "fetchable"
+      // so we provide a direct connection on each edge.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+      const graph: Graph = {
+        nodes: [
+          { id: 'A', type: 'start', entry: { is_start: true, entry_weight: 1 } } as any,
+          { id: 'B' } as any,
+          { id: 'C' } as any,
+        ],
+        edges: [
+          // Latency edge branch (path_t95 > 0)
+          {
+            uuid: 'e-lag',
+            id: 'e-lag',
+            from: 'A',
+            to: 'B',
+            p: { id: 'p-lag', connection: {}, latency: { maturity_days: 5 } },
+          } as any,
+          // Simple edge branch (no local latency, not behind lagged path => path_t95 = 0)
+          {
+            uuid: 'e-simple',
+            id: 'e-simple',
+            from: 'A',
+            to: 'C',
+            p: { id: 'p-simple', connection: {} },
+          } as any,
+        ],
+      };
+
+      const items = getItemsNeedingFetch(mockWindow, graph, cohortDSL, false);
+
+      const simple = items.find(i => i.objectId === 'p-simple');
+      const lagged = items.find(i => i.objectId === 'p-lag');
+
+      expect(simple).toBeDefined();
+      expect(lagged).toBeDefined();
+
+      expect(simple?.targetSliceOverride).toBe('window(1-Nov-25:7-Nov-25)');
+      expect(lagged?.targetSliceOverride).toBeUndefined();
     });
   });
 

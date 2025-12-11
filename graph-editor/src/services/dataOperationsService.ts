@@ -54,7 +54,6 @@ import {
 import { computeCohortRetrievalHorizon } from './cohortRetrievalHorizon';
 import { 
   statisticalEnhancementService,
-  computeBlendedMean,
 } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
@@ -5995,32 +5994,10 @@ class DataOperationsService {
               // Do not overwrite an existing forecast on the value
               if (v.forecast !== undefined) return v;
               
-              // Use shared blend function (single source of truth)
-              // Pass actual values - undefined means "not available, skip blend"
-              const blendedMean = computeBlendedMean({
-                evidenceMean: v.evidence?.mean,
-                forecastMean: forecastValue,
-                completeness: v.latency?.completeness,
-                nQuery: v.n ?? 0,
-                nBaseline: nBaseline ?? 0,
-              });
-              
-              if (blendedMean !== undefined) {
-                console.log('[addEvidenceAndForecastScalars] Computed forecast blend:', {
-                  completeness: v.latency?.completeness,
-                  nQuery: v.n ?? 0,
-                  nBaseline,
-                  evidenceMean: (v.evidence?.mean ?? 0).toFixed(3),
-                  forecastMean: forecastValue.toFixed(3),
-                  blendedMean: blendedMean.toFixed(3),
-                });
-              }
-              
+              // Attach forecast scalar only; LAG blending is handled in enhanceGraphLatencies.
               return {
                 ...v,
                 forecast: forecastValue,
-                // Update mean to blended value if computed
-                ...(blendedMean !== undefined ? { mean: blendedMean } : {}),
               };
             }),
           };

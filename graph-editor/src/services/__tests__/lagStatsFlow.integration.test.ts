@@ -20,6 +20,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   enhanceGraphLatencies,
   computeEdgeLatencyStats,
+  computeBlendedMean,
   calculateCompleteness,
   fitLagDistribution,
   logNormalCDF,
@@ -109,6 +110,202 @@ function parseDate(dateStr: string): Date {
 
 describe('LAG Stats Flow - Expected Values', () => {
   const helpers = createLAGHelpers();
+
+  describe('Blend formula via enhanceGraphLatencies (single canonical path)', () => {
+    it('computes blended p.mean when evidence + forecast are present (and matches computeBlendedMean)', () => {
+      const graph: GraphForPath = {
+        nodes: [{ id: 'A', type: 'start' }, { id: 'B' }],
+        edges: [
+          {
+            id: 'e1',
+            uuid: 'e1',
+            from: 'A',
+            to: 'B',
+            p: {
+              mean: 0.71, // initial, will be overwritten by blend
+              latency: { maturity_days: 30 },
+              evidence: { mean: 0.71, n: 97, k: 69 },
+              forecast: { mean: 0.98 },
+            },
+          },
+        ],
+      };
+
+      const cohortSlice = createCohortSlice(
+        ['1-Nov-25', '6-Nov-25', '11-Nov-25'],
+        [32, 33, 32],
+        [23, 23, 23],
+        [13.5, 13.5, 13.5]
+      );
+
+      const windowSlice = createWindowSlice('18-Nov-25:10-Dec-25', 412, 404, 0.98);
+
+      const paramLookup = new Map<string, ParameterValueForLAG[]>();
+      paramLookup.set('e1', [cohortSlice, windowSlice]);
+
+      const result = enhanceGraphLatencies(
+        graph,
+        paramLookup,
+        new Date('2025-12-10'),
+        helpers,
+        { start: new Date('2025-11-01'), end: new Date('2025-11-30') }
+      );
+
+      expect(result.edgesWithLAG).toBe(1);
+      expect(result.edgeValues.length).toBe(1);
+
+      const e1 = result.edgeValues[0];
+      expect(e1.blendedMean).toBeDefined();
+      expect(e1.forecast?.mean).toBe(0.98);
+      expect(e1.evidence?.mean).toBe(0.71);
+
+      const expected = computeBlendedMean({
+        evidenceMean: 0.71,
+        forecastMean: 0.98,
+        completeness: e1.latency.completeness,
+        nQuery: 97,
+        nBaseline: 412,
+      });
+
+      expect(expected).toBeDefined();
+      expect(e1.blendedMean).toBeCloseTo(expected as number, 8);
+      expect(e1.blendedMean!).toBeGreaterThanOrEqual(0.71);
+      expect(e1.blendedMean!).toBeLessThanOrEqual(0.98);
+    });
+
+    it('uses pure forecast when nQuery is zero (no arrivals yet)', () => {
+      const graph: GraphForPath = {
+        nodes: [{ id: 'A', type: 'start' }, { id: 'B' }],
+        edges: [
+          {
+            id: 'e1',
+            uuid: 'e1',
+            from: 'A',
+            to: 'B',
+            p: {
+              mean: 0.5, // initial
+              latency: { maturity_days: 30 },
+              evidence: { mean: 0, n: 0, k: 0 }, // nQuery=0
+              forecast: { mean: 0.95 },
+            },
+          },
+        ],
+      };
+
+      const cohortSlice = createCohortSlice(['1-Dec-25'], [0], [0], [5]);
+      const windowSlice = createWindowSlice('18-Nov-25:10-Dec-25', 500, 475, 0.95);
+
+      const paramLookup = new Map<string, ParameterValueForLAG[]>();
+      paramLookup.set('e1', [cohortSlice, windowSlice]);
+
+      const result = enhanceGraphLatencies(
+        graph,
+        paramLookup,
+        new Date('2025-12-10'),
+        helpers,
+        { start: new Date('2025-12-01'), end: new Date('2025-12-01') }
+      );
+
+      const e1 = result.edgeValues[0];
+      expect(e1.forecast?.mean).toBe(0.95);
+      expect(e1.blendedMean).toBeDefined();
+      expect(e1.blendedMean).toBeCloseTo(0.95, 10);
+    });
+
+    it('blended mean moves closer to evidence as cohorts become more complete', () => {
+      const graph: GraphForPath = {
+        nodes: [{ id: 'A', type: 'start' }, { id: 'B' }],
+        edges: [
+          {
+            id: 'e1',
+            uuid: 'e1',
+            from: 'A',
+            to: 'B',
+            p: {
+              mean: 0.5,
+              latency: { maturity_days: 30 },
+              evidence: { mean: 0.5, n: 500, k: 250 },
+              forecast: { mean: 0.98 },
+            },
+          },
+        ],
+      };
+
+      // Cohorts far older than lag → completeness high.
+      const cohortSlice = createCohortSlice(
+        ['1-Oct-25', '5-Oct-25', '10-Oct-25'],
+        [200, 150, 150],
+        [100, 75, 75],
+        [2, 2, 2]
+      );
+      const windowSlice = createWindowSlice('18-Nov-25:10-Dec-25', 400, 392, 0.98);
+
+      const paramLookup = new Map<string, ParameterValueForLAG[]>();
+      paramLookup.set('e1', [cohortSlice, windowSlice]);
+
+      const result = enhanceGraphLatencies(
+        graph,
+        paramLookup,
+        new Date('2025-12-10'),
+        helpers,
+        { start: new Date('2025-10-01'), end: new Date('2025-10-31') }
+      );
+
+      const e1 = result.edgeValues[0];
+      expect(e1.latency.completeness).toBeGreaterThan(0.8);
+
+      const distanceToEvidence = Math.abs((e1.blendedMean ?? 0) - 0.5);
+      const distanceToForecast = Math.abs((e1.blendedMean ?? 0) - 0.98);
+      expect(distanceToEvidence).toBeLessThan(distanceToForecast);
+    });
+
+    it('blended mean moves closer to forecast as cohorts become less complete', () => {
+      const graph: GraphForPath = {
+        nodes: [{ id: 'A', type: 'start' }, { id: 'B' }],
+        edges: [
+          {
+            id: 'e1',
+            uuid: 'e1',
+            from: 'A',
+            to: 'B',
+            p: {
+              mean: 0.3,
+              latency: { maturity_days: 30 },
+              evidence: { mean: 0.3, n: 100, k: 30 },
+              forecast: { mean: 0.98 },
+            },
+          },
+        ],
+      };
+
+      // Very fresh cohorts relative to lag → completeness low.
+      const cohortSlice = createCohortSlice(
+        ['9-Dec-25', '10-Dec-25'],
+        [50, 50],
+        [15, 15],
+        [10, 10]
+      );
+      const windowSlice = createWindowSlice('18-Nov-25:10-Dec-25', 400, 392, 0.98);
+
+      const paramLookup = new Map<string, ParameterValueForLAG[]>();
+      paramLookup.set('e1', [cohortSlice, windowSlice]);
+
+      const result = enhanceGraphLatencies(
+        graph,
+        paramLookup,
+        new Date('2025-12-10'),
+        helpers,
+        { start: new Date('2025-12-09'), end: new Date('2025-12-10') }
+      );
+
+      const e1 = result.edgeValues[0];
+      expect(e1.latency.completeness).toBeLessThan(0.6);
+
+      const distanceToEvidence = Math.abs((e1.blendedMean ?? 0) - 0.3);
+      const distanceToForecast = Math.abs((e1.blendedMean ?? 0) - 0.98);
+      expect(distanceToForecast).toBeLessThan(distanceToEvidence);
+    });
+  });
 
   // ---------------------------------------------------------------------------
   // Phase 0 – Design-driven LAG invariants (TDD baseline)
