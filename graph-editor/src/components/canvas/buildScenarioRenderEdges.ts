@@ -433,9 +433,11 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         // Enable LAG display if we have meaningful data
         // Two-layer: need p_mean and p_evidence
         // Bead: need median_days
+        // Completeness: need completeness + p_mean (visibility mode check happens in chevron renderer)
         const hasTwoLayerData = typeof p_mean === 'number' && p_mean > 0 && typeof p_evidence === 'number';
         const hasBeadData = typeof median_days === 'number' && median_days > 0;
-        const enabled = hasTwoLayerData || hasBeadData;
+        const hasCompletenessData = typeof completeness === 'number' && typeof p_mean === 'number' && p_mean > 0;
+        const enabled = hasTwoLayerData || hasBeadData || hasCompletenessData;
 
         if (enabled) {
           latencyDisplay = {
