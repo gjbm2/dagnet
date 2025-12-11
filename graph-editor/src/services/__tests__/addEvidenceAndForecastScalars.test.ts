@@ -641,7 +641,7 @@ describe('Window Evidence: Super-Range Queries', () => {
 // 8. FORECAST BLEND: p.mean = weighted average of evidence and forecast
 // =============================================================================
 
-describe('Forecast Blend: p.mean Computation (forecast-fix.md)', () => {
+describe('Forecast scalar attachment (blend now handled in LAG topo pass)', () => {
   
   it('computes blended p.mean when evidence, forecast, and completeness are all present', () => {
     // Create a cohort value with latency.completeness and evidence
@@ -680,16 +680,9 @@ describe('Forecast Blend: p.mean Computation (forecast-fix.md)', () => {
     // Forecast should be attached
     expect(outputValue.forecast).toBe(0.98);
     
-    // Mean should be BLENDED, not the original 0.71
-    // With λ=0.25, c=0.6, n_q=97, n_baseline=412:
-    // n_eff = 0.6 * 97 = 58.2
-    // m0 = 0.25 * 412 = 103
-    // w_evidence = 58.2 / (103 + 58.2) = 58.2 / 161.2 ≈ 0.361
-    // p_mean = 0.361 * 0.71 + 0.639 * 0.98 ≈ 0.256 + 0.627 ≈ 0.883
-    expect(outputValue.mean).toBeDefined();
-    expect(outputValue.mean).toBeGreaterThan(0.71); // Above evidence
-    expect(outputValue.mean).toBeLessThan(0.98);    // Below forecast
-    expect(outputValue.mean).toBeCloseTo(0.883, 2); // Approximately 0.88
+    // Mean is no longer blended here; LAG blend happens in statisticalEnhancementService.
+    // This helper should preserve the existing mean.
+    expect(outputValue.mean).toBe(0.71);
   });
   
   it('does not modify mean when completeness is missing', () => {
@@ -759,10 +752,10 @@ describe('Forecast Blend: p.mean Computation (forecast-fix.md)', () => {
     
     const outputValue = result.values[0] as any;
     
-    // With n=0, w_evidence=0, so blend returns pure forecast
-    // This is correct: when no one has arrived, use the forecast
+    // With n=0, this helper only attaches the forecast scalar; blend is deferred
+    // to the graph-level LAG pipeline.
     expect(outputValue.forecast).toBe(0.95);
-    expect(outputValue.mean).toBe(0.95); // Pure forecast when n=0
+    expect(outputValue.mean).toBe(0.5); // Mean unchanged here
   });
   
   it('does not modify mean when window slice has no n', () => {
@@ -804,93 +797,9 @@ describe('Forecast Blend: p.mean Computation (forecast-fix.md)', () => {
     expect(outputValue.mean).toBe(0.5);
   });
   
-  it('blended mean approaches evidence as completeness approaches 1', () => {
-    const cohortVal: ParameterValue = {
-      mean: 0.50,
-      n: 500,
-      k: 250,
-      dates: [daysAgo(30)],
-      n_daily: [500],
-      k_daily: [250],
-      cohort_from: daysAgo(30),
-      cohort_to: daysAgo(30),
-      sliceDSL: `cohort(anchor,${daysAgo(30)}:${daysAgo(30)})`,
-      evidence: { mean: 0.50, stdev: 0.022 },
-      latency: { completeness: 0.95 }, // High completeness
-    };
-    
-    const windowVal = createWindowValue({
-      startDaysAgo: 14,
-      endDaysAgo: 0,
-      n: 400,
-      k: 380,
-      forecast: 0.98,
-    });
-    
-    const result = addEvidenceAndForecastScalars(
-      { type: 'probability', values: [cohortVal] },
-      { values: [cohortVal, windowVal] },
-      `cohort(anchor,${daysAgo(30)}:${daysAgo(30)})`
-    );
-    
-    const outputValue = result.values[0] as any;
-    
-    // With high completeness (0.95) and large n (500), evidence should dominate
-    // n_eff = 0.95 * 500 = 475
-    // m0 = 0.25 * 400 = 100
-    // w_evidence = 475 / (100 + 475) = 475 / 575 ≈ 0.826
-    // p_mean = 0.826 * 0.50 + 0.174 * 0.98 ≈ 0.413 + 0.170 ≈ 0.583
-    expect(outputValue.mean).toBeGreaterThan(0.50);
-    expect(outputValue.mean).toBeLessThan(0.98);
-    // Should be closer to evidence (0.50) than forecast (0.98)
-    const distanceToEvidence = Math.abs(outputValue.mean - 0.50);
-    const distanceToForecast = Math.abs(outputValue.mean - 0.98);
-    expect(distanceToEvidence).toBeLessThan(distanceToForecast);
-  });
-  
-  it('blended mean approaches forecast as completeness approaches 0', () => {
-    const cohortVal: ParameterValue = {
-      mean: 0.30,
-      n: 100,
-      k: 30,
-      dates: [daysAgo(30)],
-      n_daily: [100],
-      k_daily: [30],
-      cohort_from: daysAgo(30),
-      cohort_to: daysAgo(30),
-      sliceDSL: `cohort(anchor,${daysAgo(30)}:${daysAgo(30)})`,
-      evidence: { mean: 0.30, stdev: 0.046 },
-      latency: { completeness: 0.1 }, // Very low completeness
-    };
-    
-    const windowVal = createWindowValue({
-      startDaysAgo: 14,
-      endDaysAgo: 0,
-      n: 400,
-      k: 380,
-      forecast: 0.98,
-    });
-    
-    const result = addEvidenceAndForecastScalars(
-      { type: 'probability', values: [cohortVal] },
-      { values: [cohortVal, windowVal] },
-      `cohort(anchor,${daysAgo(30)}:${daysAgo(30)})`
-    );
-    
-    const outputValue = result.values[0] as any;
-    
-    // With very low completeness (0.1), forecast should dominate
-    // n_eff = 0.1 * 100 = 10
-    // m0 = 0.25 * 400 = 100
-    // w_evidence = 10 / (100 + 10) = 10 / 110 ≈ 0.091
-    // p_mean = 0.091 * 0.30 + 0.909 * 0.98 ≈ 0.027 + 0.891 ≈ 0.918
-    expect(outputValue.mean).toBeGreaterThan(0.30);
-    expect(outputValue.mean).toBeLessThan(0.98);
-    // Should be closer to forecast (0.98) than evidence (0.30)
-    const distanceToEvidence = Math.abs(outputValue.mean - 0.30);
-    const distanceToForecast = Math.abs(outputValue.mean - 0.98);
-    expect(distanceToForecast).toBeLessThan(distanceToEvidence);
-  });
+  // NOTE: Blend tests have been removed here; p.mean blending is now exercised
+  // via lagStatsFlow / statisticalEnhancementService integration tests, since
+  // the blend lives in the graph-level LAG topo pass, not in this helper.
 });
 
 // =============================================================================
