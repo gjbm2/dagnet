@@ -560,39 +560,23 @@ def apply_visibility_mode(G: nx.DiGraph, mode: str) -> None:
         G: NetworkX DiGraph to mutate
         mode: Visibility mode ('f+e', 'f', or 'e')
     """
-    print(f"[apply_visibility_mode] mode={mode}, edges={G.number_of_edges()}")
-    
     if mode == 'f+e':
         # Keep p (mean) as-is - no changes needed
-        print("[apply_visibility_mode] f+e mode - keeping p.mean as-is")
         return
     
-    changes_made = 0
-    fallbacks = 0
     for u, v, data in G.edges(data=True):
-        original_p = data.get('p')
         if mode == 'f':
             forecast = data.get('forecast') or {}
             forecast_mean = forecast.get('mean')
-            print(f"[apply_visibility_mode] edge {u}->{v}: p={original_p}, forecast={forecast}, forecast.mean={forecast_mean}")
             if forecast_mean is not None:
                 data['p'] = forecast_mean
-                changes_made += 1
-            else:
-                fallbacks += 1
             # else: keep p.mean as fallback (no forecast data)
         elif mode == 'e':
             evidence = data.get('evidence') or {}
             evidence_mean = evidence.get('mean')
-            print(f"[apply_visibility_mode] edge {u}->{v}: p={original_p}, evidence={evidence}, evidence.mean={evidence_mean}")
             if evidence_mean is not None:
                 data['p'] = evidence_mean
-                changes_made += 1
-            else:
-                fallbacks += 1
             # else: keep p.mean as fallback (no evidence data)
-    
-    print(f"[apply_visibility_mode] Done: changes_made={changes_made}, fallbacks={fallbacks}")
 
 
 def get_probability_label(mode: str) -> str:

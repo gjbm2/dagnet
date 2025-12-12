@@ -570,6 +570,28 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       const meta = result.dimension_values?.[dimId]?.[String(valueId)];
       return meta?.name ?? String(valueId);
     };
+
+    const getScenarioProbabilityLabel = (scenarioId: string | number, row?: any): string | undefined => {
+      // Prefer per-row label if present (explicit basis used for this calculation)
+      const rowLabel = row?.probability_label;
+      if (typeof rowLabel === 'string' && rowLabel.trim()) return rowLabel;
+
+      // Fall back to scenario dimension metadata (per-scenario basis)
+      const meta: any = result.dimension_values?.scenario_id?.[String(scenarioId)];
+      const metaLabel = meta?.probability_label;
+      if (typeof metaLabel === 'string' && metaLabel.trim()) return metaLabel;
+
+      return undefined;
+    };
+
+    const formatScenarioTitleWithBasis = (scenarioId: string | number): string => {
+      const title = getLabel('scenario_id', scenarioId);
+      const basis = getScenarioProbabilityLabel(scenarioId);
+      // Avoid noise for default blended basis
+      if (!basis || basis === 'Probability') return title;
+      // e.g. "Current (Evidence Probability)"
+      return `${title} (${basis})`;
+    };
     
     // Get colour for a dimension value
     const getColour = (dimId: string, valueId: string | number): string | undefined => {
@@ -584,11 +606,14 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         
         return {
           id: String(pv),
-          title: getLabel(primaryDim.id, pv),
+          title: formatScenarioTitleWithBasis(pv),
           colour,
           metrics: metrics.map(m => ({
             id: m.id,
-            label: m.name,
+            // Probability basis can vary by scenario, so label per scenario.
+            label: m.id === 'probability'
+              ? (getScenarioProbabilityLabel(pv, rows[0]) || m.name)
+              : m.name,
             value: formatValue(rows[0]?.[m.id], m.format),
             role: m.role || 'secondary'
           }))
@@ -614,7 +639,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         const scenarioItems = scenarioValues.map(sv => {
           const row = result.data.find((r: any) => r[primaryDim.id] === stageId && r[secondaryDim.id] === sv);
           return {
-            label: getLabel(secondaryDim.id, sv),
+            label: formatScenarioTitleWithBasis(sv),
             value: formatValue(row?.[primaryMetric.id], primaryMetric.format),
             colour: getColour(secondaryDim.id, sv)
           };
@@ -669,7 +694,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         
         return {
           id: String(sv),
-          title: getLabel(secondaryDim.id, sv),
+          title: formatScenarioTitleWithBasis(sv),
           colour,
           items: itemData,
           primaryDimName: primaryDim.name

@@ -21,7 +21,7 @@ import {
   ScenarioMeta
 } from '../types/scenarios';
 import { Graph } from '../types';
-import { composeParams } from '../services/CompositionService';
+import { applyComposedParamsToGraph, composeParams } from '../services/CompositionService';
 import { computeDiff } from '../services/DiffService';
 import { fromYAML, fromJSON } from '../services/ParamPackDSLService';
 import { validateScenarioParams } from '../services/ScenarioValidator';
@@ -554,7 +554,12 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       colour: assignedColour,
       createdAt: now,
       version: 1,
-      params: { edges: {}, nodes: {} }, // Will be populated by regeneration
+      // Live scenarios start as a copy of Current (as diffs from Base), so they remain stable
+      // even if Current's DSL changes later.
+      //
+      // IMPORTANT: These are diffs against Base params, not against Current.
+      // This keeps scenario layering deterministic: Base + scenario.params = initial Current.
+      params: computeDiff(currentParams, baseParams, 'differences', 1e-6),
       meta: {
         queryDSL,
         isLive: true,
@@ -568,11 +573,10 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     
     // NOTE: We don't auto-regenerate on creation because:
     // 1. React state updates are async, so regenerateScenario's closure has stale scenarios
-    // 2. Live scenarios start with empty params - user can trigger regeneration when needed
-    // 3. Bulk creation would spam the API if we auto-regenerated each scenario
+    // 2. Bulk creation would spam the API if we auto-regenerated each scenario
     
     return scenario;
-  }, [generateId, scenarios]);
+  }, [generateId, scenarios, baseParams, currentParams]);
 
   /**
    * Regenerate a live scenario from its queryDSL.
@@ -600,7 +604,9 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     
     // Use provided baseDSL or fall back to state/graph
     // Use || not ?? because empty string should fall through
-    const effectiveBaseDSL = baseDSLOverride || baseDSL || graphStore?.getState().currentDSL || '';
+    // Base DSL must be stable. Falling back to currentDSL causes scenarios to "move"
+    // when Current changes, which breaks isolation.
+    const effectiveBaseDSL = baseDSLOverride || baseDSL || graph?.baseDSL || '';
     
     // Use provided scenarios list or state
     const effectiveScenarios = allScenariosOverride || scenarios;
@@ -651,13 +657,23 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     });
     
     try {
+      // Build the baseline graph for this scenario (Base + all visible scenario overlays BELOW it).
+      // We must NOT start from the current live graph, otherwise the scenario will accidentally
+      // inherit Current’s latest fetched values (regression seen with live cohort scenarios).
+      const overlaysBelow = orderedVisibleScenarios
+        .slice(scenarioIndex + 1)
+        .map(s => s.params);
+      const baselineParams = composeParams(baseParams, overlaysBelow);
+      const baselineGraph = applyComposedParamsToGraph(graph, baselineParams);
+
       // Check if we need to fetch data using fetchDataService
-      const cacheCheck = fetchDataService.checkDSLNeedsFetch(effectiveFetchDSL, graph);
+      const cacheCheck = fetchDataService.checkDSLNeedsFetch(effectiveFetchDSL, baselineGraph);
       
       // CRITICAL: Create a DEEP COPY of the graph for scenario-specific fetching.
       // This ensures that fetching data for a scenario doesn't modify the main graph.
       // Each scenario gets its own isolated graph copy to fetch into.
-      let scenarioGraph: Graph = JSON.parse(JSON.stringify(graph));
+      // IMPORTANT: Copy from the scenario baseline graph, not the current graph.
+      let scenarioGraph: Graph = JSON.parse(JSON.stringify(baselineGraph));
       const setScenarioGraph = (g: Graph | null) => {
         if (g) scenarioGraph = g;
         // Note: We intentionally don't update the main graph here.
@@ -712,8 +728,8 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       
       // Extract the fetched params from the scenario's isolated graph copy
       // This captures the edge params (mean, n, k, etc.) that were loaded
-      // We compare against the original graph to get only the differences
-      const fetchedParams = extractDiffParams(scenarioGraph, graph);
+      // We compare against the scenario baseline graph to get only the differences from Base layer.
+      const fetchedParams = extractDiffParams(scenarioGraph, baselineGraph);
       
       // Compute what-if params (case overrides, visited conditionals)
       const whatIfParams = await computeEffectiveParams(scenarioGraph, scenarioWhatIfDSL);

@@ -19,6 +19,7 @@ import { ScenarioParams, NodeParamDiff } from '../types/scenarios';
  */
 export interface FetchParts {
   window: { start?: string; end?: string } | null;
+  cohort: { start?: string; end?: string } | null;
   context: Array<{ key: string; value: string }>;
   contextAny: Array<{ pairs: Array<{ key: string; value: string }> }>;
 }
@@ -65,6 +66,7 @@ export function splitDSLParts(queryDSL: string | null | undefined): SplitDSLResu
   return {
     fetchParts: {
       window: parsed.window,
+      cohort: parsed.cohort,
       context: parsed.context,
       contextAny: parsed.contextAny,
     },
@@ -95,6 +97,13 @@ export function buildFetchDSL(parts: FetchParts): string {
     const start = parts.window.start || '';
     const end = parts.window.end || '';
     segments.push(`window(${start}:${end})`);
+  }
+  
+  // Cohort (date-range filter for cohort analysis)
+  if (parts.cohort) {
+    const start = parts.cohort.start || '';
+    const end = parts.cohort.end || '';
+    segments.push(`cohort(${start}:${end})`);
   }
   
   // Context (each key:value pair)
