@@ -108,6 +108,18 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
         # Extract evidence (n/k for sample size and conversions)
         evidence = _extract_evidence(edge.get('p'))
         
+        # Extract forecast (LAG projected probability)
+        forecast = _extract_forecast(edge.get('p'))
+        
+        # Extract latency/maturity data (LAG completeness, t95)
+        latency = _extract_latency(edge.get('p'))
+        
+        # Extract inbound-n (forecast population)
+        p_n = None
+        p_param = edge.get('p')
+        if isinstance(p_param, dict):
+            p_n = p_param.get('n')
+        
         # Extract costs and uncertainty
         cost_gbp = _extract_cost(edge.get('cost_gbp'))
         cost_gbp_stdev = _extract_cost_stdev(edge.get('cost_gbp'))
@@ -123,6 +135,9 @@ def build_networkx_graph(graph_data: dict[str, Any]) -> nx.DiGraph:
             p_stdev=p_stdev,
             p_distribution=p_distribution,
             evidence=evidence,
+            forecast=forecast,
+            latency=latency,
+            p_n=p_n,
             conditional_p=edge.get('conditional_p', []),
             cost_gbp=cost_gbp,
             cost_gbp_stdev=cost_gbp_stdev,
@@ -258,8 +273,62 @@ def _extract_evidence(p_param: Optional[dict]) -> Optional[dict]:
             return {
                 'n': evidence.get('n'),
                 'k': evidence.get('k'),
+                'mean': evidence.get('mean'),  # evidence.mean (observed rate)
                 'window_from': evidence.get('window_from'),
                 'window_to': evidence.get('window_to'),
+            }
+    
+    return None
+
+
+def _extract_forecast(p_param: Optional[dict]) -> Optional[dict]:
+    """
+    Extract forecast data from probability parameter.
+    
+    Args:
+        p_param: Probability parameter dict (edge.p)
+    
+    Returns:
+        Forecast dict with mean, k, or None if not present
+    """
+    if p_param is None:
+        return None
+    
+    if isinstance(p_param, dict):
+        forecast = p_param.get('forecast')
+        if forecast:
+            return {
+                'mean': forecast.get('mean'),  # forecast.mean (projected rate)
+                'k': forecast.get('k'),        # forecast.k (expected converters)
+                'stdev': forecast.get('stdev'),
+            }
+    
+    return None
+
+
+def _extract_latency(p_param: Optional[dict]) -> Optional[dict]:
+    """
+    Extract latency/maturity data from probability parameter.
+    
+    Args:
+        p_param: Probability parameter dict (edge.p)
+    
+    Returns:
+        Latency dict with completeness, t95, etc. or None if not present
+    """
+    if p_param is None:
+        return None
+    
+    if isinstance(p_param, dict):
+        latency = p_param.get('latency')
+        if latency:
+            return {
+                'median_lag_days': latency.get('median_lag_days'),
+                'mean_lag_days': latency.get('mean_lag_days'),
+                't95': latency.get('t95'),
+                'path_t95': latency.get('path_t95'),
+                'completeness': latency.get('completeness'),
+                'maturity_days': latency.get('maturity_days'),
             }
     
     return None

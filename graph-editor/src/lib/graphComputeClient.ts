@@ -330,7 +330,8 @@ export class GraphComputeClient {
     scenarioId: string = 'base',
     scenarioName: string = 'Current',
     scenarioColour: string = '#3b82f6',
-    analysisType?: string
+    analysisType?: string,
+    visibilityMode: 'f+e' | 'f' | 'e' = 'f+e'
   ): Promise<AnalysisResponse> {
     // Check cache first
     const cacheKey = this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId]);
@@ -362,6 +363,7 @@ export class GraphComputeClient {
         scenario_id: scenarioId,
         name: scenarioName,
         colour: scenarioColour,
+        visibility_mode: visibilityMode,
         graph,
       }],
       query_dsl: queryDsl,
@@ -406,7 +408,7 @@ export class GraphComputeClient {
    * @param analysisType - Optional analysis type override
    */
   async analyzeMultipleScenarios(
-    scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string }>,
+    scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e' }>,
     queryDsl?: string,
     analysisType?: string
   ): Promise<AnalysisResponse> {
@@ -559,6 +561,7 @@ export interface ScenarioData {
   scenario_id: string;
   name?: string;
   colour?: string;
+  visibility_mode?: 'f+e' | 'f' | 'e';
   graph: any;
   param_overrides?: Record<string, any>;
 }
