@@ -30,6 +30,8 @@ def run_single_node_entry(
     
     Returns probabilities of reaching all absorbing nodes from this entry.
     New declarative schema: scenario-first layout with outcomes nested.
+    
+    LAG support: includes visibility_mode per scenario for UI adaptors.
     """
     from .graph_builder import build_networkx_graph
     
@@ -47,14 +49,17 @@ def run_single_node_entry(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
     
     # Get outcome dimension values (absorbing nodes)
@@ -73,14 +78,17 @@ def run_single_node_entry(
         if scenario:
             scenario_G = build_networkx_graph(scenario.graph)
             scenario_id = scenario.scenario_id
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_G = G
             scenario_id = 'current'
+            visibility_mode = 'f+e'
         
         for absorbing in absorbing_nodes:
             result = calculate_path_probability(scenario_G, node_id, absorbing, pruning)
             data_rows.append({
                 'scenario_id': scenario_id,
+                'visibility_mode': visibility_mode,
                 'outcome': absorbing,
                 'probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
@@ -129,6 +137,8 @@ def run_path_to_end(
     
     Returns probability of reaching this outcome from all entries.
     New declarative schema: scenario-first, simple metrics.
+    
+    LAG support: includes visibility_mode per scenario for UI adaptors.
     """
     from .graph_builder import build_networkx_graph
     
@@ -145,20 +155,24 @@ def run_path_to_end(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_G = G
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
         
         result = calculate_path_to_absorbing(scenario_G, node_id, pruning)
         data_rows.append({
             'scenario_id': scenario_id,
+            'visibility_mode': visibility_mode,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
             'expected_labour_cost': result.expected_labour_cost,
@@ -199,6 +213,8 @@ def run_path_through(
     """
     Analyze middle node - paths through it.
     New declarative schema: scenario-first with total probability.
+    
+    LAG support: includes visibility_mode per scenario for UI adaptors.
     """
     from .graph_builder import build_networkx_graph
     
@@ -215,20 +231,24 @@ def run_path_through(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_G = G
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
         
         result = calculate_path_through_node(scenario_G, node_id, pruning)
         data_rows.append({
             'scenario_id': scenario_id,
+            'visibility_mode': visibility_mode,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
             'expected_labour_cost': result.expected_labour_cost,
@@ -269,6 +289,8 @@ def run_end_comparison(
     """
     Compare probabilities of reaching multiple absorbing nodes.
     New declarative schema: node-first with scenario secondary.
+    
+    LAG support: includes visibility_mode per scenario for UI adaptors.
     """
     from .graph_builder import build_networkx_graph
     
@@ -292,15 +314,18 @@ def run_end_comparison(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_G = G
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
         
         for node_id in node_ids:
@@ -308,6 +333,7 @@ def run_end_comparison(
             data_rows.append({
                 'node': node_id,
                 'scenario_id': scenario_id,
+                'visibility_mode': visibility_mode,
                 'probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
                 'expected_labour_cost': result.expected_labour_cost,
@@ -352,6 +378,8 @@ def run_branch_comparison(
     """
     Compare parallel branches (siblings).
     New declarative schema: branch-first with scenario secondary.
+    
+    LAG support: includes visibility_mode and forecast/evidence data per scenario.
     """
     from .graph_builder import build_networkx_graph
     
@@ -375,35 +403,60 @@ def run_branch_comparison(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_G = G
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
         
         for node_id in node_ids:
             result = calculate_path_through_node(scenario_G, node_id, pruning)
-            # Get edge probability from parent
+            # Get edge probability and LAG data from parent
             edge_prob = None
+            forecast_mean = None
+            evidence_mean = None
+            completeness = None
             parents = list(scenario_G.predecessors(node_id)) if node_id in scenario_G else []
             if parents:
                 parent = parents[0]
                 edge_data = scenario_G.edges.get((parent, node_id), {})
                 edge_prob = edge_data.get('p')
+                
+                # LAG fields
+                forecast = edge_data.get('forecast') or {}
+                forecast_mean = forecast.get('mean')
+                evidence = edge_data.get('evidence') or {}
+                evidence_mean = evidence.get('mean')
+                latency = edge_data.get('latency') or {}
+                completeness = latency.get('completeness')
             
-            data_rows.append({
+            row = {
                 'branch': node_id,
                 'scenario_id': scenario_id,
+                'visibility_mode': visibility_mode,
                 'edge_probability': edge_prob,
                 'path_through_probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
                 'expected_labour_cost': result.expected_labour_cost,
-            })
+            }
+            
+            # LAG fields: always include if available
+            if forecast_mean is not None:
+                row['forecast_mean'] = forecast_mean
+            if evidence_mean is not None:
+                row['evidence_mean'] = evidence_mean
+            if completeness is not None:
+                row['completeness'] = completeness
+            
+            data_rows.append(row)
     
     return {
         'metadata': {
@@ -416,6 +469,9 @@ def run_branch_comparison(
             ],
             'metrics': [
                 {'id': 'edge_probability', 'name': 'Edge Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
+                {'id': 'forecast_mean', 'name': 'Forecast', 'type': 'probability', 'format': 'percent'},
+                {'id': 'evidence_mean', 'name': 'Evidence', 'type': 'probability', 'format': 'percent'},
+                {'id': 'completeness', 'name': 'Completeness', 'type': 'ratio', 'format': 'percent'},
                 {'id': 'path_through_probability', 'name': 'Path Through', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
@@ -468,6 +524,9 @@ def run_path(
     
     Returns declarative schema with stage-first structure for funnel visualization.
     See: /docs/current/project-analysis/ANALYSIS_RETURN_SCHEMA.md
+    
+    LAG support: includes forecast_mean, evidence_mean, and completeness fields
+    when available on edges, conditional upon scenario visibility_mode.
     """
     from .graph_builder import build_networkx_graph
     
@@ -502,10 +561,12 @@ def run_path(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         # Ensure we have a colour - default to blue if not provided
         if not scenario_colour:
@@ -513,7 +574,8 @@ def run_path(
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
     
     # Build flat data rows (stage × scenario)
@@ -523,9 +585,11 @@ def run_path(
             if scenario:
                 scenario_G = build_networkx_graph(scenario.graph)
                 scenario_id = scenario.scenario_id
+                visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
             else:
                 scenario_G = G
                 scenario_id = 'current'
+                visibility_mode = 'f+e'
             
             # Calculate probability to reach this stage from start
             if i == 0:
@@ -536,6 +600,11 @@ def run_path(
                 distribution = None
                 n_total = None
                 k_success = None
+                forecast_mean = None
+                evidence_mean = None
+                completeness = None
+                p_n = None
+                forecast_k = None
             else:
                 result = calculate_path_probability(scenario_G, start_id, stage_id, pruning)
                 prob = result.probability
@@ -548,14 +617,34 @@ def run_path(
                 distribution = None
                 n_total = None
                 k_success = None
+                forecast_mean = None
+                evidence_mean = None
+                completeness = None
+                p_n = None
+                forecast_k = None
                 
                 if scenario_G.has_edge(prev_stage, stage_id):
                     edge_data = scenario_G.edges[prev_stage, stage_id]
                     stdev = edge_data.get('p_stdev')
                     distribution = edge_data.get('p_distribution')
+                    
+                    # Evidence data (observed rate and counts)
                     evidence = edge_data.get('evidence') or {}
                     n_total = evidence.get('n')
                     k_success = evidence.get('k')
+                    evidence_mean = evidence.get('mean')
+                    
+                    # Forecast data (LAG projected probability)
+                    forecast = edge_data.get('forecast') or {}
+                    forecast_mean = forecast.get('mean')
+                    forecast_k = forecast.get('k')
+                    
+                    # Latency/maturity data (LAG completeness)
+                    latency = edge_data.get('latency') or {}
+                    completeness = latency.get('completeness')
+                    
+                    # Inbound-n (forecast population)
+                    p_n = edge_data.get('p_n')
             
             # Calculate dropoff from previous stage
             dropoff = None
@@ -569,6 +658,7 @@ def run_path(
             row = {
                 'stage': stage_id,
                 'scenario_id': scenario_id,
+                'visibility_mode': visibility_mode,
                 'probability': prob,
                 'expected_cost_gbp': cost_gbp,
                 'expected_labour_cost': labour_cost,
@@ -585,6 +675,18 @@ def run_path(
                 row['k'] = k_success
             if dropoff is not None:
                 row['dropoff'] = dropoff
+            
+            # LAG fields: always include if available (invariant semantics)
+            if forecast_mean is not None:
+                row['forecast_mean'] = forecast_mean
+            if evidence_mean is not None:
+                row['evidence_mean'] = evidence_mean
+            if completeness is not None:
+                row['completeness'] = completeness
+            if p_n is not None:
+                row['p_n'] = p_n
+            if forecast_k is not None:
+                row['forecast_k'] = forecast_k
             
             data_rows.append(row)
     
@@ -603,10 +705,15 @@ def run_path(
             ],
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
+                {'id': 'forecast_mean', 'name': 'Forecast', 'type': 'probability', 'format': 'percent'},
+                {'id': 'evidence_mean', 'name': 'Evidence', 'type': 'probability', 'format': 'percent'},
+                {'id': 'completeness', 'name': 'Completeness', 'type': 'ratio', 'format': 'percent'},
                 {'id': 'stdev', 'name': 'Std Dev', 'type': 'probability', 'format': 'percent'},
                 {'id': 'distribution', 'name': 'Distribution', 'type': 'category', 'format': 'string'},
                 {'id': 'n', 'name': 'Sample Size', 'type': 'count', 'format': 'integer'},
                 {'id': 'k', 'name': 'Conversions', 'type': 'count', 'format': 'integer'},
+                {'id': 'p_n', 'name': 'Forecast Population', 'type': 'count', 'format': 'integer'},
+                {'id': 'forecast_k', 'name': 'Expected Conversions', 'type': 'count', 'format': 'integer'},
                 {'id': 'dropoff', 'name': 'Dropoff', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
@@ -660,6 +767,8 @@ def run_partial_path(
     """
     Analyze partial path from start through intermediates.
     New declarative schema: scenario-first with outcome secondary.
+    
+    LAG support: includes visibility_mode per scenario for UI adaptors.
     """
     from .graph_builder import build_networkx_graph
     
@@ -686,15 +795,18 @@ def run_partial_path(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_G = G
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
         
         for absorbing in absorbing_nodes:
@@ -702,6 +814,7 @@ def run_partial_path(
             if result.probability > 0:
                 data_rows.append({
                     'scenario_id': scenario_id,
+                    'visibility_mode': visibility_mode,
                     'outcome': absorbing,
                     'probability': result.probability,
                     'expected_cost_gbp': result.expected_cost_gbp,
@@ -747,6 +860,8 @@ def run_general_stats(
     General statistics for arbitrary node selection.
     New declarative schema: node-first with scenario secondary.
     
+    LAG support: includes visibility_mode per scenario for UI adaptors.
+    
     Args:
         node_keys: Graph keys (UUIDs), already resolved by dispatcher
     """
@@ -786,15 +901,18 @@ def run_general_stats(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_G = G
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
         
         for graph_key in node_keys:
@@ -806,6 +924,7 @@ def run_general_stats(
             data_rows.append({
                 'node': human_id,
                 'scenario_id': scenario_id,
+                'visibility_mode': visibility_mode,
                 'path_through_probability': result.probability,
             })
     
@@ -848,6 +967,8 @@ def run_graph_overview(
     
     Returns overall graph statistics and structure analysis.
     New declarative schema: outcome-first with scenario secondary.
+    
+    LAG support: includes visibility_mode per scenario for UI adaptors.
     """
     from .graph_builder import build_networkx_graph
     
@@ -872,15 +993,18 @@ def run_graph_overview(
             scenario_id = scenario.scenario_id
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
         else:
             scenario_G = G
             scenario_id = 'current'
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour
+            'colour': scenario_colour,
+            'visibility_mode': visibility_mode,
         }
         
         entry_nodes = find_entry_nodes(scenario_G)
@@ -900,6 +1024,7 @@ def run_graph_overview(
             data_rows.append({
                 'outcome': absorbing,
                 'scenario_id': scenario_id,
+                'visibility_mode': visibility_mode,
                 'probability': total_prob,
                 'expected_cost_gbp': total_cost_gbp,
                 'expected_labour_cost': total_labour_cost,

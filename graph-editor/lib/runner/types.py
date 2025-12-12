@@ -19,6 +19,10 @@ class ScenarioData(BaseModel):
     scenario_id: str = Field(default="base", description="Unique scenario identifier")
     name: Optional[str] = Field(default=None, description="Human-readable scenario name")
     colour: Optional[str] = Field(default=None, description="Hex colour code for scenario")
+    visibility_mode: Optional[str] = Field(
+        default="f+e",
+        description="F/E visibility mode: 'f+e' (both), 'f' (forecast only), 'e' (evidence only)"
+    )
     graph: dict[str, Any] = Field(description="Full graph data (nodes, edges, policies, metadata)")
     param_overrides: dict[str, Any] = Field(
         default_factory=dict,

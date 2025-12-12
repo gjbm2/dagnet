@@ -346,11 +346,17 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           
           const colour = getScenarioColour(scenarioId);
           
+          // Get visibility mode (F/E/F+E) for this scenario from tab state
+          const visibilityMode = tabId 
+            ? operations.getScenarioVisibilityMode(tabId, scenarioId)
+            : 'f+e';
+          
           return {
             scenario_id: scenarioId,
             name: getScenarioName(scenarioId),
             graph: scenarioGraph,
             colour,
+            visibility_mode: visibilityMode,
           };
         });
         
@@ -364,6 +370,11 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         const scenarioId = orderedVisibleScenarios[0] || 'current';
         const scenarioName = getScenarioName(scenarioId);
         const scenarioColour = getScenarioColour(scenarioId);
+        
+        // Get visibility mode (F/E/F+E) for this scenario from tab state
+        const visibilityMode = tabId 
+          ? operations.getScenarioVisibilityMode(tabId, scenarioId)
+          : 'f+e';
         
         // Build the graph with What-If applied (if current layer)
         let analysisGraph = graph;
@@ -389,7 +400,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           scenarioId,
           scenarioName,
           scenarioColour,
-          selectedAnalysisId || undefined
+          selectedAnalysisId || undefined,
+          visibilityMode
         );
       }
       
