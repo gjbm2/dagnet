@@ -235,6 +235,81 @@ class TestGetRunner:
         assert runner is None
 
 
+class TestVisibilityMode:
+    """Test visibility mode (F/E/F+E) probability source selection."""
+    
+    def test_apply_visibility_mode_mean(self):
+        """f+e mode keeps p.mean unchanged."""
+        from lib.runner.graph_builder import apply_visibility_mode
+        
+        G = nx.DiGraph()
+        G.add_node('a')
+        G.add_node('b')
+        G.add_edge('a', 'b', p=0.5, evidence={'mean': 0.3}, forecast={'mean': 0.7})
+        
+        apply_visibility_mode(G, 'f+e')
+        
+        assert G.edges['a', 'b']['p'] == 0.5  # Unchanged
+    
+    def test_apply_visibility_mode_forecast(self):
+        """f mode uses p.forecast.mean."""
+        from lib.runner.graph_builder import apply_visibility_mode
+        
+        G = nx.DiGraph()
+        G.add_node('a')
+        G.add_node('b')
+        G.add_edge('a', 'b', p=0.5, evidence={'mean': 0.3}, forecast={'mean': 0.7})
+        
+        apply_visibility_mode(G, 'f')
+        
+        assert G.edges['a', 'b']['p'] == 0.7  # Replaced with forecast
+    
+    def test_apply_visibility_mode_evidence(self):
+        """e mode uses p.evidence.mean."""
+        from lib.runner.graph_builder import apply_visibility_mode
+        
+        G = nx.DiGraph()
+        G.add_node('a')
+        G.add_node('b')
+        G.add_edge('a', 'b', p=0.5, evidence={'mean': 0.3}, forecast={'mean': 0.7})
+        
+        apply_visibility_mode(G, 'e')
+        
+        assert G.edges['a', 'b']['p'] == 0.3  # Replaced with evidence
+    
+    def test_apply_visibility_mode_fallback(self):
+        """Falls back to p.mean if requested source unavailable."""
+        from lib.runner.graph_builder import apply_visibility_mode
+        
+        G = nx.DiGraph()
+        G.add_node('a')
+        G.add_node('b')
+        G.add_edge('a', 'b', p=0.5)  # No evidence or forecast
+        
+        apply_visibility_mode(G, 'f')  # Request forecast but none exists
+        
+        assert G.edges['a', 'b']['p'] == 0.5  # Falls back to p.mean
+    
+    def test_get_probability_label(self):
+        """Probability label matches visibility mode."""
+        from lib.runner.graph_builder import get_probability_label
+        
+        assert get_probability_label('f+e') == 'Probability'
+        assert get_probability_label('f') == 'Forecast Probability'
+        assert get_probability_label('e') == 'Evidence Probability'
+    
+    def test_scenario_dimension_has_probability_label(self):
+        """Scenario dimension values include probability_label."""
+        G = build_test_graph()
+        result = run_path_to_end(G, 'end1')
+        
+        # Check current scenario has probability_label
+        scenario_values = result['dimension_values']['scenario_id']
+        assert 'current' in scenario_values
+        assert 'probability_label' in scenario_values['current']
+        assert scenario_values['current']['probability_label'] == 'Probability'
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

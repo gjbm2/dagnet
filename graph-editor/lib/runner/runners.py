@@ -16,7 +16,13 @@ from .path_runner import (
     compute_pruning,
     PruningResult,
 )
-from .graph_builder import find_entry_nodes, find_absorbing_nodes, get_graph_stats
+from .graph_builder import (
+    find_entry_nodes,
+    find_absorbing_nodes,
+    get_graph_stats,
+    apply_visibility_mode,
+    get_probability_label,
+)
 
 
 def run_single_node_entry(
@@ -60,6 +66,7 @@ def run_single_node_entry(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
     
     # Get outcome dimension values (absorbing nodes)
@@ -79,6 +86,8 @@ def run_single_node_entry(
             scenario_G = build_networkx_graph(scenario.graph)
             scenario_id = scenario.scenario_id
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+            apply_visibility_mode(scenario_G, visibility_mode)
         else:
             scenario_G = G
             scenario_id = 'current'
@@ -156,6 +165,8 @@ def run_path_to_end(
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+            apply_visibility_mode(scenario_G, visibility_mode)
         else:
             scenario_G = G
             scenario_id = 'current'
@@ -167,6 +178,7 @@ def run_path_to_end(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
         
         result = calculate_path_to_absorbing(scenario_G, node_id, pruning)
@@ -232,6 +244,8 @@ def run_path_through(
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+            apply_visibility_mode(scenario_G, visibility_mode)
         else:
             scenario_G = G
             scenario_id = 'current'
@@ -243,6 +257,7 @@ def run_path_through(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
         
         result = calculate_path_through_node(scenario_G, node_id, pruning)
@@ -315,6 +330,8 @@ def run_end_comparison(
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+            apply_visibility_mode(scenario_G, visibility_mode)
         else:
             scenario_G = G
             scenario_id = 'current'
@@ -326,6 +343,7 @@ def run_end_comparison(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
         
         for node_id in node_ids:
@@ -404,6 +422,8 @@ def run_branch_comparison(
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+            apply_visibility_mode(scenario_G, visibility_mode)
         else:
             scenario_G = G
             scenario_id = 'current'
@@ -415,6 +435,7 @@ def run_branch_comparison(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
         
         for node_id in node_ids:
@@ -576,6 +597,7 @@ def run_path(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
     
     # Build flat data rows (stage × scenario)
@@ -586,6 +608,8 @@ def run_path(
                 scenario_G = build_networkx_graph(scenario.graph)
                 scenario_id = scenario.scenario_id
                 visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+                # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+                apply_visibility_mode(scenario_G, visibility_mode)
             else:
                 scenario_G = G
                 scenario_id = 'current'
@@ -796,6 +820,8 @@ def run_partial_path(
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+            apply_visibility_mode(scenario_G, visibility_mode)
         else:
             scenario_G = G
             scenario_id = 'current'
@@ -807,6 +833,7 @@ def run_partial_path(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
         
         for absorbing in absorbing_nodes:
@@ -902,6 +929,8 @@ def run_general_stats(
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+            apply_visibility_mode(scenario_G, visibility_mode)
         else:
             scenario_G = G
             scenario_id = 'current'
@@ -913,6 +942,7 @@ def run_general_stats(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
         
         for graph_key in node_keys:
@@ -994,6 +1024,8 @@ def run_graph_overview(
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
+            apply_visibility_mode(scenario_G, visibility_mode)
         else:
             scenario_G = G
             scenario_id = 'current'
@@ -1005,6 +1037,7 @@ def run_graph_overview(
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
         }
         
         entry_nodes = find_entry_nodes(scenario_G)

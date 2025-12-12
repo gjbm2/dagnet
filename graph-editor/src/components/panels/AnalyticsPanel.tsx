@@ -84,6 +84,21 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     
     return ordered;
   }, [visibleScenarioIds, scenarioOrder]);
+
+  // Serialize visible scenarios + per-scenario visibility modes.
+  //
+  // IMPORTANT: These must be declared BEFORE runAnalysis/useEffect logic that depends on them.
+  // Otherwise we can hit the temporal dead zone (Cannot access before initialization).
+  const visibleScenariosKey = orderedVisibleScenarios.join(',');
+
+  // Triggers re-analysis when any scenario's F/E/F+E mode changes.
+  const visibilityModesKey = useMemo(() => {
+    const key = orderedVisibleScenarios
+      .map(id => `${id}:${tabId ? operations.getScenarioVisibilityMode(tabId, id) : 'f+e'}`)
+      .join(',');
+    console.log('[AnalyticsPanel] visibilityModesKey computed:', key);
+    return key;
+  }, [orderedVisibleScenarios, tabId, operations, scenarioState]); // scenarioState changes when modes change
   
   // Get scenario colour from stored values (not computed)
   const getScenarioColour = useCallback((scenarioId: string): string => {
@@ -376,6 +391,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           ? operations.getScenarioVisibilityMode(tabId, scenarioId)
           : 'f+e';
         
+        console.log('[AnalyticsPanel] runAnalysis: visibilityMode =', visibilityMode, 'for scenario', scenarioId);
+        
         // Build the graph with What-If applied (if current layer)
         let analysisGraph = graph;
         if (scenariosContext) {
@@ -428,14 +445,26 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         }
       }
     }
-  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, orderedVisibleScenarios, scenariosContext, getScenarioName, getScenarioColour, whatIfDSL]);
+  }, [
+    graph,
+    selectedNodeIds,
+    queryDSL,
+    selectedAnalysisId,
+    orderedVisibleScenarios,
+    scenariosContext,
+    getScenarioName,
+    getScenarioColour,
+    whatIfDSL,
+    // Ensure visibility-mode changes (F/E/F+E) update the closure used by runAnalysis,
+    // otherwise we'd keep reading stale modes and see no differences.
+    visibilityModesKey,
+    tabId,
+    operations,
+  ]);
   
   // Store runAnalysis in a ref to avoid effect re-triggers
   const runAnalysisRef = useRef(runAnalysis);
   runAnalysisRef.current = runAnalysis;
-  
-  // Serialize visible scenarios for comparison
-  const visibleScenariosKey = orderedVisibleScenarios.join(',');
   
   // Track previous values for detecting what changed
   const prevAnalysisIdRef = useRef<string | null>(null);
@@ -444,6 +473,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const prevSelectedNodesRef = useRef(selectedNodeIds);
   const prevScenariosKeyRef = useRef(visibleScenariosKey);
   const prevWhatIfDSLRef = useRef(whatIfDSL);
+  const prevVisibilityModesRef = useRef(visibilityModesKey);
   
   // Single unified effect that handles all triggers
   useEffect(() => {
@@ -456,6 +486,14 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     const selectionChanged = prevSelectedNodesRef.current !== selectedNodeIds;
     const scenariosChanged = prevScenariosKeyRef.current !== visibleScenariosKey;
     const whatIfChanged = prevWhatIfDSLRef.current !== whatIfDSL;
+    const visibilityModesChanged = prevVisibilityModesRef.current !== visibilityModesKey;
+    
+    if (visibilityModesChanged) {
+      console.log('[AnalyticsPanel] Effect: visibilityModesChanged!', {
+        prev: prevVisibilityModesRef.current,
+        curr: visibilityModesKey,
+      });
+    }
     
     // Update refs
     prevAnalysisIdRef.current = selectedAnalysisId;
@@ -464,6 +502,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     prevSelectedNodesRef.current = selectedNodeIds;
     prevScenariosKeyRef.current = visibleScenariosKey;
     prevWhatIfDSLRef.current = whatIfDSL;
+    prevVisibilityModesRef.current = visibilityModesKey;
     
     // If analysis type changed (including first selection), run immediately
     if (analysisChanged) {
@@ -473,13 +512,14 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     
     // For other changes, debounce
     // What-If changes should also trigger re-analysis since they affect probabilities
-    if (graphChanged || queryChanged || selectionChanged || scenariosChanged || whatIfChanged) {
+    // Visibility mode changes (F/E/F+E) change the probability basis used
+    if (graphChanged || queryChanged || selectionChanged || scenariosChanged || whatIfChanged || visibilityModesChanged) {
       const timeoutId = setTimeout(() => {
         runAnalysisRef.current();
       }, 300);
       return () => clearTimeout(timeoutId);
     }
-  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey, whatIfDSL]);
+  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey, whatIfDSL, visibilityModesKey]);
   
   // Cleanup spinner timeout on unmount
   useEffect(() => {
