@@ -333,8 +333,8 @@ export class GraphComputeClient {
     analysisType?: string,
     visibilityMode: 'f+e' | 'f' | 'e' = 'f+e'
   ): Promise<AnalysisResponse> {
-    // Check cache first
-    const cacheKey = this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId]);
+    // Check cache first - include visibilityMode so F/E/F+E changes invalidate cache
+    const cacheKey = this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId]) + `|vis:${visibilityMode}`;
     const cached = this.analysisCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
       console.log('[GraphComputeClient] Cache hit for analyzeSelection');
@@ -412,10 +412,19 @@ export class GraphComputeClient {
     queryDsl?: string,
     analysisType?: string
   ): Promise<AnalysisResponse> {
-    // Use first scenario's graph for cache key (multi-scenario typically uses same base graph)
-    const baseGraph = scenarios[0]?.graph;
+    // Generate cache key that includes ALL scenarios' data (not just first)
+    // This ensures cache invalidates when any scenario's data changes
     const scenarioIds = scenarios.map(s => s.scenario_id);
-    const cacheKey = this.generateCacheKey(baseGraph, queryDsl, analysisType, scenarioIds);
+    const visibilityModes = scenarios.map(s => `${s.scenario_id}:${s.visibility_mode || 'f+e'}`).join(',');
+    
+    // Include edge probabilities from ALL scenarios for proper cache invalidation
+    const allEdgeProbs = scenarios.map(s => {
+      const edges = s.graph?.edges || [];
+      return edges.map((e: any) => `${e.id || e.uuid}:${(e.p?.mean ?? 0).toFixed(6)}`).sort().join(',');
+    }).join('|');
+    
+    const cacheKey = this.generateCacheKey(scenarios[0]?.graph, queryDsl, analysisType, scenarioIds) 
+      + `|vis:${visibilityModes}|allProbs:${allEdgeProbs}`;
     
     // Check cache first
     const cached = this.analysisCache.get(cacheKey);
@@ -451,6 +460,7 @@ export class GraphComputeClient {
         scenario_id: s.scenario_id,
         name: s.name,
         colour: s.colour,
+        visibility_mode: s.visibility_mode || 'f+e',
         graph: s.graph,
       })),
       query_dsl: queryDsl,
