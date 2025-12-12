@@ -366,6 +366,7 @@ async def runner_analyze_endpoint(request: Request):
                 scenario_id=s.get('scenario_id', f'scenario_{i}'),
                 name=s.get('name'),
                 colour=s.get('colour'),
+                visibility_mode=s.get('visibility_mode', 'f+e'),
                 graph=s.get('graph', {}),
             )
             for i, s in enumerate(data['scenarios'])
