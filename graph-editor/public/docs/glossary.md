@@ -131,6 +131,12 @@ Examples:
 - `from(node_a).to(node_b)`: Specifies data strictly for the transition between A and B.
 - `context(device:mobile)`: Filters for specific user segments.
 
+**Cache cutting**  
+The process of splitting a requested window into **already-cached** dates vs **missing** dates, so we only fetch what’s needed (dependency‑scoped, partial cache invalidation).
+
+**Cohort horizon (retrieval horizon)**  
+The effective look-back limit for `cohort()` retrieval. DAGNet uses `path_t95` to avoid refetching cohorts that are far older than the conversion horizon (unless explicitly required).
+
 **Context**
 Definitions of user segments or environmental factors (e.g., "Mobile Users", "UK Region") that can filter data or trigger different parameter values.
 
@@ -166,6 +172,10 @@ Useful when current data is thin or noisy.
 The **time delay** between entering a step and completing it.  
 Example: 7 days from “Household Created” to “Switch Registered”.
 
+**Anchor lag (A→X lag)**  
+For a downstream latency edge, the **observed time from the graph anchor (A) to the source node (X)**.  
+In cohort mode this comes from the `anchor_*` latency arrays returned by Amplitude’s 3-step funnel and is used to adjust “effective cohort age”.
+
 **Time‑to‑convert distribution**  
 How long it typically takes users to complete a step, treated as a probability distribution over time (e.g. log‑normal).  
 This is what we infer from daily Amplitude data.
@@ -191,6 +201,18 @@ Informal distinction based on cohort **age** versus typical lag:
 A 0–1 measure of “how far along” a set of cohorts is, based on lag distributions and ages at query time.  
 Rendered visually as solid vs hatched portions of an edge.
 
+**t95**  
+The 95th percentile time-to-convert for an edge’s lag distribution.  
+Interpretation: “95% of eventual converters should convert within t95 days.”
+
+**path_t95**  
+An **anchor-to-edge** conversion horizon used to bound `cohort()` retrieval windows (to avoid fetching cohorts that are far older than the conversion horizon).  
+When anchor lag arrays are available, DAGNet prefers a moment-matched estimate \(t95(A→X + X→Y)\); otherwise it falls back to a conservative topo accumulation.
+
+**maturity_days**  
+A user-configured fallback for lag/time-to-convert when empirical lag data is missing or too noisy.  
+Also used as a conservative fallback when computing t95.
+
 ---
 
 ## Distributions & Transformations
@@ -213,6 +235,10 @@ Handy for modelling probabilities on an unconstrained scale.
 **Convolution (in this context)**  
 Combining an **arrival curve** with a **lag distribution** to get a new time‑indexed flow.  
 Example: if 100 users arrive at node A on day 0 and the A→B lag has a known pmf, convolution tells us how many arrive at B on days 1, 2, 3, … .
+
+**Moment matching (lognormal sum)**  
+An approximation technique used to represent the sum of two log-normal variables as another log-normal by matching mean and variance (often called the Fenton–Wilkinson approximation).  
+In DAGNet this is used to estimate `path_t95` from anchor lag (A→X) plus edge lag (X→Y) when both are available.
 
 ---
 
@@ -264,6 +290,9 @@ Latency beads show typical lag and completeness for an edge.
 **Mature / forecast edge layers**  
 Edges can be drawn with an inner “mature” layer (solid) and an outer “forecast” layer (hatched).  
 The ratio of these indicates how much of the edge’s conversions are based on **observed** data versus **modelled** projections.
+
+**Sibling rebalancing**  
+When one edge probability in a sibling group changes, DAGNet may adjust the remaining siblings so the group stays normalised (typically summing to 1) while respecting override flags.
 
 ---
 

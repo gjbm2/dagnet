@@ -20,7 +20,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   enhanceGraphLatencies,
   computeEdgeLatencyStats,
-  computeBlendedMean,
   calculateCompleteness,
   fitLagDistribution,
   logNormalCDF,
@@ -44,7 +43,9 @@ function createCohortSlice(
   dates: string[],
   nDaily: number[],
   kDaily: number[],
-  medianLagDays?: number[]
+  medianLagDays?: number[],
+  anchorMedianLagDays?: number[],
+  anchorMeanLagDays?: number[]
 ): ParameterValueForLAG {
   return {
     sliceDSL: `cohort(${dates[0]}:${dates[dates.length - 1]})`,
@@ -55,6 +56,8 @@ function createCohortSlice(
     k_daily: kDaily,
     median_lag_days: medianLagDays,
     mean_lag_days: medianLagDays, // Simplify: use median as mean
+    ...(anchorMedianLagDays ? { anchor_median_lag_days: anchorMedianLagDays } : {}),
+    ...(anchorMeanLagDays ? { anchor_mean_lag_days: anchorMeanLagDays } : {}),
     mean: kDaily.reduce((a, b) => a + b, 0) / nDaily.reduce((a, b) => a + b, 0),
     data_source: { retrieved_at: '2025-12-10T00:00:00Z', type: 'test' },
   } as ParameterValueForLAG;
@@ -112,7 +115,7 @@ describe('LAG Stats Flow - Expected Values', () => {
   const helpers = createLAGHelpers();
 
   describe('Blend formula via enhanceGraphLatencies (single canonical path)', () => {
-    it('computes blended p.mean when evidence + forecast are present (and matches computeBlendedMean)', () => {
+    it('computes blended p.mean when evidence + forecast are present (Formula A tail)', () => {
       const graph: GraphForPath = {
         nodes: [{ id: 'A', type: 'start' }, { id: 'B' }],
         edges: [
@@ -159,16 +162,14 @@ describe('LAG Stats Flow - Expected Values', () => {
       expect(e1.forecast?.mean).toBe(0.98);
       expect(e1.evidence?.mean).toBe(0.71);
 
-      const expected = computeBlendedMean({
-        evidenceMean: 0.71,
-        forecastMean: 0.98,
-        completeness: e1.latency.completeness,
-        nQuery: 97,
-        nBaseline: 412,
-      });
+      // Formula A expectation:
+      // - cohorts dated 1-Nov and 6-Nov are mature (age>=30) → k̂ = k
+      // - cohort dated 11-Nov is immature (age=29)          → k̂ = k + (n-k)*forecast
+      // n: [32,33,32], k: [23,23,23], forecast=0.98
+      const expected =
+        (23 + 23 + (23 + (32 - 23) * 0.98)) / (32 + 33 + 32);
 
-      expect(expected).toBeDefined();
-      expect(e1.blendedMean).toBeCloseTo(expected as number, 8);
+      expect(e1.blendedMean).toBeCloseTo(expected, 10);
       expect(e1.blendedMean!).toBeGreaterThanOrEqual(0.71);
       expect(e1.blendedMean!).toBeLessThanOrEqual(0.98);
     });
@@ -210,6 +211,59 @@ describe('LAG Stats Flow - Expected Values', () => {
       expect(e1.forecast?.mean).toBe(0.95);
       expect(e1.blendedMean).toBeDefined();
       expect(e1.blendedMean).toBeCloseTo(0.95, 10);
+    });
+
+    it('uses forecast when cohorts are immature and k=0, and anchor lag prevents false completeness', () => {
+      const graph: GraphForPath = {
+        nodes: [{ id: 'A', type: 'start' }, { id: 'B' }],
+        edges: [
+          {
+            id: 'e1',
+            uuid: 'e1',
+            from: 'A',
+            to: 'B',
+            p: {
+              // Must be > epsilon so the edge is considered active and gets LAG-enhanced.
+              // (In real graphs this can be 0 before enhancement; this test focuses on the
+              // Formula A / anchor-lag behaviour once the edge is processed.)
+              mean: 0.0001,
+              latency: { maturity_days: 10 },
+              evidence: { mean: 0, n: 6, k: 0 },
+              forecast: { mean: 0.7894333890974398 },
+            },
+          },
+        ],
+      };
+
+      // Cohorts are 5–7 days old at analysis time, but A→X anchor lag is ~12 days,
+      // so effective age at this edge is 0 for all cohorts → completeness should be very low.
+      const cohortSlice = createCohortSlice(
+        ['4-Dec-25', '5-Dec-25', '6-Dec-25'],
+        [2, 2, 2],
+        [0, 0, 0],
+        [6, 6, 6],
+        [12, 12, 12]
+      );
+      const windowSlice = createWindowSlice('11-Oct-25:9-Dec-25', 1576, 1112, 0.7894333890974398);
+
+      const paramLookup = new Map<string, ParameterValueForLAG[]>();
+      paramLookup.set('e1', [cohortSlice, windowSlice]);
+
+      const result = enhanceGraphLatencies(
+        graph,
+        paramLookup,
+        new Date('2025-12-11'),
+        helpers,
+        { start: new Date('2025-12-04'), end: new Date('2025-12-06') }
+      );
+
+      const e1 = result.edgeValues[0];
+      expect(e1.forecast?.mean).toBeCloseTo(0.7894333890974398, 12);
+      expect(e1.blendedMean).toBeDefined();
+      // Formula A: all cohorts immature, k=0 → p.mean≈forecast
+      expect(e1.blendedMean!).toBeCloseTo(0.7894333890974398, 12);
+      // Completeness should not be high once anchor lag is applied (effective ages clamp to 0)
+      expect(e1.latency.completeness).toBeLessThan(0.2);
     });
 
     it('blended mean moves closer to evidence as cohorts become more complete', () => {
@@ -938,11 +992,113 @@ describe('LAG Stats Flow - Expected Values', () => {
       expect(e1Result!.blendedMean).toBeDefined();
       expect(e2Result!.blendedMean).toBeDefined();
       
-      // Blended means should be between evidence and forecast
+      // Formula A can exceed the forecast baseline when evidence is already strong.
+      // For immature cohorts it should be >= forecast and <= 1.
       if (e1Result!.blendedMean !== undefined) {
-        expect(e1Result!.blendedMean).toBeGreaterThanOrEqual(Math.min(0.48, 0.55) - 0.01);
-        expect(e1Result!.blendedMean).toBeLessThanOrEqual(Math.max(0.48, 0.55) + 0.01);
+        expect(e1Result!.blendedMean).toBeGreaterThanOrEqual(0.55);
+        expect(e1Result!.blendedMean).toBeLessThanOrEqual(1);
       }
+    });
+
+    it('uses anchor+edge moment-matched path_t95 (Option A) to avoid compounding conservatism', () => {
+      // Graph: A → B → C → D
+      // We'll make upstream edges have large t95 with realistic variance (mean > median),
+      // but for the downstream edge C→D we provide anchor_* (A→C) lag data
+      // that is materially smaller than the conservative topo sum of upstream t95s.
+      //
+      // KEY INSIGHT: For Option A to provide benefit, upstream edges must have
+      // non-zero variance (mean > median). Otherwise their t95 = median exactly
+      // (no conservatism to compound), and the moment-matched estimate may actually
+      // be larger due to the variance introduced by anchor data.
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B' },
+          { id: 'C' },
+          { id: 'D' },
+        ],
+        edges: [
+          {
+            id: 'e1', uuid: 'e1', from: 'A', to: 'B',
+            p: { mean: 0.5, latency: { maturity_days: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+          },
+          {
+            id: 'e2', uuid: 'e2', from: 'B', to: 'C',
+            p: { mean: 0.5, latency: { maturity_days: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+          },
+          {
+            id: 'e3', uuid: 'e3', from: 'C', to: 'D',
+            p: { mean: 0.5, latency: { maturity_days: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+          },
+        ],
+      };
+
+      const dates = ['20-Nov-25', '21-Nov-25', '22-Nov-25', '23-Nov-25', '24-Nov-25'];
+
+      // Upstream edges: large lag with VARIANCE (mean > median for realistic right-skew)
+      // This gives them larger t95 values at high percentiles, so topo sum compounds.
+      // Ensure total converters >= 30 for empirical fit.
+      const e1Cohort = createCohortSlice(
+        dates,
+        [200, 200, 200, 200, 200],
+        [60, 60, 60, 60, 60],
+        [10, 10, 10, 10, 10]  // median_lag_days
+      );
+      // Add realistic variance: mean > median (typical right-skew)
+      (e1Cohort as any).mean_lag_days = [12, 12, 12, 12, 12];
+      
+      const e2Cohort = createCohortSlice(
+        dates,
+        [200, 200, 200, 200, 200],
+        [60, 60, 60, 60, 60],
+        [10, 10, 10, 10, 10]  // median_lag_days
+      );
+      // Add realistic variance: mean > median
+      (e2Cohort as any).mean_lag_days = [12, 12, 12, 12, 12];
+
+      // Downstream edge: small edge lag (C→D), but include anchor lags (A→C)
+      // that are materially smaller than the conservative sum of upstream t95s.
+      // Anchor median=8, mean=10 (measured actual A→C time, much less than topo sum)
+      const e3Cohort = createCohortSlice(
+        dates,
+        [200, 200, 200, 200, 200],
+        [60, 60, 60, 60, 60],
+        [3, 3, 3, 3, 3],  // edge lag C→D (median)
+        // anchor medians (A→C) - measured actual time from A to C
+        [8, 8, 8, 8, 8],
+        // anchor means (A→C)
+        [10, 10, 10, 10, 10]
+      );
+      // Add edge mean for C→D
+      (e3Cohort as any).mean_lag_days = [4, 4, 4, 4, 4];
+
+      const paramLookup = new Map<string, ParameterValueForLAG[]>();
+      paramLookup.set('e1', [e1Cohort, createWindowSlice('1-Nov-25:19-Nov-25', 2000, 1000, 0.5)]);
+      paramLookup.set('e2', [e2Cohort, createWindowSlice('1-Nov-25:19-Nov-25', 2000, 1000, 0.5)]);
+      paramLookup.set('e3', [e3Cohort, createWindowSlice('1-Nov-25:19-Nov-25', 2000, 1000, 0.5)]);
+
+      const queryDate = new Date('2025-11-24');
+      const cohortWindow = { start: new Date('2025-11-20'), end: new Date('2025-11-24') };
+
+      const result = enhanceGraphLatencies(graph, paramLookup, queryDate, helpers, cohortWindow);
+      const e1Result = result.edgeValues.find(v => v.edgeUuid === 'e1');
+      const e2Result = result.edgeValues.find(v => v.edgeUuid === 'e2');
+      const e3Result = result.edgeValues.find(v => v.edgeUuid === 'e3');
+
+      expect(e1Result).toBeDefined();
+      expect(e2Result).toBeDefined();
+      expect(e3Result).toBeDefined();
+
+      // Topo fallback accumulation: path_t95(to C) + t95(C→D)
+      // With variance, this compounds conservatism at high percentiles.
+      const topoFallbackForE3 = (e2Result!.latency.path_t95 ?? 0) + e3Result!.latency.t95;
+
+      // Option A uses anchor+edge moment-matched estimate (A→C + C→D as lognormal sum).
+      // Since anchor median (8d) << topo sum (much larger with variance),
+      // the combined A→D estimate should be materially smaller.
+      expect(e3Result!.latency.path_t95).toBeLessThan(topoFallbackForE3);
+      // Still must be at least the edge-local t95
+      expect(e3Result!.latency.path_t95).toBeGreaterThanOrEqual(e3Result!.latency.t95);
     });
   });
 

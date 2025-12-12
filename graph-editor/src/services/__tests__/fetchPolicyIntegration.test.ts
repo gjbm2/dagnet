@@ -602,17 +602,19 @@ describe('Policy with Slice Isolation', () => {
   describe('Mixed cohort/window param file', () => {
     it('window query treats file with aggregate data as cached', () => {
       // Param file with both window and cohort slices
-      // Note: When aggregate data exists, the FAST PATH returns cached
+      // Note: When aggregate data exists AND fully covers requested window, FAST PATH returns cached
+      // CRITICAL: The window slice must FULLY CONTAIN the requested window for fast path to trigger
       const windowSlice: ParameterValue = {
         mean: 0.5, // Has aggregate data → FAST PATH triggers
-        n: 300,
-        k: 150,
-        dates: [daysAgo(30), daysAgo(29), daysAgo(28)],
-        n_daily: [100, 100, 100],
-        k_daily: [50, 50, 50],
+        n: 1100,
+        k: 550,
+        dates: [daysAgo(30), daysAgo(29), daysAgo(28), daysAgo(27), daysAgo(26), 
+                daysAgo(25), daysAgo(24), daysAgo(23), daysAgo(22), daysAgo(21), daysAgo(20)],
+        n_daily: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100],
+        k_daily: [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50],
         window_from: daysAgo(30),
-        window_to: daysAgo(28),
-        sliceDSL: `window(${daysAgo(30)}:${daysAgo(28)})`,
+        window_to: daysAgo(20), // Must cover full requested window
+        sliceDSL: `window(${daysAgo(30)}:${daysAgo(20)})`,
       };
       
       const cohortSlice: ParameterValue = {
@@ -629,8 +631,8 @@ describe('Policy with Slice Isolation', () => {
       
       const paramFile = buildParamFile([windowSlice, cohortSlice]);
       
-      // Window query with aggregate data present → FAST PATH returns cached
-      // This is CORRECT behavior: we have usable aggregate data
+      // Window query with aggregate data present AND full coverage → FAST PATH returns cached
+      // This is CORRECT behavior: we have usable aggregate data covering the entire requested window
       const result = calculateIncrementalFetch(
         paramFile,
         { start: daysAgo(30), end: daysAgo(20) },
@@ -639,7 +641,7 @@ describe('Policy with Slice Isolation', () => {
         '' // Uncontexted query
       );
       
-      // FAST PATH: aggregate data exists → no fetch needed
+      // FAST PATH: aggregate data exists with full coverage → no fetch needed
       expect(result.needsFetch).toBe(false);
     });
     

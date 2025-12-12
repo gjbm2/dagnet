@@ -152,6 +152,14 @@ export interface RunnerExecuteOptions {
   nodeId?: string;  // For node-level fetches (future extensibility)
   parameterId?: string;
   eventDefinitions?: Record<string, any>;  // Event file data for adapter to resolve provider names + filters
+  /**
+   * Dry-run mode: run the real adapter pipeline through request construction (including pre_request),
+   * but STOP before executing the HTTP request.
+   *
+   * The returned ExecutionResult will have success=true, updates=[], and raw.dry_run=true,
+   * including a sanitized request preview for logging/debugging.
+   */
+  dryRun?: boolean;
 }
 
 

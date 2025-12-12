@@ -239,16 +239,35 @@ connections:
           }
           
           // Convert window/cohort dates to Amplitude date format (YYYYMMDD)
+          // ------------------------------------------------------------------
+          // INPUT CONTRACT (Regression Guard)
+          //
+          // DAGNet internally uses UK dates (`d-MMM-yy`) for UI/logging, but the
+          // DAS adapter boundary MUST receive ISO timestamps.
+          //
+          // If we accidentally pass "6-Dec-25" into DAS, this adapter will
+          // produce "6Dec25" which Amplitude rejects (400).
+          // ------------------------------------------------------------------
+          const assertIsoDateTime = (value, label) => {
+            if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+              throw new Error(`[Amplitude Adapter] ${label} must be ISO (YYYY-MM-DDTHH:mm:ss.sssZ). Got: ${String(value)}`);
+            }
+          };
+
           const formatDate = (iso) => iso.split('T')[0].replace(/-/g, '');
           
           // Use cohort dates if in cohort mode, otherwise use window dates
           let startDate, endDate;
           if (isCohortMode && cohort.start && cohort.end) {
+            assertIsoDateTime(cohort.start, 'cohort.start');
+            assertIsoDateTime(cohort.end, 'cohort.end');
             // Cohort mode: dates are A-entry dates
             startDate = formatDate(cohort.start);
             endDate = formatDate(cohort.end);
             console.log('[Amplitude Adapter] Using COHORT dates:', { start: startDate, end: endDate });
           } else {
+            assertIsoDateTime(window.start, 'window.start');
+            assertIsoDateTime(window.end, 'window.end');
             // Window mode: dates are X-event dates (CRITICAL: Use window from execution context!)
             startDate = formatDate(window.start);
             endDate = formatDate(window.end);

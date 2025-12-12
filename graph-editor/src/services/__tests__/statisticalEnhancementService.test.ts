@@ -46,6 +46,7 @@ import type { DateRange } from '../../types';
 import {
   LATENCY_MIN_FIT_CONVERTERS,
   LATENCY_DEFAULT_SIGMA,
+  LATENCY_T95_PERCENTILE,
 } from '../../constants/latency';
 
 describe('StatisticalEnhancementService', () => {
@@ -554,11 +555,10 @@ describe('LAG Lag Distribution Fitting (§5.4)', () => {
 
       const t95 = computeT95(fit, 30);
 
-      // For median=5, mean=7: t95 should be around 12-15 days
-      expect(t95).toBeGreaterThan(10);
-      expect(t95).toBeLessThan(20);
-      // Verify it's actually the 95th percentile
-      expect(logNormalCDF(t95, fit.mu, fit.sigma)).toBeCloseTo(0.95, 3);
+      // For median=5, mean=7: percentile should be meaningfully above the median.
+      expect(t95).toBeGreaterThan(5);
+      // Verify it's actually the configured percentile (not hard-coded 95%)
+      expect(logNormalCDF(t95, fit.mu, fit.sigma)).toBeCloseTo(LATENCY_T95_PERCENTILE, 3);
     });
 
     it('should fall back to maturityDays if fit is not valid', () => {
@@ -1599,7 +1599,7 @@ describe('enhanceGraphLatencies', () => {
       // With very immature cohorts (0.5-2 days old with median lag 10), completeness should be low
       expect(completeness).toBeLessThan(0.5);
       
-      // With window slice providing nBaseline, blend should now be computed
+      // With a window baseline p∞ + lag fit, cohort-mode p.mean is computed via Formula A.
       expect(edgeValue.blendedMean).toBeDefined();
       
       // Distance to forecast should be less than distance to evidence

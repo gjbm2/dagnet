@@ -316,6 +316,63 @@ describe('WindowAggregationService', () => {
     });
   });
 
+  describe('calculateIncrementalFetch – window vs cohort mode isolation', () => {
+    it('window() cache cutting must ignore cohort-mode values (and vice versa)', () => {
+      const values: any[] = [
+        // Window-mode slice covers up to 9-Dec-25
+        {
+          mean: 0.2,
+          n: 100,
+          k: 20,
+          dates: ['8-Dec-25', '9-Dec-25'],
+          n_daily: [50, 50],
+          k_daily: [10, 10],
+          window_from: '8-Dec-25',
+          window_to: '9-Dec-25',
+          sliceDSL: 'window(8-Dec-25:9-Dec-25)',
+        },
+        // Cohort-mode slice extends to 11-Dec-25 (must NOT satisfy window() cache coverage)
+        {
+          mean: 0.2,
+          n: 100,
+          k: 20,
+          dates: ['8-Dec-25', '9-Dec-25', '10-Dec-25', '11-Dec-25'],
+          n_daily: [25, 25, 25, 25],
+          k_daily: [5, 5, 5, 5],
+          cohort_from: '8-Dec-25',
+          cohort_to: '11-Dec-25',
+          sliceDSL: 'cohort(anchor,8-Dec-25:11-Dec-25)',
+        },
+      ];
+
+      const requestedWindow = { start: '8-Dec-25', end: '11-Dec-25' };
+
+      const windowResult = calculateIncrementalFetch(
+        { values },
+        requestedWindow,
+        undefined,
+        false,
+        'window(8-Dec-25:11-Dec-25)'
+      );
+
+      // Window mode should detect missing dates (10-Dec, 11-Dec) because only window slice has 8-9
+      expect(windowResult.needsFetch).toBe(true);
+      expect(windowResult.daysToFetch).toBe(2);
+
+      const cohortResult = calculateIncrementalFetch(
+        { values },
+        requestedWindow,
+        undefined,
+        false,
+        'cohort(8-Dec-25:11-Dec-25)'
+      );
+
+      // Cohort mode should be fully covered by the cohort slice dates[]
+      expect(cohortResult.needsFetch).toBe(false);
+      expect(cohortResult.daysToFetch).toBe(0);
+    });
+  });
+
   describe('aggregateFromParameter', () => {
     it('should aggregate from parameter file format', () => {
       const n_daily = [1000, 2000, 1500];

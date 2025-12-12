@@ -131,7 +131,7 @@ export class DASRunner {
       this.log('build_context', 'Execution context built');
 
       // 5. Execute adapter
-      const result = await this.executeAdapter(connection.adapter, execContext);
+      const result = await this.executeAdapter(connection.adapter, execContext, options);
       this.log('complete', 'Execution completed successfully', { updateCount: result.updates.length });
       return result;
     } catch (error) {
@@ -246,7 +246,11 @@ export class DASRunner {
   /**
    * Execute adapter phases: build request → execute → validate → extract → transform → upsert.
    */
-  private async executeAdapter(adapter: AdapterSpec, context: ExecutionContext): Promise<ExecutionResult> {
+  private async executeAdapter(
+    adapter: AdapterSpec,
+    context: ExecutionContext,
+    options: RunnerExecuteOptions
+  ): Promise<ExecutionResult> {
     // Phase 1: Pre-request scripts
     if (adapter.pre_request && adapter.pre_request.script) {
       this.executePreRequestScript(adapter.pre_request.script, context);
@@ -278,6 +282,27 @@ export class DASRunner {
       headers: sanitizedHeaders,
       body: request.body ? (request.body.length > 2000 ? request.body.substring(0, 2000) + '...[truncated]' : request.body) : undefined,
     });
+
+    // Dry-run: stop right before the HTTP call, but after the request is fully constructed.
+    if (options.dryRun) {
+      this.log('dry_run', 'Dry-run enabled: HTTP request will NOT be executed', {
+        url: request.url,
+        method: request.method,
+      });
+
+      return {
+        success: true,
+        updates: [],
+        raw: {
+          dry_run: true,
+          request: {
+            ...request,
+            headers: sanitizedHeaders,
+          },
+          execution_history: this.executionHistory,
+        },
+      };
+    }
 
     // Phase 3: Execute request
     this.log('execute_request', `Executing ${request.method} ${request.url}`);
