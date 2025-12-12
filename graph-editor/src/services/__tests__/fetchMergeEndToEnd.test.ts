@@ -200,7 +200,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
       undefined,
       'api',
       '',
-      { latencyConfig: { maturity_days: 7 } }
+      { recomputeForecast: true, latencyConfig: { maturity_days: 7 } }
     );
     
     paramFile.setValues(newValues);
@@ -211,7 +211,9 @@ describe('Scenario 1: Progressive Window Maturity', () => {
     expect(paramFile.values[0].window_to).toBe(daysAgo(0));
     expect(paramFile.values[0].dates!.length).toBe(15);
     
-    // NOTE: forecast / completeness / t95 / blended p are NOT computed at merge time.
+    // Forecast scalar is persisted for window() slices when requested.
+    // NOTE: completeness / t95 / blended p are NOT computed at merge time.
+    expect((paramFile.values[0] as any).forecast).toBeDefined();
   });
   
   it('second fetch (7 days later) only refetches immature portion', () => {
@@ -419,7 +421,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
       undefined,
       'api',
       '',
-      { latencyConfig: { maturity_days: 7 } }
+      { recomputeForecast: true, latencyConfig: { maturity_days: 7 } }
     );
     
     // Merge should still produce a canonical slice with dates/n/k/mean; no LAG stats.
@@ -510,7 +512,7 @@ describe('Scenario 4: Dual-Slice Interaction', () => {
       undefined,
       'api',
       '',
-      { latencyConfig: { maturity_days: 7 } }
+      { recomputeForecast: true, latencyConfig: { maturity_days: 7 } }
     );
     
     // Create cohort slice
@@ -532,8 +534,12 @@ describe('Scenario 4: Dual-Slice Interaction', () => {
     const windowVal = values.find(v => !isCohortModeValue(v))!;
     const cohortVal = values.find(v => isCohortModeValue(v))!;
     
-    // Window and cohort slices are stored independently.
-    // NOTE: mergeTimeSeriesIntoParameter does not compute forecast.
+    // Window persists a forecast scalar at merge time (baseline for dual-slice retrieval).
+    expect((windowVal as any).forecast).toBeDefined();
+    
+    // Cohort does not have forecast (would be added during query processing)
+    // Note: mergeTimeSeriesIntoParameter doesn't add forecast to cohort
+    // That happens in addEvidenceAndForecastScalars
   });
   
   it('updating window does not affect cohort', () => {

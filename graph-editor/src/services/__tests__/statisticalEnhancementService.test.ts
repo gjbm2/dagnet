@@ -1599,7 +1599,7 @@ describe('enhanceGraphLatencies', () => {
       // With very immature cohorts (0.5-2 days old with median lag 10), completeness should be low
       expect(completeness).toBeLessThan(0.5);
       
-      // With a window baseline p∞ + lag fit, cohort-mode p.mean is computed via Formula A.
+      // With window slice providing nBaseline, blend should now be computed
       expect(edgeValue.blendedMean).toBeDefined();
       
       // Distance to forecast should be less than distance to evidence

@@ -694,14 +694,15 @@ describe('Cohort Mode: sliceDSL with Anchor', () => {
 });
 
 // =============================================================================
-// 7. Forecast scalar preservation (window mode)
+// 7. Forecast and Latency Recomputation
 // =============================================================================
 
-describe('Window Mode: Forecast scalar preservation', () => {
-  it('does not manufacture a forecast scalar during merge', () => {
+describe('Window Mode: Forecast/Latency Recomputation', () => {
+  
+  it('adds forecast when recomputeForecast is enabled', () => {
     const existing: ParameterValue[] = [];
-    const newTimeSeries = makeTimeSeries(30, 10);
-
+    const newTimeSeries = makeTimeSeries(30, 10, { withLatency: true });
+    
     const result = mergeTimeSeriesIntoParameter(
       existing,
       newTimeSeries,
@@ -711,45 +712,113 @@ describe('Window Mode: Forecast scalar preservation', () => {
       undefined,
       'api',
       '',
-      { latencyConfig: { maturity_days: 7 } }
+      { 
+        recomputeForecast: true,
+        latencyConfig: { maturity_days: 7 },
+      }
     );
-
+    
     const merged = result.find(v => !isCohortModeValue(v))!;
+    
+    // Should have forecast field
+    expect((merged as any).forecast).toBeDefined();
+    expect(typeof (merged as any).forecast).toBe('number');
+  });
+  
+  it('does NOT add latency at merge time (latency computed in graph-level topo pass)', () => {
+    // NOTE: Per current design, LAG stats (completeness, t95, blended p) are computed
+    // exclusively in the graph-level topo pass (enhanceGraphLatencies), NOT during merge.
+    // This test verifies the current (correct) behavior.
+    const existing: ParameterValue[] = [];
+    const newTimeSeries = makeTimeSeries(30, 10, { withLatency: true });
+    
+    const result = mergeTimeSeriesIntoParameter(
+      existing,
+      newTimeSeries,
+      { start: daysAgo(30), end: daysAgo(10) },
+      undefined,
+      undefined,
+      undefined,
+      'api',
+      '',
+      { 
+        recomputeForecast: true,
+        latencyConfig: { maturity_days: 7 },
+      }
+    );
+    
+    const merged = result.find(v => !isCohortModeValue(v))!;
+    
+    // Latency is NOT added during merge - it's computed in the topo pass
+    // The merge function only handles forecast (baseline p_infinity)
+    expect((merged as any).latency).toBeUndefined();
+    // But forecast SHOULD be present
+    expect((merged as any).forecast).toBeDefined();
+  });
+  
+  it('does not add forecast when recomputeForecast is false', () => {
+    const existing: ParameterValue[] = [];
+    const newTimeSeries = makeTimeSeries(30, 10);
+    
+    const result = mergeTimeSeriesIntoParameter(
+      existing,
+      newTimeSeries,
+      { start: daysAgo(30), end: daysAgo(10) },
+      undefined,
+      undefined,
+      undefined,
+      'api',
+      '',
+      { recomputeForecast: false }
+    );
+    
+    const merged = result.find(v => !isCohortModeValue(v))!;
+    
+    // Should NOT have forecast field (unless it was already there)
     expect((merged as any).forecast).toBeUndefined();
   });
-
-  it('preserves an existing forecast scalar across merges (even if mean changes)', () => {
+  
+  it('forecast recomputation is idempotent on repeated merges', () => {
     let values: ParameterValue[] = [];
-
-    // Seed: a legacy/previously-computed forecast scalar exists
-    const ts1 = makeTimeSeries(14, 7);
+    const timeSeries = makeTimeSeries(30, 10, { withLatency: true });
+    
+    // First merge
     values = mergeTimeSeriesIntoParameter(
       values,
-      ts1,
-      { start: daysAgo(14), end: daysAgo(7) },
+      timeSeries,
+      { start: daysAgo(30), end: daysAgo(10) },
       undefined,
       undefined,
       undefined,
       'api',
-      ''
+      '',
+      { 
+        recomputeForecast: true,
+        latencyConfig: { maturity_days: 7 },
+      }
     );
-    // Patch in a forecast scalar as if it came from a baseline computation elsewhere
-    (values[0] as any).forecast = 0.123;
-
-    // Merge a different window; mean will change, but forecast must remain pinned.
-    const ts2 = makeTimeSeries(7, 0, { n: 200, k: 10 });
+    
+    const firstForecast = (values[0] as any).forecast;
+    expect(firstForecast).toBeDefined();
+    
+    // Second merge with same data
     values = mergeTimeSeriesIntoParameter(
       values,
-      ts2,
-      { start: daysAgo(7), end: daysAgo(0) },
+      timeSeries,
+      { start: daysAgo(30), end: daysAgo(10) },
       undefined,
       undefined,
       undefined,
       'api',
-      ''
+      '',
+      { 
+        recomputeForecast: true,
+        latencyConfig: { maturity_days: 7 },
+      }
     );
-
-    expect((values[0] as any).forecast).toBeCloseTo(0.123, 6);
+    
+    // Forecast should be stable (latency is computed in topo pass, not here)
+    expect((values[0] as any).forecast).toBeCloseTo(firstForecast, 5);
   });
 });
 
