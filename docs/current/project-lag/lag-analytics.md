@@ -1,14 +1,39 @@
-## Project LAG – Analytics Runner & Views Proposal
+## Project LAG – Analytics Runner & Views (Current Implementation + Next Steps)
+
+**Status: 12-Dec-25**
+
+This document originally described a proposal. It has now been updated to reflect **what is implemented in DagNet today**, and what remains future work.
 
 ### 0. Scope and goals
 
-This document builds on the core LAG implementation (`lag-statistics-reference.md`, `design.md`, `implementation.md`, `cohort-view*.md`) and the contexts/analysis schema (`ANALYSIS_RETURN_SCHEMA.md`) to specify how:
+This document builds on the core LAG implementation (`lag-statistics-reference.md`, `design.md`, `implementation.md`, `cohort-view*.md`) and the analysis return schema (`ANALYSIS_RETURN_SCHEMA.md`) to specify how:
 
 - The **analytics runner** should consume the new LAG variables and scenario visibility modes.
 - The **selection and query auto‑builder** should use anchor/path information to construct sensible default analyses.
 - Three key **analysis views** (Waterfall, Bridge, Cohorts) should be modelled as runner outputs, all with tabular data suitable for multiple display adaptors.
 
 It is deliberately implementation‑adjacent but prose‑first: concrete code belongs in services, runners, and tests.
+
+#### 0.1 What is implemented (today)
+
+- **Per-scenario visibility mode is supported in analytics**:
+  - `visibility_mode ∈ {'f+e','f','e'}` is sent per scenario to the Python runner.
+  - The runner **switches the probability basis it computes with** based on `visibility_mode`.
+- **Reach Probability and Conversion Funnel are LAG-aware**:
+  - Reach Probability (`to_node_reach`) and Conversion Funnel (`conversion_funnel`) both respect `visibility_mode`.
+  - Hidden scenarios are excluded by the frontend (not sent to the runner).
+- **Labels are per scenario (not global)**:
+  - The runner returns `probability_label` per scenario and per data row.
+  - The UI renders the probability basis per scenario (because modes can legitimately differ across scenarios).
+- **Graph payload parity is fixed**:
+  - The TS “compose graph for analysis” step now bakes `p.evidence`, `p.forecast`, and `p.latency` into `edge.p` so Python can actually compute E/F correctly.
+- **Caching respects basis**:
+  - Analysis cache keys incorporate the probability basis used for the mode (`p.mean` vs `p.evidence.mean` vs `p.forecast.mean`) so E/F changes invalidate cache.
+
+#### 0.2 What is not implemented yet (proposal only)
+
+- Waterfall/Bridge/Cohorts “views” as dedicated runner outputs (beyond the current Reach Probability / Funnel analyses).
+- Cohort time-series (“fan chart”) analytics that reuses daily arrays; this needs a dedicated service layer as described later in the document.
 
 ---
 
@@ -48,17 +73,16 @@ The existing `AnalysisResult` contract already supports rich outputs via:
 - `structure` for primary/secondary grouping and display hints.
 - `data` as an array of items, each of which can contain scenario‑specific values.
 
-For LAG‑aware analyses, the runner should:
+For LAG‑aware analyses, the runner:
 
-- **Extend scenario value payloads** (where appropriate) to carry:
-  - Evidence: probability, `n`, `k`.
-  - Forecast: probability, projected `k`, and `p.n`.
-  - Blended: `p.mean` and any derived expected values.
-  - Maturity: completeness, `t95`, `path_t95`, and cohort age where relevant.
-- **Record scenario visibility mode** per scenario in `metadata` and/or in each scenario value item so UI adaptors can:
-  - Filter out hidden scenarios entirely.
-  - Decide whether to present evidence vs forecast vs blended numbers, consistent with the per‑tab F/E setting.
-- **Remain agnostic about graph topology and retrieval**:
+- **Receives** a graph per scenario that already contains LAG fields on edges (`p.mean`, `p.evidence.mean`, `p.forecast.mean`, `p.latency.*`, etc.).
+- **Records per-scenario metadata** under `dimension_values.scenario_id[scenario_id]`, including:
+  - `visibility_mode`
+  - `probability_label` (one of: Probability / Evidence Probability / Forecast Probability)
+- **Includes per-row fields** in `data`, including:
+  - `visibility_mode`
+  - `probability_label`
+- **Remains agnostic about retrieval**:
   - All decisions about which edges have valid LAG data, which cohorts are mature, and which slices are available should be delegated to existing services (data operations, window aggregation, statistical enhancement, fetch planners).
   - The runner sees a read‑only “LAG‑enhanced graph snapshot” plus parameter‑level hooks where deeper cohort evidence is required (see §5).
 
@@ -70,46 +94,28 @@ For every analysis invocation, the runner should receive, alongside the selected
   - Scenario id and name.
   - Visibility mode: F+E, F, E, or hidden.
 
-The runner then applies these rules:
+The runner applies these rules:
 
-- **Hidden** scenarios are **not** included in analysis outputs at all.
-- **F‑only** scenarios:
-  - All primary numeric metrics use **forecast** values (e.g. `p.forecast.mean`, `p.forecast.k`, `p.n`).
-  - Evidence metrics may be included in metadata for context but are not the primary value rendered.
-- **E‑only** scenarios:
-  - All primary numeric metrics use **evidence** values (e.g. `p.evidence.mean`, `p.evidence.n`, `p.evidence.k`).
-  - Forecast is available as context but not the main value.
-- **F+E** scenarios:
-  - Both evidence and forecast values are present per row, with blended `p.mean` and completeness used where needed.
-  - Display adaptors can choose to show F/E side by side or emphasise blended values, depending on view type.
+- **Hidden scenarios**: excluded by the frontend (not sent to the runner). The runner operates only on scenarios present in the request.
+- **Mode selects probability basis** (implemented behaviour):
+  - `f+e`: compute using `p.mean`
+  - `f`: compute using `p.forecast.mean` (fallback to `p.mean` if forecast is missing)
+  - `e`: compute using `p.evidence.mean` (fallback to `p.mean` if evidence is missing)
+
+This is a deliberate design choice: for these analyses, the runner performs **one** calculation per scenario using a single basis, rather than returning parallel “all bases at once”.
 
 This ensures the analytics layer mirrors the mental model of the canvas: some scenarios are "what will probably happen" (F), some show "what has actually happened so far" (E), and some show both.
 
-#### 1.4 Invariant semantics principle
+#### 1.4 Basis labelling principle (implemented)
 
-**Critical design constraint:** The _meaning_ of each LAG term is invariant regardless of F/E mode. The runner must:
+Visibility mode can vary by scenario, so:
 
-- **Always provide all available data**: If `p.forecast.mean`, `p.evidence.mean`, and `p.mean` (blended) are all available on an edge, they should all be surfaced in the analysis output. The runner does not suppress fields based on visibility mode.
-- **Let the UI adaptor decide emphasis**: The F/E mode is metadata attached to each scenario in the output. Display adaptors use this to decide which values to emphasise or style differently, but they still have access to all underlying data.
-- **Never change what a field means**: `p.forecast.mean` always means the forecast probability; `p.evidence.mean` always means the observed rate. These definitions do not vary by mode.
+- The shared metric label (`semantics.metrics[*].name`) stays generic (e.g. **“Probability”**).
+- The basis is labelled **per scenario** via:
+  - `dimension_values.scenario_id[scenario_id].probability_label`
+  - and per-row `data[*].probability_label`
 
-In practice, the data row for a scenario might contain:
-
-```
-{
-  scenario_id: "current",
-  visibility_mode: "f+e",          // metadata for UI
-  probability: 0.72,               // blended p.mean (always present)
-  forecast_mean: 0.75,             // p.forecast.mean (if available)
-  evidence_mean: 0.68,             // p.evidence.mean (if available)
-  evidence_n: 1200,                // observed sample size
-  evidence_k: 816,                 // observed conversions
-  completeness: 0.85,              // LAG maturity metric
-  ...
-}
-```
-
-The adaptor can then choose to highlight `forecast_mean` when `visibility_mode == 'f'`, or show both side by side when `visibility_mode == 'f+e'`, but the underlying data is always the same.
+This avoids ambiguity when one scenario is forecast-only and another is evidence-only in the same result.
 
 ---
 
@@ -424,18 +430,18 @@ This allows a user to build a tab where some scenarios show **forecast‑heavy**
 
 ### 7. Implementation notes and next steps
 
-This proposal implies the following broad implementation steps, all following existing architectural patterns:
+This (updated) document implies the following next steps, following existing architectural patterns:
 
 - **Runner wiring and typing**
-  - Extend analysis runner types to carry LAG‑aware scenario value fields and per‑scenario visibility modes.
-  - Ensure runners receive the already LAG‑enhanced graph and do not re‑implement retrieval or fitting logic.
+  - Extend runner response typing to allow per-scenario metadata beyond `name/colour/order` (already implemented for `visibility_mode` and `probability_label`).
+  - Keep runner logic computation-only; data retrieval stays outside the runner.
 
 - **Selection and auto‑builder**
   - Implement anchor‑aware path inference for single and multi‑node selections, delegating to existing graph/LAG services.
   - Surface the inferred path and DSL (cohort/window) into runner invocation parameters.
 
 - **Analytics views**
-  - Implement Waterfall and Bridge as thin, deterministic transformations from “path + scenarios + LAG metrics” into `AnalysisResult` payloads.
+  - Implement Waterfall and Bridge as deterministic transformations from “path + scenarios + LAG metrics” into `AnalysisResult`.
   - Implement a cohort analytics service that exposes per‑cohort, per‑edge time‑series summaries to the runner, and build the Cohorts view on top of it.
 
 Each of these should be accompanied by targeted tests (runner unit tests plus end‑to‑end analytics panel tests) to ensure that the analytics outputs remain stable as LAG internals evolve.

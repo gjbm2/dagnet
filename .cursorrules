@@ -11,6 +11,11 @@
 - Never use `YYYY-MM-DD` (ISO) or `MM/DD/YYYY` (US) in UI, logs, or file storage
 - **Only exception**: External API boundaries may require ISO format - convert immediately after receipt
 
+### Python / Virtualenv (REQUIRED)
+- **ALWAYS** activate the repo venv before running any Python commands: `graph-editor/venv`
+- In terminal tool calls, prefix Python steps with: `. graph-editor/venv/bin/activate`
+- Use the venv executables (`python`, `python3`, `pip`, etc.) from `graph-editor/venv` (i.e. `which python3` must resolve inside the venv), not the system interpreter.
+
 ## Core Principles
 
 ### 1. NO LOGIC IN UI/MENU FILES

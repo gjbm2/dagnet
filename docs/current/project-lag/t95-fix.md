@@ -22,7 +22,7 @@ This proposal covers:
 
 - Data model (parameter schema + types)
 - UpdateManager behaviour (how values flow between stored parameter data and the in-memory edge parameter view)
-- The “effective value” selection rules (override precedence)
+- Default injection and overwrite rules (how values are initialised and when they may be updated)
 - Where in the application `t95` and `path_t95` are used (fetch planning, Amplitude conversion windows, LAG analytics)
 - Tests and documentation updates required
 
@@ -51,15 +51,16 @@ This proposal is intentionally designed for the current test environment (single
    - the system computes derived `t95` and derived `path_t95` and writes them to the parameter data (only if not overridden).
 6. User may later overwrite either value; from that point onward the system uses the override.
 
-### Override precedence (no mixing)
+### Override semantics (no mixing)
 
-For each of `t95` and `path_t95`, selection is:
+`t95` and `path_t95` are treated as **single fields** that consumers read directly from the graph/parameter view.
 
-- If `*_overridden` is true and the overridden value is present and valid, use it.
-- Else, use the derived value if present and valid.
-- Else, use the global default horizon (for operational needs).
+The `*_overridden` flags do not introduce an “effective value” abstraction. Instead, they only control **whether the system is allowed to overwrite the stored values**:
 
-There is no blending between overridden and derived values. An override replaces the derived value for all consumers.
+- If `t95_overridden` is true, the system must not overwrite `t95` with derived values.
+- If `path_t95_overridden` is true, the system must not overwrite `path_t95` with derived values.
+
+This produces a simple rule for readers: if the field exists, it is authoritative. There is no blending between manual and derived values.
 
 ## Data model changes
 
@@ -72,33 +73,18 @@ The following fields are treated as parameter-level fields (persisted in the par
 - `path_t95`
 - `path_t95_overridden`
 
-### Latency enablement
+### Latency enablement (single-pass migration)
 
-Latency enablement should be represented in a way that is:
+Latency enablement must be explicit, independent of numeric horizons, and consistent across the stack. We will implement this as a **single-pass migration** (no phased approach):
 
-- explicit (“is latency edge”)
-- independent of the numeric horizons
-- consistent across the stack
+- Introduce a new boolean field (name TBD; e.g. `latency_edge`) that indicates whether an edge is latency-tracked.
+- Treat `t95` and `path_t95` as the only numeric latency horizons (each with an `*_overridden` companion).
+- Perform a repo-wide audit of **every** usage of `maturity_days` and replace it with one of:
+  - `latency_edge` (for enablement checks),
+  - `t95` / `path_t95` (for horizon usage), or
+  - the global default `t95` (only during default injection when enabling latency).
 
-This proposal supports two phased approaches:
-
-#### Phase 1 (minimal change)
-
-Keep the existing enablement mechanism as-is, but decouple its meaning:
-
-- `maturity_days` remains the marker that latency tracking is enabled.
-- `maturity_days` is no longer treated as the canonical numeric horizon once `t95` and `path_t95` are available (derived or overridden).
-- A global default horizon is used when neither `t95` nor `path_t95` is present.
-
-#### Phase 2 (clean-up)
-
-Replace numeric `maturity_days` with a boolean “latency enabled” marker, and treat horizons as separate, overridable numeric fields:
-
-- `latency_enabled` (boolean)
-- `t95` + `t95_overridden`
-- `path_t95` + `path_t95_overridden`
-
-This second phase is optional and should be executed only after Phase 1 is stabilised and fully tested.
+After the migration, `maturity_days` should no longer be used as an enablement marker or a horizon input anywhere in the application logic.
 
 ## Computation and write-back rules
 
@@ -123,16 +109,160 @@ Write-back policy:
 - If `path_t95_overridden` is true, do not overwrite `path_t95`.
 - Else, write the derived `path_t95`.
 
-### Effective value resolution
+### Default injection (first enablement)
 
-Introduce a single, centralised “effective horizon” selection concept used across the app:
+We must avoid ad-hoc fallback chains across the codebase. To achieve that, when a user enables latency on an edge (`latency_edge = true`), the system must ensure a conservative default exists immediately:
 
-- `effective_t95` is the value chosen by the precedence rules above.
-- `effective_path_t95` is the value chosen by the precedence rules above.
+- If `t95_overridden` is false and `t95` is missing or invalid, set `t95` to a global conservative default (e.g. 30 days).
+- `path_t95` will then be computed from the graph using the existing `path_t95` accumulation logic over per-edge `t95` values. This means that before the first fetch, `path_t95` is derived from defaults (and becomes more accurate after data-driven derivation writes improved values).
 
-Consumers must use the effective values, not the raw stored fields.
+After this default injection, downstream consumers should read `t95` and `path_t95` directly without local fallbacks.
 
 ## Application impact areas
+
+## Repo-wide audit: current read/write sites
+
+This section inventories **all current code sites** where `maturity_days`, `t95`, and `path_t95` are written and read.
+
+Notes:
+
+- A “write” means the value is assigned (direct assignment, object literal construction, or UpdateManager applying computed values onto the graph parameter view).
+- A “read” means the value is consulted to decide behaviour (planning, refetch, query construction, analytics, UI).
+- Tests are listed separately so we can update them deterministically during the migration.
+
+### `maturity_days` (current)
+
+- **Writes (production)**
+  - **`graph-editor/src/services/UpdateManager.ts`**: bidirectional mapping between graph `p.latency.maturity_days` and stored parameter latency (`latency.maturity_days`), including override flag wiring.
+  - **`graph-editor/src/lib/das/buildDslFromEdge.ts`**: writes `queryPayload.cohort.maturity_days` (used as Amplitude `cs` by the adapter).
+  - **`graph-editor/src/services/dataOperationsService.ts`**: constructs/threads the cohort object which contains `maturity_days` (via `queryPayload.cohort` passthrough).
+  - **`graph-editor/src/lib/das/types.ts`**: defines the cohort payload field `maturity_days` (write surface at the DAS boundary).
+- **Reads (production)**
+  - **`graph-editor/src/constants/latency.ts`**: documents/defines latency/refetch constants and semantics that reference `maturity_days`.
+  - **`graph-editor/src/constants/statisticalConstants.ts`**: documents/defines LAG constants that reference `maturity_days` usage patterns.
+  - **`graph-editor/src/services/fetchRefetchPolicy.ts`**: enablement and maturity/refetch decisions use `latencyConfig.maturity_days` (and prefer `t95` when present).
+  - **`graph-editor/src/services/statisticalEnhancementService.ts`**: used as a fallback contributor in `computePathT95()` when `t95` is absent.
+  - **`graph-editor/src/services/cohortRetrievalHorizon.ts`**: used as a fallback horizon input.
+  - **`graph-editor/src/services/windowAggregationService.ts`**: cohort/window aggregation and related logic references `maturity_days` in LAG-related pathways.
+  - **`graph-editor/src/services/paramRegistryService.ts`**: parameter value typing/fields include cohort-related latency structures where `maturity_days` appears.
+  - **`graph-editor/src/services/windowFetchPlannerService.ts`**: includes `maturity_days` in the `GraphForPath` representation used for on-demand `path_t95` computation.
+  - **`graph-editor/src/services/fetchDataService.ts`**: includes `maturity_days` in the `GraphForPath` representation used for `path_t95` computation and application.
+  - **`graph-editor/src/services/dataOperationsService.ts`**: checks `maturity_days` to decide whether latency tracking is enabled for policy decisions.
+  - **`graph-editor/src/components/edges/ConversionEdge.tsx`**: UI-only heuristic fallback (uses `maturity_days` when median lag display is missing).
+  - **`graph-editor/src/components/ParameterSection.tsx`**: latency config display/edit surface (reads the latency config block including `maturity_days`).
+  - **`graph-editor/src/services/GraphParamExtractor.ts`**: extracts latency config fields from edge parameters for downstream consumption.
+  - **`graph-editor/src/services/integrityCheckService.ts`**: includes latency fields in integrity checks/diagnostics.
+- **Writes/Reads (adapter + schemas + Python)**
+  - **`graph-editor/public/defaults/connections.yaml`**: reads `cohort.maturity_days` to set Amplitude `cs` (seconds).
+  - **`graph-editor/dist/defaults/connections.yaml`**: built copy of the adapter config (do not edit directly; update source in `public/`).
+  - **`graph-editor/public/param-schemas/parameter-schema.yaml`**: defines `maturity_days` in the schema.
+  - **`graph-editor/dist/param-schemas/parameter-schema.yaml`**: built copy (do not edit directly; update source in `public/`).
+  - **`graph-editor/public/schemas/conversion-graph-1.0.0.json`**, **`graph-editor/public/schemas/conversion-graph-1.1.0.json`**: include latency/maturity shape.
+  - **`graph-editor/dist/schemas/conversion-graph-1.0.0.json`**, **`graph-editor/dist/schemas/conversion-graph-1.1.0.json`**: built copies (do not edit directly; update source in `public/`).
+  - **`graph-editor/lib/graph_types.py`**: Python model includes `maturity_days` (+ overridden flag) and documents its current enablement semantics.
+  - **`graph-editor/lib/runner/graph_builder.py`**: extracts and emits `maturity_days` in latency payloads.
+  - **`graph-editor/public/ui-schemas/parameter-ui-schema.json`** and **`graph-editor/dist/ui-schemas/parameter-ui-schema.json`**: UI schema surfaces `maturity_days`.
+- **Reads (documentation)**
+  - **`graph-editor/public/docs/glossary.md`**
+  - **`graph-editor/public/docs/lag-statistics-reference.md`**
+- **Reads (bundled artefacts)**
+  - **`graph-editor/dist/assets/index-CWQR91N3.js`**: built bundle; do not edit directly (source lives in `src/`).
+- **Tests**
+  - **`graph-editor/src/services/__tests__/fetchRefetchPolicy.test.ts`**
+  - **`graph-editor/src/services/__tests__/fetchRefetchPolicy.branches.test.ts`**
+  - **`graph-editor/src/services/__tests__/fetchMergeEndToEnd.test.ts`**
+  - **`graph-editor/src/services/__tests__/fetchPolicyIntegration.test.ts`**
+  - **`graph-editor/src/services/__tests__/mergeTimeSeriesInvariants.test.ts`**
+  - **`graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts`**
+  - **`graph-editor/src/services/__tests__/allSlicesSimulation.test.ts`**
+  - **`graph-editor/src/services/__tests__/pathT95Computation.test.ts`** (via fallback behaviour)
+  - **`graph-editor/src/lib/das/__tests__/buildDslFromEdge.cohortAnchor.test.ts`** (documentation + scenarios)
+  - **`graph-editor/src/lib/das/__tests__/amplitudeThreeStepFunnel.integration.test.ts`**
+  - **`graph-editor/src/services/__tests__/addEvidenceAndForecastScalars.test.ts`**
+  - **`graph-editor/src/services/__tests__/cohortRetrievalHorizon.test.ts`**
+  - **`graph-editor/src/services/__tests__/sampleFileQueryFlow.e2e.test.ts`**
+  - **`graph-editor/lib/tests/test_lag_fields.py`**
+
+### `t95` (current)
+
+- **Writes (production)**
+  - **`graph-editor/src/services/statisticalEnhancementService.ts`**: computes derived `t95` as part of the LAG pipeline and emits it in edge latency outputs.
+  - **`graph-editor/src/services/UpdateManager.ts`**: applies computed `latency.t95` into `edge.p.latency.t95`.
+  - **`graph-editor/src/services/dataOperationsService.ts`**: logs/threads `t95` as part of latency config diagnostics during fetch planning and bounded cohort logic.
+- **Reads (production)**
+  - **`graph-editor/src/constants/latency.ts`** and **`graph-editor/src/constants/statisticalConstants.ts`**: constants/docs reference `t95`.
+  - **`graph-editor/src/services/fetchRefetchPolicy.ts`**: prefers `t95` over `maturity_days` for refetch maturity cutoffs.
+  - **`graph-editor/src/services/statisticalEnhancementService.ts`**: used as a component for `path_t95` accumulation and for downstream path calculations.
+  - **`graph-editor/src/services/cohortRetrievalHorizon.ts`**: used as a fallback horizon input when `path_t95` is absent.
+  - **`graph-editor/src/services/windowFetchPlannerService.ts`**: includes `t95` in `GraphForPath` when computing `path_t95` on demand.
+  - **`graph-editor/src/services/fetchDataService.ts`**: includes `t95` in `GraphForPath` when computing and applying `path_t95`.
+  - **`graph-editor/src/lib/das/buildDslFromEdge.ts`**: fallback chain for cohort conversion window consults `t95`.
+  - **`graph-editor/src/services/dataOperationsService.ts`**: consults `t95` in horizon decisions and diagnostics.
+  - **`graph-editor/src/components/edges/ConversionEdge.tsx`** and **`graph-editor/src/components/canvas/buildScenarioRenderEdges.ts`**: latency-aware UI rendering can consult `t95` depending on available display data.
+  - **`graph-editor/src/services/GraphParamExtractor.ts`**: extracts latency fields including `t95`.
+- **Writes/Reads (schemas + Python)**
+  - **`graph-editor/public/param-schemas/parameter-schema.yaml`**: defines `t95` in the schema.
+  - **`graph-editor/dist/param-schemas/parameter-schema.yaml`**: built copy (do not edit directly; update source in `public/`).
+  - **`graph-editor/lib/graph_types.py`**: includes `t95` in the Python latency model.
+  - **`graph-editor/lib/runner/graph_builder.py`**: extracts and emits `t95` in latency payloads.
+- **Reads (documentation)**
+  - **`graph-editor/public/docs/glossary.md`**
+  - **`graph-editor/public/docs/lag-statistics-reference.md`**
+  - **`graph-editor/docs/current/update-problems.md`**
+- **Reads (bundled artefacts)**
+  - **`graph-editor/dist/assets/index-CWQR91N3.js`**: built bundle; do not edit directly (source lives in `src/`).
+  - **`graph-editor/dist/schemas/conversion-graph-1.0.0.json`**, **`graph-editor/dist/schemas/conversion-graph-1.1.0.json`**: built copies.
+- **Tests**
+  - **`graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts`**
+  - **`graph-editor/src/services/__tests__/lagStatsFlow.integration.test.ts`**
+  - **`graph-editor/src/services/__tests__/fetchMergeEndToEnd.test.ts`**
+  - **`graph-editor/src/services/__tests__/fetchPolicyIntegration.test.ts`**
+  - **`graph-editor/src/services/__tests__/windowAggregationService.test.ts`**
+  - **`graph-editor/src/services/__tests__/pathT95Computation.test.ts`**
+  - **`graph-editor/src/services/__tests__/batchFetchE2E.comprehensive.test.ts`**
+  - **`graph-editor/src/services/__tests__/addEvidenceAndForecastScalars.test.ts`**
+  - **`graph-editor/src/services/__tests__/cohortRetrievalHorizon.test.ts`**
+  - **`graph-editor/src/services/__tests__/sampleFileQueryFlow.e2e.test.ts`**
+  - **`graph-editor/lib/tests/test_lag_fields.py`**
+
+### `path_t95` (current)
+
+- **Writes (production)**
+  - **`graph-editor/src/services/statisticalEnhancementService.ts`**: computes/sets `path_t95` in the LAG pass (including topo accumulation and the anchor+edge estimation path) and can apply it onto graph edges.
+  - **`graph-editor/src/services/fetchDataService.ts`**: computes and applies topo `path_t95` onto in-memory edges after fetch pipelines.
+  - **`graph-editor/src/services/UpdateManager.ts`**: applies computed `latency.path_t95` into `edge.p.latency.path_t95`.
+  - **`graph-editor/src/services/dataOperationsService.ts`**: may select between “moment-matched estimate” and “graph.path_t95” for bounded cohort windows (diagnostics include both).
+- **Reads (production)**
+  - **`graph-editor/src/constants/latency.ts`** and **`graph-editor/src/constants/statisticalConstants.ts`**: constants/docs reference `path_t95`.
+  - **`graph-editor/src/lib/das/buildDslFromEdge.ts`**: uses `edge.p.latency.path_t95` as the primary input to cohort conversion windows (Amplitude `cs`).
+  - **`graph-editor/src/services/windowFetchPlannerService.ts`**: reads `edge.p.latency.path_t95` or computes it on demand for bounded cohort planning.
+  - **`graph-editor/src/services/cohortRetrievalHorizon.ts`**: uses `path_t95` as the primary horizon input for bounding.
+  - **`graph-editor/src/services/dataOperationsService.ts`**: uses `path_t95` (and/or the moment-matched estimate) for cohort bounding and for diagnostics in session logs.
+  - **`graph-editor/src/services/fetchDataService.ts`**: uses existing `path_t95` where present (persisted vs computed) when applying and logging.
+  - **`graph-editor/src/services/GraphParamExtractor.ts`**: extracts latency fields including `path_t95`.
+- **Writes/Reads (schemas + Python)**
+  - **`graph-editor/public/param-schemas/parameter-schema.yaml`**: schema includes latency fields; `path_t95` is present in the latency block type definitions.
+  - **`graph-editor/dist/param-schemas/parameter-schema.yaml`**: built copy (do not edit directly; update source in `public/`).
+  - **`graph-editor/dist/schemas/conversion-graph-1.1.0.json`**: built copy references `path_t95`.
+  - **`graph-editor/lib/graph_types.py`**: includes `path_t95` in the Python latency model.
+  - **`graph-editor/lib/runner/graph_builder.py`**: extracts and emits `path_t95` in latency payloads.
+- **Reads (documentation)**
+  - **`graph-editor/public/docs/CHANGELOG.md`**
+  - **`graph-editor/public/docs/glossary.md`**
+  - **`graph-editor/public/docs/lag-statistics-reference.md`**
+  - **`graph-editor/docs/current/update-problems.md`**
+- **Reads (bundled artefacts)**
+  - **`graph-editor/dist/assets/index-CWQR91N3.js`**: built bundle; do not edit directly (source lives in `src/`).
+- **Tests**
+  - **`graph-editor/src/services/__tests__/pathT95Computation.test.ts`**
+  - **`graph-editor/src/services/__tests__/cohortHorizonIntegration.test.ts`**
+  - **`graph-editor/src/services/__tests__/cohortModeSimpleEdgeOverride.e2e.test.ts`**
+  - **`graph-editor/src/services/__tests__/lagStatsFlow.integration.test.ts`**
+  - **`graph-editor/src/services/__tests__/windowFetchPlannerService.test.ts`**
+  - **`graph-editor/src/services/__tests__/fetchDataService.test.ts`**
+  - **`graph-editor/src/lib/das/__tests__/buildDslFromEdge.cohortAnchor.test.ts`**
+  - **`graph-editor/src/services/__tests__/cohortRetrievalHorizon.test.ts`**
+  - **`graph-editor/lib/tests/test_lag_fields.py`**
 
 ### Types
 
@@ -169,7 +299,7 @@ The statistical computation must:
 - compute derived `t95` and derived `path_t95` as it does today, but
 - avoid silently overriding user overrides.
 
-Additionally, when effective values are needed for downstream decisions, consumers should resolve overrides first.
+Consumers should read the stored fields directly.
 
 Impacted areas:
 
@@ -180,8 +310,8 @@ Impacted areas:
 
 Places that currently use `maturity_days`, `t95`, or `path_t95` must be updated to use:
 
-- `effective_t95` when making maturity/refetch decisions that are edge-local.
-- `effective_path_t95` for cohort bounding decisions that depend on anchor-to-edge horizons.
+- `t95` for edge-local maturity/refetch decisions.
+- `path_t95` for cohort bounding decisions that depend on anchor-to-edge horizons.
 
 Impacted areas:
 
@@ -196,9 +326,9 @@ The Amplitude adapter uses `cohort.maturity_days` to construct `cs`. The applica
 
 We must ensure cohort-mode `cs` is driven by an effective, overridable horizon:
 
-- use `effective_path_t95` if present
-- otherwise fall back to `effective_t95`
-- otherwise fall back to global default horizon
+- use `path_t95` if present and valid
+- otherwise fall back to `t95`
+- otherwise fall back to the global default `t95` (which should exist due to default injection on enablement)
 
 Impacted area:
 
@@ -235,10 +365,10 @@ Overrides are a user policy tool. An overridden value should not be presented or
 
 ## Defaults and first-fetch behaviour
 
-Define a single global default horizon used when no values exist yet:
+Define a single global default `t95` used at latency enablement time:
 
-- used for cohort-mode `cs` when neither overridden nor derived values exist
-- used for cohort bounding when neither overridden nor derived values exist
+- When `latency_edge` is enabled and `t95` is not overridden and missing, set `t95` to the default immediately.
+- `path_t95` will be computed from the graph using the current `t95` values, so it will naturally build from defaults until the first fetch provides enough evidence to write improved derived values (unless overridden).
 
 The default should be documented and centrally defined (single source of truth) so it is consistent across fetch planning and query construction.
 
@@ -247,9 +377,9 @@ The default should be documented and centrally defined (single source of truth) 
 Update/add tests that prove:
 
 - If `*_overridden` is true, derived computation does not overwrite the stored value.
-- Effective value selection uses override first, then derived, then default.
-- Amplitude cohort-mode `cs` uses `effective_path_t95` when present and overridden.
-- Cohort bounding uses `effective_path_t95` consistently.
+- Default injection occurs when latency is enabled (and does not occur when overridden).
+- Amplitude cohort-mode `cs` uses `path_t95` (or `t95` fallback) and does not reintroduce `maturity_days` fallbacks.
+- Cohort bounding uses `path_t95` consistently.
 
 Expected impacted test areas:
 
@@ -258,21 +388,24 @@ Expected impacted test areas:
 - `graph-editor/src/lib/das/__tests__/buildDslFromEdge.cohortAnchor.test.ts`
 - integration tests covering fetch planning + bounded windows (planner → DAS call chain)
 
-## Rollout plan (phased)
+## Rollout plan (single pass)
 
-### Phase 1: Introduce overrides and effective selection
+This change should be executed as a single coherent migration so we do not miss any `maturity_days` usage.
 
-- Add schema + type support for `t95_overridden` and `path_t95_overridden`.
-- Add effective selection logic in a single place and update all consumers to use it.
-- Update UpdateManager to respect overrides.
-- Add UI controls to set/clear overrides.
-- Update tests.
+Required steps:
 
-### Phase 2 (optional): Clean up `maturity_days`
-
-- Replace numeric `maturity_days` with a boolean `latency_enabled` marker.
-- Ensure all consumers use effective horizons and no longer depend on numeric `maturity_days` as a horizon.
-- Update schema, types, and tests accordingly.
+- Add the new boolean `latency_edge` field to the parameter schema and shared types.
+- Implement the override fields (`t95_overridden`, `path_t95_overridden`) and the overwrite-gating rules.
+- Implement default injection for `t95` on latency enablement.
+- Update UpdateManager to:
+  - write derived values only when not overridden, and
+  - honour the override flags consistently.
+- Replace every `maturity_days` reference across the application:
+  - identify whether each call site is enablement, horizon selection, refetch policy, or UI-only,
+  - migrate it to `latency_edge` and/or `t95` / `path_t95` as appropriate,
+  - delete any remaining fallback semantics that accidentally treat `maturity_days` as a horizon or enablement flag.
+- Update UI editing controls to set/clear overrides.
+- Update and add tests for the new enablement flag and override precedence.
 
 ## Non-goals
 
