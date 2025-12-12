@@ -93,6 +93,9 @@ class DimensionValueMeta(BaseModel):
     name: str = Field(description="Human-readable label")
     colour: Optional[str] = Field(default=None, description="Hex colour code")
     order: Optional[int] = Field(default=None, description="Sort order")
+    # Optional runner-provided metadata (e.g. per-scenario probability basis)
+    visibility_mode: Optional[str] = Field(default=None, description="Scenario visibility mode: 'f+e' | 'f' | 'e'")
+    probability_label: Optional[str] = Field(default=None, description="Human-readable label for the probability basis used")
 
 
 class AnalysisResult(BaseModel):

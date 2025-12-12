@@ -333,8 +333,19 @@ export class GraphComputeClient {
     analysisType?: string,
     visibilityMode: 'f+e' | 'f' | 'e' = 'f+e'
   ): Promise<AnalysisResponse> {
-    // Check cache first - include visibilityMode so F/E/F+E changes invalidate cache
-    const cacheKey = this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId]) + `|vis:${visibilityMode}`;
+    // Check cache first.
+    // IMPORTANT: include both visibilityMode and the probability basis actually used by the runner
+    // so changes to p.evidence.mean / p.forecast.mean invalidate cache.
+    const edges = graph?.edges || [];
+    const basisKey = edges.map((e: any) => {
+      const p = e.p || {};
+      const basis =
+        visibilityMode === 'e' ? (p.evidence?.mean ?? p.mean ?? 0)
+        : visibilityMode === 'f' ? (p.forecast?.mean ?? p.mean ?? 0)
+        : (p.mean ?? 0);
+      return `${e.id || e.uuid}:${Number(basis).toFixed(6)}`;
+    }).sort().join(',');
+    const cacheKey = this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId]) + `|vis:${visibilityMode}|basis:${basisKey}`;
     const cached = this.analysisCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
       console.log('[GraphComputeClient] Cache hit for analyzeSelection');
@@ -417,10 +428,19 @@ export class GraphComputeClient {
     const scenarioIds = scenarios.map(s => s.scenario_id);
     const visibilityModes = scenarios.map(s => `${s.scenario_id}:${s.visibility_mode || 'f+e'}`).join(',');
     
-    // Include edge probabilities from ALL scenarios for proper cache invalidation
+    // Include edge probabilities from ALL scenarios for proper cache invalidation.
+    // IMPORTANT: use the probability basis that the runner will actually use.
     const allEdgeProbs = scenarios.map(s => {
+      const mode = s.visibility_mode || 'f+e';
       const edges = s.graph?.edges || [];
-      return edges.map((e: any) => `${e.id || e.uuid}:${(e.p?.mean ?? 0).toFixed(6)}`).sort().join(',');
+      return edges.map((e: any) => {
+        const p = e.p || {};
+        const basis =
+          mode === 'e' ? (p.evidence?.mean ?? p.mean ?? 0)
+          : mode === 'f' ? (p.forecast?.mean ?? p.mean ?? 0)
+          : (p.mean ?? 0);
+        return `${e.id || e.uuid}:${Number(basis).toFixed(6)}`;
+      }).sort().join(',');
     }).join('|');
     
     const cacheKey = this.generateCacheKey(scenarios[0]?.graph, queryDsl, analysisType, scenarioIds) 
@@ -613,6 +633,8 @@ export interface DimensionValueMeta {
   name: string;
   colour?: string;
   order?: number;
+  visibility_mode?: 'f+e' | 'f' | 'e';
+  probability_label?: string;
 }
 
 export interface AnalysisResult {

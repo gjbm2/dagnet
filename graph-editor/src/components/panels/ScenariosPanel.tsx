@@ -525,6 +525,38 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       toast.error(errorMessage);
     }
   }, [tabId, createSnapshot, tabs, operations]);
+
+  /**
+   * Create a live scenario from the current query DSL
+   */
+  const handleCreateFromCurrentQuery = useCallback(async () => {
+    if (!tabId) {
+      toast.error('No active tab');
+      return;
+    }
+    
+    // Get current DSL from graphStore
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    
+    if (!currentDSL || !currentDSL.trim()) {
+      toast.error('No query DSL set. Select a window or context first.');
+      return;
+    }
+    
+    try {
+      const newScenario = await createLiveScenario(currentDSL, undefined, tabId);
+      
+      // Make the new scenario visible by default
+      await operations.toggleScenarioVisibility(tabId, newScenario.id);
+      
+      toast.success('Live scenario created');
+      setShowCreateMenu(false);
+    } catch (error) {
+      console.error('Failed to create live scenario:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to create live scenario';
+      toast.error(errorMessage);
+    }
+  }, [tabId, graphStore, createLiveScenario, operations]);
   
   // Listen for new scenario event from legend
   useEffect(() => {
@@ -534,8 +566,8 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       if (!tabId || eventTabId !== tabId) {
         return;
       }
-      // Directly create snapshot everything (no menu)
-      handleCreateSnapshot('all', 'visible');
+      // Default: create live scenario from current query (more powerful than dry snapshot)
+      handleCreateFromCurrentQuery();
     };
     
     const handleScenarioContextMenu = (e: CustomEvent) => {
@@ -550,7 +582,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       window.removeEventListener('dagnet:newScenario', handleNewScenarioEvent as EventListener);
       window.removeEventListener('dagnet:scenarioContextMenu', handleScenarioContextMenu as EventListener);
     };
-  }, [handleCreateSnapshot]);
+  }, [handleCreateFromCurrentQuery]);
   
   /**
    * Create blank scenario with timestamp as default name
@@ -631,38 +663,6 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       toast.error('Failed to flatten');
     }
   }, [flatten, tabId, operations]);
-
-  /**
-   * Create a live scenario from the current query DSL
-   */
-  const handleCreateFromCurrentQuery = useCallback(async () => {
-    if (!tabId) {
-      toast.error('No active tab');
-      return;
-    }
-    
-    // Get current DSL from graphStore
-    const currentDSL = graphStore?.getState().currentDSL || '';
-    
-    if (!currentDSL || !currentDSL.trim()) {
-      toast.error('No query DSL set. Select a window or context first.');
-      return;
-    }
-    
-    try {
-      const newScenario = await createLiveScenario(currentDSL, undefined, tabId);
-      
-      // Make the new scenario visible by default
-      await operations.toggleScenarioVisibility(tabId, newScenario.id);
-      
-      toast.success('Live scenario created');
-      setShowCreateMenu(false);
-    } catch (error) {
-      console.error('Failed to create live scenario:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to create live scenario';
-      toast.error(errorMessage);
-    }
-  }, [tabId, graphStore, createLiveScenario, operations]);
 
   /**
    * Refresh a live scenario (regenerate from source)
@@ -1697,6 +1697,31 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Live scenario (default, most useful) */}
+        <button
+          onClick={handleCreateFromCurrentQuery}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            width: '100%',
+            padding: '8px 12px',
+            background: 'transparent',
+            border: 'none',
+            color: '#374151',
+            fontSize: '13px',
+            textAlign: 'left',
+            cursor: 'pointer',
+            borderRadius: '2px'
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+        >
+          Live scenario <Zap size={12} style={{ color: '#F59E0B', marginLeft: '4px' }} />
+        </button>
+        {/* Divider */}
+        <div style={{ height: '1px', background: '#e5e7eb', margin: '4px 0' }} />
+        {/* Static snapshots */}
         <button
           onClick={() => {
             handleCreateSnapshot('all', 'visible');
@@ -1708,7 +1733,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
             padding: '8px 12px',
             background: 'transparent',
             border: 'none',
-            color: '#374151',
+            color: '#6b7280',
             fontSize: '13px',
             textAlign: 'left',
             cursor: 'pointer',
@@ -1730,7 +1755,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
             padding: '8px 12px',
             background: 'transparent',
             border: 'none',
-            color: '#374151',
+            color: '#6b7280',
             fontSize: '13px',
             textAlign: 'left',
             cursor: 'pointer',
@@ -1752,7 +1777,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
             padding: '8px 12px',
             background: 'transparent',
             border: 'none',
-            color: '#374151',
+            color: '#6b7280',
             fontSize: '13px',
             textAlign: 'left',
             cursor: 'pointer',
@@ -1762,29 +1787,6 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
         >
           Blank
-        </button>
-        {/* Divider */}
-        <div style={{ height: '1px', background: '#e5e7eb', margin: '4px 0' }} />
-        <button
-          onClick={handleCreateFromCurrentQuery}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            width: '100%',
-            padding: '8px 12px',
-            background: 'transparent',
-            border: 'none',
-            color: '#374151',
-            fontSize: '13px',
-            textAlign: 'left',
-            cursor: 'pointer',
-            borderRadius: '2px'
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-        >
-          From current query <Zap size={12} style={{ color: 'currentColor', marginLeft: '4px' }} />
         </button>
       </div>
     )}

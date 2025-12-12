@@ -90,6 +90,37 @@ class TestPathToEnd:
         # Get probability from data for current scenario
         current_row = [r for r in result['data'] if r['scenario_id'] == 'current'][0]
         assert current_row['probability'] == pytest.approx(0.8)
+
+    def test_metric_label_respects_visibility_mode(self):
+        """Metric label should reflect probability basis when modes are uniform."""
+        G = build_test_graph()
+
+        class Scenario:
+            def __init__(self, scenario_id: str, name: str, visibility_mode: str, graph: dict):
+                self.scenario_id = scenario_id
+                self.name = name
+                self.colour = '#EC4899'
+                self.visibility_mode = visibility_mode
+                self.graph = graph
+
+        # Build a minimal graph payload with evidence mean differing from mean
+        graph_payload = {
+            'nodes': [
+                {'id': 'start', 'uuid': 'start', 'entry': {'is_start': True}},
+                {'id': 'a', 'uuid': 'a'},
+                {'id': 'end1', 'uuid': 'end1', 'absorbing': True},
+            ],
+            'edges': [
+                {'from': 'start', 'to': 'a', 'uuid': 'e1', 'p': {'mean': 1.0, 'evidence': {'mean': 1.0}}},
+                {'from': 'a', 'to': 'end1', 'uuid': 'e2', 'p': {'mean': 0.8, 'evidence': {'mean': 0.2}}},
+            ],
+        }
+
+        scenario = Scenario('s1', 'Scenario 1', 'e', graph_payload)
+        result = run_path_to_end(build_test_graph(), 'end1', all_scenarios=[scenario])
+
+        assert result['semantics']['metrics'][0]['name'] == 'Probability'
+        assert result['dimension_values']['scenario_id']['s1']['probability_label'] == 'Evidence Probability'
     
     def test_to_end2(self):
         """Path to end2."""
