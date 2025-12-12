@@ -2165,18 +2165,12 @@ export function enhanceGraphLatencies(
         latencyStats.forecast_available ? latencyStats.p_infinity : undefined;
       const forecastMean = baseForecastMean ?? fallbackForecastMean;
 
-      // nQuery: sample size for the *evidence* term in the λ-blend.
-      //
-      // DESIGN (forecast-fix.md / design.md §5.3):
-      // - evidenceMean is computed from cohort evidence: Σk/Σn over the cohort window.
-      // - completeness adjusts how much of those eventual conversions have been observed.
-      // - Therefore the effective evidence sample is completeness × nQuery, where nQuery must
-      //   be the cohort evidence population (Σn), NOT the forecast population propagated from
-      //   upstream (edge.p.n).
-      //
-      // Using edge.p.n here makes immature downstream edges overweight the (necessarily low)
-      // observed evidence in young cohorts, pulling p.mean far below the forecast baseline.
-      const nQuery = edge.p?.evidence?.n ?? cohortsScoped.reduce((sum, c) => sum + c.n, 0);
+      // nQuery: forecast population for this edge
+      // Prefer p.n (computed by computeInboundN from upstream forecast_k),
+      // then fall back to evidence.n (raw from Amplitude), then cohort sum.
+      // This ensures downstream edges with n=0 from Amplitude still get
+      // a proper population estimate from upstream forecasts.
+      const nQuery = edge.p?.n ?? edge.p?.evidence?.n ?? cohortsScoped.reduce((sum, c) => sum + c.n, 0);
 
       // n_baseline should reflect the SAMPLE SIZE behind the WINDOW() forecast,
       // not just the subset of cohorts that are currently "mature" under this query.
@@ -2232,45 +2226,33 @@ export function enhanceGraphLatencies(
       // Compute p.mean using Formula A (§5.3) with the externally-provided forecast baseline.
       // This ensures k=0 in immature cohorts yields p.mean≈forecast (not 0),
       // and aligns with design.md.
-      // === Cohort-mode p.mean ===
-      //
-      // DESIGN (docs/current/project-lag/implemented/design.md §5.3):
-      // For cohort() queries, immature cohorts MUST NOT pull p.mean down via raw observed k/n.
-      // Instead, apply Formula A per cohort using:
-      // - p∞ = baseline forecast (from window() slice) => edge.p.forecast.mean
-      // - F(a_i) from the fitted lag distribution (mu/sigma)
-      // Then aggregate p.mean = Σ k̂ / Σ n.
-      //
-      // This is the behaviour you expect when toggling cohort windows: young cohorts lean
-      // heavily on the baseline forecast.
-      const baselinePInfinity = forecastMean;
-      if (baselinePInfinity !== undefined && Number.isFinite(baselinePInfinity)) {
-        const cohortsForFormulaA: CohortData[] =
-          anchorMedianLag > 0 || cohortsScoped.some(c => c.anchor_median_lag_days)
-            ? cohortsScoped.map(c => {
-                const lagToSubtract = c.anchor_median_lag_days ?? anchorMedianLag;
-                return { ...c, age: Math.max(0, c.age - lagToSubtract) };
-              })
-            : cohortsScoped;
+      const cohortsForFormulaA: CohortData[] =
+        anchorMedianLag > 0 || cohortsScoped.some(c => c.anchor_median_lag_days)
+          ? cohortsScoped.map(c => {
+              const lagToSubtract = c.anchor_median_lag_days ?? anchorMedianLag;
+              return { ...c, age: Math.max(0, c.age - lagToSubtract) };
+            })
+          : cohortsScoped;
 
-        const formulaAResult = applyFormulaAToAll(
-          cohortsForFormulaA,
-          baselinePInfinity,
-          latencyStats.fit,
-          effectiveMaturity
-        );
-
-        edgeLAGValues.blendedMean = formulaAResult.p_mean;
-      } else {
-        // Fallback: conservative tail estimate (maturityDays cutoff)
-        const fallbackMean = computeFormulaAMeanFromCohorts(
-          cohortsScoped,
-          forecastMean,
-          effectiveMaturity
-        );
-        if (fallbackMean !== undefined) {
-          edgeLAGValues.blendedMean = fallbackMean;
-        }
+      const blendedMean = computeFormulaAMeanFromCohorts(
+        cohortsForFormulaA,
+        forecastMean,
+        effectiveMaturity
+      );
+      
+      if (blendedMean !== undefined) {
+        edgeLAGValues.blendedMean = blendedMean;
+        
+        console.log('[enhanceGraphLatencies] Computed forecast blend:', {
+          edgeId,
+          edgeUuid,
+          completeness: (completeness ?? 0).toFixed(3),
+          nQuery,
+          nBaseline,
+          evidenceMean: (evidenceMean ?? 0).toFixed(3),
+          forecastMean: (forecastMean ?? 0).toFixed(3),
+          blendedMean: blendedMean.toFixed(3),
+        });
       }
 
       // Update node path_t95 for target node (needed for downstream edges)

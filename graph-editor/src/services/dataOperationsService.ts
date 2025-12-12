@@ -797,6 +797,8 @@ class DataOperationsService {
             const parsedTarget = parseConstraints(targetSlice);
             const wantsCohort = !!parsedTarget.cohort;
             const wantsWindow = !!parsedTarget.window;
+            const desiredMode: 'cohort' | 'window' | null =
+              wantsCohort ? 'cohort' : (wantsWindow ? 'window' : null);
 
             // Narrow candidate set to the SAME slice function family:
             // - cohort() queries should only see cohort slices
@@ -804,10 +806,10 @@ class DataOperationsService {
             // This prevents accidental mixing of cohort/window data when both
             // exist in the same parameter file (dual-slice latency files).
             let candidateValues: ParameterValue[] = allValues;
-            if (wantsCohort && !wantsWindow) {
-              candidateValues = allValues.filter(v => v.sliceDSL && v.sliceDSL.includes('cohort('));
-            } else if (wantsWindow && !wantsCohort) {
-              candidateValues = allValues.filter(v => v.sliceDSL && v.sliceDSL.includes('window('));
+            if (desiredMode === 'cohort') {
+              candidateValues = allValues.filter(v => isCohortModeValue(v));
+            } else if (desiredMode === 'window') {
+              candidateValues = allValues.filter(v => !isCohortModeValue(v));
             }
 
             // Check if this is an uncontexted query on contexted data (MECE aggregation scenario)
@@ -867,6 +869,31 @@ class DataOperationsService {
       
       if (hasDateRangeQuery && aggregatedData?.values) {
         const aggValues = aggregatedData.values as ParameterValue[];
+        const parsedTargetForMode = targetSlice ? parseConstraints(targetSlice) : null;
+        const desiredAggregationMode: 'cohort' | 'window' | null =
+          parsedTargetForMode?.cohort ? 'cohort' : (parsedTargetForMode?.window ? 'window' : null);
+
+        const isExactStoredSliceByBounds = (v: ParameterValue): boolean => {
+          if (desiredAggregationMode === 'cohort') {
+            if (!cohortWindow) return false;
+            if (!isCohortModeValue(v)) return false;
+            const from = v.cohort_from ? normalizeDate(v.cohort_from) : undefined;
+            const to = v.cohort_to ? normalizeDate(v.cohort_to) : undefined;
+            const wantFrom = normalizeDate(cohortWindow.start);
+            const wantTo = normalizeDate(cohortWindow.end);
+            return !!from && !!to && from === wantFrom && to === wantTo;
+          }
+          if (desiredAggregationMode === 'window') {
+            if (!window) return false;
+            if (isCohortModeValue(v)) return false;
+            const from = v.window_from ? normalizeDate(v.window_from) : undefined;
+            const to = v.window_to ? normalizeDate(v.window_to) : undefined;
+            const wantFrom = normalizeDate(window.start);
+            const wantTo = normalizeDate(window.end);
+            return !!from && !!to && from === wantFrom && to === wantTo;
+          }
+          return false;
+        };
         // Exact stored time slice:
         // - Applies when targetSlice explicitly includes a window() OR cohort()
         //   and matches the stored sliceDSL 1:1.
@@ -875,9 +902,9 @@ class DataOperationsService {
         //   reflects the requested sub-window inside the cached slice.
         const isExactTimeSlice =
           aggValues.length === 1 &&
-          aggValues[0].sliceDSL === targetSlice &&
           !!targetSlice &&
-          (targetSlice.includes('window(') || targetSlice.includes('cohort('));
+          (targetSlice.includes('window(') || targetSlice.includes('cohort(')) &&
+          (aggValues[0].sliceDSL === targetSlice || isExactStoredSliceByBounds(aggValues[0]));
         
         if (isExactTimeSlice) {
           // Exact stored time slice (e.g. window(25-Nov-25:1-Dec-25) or
@@ -892,7 +919,14 @@ class DataOperationsService {
           // CRITICAL: Use aggregatedData.values (which has been filtered above)
           // NOT paramFile.data.values (which contains ALL contexts)
           const allValuesWithDaily = (aggregatedData.values as ParameterValue[])
-            .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
+            .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0)
+            // HARD SAFETY: even if earlier slice filtering failed, never mix cohort/window
+            // daily data when aggregating a specific targetSlice mode.
+            .filter(v => {
+              if (desiredAggregationMode === 'cohort') return isCohortModeValue(v);
+              if (desiredAggregationMode === 'window') return !isCohortModeValue(v);
+              return true;
+            });
           
           // Check if we're in MECE aggregation mode (uncontexted query on contexted data)
           // IMPORTANT:
