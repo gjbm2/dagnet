@@ -97,6 +97,7 @@ def run_single_node_entry(
             result = calculate_path_probability(scenario_G, node_id, absorbing, pruning)
             data_rows.append({
                 'scenario_id': scenario_id,
+                'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
                 'outcome': absorbing,
                 'probability': result.probability,
@@ -165,6 +166,7 @@ def run_path_to_end(
             scenario_name = scenario.name or scenario.scenario_id
             scenario_colour = scenario.colour or '#3b82f6'
             visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+
             # Apply visibility mode to use correct probability source (mean/forecast/evidence)
             apply_visibility_mode(scenario_G, visibility_mode)
         else:
@@ -173,23 +175,33 @@ def run_path_to_end(
             scenario_name = 'Current'
             scenario_colour = '#3b82f6'
             visibility_mode = 'f+e'
+            apply_visibility_mode(scenario_G, visibility_mode)
+
+        p_label = get_probability_label(visibility_mode)
         
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+            'probability_label': p_label,
         }
         
         result = calculate_path_to_absorbing(scenario_G, node_id, pruning)
         data_rows.append({
             'scenario_id': scenario_id,
+            'scenario_name': scenario_name,
             'visibility_mode': visibility_mode,
+            'probability_label': p_label,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
             'expected_labour_cost': result.expected_labour_cost,
         })
     
+    # IMPORTANT: probability basis is per-scenario (visibility_mode may differ),
+    # so the shared metric label stays generic. Use per-row/per-scenario `probability_label`
+    # to display the actual basis in the UI.
+    metric_name = 'Probability'
+
     return {
         'metadata': {
             'node_id': node_id,
@@ -200,7 +212,7 @@ def run_path_to_end(
                 {'id': 'scenario_id', 'name': 'Scenario', 'type': 'scenario', 'role': 'primary'},
             ],
             'metrics': [
-                {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
+                {'id': 'probability', 'name': metric_name, 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
             ],
@@ -263,6 +275,7 @@ def run_path_through(
         result = calculate_path_through_node(scenario_G, node_id, pruning)
         data_rows.append({
             'scenario_id': scenario_id,
+            'scenario_name': scenario_name,
             'visibility_mode': visibility_mode,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
@@ -351,6 +364,7 @@ def run_end_comparison(
             data_rows.append({
                 'node': node_id,
                 'scenario_id': scenario_id,
+                'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
                 'probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
@@ -462,6 +476,7 @@ def run_branch_comparison(
             row = {
                 'branch': node_id,
                 'scenario_id': scenario_id,
+                'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
                 'edge_probability': edge_prob,
                 'path_through_probability': result.probability,
@@ -682,6 +697,7 @@ def run_path(
             row = {
                 'stage': stage_id,
                 'scenario_id': scenario_id,
+                'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
                 'probability': prob,
                 'expected_cost_gbp': cost_gbp,
@@ -841,6 +857,7 @@ def run_partial_path(
             if result.probability > 0:
                 data_rows.append({
                     'scenario_id': scenario_id,
+                    'scenario_name': scenario_name,
                     'visibility_mode': visibility_mode,
                     'outcome': absorbing,
                     'probability': result.probability,
@@ -954,6 +971,7 @@ def run_general_stats(
             data_rows.append({
                 'node': human_id,
                 'scenario_id': scenario_id,
+                'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
                 'path_through_probability': result.probability,
             })
@@ -1057,6 +1075,7 @@ def run_graph_overview(
             data_rows.append({
                 'outcome': absorbing,
                 'scenario_id': scenario_id,
+                'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
                 'probability': total_prob,
                 'expected_cost_gbp': total_cost_gbp,

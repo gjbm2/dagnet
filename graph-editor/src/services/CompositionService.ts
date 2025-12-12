@@ -105,11 +105,35 @@ export function applyComposedParamsToGraph(
         // Note: ScenarioParams.ProbabilityParam has more distribution types than Graph.ProbabilityParam
         // We spread the values, letting TypeScript handle the compatible subset
         if (edgeParams.p !== undefined) {
-          edge.p = { 
-            ...edge.p, 
-            mean: edgeParams.p.mean ?? edge.p?.mean,
-            stdev: edgeParams.p.stdev ?? edge.p?.stdev,
+          const existingP: any = edge.p || {};
+          const nextP: any = {
+            ...existingP,
+            mean: edgeParams.p.mean ?? existingP.mean,
+            stdev: edgeParams.p.stdev ?? existingP.stdev,
           };
+
+          // Critical for runner parity: bake nested probability bases into edge.p
+          // so Python can extract p.evidence.mean / p.forecast.mean / p.latency.*.
+          if (edgeParams.p.evidence !== undefined) {
+            nextP.evidence = {
+              ...(existingP.evidence || {}),
+              ...edgeParams.p.evidence,
+            };
+          }
+          if (edgeParams.p.forecast !== undefined) {
+            nextP.forecast = {
+              ...(existingP.forecast || {}),
+              ...edgeParams.p.forecast,
+            };
+          }
+          if (edgeParams.p.latency !== undefined) {
+            nextP.latency = {
+              ...(existingP.latency || {}),
+              ...edgeParams.p.latency,
+            };
+          }
+
+          edge.p = nextP;
         }
         
         // Apply weight_default

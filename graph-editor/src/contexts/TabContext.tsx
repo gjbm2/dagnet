@@ -1970,6 +1970,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       scenarioOrder: [],
       visibleScenarioIds: [],
       visibleColourOrderIds: [],
+      visibilityMode: {},
     };
 
     const isVisible = currentState.visibleScenarioIds.includes(scenarioId);
@@ -1977,6 +1978,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     let newScenarioOrder: string[];
     let newVisibleIds: string[];
     let newColourOrderIds: string[];
+    let newVisibilityMode = currentState.visibilityMode || {};
     
     if (isVisible) {
       // Hide scenario - remove from visible but KEEP in scenarioOrder
@@ -2011,6 +2013,16 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       
       // Colours are assigned in activation order, so append to end
       newColourOrderIds = [...currentState.visibleColourOrderIds, scenarioId];
+      
+      // NEW: Inherit F/E visibility mode from "current" when making a scenario visible
+      // This ensures new scenarios start with the same F/E state as the current layer
+      if (scenarioId !== 'current' && scenarioId !== 'base') {
+        const currentLayerMode = currentState.visibilityMode?.['current'] || 'f+e';
+        newVisibilityMode = {
+          ...newVisibilityMode,
+          [scenarioId]: currentLayerMode,
+        };
+      }
     }
 
     await updateTabState(tabId, {
@@ -2018,7 +2030,8 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         ...currentState,
         scenarioOrder: newScenarioOrder,
         visibleScenarioIds: newVisibleIds,
-        visibleColourOrderIds: newColourOrderIds
+        visibleColourOrderIds: newColourOrderIds,
+        visibilityMode: newVisibilityMode,
       }
     });
   }, [tabs, updateTabState]);

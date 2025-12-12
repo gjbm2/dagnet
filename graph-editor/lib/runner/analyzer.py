@@ -61,10 +61,6 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
                 query_dsl=request.query_dsl,
             )
         
-        # Debug: Log scenario visibility modes
-        for s in request.scenarios:
-            print(f"[analyzer] Scenario {s.scenario_id}: visibility_mode={s.visibility_mode}")
-        
         result = analyze_scenario(
             graph_data=first_scenario.graph,
             query_dsl=request.query_dsl,
