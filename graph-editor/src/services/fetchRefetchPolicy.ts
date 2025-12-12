@@ -10,6 +10,7 @@
  */
 
 import { parseDate, normalizeDate } from './windowAggregationService';
+import { LATENCY_REFETCH_COOLDOWN_MINUTES } from '../constants/latency';
 import type { DateRange } from '../types';
 import type { ParameterValue } from './paramRegistryService';
 
@@ -37,6 +38,14 @@ export interface RefetchDecision {
   
   /** Whether any immature cohorts exist */
   hasImmatureCohorts?: boolean;
+
+  /** Cooldown metadata (when we suppress latency-aware refetch shortly after a successful fetch). */
+  cooldownApplied?: boolean;
+  cooldownMinutes?: number;
+  lastRetrievedAt?: string;
+  lastRetrievedAgeMinutes?: number;
+  /** If cooldown suppressed a latency-aware refetch, this captures the window we *would* have refetched. */
+  wouldRefetchWindow?: DateRange;
 }
 
 export interface LatencyConfig {
@@ -211,6 +220,21 @@ function evaluateCohortRefetch(
   }
 
   if (hasImmatureCohorts) {
+    // Cooldown: if we just fetched this slice, do not immediately replace it again.
+    // Missing gaps will still be handled by incremental cache cutting.
+    const retrievedAt = existingSlice.data_source?.retrieved_at;
+    const cooldown = getCooldownDecision(retrievedAt, referenceDate);
+    if (cooldown.withinCooldown) {
+      return {
+        type: 'gaps_only',
+        reason: 'recent_fetch_cooldown',
+        hasImmatureCohorts: true,
+        cooldownApplied: true,
+        cooldownMinutes: LATENCY_REFETCH_COOLDOWN_MINUTES,
+        lastRetrievedAt: retrievedAt,
+        lastRetrievedAgeMinutes: cooldown.ageMinutes,
+      };
+    }
     return {
       type: 'replace_slice',
       reason: 'immature_cohorts',
@@ -284,11 +308,40 @@ function evaluateWindowRefetch(
     end: normalizeDate(immatureEnd.toISOString()),
   };
 
+  // Cooldown: if we just fetched this slice recently, suppress the immature refetch.
+  // Cache completeness wins; we will still fill missing gaps.
+  const retrievedAt = existingSlice?.data_source?.retrieved_at;
+  const cooldown = getCooldownDecision(retrievedAt, referenceDate);
+  if (cooldown.withinCooldown) {
+    return {
+      type: 'gaps_only',
+      reason: 'recent_fetch_cooldown',
+      cooldownApplied: true,
+      cooldownMinutes: LATENCY_REFETCH_COOLDOWN_MINUTES,
+      lastRetrievedAt: retrievedAt,
+      lastRetrievedAgeMinutes: cooldown.ageMinutes,
+      wouldRefetchWindow: refetchWindow,
+    };
+  }
+
   return {
     type: 'partial',
     matureCutoff,
     refetchWindow,
   };
+}
+
+function getCooldownDecision(
+  retrievedAt: string | undefined,
+  referenceDate: Date
+): { withinCooldown: boolean; ageMinutes?: number } {
+  if (!retrievedAt) return { withinCooldown: false };
+  const retrievedDate = new Date(retrievedAt);
+  if (Number.isNaN(retrievedDate.getTime())) return { withinCooldown: false };
+  const ageMs = referenceDate.getTime() - retrievedDate.getTime();
+  const cooldownMs = LATENCY_REFETCH_COOLDOWN_MINUTES * 60 * 1000;
+  const withinCooldown = ageMs >= 0 && ageMs <= cooldownMs;
+  return { withinCooldown, ageMinutes: ageMs / (60 * 1000) };
 }
 
 // =============================================================================
@@ -390,8 +443,15 @@ export function computeFetchWindow(
       return null; // No fetch needed
       
     case 'gaps_only':
-      // Only fetch if there are missing dates
-      const allMissing = [...coverage.missingMatureDates, ...coverage.immatureDates];
+      // Only fetch if there are missing dates.
+      //
+      // IMPORTANT: During cooldown (recent fetch), we suppress *immaturity-driven* refetch.
+      // In that case, immature dates should NOT be treated as missing; only genuine cache gaps
+      // in the mature portion should trigger a fetch.
+      const allMissing =
+        decision.reason === 'recent_fetch_cooldown' && decision.cooldownApplied
+          ? [...coverage.missingMatureDates]
+          : [...coverage.missingMatureDates, ...coverage.immatureDates];
       if (allMissing.length === 0) return null;
       
       // Return window spanning all missing dates

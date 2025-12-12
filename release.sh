@@ -15,6 +15,40 @@ print_green() { printf '\033[0;32m%s\033[0m\n' "$*"; }
 print_yellow() { printf '\033[1;33m%s\033[0m\n' "$*"; }
 print_red() { printf '\033[0;31m%s\033[0m\n' "$*"; }
 
+# Show exactly what would be staged by `git add .`, including a line churn summary.
+# This is intended as a safety rail against accidental editor/autosave churn.
+print_git_add_dot_preview() {
+  print_yellow "Preview: git add ."
+  echo ""
+
+  # Tracked changes (added/deleted line counts). For binaries, numstat prints '-' '-'.
+  local tracked_numstat
+  tracked_numstat="$(git diff --numstat)"
+  if [[ -n "$tracked_numstat" ]]; then
+    echo "$tracked_numstat" | awk '{ printf "  - %s  (+%s / -%s)\n", $3, $1, $2 }'
+  else
+    echo "  (no tracked file diffs)"
+  fi
+
+  # Untracked files: treat all lines as additions.
+  local untracked
+  untracked="$(git ls-files --others --exclude-standard)"
+  if [[ -n "$untracked" ]]; then
+    echo ""
+    print_yellow "Untracked files (will be added):"
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      local lines="?"
+      if [[ -f "$f" ]]; then
+        lines="$(wc -l <"$f" 2>/dev/null || echo "?")"
+      fi
+      printf "  - %s  (+%s / -0)\n" "$f" "$lines"
+    done <<< "$untracked"
+  fi
+
+  echo ""
+}
+
 # Parse command line arguments
 RUN_TESTS=false
 RUN_BUILD=false
@@ -234,10 +268,19 @@ done
 
 echo ""
 
-# Commit any uncommitted changes BEFORE proceeding
+# Commit any uncommitted changes BEFORE proceeding (guarded by preview)
 HAS_UNCOMMITTED=$(git status --porcelain)
 if [[ -n "$HAS_UNCOMMITTED" ]]; then
   print_blue "Committing current changes..."
+  echo ""
+  print_git_add_dot_preview
+  read -p "Stage and commit ALL of the above changes? [Y/N]: " STAGE_CONFIRM
+
+  if [[ ! "${STAGE_CONFIRM^^}" == "Y" ]]; then
+    print_yellow "Cancelled."
+    exit 0
+  fi
+
   git add .
   
   # Use release notes as commit message if provided, otherwise use default

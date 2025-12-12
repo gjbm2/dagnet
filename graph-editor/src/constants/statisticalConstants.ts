@@ -33,7 +33,7 @@
  * Future: This could be exposed as a user-configurable setting if needed.
  * See TODO.md "Analytics / Model Fitting (Future)" for tracking.
  */
-export const FORECAST_BLEND_LAMBDA = 0.25;
+export const FORECAST_BLEND_LAMBDA = 0.75;
 
 /**
  * RECENCY_HALF_LIFE_DAYS (H)

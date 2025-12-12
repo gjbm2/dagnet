@@ -41,6 +41,7 @@ import {
   parseDate,
   isDateInRange,
   aggregateCohortData,
+  aggregateLatencyStats,
   isCohortModeValue,
   type TimeSeriesPointWithLatency,
 } from './windowAggregationService';
@@ -48,6 +49,7 @@ import {
   shouldRefetch,
   analyzeSliceCoverage,
   computeFetchWindow,
+  computeEffectiveMaturity,
   type RefetchDecision,
   type LatencyConfig,
 } from './fetchRefetchPolicy';
@@ -55,6 +57,7 @@ import { computeCohortRetrievalHorizon } from './cohortRetrievalHorizon';
 import { 
   statisticalEnhancementService,
 } from './statisticalEnhancementService';
+import { approximateLogNormalSumPercentileDays, fitLagDistribution } from './statisticalEnhancementService';
 import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
@@ -67,6 +70,8 @@ import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
 import { DIAGNOSTIC_LOG } from '../constants/statisticalConstants';
+import { normalizeWindow } from './fetchDataService';
+import { LATENCY_T95_PERCENTILE, LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
 
 // Cached DAS runner instance for connection lookups (avoid recreating per-call)
 let cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
@@ -75,6 +80,14 @@ function getCachedDASRunner() {
     cachedDASRunner = createDASRunner();
   }
   return cachedDASRunner;
+}
+
+function toISOWindowForDAS(window: DateRange): { start?: string; end?: string; [key: string]: unknown } {
+  // CRITICAL: keep UK dates internally/logging, but DAS adapters expect ISO strings here.
+  // If we pass "6-Dec-25", the Amplitude adapter will produce "6Dec25" (invalid).
+  const start = window.start ? parseDate(window.start).toISOString() : undefined;
+  const end = window.end ? parseDate(window.end).toISOString() : undefined;
+  return { start, end };
 }
 
 /**
@@ -2813,6 +2826,8 @@ class DataOperationsService {
     currentDSL?: string;      // Explicit DSL for window/context (e.g. from WindowSelector / scenario)
     targetSlice?: string;     // Optional: DSL for specific slice (default '' = uncontexted)
     boundedCohortWindow?: DateRange; // Optional: Pre-calculated bounded window
+    /** If true, run the real planning + DAS request construction, but DO NOT execute external HTTP. */
+    dontExecuteHttp?: boolean;
   }): Promise<void> {
       const {
         objectType,
@@ -2828,6 +2843,7 @@ class DataOperationsService {
         currentDSL,
         targetSlice = '',
         boundedCohortWindow,
+        dontExecuteHttp = false,
       } = options;
     
     // DEBUG: Log conditionalIndex at entry point
@@ -3734,9 +3750,94 @@ class DataOperationsService {
             }
             // 2. Fallback: recalculate using edge path_t95 (may be undefined on first load)
             else if (isCohortQuery && latencyConfig) {
+              // Prefer Option A (moment-matched anchor+edge) if we can compute it from cached cohort data.
+              // This avoids overly conservative topo-sum path_t95 values causing huge cohort refetch windows.
+              let effectivePathT95: number | undefined = latencyConfig.path_t95;
+              let effectivePathT95Source: 'moment-matched' | 'graph.path_t95' | 'none' = effectivePathT95 ? 'graph.path_t95' : 'none';
+              let momentMatchDebug:
+                | {
+                    percentile: number;
+                    totalNForAnchor: number;
+                    totalKForEdge: number;
+                    anchorMedian: number;
+                    anchorMean: number;
+                    edgeMedian: number;
+                    edgeMean: number;
+                    anchorFitOk: boolean;
+                    edgeFitOk: boolean;
+                    estimate: number;
+                  }
+                | undefined;
+              try {
+                if (existingSlice && isCohortModeValue(existingSlice) && Array.isArray((existingSlice as any).dates)) {
+                  const cohorts = aggregateCohortData([existingSlice as any], new Date(), undefined);
+                  const anchorCandidates = cohorts.filter(c =>
+                    c.n > 0 &&
+                    c.anchor_median_lag_days !== undefined &&
+                    Number.isFinite(c.anchor_median_lag_days) &&
+                    (c.anchor_median_lag_days ?? 0) > 0
+                  );
+                  if (anchorCandidates.length > 0) {
+                    const totalNForAnchor = anchorCandidates.reduce((sum, c) => sum + c.n, 0);
+                    const anchorMedian = anchorCandidates.reduce((sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
+                    const anchorMean = anchorCandidates.reduce(
+                      (sum, c) => sum + c.n * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
+                      0
+                    ) / (totalNForAnchor || 1);
+                    const edgeLag = aggregateLatencyStats(cohorts);
+                    const totalK = cohorts.reduce((sum, c) => sum + (c.k ?? 0), 0);
+                    if (edgeLag?.median_lag_days && edgeLag.median_lag_days > 0) {
+                      const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
+                      const edgeFit = fitLagDistribution(edgeLag.median_lag_days, edgeLag.mean_lag_days, totalK);
+                      const estimate = approximateLogNormalSumPercentileDays(anchorFit, edgeFit, LATENCY_PATH_T95_PERCENTILE);
+                      if (estimate !== undefined && Number.isFinite(estimate) && estimate > 0) {
+                        effectivePathT95 = estimate;
+                        effectivePathT95Source = 'moment-matched';
+                        momentMatchDebug = {
+                          percentile: LATENCY_PATH_T95_PERCENTILE,
+                          totalNForAnchor,
+                          totalKForEdge: totalK,
+                          anchorMedian,
+                          anchorMean,
+                          edgeMedian: edgeLag.median_lag_days,
+                          edgeMean: edgeLag.mean_lag_days,
+                          anchorFitOk: anchorFit.empirical_quality_ok,
+                          edgeFitOk: edgeFit.empirical_quality_ok,
+                          estimate,
+                        };
+                      }
+                    }
+                  }
+                }
+              } catch {
+                // Non-fatal: fall back to graph.path_t95 / other horizon fallbacks.
+              }
+
+              if (momentMatchDebug) {
+                sessionLogService.addChild(
+                  logOpId,
+                  'info',
+                  'COHORT_HORIZON_PATH_T95_ESTIMATE',
+                  `path_t95 estimate (moment-matched, p=${(momentMatchDebug.percentile * 100).toFixed(1)}%) = ${momentMatchDebug.estimate.toFixed(2)}d`,
+                  `A→X: median=${momentMatchDebug.anchorMedian.toFixed(2)}d mean=${momentMatchDebug.anchorMean.toFixed(2)}d (n=${momentMatchDebug.totalNForAnchor})\nX→Y: median=${momentMatchDebug.edgeMedian.toFixed(2)}d mean=${momentMatchDebug.edgeMean.toFixed(2)}d (k=${momentMatchDebug.totalKForEdge})\nfitOk: anchor=${momentMatchDebug.anchorFitOk ? 'yes' : 'no'} edge=${momentMatchDebug.edgeFitOk ? 'yes' : 'no'}`,
+                  {
+                    percentile: momentMatchDebug.percentile,
+                    totalNForAnchor: momentMatchDebug.totalNForAnchor,
+                    totalKForEdge: momentMatchDebug.totalKForEdge,
+                    anchorMedian: momentMatchDebug.anchorMedian,
+                    anchorMean: momentMatchDebug.anchorMean,
+                    edgeMedian: momentMatchDebug.edgeMedian,
+                    edgeMean: momentMatchDebug.edgeMean,
+                    anchorFitOk: momentMatchDebug.anchorFitOk,
+                    edgeFitOk: momentMatchDebug.edgeFitOk,
+                    estimate: momentMatchDebug.estimate,
+                  }
+                );
+              }
+
               const horizonResult = computeCohortRetrievalHorizon({
                 requestedWindow,
-                pathT95: latencyConfig.path_t95,
+                pathT95: effectivePathT95,
                 edgeT95: latencyConfig.t95,
                 maturityDays: latencyConfig.maturity_days,
               });
@@ -3762,6 +3863,8 @@ class DataOperationsService {
                     daysTrimmed: horizonResult.daysTrimmed,
                     effectiveT95: horizonResult.effectiveT95,
                     t95Source: horizonResult.t95Source,
+                    effectivePathT95,
+                    effectivePathT95Source,
                   }
                 );
               }
@@ -3905,14 +4008,41 @@ class DataOperationsService {
             }
           );
           
-          if (!incrementalResult.needsFetch && !bustCache) {
+          // If partial refetch is active, we still fetch the immature portion even if cache is complete.
+          if (!incrementalResult.needsFetch && !bustCache && refetchPolicy?.type !== 'partial') {
             // All dates already exist - skip fetching (unless bustCache is true)
             shouldSkipFetch = true;
             batchableToastSuccess(`All ${incrementalResult.totalDays} days already cached`, { id: 'das-fetch' });
             console.log('[DataOperationsService] Skipping fetch - all dates already exist');
           } else if (incrementalResult.fetchWindows.length > 0) {
             // We have multiple contiguous gaps - chain requests for each
-            actualFetchWindows = incrementalResult.fetchWindows;
+            // If partial refetch is active, avoid redundant/overlapping fetch windows:
+            // - The immature refetchWindow already covers some (or all) missing dates.
+            // - Only fetch "mature gaps" outside the refetchWindow.
+            if (refetchPolicy?.type === 'partial' && refetchPolicy.refetchWindow && actualFetchWindows.length > 0) {
+              const refetch = refetchPolicy.refetchWindow;
+              const refetchStart = new Date(refetch.start).getTime();
+              const refetchEnd = new Date(refetch.end).getTime();
+
+              const outside = incrementalResult.fetchWindows.filter(w => {
+                const ws = new Date(w.start).getTime();
+                const we = new Date(w.end).getTime();
+                // keep only windows that are NOT fully contained by refetch window
+                return !(ws >= refetchStart && we <= refetchEnd);
+              });
+
+              // Combine refetch + remaining mature gaps, de-dup exact matches
+              const combined = [refetch, ...outside];
+              const seen = new Set<string>();
+              actualFetchWindows = combined.filter(w => {
+                const k = `${w.start}::${w.end}`;
+                if (seen.has(k)) return false;
+                seen.add(k);
+                return true;
+              });
+            } else {
+              actualFetchWindows = incrementalResult.fetchWindows;
+            }
             const gapCount = incrementalResult.fetchWindows.length;
             const cacheBustText = bustCache ? ' (busting cache)' : '';
             toast.loading(
@@ -3921,7 +4051,21 @@ class DataOperationsService {
             );
           } else if (incrementalResult.fetchWindow) {
             // Fallback to combined window (shouldn't happen, but keep for safety)
-            actualFetchWindows = [incrementalResult.fetchWindow];
+            if (refetchPolicy?.type === 'partial' && refetchPolicy.refetchWindow && actualFetchWindows.length > 0) {
+              // Avoid redundant single-day gap inside the refetch window
+              const refetch = refetchPolicy.refetchWindow;
+              const ws = new Date(incrementalResult.fetchWindow.start).getTime();
+              const we = new Date(incrementalResult.fetchWindow.end).getTime();
+              const rs = new Date(refetch.start).getTime();
+              const re = new Date(refetch.end).getTime();
+              if (ws >= rs && we <= re) {
+                actualFetchWindows = [refetch];
+              } else {
+                actualFetchWindows = [refetch, incrementalResult.fetchWindow];
+              }
+            } else {
+              actualFetchWindows = [incrementalResult.fetchWindow];
+            }
             toast.loading(
               `Fetching ${incrementalResult.daysToFetch} missing days${bustCache ? ' (busting cache)' : ` (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`}`,
               { id: 'das-fetch' }
@@ -4116,7 +4260,7 @@ class DataOperationsService {
         
         // Rate limit before making API calls to external providers
         // This centralizes throttling for Amplitude and other rate-limited APIs
-        if (connectionName) {
+        if (!dontExecuteHttp && connectionName) {
           await rateLimiter.waitForRateLimit(connectionName);
         }
         
@@ -4149,7 +4293,7 @@ class DataOperationsService {
             try {
               const nQueryCombined = await executeCompositeQuery(
                 nQueryString,
-                { ...baseQueryPayload, window: fetchWindow, mode: contextMode },
+                { ...baseQueryPayload, window: toISOWindowForDAS(fetchWindow), mode: contextMode },
                 connectionName,
                 runner,
                 graph,
@@ -4188,7 +4332,7 @@ class DataOperationsService {
             // Simple n_query - direct execution
             const baseResult = await runner.execute(connectionName, baseQueryPayload, {
               connection_string: connectionString,
-              window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+              window: toISOWindowForDAS(fetchWindow),
               cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
               context: { mode: contextMode, excludeTestAccounts },
               edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
@@ -4257,6 +4401,57 @@ class DataOperationsService {
           );
         }
         
+        // DRY RUN: Build the real DAS request(s) but stop before external HTTP.
+        // IMPORTANT: In dry-run mode we do NOT attempt to compute composite inclusion-exclusion results,
+        // because that requires real numerical responses. We only show the exact runner.execute calls
+        // that would be made for the non-composite pipeline.
+        if (dontExecuteHttp) {
+          const runDry = async (label: string, payload: any) => {
+            const dry = await runner.execute(connectionName, payload, {
+              connection_string: connectionString,
+              window: toISOWindowForDAS(fetchWindow),
+              cohort: requestedCohort,
+              context: { mode: contextMode, excludeTestAccounts },
+              edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
+              caseId: objectType === 'case' ? objectId : undefined,
+              nodeId: objectType === 'node' ? (targetId || objectId) : undefined,
+              eventDefinitions,
+              dryRun: true,
+            });
+
+            const req = (dry.success ? (dry.raw as any)?.request : undefined) as any;
+            sessionLogService.addChild(
+              logOpId,
+              'info',
+              'DRY_RUN_HTTP',
+              `DRY RUN: would call HTTP (${label})`,
+              req ? `${req.method} ${req.url}` : undefined,
+              req ? { request: req } : undefined
+            );
+          };
+
+          if (isComposite) {
+            sessionLogService.addChild(
+              logOpId,
+              'warning',
+              'DRY_RUN_COMPOSITE',
+              'DRY RUN: composite query detected (minus/plus); not enumerating sub-queries in dry-run yet',
+              queryString
+            );
+            // Still show the single top-level request that would have been executed in the simple path
+            // (this is useful for visibility even though actual execution would call composite executor).
+            await runDry('composite-top-level', queryPayload);
+          } else if (needsDualQuery && baseQueryPayload) {
+            await runDry('base (n_query)', baseQueryPayload);
+            await runDry('conditioned (k query)', queryPayload);
+          } else {
+            await runDry('simple', queryPayload);
+          }
+
+          // Do not mutate files or graph in dry-run mode.
+          continue;
+        }
+
         if (isComposite) {
           // Composite query: use inclusion-exclusion executor
           console.log('[DataOps] Detected composite query, using inclusion-exclusion executor');
@@ -4269,7 +4464,7 @@ class DataOperationsService {
             // Also pass eventDefinitions for event_id → provider event name translation
             const combined: CombinedResult = await executeCompositeQuery(
               queryString,
-              { ...queryPayload, window: fetchWindow, mode: contextMode },
+              { ...queryPayload, window: toISOWindowForDAS(fetchWindow), mode: contextMode },
               connectionName,
               runner,
               graph,  // Pass graph for isNodeUpstream checks
@@ -4354,7 +4549,7 @@ class DataOperationsService {
           
           const condResult = await runner.execute(connectionName, queryPayload, {
             connection_string: connectionString,
-            window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+            window: toISOWindowForDAS(fetchWindow),
             cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
             context: { mode: contextMode, excludeTestAccounts },
             edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
@@ -4480,7 +4675,7 @@ class DataOperationsService {
           // Simple query: use standard DAS runner (no upstream conditions)
           const result = await runner.execute(connectionName, queryPayload, {
             connection_string: connectionString,
-            window: fetchWindow as { start?: string; end?: string; [key: string]: unknown },
+            window: toISOWindowForDAS(fetchWindow),
             cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
             context: { mode: contextMode, excludeTestAccounts }, // Pass mode and test account exclusion to adapter
             edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
@@ -5714,6 +5909,684 @@ class DataOperationsService {
     }
     
     return { success: successCount, errors: errorCount, items: results };
+  }
+
+  // ===========================================================================
+  // DRY RUN / SIMULATION (no external HTTP)
+  // ===========================================================================
+
+  /**
+   * Simulate "Retrieve All slices" without hitting external providers.
+   *
+   * Produces a detailed markdown report covering:
+   * - Which slices would be retrieved
+   * - Per-parameter: what the file currently contains (sliceDSLs, ranges, retrieved_at)
+   * - Cache cutting / refetch policy decisions (gaps, immature cohorts, bounded horizons)
+   * - The query payload(s) that would be constructed for the provider
+   * - The HTTP calls that would be made (but are NOT executed)
+   * - The merge strategy that would apply if results returned (merge vs replace, no-data markers)
+   *
+   * IMPORTANT: This method must have zero side effects:
+   * - No runner.execute calls
+   * - No file writes
+   * - No graph updates
+   */
+  async simulateRetrieveAllSlicesToMarkdown(options: {
+    graph: Graph;
+    slices: string[];
+    bustCache?: boolean;
+  }): Promise<string> {
+    const { graph, slices, bustCache = false } = options;
+
+    const now = new Date();
+    const startedAt = now.toISOString();
+    const graphName =
+      (graph as any)?.metadata?.name ||
+      (graph as any)?.name ||
+      (graph as any)?.id ||
+      'Graph';
+
+    const lines: string[] = [];
+    lines.push(`# Simulate Retrieve All Slices`);
+    lines.push('');
+    lines.push(`**Started:** ${startedAt}`);
+    lines.push(`**Graph:** ${graphName}`);
+    // Slices must already be expanded via the canonical DSL expander (see explodeDSL).
+    // Do NOT re-implement slice expansion here.
+    lines.push(`**Slices:** ${slices.length}`);
+    lines.push(`**Bust cache:** ${bustCache ? 'Yes' : 'No'}`);
+    lines.push('');
+    lines.push('## Important note: what is “real” vs “descriptive” in this report?');
+    lines.push('- **Real (executed code path)**: Slice-family+mode matching, cache cutting (`calculateIncrementalFetch`), refetch policy (`shouldRefetch`), cohort horizon bounding (`computeCohortRetrievalHorizon`), and request construction via `runner.execute(..., dryRun=true)`.');
+    lines.push('- **Dry-run boundary**: The HTTP request is fully constructed (URL + method + payload), then stopped **immediately before network I/O**. No Amplitude call is made.');
+    lines.push('- **Descriptive**: The “expected back from provider” section describes the *shape* the downstream merge logic handles, not a real response (because we do not hit the provider in dry-run).');
+    lines.push('');
+
+    // Collect the same kinds of items that the AllSlicesModal currently fetches.
+    const items: Array<{
+      type: 'parameter' | 'case';
+      objectId: string;
+      targetId: string;
+      name: string;
+      paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
+    }> = [];
+
+    // Parameters from edges
+    for (const edge of (graph.edges || []) as any[]) {
+      const edgeId = edge.uuid || edge.id || '';
+      if (!edgeId) continue;
+
+      if (edge.p?.id && typeof edge.p.id === 'string') {
+        items.push({
+          type: 'parameter',
+          objectId: edge.p.id,
+          targetId: edgeId,
+          name: `p:${edge.p.id}`,
+          paramSlot: 'p',
+        });
+      }
+      if (edge.cost_gbp?.id && typeof edge.cost_gbp.id === 'string') {
+        items.push({
+          type: 'parameter',
+          objectId: edge.cost_gbp.id,
+          targetId: edgeId,
+          name: `cost_gbp:${edge.cost_gbp.id}`,
+          paramSlot: 'cost_gbp',
+        });
+      }
+      if (edge.labour_cost?.id && typeof edge.labour_cost.id === 'string') {
+        items.push({
+          type: 'parameter',
+          objectId: edge.labour_cost.id,
+          targetId: edgeId,
+          name: `labour_cost:${edge.labour_cost.id}`,
+          paramSlot: 'labour_cost',
+        });
+      }
+    }
+
+    // Cases from nodes
+    for (const node of (graph.nodes || []) as any[]) {
+      if (node.type === 'case' && node.case?.id) {
+        items.push({
+          type: 'case',
+          objectId: node.case.id,
+          targetId: node.uuid || node.id,
+          name: `case:${node.case.id}`,
+        });
+      }
+    }
+
+    lines.push(`## Items in scope`);
+    lines.push('');
+    lines.push(`- Parameters/cases: ${items.length}`);
+    lines.push('');
+
+    // Build a cached runner only to read connection capabilities/provider mapping.
+    // This must not execute any external queries.
+    const tempRunner = getCachedDASRunner();
+
+    for (const sliceDSL of slices) {
+      lines.push(`## Slice: \`${sliceDSL}\``);
+      lines.push('');
+
+      const sliceConstraints = parseConstraints(sliceDSL);
+
+      // Resolve requested dates for this slice (UK date strings).
+      // Mirrors windowFetchPlannerService.extractWindowFromDSL semantics:
+      // - cohort(start:end?): end defaults to today (UK)
+      // - window(start:end?): end defaults to today (UK)
+      const todayUK = formatDateUK(new Date());
+      const isCohortSlice = !!sliceConstraints.cohort?.start;
+      const isWindowSlice = !!sliceConstraints.window?.start && !isCohortSlice;
+
+      const requestedStartUK =
+        isCohortSlice
+          ? resolveRelativeDate(sliceConstraints.cohort!.start!)
+          : isWindowSlice
+          ? resolveRelativeDate(sliceConstraints.window!.start!)
+          : undefined;
+      const requestedEndUK =
+        isCohortSlice
+          ? (sliceConstraints.cohort!.end ? resolveRelativeDate(sliceConstraints.cohort!.end) : todayUK)
+          : isWindowSlice
+          ? (sliceConstraints.window!.end ? resolveRelativeDate(sliceConstraints.window!.end) : todayUK)
+          : undefined;
+
+      const sliceMode = isCohortSlice ? 'cohort()' : isWindowSlice ? 'window()' : 'none';
+      lines.push(`- **Requested mode**: ${sliceMode}`);
+      lines.push(`- **DSL requested range**: ${requestedStartUK ?? '(none)'} → ${requestedEndUK ?? '(none)'}`);
+      if (isCohortSlice) {
+        const anchorId = sliceConstraints.cohort?.anchor;
+        lines.push(`- **Date semantics**: cohort() dates are **anchor-entry dates**${anchorId ? ` (anchor=\`${anchorId}\`)` : ''}`);
+      } else if (isWindowSlice) {
+        lines.push(`- **Date semantics**: window() dates are **step-event dates** (X-event dates, not anchor-entry dates)`);
+      }
+      lines.push('');
+
+      for (const item of items) {
+        if (item.type === 'case') {
+          const caseFile = fileRegistry.getFile(`case-${item.objectId}`);
+          const scheduleCount = caseFile?.data?.schedules?.length ?? caseFile?.data?.case?.schedules?.length ?? 0;
+          const connectionName = caseFile?.data?.connection ?? undefined;
+          lines.push(`### ${item.name}`);
+          lines.push('');
+          lines.push(`- **File**: \`case-${item.objectId}\` (${caseFile ? 'exists' : 'missing'})`);
+          if (caseFile) {
+            lines.push(`- **Schedules in file**: ${scheduleCount}`);
+            lines.push(`- **Connection**: ${connectionName ?? '(none)'}`);
+          }
+          lines.push(`- **Would do**: build provider request for this slice and append a new schedule snapshot (no HTTP in simulation)`);
+          lines.push('');
+          continue;
+        }
+
+        // Parameter simulation
+        const paramFileId = `parameter-${item.objectId}`;
+        const paramFile = fileRegistry.getFile(paramFileId);
+        const values: ParameterValue[] = (paramFile?.data?.values || []) as any;
+        const connectionName: string | undefined =
+          paramFile?.data?.connection ??
+          // fallback: edge slot connection
+          ((graph.edges || []) as any[])?.find((e: any) => (e.uuid || e.id) === item.targetId)?.[item.paramSlot || 'p']?.connection;
+
+        const targetEdge = ((graph.edges || []) as any[]).find((e: any) => (e.uuid === item.targetId || e.id === item.targetId));
+        const slotData = targetEdge?.[item.paramSlot || 'p'];
+        const latencyConfig = slotData?.latency as LatencyConfig | undefined;
+
+        lines.push(`### ${item.name}`);
+        lines.push('');
+        lines.push(`- **File**: \`${paramFileId}\` (${paramFile ? 'exists' : 'missing'})`);
+        lines.push(`- **Connection**: ${connectionName ?? '(none)'}`);
+        if (latencyConfig) {
+          const md = latencyConfig.maturity_days !== undefined ? `${latencyConfig.maturity_days}d` : '(none)';
+          const t95 = latencyConfig.t95 !== undefined ? `${latencyConfig.t95.toFixed(2)}d` : '(none)';
+          const pt95 = latencyConfig.path_t95 !== undefined ? `${latencyConfig.path_t95.toFixed(2)}d` : '(none)';
+          lines.push(`- **Latency config**: maturity_days=${md}; edge.t95=${t95}; graph.path_t95=${pt95}`);
+        } else {
+          lines.push(`- **Latency config**: (none)`);
+        }
+
+        // File contents summary (sliceDSL coverage)
+        if (!paramFile) {
+          lines.push(`- **Cache**: no file → would fetch full window from source`);
+          lines.push('');
+          continue;
+        }
+
+        const sliceFamilyDims = extractSliceDimensions(sliceDSL);
+        const relevantSameMode = values.filter((v: any) => {
+          const dimsMatch = extractSliceDimensions(v.sliceDSL ?? '') === sliceFamilyDims;
+          if (!dimsMatch) return false;
+          // IMPORTANT: A "slice family" match must also match MODE (window vs cohort).
+          // Otherwise we will incorrectly show window() values while analysing cohort() (and vice versa).
+          return isCohortSlice ? isCohortModeValue(v) : isWindowSlice ? !isCohortModeValue(v) : true;
+        });
+
+        const relevantOtherMode = values.filter((v: any) => {
+          const dimsMatch = extractSliceDimensions(v.sliceDSL ?? '') === sliceFamilyDims;
+          if (!dimsMatch) return false;
+          return isCohortSlice ? !isCohortModeValue(v) : isWindowSlice ? isCohortModeValue(v) : false;
+        });
+
+        lines.push(`- **From file (matching slice family + mode)**: ${relevantSameMode.length}/${values.length}`);
+        if (relevantOtherMode.length > 0) {
+          lines.push(`- **Note**: ${relevantOtherMode.length} value(s) exist for the same slice family but the OTHER mode (ignored for this slice)`);
+        }
+        if (relevantSameMode.length > 0) {
+          const sample = relevantSameMode.slice(0, 12).map((v: any) => {
+            const dsl = v.sliceDSL ?? '(no sliceDSL)';
+            const from = v.cohort_from || v.window_from || '';
+            const to = v.cohort_to || v.window_to || '';
+            const ra = v.data_source?.retrieved_at || '';
+            return `  - \`${dsl}\` (${from}→${to}) retrieved_at=${ra || '(none)'}`;
+          });
+          lines.push(...sample);
+        }
+
+        // Requested window (ISO) for cache/refetch logic helpers.
+        // IMPORTANT: use parseUKDate to avoid any ambiguous Date parsing.
+        // NOTE: This represents an inclusive day range in UI/DSL terms; provider calls
+        // typically use end-of-day timestamps (see normalizeWindow()).
+        const requestedWindowISO: DateRange | undefined =
+          requestedStartUK && requestedEndUK
+            ? {
+                start: parseUKDate(requestedStartUK).toISOString(),
+                end: parseUKDate(requestedEndUK).toISOString(),
+              }
+            : undefined;
+
+        if (!requestedWindowISO) {
+          lines.push(`- **Cache cutting**: no explicit cohort/window in slice → would use service default window`);
+          lines.push('');
+          continue;
+        }
+
+        const isCohortQuery = isCohortSlice;
+        // Determine existing slice matching mode+dims (used for refetch policy)
+        const existingSlice = (values as any[]).find((v: any) => {
+          const correctMode = isCohortQuery ? isCohortModeValue(v) : !isCohortModeValue(v);
+          if (!correctMode) return false;
+          const vd = extractSliceDimensions(v.sliceDSL || '');
+          return vd === sliceFamilyDims;
+        });
+
+        let refetchPolicy: RefetchDecision | undefined;
+        if (latencyConfig?.maturity_days && latencyConfig.maturity_days > 0) {
+          refetchPolicy = shouldRefetch({
+            existingSlice,
+            latencyConfig,
+            requestedWindow: requestedWindowISO,
+            isCohortQuery,
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // path_t95 diagnostics (Option A)
+        // For deep graphs, path_t95 is used to bound cohort() retrieval horizons.
+        // We now prefer a moment-matched A→Y estimate from:
+        //   A→X (anchor_*) + X→Y (median/mean lag)
+        // when cached cohort data contains anchor lag arrays.
+        // -------------------------------------------------------------------
+        if (isCohortQuery) {
+          lines.push(`- **path_t95 diagnostics**:`);
+          lines.push(`  - graph.edge.latency.t95: ${latencyConfig?.t95 ? latencyConfig.t95.toFixed(2) + 'd' : '(none)'}`);
+          lines.push(`  - graph.edge.latency.path_t95: ${latencyConfig?.path_t95 ? latencyConfig.path_t95.toFixed(2) + 'd' : '(none)'}`);
+
+          // If we can compute the moment-matched estimate from cached cohort data, we will prefer it for bounding.
+          let momentMatchedPathT95Estimate: number | undefined;
+
+          try {
+            // Use cached cohort data (if present) to compute the same Option A estimate:
+            // path_t95 ≈ t95(A→X + X→Y)
+            if (existingSlice && isCohortModeValue(existingSlice) && Array.isArray((existingSlice as any).dates)) {
+              const cohorts = aggregateCohortData(
+                [existingSlice as any],
+                new Date(),
+                undefined
+              );
+
+              const anchorCandidates = cohorts.filter(c =>
+                c.n > 0 &&
+                c.anchor_median_lag_days !== undefined &&
+                Number.isFinite(c.anchor_median_lag_days) &&
+                (c.anchor_median_lag_days ?? 0) > 0
+              );
+
+              if (anchorCandidates.length > 0) {
+                const totalNForAnchor = anchorCandidates.reduce((sum, c) => sum + c.n, 0);
+                const anchorMedian = anchorCandidates.reduce((sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
+                const anchorMean = anchorCandidates.reduce(
+                  (sum, c) => sum + c.n * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
+                  0
+                ) / (totalNForAnchor || 1);
+
+                const edgeLag = aggregateLatencyStats(cohorts);
+                const totalK = cohorts.reduce((sum, c) => sum + (c.k ?? 0), 0);
+
+                if (edgeLag?.median_lag_days && edgeLag.median_lag_days > 0) {
+                  const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
+                  const edgeFit = fitLagDistribution(edgeLag.median_lag_days, edgeLag.mean_lag_days, totalK);
+                  const estimate = approximateLogNormalSumPercentileDays(anchorFit, edgeFit, LATENCY_PATH_T95_PERCENTILE);
+                  if (estimate !== undefined && Number.isFinite(estimate) && estimate > 0) {
+                    momentMatchedPathT95Estimate = estimate;
+                  }
+
+                  lines.push(`  - anchor+edge estimate (moment-matched):`);
+                  lines.push(`    - percentile: ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%`);
+                  lines.push(`    - weights: anchor_n(total arrivals at X)=${totalNForAnchor}, edge_k(total converters on X→Y)=${totalK}`);
+                  lines.push(`    - anchorMedian(A→X): ${anchorMedian.toFixed(2)}d`);
+                  lines.push(`    - anchorMean(A→X): ${anchorMean.toFixed(2)}d`);
+                  lines.push(`    - edgeMedian(X→Y): ${edgeLag.median_lag_days.toFixed(2)}d`);
+                  lines.push(`    - edgeMean(X→Y): ${edgeLag.mean_lag_days.toFixed(2)}d`);
+                  lines.push(`    - fit quality: anchor=${anchorFit.empirical_quality_ok ? 'ok' : 'fallback'} edge=${edgeFit.empirical_quality_ok ? 'ok' : 'fallback'}`);
+                  lines.push(`    - estimated path_t95(A→Y): ${estimate !== undefined ? estimate.toFixed(2) + 'd' : '(unavailable: fit quality gate / missing data)'}`);
+                } else {
+                  lines.push(`  - anchor+edge estimate (moment-matched): (unavailable: no cached edge lag stats in cohort slice)`);
+                }
+              } else {
+                lines.push(`  - anchor+edge estimate (moment-matched): (unavailable: no anchor_* lag arrays in cached cohort slice)`);
+              }
+            } else {
+              lines.push(`  - anchor+edge estimate (moment-matched): (unavailable: no cached cohort slice found for this slice family)`);
+            }
+          } catch (e) {
+            lines.push(`  - anchor+edge estimate (moment-matched): (error computing from cached data: ${e instanceof Error ? e.message : String(e)})`);
+          }
+
+          // Carry forward to bounding section (below) via closure variable.
+          (lines as any)._momentMatchedPathT95Estimate = momentMatchedPathT95Estimate;
+        }
+
+        // Incremental gaps (always computed for reporting)
+        const incremental = calculateIncrementalFetch(
+          paramFile.data,
+          requestedWindowISO,
+          undefined,
+          bustCache,
+          sliceDSL
+        );
+
+        // Helper for consistent formatting in report
+        const formatWindows = (windows: DateRange[]): string[] => {
+          if (windows.length === 0) return ['  - (none)'];
+          return windows.map(w => `  - ${normalizeDate(w.start)} → ${normalizeDate(w.end)}`);
+        };
+
+        // Decide would-fetch windows (mirror getFromSourceDirect behaviour closely)
+        let wouldFetchWindows: DateRange[] = [];
+        let wouldFetchWindowsProviderNormalised: DateRange[] = [];
+        let wouldSkip = false;
+        let horizonSummary: string | undefined;
+        let cohortBoundedWindow: DateRange | undefined;
+        let cohortBoundingPathT95Used:
+          | { value: number; source: 'moment-matched' | 'graph.path_t95' | 'none' }
+          | undefined;
+
+        if (bustCache) {
+          wouldFetchWindows = [{ ...requestedWindowISO }];
+        } else if (refetchPolicy?.type === 'use_cache') {
+          wouldSkip = true;
+        } else if (
+          refetchPolicy?.reason === 'recent_fetch_cooldown' &&
+          refetchPolicy.cooldownApplied &&
+          !incremental.needsFetch
+        ) {
+          // Mirrors real execution: if cache cutting says “no gaps” and cooldown suppressed
+          // the immaturity refetch, we will skip fetching entirely.
+          wouldSkip = true;
+        } else if (refetchPolicy?.type === 'replace_slice') {
+          // Replacement fetch (cohort horizon bounding is applied in execution path; simulate it here).
+          // For cohort queries, bounding uses path_t95 when available (planner provides it),
+          // otherwise falls back to edge_t95/maturity_days/default.
+          let bounded = requestedWindowISO;
+          if (isCohortQuery && latencyConfig) {
+            // Prefer the moment-matched estimate if available from cached data in this report.
+            const mm = (lines as any)._momentMatchedPathT95Estimate as number | undefined;
+            const effectivePathT95ForBounding = mm !== undefined ? mm : latencyConfig.path_t95;
+            cohortBoundingPathT95Used =
+              mm !== undefined
+                ? { value: mm, source: 'moment-matched' }
+                : latencyConfig.path_t95 !== undefined
+                  ? { value: latencyConfig.path_t95, source: 'graph.path_t95' }
+                  : { value: 0, source: 'none' };
+            const horizon = computeCohortRetrievalHorizon({
+              requestedWindow: requestedWindowISO,
+              pathT95: effectivePathT95ForBounding,
+              edgeT95: latencyConfig.t95,
+              maturityDays: latencyConfig.maturity_days,
+            });
+            bounded = horizon.wasBounded ? horizon.boundedWindow : requestedWindowISO;
+            horizonSummary = horizon.summary;
+            cohortBoundedWindow = bounded;
+          }
+          wouldFetchWindows = [bounded];
+        } else if (refetchPolicy?.type === 'partial' && refetchPolicy.refetchWindow) {
+          // Real execution still checks for mature gaps (incremental) in addition to the immature refetchWindow.
+          // Here we include both: the immature refetchWindow plus any missing mature gaps.
+          const windows: DateRange[] = [refetchPolicy.refetchWindow];
+          if (incremental.needsFetch && incremental.fetchWindows.length > 0) {
+            // Avoid redundant windows fully covered by the immature refetch window.
+            const refetch = refetchPolicy.refetchWindow;
+            const rs = new Date(refetch.start).getTime();
+            const re = new Date(refetch.end).getTime();
+            for (const w of incremental.fetchWindows) {
+              const ws = new Date(w.start).getTime();
+              const we = new Date(w.end).getTime();
+              if (ws >= rs && we <= re) continue;
+              windows.push(w);
+            }
+          } else if (incremental.needsFetch && incremental.fetchWindow) {
+            const refetch = refetchPolicy.refetchWindow;
+            const rs = new Date(refetch.start).getTime();
+            const re = new Date(refetch.end).getTime();
+            const ws = new Date(incremental.fetchWindow.start).getTime();
+            const we = new Date(incremental.fetchWindow.end).getTime();
+            if (!(ws >= rs && we <= re)) {
+              windows.push(incremental.fetchWindow);
+            }
+          }
+          // De-dup identical windows (string compare is safe: all are ISO strings)
+          const seen = new Set<string>();
+          wouldFetchWindows = windows.filter(w => {
+            const key = `${w.start}::${w.end}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        } else if (incremental.needsFetch && incremental.fetchWindows.length > 0) {
+          wouldFetchWindows = incremental.fetchWindows;
+        } else if (incremental.needsFetch && incremental.fetchWindow) {
+          wouldFetchWindows = [incremental.fetchWindow];
+        } else {
+          wouldSkip = true;
+        }
+
+        // Provider-normalised windows (what runner.execute would typically receive):
+        // ensures end-of-day coverage and consistent ISO-with-time semantics.
+        wouldFetchWindowsProviderNormalised = wouldFetchWindows.map(w => normalizeWindow(w));
+
+        // -------------------------------------------------------------------
+        // The key "pipeline" view (what you asked for):
+        // 1) what we have from file
+        // 2) which dates we might need due to missing cache gaps
+        // 3) which dates we might refetch due to immaturity (differs window() vs cohort())
+        // 4) therefore which actual HTTP queries would run
+        // -------------------------------------------------------------------
+
+        // 2) Missing-date gaps (cache cutting)
+        const missingGapWindows: DateRange[] =
+          incremental.needsFetch && incremental.fetchWindows.length > 0
+            ? incremental.fetchWindows
+            : incremental.needsFetch && incremental.fetchWindow
+            ? [incremental.fetchWindow]
+            : [];
+
+        // 3) Immaturity-driven refetch
+        const immatureWindows: DateRange[] = [];
+        let immaturityExplanation: string | undefined;
+
+        if (bustCache) {
+          immaturityExplanation = 'bustCache=true (ignores cache + immaturity; step (3) is not used)';
+        } else if (refetchPolicy?.reason === 'recent_fetch_cooldown' && refetchPolicy.cooldownApplied) {
+          const age = refetchPolicy.lastRetrievedAgeMinutes;
+          const ageText = age !== undefined && Number.isFinite(age) ? `${age.toFixed(1)}m` : '(unknown)';
+          const ra = refetchPolicy.lastRetrievedAt || '(none)';
+          if (isWindowSlice) {
+            immaturityExplanation =
+              `window(): cooldown active — last retrieved_at=${ra} (age ${ageText}); ` +
+              `skipping immature refetch (would have refetched ${refetchPolicy.wouldRefetchWindow ? `${normalizeDate(refetchPolicy.wouldRefetchWindow.start)}→${normalizeDate(refetchPolicy.wouldRefetchWindow.end)}` : '(unknown)'})`;
+          } else if (isCohortSlice) {
+            immaturityExplanation =
+              `cohort(): cooldown active — last retrieved_at=${ra} (age ${ageText}); ` +
+              `skipping replace_slice refetch (will only fill missing cache gaps, if any)`;
+          }
+        } else if (isWindowSlice && refetchPolicy?.type === 'partial' && refetchPolicy.refetchWindow) {
+          const effectiveMaturityDays = computeEffectiveMaturity(latencyConfig);
+          const maturitySource =
+            latencyConfig?.t95 !== undefined && latencyConfig.t95 > 0 ? `t95=${latencyConfig.t95.toFixed(2)}d` : `maturity_days=${latencyConfig?.maturity_days ?? 0}d`;
+          immatureWindows.push(refetchPolicy.refetchWindow);
+          immaturityExplanation = `window(): latency-aware partial refetch — refresh last ${effectiveMaturityDays + 1}d (effective maturity from ${maturitySource}); cutoff=${refetchPolicy.matureCutoff ?? '(unknown)'}`;
+        } else if (isCohortSlice && refetchPolicy?.type === 'replace_slice') {
+          // For cohort(), we do not “refetch only immature dates” — we replace the cohort slice when any cohorts are immature/stale.
+          // The actual query window may be horizon-bounded.
+          immaturityExplanation = `cohort(): latency-aware replace_slice — replace cohort slice when immature/stale${refetchPolicy.matureCutoff ? `; matureCutoff=${refetchPolicy.matureCutoff}` : ''}`;
+          if (cohortBoundedWindow) {
+            immatureWindows.push(cohortBoundedWindow);
+          } else {
+            immatureWindows.push(requestedWindowISO);
+          }
+        } else {
+          immaturityExplanation = 'no latency-aware refetch applied';
+        }
+
+        // 4) Therefore: actual queries (what we will run)
+        // Note: this is the same selection logic used above to compute wouldFetchWindows.
+        lines.push(`- **2) Dates I might need to get (missing cache gaps)**:`);
+        lines.push(...formatWindows(missingGapWindows));
+
+        lines.push(`- **3) Dates I might refetch because they could have changed (immature)**:`);
+        if (immaturityExplanation) lines.push(`  - rule: ${immaturityExplanation}`);
+        // For window(): show the explicit immature window (if any). For cohort(): show the bounded replacement window (if any).
+        lines.push(...formatWindows(immatureWindows));
+
+        if (isCohortQuery) {
+          lines.push(`- **cohort() bounding**:`);
+          if (refetchPolicy?.type === 'replace_slice') {
+            if (cohortBoundingPathT95Used?.source === 'moment-matched') {
+              lines.push(
+                `  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: moment-matched from cached anchor_* + edge lag; percentile ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%)`
+              );
+              if (latencyConfig?.path_t95 !== undefined) {
+                lines.push(`  - note: graph.path_t95 is ${latencyConfig.path_t95.toFixed(2)}d but is NOT used for bounding when a moment-matched estimate is available`);
+              }
+            } else if (cohortBoundingPathT95Used?.source === 'graph.path_t95') {
+              lines.push(`  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: graph.path_t95)`);
+            } else {
+              lines.push(`  - effective path_t95 used for bounding: (none available; horizon uses edge.t95/maturity_days fallbacks)`);
+            }
+            lines.push(`  - ${horizonSummary ?? '(no horizon summary available)'}`);
+            if (!latencyConfig?.path_t95) {
+              lines.push(`  - note: \`path_t95\` may be missing on the graph until a prior fetch/topo pass computes it`);
+            }
+          } else {
+            lines.push(`  - (not applicable: policy is not replace_slice)`);
+          }
+        }
+
+        lines.push(`- **4) Therefore: actual HTTP queries we would run**:`);
+        lines.push(...formatWindows(wouldFetchWindows));
+        lines.push('');
+
+        if (wouldSkip) {
+          lines.push(`- **Would fetch**: (none) — use cache / file-only update path`);
+          lines.push(`- **Would do**: apply cached slice to graph, rebalance siblings, then run LAG topo enhancement`);
+          lines.push('');
+          continue;
+        }
+
+        lines.push(`- **Would fetch (date windows)**:`);
+        lines.push(`  - DSL/internal range:`);
+        for (const w of wouldFetchWindows) {
+          lines.push(`    - ${normalizeDate(w.start)} → ${normalizeDate(w.end)}`);
+        }
+        lines.push(`  - Provider (runner.execute) range (end-of-day normalised):`);
+        for (const w of wouldFetchWindowsProviderNormalised) {
+          lines.push(`    - ${normalizeDate(w.start)} → ${normalizeDate(w.end)}`);
+        }
+
+        // Build query payload (provider event mapping) for logging
+        let queryPayload: any = {};
+        let eventDefinitions: Record<string, any> = {};
+        let connectionProvider: string | undefined;
+        let supportsDailyTimeSeries = false;
+
+        if (connectionName && targetEdge?.query) {
+          try {
+            const connection = await (tempRunner as any).connectionProvider.getConnection(connectionName);
+            connectionProvider = connection?.provider;
+            supportsDailyTimeSeries = connection?.capabilities?.supports_daily_time_series === true;
+
+            const requiresEventIds = connection?.requires_event_ids !== false;
+            if (!requiresEventIds) {
+              queryPayload = {};
+            } else {
+              const eventLoader = async (eventId: string) => {
+                const f = fileRegistry.getFile(`event-${eventId}`);
+                return f?.data || { id: eventId, name: eventId, provider_event_names: {} };
+              };
+
+              // Use slice constraints to supply window/cohort/context, and the edge query for from/to.
+              const build = await buildDslFromEdge(
+                { ...targetEdge, query: targetEdge.query },
+                graph,
+                connectionProvider,
+                eventLoader,
+                sliceConstraints
+              );
+              queryPayload = build.queryPayload;
+              eventDefinitions = build.eventDefinitions;
+            }
+          } catch (error) {
+            // Simulation must remain non-fatal even if the local connection registry
+            // cannot be loaded (e.g. tests, or misconfigured dev env).
+            // In that case, we still report the edge query and windows, but omit
+            // provider-specific payload expansion.
+            connectionProvider = connectionProvider ?? undefined;
+            supportsDailyTimeSeries = false;
+            queryPayload = {};
+            eventDefinitions = {};
+            lines.push(`- **Query constructed**:`);
+            lines.push(`  - edge.query: \`${targetEdge?.query || '(none)'}\``);
+            lines.push(`  - provider: \`(unresolved: connection lookup failed)\``);
+            lines.push(`  - supports_daily_time_series: false`);
+            lines.push(`  - note: provider mapping skipped due to error: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+
+        lines.push(`- **Query constructed**:`);
+        lines.push(`  - edge.query: \`${targetEdge?.query || '(none)'}\``);
+        lines.push(`  - provider: \`${connectionProvider || '(unknown)'}\``);
+        lines.push(`  - supports_daily_time_series: ${supportsDailyTimeSeries ? 'true' : 'false'}`);
+        lines.push(`  - payload keys: ${Object.keys(queryPayload || {}).join(', ') || '(none)'}`);
+
+        // Expected response shape (no actual call)
+        const expectedMode = supportsDailyTimeSeries ? 'daily' : 'aggregate';
+        lines.push(`- **Would call HTTP (NOT executed)**:`);
+        for (const w of wouldFetchWindowsProviderNormalised) {
+          // Run the REAL DAS runner pipeline up to request construction, then stop before HTTP.
+          // This ensures the report reflects actual adapter request templates and pre_request scripts.
+          let dryRequestLine: string | undefined;
+          try {
+            if (connectionName) {
+              const dry = await tempRunner.execute(connectionName, queryPayload || {}, {
+                connection_string: (paramFile?.data as any)?.connection_string,
+                window: w as any,
+                cohort: isCohortQuery ? (queryPayload as any)?.cohort ?? {} : {},
+                context: { mode: expectedMode },
+                edgeId: item.targetId,
+                parameterId: item.objectId,
+                eventDefinitions,
+                dryRun: true,
+              });
+              const req = dry.success ? (dry.raw as any)?.request : undefined;
+              if (req?.method && req?.url) {
+                dryRequestLine = ` [dryRun request: ${req.method} ${req.url}]`;
+              }
+            }
+          } catch (e) {
+            // Non-fatal: still show the runner.execute call even if we couldn't build the request.
+          }
+
+          lines.push(
+            `  - runner.execute(${connectionName}, <payload>, window=${normalizeDate(w.start)}→${normalizeDate(w.end)}, mode=${expectedMode}, cohort=${isCohortQuery ? 'yes' : 'no'})${dryRequestLine ?? ''}`
+          );
+        }
+
+        // What we would expect back (shape only)
+        lines.push(`- **Would expect back (shape)**:`);
+        lines.push(`  - success=true`);
+        lines.push(`  - raw: { n, k, p, ${supportsDailyTimeSeries ? 'time_series: [{date,n,k,p}]' : '(aggregate only)'} }`);
+        if (isCohortQuery) {
+          lines.push(`  - plus cohort latency arrays for 3-step funnels when available: median_lag_days[], mean_lag_days[], anchor_* (if provided)`);
+        }
+
+        // Merge plan
+        lines.push(`- **Would do with response (merge plan)**:`);
+        if (isCohortQuery) {
+          lines.push(`  - cohort mode: merge by cohort-entry date into ONE canonical \`cohort(<anchor>,earliest:latest)\` value for this slice family (preserve existing dates outside fetched range; overwrite fetched dates)`);
+        } else {
+          lines.push(`  - window mode: canonical merge by date into a single \`window(earliest:latest)\` entry for this slice family`);
+        }
+        if (bustCache) {
+          lines.push(`  - bustCache: ignore existing dates, treat all requested dates as missing`);
+        }
+        lines.push(`  - if provider returns NO DATA: write a "no data" marker for the fetched window(s) (zeros) so the UI treats it as cached`);
+        lines.push('');
+      }
+    }
+
+    return lines.join('\n');
   }
   
   /**

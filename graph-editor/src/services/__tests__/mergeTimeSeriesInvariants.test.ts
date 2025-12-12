@@ -694,69 +694,14 @@ describe('Cohort Mode: sliceDSL with Anchor', () => {
 });
 
 // =============================================================================
-// 7. Forecast and Latency Recomputation
+// 7. Forecast scalar preservation (window mode)
 // =============================================================================
 
-describe('Window Mode: Forecast/Latency Recomputation', () => {
-  
-  it('adds forecast when recomputeForecast is enabled', () => {
-    const existing: ParameterValue[] = [];
-    const newTimeSeries = makeTimeSeries(30, 10, { withLatency: true });
-    
-    const result = mergeTimeSeriesIntoParameter(
-      existing,
-      newTimeSeries,
-      { start: daysAgo(30), end: daysAgo(10) },
-      undefined,
-      undefined,
-      undefined,
-      'api',
-      '',
-      { 
-        recomputeForecast: true,
-        latencyConfig: { maturity_days: 7 },
-      }
-    );
-    
-    const merged = result.find(v => !isCohortModeValue(v))!;
-    
-    // Should have forecast field
-    expect((merged as any).forecast).toBeDefined();
-    expect(typeof (merged as any).forecast).toBe('number');
-  });
-  
-  it('adds latency summary when recomputeForecast is enabled', () => {
-    const existing: ParameterValue[] = [];
-    const newTimeSeries = makeTimeSeries(30, 10, { withLatency: true });
-    
-    const result = mergeTimeSeriesIntoParameter(
-      existing,
-      newTimeSeries,
-      { start: daysAgo(30), end: daysAgo(10) },
-      undefined,
-      undefined,
-      undefined,
-      'api',
-      '',
-      { 
-        recomputeForecast: true,
-        latencyConfig: { maturity_days: 7 },
-      }
-    );
-    
-    const merged = result.find(v => !isCohortModeValue(v))!;
-    
-    // Should have latency object with expected fields
-    expect((merged as any).latency).toBeDefined();
-    expect((merged as any).latency.median_lag_days).toBeDefined();
-    expect((merged as any).latency.completeness).toBeDefined();
-    expect((merged as any).latency.t95).toBeDefined();
-  });
-  
-  it('does not add forecast when recomputeForecast is false', () => {
+describe('Window Mode: Forecast scalar preservation', () => {
+  it('does not manufacture a forecast scalar during merge', () => {
     const existing: ParameterValue[] = [];
     const newTimeSeries = makeTimeSeries(30, 10);
-    
+
     const result = mergeTimeSeriesIntoParameter(
       existing,
       newTimeSeries,
@@ -766,57 +711,45 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
       undefined,
       'api',
       '',
-      { recomputeForecast: false }
+      { latencyConfig: { maturity_days: 7 } }
     );
-    
+
     const merged = result.find(v => !isCohortModeValue(v))!;
-    
-    // Should NOT have forecast field (unless it was already there)
     expect((merged as any).forecast).toBeUndefined();
   });
-  
-  it('forecast recomputation is idempotent on repeated merges', () => {
+
+  it('preserves an existing forecast scalar across merges (even if mean changes)', () => {
     let values: ParameterValue[] = [];
-    const timeSeries = makeTimeSeries(30, 10, { withLatency: true });
-    
-    // First merge
+
+    // Seed: a legacy/previously-computed forecast scalar exists
+    const ts1 = makeTimeSeries(14, 7);
     values = mergeTimeSeriesIntoParameter(
       values,
-      timeSeries,
-      { start: daysAgo(30), end: daysAgo(10) },
+      ts1,
+      { start: daysAgo(14), end: daysAgo(7) },
       undefined,
       undefined,
       undefined,
       'api',
-      '',
-      { 
-        recomputeForecast: true,
-        latencyConfig: { maturity_days: 7 },
-      }
+      ''
     );
-    
-    const firstForecast = (values[0] as any).forecast;
-    const firstT95 = (values[0] as any).latency?.t95;
-    
-    // Second merge with same data
+    // Patch in a forecast scalar as if it came from a baseline computation elsewhere
+    (values[0] as any).forecast = 0.123;
+
+    // Merge a different window; mean will change, but forecast must remain pinned.
+    const ts2 = makeTimeSeries(7, 0, { n: 200, k: 10 });
     values = mergeTimeSeriesIntoParameter(
       values,
-      timeSeries,
-      { start: daysAgo(30), end: daysAgo(10) },
+      ts2,
+      { start: daysAgo(7), end: daysAgo(0) },
       undefined,
       undefined,
       undefined,
       'api',
-      '',
-      { 
-        recomputeForecast: true,
-        latencyConfig: { maturity_days: 7 },
-      }
+      ''
     );
-    
-    // Forecast and t95 should be stable
-    expect((values[0] as any).forecast).toBeCloseTo(firstForecast, 5);
-    expect((values[0] as any).latency?.t95).toBeCloseTo(firstT95, 5);
+
+    expect((values[0] as any).forecast).toBeCloseTo(0.123, 6);
   });
 });
 

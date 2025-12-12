@@ -780,10 +780,19 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │   WHAT path_t95 IS                                                                  │
 │   ────────────────                                                                  │
 │                                                                                     │
-│   path_t95 = Σ t95(edge) along the path from anchor to this edge                   │
+│   UPDATED (11-Dec-25): path_t95 is the anchor-to-edge conversion horizon used for  │
+│   cohort() retrieval bounding.                                                      │
 │                                                                                     │
-│   It is an UPPER BOUND estimate: "95% of eventual converters should arrive         │
-│   at this edge within path_t95 days of entering at the anchor."                    │
+│   Prefer ANCHOR+EDGE estimate when available (reduces over-greediness on deep DAGs):│
+│     If we have 3-step cohort lag arrays for this edge (anchor_* + edge lag), then  │
+│     anchor_* gives A→X, edge lag gives X→Y, and we estimate A→Y as:                 │
+│                                                                                     │
+│       path_t95 ≈ t95( A→X + X→Y )                                                   │
+│                                                                                     │
+│     Implementation: moment-matched lognormal sum (Fenton–Wilkinson approximation). │
+│                                                                                     │
+│   Fallback (when anchor_* is missing / fails fit quality gates):                    │
+│     path_t95 = conservative topo accumulation of per-edge t95s over active paths.  │
 │                                                                                     │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                     │
@@ -834,7 +843,8 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │                             │  (from inbound-n convolution)                        │
 │                             │                                                      │
 │  p.latency.t95              │  95th percentile of this edge's lag distribution     │
-│  p.latency.path_t95         │  Sum of t95s along path from anchor (upper bound)    │
+│  p.latency.path_t95         │  Preferred: t95(A→X + X→Y) from anchor_* + edge lag   │
+│                             │  Fallback: conservative topo accumulation of t95s    │
 │  p.latency.completeness     │  Fraction of eventual conversions that have occurred │
 │  p.latency.maturity_days    │  User-configured fallback if no empirical lag data   │
 │  p.latency.median_lag_days  │  Observed median lag for this edge only              │
@@ -946,7 +956,8 @@ For scenario S:
        • Downstream:    p.n = Σ inbound p.forecast.k
        • p.forecast.k = p.n × p.mean (scenario-specific)
   4. Compute path_t95 over ACTIVE latency edges only:
-       • path_t95(edge) = max over active paths Σ t95(e) along path
+       • Prefer: path_t95 ≈ t95(A→X + X→Y) when anchor_* lag is available
+       • Fallback: path_t95(edge) = max over active paths Σ t95(e) along path
 ```
 
 **Implications:**
