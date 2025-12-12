@@ -104,10 +104,36 @@ export const LATENCY_EPSILON = 1e-9;
 /**
  * Default maturity percentile for t95 calculation.
  * 
- * The 95th percentile of the lag distribution - time by which 95% of
- * eventual converters have converted.
+ * Percentile of the lag distribution used to define `t95` (naming kept for compatibility).
+ * This is the time by which \(p\) of eventual converters have converted.
  */
-export const LATENCY_T95_PERCENTILE = 0.95;
+export const LATENCY_T95_PERCENTILE = 0.979
+
+/**
+ * Percentile used when computing *path* latency horizons for cohort bounding (path_t95 / A→Y horizon).
+ *
+ * This can be set more conservatively than LATENCY_T95_PERCENTILE to reduce under-bounding
+ * when upstream (A→X) has a fatter tail than edge (X→Y).
+ *
+ * Note: field names remain `t95` / `path_t95` in the UI; this constant governs the percentile
+ * used for the *upper-bound estimation* that drives cohort fetch window bounding.
+ */
+export const LATENCY_PATH_T95_PERCENTILE = 0.99
+
+/**
+ * Cooldown for latency-aware refetching.
+ *
+ * When a slice was fetched very recently (based on `data_source.retrieved_at`),
+ * we should not immediately refetch the “immature window” again. This is
+ * particularly important for “Retrieve all slices”, which users may run
+ * repeatedly while debugging failures: caches should prevent redundant calls.
+ *
+ * Behaviour:
+ * - Missing cache gaps are still fetched (cache completeness wins).
+ * - The maturity-driven “refresh last t95 days” (window) / “replace slice” (cohort)
+ *   is suppressed during the cooldown window.
+ */
+export const LATENCY_REFETCH_COOLDOWN_MINUTES = 720;
 
 // =============================================================================
 // Effective Sample Size

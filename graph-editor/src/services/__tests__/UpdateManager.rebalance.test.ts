@@ -137,6 +137,44 @@ describe('UpdateManager - Rebalancing', () => {
     });
     
     describe('Normal Rebalance (forceRebalance=false)', () => {
+      it('should rebalance p.mean without clobbering p.forecast.mean (no cross-layer rebalance)', () => {
+        const graph = {
+          nodes: [{ uuid: 'node-a', id: 'node-a' }],
+          edges: [
+            {
+              uuid: 'edge-1',
+              from: 'node-a',
+              to: 'node-b',
+              p: { mean: 0.6, forecast: { mean: 0.1 } }, // origin edge forecast baseline
+            },
+            {
+              uuid: 'edge-2',
+              from: 'node-a',
+              to: 'node-c',
+              p: { mean: 0.2, forecast: { mean: 0.7 } }, // sibling forecast baseline
+            },
+            {
+              uuid: 'edge-3',
+              from: 'node-a',
+              to: 'node-d',
+              p: { mean: 0.2, forecast: { mean: 0.2 } }, // sibling forecast baseline
+            },
+          ],
+        };
+
+        // Rebalance siblings given origin mean=0.6 → siblings should sum to 0.4
+        const result = updateManager.rebalanceEdgeProbabilities(graph, 'edge-1', false);
+
+        // Means rebalanced (edge-2 and edge-3 remain proportional 0.2:0.2 → equal split)
+        expect(result.edges[1].p.mean).toBeCloseTo(0.2, 6);
+        expect(result.edges[2].p.mean).toBeCloseTo(0.2, 6);
+
+        // Forecasts must be unchanged
+        expect(result.edges[0].p.forecast.mean).toBeCloseTo(0.1, 10);
+        expect(result.edges[1].p.forecast.mean).toBeCloseTo(0.7, 10);
+        expect(result.edges[2].p.forecast.mean).toBeCloseTo(0.2, 10);
+      });
+
       it('should respect override flags', () => {
         const graph = {
           nodes: [

@@ -170,6 +170,35 @@ describe('fetchRefetchPolicy', () => {
       expect(decision.type).toBe('partial');
       expect(decision.matureCutoff).toBe(ukDate(8, referenceDate));
     });
+
+    it('should suppress immature refetch when slice was fetched very recently (cooldown)', () => {
+      const existingSlice: ParameterValue = {
+        mean: 0.5,
+        n: 10,
+        k: 5,
+        dates: [ukDate(1, referenceDate), ukDate(0, referenceDate)],
+        n_daily: [10, 10],
+        k_daily: [5, 5],
+        sliceDSL: 'window(-60d:)',
+        data_source: {
+          type: 'api',
+          retrieved_at: new Date(referenceDate.getTime() - 5 * 60 * 1000).toISOString(), // 5 minutes ago
+        },
+      };
+
+      const decision = shouldRefetch({
+        existingSlice,
+        latencyConfig: { maturity_days: 7 },
+        requestedWindow: { start: ukDate(14, referenceDate), end: ukDate(0, referenceDate) },
+        isCohortQuery: false,
+        referenceDate,
+      });
+
+      expect(decision.type).toBe('gaps_only');
+      expect(decision.reason).toBe('recent_fetch_cooldown');
+      expect(decision.cooldownApplied).toBe(true);
+      expect(decision.wouldRefetchWindow).toBeDefined();
+    });
   });
   
   describe('shouldRefetch - Cohort mode', () => {
@@ -206,6 +235,29 @@ describe('fetchRefetchPolicy', () => {
       expect(decision.type).toBe('replace_slice');
       expect(decision.hasImmatureCohorts).toBe(true);
       expect(decision.reason).toBe('immature_cohorts');
+    });
+
+    it('should suppress replace_slice when cohort slice was fetched very recently (cooldown)', () => {
+      const recentImmatureSlice: ParameterValue = {
+        ...existingCohortSlice,
+        data_source: {
+          type: 'api',
+          retrieved_at: new Date(referenceDate.getTime() - 2 * 60 * 1000).toISOString(), // 2 minutes ago
+        },
+      };
+
+      const decision = shouldRefetch({
+        existingSlice: recentImmatureSlice,
+        latencyConfig: { maturity_days: 7 },
+        requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(0, referenceDate) },
+        isCohortQuery: true,
+        referenceDate,
+      });
+
+      expect(decision.type).toBe('gaps_only');
+      expect(decision.reason).toBe('recent_fetch_cooldown');
+      expect(decision.cooldownApplied).toBe(true);
+      expect(decision.hasImmatureCohorts).toBe(true);
     });
     
     it('should return use_cache when all cohorts are mature', () => {

@@ -792,13 +792,22 @@ export function calculateIncrementalFetch(
   // Otherwise we'd incorrectly report "data available" for dates outside the cached range.
   if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
     try {
-      const sliceValues = isolateSlice(paramFileData.values, targetSlice);
+      // IMPORTANT: Keep cohort-mode and window-mode caches isolated.
+      // If the file contains both a window() entry and a cohort() entry for the same slice family,
+      // cache cutting must only consider values matching the requested mode.
+      const targetIsCohort = typeof targetSlice === 'string' && targetSlice.includes('cohort(');
+      const targetIsWindow = typeof targetSlice === 'string' && targetSlice.includes('window(');
+      const modeFilteredValues = isolateSlice(paramFileData.values, targetSlice).filter(v => {
+        if (targetIsCohort) return isCohortModeValue(v);
+        if (targetIsWindow) return !isCohortModeValue(v);
+        return true; // no explicit mode in targetSlice (fallback behaviour)
+      });
       
       // Check if any slice has aggregate data AND fully covers the requested window.
       // IMPORTANT: we require the slice window to CONTAIN the requested window, not
       // just overlap. Otherwise we'd incorrectly declare "fully cached" when only
       // a tail fragment (e.g. last 7 days) is available.
-      const hasAggregateDataWithCoverage = sliceValues.some(v => {
+      const hasAggregateDataWithCoverage = modeFilteredValues.some(v => {
         // Must have aggregate values
         const hasAggregate = v.mean !== undefined && v.mean !== null && 
           (v.n !== undefined || (v as any).evidence?.n !== undefined);
@@ -806,8 +815,8 @@ export function calculateIncrementalFetch(
         
         // Must have date coverage that fully contains requested window
         // Check window_from/window_to or cohort_from/cohort_to
-        const sliceStart = v.window_from || v.cohort_from;
-        const sliceEnd = v.window_to || v.cohort_to;
+        const sliceStart = isCohortModeValue(v) ? v.cohort_from : v.window_from;
+        const sliceEnd = isCohortModeValue(v) ? v.cohort_to : v.window_to;
         
         if (!sliceStart || !sliceEnd) {
           // No aggregate window bounds – fall back to daily coverage check.
@@ -834,7 +843,7 @@ export function calculateIncrementalFetch(
       if (hasAggregateDataWithCoverage) {
         console.log(`[calculateIncrementalFetch] FAST PATH: Found aggregate data with coverage for slice`, {
           targetSlice,
-          matchingSlicesCount: sliceValues.length,
+          matchingSlicesCount: modeFilteredValues.length,
         });
         // Data available - no fetch needed
         return {
@@ -860,6 +869,14 @@ export function calculateIncrementalFetch(
   
   // If bustCache is true, skip checking existing dates
   if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
+    const targetIsCohort = typeof targetSlice === 'string' && targetSlice.includes('cohort(');
+    const targetIsWindow = typeof targetSlice === 'string' && targetSlice.includes('window(');
+    const modeMatchesTarget = (v: ParameterValue): boolean => {
+      if (targetIsCohort) return isCohortModeValue(v);
+      if (targetIsWindow) return !isCohortModeValue(v);
+      return true;
+    };
+
     // Check for contextAny: need to verify ALL component slices have data
     if (hasContextAny(targetSlice)) {
       const parsed = parseConstraints(targetSlice);
@@ -873,6 +890,7 @@ export function calculateIncrementalFetch(
         const sliceDates = new Set<string>();
         // Filter values matching this specific slice
         const sliceValues = paramFileData.values.filter(v => {
+          if (!modeMatchesTarget(v)) return false;
           const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
           return valueSlice === sliceId;
         });
@@ -912,14 +930,17 @@ export function calculateIncrementalFetch(
       // Check if query has no context but file has ONLY contexted data (no uncontexted)
       // In that case, we need MECE aggregation across all contexted slices
       const normalizedTarget = extractSliceDimensions(targetSlice);
-      const hasContextedData = paramFileData.values.some(v => v.sliceDSL && v.sliceDSL !== '');
-      const hasUncontextedData = paramFileData.values.some(v => !v.sliceDSL || v.sliceDSL === '');
+      // IMPORTANT: "contexted" here means "has non-empty slice dimensions" (e.g. `.context(...)`),
+      // not merely "has a non-empty sliceDSL". Window/cohort functions are not "dimensions".
+      const hasContextedData = paramFileData.values.some(v => extractSliceDimensions(v.sliceDSL ?? '') !== '');
+      const hasUncontextedData = paramFileData.values.some(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
       
       if (normalizedTarget === '' && hasContextedData && !hasUncontextedData) {
         // Query has no context, but file has contexted data
         // Extract all unique slices from the file and check ALL have data (MECE aggregation)
         const uniqueSlices = new Set<string>();
         for (const value of paramFileData.values) {
+          if (!modeMatchesTarget(value)) continue;
           const sliceDSL = extractSliceDimensions(value.sliceDSL ?? '');
           if (sliceDSL) uniqueSlices.add(sliceDSL);
         }
@@ -932,6 +953,7 @@ export function calculateIncrementalFetch(
         for (const sliceId of expandedSlices) {
           const sliceDates = new Set<string>();
           const sliceValues = paramFileData.values.filter(v => {
+            if (!modeMatchesTarget(v)) return false;
             const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
             return valueSlice === sliceId;
           });
@@ -975,7 +997,7 @@ export function calculateIncrementalFetch(
         });
       } else {
         // CRITICAL: Isolate to target slice first
-        const sliceValues = isolateSlice(paramFileData.values, targetSlice);
+        const sliceValues = isolateSlice(paramFileData.values, targetSlice).filter(modeMatchesTarget);
         
         for (const value of sliceValues) {
           // Extract dates from this value entry
@@ -1518,8 +1540,10 @@ export function parameterValueToCohortData(
     median_lag_days,
     mean_lag_days,
     anchor_median_lag_days,
+    anchor_mean_lag_days,
   } = value as ParameterValue & {
     anchor_median_lag_days?: number[];
+    anchor_mean_lag_days?: number[];
   };
 
   if (!dates || !n_daily || !k_daily) {
@@ -1546,6 +1570,7 @@ export function parameterValueToCohortData(
       median_lag_days: median_lag_days?.[i],
       mean_lag_days: mean_lag_days?.[i],
       anchor_median_lag_days: anchor_median_lag_days?.[i],
+      anchor_mean_lag_days: anchor_mean_lag_days?.[i],
     });
   }
 
