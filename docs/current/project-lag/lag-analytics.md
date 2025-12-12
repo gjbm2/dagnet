@@ -83,9 +83,33 @@ The runner then applies these rules:
   - Both evidence and forecast values are present per row, with blended `p.mean` and completeness used where needed.
   - Display adaptors can choose to show F/E side by side or emphasise blended values, depending on view type.
 
-This ensures the analytics layer mirrors the mental model of the canvas: some scenarios are “what will probably happen” (F), some show “what has actually happened so far” (E), and some show both.
+This ensures the analytics layer mirrors the mental model of the canvas: some scenarios are "what will probably happen" (F), some show "what has actually happened so far" (E), and some show both.
 
-*** YES, BUT I THINK THE MODEL YOU'RE PROPOSING MAY BE SEENS TO IMPLY THAT THE 'MEANING' OF E.G. P.MEAN FOR AN ANALYSIS CHANGES. THAT WOULD BE RISKY. A GIVEN ANALYSIS TYPE MAY NOT HAVE A USE FOR P.FORECAST, BUT IF P.FORECAST IS AVAILABLE, IT SHOULD BE PROVIDED, AND THE ANALYSIS CAN CHOOSE WHAT TO DO WITH IT. THE _MEANING_ OF EACH TERM I THINK IS INVARIATE. ***
+#### 1.4 Invariant semantics principle
+
+**Critical design constraint:** The _meaning_ of each LAG term is invariant regardless of F/E mode. The runner must:
+
+- **Always provide all available data**: If `p.forecast.mean`, `p.evidence.mean`, and `p.mean` (blended) are all available on an edge, they should all be surfaced in the analysis output. The runner does not suppress fields based on visibility mode.
+- **Let the UI adaptor decide emphasis**: The F/E mode is metadata attached to each scenario in the output. Display adaptors use this to decide which values to emphasise or style differently, but they still have access to all underlying data.
+- **Never change what a field means**: `p.forecast.mean` always means the forecast probability; `p.evidence.mean` always means the observed rate. These definitions do not vary by mode.
+
+In practice, the data row for a scenario might contain:
+
+```
+{
+  scenario_id: "current",
+  visibility_mode: "f+e",          // metadata for UI
+  probability: 0.72,               // blended p.mean (always present)
+  forecast_mean: 0.75,             // p.forecast.mean (if available)
+  evidence_mean: 0.68,             // p.evidence.mean (if available)
+  evidence_n: 1200,                // observed sample size
+  evidence_k: 816,                 // observed conversions
+  completeness: 0.85,              // LAG maturity metric
+  ...
+}
+```
+
+The adaptor can then choose to highlight `forecast_mean` when `visibility_mode == 'f'`, or show both side by side when `visibility_mode == 'f+e'`, but the underlying data is always the same.
 
 ---
 
@@ -101,9 +125,16 @@ When the user clicks a **single node X** and opens analytics:
     - Prefer a single, simple path if multiple exist; where ambiguity remains, choose a deterministic “primary path” (e.g. the one with highest forecast traffic `p.n`, or a consistent topological tie‑break).
   - Build a default **funnel analysis** over this path, using the views described in §3–§5.
 
-This gives a natural default: “from where these users first appear (A) to the point I have clicked (X)”.
+This gives a natural default: "from where these users first appear (A) to the point I have clicked (X)".
 
-*** EXISTING LOGIC SORT OF DOES THIS ALREADY (SHOWS "to(switch-success)" SAY IF I CLICK THAT NODE ONLY). QUESTION IS WHETHER WE SHOULD 'AUTO-INJECT' A 'FROM(ANCHOR_NODE_ID)' INTO THE QUERY DSL? HAVE TO IMPACT EXISTING ANALYSIS ***
+**Implementation note – compatibility with existing behaviour:**
+
+The existing logic already generates a DSL like `to(switch-success)` when clicking a single absorbing node. For anchor-aware analysis, we have two options:
+
+1. **Explicit injection**: Auto-inject `from(anchor_node_id)` into the DSL, e.g. `from(entry).to(switch-success)`. This makes the anchor explicit and visible to the user.
+2. **Implicit anchor in metadata**: Keep the DSL as `to(switch-success)` but include `anchor_node_id` in the analysis metadata. The runner interprets this when computing LAG metrics.
+
+**Recommendation:** Prefer option 2 for backwards compatibility. The DSL remains unchanged, but runners that need anchor context can read it from metadata. This avoids breaking existing analyses while enabling LAG-aware views to use anchor information when available.
 
 #### 2.2 Multi‑node selection: explicit funnel bounds
 
@@ -120,7 +151,11 @@ In all cases the auto‑builder:
 - Delegates the actual path‑finding and anchor semantics to existing graph/LAG services.
 - Produces a **single, well‑defined path** object (list of edges/nodes in order), which all three analytics views then consume.
 
-*** THIS ALREADY HAPPENS, AND IS VISIBLE TO THE USER IN THE FORM OF THE 'QUERY DSL'. THIS DOESN'T CHANGE -- IT'S STILL THE QUERY DSL THAT IS SUPPLIED TO ANALYSIS SO THAT IT'S INSPECTABLE AND CLEAR TO THE USER WHAT PATH IS BEING GIVEN TO THE ENGINE ***
+**The query DSL remains the authoritative input.** The user sees and can edit the DSL (e.g. `from(entry).to(success).visited(step1)`), which is exactly what gets supplied to the analysis runner. This transparency is preserved:
+
+- The DSL is inspectable and editable in the analytics panel.
+- The runner parses the DSL to determine from/to/visited constraints.
+- Any additional context (anchor metadata, visibility modes) is passed alongside the DSL, not embedded in it.
 
 #### 2.3 Integrating DSL and retrieval
 
