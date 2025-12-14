@@ -164,6 +164,11 @@ which then cascades to missing keys in the param pack (because `GraphParamExtrac
    - **Problem:** cohort selections are often immature; `anchor_*` lag arrays may be sparse/noisy, but we still need an A→X delay adjustment to avoid overstating downstream completeness.
    - **Principle:** completeness is analytically derived; the question is how we infer the upstream delay used for the effective-age adjustment.
    - **Prior anchor delay (`m0`)**: derive an A→X prior median delay from upstream baseline `window()` lag summaries (distribution-aware; uses median+mean where available). This is the stable “baseline” source.
+   - **Optional tail safety (revised proposal):** to reduce the risk of systematically optimistic upstream priors when one or more upstream edges have fat/long tails (and early evidence underestimates that tail), we may optionally apply a *tail constraint* using upstream `path_t95` horizons:
+     - Use the upstream horizon-to-X implied by the immediately upstream edges’ `path_t95` values (under the active scenario/paths).
+     - Use the percentile defined by `LATENCY_PATH_T95_PERCENTILE` (from the single stats constants file, `graph-editor/src/constants/statisticalConstants.ts`) as the meaning of that horizon (do not hard-code 0.95/0.99 in the maths).
+     - If enabled, inflate the prior distribution’s spread only as needed so that its \(p\)-quantile is not more optimistic than that upstream horizon.
+     - This behaviour must be guarded by a single stats constant toggle (enabled/disabled) so it can be tested and tuned (see `ENABLE_ANCHOR_PRIOR_TAIL_CONSTRAINT_FROM_PATH_T95` in the same constants file).
    - **Observed anchor delay (`m̂`)**: compute a cohort-window observed median delay from cohort-slice `anchor_median_lag_days[]` when available (population-weighted over cohorts in the user’s selected window).
    - **Weight (`w`)**: compute a simple confidence weight \(w \in [0,1]\) that increases with:
      - cohort coverage (fraction of cohorts in-range with valid `anchor_median_lag_days[]`), and
@@ -307,14 +312,98 @@ This plan intentionally avoids deepening reliance on `maturity_days`, since it i
 ## 8. Open questions (for explicit sign-off)
 
 1. (Deferred) “HAS completed” vs “completed by window end” toggle (tracked in `/TODO.md`).
-2. Exact definition of “baseline window slice” when multiple window slices exist:
-   - prefer most recent by retrieved_at, or
-   - merged window slice semantics (single canonical baseline), or
-   - another documented rule.
-3. Cohort-mode fallback policy when anchor lag evidence is missing:
+2. Cohort-mode fallback policy when anchor lag evidence is missing:
    - preferred: derive upstream A→X delay prior from baseline-window lag summaries of upstream edges (median+mean → distribution proxy),
    - confirm the soft-transition weight inputs (coverage + effective population) and the single tuning constant (if any),
    - how to signal low confidence / “prior-heavy” completeness (diagnostics/logging),
    - how this interacts with `t95/path_t95` overrides in Phase 2 (horizons remain bounding/planning primitives; completeness meaning does not change).
+
+**Resolved (no sign-off required): baseline window slice selection**
+
+The baseline window slice selection rule is already implemented and should be treated as policy, not a new design decision:
+
+- Match the same context/case dimensions as the target slice.
+- Prefer the most recent window baseline by `data_source.retrieved_at`, falling back to `window_to`.
+
+This behaviour is implemented in `graph-editor/src/services/dataOperationsService.ts` and should be preserved.
+
+---
+
+## 9. Detailed implementation plan (Phase 1 — Semantics + regressions)
+
+This section is a concrete “what to change where” plan for Phase 1. It intentionally avoids schema migrations and focuses on wiring, semantics, and regression repair.
+
+### 9.1 Constants (Phase 1: reference existing; Phase 2: consolidate)
+
+- **Files**
+  - `graph-editor/src/constants/latency.ts`
+  - `graph-editor/src/constants/statisticalConstants.ts`
+
+- **Required changes (Phase 1)**
+  - Add a single **enabled/disabled** boolean flag for the optional anchor-prior tail safety behaviour in the stats constants (location to be finalised under Phase 2 consolidation).
+  - Ensure all code paths that interpret `path_t95` as a percentile horizon consult `LATENCY_PATH_T95_PERCENTILE` (do not hard-code 0.95/0.99).
+  - Keep any consolidation (“single constants file”) as Phase 2 work (see `t95-fix-implementation-plan.md`).
+
+### 9.2 Window evidence and completeness (window mode must not consult cohort slices)
+
+- **Files**
+  - `graph-editor/src/services/windowAggregationService.ts`
+  - `graph-editor/src/services/statisticalEnhancementService.ts`
+  - `graph-editor/src/services/fetchDataService.ts`
+
+- **Required changes**
+  - Ensure window-mode evidence is computed strictly from window-slice daily arrays for the selected query window, using the “HAS completed (as-of now)” semantics.
+  - Ensure window-mode completeness uses only local X→Y lag and X-entry cohort ages (no A→X adjustment).
+  - Ensure the LAG/topo pass in window mode does not accidentally route through cohort-shaped aggregation logic.
+
+### 9.3 Cohort evidence and cohort completeness (A-anchored)
+
+- **Files**
+  - `graph-editor/src/services/windowAggregationService.ts` (cohort aggregation helpers)
+  - `graph-editor/src/services/statisticalEnhancementService.ts` (topo/LAG pass)
+
+- **Required changes**
+  - Ensure cohort-mode evidence is computed from cohort slices (A-entry cohorts) for the selected range, using “HAS completed (as-of now)” semantics.
+  - Implement the **soft transition** for anchor delay used in cohort-mode completeness:
+    - Prior A→X delay from baseline-window-derived upstream priors (median+mean, distribution-aware).
+    - Observed A→X delay from cohort-slice `anchor_median_lag_days[]` where present.
+    - Weight \(w\) based on coverage + effective population (single tuning constant to be agreed).
+    - Optional tail safety (if enabled): use upstream `path_t95` horizons at `LATENCY_PATH_T95_PERCENTILE` to avoid overly optimistic tails in the prior.
+
+### 9.4 Forecast baseline attachment (dual-slice correctness)
+
+- **Files**
+  - `graph-editor/src/services/dataOperationsService.ts`
+
+- **Required changes**
+  - Preserve the baseline-window selection policy (match dims; most recent by retrieved_at/window_to).
+  - Ensure forecast scalar attachment is invariant to the narrow selection and does not drift with query windows.
+
+### 9.5 Scenario-visible fields propagation (regression repair)
+
+- **Files**
+  - `graph-editor/src/services/dataOperationsService.ts` (evidence/stdev computed where evidence exists)
+  - `graph-editor/src/services/UpdateManager.ts` (apply onto edges)
+  - `graph-editor/src/services/GraphParamExtractor.ts` (export to param packs)
+  - `graph-editor/src/services/ParamPackDSLService.ts` (key formatting)
+
+- **Required changes**
+  - Ensure `p.evidence.mean` / `p.evidence.stdev` are present when evidence exists (and absent for rebalanced/model-only edges).
+  - Ensure `p.stdev` is consistently present in the edge and therefore in the param pack (when defined by the model).
+
+### 9.6 Tests (must cover non-exact windows and regression cases)
+
+- **Files**
+  - `graph-editor/src/services/__tests__/dataOperationsService.test.ts`
+  - `graph-editor/src/services/__tests__/sampleFileQueryFlow.e2e.test.ts`
+  - (If needed) `graph-editor/src/services/__tests__/fetchDataService.test.ts`
+  - (If needed) `graph-editor/src/services/__tests__/windowCohortSemantics.integration.test.ts`
+
+- **Required scenarios**
+  - Window exact slice, narrow inside slice, and super-window (coverage gaps treated as gaps, not zeros).
+  - Cohort exact slice and narrow sub-range.
+  - Contexted window and cohort.
+  - Rebalanced/model-only edges: evidence absent; scenario-visible keys still stable.
+  - Param pack includes: `p.mean`, `p.stdev`, `p.evidence.*`, `p.forecast.*`, and latency fields (`p.latency.median_lag_days`, `p.latency.t95`, `p.latency.completeness`).
 
 
