@@ -1,16 +1,21 @@
 # TODO
 
-- may need to careful with long run path_t95 being overly aggressive -- we need cohorts to run ~45 days or so.
 - Some dodgy tests
+- may need to careful with long run path_t95 being overly aggressive -- we need cohorts to run ~45 days or so.
+
 - Add basic graphing for analysis??
 - Check fetch logic properly -- some odd behaviour
 - +Contexts should show all if none pinned
-- we really have to re-factor the 2x god files...
 - querydsl isn't reading from graph on refresh -- is resetting to last 7 days.
 - on F5, we're trying to fetch before files have loaded and failing. Need a guard to hold back fetch until after files are available
+- we really have to re-factor the 2x god files...
 
 - Confidence band rendering in LAG view needs checking & improving (design and polish; semantics now centralised but visuals may lag)
-- Not auto-updating analaytics when scenarios are showing
+
+## LAG semantics (deferred requirement)
+
+- Add an explicit toggle for **“HAS completed”** (as-of now; allow conversions after `window.end` / `cohort.end`) vs **“completed by window end”** semantics.
+  - This is deferred because it complicates Phase 1 semantics/regression repair, and it may not be trivial to derive “events occurred within the window” from the current Amplitude return shapes without additional query structure.
 
 
 ## Major components

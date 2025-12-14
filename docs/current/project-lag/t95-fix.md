@@ -16,6 +16,38 @@ This document specifies a simpler and more traceable model:
 - If the user overrides a value, downstream logic uses the override (no mixing of derived + manual).
 - A global default is used for first fetches when neither derived values nor overrides exist.
 
+## Relationship to Window/Cohort LAG Semantics
+
+This proposal is part of a broader, conceptually integrated effort:
+
+1. **Phase 1:** Correct and stabilise `window()` vs `cohort()` semantics per the canonical spec (`graph-editor/public/docs/lag-statistics-reference.md`), including:
+   - baseline `window()` vs query `window(start:end)` separation,
+   - evidence/forecast sourcing,
+   - completeness semantics,
+   - and defensible blending into `p.mean`.
+2. **Phase 2 (this document):** Migrate horizon primitives away from `maturity_days` and towards **parameter-level, overridable** `t95` and `path_t95`, to improve:
+   - horizon stability for heterogeneous edges (bounding/planning and external conversion windows),
+   - traceability of horizons,
+   - and user control when automated derivation is systematically wrong.
+
+This document does not re-specify the LAG maths; it focuses on making the horizon primitives stable and inspectable.
+
+### Baseline vs query windows (terminology alignment)
+
+This proposal assumes (and should remain consistent with) the semantics work:
+
+- **Baseline `window()`** (whole/pinned, typically ~90 days): the stable source of:
+  - `p.forecast.*` baselines, and
+  - lag-shape priors (`median` + `mean`) for distribution fitting.
+- **Query `window(start:end)`**: the user-selected X-anchored cohorts used for:
+  - `p.evidence.*` for the current view, and
+  - window-mode completeness.
+- **Query `cohort(anchor,start:end)`**: the user-selected A-anchored cohorts used for:
+  - cohort-mode evidence, and
+  - cohort-mode completeness (with upstream delay adjustment).
+
+`t95/path_t95` are horizon primitives that support retrieval bounding and planning across these modes; they do not redefine these query semantics.
+
 ## Scope
 
 This proposal covers:
@@ -62,6 +94,17 @@ The `*_overridden` flags do not introduce an “effective value” abstraction. 
 
 This produces a simple rule for readers: if the field exists, it is authoritative. There is no blending between manual and derived values.
 
+### Explicit separation: horizon primitives vs completeness
+
+To avoid conceptual confusion:
+
+- `t95` and `path_t95` are **horizon primitives** used for:
+  - retrieval bounding / “how far back to fetch”,
+  - conversion window construction for external APIs,
+  - and stable horizon behaviour on long/heterogeneous edges.
+- Completeness is still computed from lag CDF evaluation over cohort ages (and is mode-dependent as per the canonical spec).
+  `path_t95` is not a substitute for upstream median delay; we do not invert percentiles into medians.
+
 ## Data model changes
 
 ### New/standardised fields (parameter-level)
@@ -77,7 +120,7 @@ The following fields are treated as parameter-level fields (persisted in the par
 
 Latency enablement must be explicit, independent of numeric horizons, and consistent across the stack. We will implement this as a **single-pass migration** (no phased approach):
 
-- Introduce a new boolean field (name TBD; e.g. `latency_edge`) that indicates whether an edge is latency-tracked.
+- Introduce a new boolean field `latency_edge` that indicates whether an edge is latency-tracked.
 - Treat `t95` and `path_t95` as the only numeric latency horizons (each with an `*_overridden` companion).
 - Perform a repo-wide audit of **every** usage of `maturity_days` and replace it with one of:
   - `latency_edge` (for enablement checks),
@@ -91,6 +134,17 @@ After the migration, `maturity_days` should no longer be used as an enablement m
 ### Derived `t95`
 
 Derived `t95` continues to be computed from cohort evidence via the existing fitting logic and quality gates.
+
+Important context:
+
+- Baseline `window()` slices are expected to be wide (typically ~90 days) and provide stable lag-shape summaries (`median` + `mean`) for many edges.
+- Cohort selections (especially “last week”) are often immature; empirical cohort lag signal may be sparse.
+- `t95` should therefore be treated as the *canonical horizon* once introduced, so the system can remain stable even when empirical lag data is weak.
+
+Additional clarity:
+
+- Because baseline windows are wide, `t95` derivation should prioritise stability and tail safety over responsiveness to very narrow/immature cohort selections.
+- User overrides exist precisely for the “heterogeneous long tail” scenario where automated derivation is systematically wrong.
 
 Write-back policy:
 
@@ -109,11 +163,16 @@ Write-back policy:
 - If `path_t95_overridden` is true, do not overwrite `path_t95`.
 - Else, write the derived `path_t95`.
 
+Clarification:
+
+- `path_t95` is primarily for retrieval bounding and cohort-vs-window targeting.
+- It is not used as a proxy for upstream median delay in completeness calculations.
+
 ### Default injection (first enablement)
 
 We must avoid ad-hoc fallback chains across the codebase. To achieve that, when a user enables latency on an edge (`latency_edge = true`), the system must ensure a conservative default exists immediately:
 
-- If `t95_overridden` is false and `t95` is missing or invalid, set `t95` to a global conservative default (e.g. 30 days).
+- If `t95_overridden` is false and `t95` is missing or invalid, set `t95` to the global conservative default of 30 days.
 - `path_t95` will then be computed from the graph using the existing `path_t95` accumulation logic over per-edge `t95` values. This means that before the first fetch, `path_t95` is derived from defaults (and becomes more accurate after data-driven derivation writes improved values).
 
 After this default injection, downstream consumers should read `t95` and `path_t95` directly without local fallbacks.
