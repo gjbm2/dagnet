@@ -1,7 +1,7 @@
 # DagNet DSL: Parameter Addressing Guide
 
-**Version:** 2.0  
-**Last Updated:** November 2025
+**Version:** 2.1  
+**Last Updated:** December 2025
 
 ---
 
@@ -12,6 +12,7 @@ DagNet uses a simple DSL (Domain-Specific Language) to refer to parameters on yo
 - **Scenario overlays** (YAML/JSON)
 - **Google Sheets** parameter tables
 - **Parameter files**
+- **Cohort windows** for time-based analysis
 
 ---
 
@@ -34,6 +35,12 @@ e.checkout-to-purchase.visited(promo).p.mean: 0.72
 n.promo-gate.case(promo-experiment:treatment).weight: 0.6
 ```
 *"Set the treatment variant weight to 60% on the promo-gate case node"*
+
+### Setting a cohort window (New in 1.0)
+```
+cohort(1-Dec-25:7-Dec-25)
+```
+*"Analyse users who entered the funnel between 1st and 7th December 2025"*
 
 ---
 
@@ -376,6 +383,71 @@ n.checkout-gate.case(checkout-redesign:simplified).weight: 0.5
 
 ---
 
+## Cohort Windows (New in 1.0)
+
+Cohort windows let you analyse data for users who entered the funnel during a specific date range.
+
+### Basic Syntax
+
+```
+cohort(start-date:end-date)
+```
+
+Dates use the `d-MMM-yy` format (e.g., `1-Dec-25`, `15-Jan-26`).
+
+### Examples
+
+**Last week's cohort:**
+```
+cohort(2-Dec-25:8-Dec-25)
+```
+*Analyses users who entered between 2nd and 8th December 2025*
+
+**Single day:**
+```
+cohort(5-Dec-25:5-Dec-25)
+```
+*Analyses users who entered on 5th December only*
+
+### Combining with Other DSL Elements
+
+**Cohort + Context:**
+```
+cohort(1-Dec-25:7-Dec-25).context(channel:organic)
+```
+*Organic users who entered during the first week of December*
+
+**In Edge Queries:**
+```
+from(homepage).to(checkout).cohort(1-Dec-25:7-Dec-25)
+```
+*Homepage→Checkout conversion for December cohort*
+
+### How Cohort Aggregation Works
+
+When you set a cohort window:
+1. Daily n/k data is retrieved for each day in the window
+2. Values are summed: total n = Σ(daily n), total k = Σ(daily k)
+3. Mean probability is recalculated: p = k ÷ n
+4. Evidence fields are populated with the window dates
+
+### Evidence Fields
+
+After cohort aggregation, edges contain:
+- `p.evidence.n` — Total users in cohort
+- `p.evidence.k` — Users who converted
+- `p.evidence.window_from` — Cohort start date
+- `p.evidence.window_to` — Cohort end date
+- `p.evidence.retrieved_at` — When data was fetched
+
+### Tips
+
+- **Exclude very recent dates**: Users need time to convert; include a buffer
+- **Use consistent window sizes**: Makes comparison between periods meaningful
+- **Check n values**: Smaller cohorts have higher variance in probability estimates
+
+---
+
 ## Validation & Errors
 
 ### Valid References
@@ -383,7 +455,8 @@ n.checkout-gate.case(checkout-redesign:simplified).weight: 0.5
 ✅ `e.checkout-to-purchase.p.mean`  
 ✅ `e.from(cart).to(checkout).p.mean`  
 ✅ `e.edge-id.visited(promo).p.mean`  
-✅ `n.case-node.case(exp:control).weight`
+✅ `n.case-node.case(exp:control).weight`  
+✅ `cohort(1-Dec-25:7-Dec-25)`
 
 ### Common Mistakes
 
