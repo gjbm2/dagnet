@@ -1,6 +1,6 @@
 # DagNet Keyboard Shortcuts
 
-**Version 1.0.0-alpha**
+**Version 1.0**
 
 ## Global Shortcuts
 

@@ -715,6 +715,7 @@ For Google Sheets:
 
 ---
 
-**Version History:**u
+**Version History:**
+- **2.1** (December 2025): Added cohort windows and LAG-related DSL
 - **2.0** (November 2025): Simplified user guide format, correct conditional probability syntax
 - **1.0** (November 2025): Initial release
