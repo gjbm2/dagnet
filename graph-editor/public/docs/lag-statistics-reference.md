@@ -279,7 +279,7 @@ NOTE (14-Dec-25): We distinguish two “window” concepts:
 │   ───────────────                                                                   │
 │                                                                                     │
 │   IF empirical_quality_ok:                                                          │
-│       t95 = logNormalInverseCDF(0.95, μ, σ)                                         │
+│       t95 = logNormalInverseCDF(LATENCY_T95_PERCENTILE, μ, σ)                       │
 │                                                                                     │
 │   ELSE:                                                                             │
 │       t95 = maturity_days     ← fallback to configured value                        │
@@ -288,6 +288,13 @@ NOTE (14-Dec-25): We distinguish two “window” concepts:
 ```
 
 NOTE (14-Dec-25): `maturity_days` is a legacy fallback and is being deprecated in favour of explicit horizon primitives (`t95`, `path_t95`) with override semantics (see `docs/current/project-lag/t95-fix.md`).
+
+NOTE (14-Dec-25): Percentiles must be treated as **configuration**, not hard-coded:
+
+- `LATENCY_T95_PERCENTILE` defines the meaning of `t95` (edge-local horizon).
+- `LATENCY_PATH_T95_PERCENTILE` defines the meaning of `path_t95` (path horizon).
+
+These constants are part of the statistical constants set and should be referenced consistently by all implementations and docs.
 
 ---
 
@@ -329,6 +336,9 @@ NOTE (14-Dec-25): `maturity_days` is a legacy fallback and is being deprecated i
 │   │      We use a simple soft transition from prior to observed:                │   │
 │   │        - Prior median m0: derived from upstream baseline-window lag          │   │
 │   │          summaries (distribution-aware).                                     │   │
+│   │        - Optional tail safety: if enabled, use upstream path_t95 horizons    │   │
+│   │          (interpreted at LATENCY_PATH_T95_PERCENTILE) to prevent the prior   │   │
+│   │          from being systematically optimistic in the tails on fat-tail paths.│  │
 │   │        - Observed median m̂: population-weighted median from                  │   │
 │   │          anchor_median_lag_days[] within the selected cohort window.         │   │
 │   │        - Weight w ∈ [0,1]: increases with cohort coverage and effective      │   │

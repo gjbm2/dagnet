@@ -197,8 +197,7 @@ Notes:
   - **`graph-editor/src/services/dataOperationsService.ts`**: constructs/threads the cohort object which contains `maturity_days` (via `queryPayload.cohort` passthrough).
   - **`graph-editor/src/lib/das/types.ts`**: defines the cohort payload field `maturity_days` (write surface at the DAS boundary).
 - **Reads (production)**
-  - **`graph-editor/src/constants/latency.ts`**: documents/defines latency/refetch constants and semantics that reference `maturity_days`.
-  - **`graph-editor/src/constants/statisticalConstants.ts`**: documents/defines LAG constants that reference `maturity_days` usage patterns.
+  - **`graph-editor/src/constants/statisticalConstants.ts`**: single source of truth for all LAG/statistical constants (percentiles, quality gates, horizon buffers, refetch cooldowns, etc.). This file currently contains some of these; Phase 2 will consolidate all remaining ones into it.
   - **`graph-editor/src/services/fetchRefetchPolicy.ts`**: enablement and maturity/refetch decisions use `latencyConfig.maturity_days` (and prefer `t95` when present).
   - **`graph-editor/src/services/statisticalEnhancementService.ts`**: used as a fallback contributor in `computePathT95()` when `t95` is absent.
   - **`graph-editor/src/services/cohortRetrievalHorizon.ts`**: used as a fallback horizon input.
@@ -249,7 +248,7 @@ Notes:
   - **`graph-editor/src/services/UpdateManager.ts`**: applies computed `latency.t95` into `edge.p.latency.t95`.
   - **`graph-editor/src/services/dataOperationsService.ts`**: logs/threads `t95` as part of latency config diagnostics during fetch planning and bounded cohort logic.
 - **Reads (production)**
-  - **`graph-editor/src/constants/latency.ts`** and **`graph-editor/src/constants/statisticalConstants.ts`**: constants/docs reference `t95`.
+  - **`graph-editor/src/constants/statisticalConstants.ts`**: single source of truth for all LAG/statistical constants (including the `t95` percentile and any related gates/buffers after consolidation).
   - **`graph-editor/src/services/fetchRefetchPolicy.ts`**: prefers `t95` over `maturity_days` for refetch maturity cutoffs.
   - **`graph-editor/src/services/statisticalEnhancementService.ts`**: used as a component for `path_t95` accumulation and for downstream path calculations.
   - **`graph-editor/src/services/cohortRetrievalHorizon.ts`**: used as a fallback horizon input when `path_t95` is absent.
@@ -292,7 +291,7 @@ Notes:
   - **`graph-editor/src/services/UpdateManager.ts`**: applies computed `latency.path_t95` into `edge.p.latency.path_t95`.
   - **`graph-editor/src/services/dataOperationsService.ts`**: may select between “moment-matched estimate” and “graph.path_t95” for bounded cohort windows (diagnostics include both).
 - **Reads (production)**
-  - **`graph-editor/src/constants/latency.ts`** and **`graph-editor/src/constants/statisticalConstants.ts`**: constants/docs reference `path_t95`.
+  - **`graph-editor/src/constants/statisticalConstants.ts`**: single source of truth for all LAG/statistical constants (including the `path_t95` percentile after consolidation).
   - **`graph-editor/src/lib/das/buildDslFromEdge.ts`**: uses `edge.p.latency.path_t95` as the primary input to cohort conversion windows (Amplitude `cs`).
   - **`graph-editor/src/services/windowFetchPlannerService.ts`**: reads `edge.p.latency.path_t95` or computes it on demand for bounded cohort planning.
   - **`graph-editor/src/services/cohortRetrievalHorizon.ts`**: uses `path_t95` as the primary horizon input for bounding.
