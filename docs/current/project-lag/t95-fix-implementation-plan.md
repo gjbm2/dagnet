@@ -131,7 +131,7 @@ Establish single source of truth for the default t95 value.
 
 ### 1.1 Define Default Constant
 
-**File:** `graph-editor/src/constants/latency.ts`
+**File:** `graph-editor/src/constants/statisticalConstants.ts` (single source of truth for stats constants)
 
 - Add `DEFAULT_T95_DAYS = 30` constant
 - Document its purpose (conservative default for first enablement)
@@ -362,11 +362,22 @@ Update and add tests for new behaviour.
 ### 8.3 Constants Documentation
 
 **Files:**
-- `graph-editor/src/constants/latency.ts`
-- `graph-editor/src/constants/statisticalConstants.ts`
+- `graph-editor/src/constants/statisticalConstants.ts` (single source of truth)
 
 - Update comments to reflect new field usage
 - Remove `maturity_days` references
+
+### 8.5 Consolidate statistical constants (single file)
+
+All statistical constants used by LAG (percentiles, quality gates, refetch cooldowns, horizon buffers, etc.) should live in **one** file:
+
+- `graph-editor/src/constants/statisticalConstants.ts`
+
+This phase includes:
+
+- Moving any LAG-related constants currently defined elsewhere (e.g. `constants/latency.ts`) into `statisticalConstants.ts`.
+- Updating imports across services/tests to reference the single constants file.
+- Deleting the redundant constants module(s) once no longer referenced.
 
 ### 8.4 Schema Cleanup (Optional)
 
