@@ -26,15 +26,18 @@ This document is the canonical reference for LAG statistics and convolution logi
                   ▼                 ▼                 ▼                 ▼                 ▼
 
             NON-LATENCY       NON-LATENCY       1st LATENCY       2nd LATENCY       3rd LATENCY
-            (no maturity)     (no maturity)     maturity_days>0   maturity_days>0   maturity_days>0
+            (no maturity)     (no maturity)     latency-tracked   latency-tracked   latency-tracked
             lag = 0           lag = 0           median ~2d        median ~8d        median ~6d
 
 
       KEY:
       ─────
-      • Non-latency edges: maturity_days = 0 or undefined → effectively instantaneous
-      • Latency edges: maturity_days > 0 → has lag distribution, requires cohort tracking
+      • Non-latency edges: no lag distribution (effectively instantaneous)
+      • Latency edges: has lag distribution, requires cohort tracking
       • Anchor (A): furthest upstream START node, defines cohort entry dates
+
+      NOTE (14-Dec-25): The implementation is migrating away from `maturity_days` as the latency enablement flag.
+      Conceptually, “latency-tracked” is an explicit property of an edge; the exact schema field is an implementation detail.
 ```
 
 ---
@@ -222,13 +225,18 @@ This document is the canonical reference for LAG statistics and convolution logi
 │   └─────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                     │
 │   ┌─────────────────────────────────────────────────────────────────────────────┐   │
-│   │  WINDOW SLICE  (window(start:end))   ── MATURE DATA FOR FORECAST BASELINE   │   │
+│   │  WINDOW SLICE  (baseline window)   ── FORECAST + LAG-PRIOR BASELINE         │   │
 │   ├─────────────────────────────────────────────────────────────────────────────┤   │
 │   │   n, k, mean (from mature periods)  ──▶  p.forecast.mean                    │   │
 │   └─────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+NOTE (14-Dec-25): We distinguish two “window” concepts:
+
+- **Baseline window**: the pinned/merged whole-window slice (typically ~90 days) stored in the param file, used for `p.forecast` and lag-shape priors.
+- **Query window** (`window(start:end)` in the DSL): the user-selected X-entry cohorts whose evidence/completeness are computed by aggregating within the available window-slice daily arrays (it is not necessarily stored as its own slice).
 
 ---
 
@@ -279,6 +287,8 @@ This document is the canonical reference for LAG statistics and convolution logi
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+NOTE (14-Dec-25): `maturity_days` is a legacy fallback and is being deprecated in favour of explicit horizon primitives (`t95`, `path_t95`) with override semantics (see `docs/current/project-lag/t95-fix.md`).
+
 ---
 
 ## 4. Effective Age Calculation (Per Cohort)
@@ -310,18 +320,22 @@ This document is the canonical reference for LAG statistics and convolution logi
 │   ┌─────────────────────────────────────────────────────────────────────────────┐   │
 │   │  CASE 2: Downstream latency edge (X→Y, Y→Z, ...)                            │   │
 │   │                                                                             │   │
-│   │      effective_age[d] = max(0, anchor_age[d] - anchor_median_lag[d])        │   │
+│   │      effective_age[d] = max(0, anchor_age[d] - anchor_median_lag_eff)       │   │
 │   │                                                                             │   │
 │   │      WHERE:                                                                 │   │
-│   │        anchor_median_lag[d] = per-cohort A→(source of this edge) median     │   │
-│   │                               from anchor_median_lag_days[] array           │   │
+│   │        anchor_median_lag_eff is the effective A→(source) median delay used  │   │
+│   │        for cohort-mode completeness adjustment.                             │   │
 │   │                                                                             │   │
-│   │      IF anchor_median_lag_days[] not available:                             │   │
-│   │        anchor_median_lag = anchor_latency.median_lag_days (slice summary)   │   │
+│   │      We use a simple soft transition from prior to observed:                │   │
+│   │        - Prior median m0: derived from upstream baseline-window lag          │   │
+│   │          summaries (distribution-aware).                                     │   │
+│   │        - Observed median m̂: population-weighted median from                  │   │
+│   │          anchor_median_lag_days[] within the selected cohort window.         │   │
+│   │        - Weight w ∈ [0,1]: increases with cohort coverage and effective      │   │
+│   │          population.                                                        │   │
+│   │        - Effective delay: m_eff = w·m̂ + (1-w)·m0                              │   │
 │   │                                                                             │   │
-│   │      IF no anchor lag data at all:                                          │   │
-│   │        anchor_median_lag = 0 (treat as first edge – conservative)           │   │
-│   │                                                                             │   │
+│   │      If anchor_* arrays are absent, w=0 (prior-only).                        │   │
 │   └─────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
@@ -369,6 +383,12 @@ This document is the canonical reference for LAG statistics and convolution logi
 │                                                                                     │
 │   "What fraction of eventual converters on this edge, for these cohorts,            │
 │    should have converted by now?"                                                   │
+│                                                                                     │
+│   IMPORTANT: This is an “as-of now” view. Conversions that occur after the end of   │
+│   the selected `window(start:end)` / `cohort(start:end)` still count towards the    │
+│   evidence for those cohorts, because we care about what HAS happened so far.       │
+│                                                                                     │
+│   A separate “completed by window end” semantic toggle is a deferred requirement.   │
 │                                                                                     │
 │   • completeness → 0:  Cohorts are too young; most conversions still pending        │
 │   • completeness → 1:  Cohorts are mature; nearly all conversions have occurred     │

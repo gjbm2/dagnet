@@ -905,13 +905,17 @@ class DataOperationsService {
           !!targetSlice &&
           (targetSlice.includes('window(') || targetSlice.includes('cohort(')) &&
           (aggValues[0].sliceDSL === targetSlice || isExactStoredSliceByBounds(aggValues[0]));
-        
-        if (isExactTimeSlice) {
-          // Exact stored time slice (e.g. window(25-Nov-25:1-Dec-25) or
-          // cohort(landing-page,1-Sep-25:30-Nov-25)):
-          // - Use pre-computed mean/stdev from the file
-          // - Still compute evidence/latency/forecast via helper below
-          console.log('[DataOperationsService] Exact time slice match - skipping aggregation and using stored slice stats', {
+
+        // IMPORTANT (design + tests):
+        // - For window() queries, we ALWAYS run aggregation so evidence reflects the requested window
+        //   and so that n/k totals are computed even when header n/k are absent (fixture-style data).
+        // - For cohort() queries, we may skip aggregation on exact match to avoid sample truncation
+        //   (fixtures often include representative daily arrays but authoritative header n/k).
+        const shouldSkipAggregation =
+          desiredAggregationMode === 'cohort' && isExactTimeSlice;
+
+        if (shouldSkipAggregation) {
+          console.log('[DataOperationsService] Exact cohort time slice match - skipping aggregation and using stored slice stats', {
             targetSlice,
           });
         } else {
