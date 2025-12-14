@@ -1,6 +1,6 @@
 # DagNet User Guide
 
-**Version 1.0.0-alpha** | [Changelog](CHANGELOG.md)
+**Version 1.0** | [Changelog](CHANGELOG.md)
 
 ## Getting Started
 
@@ -79,6 +79,12 @@ Hover over any edge to see a tooltip with:
 - Window dates (when data was collected)
 - Last retrieval timestamp
 
+For LAG-enabled edges, tooltips also show:
+- **Median lag**: Typical time to convert (e.g., "~5.2 days")
+- **Completeness**: Percentage of expected conversions observed
+- **Evidence vs Forecast**: Breakdown of observed vs projected conversions
+- **Maturity status**: Green/amber/red indicator of cohort maturity
+
 ## What-If Analysis
 
 ### Setting Overrides
@@ -96,6 +102,45 @@ Hover over any edge to see a tooltip with:
 - **Enable Conditionals**: Turn on conditional probability features
 - **Set Conditions**: Define when different probabilities apply
 - **Test Scenarios**: Use What-If to test different conditional states
+
+## Latency-Aware Graphs (LAG) — New in 1.0
+
+### Understanding Latency
+
+Traditional conversion funnels treat edges as instantaneous: users either convert or they don't. But in reality, **conversion takes time**. A user who signed up today might not purchase for another 3 weeks.
+
+**LAG** (Latency-Aware Graphs) models this timing. Each edge can have:
+- **Median lag**: The typical time to convert (e.g., 5 days)
+- **Maturity days**: How long to wait before considering a cohort "complete" (e.g., 30 days)
+
+### Evidence vs Forecast
+
+With LAG enabled, edge probabilities split into two components:
+
+| Metric | Meaning |
+|--------|---------|
+| **Evidence** | What we've *observed* — users who have already converted |
+| **Forecast** | What we *expect* — projected conversions based on the lag model |
+
+When a cohort is immature (recent entry date, not enough time has passed), the evidence is incomplete. LAG uses the historical lag distribution to forecast how many more will convert.
+
+### Reading Edge Display
+
+On the canvas, LAG-enabled edges show:
+- **Probability bar**: A horizontal bar showing conversion rate
+  - **Solid portion**: Evidence (observed conversions)
+  - **Faded/striped portion**: Forecast (projected additional conversions)
+- **Completeness indicator**: Shows what percentage of eventual conversions have occurred
+- **Median lag**: Displayed as "~5d" meaning typical conversion time is 5 days
+
+### Maturity Indicators
+
+Edge tooltips show maturity status:
+- **Green**: Cohort is mature (completeness > 95%)
+- **Amber**: Cohort is maturing (completeness 50-95%)
+- **Red**: Cohort is immature (completeness < 50%)
+
+Immature cohorts have higher uncertainty in their final conversion rates.
 
 ## Cohort Windows (New in 1.0)
 
@@ -134,6 +179,51 @@ Data is automatically aggregated from daily breakdowns:
 - **Exclude Recent Days**: Very recent cohorts may have incomplete conversions
 - **Consistent Windows**: Use the same window size when comparing periods
 - **Check Evidence**: Larger n values give more reliable probability estimates
+
+## Analytics Panel
+
+### Opening Analytics
+Click the **Analytics** button in the sidebar (bar chart icon) or use the keyboard shortcut to open the Analytics panel.
+
+### Query DSL
+The Analytics panel shows the current query as a DSL expression. You can:
+- **View the auto-generated query**: Based on your node selection
+- **Edit the query**: Click to modify the DSL directly
+- **Override mode**: Toggle to manually control the query
+
+### Available Analyses
+
+| Analysis | Description |
+|----------|-------------|
+| **Reach Probability** | Probability of reaching selected node(s) from the anchor |
+| **Conversion Funnel** | Step-by-step breakdown of conversion through a path |
+| **Path Comparison** | Compare conversion rates across different paths |
+
+### Multi-Scenario Analysis
+The Analytics panel respects scenario visibility:
+- Only **visible scenarios** are included in analysis
+- Each scenario can have a different **visibility mode** (F+E, F only, E only)
+- Results show per-scenario values with appropriate labels
+
+### Visibility Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| **F+E** | Evidence + Forecast blended | Best overall estimate |
+| **F only** | Forecast probabilities | Long-term baseline |
+| **E only** | Evidence probabilities | What's actually happened |
+| **Hidden** | Excluded from analysis | Temporarily hide a scenario |
+
+Toggle visibility modes using the eye icons in the Scenarios panel.
+
+### Interpreting Results
+
+Analysis results include:
+- **Probability**: Conversion rate for each scenario
+- **Probability label**: Shows which basis was used (Evidence/Forecast/Probability)
+- **Confidence**: Based on sample size (n) and completeness
+
+When scenarios have different visibility modes, the probability label will differ per scenario.
 
 ## File Management
 
@@ -192,9 +282,36 @@ Data is automatically aggregated from daily breakdowns:
 - **Context Schemas**: Create reusable context definitions
 - **Case Schemas**: Design experiment case structures
 
+### Data Connections
+
+DagNet can fetch live data from external sources:
+
+**Amplitude** — Funnel analytics
+- Connect edges to Amplitude funnels
+- Automatic n/k/p retrieval with daily breakdowns
+- LAG-aware: fetches median lag times for latency modelling
+- Native support for `visited()` and `exclude()` filters
+
+**Google Sheets** — Parameter data
+- Read scalar values or parameter packs from spreadsheets
+- Right-click cell range → Copy link → Paste into connection settings
+- Supports both single-cell and multi-row parameter tables
+
+**Statsig** — Experiment configuration
+- Fetch gate/experiment variant allocations
+- Auto-updates case node weights from production rules
+- Treatment/control weights sync from Statsig Console API
+
+### Setting Up Data Connections
+
+1. **Configure Credentials**: `File > Credentials` to add API keys
+2. **Attach Connection**: Right-click edge/node → Attach parameter → Select connection
+3. **Fetch Data**: Right-click → Get from Source, or use the refresh button
+
 ### Integration
-- **Google Sheets**: Export data to spreadsheets for analysis
-- **Statsig**: Integrate with Statsig for experiment management
+- **Google Sheets**: Read parameters from spreadsheets
+- **Statsig**: Fetch experiment variant allocations
+- **Amplitude**: Retrieve funnel metrics with latency data
 - **API Access**: Use the API for programmatic access
 
 ### Automation
