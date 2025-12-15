@@ -184,7 +184,7 @@ Contexted data and MECE aggregation influence **which slices** count towards cov
 
 To avoid confusion, the following **do not** affect the coverage decision:
 
-- Whether the data is **mature** with respect to `t95` or `maturity_days`.
+- Whether the data is **mature** with respect to `t95` or `legacy maturity field`.
   - Maturity is a **quality** and **refetch policy** concern, not a coverage concern.
   - Immature but present data still means “we fetched this date”.
 - Whether `n_daily` or `k_daily` is zero or non-zero on a given day.

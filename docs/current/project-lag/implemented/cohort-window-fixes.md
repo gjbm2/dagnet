@@ -89,7 +89,7 @@
   - For `window()` queries:
     - The forecast baseline can come from:
       - The canonical window slice used as a baseline (for example, the pinned DSL window for that edge).
-      - Or, when required by the design, an implicit baseline window derived from `maturity_days`.
+      - Or, when required by the design, an implicit baseline window derived from `legacy maturity field`.
     - The aggregation for forecast should use the rules in the LAG design (recent history, mature days, etc.), independent of the evidence window used in the current query.
   - Implementation detail: the helper that injects forecast into the aggregated value should look up the best baseline window slice in the file and copy its `forecast` scalar, rather than recomputing it from the current evidence window.
 

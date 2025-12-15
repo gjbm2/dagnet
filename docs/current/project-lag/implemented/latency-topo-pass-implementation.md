@@ -38,8 +38,8 @@ Behaviour:
    - If no param values or no latency config, skip this edge.
    - Call `aggregateCohortData(paramValues, queryDate)` to get cohorts.
    - Call `aggregateLatencyStats(cohorts)` to get aggregate median/mean lag.
-   - Read `maturityDays` from `edge.p.latency.maturity_days`.
-   - Call `computeEdgeLatencyStats(cohorts, medianLag, meanLag, maturityDays, pathT95ToSource)`.
+   - Read `legacy maturity threshold` from `edge.p.latency.legacy maturity field`.
+   - Call `computeEdgeLatencyStats(cohorts, medianLag, meanLag, legacy maturity threshold, pathT95ToSource)`.
    - Write results to edge: `p.latency.t95`, `p.latency.completeness`, `p.latency.median_lag_days`, `p.latency.mean_lag_days`.
    - Compute `edgePathT95 = pathT95ToSource + edge.p.latency.t95`.
    - Write `edge.p.latency.path_t95 = edgePathT95`.
@@ -113,7 +113,7 @@ No change to `computeAndApplyInboundN` itself.
 Location: around lines 1311-1365.
 
 Currently this code:
-1. Checks if edge has `maturity_days > 0`.
+1. Checks if edge has `legacy maturity field > 0`.
 2. Builds cohorts from time series.
 3. Calls `computeEdgeLatencyStats`.
 4. Writes results to latency fields.

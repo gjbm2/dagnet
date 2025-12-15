@@ -66,7 +66,7 @@ Before describing the target design, this section summarises the current impleme
   - Delegates coverage classification to `fetchDataService.getItemsNeedingFetch()` / `getItemsNeedingFetch()` so that its `needs_fetch` view matches execution.
   - Uses `shouldRefetch` and the current graph edge latency config to classify covered items as stale vs stable, and produces:
     - `autoAggregationItems`, `fetchPlanItems`, `staleCandidates`, `unfetchableGaps`.
-  - Does **not yet** use `path_t95`; all maturity decisions are edge‑local (`t95`/`maturity_days`), and cohort retrieval horizons are still implicitly “full slice” rather than horizon‑bounded.
+  - Does **not yet** use `path_t95`; all maturity decisions are edge‑local (`t95`/`legacy maturity field`), and cohort retrieval horizons are still implicitly “full slice” rather than horizon‑bounded.
 
 - **Path `t95` computation:**
   - TypeScript helpers for `computePathT95` / `applyPathT95ToGraph` exist in `statisticalEnhancementService.ts`.
@@ -96,7 +96,7 @@ The phases below describe how to move from this mixed state (legacy + planner be
 - Re‑state explicitly in the docs that:
   - `t95` is the primary scalar maturity horizon for an individual edge and is **persisted** on the graph.
   - `path_t95` is the cumulative maturity horizon from the anchor to a downstream edge, computed per scenario and **never persisted**; it is always recomputed cheaply from persisted `t95` and the current scenario topology.
-  - Retrieval staleness tests for cohorts should use a **freshly computed** `path_t95` where available, falling back to edge `t95` or `maturity_days`.
+  - Retrieval staleness tests for cohorts should use a **freshly computed** `path_t95` where available, falling back to edge `t95` or `legacy maturity field`.
 - Add a concise subsection summarising the intended relationship between:
   - Query DSL windows (`window()` and `cohort()` clauses).
   - Retrieval horizons derived from `t95` / `path_t95`.
@@ -293,7 +293,7 @@ In addition, for clarity, the helper must:
 Design the helper and integration to cope with:
 
 - Missing or zero `t95` / `path_t95`:
-  - Fall back to `maturity_days` or a conservative default, as per design.
+  - Fall back to `legacy maturity field` or a conservative default, as per design.
 - Very large `t95` values:
   - Allow retrieval windows to remain long when the lag statistics justify it.
 - Cohort DSLs that are already shorter than the horizon:
@@ -395,7 +395,7 @@ Ensure `useFetchData`:
   - Ensure the bounded retrieval window still covers all cohorts that are expected to contribute materially.
 - Non‑latency vs latency edges on the same path:
   - Construct a path `a→b→c→d` with:
-    - Upstream edge with `maturity_days = 0` (non‑latency).
+    - Upstream edge with `legacy maturity field = 0` (non‑latency).
     - Middle edge with a moderate `t95` (for example, around 10 days).
     - Downstream edge with a shorter `t95`, so that `path_t95` grows along the path.
   - Pre‑populate cohort data so that:
@@ -417,7 +417,7 @@ Ensure `useFetchData`:
 - Graphs with mixed latency configurations along a path (for example, non‑latency `a→b`, latency `b→c`, shorter‑latency `c→d`):
   - Verify that the planner produces **per‑edge** cohort retrieval windows: non‑latency edges refetch only the strictly missing cohorts, while latency edges bound their refetch windows by their own `path_t95`, even for the same global `cohort()` DSL.
 - Scenarios where `t95` is undefined or zero for some edges:
-  - Verify that the helper falls back to `maturity_days` or a conservative default and still produces sensible, per‑edge cohort windows without ever expanding the window beyond the user’s query.
+  - Verify that the helper falls back to `legacy maturity field` or a conservative default and still produces sensible, per‑edge cohort windows without ever expanding the window beyond the user’s query.
 - Cases where retrieval timestamps vary between edges:
   - Verify that edges with very recent retrievals treat cohorts near the horizon as “stable”, while edges with older retrievals treat the same cohorts as “covered but stale” and appear as refresh candidates in the planner result.
 
@@ -463,7 +463,7 @@ The following points require explicit resolution before or during implementation
 - **Decision:** Reuse the existing pre‑fetch funnel staleness predicate as the single source of truth.
   - As of this plan, that predicate treats a covered slice as **stale** if `days_since_retrieval > 1` **and** the slice's cohort/window end date is within `t95` (or `path_t95` for cohorts) of today.
   - Cohorts and windows use the same rule, substituting `path_t95` for cohorts and edge-level `t95` for windows. The canonical definition of the inequality lives in the pre‑fetch funnel design; the planner and horizon helper call into that shared logic rather than redefining it.
-- **Fallback:** When `t95` is missing or zero, use `maturity_days`; if that is also missing, treat the slice as **stable** (no refresh pressure).
+- **Fallback:** When `t95` is missing or zero, use `legacy maturity field`; if that is also missing, treat the slice as **stable** (no refresh pressure).
 
 ### 9.2 Per-anchor `path_t95` computation
 

@@ -347,7 +347,7 @@ def build_param_file(
     edge_id: str,
     edge_name: str,
     description: str,
-    maturity_days: int = 30,
+    fallback_t95_days: int = 30,
     query_date: str = None,
     anchor_node_id: str = None,
     dsl_query: str = None,
@@ -465,8 +465,8 @@ def build_param_file(
         'name': edge_name,
         'type': 'probability',
         'latency': {
-            'track': True,
-            'maturity_days': maturity_days,
+            'latency_parameter': True,
+            't95': fallback_t95_days,
             # Canonical cohort anchor for multi-step funnels (A in A→X→Y)
             # Mirrored on graph edge as edge.latency.anchor_node_id
             'anchor_node_id': anchor_node_id,
@@ -494,7 +494,7 @@ def main():
     parser.add_argument('--edge-id', default='edge-unnamed', help='Edge ID for param file')
     parser.add_argument('--edge-name', default='Unnamed Edge', help='Edge name')
     parser.add_argument('--description', default='Converted from Amplitude funnel data.', help='Description')
-    parser.add_argument('--maturity-days', type=int, default=30, help='Maturity threshold in days')
+    parser.add_argument('--fallback-t95-days', type=int, default=30, help='Fallback t95 horizon in days')
     parser.add_argument('--query-date', help='Query date (default: today)')
     parser.add_argument('--anchor-node-id', help='Graph node_id for cohort anchor (e.g., household-created)')
     parser.add_argument('--slice-dsl', help='Full DSL label for this slice (e.g., "cohort(-90d:).context(channel:google)")')
@@ -521,7 +521,7 @@ def main():
         edge_id=args.edge_id,
         edge_name=args.edge_name,
         description=args.description,
-        maturity_days=args.maturity_days,
+        fallback_t95_days=args.fallback_t95_days,
         query_date=args.query_date,
         anchor_node_id=args.anchor_node_id,
         dsl_query=args.slice_dsl,

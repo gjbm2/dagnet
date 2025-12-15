@@ -133,7 +133,7 @@ The 1.0 release introduces **Latency-Aware Graphs** — a shift from static snap
 | **Cohort Windows** | Analyse users by *entry date* with `cohort(1-Dec-25:7-Dec-25)` DSL |
 | **Daily Time-Series** | Full `n_daily`, `k_daily` arrays stored per parameter file |
 | **On-the-fly Aggregation** | Select any date range; evidence recalculates instantly |
-| **Latency Tracking** | Model time-to-convert with `maturity_days` configuration |
+| **Latency Tracking** | Model time-to-convert with `legacy maturity field` configuration |
 | **Evidence vs Forecast** | Distinguish observed ($p_{evidence}$) from projected ($p_{\infty}$) |
 
 ### Visual Graph Editor

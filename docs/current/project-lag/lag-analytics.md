@@ -50,7 +50,7 @@ From the core LAG implementation and statistics reference, the analytics layer n
   - `p.n` – forecast population flowing through the edge under the scenario.
 
 - **Latency / maturity metrics**
-  - `p.latency.maturity_days` – configured lag horizon.
+  - `p.latency.legacy maturity field` – configured lag horizon.
   - `p.latency.median_lag_days`, `p.latency.mean_lag_days` – local lag.
   - `p.latency.t95` – 95th percentile lag for the edge.
   - `p.latency.path_t95` – cumulative 95th percentile along active path from anchor (scenario‑specific).

@@ -93,7 +93,7 @@ We want **ONE** conceptual pipeline for edge visualisation, with the following r
        - `mode` – `'e' | 'f' | 'f+e'` (final, after scenario visibility + data availability).
        - **Latency bead policy (by query mode and edge type):**
          - In **window() mode**:
-           - Show latency beads only for edges with local latency configuration (`maturity_days` / `t95` on the edge).
+           - Show latency beads only for edges with local latency configuration (`legacy maturity field` / `t95` on the edge).
            - Suppress beads on non‑latency edges, even if completeness can be inferred from upstream path lag; an instantaneous edge in pure window view should not look like it has its own lag.
          - In **cohort() mode**:
            - For edges with local latency config, show beads with both completeness and median‑lag (existing behaviour).

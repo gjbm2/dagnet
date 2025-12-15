@@ -1544,19 +1544,12 @@ export class UpdateManager {
       },
       
       // LAG: Latency CONFIG fields (graph → file, bidirectional)
-      // latency_parameter: explicit enablement flag (replaces maturity_days > 0)
+      // latency_parameter: explicit enablement flag
       { 
         sourceField: 'p.latency.latency_parameter', 
         targetField: 'latency.latency_parameter',
         overrideFlag: 'p.latency.latency_parameter_overridden',
         condition: (source) => source.p?.latency?.latency_parameter !== undefined && source.p?.id
-      },
-      // maturity_days: DEPRECATED - retained for migration
-      { 
-        sourceField: 'p.latency.maturity_days', 
-        targetField: 'latency.maturity_days',
-        overrideFlag: 'p.latency.maturity_days_overridden',
-        condition: (source) => source.p?.latency?.maturity_days !== undefined && source.p?.id
       },
       { 
         sourceField: 'p.latency.anchor_node_id', 
@@ -1961,18 +1954,11 @@ export class UpdateManager {
       },
       
       // LAG: Latency CONFIG fields (file → graph, bidirectional)
-      // latency_parameter: explicit enablement flag (replaces maturity_days > 0)
+      // latency_parameter: explicit enablement flag
       { 
         sourceField: 'latency.latency_parameter', 
         targetField: 'p.latency.latency_parameter',
         overrideFlag: 'p.latency.latency_parameter_overridden',
-        condition: isProbType
-      },
-      // maturity_days: DEPRECATED - retained for migration
-      { 
-        sourceField: 'latency.maturity_days', 
-        targetField: 'p.latency.maturity_days',
-        overrideFlag: 'p.latency.maturity_days_overridden',
         condition: isProbType
       },
       { 

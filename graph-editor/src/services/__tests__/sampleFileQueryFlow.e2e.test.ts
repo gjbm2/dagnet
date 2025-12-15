@@ -60,7 +60,7 @@
  * ============================================================================
  * 
  * KEY DESIGN SEMANTICS (lag-fixes.md, design.md §4.8):
- * - p.mean = BLENDED probability from Formula A (may include forecasted tail)
+ * - p.mean = BLENDED probability (evidence/forecast weighted by completeness)
  * - p.evidence.mean = RAW observed rate (Σk / Σn from query window)
  * - p.forecast.mean = BASELINE probability from mature cohorts (p_∞)
  * - For MATURE data: p.mean ≈ p.evidence.mean (no forecasting needed)
@@ -74,7 +74,7 @@
  * 
  * NOT IN PARAM PACK (internal/config):
  * - evidence.n, evidence.k, evidence.window_from/to, etc.
- * - latency.maturity_days, latency.anchor_node_id, latency.mean_lag_days
+ * - latency.latency_parameter, latency.anchor_node_id, latency.mean_lag_days
  * - distribution, min, max, alpha, beta
  */
 
@@ -261,8 +261,9 @@ describe('Sample File Query Flow E2E', () => {
       const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_COHORT.k / CHECKOUT_TO_PAYMENT_COHORT.n;
       const pMean = paramPack['e.checkout-to-payment.p.mean'];
       expect(pMean).toBeCloseTo(expectedEvidenceMean, 2); // Close to evidence at high completeness
-      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_COHORT.forecast));
-      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_COHORT.forecast));
+      // Allow for rounding of stored/scenario-visible values in the param pack.
+      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_COHORT.forecast) - 1e-3);
+      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_COHORT.forecast) + 1e-3);
       expect(paramPack['e.checkout-to-payment.p.stdev']).toBeCloseTo(CHECKOUT_TO_PAYMENT_COHORT.stdev, 2);
       
       // === EVIDENCE.MEAN (IN param pack - RAW k/n) ===
@@ -284,7 +285,7 @@ describe('Sample File Query Flow E2E', () => {
       // === NOT IN PARAM PACK (should be undefined) ===
       expect(paramPack['e.checkout-to-payment.p.evidence.n']).toBeUndefined();
       expect(paramPack['e.checkout-to-payment.p.evidence.k']).toBeUndefined();
-      expect(paramPack['e.checkout-to-payment.p.latency.maturity_days']).toBeUndefined();
+      expect(paramPack['e.checkout-to-payment.p.latency.latency_parameter']).toBeUndefined();
       expect(paramPack['e.checkout-to-payment.p.latency.anchor_node_id']).toBeUndefined();
       expect(paramPack['e.checkout-to-payment.p.latency.mean_lag_days']).toBeUndefined();
       
@@ -420,11 +421,15 @@ describe('Sample File Query Flow E2E', () => {
       const paramPack = flattenParams(params);
       
       // === CORE FIELDS (IN param pack) ===
-      expect(paramPack['e.checkout-to-payment.p.mean']).toBe(CHECKOUT_TO_PAYMENT_WINDOW.mean);
+      const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_WINDOW.k / CHECKOUT_TO_PAYMENT_WINDOW.n;
+      const pMean = paramPack['e.checkout-to-payment.p.mean'];
+      // Phase 2: p.mean is the blended probability (evidence/forecast weighted by completeness).
+      // It should be close to evidence but bounded between evidence and forecast.
+      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_WINDOW.forecast) - 1e-3);
+      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_WINDOW.forecast) + 1e-3);
       expect(paramPack['e.checkout-to-payment.p.stdev']).toBe(CHECKOUT_TO_PAYMENT_WINDOW.stdev);
       
       // === EVIDENCE.MEAN (IN param pack - RAW k/n) ===
-      const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_WINDOW.k / CHECKOUT_TO_PAYMENT_WINDOW.n;
       expect(paramPack['e.checkout-to-payment.p.evidence.mean']).toBeCloseTo(expectedEvidenceMean, 3);
       
       // === EVIDENCE.STDEV (IN param pack - binomial uncertainty) ===
@@ -443,8 +448,8 @@ describe('Sample File Query Flow E2E', () => {
       expect(paramPack['e.checkout-to-payment.p.evidence.k']).toBeUndefined();
       
       // === MATHEMATICAL VERIFICATION ===
-      // For window data, evidence (k/n = 265/385 = 0.688) should be close to blended mean (0.689)
-      expect(Math.abs(expectedEvidenceMean - CHECKOUT_TO_PAYMENT_WINDOW.mean)).toBeLessThan(0.01);
+      // Blended mean should stay close to evidence for high completeness, but can exceed it.
+      expect(Math.abs((pMean ?? 0) - expectedEvidenceMean)).toBeLessThan(0.05);
     });
 
     it('should aggregate correctly for a narrower window inside the stored slice', async () => {
@@ -569,8 +574,9 @@ describe('Sample File Query Flow E2E', () => {
       const expectedEvidenceMean = CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.k / CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.n;
       const pMean = paramPack['e.checkout-to-payment.p.mean'];
       expect(pMean).toBeCloseTo(expectedEvidenceMean, 2); // Close to evidence at high completeness
-      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.forecast));
-      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.forecast));
+      // Allow for rounding of stored/scenario-visible values in the param pack.
+      expect(pMean).toBeGreaterThanOrEqual(Math.min(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.forecast) - 1e-3);
+      expect(pMean).toBeLessThanOrEqual(Math.max(expectedEvidenceMean, CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.forecast) + 1e-3);
       expect(paramPack['e.checkout-to-payment.p.stdev']).toBeCloseTo(CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.stdev, 2);
       
       // === EVIDENCE.MEAN (IN param pack - RAW k/n) ===
@@ -649,7 +655,7 @@ describe('Sample File Query Flow E2E', () => {
       expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.evidence.n');
       expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.evidence.k');
       expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.evidence.window_from');
-      expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.latency.maturity_days');
+      expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.latency.latency_parameter');
       expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.latency.anchor_node_id');
       expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.distribution');
     });

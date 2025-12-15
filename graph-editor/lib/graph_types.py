@@ -59,14 +59,9 @@ class LatencyConfig(BaseModel):
     SEMANTICS:
     - latency_parameter == True: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
     - latency_parameter == False or None: Latency tracking DISABLED (standard window() behaviour)
-    
-    NOTE: maturity_days is DEPRECATED for enablement; use latency_parameter instead.
-    maturity_days is retained temporarily for backward compatibility during migration.
     """
     latency_parameter: Optional[bool] = Field(None, description="Explicit enablement flag. True = latency tracking enabled.")
     latency_parameter_overridden: bool = Field(False, description="If true, user manually set latency_parameter")
-    maturity_days: Optional[int] = Field(None, ge=0, description="DEPRECATED: Use latency_parameter. Retained for migration.")
-    maturity_days_overridden: bool = Field(False, description="If true, user manually set maturity_days")
     anchor_node_id: Optional[str] = Field(None, description="Anchor node for cohort queries (furthest upstream START)")
     anchor_node_id_overridden: bool = Field(False, description="If true, user manually set anchor_node_id")
     t95: Optional[float] = Field(None, ge=0, description="95th percentile lag in days (computed from fitted CDF)")
@@ -80,9 +75,8 @@ class LatencyConfig(BaseModel):
 
 class ForecastParams(BaseModel):
     """Forecast probability parameters from mature cohorts."""
-    # NOTE: mean can exceed 1.0 in edge cases when extrapolating from immature cohort data
-    # This is a known artifact of Formula A when completeness is low - the forecast
-    # is still useful as an indicator even if > 1.0 (will be clamped at display time)
+    # NOTE: mean can exceed 1.0 in edge cases when extrapolating from sparse/immature data.
+    # The forecast is still useful as an indicator even if > 1.0 (will be clamped at display time).
     mean: Optional[float] = Field(None, ge=0, description="Forecast mean probability (p_∞)")
     stdev: Optional[float] = Field(None, ge=0, description="Forecast standard deviation")
     # Expected converters: p.mean * p.n - used for propagating population downstream

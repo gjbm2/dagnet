@@ -40,7 +40,7 @@ Pre-requisite cleanup before introducing latency complexity.
 | C1.6 UI Schema | ✅ Done | Added latency to `parameter-ui-schema.json` |
 
 **Summary:**
-- Added `LatencyConfig` interface with `maturity_days`, `anchor_node_id`, `t95`, `median_lag_days`, `completeness`
+- Added `LatencyConfig` interface with `legacy maturity field`, `anchor_node_id`, `t95`, `median_lag_days`, `completeness`
 - Added LAG fields to `ProbabilityParam`: `latency`, `forecast`
 - Updated scenario param packs per design §9.K.1 (removed distribution fields)
 - Added 30+ new fields to parameter schema for cohort/window latency data
@@ -231,7 +231,7 @@ Critical fixes to align implementation with design, implemented via TDD:
    - Updated Amplitude adapter in `connections.yaml`:
      - Detect cohort mode and prepend anchor step (3-step funnel)
      - Use cohort.start/end dates instead of window dates
-     - Add `cs` (conversion window) parameter for maturity_days
+     - Add `cs` (conversion window) parameter for legacy maturity field
      - Extract latency fields: `dayMedianTransTimes`, `dayAvgTransTimes`, histograms
      - Transform to include `median_lag_days`, `mean_lag_days` in time_series
    - Updated `implementation.md` with detailed task breakdown

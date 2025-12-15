@@ -214,7 +214,7 @@ connections:
           // If cohort is provided (from parsed cohort() DSL), we:
           // 1. Prepend anchor node as step 0 (if anchor_event_id provided)
           // 2. Use cohort entry dates (cohort.start/end) instead of event dates
-          // 3. Set conversion window (cs) based on maturity_days
+          // 3. Set conversion window (cs) based on conversion_window_days
           // ═══════════════════════════════════════════════════════════════════════
           let isCohortMode = false;
           let cohortAnchorStepAdded = false;
@@ -387,16 +387,16 @@ connections:
           // Build query parameters for GET request
           // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&i=1&s={...}&cs=...
           // i=1 means daily breakdown (required for time-series)
-          // cs=seconds is conversion window (for cohort mode, set based on maturity_days)
+          // cs=seconds is conversion window (for cohort mode, set based on conversion_window_days)
           const intervalParam = (context && context.mode === 'daily') ? 'i=1' : 'i=1';  // Always daily for now
           
           // Build conversion window parameter (cs) for cohort mode
           // cs is in seconds - tells Amplitude how long to wait for conversions after cohort entry
           let csParam = '';
-          if (isCohortMode && cohort.maturity_days && cohort.maturity_days > 0) {
-            const csSeconds = cohort.maturity_days * 24 * 60 * 60;  // Convert days to seconds
+          if (isCohortMode && cohort.conversion_window_days && cohort.conversion_window_days > 0) {
+            const csSeconds = cohort.conversion_window_days * 24 * 60 * 60;  // Convert days to seconds
             csParam = 'cs=' + csSeconds;
-            console.log('[Amplitude Adapter] COHORT conversion window: ' + cohort.maturity_days + ' days (' + csSeconds + ' seconds)');
+            console.log('[Amplitude Adapter] COHORT conversion window: ' + cohort.conversion_window_days + ' days (' + csSeconds + ' seconds)');
           }
           
           const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');

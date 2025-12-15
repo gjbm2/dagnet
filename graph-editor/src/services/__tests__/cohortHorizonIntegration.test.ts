@@ -24,8 +24,8 @@ describe('cohort horizon integration', () => {
           { id: 'end' },
         ],
         edges: [
-          { id: 'e1', uuid: 'e1', from: 'start', to: 'mid', p: { mean: 0.5, latency: { t95: 15 } } },
-          { id: 'e2', uuid: 'e2', from: 'mid', to: 'end', p: { mean: 0.5, latency: { t95: 10 } } },
+          { id: 'e1', uuid: 'e1', from: 'start', to: 'mid', p: { mean: 0.5, latency: { latency_parameter: true, t95: 15 } } },
+          { id: 'e2', uuid: 'e2', from: 'mid', to: 'end', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
         ],
       };
       
@@ -68,9 +68,9 @@ describe('cohort horizon integration', () => {
           { id: 'C' },
         ],
         edges: [
-          { id: 'e1', from: 'start', to: 'A', p: { mean: 0.5, latency: { t95: 7 } } },
-          { id: 'e2', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 14 } } },
-          { id: 'e3', from: 'B', to: 'C', p: { mean: 0.5, latency: { t95: 21 } } },
+          { id: 'e1', from: 'start', to: 'A', p: { mean: 0.5, latency: { latency_parameter: true, t95: 7 } } },
+          { id: 'e2', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true, t95: 14 } } },
+          { id: 'e3', from: 'B', to: 'C', p: { mean: 0.5, latency: { latency_parameter: true, t95: 21 } } },
         ],
       };
       
@@ -128,8 +128,8 @@ describe('cohort horizon integration', () => {
             p: { 
               mean: 0.5, 
               latency: { 
+                latency_parameter: true,
                 t95: 20, 
-                maturity_days: 14 
               } 
             } 
           },
@@ -157,7 +157,6 @@ describe('cohort horizon integration', () => {
         },
         pathT95: edge?.p?.latency?.path_t95,
         edgeT95: edge?.p?.latency?.t95,
-        maturityDays: edge?.p?.latency?.maturity_days,
         referenceDate,
       });
       
@@ -179,7 +178,7 @@ describe('cohort horizon integration', () => {
           // Non-latency edge (no t95)
           { id: 'ab', from: 'a', to: 'b', p: { mean: 0.8 } },
           // Latency edge
-          { id: 'bc', from: 'b', to: 'c', p: { mean: 0.5, latency: { t95: 14 } } },
+          { id: 'bc', from: 'b', to: 'c', p: { mean: 0.5, latency: { latency_parameter: true, t95: 14 } } },
         ],
       };
       

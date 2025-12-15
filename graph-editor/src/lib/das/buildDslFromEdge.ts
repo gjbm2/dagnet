@@ -69,7 +69,7 @@ export interface QueryPayload {
     start?: string;        // Cohort entry start date (ISO format)
     end?: string;          // Cohort entry end date (ISO format)
     anchor_event_id?: string; // Anchor node's event_id (for 3-step funnel: Anchor → From → To)
-    maturity_days?: number;   // Maturity threshold from edge.p.latency.maturity_days
+    conversion_window_days?: number; // Conversion window (days) used to set provider cs parameter
   };
 }
 
@@ -411,7 +411,7 @@ export async function buildDslFromEdge(
   }
   
   // Add cohort mode if constraints contain cohort clause
-  // Cohort mode is for latency-tracked edges (p.latency.maturity_days > 0)
+  // Cohort mode is for latency-tracked edges (latency_parameter === true)
   if (constraints && constraints.cohort) {
     try {
       console.log('[buildQueryPayload] Input cohort strings:', constraints.cohort);
@@ -442,15 +442,13 @@ export async function buildDslFromEdge(
       
       // Get conversion window for cohort query
       // CRITICAL: Use path_t95 (cumulative latency from anchor) for the Amplitude conversion window,
-      // NOT maturity_days which is for cache staleness only.
       // path_t95 tells us how long to wait for conversions from the anchor event.
       // 
       // Data sufficiency fallback chain:
       // 1. path_t95 from edge (if already computed from previous fetch)
-      // 2. Compute path_t95 on-the-fly from graph (uses t95 → maturity_days → 0 per edge)
+      // 2. Compute path_t95 on-the-fly from graph (uses t95/default per edge)
       // 3. edge-local t95 (if only this edge has data)
-      // 4. edge-local maturity_days (user-configured)
-      // 5. Default 30 days
+      // 4. Default 30 days
       let pathT95 = edge.p?.latency?.path_t95;
       
       // If path_t95 not stored, compute it on-the-fly from the graph
@@ -473,7 +471,7 @@ export async function buildDslFromEdge(
               to: e.to,
               p: e.p ? {
                 latency: e.p.latency ? {
-                  maturity_days: e.p.latency.maturity_days,
+                  latency_parameter: e.p.latency.latency_parameter,
                   t95: e.p.latency.t95,
                   path_t95: e.p.latency.path_t95,
                 } : undefined,
@@ -499,15 +497,13 @@ export async function buildDslFromEdge(
       }
       
       const edgeT95 = edge.p?.latency?.t95;
-      const maturityDays = edge.p?.latency?.maturity_days;
       
-      // Prefer path_t95 > t95 > maturity_days > default 30
-      const conversionWindowDays = Math.ceil(pathT95 ?? edgeT95 ?? maturityDays ?? 30);
+      // Prefer path_t95 > t95 > default 30
+      const conversionWindowDays = Math.ceil(pathT95 ?? edgeT95 ?? 30);
       
       console.log('[buildQueryPayload] Cohort conversion window:', {
         pathT95,
         edgeT95,
-        maturityDays,
         conversionWindowDays
       });
       
@@ -515,7 +511,7 @@ export async function buildDslFromEdge(
         start: cohortStart?.toISOString(),
         end: cohortEnd?.toISOString(),
         anchor_event_id: anchorEventId,
-        maturity_days: conversionWindowDays  // Used as Amplitude's cs (conversion window) parameter
+        conversion_window_days: conversionWindowDays  // Used to set provider conversion window (cs) parameter
       };
       
       console.log('[buildQueryPayload] Added cohort:', queryPayload.cohort);

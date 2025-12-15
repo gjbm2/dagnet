@@ -97,7 +97,7 @@ Per the design’s param‑pack section and your clarified expectations, scenari
 - `p.forecast.mean` and `p.forecast.stdev` as the scenario’s mature baseline probability and uncertainty, corresponding to the outer forecast layer where applicable.
 - `p.latency.completeness`, `p.latency.t95`, and `p.latency.median_lag_days` as the latency‑display scalars needed for beads and lag visualisations.
 
-Param packs must **not** include bulk arrays (`n_daily`, `k_daily`, `median_lag_days[]`, histograms), raw config internals (`maturity_days`, `anchor_node_id`), or raw provenance fields (`window_from`, `window_to`, raw `source` details). Those remain in param files and on the graph edge where needed for diagnostics, not in the scenario editor.
+Param packs must **not** include bulk arrays (`n_daily`, `k_daily`, `median_lag_days[]`, histograms), raw config internals (`legacy maturity field`, `anchor_node_id`), or raw provenance fields (`window_from`, `window_to`, raw `source` details). Those remain in param files and on the graph edge where needed for diagnostics, not in the scenario editor.
 
 
 ### 4. Concrete Fixes (By Responsibility)
@@ -134,7 +134,7 @@ The Update Manager is responsible for moving scalars between param file slices a
 - The mapping that moves `values[latest].mean` into `edge.p.mean` must continue to do so, but with the understanding that `values[].mean` is now the **blended** probability for that slice.
 - The mappings that move `values[latest].n` and `values[latest].k` into `edge.p.evidence.n` and `edge.p.evidence.k` remain valid and must be preserved.
 - If, as an optional extension, we later choose to persist an explicit evidence scalar in the slice (for example, a dedicated evidence mean), the Update Manager would need corresponding mappings into `edge.p.evidence.mean` and `edge.p.evidence.stdev`. For the current proposal, the more important requirement is to ensure that the graph edge is updated directly by the data operations layer after each query, using the enhancement layer’s evidence scalar.
-- Existing mappings for latency config and data fields (`maturity_days`, `anchor_node_id`, `latency.median_lag_days`, `latency.completeness`, `latency.t95`) should be reviewed to ensure they are consistent with the enhanced data flow, but they already broadly match the design’s expectations and do not require fundamental changes for this proposal.
+- Existing mappings for latency config and data fields (`legacy maturity field`, `anchor_node_id`, `latency.median_lag_days`, `latency.completeness`, `latency.t95`) should be reviewed to ensure they are consistent with the enhanced data flow, but they already broadly match the design’s expectations and do not require fundamental changes for this proposal.
 
 
 #### 4.4 Types and Param Pack Extraction

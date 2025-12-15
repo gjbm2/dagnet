@@ -154,9 +154,9 @@ function createParameterFile(paramId: string, config: {
 function createLinearFunnelGraph(options: {
   edgeCount: number;
   latencyEnabled?: boolean[];
-  maturityDays?: number;
+  fallbackT95Days?: number;
 }): Graph {
-  const { edgeCount, latencyEnabled = [], maturityDays = 30 } = options;
+  const { edgeCount, latencyEnabled = [], fallbackT95Days = 30 } = options;
   
   const nodes: any[] = [];
   const edges: any[] = [];
@@ -189,7 +189,8 @@ function createLinearFunnelGraph(options: {
         connection: 'amplitude-prod',
         ...(hasLatency ? {
           latency: {
-            maturity_days: maturityDays,
+            latency_parameter: true,
+            t95: fallbackT95Days,
             anchor_node_id: 'node-A',
           }
         } : {})
@@ -219,13 +220,14 @@ function createLinearFunnelGraph(options: {
  */
 function createDiamondGraph(options: {
   latencyEnabled?: boolean;
-  maturityDays?: number;
+  fallbackT95Days?: number;
 }): Graph {
-  const { latencyEnabled = true, maturityDays = 30 } = options;
+  const { latencyEnabled = true, fallbackT95Days = 30 } = options;
   
   const latencyConfig = latencyEnabled ? {
     latency: {
-      maturity_days: maturityDays,
+      latency_parameter: true,
+      t95: fallbackT95Days,
       anchor_node_id: 'node-A',
     }
   } : {};
@@ -536,7 +538,7 @@ describe('Comprehensive Batch Fetch E2E Tests', () => {
       
       // All edges should still have anchor_node_id after fetch
       for (const edge of currentGraph.edges) {
-        if (edge.p?.latency?.maturity_days) {
+        if (edge.p?.latency?.latency_parameter === true) {
           expect(edge.p.latency.anchor_node_id).toBe('node-A');
         }
       }
@@ -795,7 +797,7 @@ describe('Comprehensive Batch Fetch E2E Tests', () => {
       // With median ~5 days and mean ~6 days, t95 should be computed (not 30)
       // The exact value depends on the log-normal fit, but it should NOT be 30 (the default)
       expect(t95).toBeDefined();
-      expect(t95).not.toBe(30); // 30 is the maturity_days default fallback
+      expect(t95).not.toBe(30); // 30 is the DEFAULT_T95_DAYS fallback
       expect(t95).toBeGreaterThan(0);
       expect(t95).toBeLessThan(30); // With mean/median around 5-6, t95 should be well under 30
       

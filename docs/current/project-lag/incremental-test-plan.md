@@ -56,7 +56,7 @@ This section maps the schematic to the current tests and rates indicative covera
 - `statisticalEnhancementService.test.ts`:
   - Detailed tests for `fitLagDistribution`, including:
     - Valid median with sufficient `k` (empirical fit).
-    - Valid median but low `k` (quality gate fails; fallback to `maturity_days` for t95).
+    - Valid median but low `k` (quality gate fails; fallback to `legacy maturity field` for t95).
     - Missing or invalid median.
     - Mean/median ratio bounds (too low, too high, near-1).
   - Tests for `computeT95` fallback behaviour.

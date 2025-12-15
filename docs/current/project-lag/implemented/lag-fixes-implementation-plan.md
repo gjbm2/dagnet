@@ -80,7 +80,7 @@ Below, “expected behaviour” always means “what the schematic says should h
 - Run the cohort aggregation and latency enhancement with:
   - `queryDate = 1‑Dec‑25`.
   - `cohortWindow` matching the DSL window (for example, 1‑Nov‑25 to 7‑Nov‑25).
-- Inspect the resulting cohort ages and the completeness on a short‑lag edge (for example, median lag around 3 days, maturity_days around 7 days).
+- Inspect the resulting cohort ages and the completeness on a short‑lag edge (for example, median lag around 3 days, legacy maturity field around 7 days).
 
 **Expected behaviour (design):**
 - Cohort ages are **approximately 24–30 days** (1‑Dec minus early‑November).
@@ -143,7 +143,7 @@ Below, “expected behaviour” always means “what the schematic says should h
 - Examine the returned completeness.
 
 **Expected behaviour (design):**
-- With ages much greater than maturity_days, the log‑normal CDF should be essentially saturated.
+- With ages much greater than legacy maturity field, the log‑normal CDF should be essentially saturated.
 - Completeness should be **very close to 1** (for example, at least 0.99).
 - This should hold regardless of the exact evidence mean or long‑run forecast; it is purely a timing property.
 
@@ -283,10 +283,10 @@ After adding new tests, we **expect failures** against the current implementatio
 **Signature change:**
 ```
 // BEFORE
-computeEdgeLatencyStats(cohorts, aggregateMedianLag, aggregateMeanLag, maturityDays, pathT95)
+computeEdgeLatencyStats(cohorts, aggregateMedianLag, aggregateMeanLag, legacy maturity threshold, pathT95)
 
 // AFTER
-computeEdgeLatencyStats(cohorts, aggregateMedianLag, aggregateMeanLag, maturityDays, anchorMedianLag)
+computeEdgeLatencyStats(cohorts, aggregateMedianLag, aggregateMeanLag, legacy maturity threshold, anchorMedianLag)
 ```
 
 ---
@@ -416,7 +416,7 @@ computeEdgeLatencyStats(cohorts, aggregateMedianLag, aggregateMeanLag, maturityD
 
 ### B1. μ fallback when k is low
 
-**Problem:** Schematic says use `μ = ln(maturity_days / 2)` when k is low. Code uses `μ = ln(median_lag)` if median is valid.
+**Problem:** Schematic says use `μ = ln(legacy maturity field / 2)` when k is low. Code uses `μ = ln(median_lag)` if median is valid.
 
 **Resolution:** Update schematic to match code — using available median is more accurate.
 

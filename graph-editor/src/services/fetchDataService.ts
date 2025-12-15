@@ -233,10 +233,7 @@ function computeTargetSliceOverrideForItem(
   if (!edge) return undefined;
 
   const latency = edge?.p?.latency;
-  // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
-  const hasLocalLatency = latency?.latency_parameter === true || 
-                          (latency?.maturity_days ?? 0) > 0 || 
-                          !!latency?.t95;
+  const hasLocalLatency = latency?.latency_parameter === true || !!latency?.t95;
 
   const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
   const computedPathT95 = pathT95Map.get(edgeId);
@@ -789,7 +786,7 @@ export function computeAndApplyPathT95(
       to: e.to,
       p: e.p ? {
         latency: e.p.latency ? {
-          maturity_days: e.p.latency.maturity_days,
+          latency_parameter: e.p.latency.latency_parameter,
           t95: e.p.latency.t95,
           path_t95: e.p.latency.path_t95,
         } : undefined,
@@ -913,7 +910,7 @@ export function computeAndApplyInboundN(
         ? {
             latency: e.p.latency
               ? {
-                  maturity_days: e.p.latency.maturity_days,
+                  latency_parameter: e.p.latency.latency_parameter,
                   t95: e.p.latency.t95,
                   path_t95: e.p.latency.path_t95,
                 }
@@ -1179,17 +1176,13 @@ export async function fetchItems(
       let finalGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
       if (finalGraph) {
         // Check if any fetched items were parameters on latency edges
-        // NOTE: latency_parameter === true is the canonical enablement check
-        //       maturity_days > 0 is deprecated but still supported for migration
         const latencyCheck = effectiveItems.map(item => {
           if (item.type !== 'parameter') return { item: item.name, hasLatency: false, reason: 'not parameter' };
           const edge = finalGraph.edges?.find((e: any) => 
             e.uuid === item.targetId || e.id === item.targetId
           );
           if (!edge) return { item: item.name, hasLatency: false, reason: 'edge not found' };
-          // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
-          const hasLatency = edge?.p?.latency?.latency_parameter === true || 
-                            (edge?.p?.latency?.maturity_days ?? 0) > 0;
+          const hasLatency = edge?.p?.latency?.latency_parameter === true;
           return { 
             item: item.name, 
             hasLatency, 
@@ -1562,7 +1555,7 @@ export async function fetchItems(
         // ═══════════════════════════════════════════════════════════════════
         // Debug: Check if LAG values actually landed on latency-labelled edges
         const latencyEdges = (finalGraph?.edges || []).filter(
-          (e: any) => e.p?.latency && (e.p.latency.latency_parameter || e.p.latency.maturity_days || e.p.latency.t95 || e.p.latency.completeness)
+          (e: any) => e.p?.latency && (e.p.latency.latency_parameter || e.p.latency.t95 || e.p.latency.completeness)
         );
         console.log('[fetchDataService] LAG_DEBUG finalGraph before inbound-n:', {
           edgeCount: finalGraph?.edges?.length,

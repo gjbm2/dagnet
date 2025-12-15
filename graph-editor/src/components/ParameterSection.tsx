@@ -382,7 +382,7 @@ export function ParameterSection({
                 <input
                   type="checkbox"
                   id={`latency-track-${objectId}-${paramSlot}`}
-                  checked={param?.latency?.latency_parameter === true || (param?.latency?.maturity_days ?? 0) > 0}
+                  checked={param?.latency?.latency_parameter === true}
                   onChange={(e) => {
                     const trackLatency = e.target.checked;
                     onUpdate({
@@ -423,7 +423,7 @@ export function ParameterSection({
           </AutomatableField>
           
           {/* t95 and path_t95 fields (only shown when latency tracking is enabled) */}
-          {(param?.latency?.latency_parameter === true || (param?.latency?.maturity_days ?? 0) > 0) && (
+          {(param?.latency?.latency_parameter === true) && (
             <>
               {/* Edge t95 */}
               <AutomatableField
@@ -516,7 +516,7 @@ export function ParameterSection({
           )}
           
           {/* Anchor Node (only shown when latency tracking is enabled) */}
-          {(param?.latency?.latency_parameter === true || (param?.latency?.maturity_days ?? 0) > 0) && (
+          {(param?.latency?.latency_parameter === true) && (
             <AutomatableField
               label=""
               value={param?.latency?.anchor_node_id || ''}

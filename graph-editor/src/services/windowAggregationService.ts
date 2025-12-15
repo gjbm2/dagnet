@@ -1162,7 +1162,7 @@ export interface MergeOptions {
   
   // === LAG: Latency configuration for forecast recomputation (design.md §3.2) ===
   latencyConfig?: {
-    maturity_days?: number;   // Cohorts younger than this are "immature"
+    latency_parameter?: boolean; // Explicit enablement flag
     anchor_node_id?: string;  // Anchor node for cohort queries
     path_t95?: number;        // Cumulative t95 from anchor to this edge's source node
   };

@@ -9,11 +9,11 @@
 
 The following items are **not fully specified** in `design.md` and require design decisions before implementation:
 
-### GAP-1: Default maturity_days Value ✅ RESOLVED
+### GAP-1: Default legacy maturity field Value ✅ RESOLVED
 
 **Issue:** Design uses both 30 and 45 days in different places.
-- §5.0 algorithm example uses `maturity_days: int = 45`
-- §4.3 example uses `maturity_days: 30`
+- §5.0 algorithm example uses `legacy maturity field: int = 45`
+- §4.3 example uses `legacy maturity field: 30`
 
 **Decision needed:** What should the default be? Should it be per-edge or global?
 
@@ -21,7 +21,7 @@ The following items are **not fully specified** in `design.md` and require desig
 
 **Resolution:** 
 - Default: **30 days**
-- Scope: **Per-edge** (stored in `edge.latency.maturity_days`)
+- Scope: **Per-edge** (stored in `edge.latency.legacy maturity field`)
 - Design doc updated: §3.1, §4.3
 
 ---
@@ -112,18 +112,18 @@ The following items are **not fully specified** in `design.md` and require desig
 
 ### GAP-6: Observation Window Extension ✅ RESOLVED
 
-**Issue:** design.md §9.B mentions "observe conversions through cohortEnd + maturityDays" but doesn't specify exact semantics.
+**Issue:** design.md §9.B mentions "observe conversions through cohortEnd + legacy maturity threshold" but doesn't specify exact semantics.
 
 **Decision needed:**
-- For `cohort(1-Nov:7-Nov)` with maturity_days=30, what's the Amplitude API end date?
-- Is it `cohortEnd + maturityDays` or `min(now, cohortEnd + maturityDays)`?
+- For `cohort(1-Nov:7-Nov)` with legacy maturity field=30, what's the Amplitude API end date?
+- Is it `cohortEnd + legacy maturity threshold` or `min(now, cohortEnd + legacy maturity threshold)`?
 - What if user queries recent cohorts that haven't had time to mature?
 
 *** MATURITY_DAYS SHOULD NOT BE PER GRAPH, IT SHOULD BE PER EDGE. WHY DO YOU NEED THIS ADDITIONAL CLARIFICATION -- WHERE SPECFICALLY WILL IT IMPACT SYSTEM DESIGN? ***
 
 **Resolution:**
-- `maturity_days` is **per-edge** (confirmed, already in §3.1)
-- **Amplitude API semantics**: The observation window is implicitly `min(now, cohortEnd + maturity_days)` — Amplitude automatically returns data up to current date
+- `legacy maturity field` is **per-edge** (confirmed, already in §3.1)
+- **Amplitude API semantics**: The observation window is implicitly `min(now, cohortEnd + legacy maturity field)` — Amplitude automatically returns data up to current date
 - **No adapter change needed**: Amplitude's `dayFunnels` returns all available data for the cohort period; maturity classification happens client-side after data returns
 - The question was about whether we need to extend the API query dates — we don't; we just classify cohorts by age post-fetch
 - Design doc: No change needed (§4.3 already covers this)
@@ -170,8 +170,8 @@ edge.p.connection             ↔    connection
 edge.p.connection_string      ↔    connection_string
 edge.latency.track            ↔    latency.track        (NEW)
 edge.latency.track_overridden      latency.track_overridden
-edge.latency.maturity_days    ↔    latency.maturity_days (NEW)
-edge.latency.maturity_days_overridden  latency.maturity_days_overridden
+edge.latency.legacy maturity field    ↔    latency.legacy maturity field (NEW)
+edge.latency.legacy maturity override  latency.legacy maturity override
 ═══════════════════════════════════════════════════════════════════════════
 DATA (per-slice, flow: file→graph)
 ───────────────────────────────────────────────────────────────────────────
@@ -221,7 +221,7 @@ BULK DATA (param file only, NOT on graph)
 | Graph Edge | Param File Top-Level | Override Flag | Scenario | Notes |
 |------------|---------------------|---------------|----------|-------|
 | `edge.latency.track` | `latency.track` | `latency.track_overridden` | ❌ | Retrieval config |
-| `edge.latency.maturity_days` | `latency.maturity_days` | `latency.maturity_days_overridden` | ❌ | Maturity threshold |
+| `edge.latency.legacy maturity field` | `latency.legacy maturity field` | `latency.legacy maturity override` | ❌ | Maturity threshold |
 | `edge.latency.censor_days` | `latency.censor_days` | `latency.censor_days_overridden` | ❌ | Censor threshold |
 | `edge.latency.anchor_node_id` | `latency.anchor_node_id` | `latency.anchor_node_id_overridden` | ❌ | **NEW**: Cohort anchor (MSMDC-computed) |
 | `edge.query` | `query` | `query_overridden` | ❌ | Existing field |
@@ -361,7 +361,7 @@ interface EdgeParamDiff {
 - Location: **Within the Probability param section** of edge properties (not a separate section)
 - Fields to display (as settings):
   - `Calculate Latency` — boolean toggle (maps to `latency.track`)
-  - `Cut-off Time` — string input (e.g., "30d") (maps to `latency.maturity_days`)
+  - `Cut-off Time` — string input (e.g., "30d") (maps to `latency.legacy maturity field`)
 - **Not displayed as stats** — these are configuration settings, not read-only displays
 - Derived values (maturity_coverage, median_lag_days) shown via edge bead and tooltip, not in properties panel
 - Design doc updated: §7.7 (new section)
@@ -439,7 +439,7 @@ These are machine-generated from Amplitude data. Users typically don't edit them
 
 **Decision needed:**
 - What constitutes invalid latency config?
-- Should we validate `maturity_days` is positive?
+- Should we validate `legacy maturity field` is positive?
 - Should we validate `maturity_coverage` is 0-1?
 
 ---
@@ -634,7 +634,7 @@ The design currently favours dual-slice ingestion (§4.6) so that `window()` giv
 
 ### 4. Scenario semantics for derived latency fields
 
-Latency config (`latency.track`, `maturity_days`, `recency_half_life_days`) is graph-level, non-scenario. Derived values (`latency.completeness`, `median_days`) are evidence/model outputs. If we later treat some derived fields as user-writable overrides, they will need the usual `*_overridden` and scenario handling.
+Latency config (`latency.track`, `legacy maturity field`, `recency_half_life_days`) is graph-level, non-scenario. Derived values (`latency.completeness`, `median_days`) are evidence/model outputs. If we later treat some derived fields as user-writable overrides, they will need the usual `*_overridden` and scenario handling.
 
 ### 5. Time-varying behaviour and model drift detection
 
@@ -865,7 +865,7 @@ Overnight batch runner is **out of scope** — pattern is "fetch for all slices"
 |------|---------------|-----------|
 | `p.forecast` | Mature window() data | Slice in param file |
 | `median_lag_days` | `dayMedianTransTimes` from cohort() response | Slice in param file |
-| `completeness` | Cohort ages vs maturity_days | Slice in param file |
+| `completeness` | Cohort ages vs legacy maturity field | Slice in param file |
 | `evidence.n`, `evidence.k` | Raw funnel counts | Slice in param file |
 
 **At query time, compute (not stored):**
@@ -1031,8 +1031,8 @@ k̂_i = k_i + (n_i - k_i) × p.forecast × (1 - F(a_i)) / (1 - p.forecast × F(a
 
 For Phase 0, we can use a simple step function:
 ```
-F(a_i) = 0  if a_i < maturity_days
-F(a_i) = 1  if a_i >= maturity_days
+F(a_i) = 0  if a_i < legacy maturity field
+F(a_i) = 1  if a_i >= legacy maturity field
 ```
 
 This means:
@@ -1041,8 +1041,8 @@ This means:
 
 **Phase 0 formula:**
 ```
-k̂_i = k_i                       if a_i >= maturity_days (mature)
-k̂_i = k_i + (n_i - k_i) × p.forecast    if a_i < maturity_days (immature)
+k̂_i = k_i                       if a_i >= legacy maturity field (mature)
+k̂_i = k_i + (n_i - k_i) × p.forecast    if a_i < legacy maturity field (immature)
 ```
 
 **Then:**
@@ -1087,7 +1087,7 @@ p.mean = Σk̂_i / Σn_i
 8. **Properties Panel UI**: Latency settings within Probability card, under Distribution
 9. **conditional_p**: First-class citizen — identical latency treatment to `p`
 10. **Cost params**: NO latency treatment — just direct inputs
-11. **Override pattern**: `track_overridden`, `maturity_days_overridden` for put/get to file
+11. **Override pattern**: `track_overridden`, `legacy maturity override` for put/get to file
 
 ---
 

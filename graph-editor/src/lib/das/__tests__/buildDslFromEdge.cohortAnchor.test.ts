@@ -60,10 +60,10 @@ function createLatencyEdge(from: string, to: string, anchorNodeId?: string): Gra
     p: {
       mean: 0.5,
       latency: anchorNodeId ? {
-        maturity_days: 30,
+        latency_parameter: true,
         anchor_node_id: anchorNodeId
       } : {
-        maturity_days: 30
+        latency_parameter: true
       }
     }
   } as GraphEdge;
@@ -214,17 +214,17 @@ describe('Cohort Query Payload Structure', () => {
     //   start: cohortStart?.toISOString(),      // Cohort window start
     //   end: cohortEnd?.toISOString(),          // Cohort window end
     //   anchor_event_id: anchorEventId,          // Resolved from anchor node's event_id
-    //   maturity_days: maturityDays             // From edge.p.latency.maturity_days
+    //   conversion_window_days: conversionWindowDays  // Provider conversion window (days)
     // };
     
     const expectedStructure = {
       start: 'ISO date string',
       end: 'ISO date string',
       anchor_event_id: 'string or undefined',
-      maturity_days: 'number or undefined'
+      conversion_window_days: 'number or undefined'
     };
     
-    expect(Object.keys(expectedStructure)).toEqual(['start', 'end', 'anchor_event_id', 'maturity_days']);
+    expect(Object.keys(expectedStructure)).toEqual(['start', 'end', 'anchor_event_id', 'conversion_window_days']);
   });
   
   it('should pass anchor_event_id to Amplitude adapter', () => {
@@ -241,7 +241,7 @@ describe('Cohort Query Payload Structure', () => {
   });
 });
 
-describe('Cohort Conversion Window (maturity_days / path_t95)', () => {
+describe('Cohort Conversion Window (conversion_window_days / path_t95)', () => {
   
   describe('Conversion Window Fallback Chain', () => {
     // The conversion window (cs parameter in Amplitude) determines how long
@@ -252,21 +252,17 @@ describe('Cohort Conversion Window (maturity_days / path_t95)', () => {
     // 1. path_t95 - Cumulative t95 from anchor (from previous fetch)
     // 2. On-the-fly computation using computePathT95 (if graph available)
     // 3. edge-local t95 (if only this edge has data)
-    // 4. edge-local maturity_days (user-configured)
     // 5. Default 30 days
     
     it('should document the 10-day bug scenario', () => {
-      // BUG: For A→X→Y path where each edge has maturity_days=10:
+      // BUG (historical): For A→X→Y path where each edge horizon was treated as 10:
       //   - WRONG: Conversion window = 10 (just edge-local maturity)
       //   - RIGHT: Conversion window = 20 (10 + 10, cumulative from anchor)
       //
-      // The Amplitude cs parameter (seconds) = maturity_days * 86400
+      // The Amplitude cs parameter (seconds) = conversion_window_days * 86400
       //   - WRONG: cs = 864000 (10 days) → misses conversions after day 10
       //   - RIGHT: cs = 1728000 (20 days) → captures conversions up to day 20
       //
-      // Fix: computePathT95 now falls back to maturity_days when t95 is undefined:
-      //   edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.maturity_days ?? 0
-      
       expect(true).toBe(true);
     });
     
@@ -277,7 +273,7 @@ describe('Cohort Conversion Window (maturity_days / path_t95)', () => {
       // 3. Calls computePathT95(graph, activeEdges, anchorNodeId)
       // 4. Looks up this edge's path_t95 in the returned map
       //
-      // computePathT95 uses t95 → maturity_days → 0 fallback per edge,
+      // computePathT95 uses a conservative per-edge fallback when t95 is missing,
       // so even on first fetch it gives a reasonable approximation.
       
       expect(true).toBe(true);
@@ -287,8 +283,7 @@ describe('Cohort Conversion Window (maturity_days / path_t95)', () => {
       // First fetch (no data):
       //   - path_t95: undefined
       //   - t95: undefined
-      //   - maturity_days: 10 (user-configured)
-      //   - Computed path_t95: sum of maturity_days along path (e.g., 20 for 2 edges)
+      //   - Computed path_t95: conservative sum along the active path
       //   - Conversion window: 20 days
       //
       // After first fetch (has data):
@@ -297,7 +292,7 @@ describe('Cohort Conversion Window (maturity_days / path_t95)', () => {
       //   - Conversion window: 14 days (more accurate)
       //
       // This progression ensures:
-      // 1. First fetch is conservative (uses user's maturity_days)
+      // 1. First fetch is conservative (uses defaults)
       // 2. Subsequent fetches are accurate (uses observed t95)
       
       expect(true).toBe(true);
@@ -305,9 +300,9 @@ describe('Cohort Conversion Window (maturity_days / path_t95)', () => {
   });
   
   describe('Amplitude cs Parameter', () => {
-    it('should document how maturity_days becomes cs', () => {
+    it('should document how conversion_window_days becomes cs', () => {
       // In connections.yaml, the Amplitude adapter:
-      //   const csSeconds = (cohort.maturity_days || 30) * 86400;
+      //   const csSeconds = (cohort.conversion_window_days || 30) * 86400;
       //   url += `&cs=${csSeconds}`;
       //
       // cs (conversion segment) = max time in seconds for a user to convert
@@ -317,7 +312,7 @@ describe('Cohort Conversion Window (maturity_days / path_t95)', () => {
       //   - cs applies from Anchor step
       //   - Must account for TOTAL time: A→X latency + X→Y latency
       //
-      // This is why we use path_t95 (cumulative) not edge-local maturity_days.
+      // This is why we use path_t95 (cumulative) not an edge-local value.
       
       expect(true).toBe(true);
     });

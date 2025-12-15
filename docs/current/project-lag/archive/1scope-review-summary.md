@@ -12,7 +12,7 @@ This document provides a granular, line-by-line verification of the Project LAG 
 
 | Design Ref | Requirement | Implementation | Verification Status |
 |------------|-------------|----------------|---------------------|
-| §3.1 | `LatencyConfig` interface with `maturity_days` and `anchor_node_id` | `graph-editor/src/types/index.ts` | ✅ **Verified** in type definition. |
+| §3.1 | `LatencyConfig` interface with `legacy maturity field` and `anchor_node_id` | `graph-editor/src/types/index.ts` | ✅ **Verified** in type definition. |
 | §3.2 | Parameter file schema extensions (cohort arrays, latency block) | `graph-editor/src/services/paramRegistryService.ts` (implied usage) | ✅ **Verified** via data usage in `dataOperationsService.ts`. |
 | §3.3 | Canonical `sliceDSL` with absolute dates | `graph-editor/src/services/dataOperationsService.ts` | ✅ **Verified**: `window` and `cohort` dates resolved to ISO strings before storage. |
 | §3.4 | Date format standardisation (`d-MMM-yy`) | `graph-editor/src/lib/dateFormat.ts` | ✅ **Verified**: Usage of `normalizeToUK` in `dataOperationsService.ts` (L1366). |

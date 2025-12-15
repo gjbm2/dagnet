@@ -6,7 +6,7 @@
  * - LAG (Latency-Aware Graph) functions for conversion forecasting
  * 
  * LAG Architecture (design.md §5):
- *   Per-cohort data → Lag CDF fitting → Formula A → p.mean, completeness
+ *   Per-cohort data → Lag CDF fitting → completeness CDF (t95 constrained) → canonical blend → p.mean
  * 
  * Original Architecture:
  *   RawAggregation → StatisticalEnhancementService → EnhancedAggregation
@@ -20,12 +20,12 @@ import {
   LATENCY_MIN_MEAN_MEDIAN_RATIO,
   LATENCY_MAX_MEAN_MEDIAN_RATIO,
   LATENCY_DEFAULT_SIGMA,
-  LATENCY_EPSILON,
   LATENCY_T95_PERCENTILE,
   LATENCY_PATH_T95_PERCENTILE,
 } from '../constants/latency';
-import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS } from '../constants/statisticalConstants';
+import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
+import { sessionLogService } from './sessionLogService';
 
 // =============================================================================
 // Shared Blend Calculation (Single Source of Truth)
@@ -370,47 +370,7 @@ export interface CohortData {
   anchor_mean_lag_days?: number;
 }
 
-/**
- * Compute p.mean using Formula A (§5.3) with an externally-provided forecast baseline.
- *
- * This is required for short cohort windows where there may be no mature cohorts in-range,
- * but we *do* have a stable forecast baseline from the window() slice.
- *
- * For each cohort:
- * - If age >= maturityDays: k̂ = k
- * - Else:                 k̂ = k + (n - k) * p_forecast
- *
- * Then p.mean = Σk̂ / Σn
- */
-function computeFormulaAMeanFromCohorts(
-  cohorts: CohortData[],
-  forecastMean: number | undefined,
-  maturityDays: number
-): number | undefined {
-  if (forecastMean === undefined || !Number.isFinite(forecastMean)) return undefined;
-  if (!Number.isFinite(maturityDays) || maturityDays <= 0) return undefined;
-
-  let totalN = 0;
-  let totalKHat = 0;
-
-  for (const c of cohorts) {
-    const n = c.n ?? 0;
-    if (n <= 0) continue;
-    const k = c.k ?? 0;
-    const age = c.age ?? 0;
-
-    const kHat = age >= maturityDays ? k : k + (n - k) * forecastMean;
-    totalN += n;
-    totalKHat += kHat;
-  }
-
-  // No arrivals yet: fall back to pure forecast baseline.
-  // This keeps downstream edges sane in early cohorts (design intent: show forecast
-  // even when evidence is empty).
-  if (totalN <= 0) return Math.min(1, Math.max(0, forecastMean));
-  const p = totalKHat / totalN;
-  return Math.min(1, Math.max(0, p));
-}
+// (Phase 2) Tail-substitution mean estimator deleted: p.mean is computed only via the canonical blend (`computeBlendedMean`).
 
 /**
  * Fitted log-normal distribution parameters.
@@ -430,34 +390,6 @@ export interface LagDistributionFit {
 }
 
 /**
- * Result of Formula A application to cohort data.
- * See design.md §5.3 for the derivation.
- */
-export interface FormulaAResult {
-  /** Blended probability (evidence + forecasted tail) */
-  p_mean: number;
-  /** Completeness measure (0-1) - fraction of eventual conversions observed */
-  completeness: number;
-  /** Sum of expected eventual conversions */
-  total_k_hat: number;
-  /** Sum of cohort sizes */
-  total_n: number;
-  /** Asymptotic conversion probability from mature cohorts */
-  p_infinity: number;
-  /** 95th percentile lag (time by which 95% of converters have converted) */
-  t95: number;
-  /** Per-cohort breakdown (for debugging/display) */
-  cohort_details?: Array<{
-    date: string;
-    n: number;
-    k: number;
-    age: number;
-    F_age: number;  // CDF at this age
-    k_hat: number;  // Expected eventual conversions
-  }>;
-}
-
-/**
  * Result of computing edge latency statistics.
  * This is the main output type for latency-enabled edges.
  */
@@ -468,14 +400,20 @@ export interface EdgeLatencyStats {
   t95: number;
   /** Asymptotic conversion probability */
   p_infinity: number;
-  /** Blended probability from Formula A */
-  p_mean: number;
   /** Completeness measure (0-1) */
   completeness: number;
   /** Evidence probability (observed k/n) */
   p_evidence: number;
   /** Whether forecast is available (requires valid fit and p_infinity) */
   forecast_available: boolean;
+  /** CDF parameters actually used for completeness evaluation (may apply t95 tail constraint) */
+  completeness_cdf: {
+    mu: number;
+    sigma: number;
+    sigma_moments: number;
+    sigma_min_from_t95?: number;
+    tail_constraint_applied: boolean;
+  };
 }
 
 // =============================================================================
@@ -758,15 +696,15 @@ export function fitLagDistribution(
  * This is the time by which 95% of eventual converters have converted.
  * 
  * @param fit - Fitted distribution
- * @param maturityDays - Fallback if fit is not valid
+ * @param fallbackT95Days - Fallback t95-days if fit is not valid
  * @returns t95 in days
  */
-export function computeT95(fit: LagDistributionFit, maturityDays: number): number {
+export function computeT95(fit: LagDistributionFit, fallbackT95Days: number): number {
   if (fit.empirical_quality_ok) {
     return logNormalInverseCDF(LATENCY_T95_PERCENTILE, fit.mu, fit.sigma);
   }
-  // Fallback to user-configured maturity days
-  return maturityDays;
+  // Fallback to configured/default t95
+  return fallbackT95Days;
 }
 
 /**
@@ -888,119 +826,8 @@ export function estimatePInfinity(cohorts: CohortData[], t95: number): number | 
 }
 
 // =============================================================================
-// Formula A: Bayesian Forecasting (§5.3)
+// (Phase 2) Tail-substitution mean estimator deleted
 // =============================================================================
-
-/**
- * Apply Formula A to forecast eventual conversions for a single cohort.
- * 
- * k̂_i = k_i + (n_i - k_i) × (p_∞ × S(a_i)) / (1 - p_∞ × F(a_i))
- * 
- * See design.md §5.3
- * 
- * @param cohort - Cohort data (n, k, age)
- * @param pInfinity - Asymptotic conversion probability
- * @param mu - Log-normal μ parameter
- * @param sigma - Log-normal σ parameter
- * @returns Expected eventual conversions for this cohort
- */
-export function applyFormulaA(
-  cohort: CohortData,
-  pInfinity: number,
-  mu: number,
-  sigma: number
-): number {
-  const { n, k, age } = cohort;
-
-  // Edge case: no users in cohort
-  if (n === 0) return 0;
-
-  // Compute F(age) and S(age)
-  const F_age = logNormalCDF(age, mu, sigma);
-  const S_age = 1 - F_age;
-
-  // Mature cohort: all conversions observed
-  if (F_age >= 1 - LATENCY_EPSILON) {
-    return k;
-  }
-
-  // Denominator: 1 - p_∞ × F(a_i)
-  const denominator = 1 - pInfinity * F_age;
-
-  // Guard against division by zero or blow-up
-  if (denominator < LATENCY_EPSILON) {
-    // Fall back to observed k (conservative)
-    return k;
-  }
-
-  // Formula A: k̂_i = k_i + (n_i - k_i) × (p_∞ × S(a_i)) / (1 - p_∞ × F(a_i))
-  const unconverted = n - k;
-  const forecastedTail = unconverted * (pInfinity * S_age) / denominator;
-
-  return k + forecastedTail;
-}
-
-/**
- * Apply Formula A to all cohorts and compute aggregate statistics.
- * 
- * @param cohorts - Array of cohort data
- * @param pInfinity - Asymptotic probability (from mature cohorts)
- * @param fit - Fitted lag distribution
- * @param maturityDays - Fallback maturity threshold
- * @param includeDetails - Whether to include per-cohort breakdown
- * @returns Formula A result with p_mean, completeness, t95
- */
-export function applyFormulaAToAll(
-  cohorts: CohortData[],
-  pInfinity: number,
-  fit: LagDistributionFit,
-  maturityDays: number,
-  includeDetails: boolean = false
-): FormulaAResult {
-  const { mu, sigma } = fit;
-  const t95 = computeT95(fit, maturityDays);
-
-  let totalN = 0;
-  let totalKHat = 0;
-  let weightedCompleteness = 0;
-  const details: FormulaAResult['cohort_details'] = includeDetails ? [] : undefined;
-
-  for (const cohort of cohorts) {
-    if (cohort.n === 0) continue;
-
-    const F_age = logNormalCDF(cohort.age, mu, sigma);
-    const kHat = applyFormulaA(cohort, pInfinity, mu, sigma);
-
-    totalN += cohort.n;
-    totalKHat += kHat;
-    weightedCompleteness += cohort.n * F_age;
-
-    if (details) {
-      details.push({
-        date: cohort.date,
-        n: cohort.n,
-        k: cohort.k,
-        age: cohort.age,
-        F_age,
-        k_hat: kHat,
-      });
-    }
-  }
-
-  // Aggregate results
-  const pMean = totalN > 0 ? totalKHat / totalN : 0;
-  const completeness = totalN > 0 ? weightedCompleteness / totalN : 0;
-
-  return {
-    p_mean: pMean,
-    completeness,
-    total_k_hat: totalKHat,
-    total_n: totalN,
-    p_infinity: pInfinity,
-    t95,
-    cohort_details: details,
-  };
-}
 
 // =============================================================================
 // Completeness Calculation (§5.5)
@@ -1057,6 +884,98 @@ export function calculateCompleteness(
   return completeness;
 }
 
+function calculateCompletenessWithTailConstraint(
+  cohorts: CohortData[],
+  mu: number,
+  sigmaMoments: number,
+  sigmaConstrained: number,
+  tailConstraintApplied: boolean
+): number {
+  if (!tailConstraintApplied) {
+    return calculateCompleteness(cohorts, mu, sigmaMoments);
+  }
+
+  let totalN = 0;
+  let weightedSum = 0;
+
+  for (const cohort of cohorts) {
+    if (cohort.n === 0) continue;
+    const F_moments = logNormalCDF(cohort.age, mu, sigmaMoments);
+    const F_constrained = logNormalCDF(cohort.age, mu, sigmaConstrained);
+    // One-way safety: do not allow the tail constraint to INCREASE completeness.
+    const F_age = Math.min(F_moments, F_constrained);
+    totalN += cohort.n;
+    weightedSum += cohort.n * F_age;
+  }
+
+  return totalN > 0 ? weightedSum / totalN : 0;
+}
+
+function getCompletenessCdfParams(
+  fit: LagDistributionFit,
+  medianLagDays: number,
+  authoritativeT95Days: number
+): EdgeLatencyStats['completeness_cdf'] {
+  const mu = fit.mu;
+  const sigmaMoments = fit.sigma;
+
+  // Guard rails: keep sigma finite and positive
+  const sigmaMomentsSafe =
+    Number.isFinite(sigmaMoments) && sigmaMoments > 0 ? sigmaMoments : LATENCY_DEFAULT_SIGMA;
+
+  const z = standardNormalInverseCDF(LATENCY_T95_PERCENTILE);
+  const canComputeSigmaMin =
+    Number.isFinite(z) &&
+    z > 0 &&
+    Number.isFinite(medianLagDays) &&
+    medianLagDays > 0 &&
+    Number.isFinite(authoritativeT95Days) &&
+    authoritativeT95Days > 0;
+
+  const sigmaMinFromT95 =
+    canComputeSigmaMin && authoritativeT95Days > medianLagDays
+      ? Math.log(authoritativeT95Days / medianLagDays) / z
+      : undefined;
+
+  const tailConstraintApplied =
+    sigmaMinFromT95 !== undefined &&
+    Number.isFinite(sigmaMinFromT95) &&
+    sigmaMinFromT95 > sigmaMomentsSafe;
+
+  // One-way constraint only: do not reduce sigma if t95 is smaller than implied.
+  // Cap sigma to avoid catastrophic blow-ups from pathological inputs.
+  const sigmaFinalRaw = tailConstraintApplied ? sigmaMinFromT95! : sigmaMomentsSafe;
+  const sigmaFinal =
+    Number.isFinite(sigmaFinalRaw) && sigmaFinalRaw > 0 ? Math.min(sigmaFinalRaw, 10) : sigmaMomentsSafe;
+
+  if (tailConstraintApplied) {
+    sessionLogService.info(
+      'graph',
+      'LAG_T95_TAIL_CONSTRAINT',
+      'Applied t95 tail constraint to completeness CDF',
+      undefined,
+      {
+        valuesAfter: {
+          median_lag_days: medianLagDays,
+          t95_authoritative_days: authoritativeT95Days,
+          percentile: LATENCY_T95_PERCENTILE,
+          sigma_moments: sigmaMomentsSafe,
+          sigma_min_from_t95: sigmaMinFromT95,
+          sigma_final: sigmaFinal,
+        },
+      }
+    );
+  }
+
+  return {
+    mu,
+    sigma: sigmaFinal,
+    sigma_moments: sigmaMomentsSafe,
+    sigma_min_from_t95: sigmaMinFromT95,
+    tail_constraint_applied: tailConstraintApplied,
+  };
+}
+
 // =============================================================================
 // Main Edge Latency Computation
 // =============================================================================
@@ -1064,11 +983,11 @@ export function calculateCompleteness(
 /**
  * Compute full latency statistics for an edge from cohort data.
  * 
- * This is the main entry point for LAG calculations. It:
+ * This is the main entry point for LAG latency statistics. It:
  * 1. Fits the lag distribution from aggregate median/mean
  * 2. Computes t95 (95th percentile lag)
- * 3. Estimates p_infinity from mature cohorts
- * 4. Applies Formula A to compute p_mean and completeness
+ * 3. Estimates p_infinity from mature cohorts (optional forecast fallback)
+ * 4. Computes completeness via the lag CDF (with one-way t95 tail constraint)
  * 
  * For completeness calculation, effective age is computed as:
  *   - First latency edge: effective_age = anchor_age (no adjustment)
@@ -1080,7 +999,7 @@ export function calculateCompleteness(
  * @param cohorts - Per-cohort data array (may include anchor_median_lag_days)
  * @param aggregateMedianLag - Weighted aggregate median lag for this edge
  * @param aggregateMeanLag - Weighted aggregate mean lag (optional)
- * @param maturityDays - User-configured maturity threshold
+ * @param fallbackT95Days - Fallback t95-days threshold (t95 or configured default)
  * @param anchorMedianLag - Observed median lag from anchor to this edge's source (for downstream edges).
  *                          Use 0 for first latency edge from anchor. This is the central tendency
  *                          of cumulative upstream lag, NOT path_t95.
@@ -1090,7 +1009,7 @@ export function computeEdgeLatencyStats(
   cohorts: CohortData[],
   aggregateMedianLag: number,
   aggregateMeanLag: number | undefined,
-  maturityDays: number,
+  fallbackT95Days: number,
   anchorMedianLag: number = 0,
   fitTotalKOverride?: number,
   pInfinityCohortsOverride?: CohortData[]
@@ -1105,7 +1024,7 @@ export function computeEdgeLatencyStats(
     cohortsCount: cohorts.length,
     aggregateMedianLag,
     aggregateMeanLag,
-    maturityDays,
+    fallbackT95Days,
     anchorMedianLag,
     totalK,
     fitTotalK,
@@ -1164,7 +1083,13 @@ export function computeEdgeLatencyStats(
   });
 
   // Step 2: Compute t95
-  const t95 = computeT95(fit, maturityDays);
+  const t95 = computeT95(fit, fallbackT95Days);
+
+  // Completeness CDF parameters: use the configured/authoritative t95 as a one-way
+  // constraint to prevent thin-tail completeness on fat-tailed edges.
+  const authoritativeT95Days =
+    Number.isFinite(fallbackT95Days) && fallbackT95Days > 0 ? fallbackT95Days : DEFAULT_T95_DAYS;
+  const completenessCdf = getCompletenessCdfParams(fit, aggregateMedianLag, authoritativeT95Days);
 
   // Step 3: Estimate p_infinity from mature cohorts
   // NOTE: Use ORIGINAL cohorts for p_infinity estimation (raw age determines maturity)
@@ -1173,32 +1098,36 @@ export function computeEdgeLatencyStats(
   // Evidence probability (observed k/n)
   const pEvidence = totalN > 0 ? totalK / totalN : 0;
 
-  // If no mature cohorts, forecast is not available
+  // Use ADJUSTED cohorts for completeness (reflects effective age at this edge)
+  const completeness = calculateCompletenessWithTailConstraint(
+    adjustedCohorts,
+    completenessCdf.mu,
+    completenessCdf.sigma_moments,
+    completenessCdf.sigma,
+    completenessCdf.tail_constraint_applied
+  );
+
+  // If no mature cohorts, forecast fallback is not available
   if (pInfinityEstimate === undefined) {
     return {
       fit,
       t95,
-      p_infinity: pEvidence, // Fall back to evidence as estimate
-      p_mean: pEvidence,     // Can't forecast without p_infinity
-      // Use ADJUSTED cohorts for completeness (reflects effective age at this edge)
-      completeness: calculateCompleteness(adjustedCohorts, fit.mu, fit.sigma),
+      p_infinity: pEvidence, // fall back to evidence as estimate
+      completeness,
       p_evidence: pEvidence,
       forecast_available: false,
+      completeness_cdf: completenessCdf,
     };
   }
-
-  // Step 4: Apply Formula A
-  // Use ADJUSTED cohorts for completeness calculation
-  const result = applyFormulaAToAll(adjustedCohorts, pInfinityEstimate, fit, maturityDays);
 
   return {
     fit,
     t95,
     p_infinity: pInfinityEstimate,
-    p_mean: result.p_mean,
-    completeness: result.completeness,
+    completeness,
     p_evidence: pEvidence,
     forecast_available: true,
+    completeness_cdf: completenessCdf,
   };
 }
 
@@ -1220,7 +1149,7 @@ export interface GraphEdgeForPath {
     /** Forecast population for this edge under the current DSL (inbound-n result). */
     n?: number;
     latency?: {
-      maturity_days?: number;
+      latency_parameter?: boolean;
       t95?: number;
       path_t95?: number;
       median_lag_days?: number;
@@ -1543,13 +1472,10 @@ export function computePathT95(
     const outgoing = adjacency.get(nodeId) || [];
     for (const edge of outgoing) {
       const edgeId = getEdgeId(edge);
-      // Fallback chain for edge t95: t95 (computed) → maturity_days (deprecated fallback) → 0
-      // Phase 2: maturity_days fallback retained for migration; will be removed when all
-      //          edges use latency_parameter + explicit t95 values.
-      // - Full data: Uses actual t95 from fitted distribution
-      // - Deprecated: Uses user-configured maturity_days as approximation (migration only)
-      // - No latency: Contributes 0 (edge has no latency tracking)
-      const edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.maturity_days ?? 0;
+      // Phase 2: edge t95 is either computed or default-injected when latency is enabled.
+      const edgeT95 = edge.p?.latency?.latency_parameter === true
+        ? (edge.p?.latency?.t95 ?? DEFAULT_T95_DAYS)
+        : 0;
 
       // path_t95 for this edge = path to source node + edge's own t95
       const edgePathT95 = nodePathT95 + edgeT95;
@@ -1896,19 +1822,19 @@ export function enhanceGraphLatencies(
       const edgeId = getEdgeId(edge);
       result.edgesProcessed++;
 
-      // Get maturity config and path_t95 for classification
-      const maturityDays = edge.p?.latency?.maturity_days;
+      // Get local latency enablement and path_t95 for classification
+      const latencyEnabled = edge.p?.latency?.latency_parameter === true;
       const edgePrecomputedPathT95 = precomputedPathT95.get(edgeId) ?? 0;
       // Normalize edge.to for queue/inDegree operations
       const toNodeId = normalizeNodeRef(edge.to);
       
       // COHORT-VIEW: An edge needs LAG treatment if it has local latency OR
       // is downstream of latency edges (path_t95 > 0).
-      const hasLocalLatency = maturityDays !== undefined && maturityDays > 0;
+      const hasLocalLatency = latencyEnabled;
       const isBehindLaggedPath = edgePrecomputedPathT95 > 0;
       
       if (!hasLocalLatency && !isBehindLaggedPath) {
-        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, maturityDays, edgePrecomputedPathT95 });
+        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, latencyEnabled, edgePrecomputedPathT95 });
         // Truly simple edge: no latency config AND no upstream lag
         // Skip LAG computation but update topo state
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
@@ -1919,9 +1845,9 @@ export function enhanceGraphLatencies(
         continue;
       }
       
-      // Effective maturity: local config if available, else use path_t95 as fallback
-      // This handles edges downstream of latency edges that have no local config.
-      const effectiveMaturity = hasLocalLatency ? maturityDays : edgePrecomputedPathT95;
+      // Effective t95 days: local latency edges rely on their own settings; downstream edges
+      // may still need treatment if path_t95 indicates upstream latency.
+      const effectiveHorizonDays = hasLocalLatency ? (edge.p?.latency?.t95 ?? DEFAULT_T95_DAYS) : edgePrecomputedPathT95;
 
       // Get parameter values for this edge
       const paramValues = paramLookup.get(edgeId);
@@ -1943,7 +1869,7 @@ export function enhanceGraphLatencies(
       // - cohortsAll:    used for fitting lag distributions (t95) and path_t95 estimation
       //
       // Rationale: Narrow cohort windows (e.g. 3–4 days) often have k≈0, which would
-      // force the fit to fail and make t95/path_t95 fall back to maturity_days / topo sums.
+      // force the fit to fail and make t95/path_t95 fall back to defaults / topo sums.
       // That produces "stuck" persisted path_t95 values like 46.66d even when the file
       // contains rich anchor_* + lag data that yields a stable moment-matched estimate.
       //
@@ -1995,15 +1921,14 @@ export function enhanceGraphLatencies(
       console.log('[LAG_TOPO_PROCESS] edge:', { 
         edgeId, 
         hasLocalLatency, 
-        maturityDays, 
-        effectiveMaturity, 
+        effectiveHorizonDays, 
         cohortsCount: cohortsScoped.length,
         cohortsAllCount: cohortsAll.length
       });
 
       // Get aggregate lag stats for this edge
       const lagStats = helpers.aggregateLatencyStats(cohortsAll.length > 0 ? cohortsAll : cohortsScoped);
-      const aggregateMedianLag = lagStats?.median_lag_days ?? effectiveMaturity / 2;
+      const aggregateMedianLag = lagStats?.median_lag_days ?? effectiveHorizonDays / 2;
       const aggregateMeanLag = lagStats?.mean_lag_days;
       const totalKForFit = (cohortsAll.length > 0 ? cohortsAll : cohortsScoped).reduce((sum, c) => sum + (c.k ?? 0), 0);
 
@@ -2082,12 +2007,12 @@ export function enhanceGraphLatencies(
       });
 
       // Compute edge LAG stats with anchor-adjusted ages (NOT path_t95!)
-      // Use effectiveMaturity for edges behind lagged paths that have no local config.
+      // Use effectiveHorizonDays for edges behind lagged paths that have no local config.
       const latencyStats = computeEdgeLatencyStats(
         cohortsScoped,
         aggregateMedianLag,
         aggregateMeanLag,
-        effectiveMaturity,
+        effectiveHorizonDays,
         anchorMedianLag,  // Use observed anchor lag, NOT path_t95
         totalKForFit,     // Fit quality gate should consider full-history converters when available
         cohortsAll.length > 0 ? cohortsAll : cohortsScoped // p∞ estimation should use full-history mature cohorts
@@ -2164,7 +2089,7 @@ export function enhanceGraphLatencies(
         const lagToSubtract = c.anchor_median_lag_days ?? anchorMedianLag;
         return Math.max(0, c.age - lagToSubtract);
       });
-      const { mu, sigma } = latencyStats.fit;
+      const { mu, sigma } = latencyStats.completeness_cdf;
       
       // Count input value slice types for debugging
       const cohortSliceCount = paramValues.filter((v: any) => {
@@ -2298,7 +2223,7 @@ export function enhanceGraphLatencies(
 
       // Fallback: if no window baseline is available, approximate from mature cohorts
       if (nBaseline === 0) {
-        const matureCohorts = cohortsScoped.filter(c => c.age >= effectiveMaturity);
+        const matureCohorts = cohortsScoped.filter(c => c.age >= effectiveHorizonDays);
         nBaseline = matureCohorts.reduce((sum, c) => sum + c.n, 0);
       }
       
@@ -2313,28 +2238,11 @@ export function enhanceGraphLatencies(
         hasPN: edge.p?.n !== undefined,
       });
       
-      // Compute p.mean using Formula A (tail substitution for immature cohorts).
-      // This is the canonical expectation for the LAG topo pass and is asserted in
-      // `lagStatsFlow.integration.test.ts`.
-      const cohortsForFormulaA: CohortData[] =
-        anchorMedianLag > 0 || cohortsScoped.some(c => c.anchor_median_lag_days)
-          ? cohortsScoped.map(c => {
-              const lagToSubtract = c.anchor_median_lag_days ?? anchorMedianLag;
-              return { ...c, age: Math.max(0, c.age - lagToSubtract) };
-            })
-          : cohortsScoped;
-
-      const formulaAMean = computeFormulaAMeanFromCohorts(
-        cohortsForFormulaA,
-        forecastMean,
-        effectiveMaturity
-      );
-
       // Fixture-safety: some test fixtures include sampled per-day cohort arrays but
       // authoritative header totals on the edge (p.evidence.n/k). If cohort totals
       // look far smaller than edge evidence totals, prefer the edge-attached evidence
-      // when computing a blended mean (otherwise Formula A will be biased by the sample).
-      const sumCohortN = cohortsForFormulaA.reduce((sum, c) => sum + (c.n ?? 0), 0);
+      // for nQuery when computing the blend (otherwise weights can be biased).
+      const sumCohortN = cohortsScoped.reduce((sum, c) => sum + (c.n ?? 0), 0);
       const edgeEvidenceN = edge.p?.evidence?.n;
       const cohortsLookSampled =
         typeof edgeEvidenceN === 'number' &&
@@ -2342,24 +2250,18 @@ export function enhanceGraphLatencies(
         sumCohortN > 0 &&
         edgeEvidenceN >= sumCohortN * 2;
 
-      // WINDOW MODE: Always use completeness-weighted blend (computeBlendedMean).
-      // Formula A is designed for cohort-anchored ages where "age" = time since anchor event.
-      // In window mode, "age" = days since window entry, which is NOT the same semantics.
-      // Window mode should blend evidence + forecast using the LAG-computed completeness.
-      //
-      // COHORT MODE: Use Formula A for immature cohorts (adds expected tail to observed k),
-      // or edge-evidence blend if cohorts look sampled.
-      const useDirectBlend = isWindowMode || cohortsLookSampled;
+      // Phase 2: p.mean is computed ONLY via the canonical blend (computeBlendedMean),
+      // in both window() and cohort() modes.
+      const blendedMeanFromBlend = computeBlendedMean({
+        evidenceMean,
+        forecastMean: forecastMean ?? 0,
+        completeness,
+        nQuery: cohortsLookSampled && typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery,
+        nBaseline: nBaseline > 0 ? nBaseline : nQuery,
+      });
 
-      const blendedMean = useDirectBlend
-        ? computeBlendedMean({
-            evidenceMean,
-            forecastMean: forecastMean ?? 0,
-            completeness,
-            nQuery: typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery,
-            nBaseline: nBaseline > 0 ? nBaseline : nQuery,
-          })
-        : formulaAMean;
+      // If blend cannot be computed (e.g., missing forecast baseline), fall back to evidence.
+      const blendedMean = blendedMeanFromBlend ?? evidenceMean;
 
       if (blendedMean !== undefined) {
         edgeLAGValues.blendedMean = blendedMean;
@@ -2373,7 +2275,7 @@ export function enhanceGraphLatencies(
           evidenceMean: (evidenceMean ?? 0).toFixed(3),
           forecastMean: (forecastMean ?? 0).toFixed(3),
           blendedMean: blendedMean.toFixed(3),
-          blendMethod: isWindowMode ? 'window-blend' : (cohortsLookSampled ? 'edge-evidence' : 'formula-a'),
+          blendMethod: blendedMeanFromBlend !== undefined ? 'canonical-blend' : 'evidence-fallback',
         });
       }
 

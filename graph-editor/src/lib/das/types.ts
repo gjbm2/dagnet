@@ -142,7 +142,7 @@ export interface RunnerExecuteOptions {
     start?: string;           // Cohort entry start date (ISO format)
     end?: string;             // Cohort entry end date (ISO format)
     anchor_event_id?: string; // Anchor node's event_id (for 3-step funnel: Anchor → From → To)
-    maturity_days?: number;   // Maturity threshold from edge.p.latency.maturity_days
+    conversion_window_days?: number; // Conversion window (days) used to set provider cs parameter
     [key: string]: unknown;
   };
   context?: Record<string, unknown>;

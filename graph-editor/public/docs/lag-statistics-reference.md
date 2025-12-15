@@ -36,7 +36,7 @@ This document is the canonical reference for LAG statistics and convolution logi
       • Latency edges: has lag distribution, requires cohort tracking
       • Anchor (A): furthest upstream START node, defines cohort entry dates
 
-      NOTE (14-Dec-25): The implementation is migrating away from `maturity_days` as the latency enablement flag.
+      NOTE (14-Dec-25): The implementation uses `latency_parameter` as the latency enablement flag.
       Conceptually, “latency-tracked” is an explicit property of an edge; the exact schema field is an implementation detail.
 ```
 
@@ -176,7 +176,7 @@ This document is the canonical reference for LAG statistics and convolution logi
       │   (e.g., X→Y where X is latency)   │  (A→X→Y)       │                     │
       │                                    │                │                     │
       │   Non-latency edges                │  N/A           │  No cohort tracking │
-      │   (maturity_days = 0)              │  (window only) │  needed             │
+      │   (latency_parameter = false)      │  (window only) │  needed             │
       │                                                                            │
       └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -193,7 +193,7 @@ This document is the canonical reference for LAG statistics and convolution logi
 │   ┌─────────────────────────────────────────────────────────────────────────────┐   │
 │   │  EDGE CONFIG                                                                │   │
 │   ├─────────────────────────────────────────────────────────────────────────────┤   │
-│   │   maturity_days        30                  ─── FALLBACK if no lag data      │   │
+│   │   DEFAULT_T95_DAYS     30                  ─── FALLBACK if no lag data      │   │
 │   │   anchor_node_id       "household-created" ─── Cohort anchor (A)            │   │
 │   └─────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                     │
@@ -214,7 +214,7 @@ This document is the canonical reference for LAG statistics and convolution logi
 │   │   latency: {                                       ── EDGE-LEVEL SUMMARY    │   │
 │   │     median_lag_days: 2,                                                     │   │
 │   │     mean_lag_days: 2.1,                                                     │   │
-│   │     t95: 4.6    (computed from μ,σ or fallback to maturity_days)           │   │
+│   │     t95: 4.6    (computed from μ,σ or fallback to DEFAULT_T95_DAYS)        │   │
 │   │   }                                                                         │   │
 │   │                                                                             │   │
 │   │   anchor_latency: {                               ── A→(this edge) SUMMARY  │   │
@@ -240,7 +240,7 @@ NOTE (14-Dec-25): We distinguish two “window” concepts:
 
 NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
 
-- For `cohort()` queries: `cs` is driven by the cohort conversion horizon (Phase 2: `path_t95`/`t95` with overrides; currently carried via `cohort.maturity_days` as a transport field to the adapter).
+- For `cohort()` queries: `cs` is driven by the cohort conversion horizon (Phase 2: `path_t95`/`t95` with overrides; currently carried via `cohort.t95` as a transport field to the adapter).
 - For `window()` queries (baseline window retrieval): we must set a **fixed** `cs = 30 days` to avoid accidental censoring by provider defaults when building baseline lag summaries and derived horizons.
   - Design: use `DEFAULT_T95_DAYS = 30` as the single source of truth for this value.
 
@@ -255,7 +255,7 @@ NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
 │   ──────                                                                            │
 │   median_lag_days      (from per-cohort or slice-level summary)                     │
 │   mean_lag_days        (from per-cohort or slice-level summary)                     │
-│   maturity_days        (user-configured fallback)                                   │
+│   DEFAULT_T95_DAYS     (fallback if no empirical lag data)                           │
 │   total_k              (total converters – for quality gate)                        │
 │                                                                                     │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
@@ -272,12 +272,12 @@ NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
 │   CASE 2: median_lag_days valid BUT total_k < MIN_CONVERTERS                        │
 │       μ = ln(median_lag_days)       ← use available median, still informative       │
 │       σ = DEFAULT_SIGMA (0.5)                                                       │
-│       empirical_quality_ok = false  ← but t95 falls back to maturity_days           │
+│       empirical_quality_ok = false  ← but t95 falls back to DEFAULT_T95_DAYS        │
 │                                                                                     │
 │   CASE 3: median_lag_days invalid (missing, NaN, ≤0)                                │
 │       μ = 0                                                                         │
 │       σ = DEFAULT_SIGMA (0.5)                                                       │
-│       empirical_quality_ok = false  ← t95 falls back to maturity_days               │
+│       empirical_quality_ok = false  ← t95 falls back to DEFAULT_T95_DAYS            │
 │                                                                                     │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                     │
@@ -288,12 +288,12 @@ NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
 │       t95 = logNormalInverseCDF(LATENCY_T95_PERCENTILE, μ, σ)                       │
 │                                                                                     │
 │   ELSE:                                                                             │
-│       t95 = maturity_days     ← fallback to configured value                        │
+│       t95 = DEFAULT_T95_DAYS  ← fallback to configured value                        │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-NOTE (14-Dec-25): `maturity_days` is a legacy fallback and is being deprecated in favour of explicit horizon primitives (`t95`, `path_t95`) with override semantics (see `docs/current/project-lag/t95-fix.md`).
+NOTE (14-Dec-25): Use explicit horizon primitives (`t95`, `path_t95`) with override semantics (see `docs/current/project-lag/t95-fix.md`). When no reliable empirical estimate is available, the system falls back to `DEFAULT_T95_DAYS`.
 
 NOTE (14-Dec-25): Percentiles must be treated as **configuration**, not hard-coded:
 
@@ -757,11 +757,11 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │   │   2. Fit lag distribution:                                                  │  │
 │   │        μ = ln(median_lag)                                                   │  │
 │   │        σ = from mean/median ratio                                           │  │
-│   │        (fallback to maturity_days if no lag data)                           │  │
+│   │        (fallback to DEFAULT_T95_DAYS if no lag data)                        │  │
 │   │                                                                             │  │
 │   │   3. Compute t95:                                                           │  │
 │   │        = logNormalInverseCDF(0.95, μ, σ) if fit OK                          │  │
-│   │        = maturity_days otherwise                                            │  │
+│   │        = DEFAULT_T95_DAYS otherwise                                         │  │
 │   │                                                                             │  │
 │   │   4. Compute effective age per cohort:                                      │  │
 │   │        First latency edge:  eff_age = anchor_age                            │  │
@@ -890,7 +890,7 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │  p.latency.path_t95         │  Preferred: t95(A→X + X→Y) from anchor_* + edge lag   │
 │                             │  Fallback: conservative topo accumulation of t95s    │
 │  p.latency.completeness     │  Fraction of eventual conversions that have occurred │
-│  p.latency.maturity_days    │  User-configured fallback if no empirical lag data   │
+│  p.latency.latency_parameter│  Enablement flag for latency tracking (boolean)      │
 │  p.latency.median_lag_days  │  Observed median lag for this edge only              │
 │  p.latency.mean_lag_days    │  Observed mean lag for this edge only                │
 └─────────────────────────────┴──────────────────────────────────────────────────────┘
@@ -927,7 +927,7 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 ┌─────────────────────────────┬──────────────────────────────────────────────────────┐
 │  EDGE CONFIG FIELD          │  MEANING                                             │
 ├─────────────────────────────┼──────────────────────────────────────────────────────┤
-│  p.latency.maturity_days    │  User-configured fallback for lag (if no empirical   │
+│  p.latency.latency_parameter│  Enablement flag for latency tracking (boolean)      │
 │                             │  data available) – also used for t95 fallback        │
 │                             │                                                      │
 │  p.latency.anchor_node_id   │  ID of the cohort anchor node (A) for this edge      │

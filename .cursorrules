@@ -96,6 +96,9 @@ Before creating ANY new functionality:
 When modifying functionality:
 
 1. **Update existing tests** - Don't leave tests broken or outdated
+2. **CRITICAL: Updating existing tests is permitted ONLY with user EXPRESS authorisation**
+   - This includes “small” edits like expectation tweaks, thresholds, renames, or snapshot updates.
+   - If a change requires updating an existing test, the assistant MUST batch the proposed diffs and wait for explicit approval before editing.
 2. **Add new tests** - For new functionality or bug fixes
 3. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
 4. **Check integration tests** - Only if changes affect integration points
