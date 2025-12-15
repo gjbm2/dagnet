@@ -452,12 +452,22 @@ export interface CaseEvidence {
  * Attached to ProbabilityParam (edge.p.latency and edge.conditional_p[i].p.latency)
  * 
  * SEMANTICS:
- * - maturity_days > 0: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
- * - maturity_days = 0 or undefined: Latency tracking DISABLED (standard window() behaviour)
+ * - latency_parameter === true: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
+ * - latency_parameter === false or undefined: Latency tracking DISABLED (standard window() behaviour)
+ * 
+ * NOTE: maturity_days is DEPRECATED for enablement; use latency_parameter instead.
+ * maturity_days is retained temporarily for backward compatibility during migration.
  */
 export interface LatencyConfig {
-  /** Maturity threshold in days - cohorts younger than this are "immature"
-   *  Set >0 to enable latency tracking. Default: undefined (no tracking).
+  /** Explicit latency enablement flag - set true to enable latency tracking.
+   *  Replaces maturity_days > 0 semantics.
+   */
+  latency_parameter?: boolean;
+  /** True if user manually set latency_parameter (vs derived from file) */
+  latency_parameter_overridden?: boolean;
+  
+  /** @deprecated Use latency_parameter instead.
+   *  Maturity threshold in days - retained for backward compatibility.
    */
   maturity_days?: number;
   /** True if user manually set maturity_days (vs derived from file) */
@@ -474,12 +484,16 @@ export interface LatencyConfig {
    *  Computed from fitted log-normal CDF. Scenario-independent.
    */
   t95?: number;
+  /** True if user manually set t95 (vs computed from stats) */
+  t95_overridden?: boolean;
   
   /** Cumulative path latency (t95) from anchor to this edge.
    *  Computed by statisticalEnhancementService.computePathT95().
    *  Used for cohort retrieval horizon calculations.
    */
   path_t95?: number;
+  /** True if user manually set path_t95 (vs computed from topo pass) */
+  path_t95_overridden?: boolean;
   
   // === Display-only fields (populated from file, not user-editable) ===
   

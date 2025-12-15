@@ -1495,9 +1495,11 @@ export class IntegrityCheckService {
       // Only check if there are multiple outgoing edges
       if (outgoingEdges.length < 2) continue;
       
-      // Only check edges with latency tracking enabled (maturity_days > 0)
+      // Only check edges with latency tracking enabled
+      // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
       const latencyEdges = outgoingEdges.filter((e: any) => 
-        e.p?.latency?.maturity_days && e.p.latency.maturity_days > 0
+        e.p?.latency?.latency_parameter === true ||
+        (e.p?.latency?.maturity_days ?? 0) > 0
       );
       
       // Need at least 2 sibling latency edges for this check to be relevant

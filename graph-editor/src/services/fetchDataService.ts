@@ -233,7 +233,10 @@ function computeTargetSliceOverrideForItem(
   if (!edge) return undefined;
 
   const latency = edge?.p?.latency;
-  const hasLocalLatency = !!(latency?.maturity_days || latency?.t95);
+  // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
+  const hasLocalLatency = latency?.latency_parameter === true || 
+                          (latency?.maturity_days ?? 0) > 0 || 
+                          !!latency?.t95;
 
   const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
   const computedPathT95 = pathT95Map.get(edgeId);
@@ -1176,17 +1179,22 @@ export async function fetchItems(
       let finalGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
       if (finalGraph) {
         // Check if any fetched items were parameters on latency edges
+        // NOTE: latency_parameter === true is the canonical enablement check
+        //       maturity_days > 0 is deprecated but still supported for migration
         const latencyCheck = effectiveItems.map(item => {
           if (item.type !== 'parameter') return { item: item.name, hasLatency: false, reason: 'not parameter' };
           const edge = finalGraph.edges?.find((e: any) => 
             e.uuid === item.targetId || e.id === item.targetId
           );
           if (!edge) return { item: item.name, hasLatency: false, reason: 'edge not found' };
-          const hasLatency = !!(edge?.p?.latency?.maturity_days);
+          // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
+          const hasLatency = edge?.p?.latency?.latency_parameter === true || 
+                            (edge?.p?.latency?.maturity_days ?? 0) > 0;
           return { 
             item: item.name, 
             hasLatency, 
-            maturity_days: edge?.p?.latency?.maturity_days,
+            latency_parameter: edge?.p?.latency?.latency_parameter,
+            t95: edge?.p?.latency?.t95,
             edgeId: edge.uuid || edge.id,
           };
         });
@@ -1405,11 +1413,8 @@ export async function fetchItems(
             // file-provided latency summary fields.
             const preserveLatencySummaryFromFile = itemOptions?.mode === 'from-file';
 
-            // Phase 1 behaviour (legacy tests): window() queries should not overwrite p.mean via LAG.
-            // Window-mode p.mean is taken from the window aggregation result; LAG contributes latency fields.
-            const edgeValuesToApply = lagSliceSource === 'window'
-              ? lagResult.edgeValues.map(ev => ({ ...ev, blendedMean: undefined }))
-              : lagResult.edgeValues;
+            // Phase 2: apply blended p.mean for latency edges in BOTH window() and cohort() modes.
+            const edgeValuesToApply = lagResult.edgeValues;
             
             // DEBUG: Log p.mean values BEFORE LAG application
             console.log('[fetchDataService] BEFORE applyBatchLAGValues:', {
@@ -1557,7 +1562,7 @@ export async function fetchItems(
         // ═══════════════════════════════════════════════════════════════════
         // Debug: Check if LAG values actually landed on latency-labelled edges
         const latencyEdges = (finalGraph?.edges || []).filter(
-          (e: any) => e.p?.latency && (e.p.latency.maturity_days || e.p.latency.t95 || e.p.latency.completeness)
+          (e: any) => e.p?.latency && (e.p.latency.latency_parameter || e.p.latency.maturity_days || e.p.latency.t95 || e.p.latency.completeness)
         );
         console.log('[fetchDataService] LAG_DEBUG finalGraph before inbound-n:', {
           edgeCount: finalGraph?.edges?.length,
@@ -1568,7 +1573,7 @@ export async function fetchItems(
             from: e.from,
             to: e.to,
             pMean: e.p?.mean,
-            maturity_days: e.p?.latency?.maturity_days,
+            latency_parameter: e.p?.latency?.latency_parameter,
             t95: e.p?.latency?.t95,
             completeness: e.p?.latency?.completeness,
             path_t95: e.p?.latency?.path_t95,

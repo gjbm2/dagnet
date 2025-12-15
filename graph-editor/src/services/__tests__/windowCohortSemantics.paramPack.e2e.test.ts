@@ -73,7 +73,9 @@ function makeSingleEdgeGraph(params: {
         p: {
           id: paramId,
           connection: 'amplitude-test',
-          ...(latencyEnabled ? { latency: { maturity_days: 30, anchor_node_id: 'A' } } : {}),
+          ...(latencyEnabled
+            ? { latency: { latency_parameter: true, anchor_node_id: 'A' } }
+            : {}),
         },
       } as any,
     ],
@@ -99,14 +101,14 @@ function makeTwoEdgeGraph(params: {
         uuid: edgeAX,
         from: 'A',
         to: 'X',
-        p: { id: paramAX, connection: 'amplitude-test', latency: { maturity_days: 30, anchor_node_id: 'A' } },
+        p: { id: paramAX, connection: 'amplitude-test', latency: { latency_parameter: true, anchor_node_id: 'A' } },
       } as any,
       {
         id: edgeXY,
         uuid: edgeXY,
         from: 'X',
         to: 'Y',
-        p: { id: paramXY, connection: 'amplitude-test', latency: { maturity_days: 30, anchor_node_id: 'A' } },
+        p: { id: paramXY, connection: 'amplitude-test', latency: { latency_parameter: true, anchor_node_id: 'A' } },
       } as any,
     ],
     currentQueryDSL: 'cohort(A,1-Dec-25:7-Dec-25)',
@@ -139,8 +141,17 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
     vi.useRealTimers();
   });
 
-  describe('Window(start:end) semantics: evidence from narrow selection, forecast from baseline window', () => {
-    it('PHASE 1 CONTRACT: evidence reflects the requested window subset; forecast stays baseline; completeness is present', async () => {
+  // ============================================================================
+  // DEPRECATED (Phase 1 contract): superseded by Phase 2 canonical blend behaviour
+  //
+  // Phase 2 stance:
+  // - For latency edges, p.mean is the canonical completeness-weighted blend of evidence + forecast.
+  // - Therefore, the Phase 1 contract "window() does not allow LAG to overwrite p.mean" is no longer true.
+  //
+  // These tests are retained for historical context only.
+  // ============================================================================
+  describe.skip('DEPRECATED: Phase 1 contract (superseded by Phase 2 canonical blend)', () => {
+    it('Phase 1: evidence reflects the requested window subset; forecast stays baseline; completeness is present', async () => {
       const paramId = 'lag-window-baseline-subset';
       await registerParameterFile(paramId, loadTestParameterYaml(paramId));
 
@@ -189,7 +200,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       expect(paramPack['e.edge-A-B.p.latency.completeness']).toBeDefined();
     });
 
-    it('changing the narrow selection changes evidence (and p.mean), but forecast stays fixed', async () => {
+    it('Phase 1: changing the narrow selection changes evidence (and p.mean), but forecast stays fixed', async () => {
       const paramId = 'lag-window-baseline-subset';
 
       let graph: Graph | null = makeSingleEdgeGraph({
@@ -221,7 +232,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       expect(edge.p.mean).toBeLessThanOrEqual(0.3);
     });
 
-    it('PHASE 1 CONTRACT: super-window queries treat missing days as gaps (evidence equals base window totals, not diluted)', async () => {
+    it('Phase 1: super-window queries treat missing days as gaps (evidence equals base window totals, not diluted)', async () => {
       // Spec: if query window fully contains the stored base window slice,
       // evidence totals should equal the base window totals (missing days are gaps, not zeros).
       const paramId = 'lag-window-baseline-subset';
@@ -258,7 +269,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
   });
 
   describe('Window(start:end) semantics: non-latency edges', () => {
-    it('PHASE 1 CONTRACT: for non-latency edges, p.mean MUST equal evidence.mean (no LAG blend), but forecast is still attached when available', async () => {
+    it('for non-latency edges, p.mean MUST equal evidence.mean (no LAG blend), but forecast is still attached when available', async () => {
       const paramId = 'lag-nonlatency-window';
       await registerParameterFile(paramId, loadTestParameterYaml(paramId));
 
@@ -290,11 +301,11 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
   });
 
   // ============================================================================
-  // PHASE 2 RED TESTS (intentionally skipped until Phase 2 work begins)
+  // PHASE 2 TESTS (gold standard once Phase 2 is in-flight)
   // ============================================================================
 
-  describe('PHASE 2 RED TESTS (enable when starting Phase 2)', () => {
-    it.skip('PHASE 2: window-mode p.mean becomes the canonical blend (evidence + forecast weighted by completeness)', async () => {
+  describe('PHASE 2 CONTRACT: canonical blend + override semantics', () => {
+    it('window-mode p.mean becomes the canonical blend (evidence + forecast weighted by completeness)', async () => {
       const paramId = 'lag-window-baseline-subset';
       await registerParameterFile(paramId, loadTestParameterYaml(paramId));
 
@@ -335,6 +346,113 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       // p.mean is stored at standard precision (see UpdateManager rounding); we only
       // require correctness within that precision.
       expect(edge.p.mean).toBeCloseTo(expected, 4);
+    });
+
+    it('enabling latency_parameter injects DEFAULT_T95_DAYS when t95 is missing (persists via dirty file)', async () => {
+      const paramId = 'lag-window-baseline-subset';
+      await registerParameterFile(paramId, loadTestParameterYaml(paramId));
+
+      // Start from a graph entity that enables latency_parameter but has no t95 set.
+      // This should trigger UpdateManager default injection when syncing graph → file.
+      const graphEdgeEntity: any = {
+        id: paramId,
+        label: `p: ${paramId}`,
+        p: {
+          id: paramId,
+          connection: 'amplitude-test',
+          latency: {
+            latency_parameter: true,
+            latency_parameter_overridden: true,
+            // t95 intentionally missing
+          },
+        },
+      };
+
+      const fileId = `parameter-${paramId}`;
+      const existingFile = fileRegistry.getFile(fileId) as any;
+      // Precondition: fixture file may not include a latency block at all.
+      expect(existingFile?.data?.latency?.t95).toBeUndefined();
+
+      const { DEFAULT_T95_DAYS } = await import('../../constants/statisticalConstants');
+      const { UpdateManager } = await import('../UpdateManager');
+      const updateManager = new UpdateManager();
+
+      // Apply graph→file metadata update (should inject t95 default into file latency block)
+      await updateManager.handleGraphToFile(graphEdgeEntity, existingFile.data, 'UPDATE', 'parameter', {});
+
+      expect(existingFile.data.latency.latency_parameter).toBe(true);
+      expect(existingFile.data.latency.t95).toBe(DEFAULT_T95_DAYS);
+
+      // Persist through FileRegistry so it becomes dirty (originalData differs)
+      await fileRegistry.updateFile(fileId, existingFile.data);
+      const updatedFile = fileRegistry.getFile(fileId) as any;
+      expect(updatedFile.isDirty).toBe(true);
+    });
+
+    it('respects t95_overridden (derived t95 must not overwrite overridden values)', async () => {
+      const { UpdateManager } = await import('../UpdateManager');
+      const updateManager = new UpdateManager();
+
+      const graph: any = makeSingleEdgeGraph({
+        edgeId: 'edge-A-B',
+        paramId: 'lag-window-baseline-subset',
+        latencyEnabled: true,
+      });
+
+      const edge: any = graph.edges[0];
+      edge.p.latency = {
+        ...(edge.p.latency ?? {}),
+        t95: 99,
+        t95_overridden: true,
+      };
+
+      const updated = updateManager.applyBatchLAGValues(graph, [
+        {
+          edgeId: 'edge-A-B',
+          latency: {
+            t95: 12,
+            path_t95: 12,
+            completeness: 0.5,
+          },
+        } as any,
+      ]);
+
+      const updatedEdge: any = updated.edges[0];
+      expect(updatedEdge.p.latency.t95).toBe(99);
+      expect(updatedEdge.p.latency.t95_overridden).toBe(true);
+    });
+
+    it('respects path_t95_overridden (topo-computed path_t95 must not overwrite overridden values)', async () => {
+      const { UpdateManager } = await import('../UpdateManager');
+      const updateManager = new UpdateManager();
+
+      const graph: any = makeSingleEdgeGraph({
+        edgeId: 'edge-A-B',
+        paramId: 'lag-window-baseline-subset',
+        latencyEnabled: true,
+      });
+
+      const edge: any = graph.edges[0];
+      edge.p.latency = {
+        ...(edge.p.latency ?? {}),
+        path_t95: 77,
+        path_t95_overridden: true,
+      };
+
+      const updated = updateManager.applyBatchLAGValues(graph, [
+        {
+          edgeId: 'edge-A-B',
+          latency: {
+            t95: 12,
+            path_t95: 12,
+            completeness: 0.5,
+          },
+        } as any,
+      ]);
+
+      const updatedEdge: any = updated.edges[0];
+      expect(updatedEdge.p.latency.path_t95).toBe(77);
+      expect(updatedEdge.p.latency.path_t95_overridden).toBe(true);
     });
   });
 
@@ -394,14 +512,7 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
     });
   });
 
-  describe('Phase 2 expectations (t95/path_t95 overrides) — integration TODOs', () => {
-    // PHASE 2 RED TESTS:
-    // These are intentionally not runnable yet because Phase 2 schema/behaviour is not implemented.
-    // When starting Phase 2, convert these to `it(...)` (and delete the `.todo`) so they fail red-to-green.
-    it.todo('PHASE 2: enabling latency_edge injects DEFAULT_T95_DAYS when t95 is missing (persists via dirty file)');
-    it.todo('PHASE 2: respects t95_overridden (derived t95 must not overwrite overridden values)');
-    it.todo('PHASE 2: respects path_t95_overridden (topo-computed path_t95 must not overwrite overridden values)');
-  });
+  // (Phase 2 override tests are now enabled above.)
 });
 
 

@@ -1543,11 +1543,12 @@ export function computePathT95(
     const outgoing = adjacency.get(nodeId) || [];
     for (const edge of outgoing) {
       const edgeId = getEdgeId(edge);
-      // Fallback chain: t95 (accurate) → maturity_days (conservative) → 0
-      // This handles different data sufficiency conditions:
+      // Fallback chain for edge t95: t95 (computed) → maturity_days (deprecated fallback) → 0
+      // Phase 2: maturity_days fallback retained for migration; will be removed when all
+      //          edges use latency_parameter + explicit t95 values.
       // - Full data: Uses actual t95 from fitted distribution
-      // - Partial data: Uses user-configured maturity_days as approximation
-      // - No data: Contributes 0 (edge has no latency tracking)
+      // - Deprecated: Uses user-configured maturity_days as approximation (migration only)
+      // - No latency: Contributes 0 (edge has no latency tracking)
       const edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.maturity_days ?? 0;
 
       // path_t95 for this edge = path to source node + edge's own t95
