@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.0.12b
+**Released:** December 15, 2025
+
+Regressions in rendering, and still weird completeness data. Stats fixing work continues...
+
+---
+
 
 ## Version 1.1
 **Release:** 15-Dec-2025
