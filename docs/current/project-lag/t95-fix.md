@@ -33,6 +33,15 @@ This proposal is part of a broader, conceptually integrated effort:
 
 This document does not re-specify the LAG maths; it focuses on making the horizon primitives stable and inspectable.
 
+### Phase 1 status (15-Dec-25)
+
+Phase 1 (`window()`/`cohort()` semantics + regressions) is **complete and signed off** on 15-Dec-25 with a full `graph-editor` test suite run:
+
+- 2567 passing
+- 32 skipped
+- 3 todo
+- Total: 2602
+
 ### Baseline vs query windows (terminology alignment)
 
 This proposal assumes (and should remain consistent with) the semantics work:
