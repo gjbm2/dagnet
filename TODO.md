@@ -1,28 +1,12 @@
 # TODO
 
-## Outstanding docs updates (Phase 2 tail constraint + canonical blend)
-
-**As of:** 15-Dec-25
-
-- **Update `graph-editor/public/docs/lag-statistics-reference.md`**:
-  - Add an explicit section describing the **t95 tail constraint** and its intended outcome: it can **only lower (or leave unchanged)** completeness, never increase it.
-  - Clarify that **`p.mean` is the canonical completeness-weighted blend** of evidence and forecast (no tail-substitution mean estimator).
-- **Update or archive `docs/current/project-lag/implemented/design.md`**:
-  - It still documents **Formula A** as the mechanism for `p.mean` and therefore contradicts current implementation.
-  - Replace with the Phase 2 canonical blend + tail-constraint description, or clearly mark it as historical/superseded.
-
-
-- What is skipped in: windowCohortSemantics.paramPack.e2e.test.ts & why? Should it be skipped??
-- 2dp for latency t95 and path_t95 calcs
-
----
-
+- latency variance?
+- PgDn / up / home / end /arrows should work in md viewer, etc.
+- Store vars to arbitary precision; display to only 2/4dp
 - Check fetch logic properly -- some odd behaviour
-- +Contexts should show all if none pinned
-- querydsl isn't reading from graph on refresh -- is resetting to last 7 days.
 - on F5, we're trying to fetch before files have loaded and failing. Need a guard to hold back fetch until after files are available
+- Graph masters topo-derived fields (e.g. `latency.path_t95`) which can diverge from parameter files. Consider an explicit post-update “auto put back to files” pass for graph-mastered fields (path_t95, anchor/query-derived fields, etc.) so files converge automatically after graph recomputation.
 - we really have to re-factor the 3x god files (dataOperationsService, UpdateManager and GraphCanvas) -- cf. src-slimdown.md
-
 - Confidence band rendering in LAG view needs checking & improving (design and polish; semantics now centralised but visuals may lag)
 
 # Project-lag
@@ -399,7 +383,6 @@ Could use Web Worker for true background execution:
 
 ### Low Priority
 - three different types of ">" indicator on menus (!!)
-- x5 etc. badges next to overriden symbols on graph
 - Check we load right querydsl on graph load
 - Missing terminal node type on node file
 - Keyboard short cuts, generally

@@ -65,7 +65,7 @@
 }
 
 .override-toggle:not(.disabled) svg {
-  color: #374151;  /* Dark grey */
+  color: #f97316;  /* Bright orange (override) */
 }
 
 .override-toggle:not(.disabled):hover {
@@ -75,6 +75,17 @@
 
 .override-toggle:not(.disabled):active {
   transform: scale(1.05);
+}
+
+/* Pulse specifically on the override icon when override flips on */
+.override-toggle.pulse-override {
+  animation: override-icon-pulse 600ms ease-out;
+}
+
+@keyframes override-icon-pulse {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.35); }
+  100% { transform: scale(1); }
 }
 
 /* Focus state for accessibility */
@@ -110,7 +121,7 @@
   }
   
   .override-toggle:not(.disabled) svg {
-    color: #d1d5db;  /* Light grey in dark mode */
+    color: #fb923c;  /* Bright orange in dark mode */
   }
   
   .override-toggle:not(.disabled):hover {

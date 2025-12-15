@@ -175,7 +175,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
             >
-              <span>Get data from file</span>
+              <span>Get from file</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                 <Folders size={12} />
                 <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
@@ -201,7 +201,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
               onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
             >
-              <span>Put data to file</span>
+              <span>Put to file</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
                 <TrendingUpDown size={12} />
                 <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>

@@ -1,6 +1,6 @@
 # DagNet - Directed Acyclic Graph Network Editor
 
-**Version 1.0.0-alpha** | [Changelog](graph-editor/public/docs/CHANGELOG.md) | [About](graph-editor/public/docs/about.md)
+**Version 1.1** | [Changelog](graph-editor/public/docs/CHANGELOG.md) | [About](graph-editor/public/docs/about.md)
 
 A web-based visual editor for creating and analyzing directed acyclic graphs (DAGs) with support for conditional probabilities, file-backed parameters, cohort-based analytics, and latency-aware forecasting.
 
@@ -133,7 +133,7 @@ The 1.0 release introduces **Latency-Aware Graphs** — a shift from static snap
 | **Cohort Windows** | Analyse users by *entry date* with `cohort(1-Dec-25:7-Dec-25)` DSL |
 | **Daily Time-Series** | Full `n_daily`, `k_daily` arrays stored per parameter file |
 | **On-the-fly Aggregation** | Select any date range; evidence recalculates instantly |
-| **Latency Tracking** | Model time-to-convert with `legacy maturity field` configuration |
+| **Latency Tracking** | Model time-to-convert distributions per edge |
 | **Evidence vs Forecast** | Distinguish observed ($p_{evidence}$) from projected ($p_{\infty}$) |
 
 ### Visual Graph Editor

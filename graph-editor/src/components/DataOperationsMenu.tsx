@@ -20,6 +20,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
 import './LightningMenu.css';
+import type { BatchOperationType, SingleOperationTarget } from './modals/BatchOperationsModal';
 
 interface DataOperationsMenuProps {
   // Object identification
@@ -193,38 +194,29 @@ export function DataOperationsMenu({
   const handleGetFromFile = () => {
     if (onClose) onClose();
     if (objectType === 'event') return;
-    const item = createFetchItem(
-      objectType as 'parameter' | 'case' | 'node',
+    const op: BatchOperationType = 'get-from-files';
+    const singleTarget: SingleOperationTarget = {
+      type: objectType as 'parameter' | 'case' | 'node',
       objectId,
-      targetId || '',
-      { paramSlot, conditionalIndex }
-    );
-    fetchItem(item, { mode: 'from-file' });
+      targetId: targetId || '',
+      paramSlot,
+      conditionalIndex,
+    };
+    globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', { detail: { operationType: op, singleTarget } }));
   };
   
   const handlePutToFile = () => {
     if (onClose) onClose();
-    if (objectType === 'parameter') {
-      dataOperationsService.putParameterToFile({ 
-        paramId: objectId, 
-        edgeId: targetId,
-        graph,
-        setGraph
-      });
-    } else if (objectType === 'case') {
-      dataOperationsService.putCaseToFile({ 
-        caseId: objectId, 
-        nodeId: targetId,
-        graph,
-        setGraph
-      });
-    } else if (objectType === 'node') {
-      dataOperationsService.putNodeToFile({ 
-        nodeId: objectId,
-        graph,
-        setGraph
-      });
-    }
+    if (objectType === 'event') return;
+    const op: BatchOperationType = 'put-to-files';
+    const singleTarget: SingleOperationTarget = {
+      type: objectType as 'parameter' | 'case' | 'node',
+      objectId,
+      targetId: targetId || '',
+      paramSlot,
+      conditionalIndex,
+    };
+    globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', { detail: { operationType: op, singleTarget } }));
   };
   
   const handleGetFromSource = () => {
@@ -314,9 +306,9 @@ export function DataOperationsMenu({
       <button
         className={itemClassName}
         onClick={handleGetFromFile}
-          title="Get data from file"
+          title="Get from file"
       >
-        <span>Get data from file</span>
+        <span>Get from file</span>
         <div className={pathwayClassName}>
           <Folders size={12} />
           <span className="lightning-menu-pathway">→</span>
@@ -364,9 +356,9 @@ export function DataOperationsMenu({
         className={itemClassName}
         onClick={handlePutToFile}
         disabled={!objectId || objectId.trim() === ''}
-        title={objectId && objectId.trim() !== '' ? "Put data to file" : "No ID specified (cannot create file)"}
+        title={objectId && objectId.trim() !== '' ? "Put to file" : "No ID specified (cannot create file)"}
       >
-        <span>Put data to file</span>
+        <span>Put to file</span>
         <div className={pathwayClassName}>
           <TrendingUpDown size={12} />
           <span className="lightning-menu-pathway">→</span>

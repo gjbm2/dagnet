@@ -22,10 +22,12 @@ import {
   LATENCY_DEFAULT_SIGMA,
   LATENCY_T95_PERCENTILE,
   LATENCY_PATH_T95_PERCENTILE,
+  LATENCY_HORIZON_DECIMAL_PLACES,
 } from '../constants/latency';
 import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
+import { roundToDecimalPlaces } from '../utils/rounding';
 
 // =============================================================================
 // Shared Blend Calculation (Single Source of Truth)
@@ -1517,7 +1519,7 @@ export function applyPathT95ToGraph(
     const pathT95 = pathT95Map.get(edgeId);
 
     if (pathT95 !== undefined && edge.p?.latency) {
-      edge.p.latency.path_t95 = pathT95;
+      edge.p.latency.path_t95 = roundToDecimalPlaces(pathT95, LATENCY_HORIZON_DECIMAL_PLACES);
     }
   }
 }

@@ -1,32 +1,62 @@
 # DagNet Release Notes
-## Version 1.0.11b
-**Released:** December 15, 2025
 
-Many fixes, t95 testing
+## Version 1.1
+**Release:** 15-Dec-2025
+
+### 📊 LAG Semantics: Stabilisation & Correctness
+
+This release completes the Project LAG work begun in v1.0, hardening the statistical pipeline and fixing several regressions that affected `window()` vs `cohort()` semantics.
+
+#### Completeness & Blending
+- **Window vs Cohort completeness separation**: Completeness is now scoped to the query mode (`window(start:end)` or `cohort(start:end)`). This ensures evidence and completeness reflect the same temporal slice.
+- **Upstream delay adjustment**: Cohort-mode completeness on downstream edges now accounts for anchor-to-source delay (soft prior→observed blend).
+- **Evidence–Forecast blending**: Overhauled to use mode-specific completeness consistently, preventing over/underweighting of immature cohorts.
+
+#### Horizon Primitives (`t95` / `path_t95`)
+- **`path_t95` moment-matched estimate**: When 3-step Amplitude lag arrays are available, DAGNet estimates `path_t95 ≈ t95(A→X + X→Y)` via Fenton–Wilkinson approximation, reducing over-greediness on deep DAGs.
+- **Conservative fallback**: Falls back to topological accumulation of per-edge `t95` when lag arrays are absent.
+- **Quality gate for fitting**: `t95` derivation now requires a minimum converter threshold (`MIN_CONVERTERS`) before treating empirical fits as reliable.
+
+#### Amplitude Conversion Window (`cs`)
+- **Cohort mode**: `cs` is driven by `path_t95` (or `t95` fallback) to avoid premature retrieval truncation.
+- **Window mode**: A fixed 30-day `cs` is now applied to baseline window fetches, preventing accidental censoring by provider defaults.
+
+### 🎨 Edge Rendering & Display
+- Redesigned edge probability bar with solid (evidence) vs hatched (forecast) regions.
+- Improved tooltip layout: shows probability ± stdev, n/k, window dates, completeness, median lag, and maturity status indicator.
+- Non-latency edges now render correctly (no spurious latency beads).
+
+### ⚡ Performance & Fetch Pipeline
+- Unified single-fetch refactor: reduced redundant Amplitude calls.
+- Cache-cutting improvements: smarter detection of missing date ranges.
+- Refetch policy respects `t95` over legacy `maturity_days`.
+
+### 📚 Documentation
+- **LAG Statistics Reference** updated for window/cohort separation, completeness scoping, and `path_t95` estimation strategy.
+- **Glossary** expanded: added `t95`, `path_t95`, anchor lag, moment matching, cohort horizon, cache cutting, sibling rebalancing.
+- **Query DSL Guide** v2.1: added cohort window syntax and examples.
+- **User Guide** updated to v1.0 conventions (LAG sections, copy/paste from Navigator, cohort windows).
+- **Keyboard Shortcuts** updated with Navigator copy/paste and drag-and-drop actions.
+
+### ⚙️ Migration Notes
+- No breaking changes to stored parameter files; existing `maturity_days` values continue to work.
+- A future release (Phase 2 of `t95-fix`) will promote `t95` and `path_t95` to explicit overridable schema fields and introduce a `latency_parameter` enablement flag, deprecating implicit `maturity_days` semantics. See `docs/current/project-lag/t95-fix.md` for details.
 
 ---
 
-## Version 1.0.6b
-**Released:** December 11, 2025
+## Version 1.0.x Series (10-Dec to 15-Dec-25)
+**Post-Alpha Stabilisation**
 
-Fixes to logic & display
+Rapid iteration following the 1.0-alpha release, primarily bug fixes and LAG display improvements.
 
----
-
-## Version 1.0.3b
-**Released:** December 10, 2025
-
-Further cohort path_t95 fixes
-
----
-
-## Version 1.0.2b
-**Released:** December 10, 2025
-
-Added the other clipboard staples; general fetch fixes
+| Version | Date | Summary |
+|---------|------|---------|
+| 1.0.11b | 15-Dec-25 | Many fixes, t95 testing |
+| 1.0.6b  | 11-Dec-25 | Fixes to logic & display |
+| 1.0.3b  | 10-Dec-25 | Further cohort path_t95 fixes |
+| 1.0.2b  | 10-Dec-25 | Added other clipboard staples; general fetch fixes |
 
 ---
-
 
 ## Version 1.0.0-alpha
 **Released:** 10-Dec-25

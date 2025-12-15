@@ -584,6 +584,7 @@ export interface ProbabilityParam {
   id?: string; // Reference to parameter file (FK to parameter-{id}.yaml)
   distribution?: 'normal' | 'beta' | 'uniform';
   connection?: string; // Connection name from connections.yaml
+  connection_overridden?: boolean; // If true, connection was manually edited
   connection_string?: string; // JSON blob of provider-specific settings
   // NOTE: 'query' field removed - legacy field, actual query lives at edge.query
   evidence?: Evidence; // Observations from data sources (n, k, window, etc.)
@@ -638,6 +639,7 @@ export interface CostParam {
   id?: string; // Reference to cost parameter file (FK to parameter-{id}.yaml)
   distribution?: 'normal' | 'lognormal' | 'gamma' | 'uniform' | 'beta';
   connection?: string; // Connection name from connections.yaml
+  connection_overridden?: boolean; // If true, connection was manually edited
   connection_string?: string; // JSON blob of provider-specific settings
   evidence?: Evidence; // Observations from data sources
   data_source?: { // Provenance information

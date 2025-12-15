@@ -1,8 +1,23 @@
 # Project LAG: Latency-Aware Graph Analytics
 
-**Status:** Implementation Complete (Alpha v1.0 Ready)  
+**Status:** Superseded (historical design document; Phase 2 semantics differ)  
 **Created:** 1-Dec-25  
-**Last Updated:** 10-Dec-25  
+**Last Updated:** 15-Dec-25  
+
+---
+
+## Superseded Notice (Phase 2)
+
+This document reflects an earlier design that used **“Formula A” (tail substitution)** as the mechanism for query-time `p.mean`.
+
+**Current implementation (Phase 2) is different:**
+
+- **`p.mean`** is the **canonical completeness-weighted blend** of `p.evidence.mean` and `p.forecast.mean` (no Formula A estimator).
+- **Completeness** uses a **one-way t95 tail constraint** anchored to authoritative `t95`, which can **only lower (or leave unchanged)** completeness — never increase it.
+
+Canonical references:
+- `graph-editor/public/docs/lag-statistics-reference.md`
+- `docs/current/project-lag/t95-fix.md`
 
 ---
 
@@ -478,7 +493,7 @@ When the pinned DSL (e.g., `or(window(-7d:), cohort(-90d:)).context(channel)`) c
    - Store using flat arrays (`dates`, `n_daily`, `k_daily`, `median_lag_days`, `mean_lag_days`, `anchor_*`) plus `latency` and `anchor_latency` blocks (as per §3.2):
      - Per-cohort arrays: `median_lag_days[]`, `mean_lag_days[]`, `anchor_n_daily[]`, `anchor_median_lag_days[]`, `anchor_mean_lag_days[]`.
      - Slice summaries: `latency.{median_lag_days, mean_lag_days, completeness, histogram}`, `anchor_latency.{median_lag_days, mean_lag_days, histogram}`.
-   - Used for `cohort(...)` queries and as the A-anchored evidence for Formula A and completeness.
+   - Used for `cohort(...)` queries and as the A-anchored evidence for completeness and the canonical blend inputs (evidence + upstream delay adjustment).
 
 2. **Window slice** (X-anchored):
    - Fetch 2-step funnel `[X → Y]` for the window range.
@@ -908,7 +923,7 @@ function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDeci
 |-------|---------------|-----|
 | `p.forecast` | **Retrieval time** | Stable baseline from mature data; doesn't depend on query window |
 | `p.evidence` | **Query time** | Depends on which dates/cohorts fall in query window |
-| `p.mean` (blended) | **Query time** | Depends on cohort ages at query time; Formula A (§5.3) runs per-cohort |
+| `p.mean` (blended) | **Query time** | Depends on completeness and forecast population at query time; computed via the canonical completeness-weighted blend (no Formula A) |
 
 **Retrieval-time computation (fetch from source):**
 
@@ -934,14 +949,10 @@ User selects query window (e.g., cohort(-21d:))
          ↓
 Slice stored cohort_data to matching dates
          ↓
-For each cohort i in slice:
-  - k_i, n_i from stored data
-  - a_i = query_date - cohort_date (age TODAY)
-  - Apply Formula A (§5.3)
-         ↓
 Aggregate:
   - p.evidence = Σk_i / Σn_i
-  - p.mean = Σk̂_i / Σn_i (where k̂_i includes forecasted tail)
+  - completeness = n-weighted lag CDF over effective ages (with t95 tail constraint)
+  - p.mean = canonical blend of evidence and forecast weighted by completeness and population
          ↓
 Render using scenario visibility mode (E/F/F+E)
 ```
@@ -949,16 +960,16 @@ Render using scenario visibility mode (E/F/F+E)
 **Why p.mean must be query-time:**
 1. **Query window varies**: User might query last 21 days, last 7 days, specific range
 2. **Cohort ages change daily**: A cohort from 1-Dec has age=3 on 4-Dec, age=4 on 5-Dec
-3. **Formula A (§5.3) needs current ages**: The tail forecast depends on `F(a_i)` which changes as cohorts mature
+3. **Completeness changes as cohorts mature**: the lag CDF is evaluated at “as-of now” effective ages, which changes day-to-day
 
 **Data flow by query type:**
 
 | Query | Slice Used | p.evidence | p.forecast | p.mean |
 |-------|-----------|------------|------------|--------|
 | `window()` mature | window_data | QT: Σk/Σn | RT: p.forecast | = evidence |
-| `window()` immature | window_data | QT: Σk/Σn | RT: p.forecast | QT: Formula A (§5.3) per day |
+| `window()` immature | window_data | QT: Σk/Σn | RT: p.forecast | QT: canonical blend (completeness-weighted) |
 | `cohort()` mature | cohort_data | QT: Σk/Σn | RT: p.forecast | = evidence |
-| `cohort()` immature | cohort_data | QT: Σk/Σn | RT: p.forecast | QT: Formula A (§5.3) per cohort |
+| `cohort()` immature | cohort_data | QT: Σk/Σn | RT: p.forecast | QT: canonical blend (completeness-weighted) |
 | No usable window baseline (API returns no data even for implicit baseline window) | — | Available | **Not available** | — |
 | Non-latency edge | either | QT: Σk/Σn | = evidence | = evidence |
 
@@ -1036,7 +1047,9 @@ Therefore:
 P(\text{not converted by } a_i) = (1 - p_\infty) + p_\infty \cdot S(a_i) = 1 - p_\infty \cdot F(a_i)
 \]
 
-### 5.3 The Forecasting Formula (Formula A)
+### 5.3 (Superseded) The Forecasting Formula (“Formula A”)
+
+**Superseded (Phase 2):** Formula A / tail substitution is not used by the current implementation. `p.mean` is computed via the canonical completeness-weighted blend (see “Superseded Notice (Phase 2)” at the top of this document and the canonical references).
 
 Using Bayes' rule, the probability that a user who hasn't converted by age \(a_i\) will eventually convert is:
 

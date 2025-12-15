@@ -3,7 +3,7 @@ import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
-import { BatchOperationsModal } from '../modals/BatchOperationsModal';
+import { BatchOperationsModal, type SingleOperationTarget } from '../modals/BatchOperationsModal';
 import { AllSlicesModal } from '../modals/AllSlicesModal';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
@@ -229,6 +229,30 @@ export function DataMenu() {
   // Batch operations state
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchOperationType, setBatchOperationType] = useState<BatchOperationType | null>(null);
+  const [batchSingleTarget, setBatchSingleTarget] = useState<SingleOperationTarget | null>(null);
+
+  // Allow any UI entry point to open the batch modal in single-item mode.
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      const detail = (e as any).detail as { operationType?: BatchOperationType; singleTarget?: SingleOperationTarget } | undefined;
+      const op = detail?.operationType;
+      const singleTarget = detail?.singleTarget;
+
+      if (!op) return;
+      if (!graphStore) return;
+      if (!graph) {
+        toast.error('No graph loaded');
+        return;
+      }
+
+      setBatchOperationType(op);
+      setBatchSingleTarget(singleTarget ?? null);
+      setBatchModalOpen(true);
+    };
+
+    window.addEventListener('dagnet:openBatchOperationsModal', handler as EventListener);
+    return () => window.removeEventListener('dagnet:openBatchOperationsModal', handler as EventListener);
+  }, [graphStore, graph]);
   
   // All slices flow - uses hook to handle pinned query requirement
   const {
@@ -292,38 +316,36 @@ export function DataMenu() {
   const handleSectionGetFromFile = (section: DataOperationSection) => {
     if (!graph) return;
     if (section.objectType === 'parameter' || section.objectType === 'case' || section.objectType === 'node') {
-      const item = createFetchItem(
-        section.objectType,
-        section.objectId,
-        section.targetId,
-        { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
-      );
-      fetchItem(item, { mode: 'from-file' });
+      globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+        detail: {
+          operationType: 'get-from-files',
+          singleTarget: {
+            type: section.objectType,
+            objectId: section.objectId,
+            targetId: section.targetId,
+            paramSlot: section.paramSlot,
+            conditionalIndex: section.conditionalIndex,
+          },
+        },
+      }));
     }
   };
 
   const handleSectionPutToFile = (section: DataOperationSection) => {
     if (!graph) return;
-    if (section.objectType === 'parameter') {
-      dataOperationsService.putParameterToFile({
-        paramId: section.objectId,
-        edgeId: section.targetId,
-        graph,
-        setGraph: handleSetGraph,
-      });
-    } else if (section.objectType === 'case') {
-      dataOperationsService.putCaseToFile({
-        caseId: section.objectId,
-        nodeId: section.targetId,
-        graph,
-        setGraph: handleSetGraph,
-      });
-    } else if (section.objectType === 'node') {
-      dataOperationsService.putNodeToFile({
-        nodeId: section.objectId,
-        graph,
-        setGraph: handleSetGraph,
-      });
+    if (section.objectType === 'parameter' || section.objectType === 'case' || section.objectType === 'node') {
+      globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+        detail: {
+          operationType: 'put-to-files',
+          singleTarget: {
+            type: section.objectType,
+            objectId: section.objectId,
+            targetId: section.targetId,
+            paramSlot: section.paramSlot,
+            conditionalIndex: section.conditionalIndex,
+          },
+        },
+      }));
     }
   };
 
@@ -813,8 +835,10 @@ export function DataMenu() {
         onClose={() => {
           setBatchModalOpen(false);
           setBatchOperationType(null);
+          setBatchSingleTarget(null);
         }}
         operationType={batchOperationType}
+        singleTarget={batchSingleTarget}
         graph={graph || null}
         setGraph={handleSetGraph}
         currentDSL={graphStore?.getState().currentDSL || ''}

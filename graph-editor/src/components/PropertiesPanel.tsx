@@ -768,9 +768,18 @@ export default function PropertiesPanel({
     const edge = selectedEdge;
     const paramId = edge?.[paramSlot]?.id;
     if (!paramId || !selectedEdgeId) return;
-    
-    const item = createFetchItem('parameter', paramId, selectedEdgeId, { paramSlot });
-    await fetchItem(item, { mode: 'from-file' });
+
+    globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+      detail: {
+        operationType: 'get-from-files',
+        singleTarget: {
+          type: 'parameter',
+          objectId: paramId,
+          targetId: selectedEdgeId,
+          paramSlot,
+        },
+      },
+    }));
   }, [selectedEdge, selectedEdgeId, fetchItem]);
 
   // Helper: PUSH edge parameter to file  
@@ -778,13 +787,18 @@ export default function PropertiesPanel({
     const edge = selectedEdge;
     const paramId = edge?.[paramSlot]?.id;
     if (!paramId || !selectedEdgeId) return;
-    
-    await dataOperationsService.putParameterToFile({
-      paramId,
-      edgeId: selectedEdgeId,
-      graph,
-      setGraph: setGraph as (graph: any) => void
-    });
+
+    globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+      detail: {
+        operationType: 'put-to-files',
+        singleTarget: {
+          type: 'parameter',
+          objectId: paramId,
+          targetId: selectedEdgeId,
+          paramSlot,
+        },
+      },
+    }));
   }, [selectedEdge, selectedEdgeId, graph, setGraph]);
 
   // Helper: OPEN edge parameter file
@@ -1294,9 +1308,14 @@ export default function PropertiesPanel({
                         const next = structuredClone(graph);
                         const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                         if (nodeIndex >= 0) {
-                          next.nodes[nodeIndex].url = localNodeData.url;
-                            // Mark as overridden when user commits edit
-                            next.nodes[nodeIndex].url_overridden = true;
+                          const trimmed = (localNodeData.url || '').trim();
+                          if (trimmed.length === 0) {
+                            delete next.nodes[nodeIndex].url;
+                          } else {
+                            next.nodes[nodeIndex].url = trimmed;
+                          }
+                          // Mark as overridden when user commits edit
+                          next.nodes[nodeIndex].url_overridden = true;
                           if (next.metadata) {
                             next.metadata.updated_at = new Date().toISOString();
                           }
@@ -1310,9 +1329,14 @@ export default function PropertiesPanel({
                           const next = structuredClone(graph);
                           const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
                           if (nodeIndex >= 0) {
-                            next.nodes[nodeIndex].url = localNodeData.url;
-                              // Mark as overridden when user commits edit
-                              next.nodes[nodeIndex].url_overridden = true;
+                            const trimmed = (localNodeData.url || '').trim();
+                            if (trimmed.length === 0) {
+                              delete next.nodes[nodeIndex].url;
+                            } else {
+                              next.nodes[nodeIndex].url = trimmed;
+                            }
+                            // Mark as overridden when user commits edit
+                            next.nodes[nodeIndex].url_overridden = true;
                             if (next.metadata) {
                               next.metadata.updated_at = new Date().toISOString();
                             }

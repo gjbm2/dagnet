@@ -417,6 +417,10 @@ These constants are part of the statistical constants set and should be referenc
 │   • completeness → 0:  Cohorts are too young; most conversions still pending        │
 │   • completeness → 1:  Cohorts are mature; nearly all conversions have occurred     │
 │                                                                                     │
+│   PHASE 2 T95 TAIL CONSTRAINT (15-Dec-25): Completeness applies an explicit tail     │
+│   constraint anchored to the authoritative `t95` horizon. This can ONLY LOWER (or   │
+│   leave unchanged) completeness. It must NEVER increase completeness.               │
+│                                                                                     │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                     │
 │   SCOPING BY QUERY MODE                                                             │
@@ -625,6 +629,8 @@ These constants are part of the statistical constants set and should be referenc
 
 ## 7. Blend Formula (p.mean from evidence + forecast)
 
+Phase 2 clarifies that **`p.mean` is the canonical completeness-weighted blend** of evidence and forecast. There is **no separate “tail substitution” / “Formula A” mean estimator**.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                     │
@@ -744,7 +750,7 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │   ───────────────────────                                                           │
 │                                                                                     │
 │   ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐       │
-│   │ n_daily[]  │ │ k_daily[]  │ │median_lag[]│ │anchor_lag[]│ │maturity_d  │       │
+│   │ n_daily[]  │ │ k_daily[]  │ │median_lag[]│ │anchor_lag[]│ │ latency?   │       │
 │   └─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └─────┬──────┘       │
 │         │              │              │              │              │               │
 │         ▼              ▼              ▼              ▼              ▼               │

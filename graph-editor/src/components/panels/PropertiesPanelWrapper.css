@@ -23,6 +23,51 @@
   color: #374151;
 }
 
+.properties-panel-header-badges {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.properties-panel-badge {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.properties-panel-badge-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #374151;
+}
+
+/* Override badge should be more visible in props panel */
+.properties-panel-badge-icon--override {
+  color: #f97316;
+}
+
+.properties-panel-badge-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #f97316;
+  color: white;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+
 .properties-panel-wrapper .panel-body {
   flex: 1;
   overflow-y: auto;
