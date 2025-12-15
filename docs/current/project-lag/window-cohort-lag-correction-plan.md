@@ -2,7 +2,7 @@
 
 **Created:** 14-Dec-25  
 **Updated:** 15-Dec-25  
-**Status:** ✅ Complete (all phases done; 2562 tests passing)  
+**Status:** ✅ Complete (all phases done; full `graph-editor` test suite green on 15-Dec-25)  
 **Canonical spec:** `graph-editor/public/docs/lag-statistics-reference.md`
 
 ## Progress Summary (15-Dec-25)
@@ -27,7 +27,7 @@ Implemented soft transition for anchor delay in cohort mode completeness:
   - **Observed**: from cohort-slice `anchor_median_lag_days[]`
 - Blend weight: `w = 1 - exp(-effective_forecast_conversions / 50)`
 - When observed data is sparse, prior dominates; as evidence accumulates, observed takes over
-- All 2562 tests pass  
+- Phase 1 sign-off: full `graph-editor` suite run on 15-Dec-25 with **2567 passing**, **32 skipped**, **3 todo** (total **2602**).
 
 ---
 
