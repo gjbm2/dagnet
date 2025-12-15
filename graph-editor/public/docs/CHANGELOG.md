@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.0.11b
+**Released:** December 15, 2025
+
+Many fixes, t95 testing
+
+---
+
 ## Version 1.0.6b
 **Released:** December 11, 2025
 
