@@ -1,0 +1,18 @@
+id: lag-cohort-anchor-prior-only
+type: probability
+parameter_type: probability
+connection: amplitude-test
+values:
+  # Upstream edge A→X: provides the PRIOR anchor delay via baseline window median lag.
+  - sliceDSL: window(1-Oct-25:31-Oct-25)
+    window_from: 1-Oct-25
+    window_to: 31-Oct-25
+    n: 1000
+    k: 500
+    dates: [1-Oct-25]
+    n_daily: [1000]
+    k_daily: [500]
+    median_lag_days: [10]
+    mean_lag_days: [12]
+    forecast: 0.50
+

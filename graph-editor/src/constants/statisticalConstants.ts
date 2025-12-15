@@ -135,3 +135,34 @@ export const DIAGNOSTIC_LOG = true;
  */
 export const PRECISION_DECIMAL_PLACES = 4;
 
+/**
+ * ANCHOR_DELAY_BLEND_K_CONVERSIONS
+ * 
+ * Controls the rate at which observed anchor lag data overrides the prior
+ * (baseline-derived) anchor delay in cohort mode completeness calculations.
+ * 
+ * The effective anchor delay is blended:
+ *   effective_anchor_median = w * observed + (1-w) * prior
+ * 
+ * where:
+ *   forecast_conversions = p.n * p.mean
+ *   anchor_lag_coverage = fraction of cohort-days with valid anchor_median_lag_days
+ *   effective_forecast_conversions = anchor_lag_coverage * forecast_conversions
+ *   w = 1 - exp(-effective_forecast_conversions / ANCHOR_DELAY_BLEND_K_CONVERSIONS)
+ * 
+ * Interpretation:
+ *   - At 50 effective forecast conversions, w ≈ 63% (observed data dominates)
+ *   - At 100 effective forecast conversions, w ≈ 86%
+ *   - At 150 effective forecast conversions, w ≈ 95%
+ *   - When coverage is low or sample size is small, prior dominates
+ * 
+ * Rationale:
+ *   - Prevents completeness from being incorrectly high for fresh cohorts
+ *     on downstream edges when anchor lag evidence is sparse
+ *   - Allows stable prior from baseline window to guide early estimates
+ *   - Smoothly transitions to observed as cohort evidence accumulates
+ * 
+ * See: window-cohort-lag-correction-plan.md §5 Phase B
+ */
+export const ANCHOR_DELAY_BLEND_K_CONVERSIONS = 50;
+

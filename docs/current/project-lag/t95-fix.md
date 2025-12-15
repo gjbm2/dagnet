@@ -1,6 +1,7 @@
 # t95 Fix: Parameter-Level Overrides for `t95` and `path_t95`
 
-Date: 12-Dec-25
+Date: 12-Dec-25  
+Updated: 15-Dec-25
 
 ## Purpose
 
@@ -104,6 +105,17 @@ To avoid conceptual confusion:
   - and stable horizon behaviour on long/heterogeneous edges.
 - Completeness is still computed from lag CDF evaluation over cohort ages (and is mode-dependent as per the canonical spec).
   `path_t95` is not a substitute for upstream median delay; we do not invert percentiles into medians.
+
+### Phase 2 simplification: delete “Formula A” (tail substitution) entirely
+
+Phase 2 will delete the “Formula A / tail substitution” construct from the implementation.
+
+`p.mean` will be computed via the canonical completeness-weighted blend of:
+
+- narrow evidence (`p.evidence.*`) from the relevant query cohort set, and
+- baseline forecast (`p.forecast.*`) from the pinned baseline `window()` slice,
+
+with completeness computed from the lag CDF (with the Phase 2 “t95 tail constraint” applied where applicable).
 
 ### Phase 2 design note: tail-safe completeness CDF using `t95` (recommended)
 

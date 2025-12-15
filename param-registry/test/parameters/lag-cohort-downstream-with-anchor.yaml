@@ -1,0 +1,41 @@
+id: lag-cohort-downstream-with-anchor
+type: probability
+parameter_type: probability
+connection: amplitude-test
+values:
+  # Downstream edge X→Y: cohort slice WITH anchor lag arrays (observed).
+  # We choose a short observed upstream delay (2 days) so completeness increases.
+  - sliceDSL: cohort(A,1-Dec-25:7-Dec-25)
+    cohort_from: 1-Dec-25
+    cohort_to: 7-Dec-25
+    n: 700
+    k: 140
+    dates:
+      - 1-Dec-25
+      - 2-Dec-25
+      - 3-Dec-25
+      - 4-Dec-25
+      - 5-Dec-25
+      - 6-Dec-25
+      - 7-Dec-25
+    n_daily: [100, 100, 100, 100, 100, 100, 100]
+    k_daily: [20, 20, 20, 20, 20, 20, 20]
+    median_lag_days: [5, 5, 5, 5, 5, 5, 5]
+    mean_lag_days: [7, 7, 7, 7, 7, 7, 7]
+    # Observed anchor lag coverage is 100% here.
+    anchor_median_lag_days: [2, 2, 2, 2, 2, 2, 2]
+    anchor_mean_lag_days: [2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]
+
+  # Baseline window slice (forecast) for X→Y.
+  - sliceDSL: window(1-Oct-25:31-Oct-25)
+    window_from: 1-Oct-25
+    window_to: 31-Oct-25
+    n: 5000
+    k: 2500
+    dates: [1-Oct-25]
+    n_daily: [5000]
+    k_daily: [2500]
+    median_lag_days: [5]
+    mean_lag_days: [7]
+    forecast: 0.40
+
