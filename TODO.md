@@ -17,6 +17,8 @@
 - Add an explicit toggle for **“HAS completed”** (as-of now; allow conversions after `window.end` / `cohort.end`) vs **“completed by window end”** semantics.
   - This is deferred because it complicates Phase 1 semantics/regression repair, and it may not be trivial to derive “events occurred within the window” from the current Amplitude return shapes without additional query structure.
 
+- (15-Dec-25) Completeness is currently **model-derived** from the lag CDF and cohort ages; it does not directly consult realised conversions (`p.evidence.k/n`). This can be counter-intuitive in edge cases (e.g. `evidence.k > 0` while completeness is ~0). Consider adding an evidence-informed completeness floor/blend (design needed; defer until after Phase 1).
+
 
 ## Major components
 - Tabulated & graphing analytics output
