@@ -34,7 +34,8 @@ Do not start Phase 2 implementation until Phase 1 is complete and the relevant s
 
 - `dataOperationsService.test.ts` — `should set non-latency p.mean = evidence for window() queries` ✅
 - `sampleFileQueryFlow.e2e.test.ts` — all 8 tests passing ✅
-- Full suite: 2562 tests passing ✅
+- `windowCohortSemantics.paramPack.e2e.test.ts` — Phase 1 contract tests passing; Phase 2 RED tests intentionally skipped ✅
+- Full `graph-editor` suite: **2567 passing**, **32 skipped**, **3 todo** (total **2602**) ✅
 
 **Phase 2 is now unblocked** — can proceed with schema/type changes and `maturity_days` deprecation.
 
