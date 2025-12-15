@@ -117,3 +117,34 @@ parameters:
     status: active
     tags: [delivery, fulfilment, latency, long-lag]
 
+  # LAG semantics fixtures (Phase 1/2 integration)
+  - id: lag-window-baseline-subset
+    file_path: parameters/lag-window-baseline-subset.yaml
+    type: probability
+    status: active
+    tags: [lag, window, baseline, fixture]
+
+  - id: lag-nonlatency-window
+    file_path: parameters/lag-nonlatency-window.yaml
+    type: probability
+    status: active
+    tags: [lag, window, non-latency, fixture]
+
+  - id: lag-cohort-anchor-prior-only
+    file_path: parameters/lag-cohort-anchor-prior-only.yaml
+    type: probability
+    status: active
+    tags: [lag, cohort, anchor, prior, fixture]
+
+  - id: lag-cohort-downstream-no-anchor
+    file_path: parameters/lag-cohort-downstream-no-anchor.yaml
+    type: probability
+    status: active
+    tags: [lag, cohort, downstream, no-anchor, fixture]
+
+  - id: lag-cohort-downstream-with-anchor
+    file_path: parameters/lag-cohort-downstream-with-anchor.yaml
+    type: probability
+    status: active
+    tags: [lag, cohort, downstream, anchor, fixture]
+

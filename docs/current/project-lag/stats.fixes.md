@@ -40,13 +40,19 @@ For latency edges, a “baseline” derived from `window()` data must avoid incl
 - Confirm whether stored forecast is computed from “mature-only” data (or corrected), especially for edges with `t95` in the 10–20 day range.
 - Verify whether forecast storage is accidentally equal to a raw window mean on latency edges.
 
-### 2) Cohort-mode `p.mean` needs to be driven by Formula A (not raw k/n blending) — pending implementation
+### 2) Cohort-mode `p.mean` should be computed via completeness-weighted blending (no “Formula A”)
 
-For immature cohorts, raw `p.evidence.mean = Σk/Σn` is a partial observation and will be biased low. The intended cohort-mode behaviour is to forecast eventual conversions using Formula A’s per-cohort \(\hat{k}\) mechanism, anchored by the baseline forecast, rather than “blending” raw evidence mean directly.
+For immature cohorts, raw `p.evidence.mean = Σk/Σn` is a partial observation and will be biased low. The system should therefore lean on the baseline forecast when completeness is low.
+
+Design stance (Phase 1+2 target):
+
+- `p.mean` is computed via the canonical **completeness-weighted blend** of `p.evidence.mean` (narrow query cohort set) and `p.forecast.mean` (baseline window slice).
+- Phase 2 strengthens the completeness calculation by applying the “t95 tail constraint” so the CDF used for completeness does not contradict the authoritative `t95`.
+- Phase 2 explicitly deletes the “Formula A / tail substitution” construct to avoid ambiguity and duplicated estimators.
 
 **Checkpoints**
-- Ensure cohort-mode `p.mean` is computed using Formula A per cohort (or an equivalent cohort-tail mechanism), rather than a direct mixture of raw `p.evidence.mean` and `p.forecast.mean`.
-- Ensure any weighting uses the correct population for the evidence term (evidence `n`, not forecast-propagated `n`).
+- Ensure cohort-mode `p.mean` leans towards forecast when completeness is low and towards evidence when completeness is high.
+- Ensure weighting uses the correct population (`p.n` where present, otherwise evidence `n`), and uses baseline-window `n` for the forecast prior strength.
 
 ### 3) Conditional probability handling can change the effective evidence view of success
 

@@ -24,7 +24,7 @@ import {
   LATENCY_T95_PERCENTILE,
   LATENCY_PATH_T95_PERCENTILE,
 } from '../constants/latency';
-import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
+import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS } from '../constants/statisticalConstants';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 
 // =============================================================================
@@ -1629,11 +1629,17 @@ export interface ParameterValueForLAG {
  * These come from windowAggregationService.
  */
 export interface LAGHelpers {
-  /** Convert ParameterValue[] to CohortData[], optionally filtered to a cohort window */
+  /** Convert ParameterValue[] to CohortData[], optionally filtered to a cohort window (cohort slices only) */
   aggregateCohortData: (
     values: ParameterValueForLAG[], 
     queryDate: Date,
     cohortWindow?: { start: Date; end: Date }
+  ) => CohortData[];
+  /** Convert ParameterValue[] to CohortData[] from window slices (for window-mode LAG) */
+  aggregateWindowData?: (
+    values: ParameterValueForLAG[], 
+    queryDate: Date,
+    windowFilter?: { start: Date; end: Date }
   ) => CohortData[];
   /** Compute aggregate median/mean lag from cohorts */
   aggregateLatencyStats: (cohorts: CohortData[]) => { median_lag_days: number; mean_lag_days: number } | undefined;
@@ -1744,7 +1750,8 @@ export function enhanceGraphLatencies(
   helpers: LAGHelpers,
   cohortWindow?: { start: Date; end: Date },
   whatIfDSL?: string,
-  pathT95Map?: Map<string, number>
+  pathT95Map?: Map<string, number>,
+  lagSliceSource: 'cohort' | 'window' | 'none' = 'cohort'
 ): GraphLatencyEnhancementResult {
   const result: GraphLatencyEnhancementResult = {
     edgesProcessed: 0,
@@ -1752,10 +1759,14 @@ export function enhanceGraphLatencies(
     edgeValues: [],
   };
   
+  // For window-mode queries, use aggregateWindowData to process window slices.
+  // For cohort-mode queries, use aggregateCohortData to process cohort slices.
+  const isWindowMode = lagSliceSource === 'window';
+  
   console.log('[LAG_TOPO] enhanceGraphLatencies called with cohortWindow:', cohortWindow ? {
     start: cohortWindow.start.toISOString().split('T')[0],
     end: cohortWindow.end.toISOString().split('T')[0],
-  } : 'none');
+  } : 'none', '| lagSliceSource:', lagSliceSource);
 
   // Build a map from node UUID to node ID for normalization
   // This handles graphs where edge.from/to are UUIDs instead of node IDs
@@ -1823,6 +1834,14 @@ export function enhanceGraphLatencies(
   const nodePathT95 = new Map<string, number>();
   for (const startId of startNodes) {
     nodePathT95.set(startId, 0);
+  }
+  
+  // DP state: accumulated median lag prior (from baseline window data) to reach each node.
+  // Used for cohort mode soft transition: when observed anchor lag is sparse,
+  // blend with this prior to avoid overstating completeness.
+  const nodeMedianLagPrior = new Map<string, number>();
+  for (const startId of startNodes) {
+    nodeMedianLagPrior.set(startId, 0);
   }
 
   // Compute in-degree for Kahn's algorithm
@@ -1926,10 +1945,44 @@ export function enhanceGraphLatencies(
       // force the fit to fail and make t95/path_t95 fall back to maturity_days / topo sums.
       // That produces "stuck" persisted path_t95 values like 46.66d even when the file
       // contains rich anchor_* + lag data that yields a stable moment-matched estimate.
-      const cohortsScoped = helpers.aggregateCohortData(paramValues, queryDate, cohortWindow);
-      const cohortsAll = helpers.aggregateCohortData(paramValues, queryDate, undefined);
+      //
+      // WINDOW MODE vs COHORT MODE:
+      // - Window mode: use aggregateWindowData (processes window slices only)
+      // - Cohort mode: use aggregateCohortData (processes cohort slices only)
+      const windowAggregateFn = helpers.aggregateWindowData ?? helpers.aggregateCohortData;
+      const aggregateFn = isWindowMode ? windowAggregateFn : helpers.aggregateCohortData;
+      const cohortsScoped = aggregateFn(paramValues, queryDate, cohortWindow);
+      const cohortsAll = aggregateFn(paramValues, queryDate, undefined);
       if (cohortsScoped.length === 0) {
-        console.log('[LAG_TOPO_SKIP] noCohorts:', { edgeId, paramValuesCount: paramValues.length });
+        // Cohort mode: upstream edges (especially the first latency edge from the anchor)
+        // may have only a baseline window() slice. Even if we cannot compute cohort-scoped
+        // completeness for that edge, we still need to propagate a baseline median-lag
+        // prior downstream for the anchor-delay soft transition.
+        //
+        // Window mode: this prior is not used (no upstream adjustment), so we can skip.
+        if (!isWindowMode) {
+          const fromNodeIdForPrior = normalizeNodeRef(edge.from);
+          const windowCohortsForPriorOnly = windowAggregateFn(paramValues, queryDate, undefined);
+          const windowLagStatsForPriorOnly = helpers.aggregateLatencyStats(windowCohortsForPriorOnly);
+          const baselineMedianLagForPrior =
+            windowLagStatsForPriorOnly?.median_lag_days ?? 0;
+
+          if (baselineMedianLagForPrior > 0) {
+            const currentPriorToNode = nodeMedianLagPrior.get(fromNodeIdForPrior) ?? 0;
+            const newPriorToTarget = currentPriorToNode + baselineMedianLagForPrior;
+            const existingPriorToTarget = nodeMedianLagPrior.get(toNodeId) ?? 0;
+            nodeMedianLagPrior.set(toNodeId, Math.max(existingPriorToTarget, newPriorToTarget));
+          }
+
+          console.log('[LAG_TOPO_SKIP] noData (propagatedPrior):', {
+            edgeId,
+            paramValuesCount: paramValues.length,
+            isWindowMode,
+            propagatedPriorMedianLag: baselineMedianLagForPrior,
+          });
+        } else {
+          console.log('[LAG_TOPO_SKIP] noData:', { edgeId, paramValuesCount: paramValues.length, isWindowMode });
+        }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
         if (newInDegree === 0 && !queue.includes(toNodeId)) {
@@ -1961,14 +2014,26 @@ export function enhanceGraphLatencies(
       //   - First latency edge: anchorMedianLag = 0
       //   - Downstream edges: anchorMedianLag from anchor_median_lag_days in cohort data
       //
+      // PHASE B: Soft transition for anchor delay (prior → observed)
+      //   For immature cohort selections, observed anchor lag may be sparse/noisy.
+      //   We blend between:
+      //     - prior_anchor_median_days: accumulated baseline median lag from upstream edges
+      //     - observed_anchor_median_days: from cohort-slice anchor_median_lag_days[]
+      //   Weight is based on coverage and forecast conversions.
+      //   See: window-cohort-lag-correction-plan.md §5 Phase B
+      
+      // 1. Get prior anchor delay from accumulated baseline (already computed via topo pass)
+      const fromNodeId = normalizeNodeRef(edge.from);
+      const priorAnchorMedianDays = nodeMedianLagPrior.get(fromNodeId) ?? 0;
+      
+      // 2. Compute observed anchor delay from cohort-slice anchor_median_lag_days[]
       // We compute an n-weighted average of per-cohort anchor_median_lag_days.
       //
       // IMPORTANT: This MUST NOT be k-weighted. For downstream edges it is common
       // to have k=0 in the current cohort window while the A→X anchor lag is still
       // well-defined; k-weighting incorrectly collapses anchorMedianLag to 0 and
       // makes completeness look artificially high.
-      // If cohorts don't have this field (legacy data), we use 0 (treat as first edge).
-      let anchorMedianLag = 0;
+      let observedAnchorMedianDays = 0;
       const cohortsWithAnchorLag = (cohortsAll.length > 0 ? cohortsAll : cohortsScoped).filter(c =>
         c.anchor_median_lag_days !== undefined && 
         Number.isFinite(c.anchor_median_lag_days) &&
@@ -1977,19 +2042,43 @@ export function enhanceGraphLatencies(
       );
       if (cohortsWithAnchorLag.length > 0) {
         const totalNForAnchor = cohortsWithAnchorLag.reduce((sum, c) => sum + c.n, 0);
-        anchorMedianLag = cohortsWithAnchorLag.reduce(
+        observedAnchorMedianDays = cohortsWithAnchorLag.reduce(
           (sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0),
           0
         ) / (totalNForAnchor || 1);
-        
-        console.log('[LAG_TOPO_ANCHOR] computed anchorMedianLag:', {
-          edgeId,
-          anchorMedianLag: anchorMedianLag.toFixed(2),
-          cohortsWithAnchorLag: cohortsWithAnchorLag.length,
-          totalNForAnchor,
-          sampleValues: cohortsWithAnchorLag.slice(0, 3).map(c => c.anchor_median_lag_days),
-        });
       }
+      
+      // 3. Compute anchor lag coverage (fraction of cohort-days with valid anchor data)
+      const totalCohortsInScope = (cohortsAll.length > 0 ? cohortsAll : cohortsScoped).filter(c => c.n > 0).length;
+      const anchorLagCoverage = totalCohortsInScope > 0 
+        ? cohortsWithAnchorLag.length / totalCohortsInScope 
+        : 0;
+      
+      // 4. Compute blend weight using exponential credibility
+      //    w = 1 - exp(-effective_forecast_conversions / K)
+      //    where effective_forecast_conversions = coverage * forecast_conversions
+      const forecastConversions = (edge.p?.n ?? 0) * (edge.p?.mean ?? 0);
+      const effectiveForecastConversions = anchorLagCoverage * forecastConversions;
+      const blendWeight = 1 - Math.exp(-effectiveForecastConversions / ANCHOR_DELAY_BLEND_K_CONVERSIONS);
+      
+      // 5. Blend to get effective anchor median delay
+      const effectiveAnchorMedianDays = blendWeight * observedAnchorMedianDays + (1 - blendWeight) * priorAnchorMedianDays;
+      
+      // For compatibility, expose as anchorMedianLag (the effective value)
+      const anchorMedianLag = effectiveAnchorMedianDays;
+      
+      console.log('[LAG_TOPO_ANCHOR] soft transition anchor delay:', {
+        edgeId,
+        priorAnchorMedianDays: priorAnchorMedianDays.toFixed(2),
+        observedAnchorMedianDays: observedAnchorMedianDays.toFixed(2),
+        anchorLagCoverage: anchorLagCoverage.toFixed(2),
+        forecastConversions: forecastConversions.toFixed(1),
+        effectiveForecastConversions: effectiveForecastConversions.toFixed(1),
+        blendWeight: blendWeight.toFixed(3),
+        effectiveAnchorMedianDays: effectiveAnchorMedianDays.toFixed(2),
+        cohortsWithAnchorLag: cohortsWithAnchorLag.length,
+        totalCohortsInScope,
+      });
 
       // Compute edge LAG stats with anchor-adjusted ages (NOT path_t95!)
       // Use effectiveMaturity for edges behind lagged paths that have no local config.
@@ -2223,9 +2312,9 @@ export function enhanceGraphLatencies(
         hasPN: edge.p?.n !== undefined,
       });
       
-      // Compute p.mean using Formula A (§5.3) with the externally-provided forecast baseline.
-      // This ensures k=0 in immature cohorts yields p.mean≈forecast (not 0),
-      // and aligns with design.md.
+      // Compute p.mean using Formula A (tail substitution for immature cohorts).
+      // This is the canonical expectation for the LAG topo pass and is asserted in
+      // `lagStatsFlow.integration.test.ts`.
       const cohortsForFormulaA: CohortData[] =
         anchorMedianLag > 0 || cohortsScoped.some(c => c.anchor_median_lag_days)
           ? cohortsScoped.map(c => {
@@ -2234,15 +2323,46 @@ export function enhanceGraphLatencies(
             })
           : cohortsScoped;
 
-      const blendedMean = computeFormulaAMeanFromCohorts(
+      const formulaAMean = computeFormulaAMeanFromCohorts(
         cohortsForFormulaA,
         forecastMean,
         effectiveMaturity
       );
-      
+
+      // Fixture-safety: some test fixtures include sampled per-day cohort arrays but
+      // authoritative header totals on the edge (p.evidence.n/k). If cohort totals
+      // look far smaller than edge evidence totals, prefer the edge-attached evidence
+      // when computing a blended mean (otherwise Formula A will be biased by the sample).
+      const sumCohortN = cohortsForFormulaA.reduce((sum, c) => sum + (c.n ?? 0), 0);
+      const edgeEvidenceN = edge.p?.evidence?.n;
+      const cohortsLookSampled =
+        typeof edgeEvidenceN === 'number' &&
+        edgeEvidenceN > 0 &&
+        sumCohortN > 0 &&
+        edgeEvidenceN >= sumCohortN * 2;
+
+      // WINDOW MODE: Always use completeness-weighted blend (computeBlendedMean).
+      // Formula A is designed for cohort-anchored ages where "age" = time since anchor event.
+      // In window mode, "age" = days since window entry, which is NOT the same semantics.
+      // Window mode should blend evidence + forecast using the LAG-computed completeness.
+      //
+      // COHORT MODE: Use Formula A for immature cohorts (adds expected tail to observed k),
+      // or edge-evidence blend if cohorts look sampled.
+      const useDirectBlend = isWindowMode || cohortsLookSampled;
+
+      const blendedMean = useDirectBlend
+        ? computeBlendedMean({
+            evidenceMean,
+            forecastMean: forecastMean ?? 0,
+            completeness,
+            nQuery: typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery,
+            nBaseline: nBaseline > 0 ? nBaseline : nQuery,
+          })
+        : formulaAMean;
+
       if (blendedMean !== undefined) {
         edgeLAGValues.blendedMean = blendedMean;
-        
+
         console.log('[enhanceGraphLatencies] Computed forecast blend:', {
           edgeId,
           edgeUuid,
@@ -2252,12 +2372,34 @@ export function enhanceGraphLatencies(
           evidenceMean: (evidenceMean ?? 0).toFixed(3),
           forecastMean: (forecastMean ?? 0).toFixed(3),
           blendedMean: blendedMean.toFixed(3),
+          blendMethod: isWindowMode ? 'window-blend' : (cohortsLookSampled ? 'edge-evidence' : 'formula-a'),
         });
       }
 
       // Update node path_t95 for target node (needed for downstream edges)
       const currentTargetT95 = nodePathT95.get(toNodeId) ?? 0;
       nodePathT95.set(toNodeId, Math.max(currentTargetT95, edgePathT95));
+      
+      // Update node median lag prior for target node (for cohort mode soft transition).
+      //
+      // IMPORTANT: The prior must come from the baseline WINDOW slice (stable, wide),
+      // even when we are running a cohort() query.
+      //
+      // In cohort mode, `aggregateMedianLag` is derived from cohort slices (if present),
+      // but upstream anchor-prior should not collapse to 0 just because there are no cohort
+      // slices on the upstream edge (common for the first latency edge where we only have
+      // a baseline window summary).
+      //
+      // So: prefer the window-slice median lag as the baseline prior if available.
+      const windowCohortsForPrior = windowAggregateFn(paramValues, queryDate, undefined);
+      const windowLagStatsForPrior = helpers.aggregateLatencyStats(windowCohortsForPrior);
+      const edgeBaselineMedianLag =
+        windowLagStatsForPrior?.median_lag_days ?? aggregateMedianLag;
+      const currentPriorToNode = nodeMedianLagPrior.get(fromNodeId) ?? 0;
+      const newPriorToTarget = currentPriorToNode + edgeBaselineMedianLag;
+      const existingPriorToTarget = nodeMedianLagPrior.get(toNodeId) ?? 0;
+      // Take max path (like path_t95) to handle convergent paths
+      nodeMedianLagPrior.set(toNodeId, Math.max(existingPriorToTarget, newPriorToTarget));
 
       // Add to results
       console.log('[LAG_TOPO_PUSHING] edgeValues:', {

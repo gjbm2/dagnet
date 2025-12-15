@@ -7,8 +7,15 @@ import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom';
 import { beforeAll, afterEach, vi } from 'vitest';
 
-// Mock console methods to reduce noise in tests
+// Mock console methods to reduce noise in tests.
+// NOTE: For debugging, set DAGNET_TEST_DEBUG_LOGS=1 to keep real console output.
 beforeAll(() => {
+  const debugLogsEnabled = process.env.DAGNET_TEST_DEBUG_LOGS === '1';
+  if (debugLogsEnabled) {
+    // Leave console intact so production-code logging is visible during tests.
+    return;
+  }
+
   global.console = {
     ...console,
     // Keep error and warn for debugging

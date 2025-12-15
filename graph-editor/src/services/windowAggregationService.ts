@@ -1684,6 +1684,112 @@ export function aggregateCohortData(
 }
 
 /**
+ * Aggregate WINDOW data for LAG calculations in window() mode.
+ * 
+ * This is the window-mode counterpart to aggregateCohortData. It:
+ *   - Uses only WINDOW slices (sliceDSL containing 'window(' but not 'cohort(')
+ *   - Converts window-slice daily arrays (n_daily, k_daily, dates) to CohortData[]
+ *   - Does NOT populate anchor_median_lag_days (window mode is X-anchored; no A→X adjustment)
+ * 
+ * Window mode semantics (design.md, lag-statistics-reference.md):
+ *   - Evidence uses X-entry dates (dates when conversion exposure began)
+ *   - Completeness uses local X→Y lag CDF only (no upstream delay subtraction)
+ *   - Forecast baseline comes from the same window slice
+ * 
+ * @param values - Array of ParameterValue entries (should include window slices)
+ * @param queryDate - Date for computing cohort ages (typically "today")
+ * @param windowFilter - Optional window to filter dates (only include dates within this range)
+ * @returns CohortData array built from window slices
+ */
+export function aggregateWindowData(
+  values: ParameterValue[],
+  queryDate: Date,
+  windowFilter?: { start: Date; end: Date }
+): CohortData[] {
+  // Only use WINDOW slices for window-mode LAG calculations
+  const windowValues = values.filter(v => {
+    const sliceDSL = (v as any).sliceDSL ?? '';
+    const hasWindow = sliceDSL.includes('window(');
+    const hasCohort = sliceDSL.includes('cohort(');
+    // Include window slices only (not cohort slices)
+    return hasWindow && !hasCohort;
+  });
+  
+  console.log('[LAG_DEBUG] aggregateWindowData filtering:', {
+    totalValues: values.length,
+    windowValues: windowValues.length,
+    windowFilter: windowFilter ? {
+      start: windowFilter.start.toISOString().split('T')[0],
+      end: windowFilter.end.toISOString().split('T')[0],
+    } : 'none (using all)',
+    sliceDSLs: values.map((v: any) => v.sliceDSL?.substring(0, 50) ?? 'none'),
+  });
+  
+  // Collect data from window values
+  const dateMap = new Map<string, { cohort: CohortData; retrieved_at: string }>();
+  
+  for (const value of windowValues) {
+    // Convert window slice to CohortData using parameterValueToCohortData
+    // This handles the daily array extraction
+    const cohorts = parameterValueToCohortData(value, queryDate);
+    const retrievedAt = value.data_source?.retrieved_at || '';
+    
+    for (const cohort of cohorts) {
+      // Filter by window if provided
+      if (windowFilter) {
+        const cohortDate = parseDate(cohort.date);
+        if (cohortDate < windowFilter.start || cohortDate > windowFilter.end) {
+          continue;
+        }
+      }
+      
+      // For window mode, explicitly clear anchor_median_lag_days
+      // Window mode is X-anchored; there's no upstream delay to subtract
+      const windowCohort: CohortData = {
+        date: cohort.date,
+        n: cohort.n,
+        k: cohort.k,
+        age: cohort.age,
+        median_lag_days: cohort.median_lag_days,
+        mean_lag_days: cohort.mean_lag_days,
+        // Explicitly NO anchor_median_lag_days for window mode
+      };
+      
+      const existing = dateMap.get(cohort.date);
+      
+      // Keep the more recent data for each date
+      if (!existing || retrievedAt > existing.retrieved_at) {
+        dateMap.set(cohort.date, { cohort: windowCohort, retrieved_at: retrievedAt });
+      }
+    }
+  }
+  
+  // Extract cohorts sorted by date
+  const result = Array.from(dateMap.values())
+    .map(item => item.cohort)
+    .sort((a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime());
+  
+  console.log('[LAG_DEBUG] aggregateWindowData result:', {
+    inputCount: values.length,
+    windowSliceCount: windowValues.length,
+    outputCohortCount: result.length,
+    filteredByWindow: !!windowFilter,
+    dateRange: result.length > 0 
+      ? `${result[0].date} to ${result[result.length - 1].date}`
+      : 'none',
+    totalN: result.reduce((sum, c) => sum + c.n, 0),
+    totalK: result.reduce((sum, c) => sum + c.k, 0),
+    sampleCohorts: result.slice(0, 3).map(c => ({
+      date: c.date,
+      n: c.n,
+      k: c.k,
+    })),
+  });
+  
+  return result;
+}
+
+/**
  * Calculate aggregate latency statistics from cohort data.
  * 
  * Computes weighted median and mean lag from per-cohort lag arrays.
