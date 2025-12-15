@@ -1,5 +1,16 @@
 # TODO
 
+## Outstanding docs updates (Phase 2 tail constraint + canonical blend)
+
+**As of:** 15-Dec-25
+
+- **Update `graph-editor/public/docs/lag-statistics-reference.md`**:
+  - Add an explicit section describing the **t95 tail constraint** and its intended outcome: it can **only lower (or leave unchanged)** completeness, never increase it.
+  - Clarify that **`p.mean` is the canonical completeness-weighted blend** of evidence and forecast (no tail-substitution mean estimator).
+- **Update or archive `docs/current/project-lag/implemented/design.md`**:
+  - It still documents **Formula A** as the mechanism for `p.mean` and therefore contradicts current implementation.
+  - Replace with the Phase 2 canonical blend + tail-constraint description, or clearly mark it as historical/superseded.
+
 
 - What is skipped in: windowCohortSemantics.paramPack.e2e.test.ts & why? Should it be skipped??
 - 2dp for latency t95 and path_t95 calcs
