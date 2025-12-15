@@ -1,0 +1,32 @@
+id: lag-window-baseline-subset
+type: probability
+parameter_type: probability
+connection: amplitude-test
+values:
+  - sliceDSL: window(1-Nov-25:10-Nov-25)
+    window_from: 1-Nov-25
+    window_to: 10-Nov-25
+    # Baseline totals (10 days)
+    n: 1000
+    k: 60
+    # Daily series: first 7 days have 0% conversion, last 3 days have 20% conversion.
+    # This makes the query-window evidence clearly differ from the baseline mean.
+    dates:
+      - 1-Nov-25
+      - 2-Nov-25
+      - 3-Nov-25
+      - 4-Nov-25
+      - 5-Nov-25
+      - 6-Nov-25
+      - 7-Nov-25
+      - 8-Nov-25
+      - 9-Nov-25
+      - 10-Nov-25
+    n_daily: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100]
+    k_daily: [0, 0, 0, 0, 0, 0, 0, 20, 20, 20]
+    # Lag shape for completeness (local X→Y). Keep simple and stable.
+    median_lag_days: [5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+    mean_lag_days: [7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
+    # Baseline forecast scalar (p∞) must be invariant to narrow selection.
+    forecast: 0.30
+

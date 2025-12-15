@@ -1,8 +1,9 @@
 # t95 Fix Implementation Plan
 
 **Design Document:** `t95-fix.md`  
-**Status:** 🔲 Not Started  
-**Created:** 14-Dec-25
+**Status:** 🟢 Ready to Start (Phase 1 complete)  
+**Created:** 14-Dec-25  
+**Updated:** 15-Dec-25
 
 ---
 
@@ -15,6 +16,27 @@ This document is **Phase 2** of the integrated plan:
 - **Phase 2 (this document):** introduce parameter-level, overridable `t95/path_t95` and remove `maturity_days` from all logic.
 
 Do not start Phase 2 implementation until Phase 1 is complete and the relevant semantics tests pass.
+
+### Phase 1 Status (15-Dec-25)
+
+**Phase 1 COMPLETE ✅** — all work from `window-cohort-lag-correction-plan.md` is done:
+
+- Phase A: Window mode uses window slices for evidence/completeness ✅
+- Phase B: Cohort mode soft transition for anchor delay ✅ (implemented 15-Dec-25)
+  - Added `ANCHOR_DELAY_BLEND_K_CONVERSIONS = 50` constant
+  - Soft transition blends prior (baseline) and observed anchor delay
+  - Prevents overstated completeness for fresh cohorts on downstream edges
+- Phase C: Forecast baseline verified ✅ (doesn't drift with narrow selection)
+- Phase D: Canonical blend formula verified ✅ (uses `computeBlendedMean`)
+- Phase E: Scenario-visible fields present ✅
+
+**Regression blockers cleared ✅** — all tests pass:
+
+- `dataOperationsService.test.ts` — `should set non-latency p.mean = evidence for window() queries` ✅
+- `sampleFileQueryFlow.e2e.test.ts` — all 8 tests passing ✅
+- Full suite: 2562 tests passing ✅
+
+**Phase 2 is now unblocked** — can proceed with schema/type changes and `maturity_days` deprecation.
 
 ---
 
@@ -85,6 +107,22 @@ This work is a **Phase 2** dependency of the window/cohort semantics correction:
 - Phase 2 provides persisted/overridable `t95` and `path_t95` so:
   - `t95` can serve as the canonical, user-auditable horizon when empirical lag data is sparse or heterogeneous.
   - `path_t95` remains primarily a retrieval/bounding primitive and a cohort-vs-window targeting signal (it is not a proxy for upstream medians in completeness).
+
+### Phase 2 design simplification (15-Dec-25): delete “Formula A” entirely
+
+Phase 2 will **delete** the “Formula A / tail substitution” construct from the codebase.
+
+Rationale:
+
+- Phase 1 establishes a single user-visible contract for `p.mean`: **completeness-weighted blending** of narrow evidence and baseline forecast (via `computeBlendedMean`).
+- Phase 2 strengthens completeness by shaping/guarding the lag CDF with authoritative `t95` (the “t95 tail constraint”).
+- In that regime, “Formula A” is redundant and creates conceptual ambiguity (it appears to introduce a second mean/completeness model).
+
+Design stance (Phase 2+):
+
+- `p.mean` is computed via the canonical blend formula.
+- `t95/path_t95` are horizon primitives (planning/bounding); `t95` additionally constrains completeness CDF evaluation.
+- There is no additional “tail substitution” mean estimator.
 
 ---
 
@@ -225,6 +263,7 @@ Replace all horizon value reads.
 
 - Remove `maturity_days` fallback in `computePathT95()` — use only `t95`
 - Remove any `maturity_days` references in LAG calculations
+- Delete Formula A / tail-substitution code paths and rely only on completeness-weighted blending for `p.mean` (see “Phase 2 design simplification” above)
 
 #### 4.1.a Implement “t95 tail constraint” for completeness CDF (fat-tail safety)
 
@@ -337,6 +376,7 @@ Update and add tests for new behaviour.
 
 - Test: derived computation does not overwrite `t95` when `t95_overridden` is true
 - Test: derived computation does not overwrite `path_t95` when `path_t95_overridden` is true
+- Remove/replace any tests that assert “Formula A” behaviour, since Phase 2 deletes the construct entirely (see “Phase 2 design simplification” above)
 
 #### 7.1.a Tail constraint tests (completeness CDF respects authoritative t95)
 

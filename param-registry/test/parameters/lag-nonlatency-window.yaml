@@ -1,0 +1,15 @@
+id: lag-nonlatency-window
+type: probability
+parameter_type: probability
+connection: amplitude-test
+values:
+  - sliceDSL: window(1-Nov-25:3-Nov-25)
+    window_from: 1-Nov-25
+    window_to: 3-Nov-25
+    n: 600
+    k: 60
+    dates: [1-Nov-25, 2-Nov-25, 3-Nov-25]
+    n_daily: [100, 200, 300]
+    k_daily: [10, 20, 30]
+    forecast: 0.40
+

@@ -18,6 +18,7 @@ import {
   hasFullSliceCoverageByHeader, 
   parseDate,
   aggregateCohortData,
+  aggregateWindowData,
   aggregateLatencyStats,
 } from './windowAggregationService';
 import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
@@ -1056,6 +1057,19 @@ export async function fetchItems(
   getUpdatedGraph?: () => Graph | null
 ): Promise<FetchResult[]> {
   if (!graph || items.length === 0) return [];
+
+  // CRITICAL: Track the freshest graph as we go.
+  //
+  // Many callers (including tests) pass a setGraph callback but do NOT provide
+  // getUpdatedGraph(). Without local tracking, this function keeps using the
+  // original `graph` reference for subsequent items and for Stage-2 passes
+  // (LAG + inbound-n), which causes LAG to run on stale data and drop p.evidence.*,
+  // p.stdev, and other fields.
+  let latestGraph: Graph | null = graph;
+  const trackingSetGraph = (g: Graph | null) => {
+    latestGraph = g;
+    setGraph(g);
+  };
   
   // COHORT-VIEW: Apply per-item targetSlice overrides so cohort-mode tabs only use
   // cohort-shaped retrieval for edges behind lagged paths (path_t95 > 0) or with
@@ -1108,9 +1122,16 @@ export async function fetchItems(
       // CRITICAL: Use getUpdatedGraph() to get fresh graph for each item
       // This ensures rebalancing from previous items is preserved
       // Without this, each item clones the ORIGINAL graph, losing sibling rebalancing
-      const currentGraph = getUpdatedGraph?.() ?? graph;
+      const currentGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
       
-      const result = await fetchSingleItemInternal(effectiveItems[i], itemOptions, currentGraph, setGraph, dsl, getUpdatedGraph);
+      const result = await fetchSingleItemInternal(
+        effectiveItems[i],
+        itemOptions,
+        currentGraph,
+        trackingSetGraph,
+        dsl,
+        getUpdatedGraph
+      );
       results.push(result);
       
       if (result.success) {
@@ -1152,7 +1173,7 @@ export async function fetchItems(
     // dataOperationsService, then path_t95 was computed separately here.
     // ═══════════════════════════════════════════════════════════════════════
     if (successCount > 0) {
-      let finalGraph = getUpdatedGraph?.() ?? graph;
+      let finalGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
       if (finalGraph) {
         // Check if any fetched items were parameters on latency edges
         const latencyCheck = effectiveItems.map(item => {
@@ -1312,6 +1333,7 @@ export async function fetchItems(
           // Cast helpers to LAGHelpers - ParameterValueForLAG is a subset of ParameterValue
           const lagHelpers: LAGHelpers = {
             aggregateCohortData: aggregateCohortData as LAGHelpers['aggregateCohortData'],
+            aggregateWindowData: aggregateWindowData as LAGHelpers['aggregateWindowData'],
             aggregateLatencyStats,
           };
           
@@ -1356,7 +1378,8 @@ export async function fetchItems(
             lagHelpers,
             lagCohortWindow,
             undefined, // whatIfDSL
-            pathT95MapForLAG
+            pathT95MapForLAG,
+            lagSliceSource
           );
           
           console.log('[fetchDataService] LAG enhancement result:', {
@@ -1375,10 +1398,22 @@ export async function fetchItems(
           // Single call: clone once, apply all latency + means, rebalance once
           if (lagResult.edgeValues.length > 0 && finalGraph?.edges) {
             const updateManager = new UpdateManager();
+
+            // In from-file mode, the parameter file already contains slice-level latency
+            // summaries (median/t95/completeness). The LAG topo pass is primarily needed
+            // for path_t95 and (in cohort mode) blended p.mean. Do not overwrite the
+            // file-provided latency summary fields.
+            const preserveLatencySummaryFromFile = itemOptions?.mode === 'from-file';
+
+            // Phase 1 behaviour (legacy tests): window() queries should not overwrite p.mean via LAG.
+            // Window-mode p.mean is taken from the window aggregation result; LAG contributes latency fields.
+            const edgeValuesToApply = lagSliceSource === 'window'
+              ? lagResult.edgeValues.map(ev => ({ ...ev, blendedMean: undefined }))
+              : lagResult.edgeValues;
             
             // DEBUG: Log p.mean values BEFORE LAG application
             console.log('[fetchDataService] BEFORE applyBatchLAGValues:', {
-              edgeMeans: lagResult.edgeValues.slice(0, 3).map(ev => {
+              edgeMeans: edgeValuesToApply.slice(0, 3).map(ev => {
                 const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
                 return {
                   id: ev.edgeUuid,
@@ -1390,9 +1425,32 @@ export async function fetchItems(
             
             finalGraph = updateManager.applyBatchLAGValues(
               finalGraph,
-              lagResult.edgeValues.map(ev => ({
+              edgeValuesToApply.map(ev => ({
                 edgeId: ev.edgeUuid,
-                latency: ev.latency,
+                latency: preserveLatencySummaryFromFile
+                  ? (() => {
+                      const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+                      const existing = edge?.p?.latency;
+                      const hasExistingSummary =
+                        existing?.median_lag_days !== undefined ||
+                        existing?.mean_lag_days !== undefined;
+
+                      // If the file already populated a latency summary on the edge, preserve it.
+                      // Otherwise (e.g. file only has per-day lag arrays), apply the topo-computed summary.
+                      if (!hasExistingSummary) {
+                        return ev.latency;
+                      }
+                      return {
+                        // Preserve existing slice-level latency summary (from file)
+                        median_lag_days: existing?.median_lag_days,
+                        mean_lag_days: existing?.mean_lag_days,
+                        t95: existing?.t95 ?? ev.latency.t95,
+                        completeness: existing?.completeness ?? ev.latency.completeness,
+                        // Still apply computed path_t95
+                        path_t95: ev.latency?.path_t95,
+                      };
+                    })()
+                  : ev.latency,
                 blendedMean: ev.blendedMean,
                 forecast: ev.forecast,
                 evidence: ev.evidence,
@@ -1401,7 +1459,7 @@ export async function fetchItems(
             
             // DEBUG: Log p.mean values AFTER LAG application
             console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
-              edgeMeans: lagResult.edgeValues.slice(0, 3).map(ev => {
+              edgeMeans: edgeValuesToApply.slice(0, 3).map(ev => {
                 const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
                 return {
                   id: ev.edgeUuid,

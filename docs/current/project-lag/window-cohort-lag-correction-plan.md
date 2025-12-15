@@ -1,8 +1,33 @@
 # Window/Cohort LAG Correction Plan
 
 **Created:** 14-Dec-25  
-**Status:** Ready for implementation (no open design issues; explicit deferrals tracked in `/TODO.md`)  
-**Canonical spec:** `graph-editor/public/docs/lag-statistics-reference.md`  
+**Updated:** 15-Dec-25  
+**Status:** ✅ Complete (all phases done; 2562 tests passing)  
+**Canonical spec:** `graph-editor/public/docs/lag-statistics-reference.md`
+
+## Progress Summary (15-Dec-25)
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| A | Window mode uses window slices for evidence/completeness | ✅ Complete |
+| B | Cohort mode uses cohort slices with A→X adjustment (soft transition) | ✅ Complete |
+| C | Forecast baseline from whole baseline window slice | ✅ Complete (verified) |
+| D | Blending rules for p.mean (canonical formula) | ✅ Complete (verified) |
+| E | Scenario-visible fields (p.stdev, p.evidence.*) | ✅ Complete |
+| F | Deferred: "HAS completed" vs "by window end" toggle | ⏸️ Deferred |
+
+### Phase B Implementation Details (15-Dec-25)
+
+Implemented soft transition for anchor delay in cohort mode completeness:
+
+- Added `ANCHOR_DELAY_BLEND_K_CONVERSIONS = 50` constant to `statisticalConstants.ts`
+- `nodeMedianLagPrior` map tracks accumulated baseline median lag (like `nodePathT95`)
+- Anchor delay now blends between:
+  - **Prior**: accumulated baseline median lag from upstream edges
+  - **Observed**: from cohort-slice `anchor_median_lag_days[]`
+- Blend weight: `w = 1 - exp(-effective_forecast_conversions / 50)`
+- When observed data is sparse, prior dominates; as evidence accumulates, observed takes over
+- All 2562 tests pass  
 
 ---
 

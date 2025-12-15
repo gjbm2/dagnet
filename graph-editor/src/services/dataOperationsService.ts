@@ -63,7 +63,7 @@ import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
 import { sessionLogService } from './sessionLogService';
-import { parseConstraints, parseDSL } from '../lib/queryDSL';
+import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
 import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
@@ -782,7 +782,11 @@ class DataOperationsService {
           //    This is critical for dual-slice latency files where both cohort() and window()
           //    slices exist in the same parameter file (design.md §4.6).
           let sliceFilteredValues: ParameterValue[] | null = null;
-          const exactMatches = allValues.filter(v => v.sliceDSL === targetSlice);
+          const normalizedTargetSlice = normalizeConstraintString(targetSlice);
+          const exactMatches = allValues.filter(v => {
+            if (!v.sliceDSL) return false;
+            return normalizeConstraintString(v.sliceDSL) === normalizedTargetSlice;
+          });
           if (exactMatches.length > 0) {
             sliceFilteredValues = exactMatches;
             console.log('[DataOperationsService] Exact sliceDSL match for targetSlice', {
@@ -904,13 +908,13 @@ class DataOperationsService {
           aggValues.length === 1 &&
           !!targetSlice &&
           (targetSlice.includes('window(') || targetSlice.includes('cohort(')) &&
-          (aggValues[0].sliceDSL === targetSlice || isExactStoredSliceByBounds(aggValues[0]));
+          ((!!aggValues[0].sliceDSL && normalizeConstraintString(aggValues[0].sliceDSL) === normalizeConstraintString(targetSlice)) || isExactStoredSliceByBounds(aggValues[0]));
 
         // IMPORTANT (design + tests):
-        // - For window() queries, we ALWAYS run aggregation so evidence reflects the requested window
-        //   and so that n/k totals are computed even when header n/k are absent (fixture-style data).
-        // - For cohort() queries, we may skip aggregation on exact match to avoid sample truncation
-        //   (fixtures often include representative daily arrays but authoritative header n/k).
+        // - For window() queries, we aggregate so evidence reflects the requested window,
+        //   and so non-latency edges use query-time evidence for p.mean.
+        // - For cohort() queries, we may skip aggregation on exact matches to avoid relying
+        //   on sampled/incomplete daily arrays when header totals are authoritative.
         const shouldSkipAggregation =
           desiredAggregationMode === 'cohort' && isExactTimeSlice;
 
@@ -1386,7 +1390,22 @@ class DataOperationsService {
             const isSingleExactSlice =
               !isMultiSliceAggregation &&
               sortedValues.length === 1 &&
-              latestValueWithSource?.sliceDSL === targetSlice;
+              !!latestValueWithSource?.sliceDSL &&
+              normalizeConstraintString(latestValueWithSource.sliceDSL) === normalizeConstraintString(targetSlice) &&
+              // If a window filter is explicitly provided (or derived from DSL),
+              // treat this as an exact slice only when the stored window bounds match.
+              // Otherwise (common cache-subset case: context slice + explicit window),
+              // we must use the aggregated daily totals for the requested window.
+              (
+                !window ||
+                (
+                  !isCohortQuery &&
+                  !!latestValueWithSource?.window_from &&
+                  !!latestValueWithSource?.window_to &&
+                  normalizeDate(latestValueWithSource.window_from) === normalizeDate(window.start) &&
+                  normalizeDate(latestValueWithSource.window_to) === normalizeDate(window.end)
+                )
+              );
             
             // For single exact slice, preserve pre-computed mean; otherwise use enhanced
             const storedMean = isSingleExactSlice && latestValueWithSource?.mean !== undefined
@@ -1397,9 +1416,18 @@ class DataOperationsService {
               : enhanced.stdev;
             
             // Compute evidence scalars (raw observed rate = k/n)
-            const evidenceMean = enhanced.n > 0 ? enhanced.k / enhanced.n : 0;
-            const evidenceStdev = enhanced.n > 0 
-              ? Math.sqrt((evidenceMean * (1 - evidenceMean)) / enhanced.n) 
+            // IMPORTANT: When the query DSL exactly matches a stored sliceDSL, treat the
+            // slice header totals (n/k) as authoritative (daily arrays may be sampled or
+            // inconsistent). For non-exact queries, use the aggregated daily totals.
+            const effectiveN = isSingleExactSlice && typeof latestValueWithSource?.n === 'number'
+              ? latestValueWithSource.n
+              : enhanced.n;
+            const effectiveK = isSingleExactSlice && typeof latestValueWithSource?.k === 'number'
+              ? latestValueWithSource.k
+              : enhanced.k;
+            const evidenceMean = effectiveN > 0 ? effectiveK / effectiveN : 0;
+            const evidenceStdev = effectiveN > 0 
+              ? Math.sqrt((evidenceMean * (1 - evidenceMean)) / effectiveN) 
               : 0;
             
             // Use the effective filter window for storing date bounds
@@ -1424,10 +1452,12 @@ class DataOperationsService {
               // values[latest].mean → p.mean mapping does the right thing for both:
               //   - Non-latency edges: final p.mean = evidence (no LAG pass)
               //   - Latency edges: p.mean is later overwritten by blendedMean
-              mean: evidenceMean,
+              //
+              // BUT: if this is an exact slice match, preserve the stored aggregate mean.
+              mean: isSingleExactSlice ? storedMean : evidenceMean,
               stdev: storedStdev,
-              n: enhanced.n,
-              k: enhanced.k,
+              n: effectiveN,
+              k: effectiveK,
               // Store both window_from/to (standard) and cohort_from/to if applicable
               ...(isCohortQuery && cohortWindow ? {
                 cohort_from: normalizeToUK(cohortWindow.start),

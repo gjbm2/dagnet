@@ -41,6 +41,10 @@ export default defineConfig({
       if (log.includes('webidl-conversions')) return false;
       return true;
     },
+
+    // DEBUG: Ensure console output from production code is visible during tests.
+    // This is critical for diagnosing slice-selection / aggregation behaviour in E2E flows.
+    disableConsoleIntercept: true,
     
     coverage: {
       provider: 'v8',
@@ -98,8 +102,8 @@ export default defineConfig({
     // Force exit after tests complete (prevents hanging in CI/non-interactive mode)
     forceRerunTriggers: [],
     
-    // NEW: Better reporters for new test suite
-    reporters: ['dot'],
+    // DEBUG: Use a verbose reporter so logs and failures are easier to correlate.
+    reporters: ['default'],
     
     // Ensure tests exit properly (not in watch mode)
     watch: false,

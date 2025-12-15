@@ -56,16 +56,19 @@ afterEach(() => {
   vi.useRealTimers(); // Reset any fake timers
 });
 
-// Mock console methods in tests (suppress all noise)
-global.console = {
-  ...console,
-  // Suppress ALL console output in tests for clean output
-  error: vi.fn(),
-  warn: vi.fn(),
-  log: vi.fn(),
-  info: vi.fn(),
-  debug: vi.fn()
-};
+// Mock console methods in tests (suppress all noise by default).
+// NOTE: For debugging, set DAGNET_TEST_DEBUG_LOGS=1 to keep real console output.
+if (process.env.DAGNET_TEST_DEBUG_LOGS !== '1') {
+  global.console = {
+    ...console,
+    // Suppress ALL console output in tests for clean output
+    error: vi.fn(),
+    warn: vi.fn(),
+    log: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn()
+  };
+}
 
 // Mock window.crypto for UUIDs
 if (typeof window !== 'undefined' && !window.crypto) {
