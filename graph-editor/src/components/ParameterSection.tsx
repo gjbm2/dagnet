@@ -98,8 +98,11 @@ export function ParameterSection({
   
   // Local state for immediate input feedback
   const [localQuery, setLocalQuery] = useState(param?.query || '');
-  const [localMaturityDays, setLocalMaturityDays] = useState<string>(
-    param?.latency?.maturity_days?.toString() || '30'
+  const [localT95, setLocalT95] = useState<string>(
+    param?.latency?.t95?.toString() || ''
+  );
+  const [localPathT95, setLocalPathT95] = useState<string>(
+    param?.latency?.path_t95?.toString() || ''
   );
   // Note: isSettingsModalOpen state moved into ConnectionControl component
   
@@ -109,8 +112,12 @@ export function ParameterSection({
   }, [param?.query]);
   
   useEffect(() => {
-    setLocalMaturityDays(param?.latency?.maturity_days?.toString() || '30');
-  }, [param?.latency?.maturity_days]);
+    setLocalT95(param?.latency?.t95?.toString() || '');
+  }, [param?.latency?.t95]);
+  
+  useEffect(() => {
+    setLocalPathT95(param?.latency?.path_t95?.toString() || '');
+  }, [param?.latency?.path_t95]);
   
   // Callback to initialize a newly created parameter file from current edge data
   const handleCreateAndInitialize = async (paramId: string) => {
@@ -367,7 +374,7 @@ export function ParameterSection({
       {/* Latency Tracking (probability params only) */}
       {showLatency && (
         <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {/* Inline: [checkbox] Latency - days [input] [override] */}
+          {/* Enable Latency checkbox with override toggle */}
           <AutomatableField
             label=""
             labelExtra={
@@ -375,14 +382,14 @@ export function ParameterSection({
                 <input
                   type="checkbox"
                   id={`latency-track-${objectId}-${paramSlot}`}
-                  checked={(param?.latency?.maturity_days || 0) > 0}
+                  checked={param?.latency?.latency_parameter === true || (param?.latency?.maturity_days ?? 0) > 0}
                   onChange={(e) => {
                     const trackLatency = e.target.checked;
                     onUpdate({
                       latency: {
                         ...param?.latency,
-                        maturity_days: trackLatency ? 30 : 0,
-                        maturity_days_overridden: true,
+                        latency_parameter: trackLatency,
+                        latency_parameter_overridden: true,
                       }
                     });
                   }}
@@ -393,48 +400,21 @@ export function ParameterSection({
                   htmlFor={`latency-track-${objectId}-${paramSlot}`}
                   style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#333', whiteSpace: 'nowrap' }}
                 >
-                  Latency
+                  Latency Tracking
                 </label>
-                <span style={{ fontSize: '12px', color: '#6B7280' }}>—</span>
-                <span style={{ fontSize: '12px', color: '#6B7280', whiteSpace: 'nowrap' }}>days</span>
-                <input
-                  type="number"
-                  value={localMaturityDays}
-                  onChange={(e) => {
-                    setLocalMaturityDays(e.target.value);
-                  }}
-                  onBlur={() => {
-                    const value = parseInt(localMaturityDays);
-                    const days = isNaN(value) || value < 1 ? 30 : Math.min(365, value);
-                    setLocalMaturityDays(days.toString());
-                    onUpdate({
-                      latency: {
-                        ...param?.latency,
-                        maturity_days: days,
-                        maturity_days_overridden: true,
-                      }
-                    });
-                  }}
-                  min={1}
-                  max={365}
-                  disabled={disabled || (param?.latency?.maturity_days || 0) === 0}
-                  className="parameter-input"
-                  style={{ width: '60px' }}
-                  title="Days after cohort entry at which conversions are considered 'mature'."
-                />
                 <span title="Enable latency tracking to forecast conversions for immature cohorts. When enabled, uses cohort-based queries to measure conversion lag.">
                   <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
                 </span>
               </div>
             }
             layout="label-above"
-            value={param?.latency?.maturity_days || 0}
-            overridden={param?.latency?.maturity_days_overridden || false}
+            value={param?.latency?.latency_parameter ?? false}
+            overridden={param?.latency?.latency_parameter_overridden || false}
             onClearOverride={() => {
               onUpdate({ 
                 latency: { 
                   ...param?.latency,
-                  maturity_days_overridden: false 
+                  latency_parameter_overridden: false 
                 } 
               });
             }}
@@ -442,8 +422,101 @@ export function ParameterSection({
             <div style={{ display: 'none' }} />
           </AutomatableField>
           
+          {/* t95 and path_t95 fields (only shown when latency tracking is enabled) */}
+          {(param?.latency?.latency_parameter === true || (param?.latency?.maturity_days ?? 0) > 0) && (
+            <>
+              {/* Edge t95 */}
+              <AutomatableField
+                label=""
+                value={param?.latency?.t95 ?? ''}
+                overridden={param?.latency?.t95_overridden || false}
+                onClearOverride={() => {
+                  onUpdate({ 
+                    latency: { 
+                      ...param?.latency,
+                      t95_overridden: false 
+                    } 
+                  });
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Edge t95</label>
+                  <input
+                    type="number"
+                    value={localT95}
+                    onChange={(e) => setLocalT95(e.target.value)}
+                    onBlur={() => {
+                      const value = parseFloat(localT95);
+                      const t95 = isNaN(value) || value < 0 ? undefined : value;
+                      setLocalT95(t95?.toString() || '');
+                      onUpdate({
+                        latency: {
+                          ...param?.latency,
+                          t95,
+                          t95_overridden: true,
+                        }
+                      });
+                    }}
+                    min={0}
+                    step={0.1}
+                    disabled={disabled}
+                    className="parameter-input"
+                    style={{ width: '70px' }}
+                    placeholder="(computed)"
+                    title="95th percentile lag in days for this edge (computed from historical data or set manually)"
+                  />
+                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
+                </div>
+              </AutomatableField>
+              
+              {/* Path t95 */}
+              <AutomatableField
+                label=""
+                value={param?.latency?.path_t95 ?? ''}
+                overridden={param?.latency?.path_t95_overridden || false}
+                onClearOverride={() => {
+                  onUpdate({ 
+                    latency: { 
+                      ...param?.latency,
+                      path_t95_overridden: false 
+                    } 
+                  });
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Path t95</label>
+                  <input
+                    type="number"
+                    value={localPathT95}
+                    onChange={(e) => setLocalPathT95(e.target.value)}
+                    onBlur={() => {
+                      const value = parseFloat(localPathT95);
+                      const path_t95 = isNaN(value) || value < 0 ? undefined : value;
+                      setLocalPathT95(path_t95?.toString() || '');
+                      onUpdate({
+                        latency: {
+                          ...param?.latency,
+                          path_t95,
+                          path_t95_overridden: true,
+                        }
+                      });
+                    }}
+                    min={0}
+                    step={0.1}
+                    disabled={disabled}
+                    className="parameter-input"
+                    style={{ width: '70px' }}
+                    placeholder="(computed)"
+                    title="Cumulative path latency from anchor to this edge (computed from topo pass or set manually)"
+                  />
+                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
+                </div>
+              </AutomatableField>
+            </>
+          )}
+          
           {/* Anchor Node (only shown when latency tracking is enabled) */}
-          {(param?.latency?.maturity_days || 0) > 0 && (
+          {(param?.latency?.latency_parameter === true || (param?.latency?.maturity_days ?? 0) > 0) && (
             <AutomatableField
               label=""
               value={param?.latency?.anchor_node_id || ''}

@@ -323,12 +323,24 @@ def _extract_latency(p_param: Optional[dict]) -> Optional[dict]:
         latency = p_param.get('latency')
         if latency:
             return {
+                # Enablement
+                'latency_parameter': latency.get('latency_parameter'),
+                'latency_parameter_overridden': latency.get('latency_parameter_overridden'),
+                # Anchor
+                'anchor_node_id': latency.get('anchor_node_id'),
+                'anchor_node_id_overridden': latency.get('anchor_node_id_overridden'),
+                # Horizons
+                't95': latency.get('t95'),
+                't95_overridden': latency.get('t95_overridden'),
+                'path_t95': latency.get('path_t95'),
+                'path_t95_overridden': latency.get('path_t95_overridden'),
+                # Display-only stats
                 'median_lag_days': latency.get('median_lag_days'),
                 'mean_lag_days': latency.get('mean_lag_days'),
-                't95': latency.get('t95'),
-                'path_t95': latency.get('path_t95'),
                 'completeness': latency.get('completeness'),
+                # DEPRECATED (migration)
                 'maturity_days': latency.get('maturity_days'),
+                'maturity_days_overridden': latency.get('maturity_days_overridden'),
             }
     
     return None

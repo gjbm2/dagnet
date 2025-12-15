@@ -29,6 +29,7 @@ import { generateUniqueId } from '../lib/idUtils';
 import { getSiblingEdges } from '../lib/conditionalColours';
 import { normalizeConstraintString } from '../lib/queryDSL';
 import { sessionLogService } from './sessionLogService';
+import { DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
 import { normalizeToUK } from '../lib/dateFormat';
 import { PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
 
@@ -925,6 +926,12 @@ export class UpdateManager {
     subDest: SubDestination,
     options: UpdateOptions
   ): Promise<UpdateResult> {
+    // Phase 2: capture pre-state for transition-based default injection
+    const prevLatencyParameter =
+      subDest === 'parameter'
+        ? (existingFile?.latency?.latency_parameter === true)
+        : false;
+
     // Get field mappings for UPDATE operation
     const key = this.getMappingKey('graph_to_file', 'UPDATE', subDest);
     const config = this.mappingConfigurations.get(key);
@@ -940,6 +947,38 @@ export class UpdateManager {
       config.mappings,
       options
     );
+
+    // =========================================================================
+    // Phase 2: Default injection (t95) on latency enablement
+    //
+    // Requirement: When latency_parameter transitions to true, and t95 is missing and
+    // not overridden, inject DEFAULT_T95_DAYS so the horizon is immediately available
+    // and will persist via the dirty-file mechanism.
+    // =========================================================================
+    if (subDest === 'parameter' && !options.validateOnly) {
+      const nextLatencyParameter = existingFile?.latency?.latency_parameter === true;
+      const transitionedOn = !prevLatencyParameter && nextLatencyParameter;
+
+      if (transitionedOn) {
+        const t95Overridden = graphEntity?.p?.latency?.t95_overridden === true;
+        const fileT95 = existingFile?.latency?.t95;
+        const hasValidT95 = typeof fileT95 === 'number' && isFinite(fileT95) && fileT95 > 0;
+
+        if (!t95Overridden && !hasValidT95) {
+          // Ensure latency block exists
+          if (!existingFile.latency) existingFile.latency = {};
+          existingFile.latency.t95 = DEFAULT_T95_DAYS;
+
+          result.changes = result.changes ?? [];
+          result.changes.push({
+            field: 'latency.t95',
+            oldValue: fileT95,
+            newValue: DEFAULT_T95_DAYS,
+            source: 'system',
+          } as any);
+        }
+      }
+    }
     
     // Record audit trail
     if (!options.validateOnly && result.success) {
@@ -1505,6 +1544,14 @@ export class UpdateManager {
       },
       
       // LAG: Latency CONFIG fields (graph → file, bidirectional)
+      // latency_parameter: explicit enablement flag (replaces maturity_days > 0)
+      { 
+        sourceField: 'p.latency.latency_parameter', 
+        targetField: 'latency.latency_parameter',
+        overrideFlag: 'p.latency.latency_parameter_overridden',
+        condition: (source) => source.p?.latency?.latency_parameter !== undefined && source.p?.id
+      },
+      // maturity_days: DEPRECATED - retained for migration
       { 
         sourceField: 'p.latency.maturity_days', 
         targetField: 'latency.maturity_days',
@@ -1516,6 +1563,19 @@ export class UpdateManager {
         targetField: 'latency.anchor_node_id',
         overrideFlag: 'p.latency.anchor_node_id_overridden',
         condition: (source) => source.p?.latency?.anchor_node_id !== undefined && source.p?.id
+      },
+      // t95 and path_t95: horizon fields (derived but user-overridable)
+      { 
+        sourceField: 'p.latency.t95', 
+        targetField: 'latency.t95',
+        overrideFlag: 'p.latency.t95_overridden',
+        condition: (source) => source.p?.latency?.t95 !== undefined && source.p?.id
+      },
+      { 
+        sourceField: 'p.latency.path_t95', 
+        targetField: 'latency.path_t95',
+        overrideFlag: 'p.latency.path_t95_overridden',
+        condition: (source) => source.p?.latency?.path_t95 !== undefined && source.p?.id
       }
     ]);
     
@@ -1901,6 +1961,14 @@ export class UpdateManager {
       },
       
       // LAG: Latency CONFIG fields (file → graph, bidirectional)
+      // latency_parameter: explicit enablement flag (replaces maturity_days > 0)
+      { 
+        sourceField: 'latency.latency_parameter', 
+        targetField: 'p.latency.latency_parameter',
+        overrideFlag: 'p.latency.latency_parameter_overridden',
+        condition: isProbType
+      },
+      // maturity_days: DEPRECATED - retained for migration
       { 
         sourceField: 'latency.maturity_days', 
         targetField: 'p.latency.maturity_days',
@@ -1911,6 +1979,19 @@ export class UpdateManager {
         sourceField: 'latency.anchor_node_id', 
         targetField: 'p.latency.anchor_node_id',
         overrideFlag: 'p.latency.anchor_node_id_overridden',
+        condition: isProbType
+      },
+      // t95 and path_t95: horizon fields (derived but user-overridable)
+      { 
+        sourceField: 'latency.t95', 
+        targetField: 'p.latency.t95',
+        overrideFlag: 'p.latency.t95_overridden',
+        condition: isProbType
+      },
+      { 
+        sourceField: 'latency.path_t95', 
+        targetField: 'p.latency.path_t95',
+        overrideFlag: 'p.latency.path_t95_overridden',
         condition: isProbType
       },
       
@@ -1929,6 +2010,11 @@ export class UpdateManager {
         sourceField: 'values[latest].latency.t95', 
         targetField: 'p.latency.t95',
         condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.latency?.t95 !== undefined
+      },
+      { 
+        sourceField: 'values[latest].latency.path_t95', 
+        targetField: 'p.latency.path_t95',
+        condition: (source) => isProbType(source) && source.values?.[source.values.length - 1]?.latency?.path_t95 !== undefined
       },
       
       // LAG: Forecast fields (file → graph only)
@@ -3267,9 +3353,14 @@ export class UpdateManager {
       if (update.latency.mean_lag_days !== undefined) {
         edge.p.latency.mean_lag_days = update.latency.mean_lag_days;
       }
-      edge.p.latency.t95 = update.latency.t95;
+      // Phase 2: respect override flags
+      if (edge.p.latency.t95_overridden !== true) {
+        edge.p.latency.t95 = update.latency.t95;
+      }
       edge.p.latency.completeness = update.latency.completeness;
-      edge.p.latency.path_t95 = update.latency.path_t95;
+      if (edge.p.latency.path_t95_overridden !== true) {
+        edge.p.latency.path_t95 = update.latency.path_t95;
+      }
       
       // Apply forecast if provided
       if (update.forecast) {

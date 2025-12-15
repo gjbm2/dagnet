@@ -3748,7 +3748,10 @@ class DataOperationsService {
         const latencyConfig = targetEdgeForPolicy?.p?.latency as LatencyConfig | undefined;
         
         // Check if this edge has latency tracking enabled
-        if (latencyConfig?.maturity_days && latencyConfig.maturity_days > 0) {
+        // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
+        const isLatencyEnabled = latencyConfig?.latency_parameter === true || 
+                                (latencyConfig?.maturity_days ?? 0) > 0;
+        if (isLatencyEnabled) {
           // Get existing slice for this context/case family
           const existingValues = paramFile?.data?.values as ParameterValue[] | undefined;
           const existingSlice = existingValues?.find(v => {
@@ -3769,8 +3772,9 @@ class DataOperationsService {
             isCohortQuery,
           });
           
-          console.log('[DataOps:REFETCH_POLICY] Maturity-aware refetch decision:', {
-            maturityDays: latencyConfig.maturity_days,
+          console.log('[DataOps:REFETCH_POLICY] Latency-aware refetch decision:', {
+            latency_parameter: latencyConfig?.latency_parameter,
+            t95: latencyConfig?.t95,
             isCohortQuery,
             hasExistingSlice: !!existingSlice,
             policy: refetchPolicy.type,
@@ -3779,11 +3783,13 @@ class DataOperationsService {
             reason: refetchPolicy.reason,
           });
           
+          const effectiveHorizon = latencyConfig?.t95 ?? latencyConfig?.maturity_days ?? 30;
           sessionLogService.addChild(logOpId, 'info', 'REFETCH_POLICY',
-            `Maturity-aware policy: ${refetchPolicy.type}`,
-            `Maturity: ${latencyConfig.maturity_days}d | Mode: ${isCohortQuery ? 'cohort' : 'window'}${refetchPolicy.matureCutoff ? ` | Cutoff: ${refetchPolicy.matureCutoff}` : ''}`,
+            `Latency-aware policy: ${refetchPolicy.type}`,
+            `Horizon: ${effectiveHorizon.toFixed(1)}d | Mode: ${isCohortQuery ? 'cohort' : 'window'}${refetchPolicy.matureCutoff ? ` | Cutoff: ${refetchPolicy.matureCutoff}` : ''}`,
             {
-              maturityDays: latencyConfig.maturity_days,
+              latency_parameter: latencyConfig?.latency_parameter,
+              t95: latencyConfig?.t95,
               isCohortQuery,
               policyType: refetchPolicy.type,
               matureCutoff: refetchPolicy.matureCutoff,
@@ -5063,7 +5069,9 @@ class DataOperationsService {
               ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) 
               : undefined;
             const latencyConfigForMerge = targetEdgeForMerge?.p?.latency;
-            const shouldRecomputeForecast = !!(latencyConfigForMerge?.maturity_days && latencyConfigForMerge.maturity_days > 0);
+            // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
+            const shouldRecomputeForecast = latencyConfigForMerge?.latency_parameter === true ||
+                                           (latencyConfigForMerge?.maturity_days ?? 0) > 0;
             
             if (allTimeSeriesData.length > 0) {
               // API returned data - store each gap as a separate value entry
@@ -6240,7 +6248,10 @@ class DataOperationsService {
         });
 
         let refetchPolicy: RefetchDecision | undefined;
-        if (latencyConfig?.maturity_days && latencyConfig.maturity_days > 0) {
+        // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
+        const isLatencyEnabledForReport = latencyConfig?.latency_parameter === true || 
+                                         (latencyConfig?.maturity_days ?? 0) > 0;
+        if (isLatencyEnabledForReport) {
           refetchPolicy = shouldRefetch({
             existingSlice,
             latencyConfig,
