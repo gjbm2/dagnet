@@ -123,7 +123,7 @@ For this rename, the implementation should follow the usual pattern from earlier
 
 **Design reference:** `design.md §3.1`, `design.md §9.2.H`, `open-issues.md §DATA ARCHITECTURE`.
 
-**Intent:** Introduce a latency configuration object on edges, with fields such as `track`, `maturity_days`, `censor_days`, and `anchor_node_id`. These are configuration-level fields (not per-scenario) and must be present consistently across TS types, JSON schemas, and Python models.
+**Intent:** Introduce a latency configuration object on edges, with fields such as `track`, `legacy maturity field`, `censor_days`, and `anchor_node_id`. These are configuration-level fields (not per-scenario) and must be present consistently across TS types, JSON schemas, and Python models.
 
 **Code files touched:**
 
@@ -186,7 +186,7 @@ The implementation here is to wire in the new fields as per `design.md §3.2–3
 
 - Integrity checks
   - `graph-editor/src/services/integrityCheckService.ts`  
-    (validate latency config: non-negative or positive `maturity_days`, bounded completeness, anchor presence, etc., as per design decisions)
+    (validate latency config: non-negative or positive `legacy maturity field`, bounded completeness, anchor presence, etc., as per design decisions)
 
 - Issues reporting
   - `graph-editor/src/services/graphIssuesService.ts`  
@@ -463,7 +463,7 @@ The work here is to ensure that the new latency-aware query shapes and cohort/wi
 
 **Implementation tasks:**
 
-1. Add sibling sum check to `integrityCheckService`: for each node with multiple outgoing edges where both have `maturity_days > 0`, compute `Σ p.mean` and `Σ p.evidence`.
+1. Add sibling sum check to `integrityCheckService`: for each node with multiple outgoing edges where both have `legacy maturity field > 0`, compute `Σ p.mean` and `Σ p.evidence`.
 
 2. Issue classification per `design.md §5.0.4`:
    - `Σ p.evidence > 1.0`: Error (data inconsistency)

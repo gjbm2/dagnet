@@ -32,12 +32,12 @@ This registry tracks open questions, ambiguities, and potential risks identified
   - Implementation: Schema includes these fields; retrieval code populates them; inference code ignores them until deferred features are built.
 - **Status:** **RESOLVED**.
 
-### 1.4 `maturity_days` role: boolean vs numeric
-- **Issue:** With the CDF-based formulas (§5.3-5.6), `maturity_days` is no longer used computationally in the core formulas. It's effectively just a boolean (>0 = enabled).
+### 1.4 `legacy maturity field` role: boolean vs numeric
+- **Issue:** With the CDF-based formulas (§5.3-5.6), `legacy maturity field` is no longer used computationally in the core formulas. It's effectively just a boolean (>0 = enabled).
 - **Resolution:**
   - §4.7.2 updated to use **T_95** (from `median_lag_days` + `mean_lag_days`) for cache calculation
-  - Falls back to `maturity_days` when empirical data unavailable or low quality (`k < 30` or `mean/median` ratio outside [1.0, 3.0])
-  - `maturity_days` now serves as: feature flag (>0 = enabled) + fallback threshold
+  - Falls back to `legacy maturity field` when empirical data unavailable or low quality (`k < 30` or `mean/median` ratio outside [1.0, 3.0])
+  - `legacy maturity field` now serves as: feature flag (>0 = enabled) + fallback threshold
 - **Status:** **RESOLVED**. Design §4.7.2 and implementation §3.6 updated.
 
 ### 1.5 Topological sorting of batch fetches

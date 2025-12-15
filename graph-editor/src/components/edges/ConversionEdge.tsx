@@ -105,7 +105,7 @@ const NO_BEADS_MODE = new URLSearchParams(window.location.search).has('nobeads')
  *   d=7  → f(7)  ≈ 0.49  (≈ half speed)
  *   d=30 → f(30) ≈ 0.24  (≈ quarter speed)
  * 
- * @param lagDays - median_lag_days or maturity_days for the edge
+ * @param lagDays - median_lag_days (preferred) or t95 (fallback) for the edge
  * @returns Speed multiplier (0..1], where 1 = baseline CHEVRON_SPEED
  */
 function computeChevronSpeedFactor(lagDays: number | undefined): number {
@@ -367,10 +367,9 @@ export default function ConversionEdge({
     
     // Latency information (if tracking enabled)
     const latency = fullEdge?.p?.latency;
-    if (latency && (latency.maturity_days || 0) > 0) {
+    if (latency && latency.latency_parameter === true) {
       lines.push('');
       lines.push(`latency:`);
-      lines.push(`  maturity: ${latency.maturity_days}d`);
       if (latency.median_lag_days !== undefined) {
         lines.push(`  median lag: ${latency.median_lag_days.toFixed(1)}d`);
       }
@@ -2698,9 +2697,9 @@ export default function ConversionEdge({
             const pathLength = pathRef.current.getTotalLength?.() || 100;
             const numChevrons = Math.max(1, Math.floor(pathLength / CHEVRON_SPACING));
             
-            // Lag-adjusted speed: slower chevrons for edges with higher lag/maturity
-            // Use median_lag_days from display data, fall back to maturity_days from config
-            const lagDays = data?.edgeLatencyDisplay?.median_days ?? fullEdge?.p?.latency?.maturity_days;
+            // Lag-adjusted speed: slower chevrons for edges with higher lag.
+            // Use median_lag_days from display data, fall back to t95 from config.
+            const lagDays = data?.edgeLatencyDisplay?.median_days ?? fullEdge?.p?.latency?.t95;
             const effectiveSpeed = CHEVRON_SPEED * computeChevronSpeedFactor(lagDays);
             
             const animationDuration = pathLength / effectiveSpeed;

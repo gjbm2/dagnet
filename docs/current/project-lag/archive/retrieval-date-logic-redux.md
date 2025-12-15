@@ -16,7 +16,7 @@ This section distils the relevant intent from `design.md` and the window fetch p
 
 - **Edge-level `t95` (design.md §3.2, §4.7.2, §5.2.1):**
   - `t95` is the persisted 95th percentile lag per edge under the pinned DSL.
-  - It is computed from `median_lag_days` and `mean_lag_days` with quality gates; when empirical quality is poor, we fall back to `maturity_days`.
+  - It is computed from `median_lag_days` and `mean_lag_days` with quality gates; when empirical quality is poor, we fall back to `legacy maturity field`.
   - `t95` is the **primary maturity horizon** for both caching and forecasting.
 
 - **Path-level `path_t95` (design.md §4.7.2):**
@@ -82,9 +82,9 @@ This section describes the actual behaviour for `window()` queries from hook →
      - Otherwise, it falls back to a default 7‑day window.
    - Checks for incremental fetch / maturity‑aware refetch (see below).
 
-### 3.2 Non‑latency edges (maturity_days ≤ 0 or no latency)
+### 3.2 Non‑latency edges (legacy maturity field ≤ 0 or no latency)
 
-- For edges with `latency.maturity_days <= 0`:
+- For edges with `latency.legacy maturity field <= 0`:
   - `fetchRefetchPolicy.shouldRefetch` returns `type: 'gaps_only'`.
   - In `dataOperationsService`, the `refetchPolicy` short‑circuit path for latency edges is effectively bypassed for non‑latency edges.
   - `calculateIncrementalFetch` in `windowAggregationService` is invoked with:
@@ -98,12 +98,12 @@ This section describes the actual behaviour for `window()` queries from hook →
 
 **Key point:** For non‑latency window edges, **t95 is not consulted**. Retrieval horizon is exactly the requested window, and we only avoid re‑fetching dates that already have daily data.
 
-### 3.3 Latency window edges (maturity_days > 0 / t95 > 0)
+### 3.3 Latency window edges (legacy maturity field > 0 / t95 > 0)
 
 - **Effective maturity selection (edge‑level t95):**
   - `fetchRefetchPolicy.computeEffectiveMaturity` chooses:
     - `effectiveMaturityDays = ceil(t95)` if `t95 > 0`, otherwise
-    - `effectiveMaturityDays = maturity_days`.
+    - `effectiveMaturityDays = legacy maturity field`.
   - Tests in `fetchRefetchPolicy.branches.test.ts` confirm this matrix.
 
 - **Window refetch policy:**
@@ -148,14 +148,14 @@ This is the area of most concern relative to the design.
 ### 4.2 Cohort refetch policy (latency edges)
 
 - `fetchRefetchPolicy.shouldRefetch` delegates cohort logic to `evaluateCohortRefetch` with:
-  - `maturityDays = effectiveMaturityDays` derived from `t95` or `maturity_days`.
+  - `legacy maturity threshold = effectiveMaturityDays` derived from `t95` or `legacy maturity field`.
   - `requestedWindow` (for cohort) passed through but **not modified**.
 
 - `evaluateCohortRefetch`:
   - If `existingSlice` is missing or has no cohort dates → `type: 'replace_slice'` with reasons `no_existing_slice` / `no_cohort_dates`.
-  - Else, computes a maturity cutoff date from `maturityDays` (i.e. effective t95):
+  - Else, computes a maturity cutoff date from `legacy maturity threshold` (i.e. effective t95):
     - If any cohort dates are **newer than the cutoff** → `type: 'replace_slice'` with reason `immature_cohorts`.
-  - Else, if all cohorts are mature but `retrieved_at` is **older than maturityDays (t95) ago** → `type: 'replace_slice'` with reason `stale_data`.
+  - Else, if all cohorts are mature but `retrieved_at` is **older than legacy maturity threshold (t95) ago** → `type: 'replace_slice'` with reason `stale_data`.
   - Else → `type: 'use_cache'` (all cohorts mature and data fresh enough).
 
 - Integration in `dataOperationsService`:
@@ -204,7 +204,7 @@ The planner design in `window-fetch-planner-service.md` and `window-fetch-planne
 
 - Retrieval timestamps are used in two main places:
   - Cohort refetch policy (`evaluateCohortRefetch`):
-    - `retrieved_at` older than `maturityDays (≈ t95)` → `replace_slice` due to `stale_data`.
+    - `retrieved_at` older than `legacy maturity threshold (≈ t95)` → `replace_slice` due to `stale_data`.
   - Logging / diagnostics in `dataOperationsService` and `windowAggregationService` (for session logs and debugging).
 
 There is **no central planner** in the codebase today that:
@@ -238,7 +238,7 @@ There is **no central planner** in the codebase today that:
   - Tests validate that t95 is finite and propagated into the param pack and UI.
 
 - **Effective maturity selection for latency edges:**
-  - `computeEffectiveMaturity` honours “prefer `t95`, fallback to `maturity_days`”.
+  - `computeEffectiveMaturity` honours “prefer `t95`, fallback to `legacy maturity field`”.
   - `shouldRefetch` uses this for both cohort and window modes.
 
 - **Latent vs non-latent window behaviour:**

@@ -277,7 +277,7 @@
         "mean": 0.75, 
         "id": "checkout-to-payment-latency",
         "latency": {
-          "maturity_days": 10,
+          "latency_parameter": true,
           "anchor_node_id": "landing-page",
           "median_lag_days": 3.0,
           "mean_lag_days": 3.5,
@@ -402,7 +402,7 @@
         "mean": 0.97, 
         "id": "confirmed-to-shipped-latency",
         "latency": {
-          "maturity_days": 21,
+          "latency_parameter": true,
           "anchor_node_id": "landing-page",
           "median_lag_days": 5.0,
           "mean_lag_days": 5.9,
@@ -448,7 +448,7 @@
         "mean": 0.98, 
         "id": "shipped-to-delivered-latency",
         "latency": {
-          "maturity_days": 45,
+          "latency_parameter": true,
           "anchor_node_id": "landing-page",
           "median_lag_days": 14.0,
           "mean_lag_days": 17.8,

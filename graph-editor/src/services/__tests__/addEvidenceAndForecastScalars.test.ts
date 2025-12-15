@@ -427,7 +427,7 @@ describe('Forecast: Fallback from Cohort Data', () => {
       { type: 'probability', values: [cohortVal] },
       { 
         values: [cohortVal], // No window slices
-        latency: { maturity_days: 30 },
+        latency: { latency_parameter: true, t95: 30 },
       },
       `cohort(anchor,${daysAgo(90)}:${daysAgo(50)})`
     );
@@ -464,7 +464,7 @@ describe('Forecast: Fallback from Cohort Data', () => {
       { type: 'probability', values: [cohortVal] },
       { 
         values: [cohortVal, windowVal],
-        latency: { maturity_days: 30 },
+        latency: { latency_parameter: true, t95: 30 },
       },
       `cohort(anchor,${daysAgo(90)}:${daysAgo(80)})`
     );
@@ -488,7 +488,7 @@ describe('Forecast: Fallback from Cohort Data', () => {
       { type: 'probability', values: [cohortVal] },
       { 
         values: [cohortVal], // No window slices
-        latency: { maturity_days: 30 },
+        latency: { latency_parameter: true, t95: 30 },
       },
       `cohort(anchor,${daysAgo(90)}:${daysAgo(80)})`
     );

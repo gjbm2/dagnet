@@ -98,21 +98,22 @@ class SimulatedParamFile {
     id: string;
     type: string;
     values: ParameterValue[];
-    latency?: { maturity_days?: number; anchor_node_id?: string };
+    latency?: { latency_parameter?: boolean; t95?: number; anchor_node_id?: string };
   };
   
   constructor(options?: {
     id?: string;
     type?: string;
-    maturity_days?: number;
+    t95?: number;
     anchor_node_id?: string;
   }) {
     this.data = {
       id: options?.id ?? 'test-param',
       type: options?.type ?? 'probability',
       values: [],
-      latency: options?.maturity_days ? {
-        maturity_days: options.maturity_days,
+      latency: options?.t95 ? {
+        latency_parameter: true,
+        t95: options.t95,
         anchor_node_id: options.anchor_node_id,
       } : undefined,
     };
@@ -152,7 +153,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
   
   beforeEach(() => {
     dasRunner = new SimulatedDASRunner({ conversionRate: 0.45, exposuresPerDay: 100 });
-    paramFile = new SimulatedParamFile({ maturity_days: 7, anchor_node_id: 'start-node' });
+    paramFile = new SimulatedParamFile({ t95: 7, anchor_node_id: 'start-node' });
   });
   
   it('initial fetch captures full window (all immature)', () => {
@@ -163,7 +164,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
     // Policy decision
     const decision = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { latency_parameter: true, t95: 7 },
       requestedWindow,
       isCohortQuery: false,
       referenceDate,
@@ -200,7 +201,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
       undefined,
       'api',
       '',
-      { recomputeForecast: true, latencyConfig: { maturity_days: 7 } }
+      { recomputeForecast: true, latencyConfig: { latency_parameter: true, t95: 7 } }
     );
     
     paramFile.setValues(newValues);
@@ -232,7 +233,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
     // Policy decision
     const decision = shouldRefetch({
       existingSlice: paramFile.values[0],
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { latency_parameter: true, t95: 7 },
       requestedWindow,
       isCohortQuery: false,
       referenceDate: laterDate,
@@ -280,7 +281,7 @@ describe('Scenario 2: Cohort Slice Replacement', () => {
   
   beforeEach(() => {
     dasRunner = new SimulatedDASRunner({ conversionRate: 0.5 });
-    paramFile = new SimulatedParamFile({ maturity_days: 14, anchor_node_id: 'cohort-anchor' });
+    paramFile = new SimulatedParamFile({ t95: 14, anchor_node_id: 'cohort-anchor' });
   });
   
   it('cohort fetch creates cohort value with anchor in sliceDSL', () => {
@@ -370,7 +371,7 @@ describe('Scenario 2: Cohort Slice Replacement', () => {
     
     const decision = shouldRefetch({
       existingSlice: cohortVal,
-      latencyConfig: { maturity_days: 14 },
+      latencyConfig: { latency_parameter: true, t95: 14 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(20) },
       isCohortQuery: true,
       referenceDate: REFERENCE_DATE,
@@ -386,25 +387,25 @@ describe('Scenario 2: Cohort Slice Replacement', () => {
 
 describe('Scenario 3: t95-Driven Maturity', () => {
   /**
-   * As we collect more data, t95 becomes available and replaces maturity_days.
+   * t95 drives maturity and is used by policy decisions.
    * 
    * This scenario tests:
-   * - Initial fetches use maturity_days (t95 not yet computed)
-   * - After sufficient data, t95 is computed
+   * - Initial fetches use an initial t95 configuration
+   * - Later, t95 can change as it is recomputed
    * - Subsequent policy decisions use t95
    */
   
-  it('first fetch: no t95, uses maturity_days', () => {
+  it('first fetch: uses initial t95', () => {
     const decision = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7, t95: undefined },
+      latencyConfig: { latency_parameter: true, t95: 7 },
       requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
     });
     
     expect(decision.type).toBe('partial');
-    // Cutoff based on maturity_days = 8 days ago
+    // Cutoff based on t95 = 8 days ago
     expect(decision.matureCutoff).toBe(daysAgo(8));
   });
   
@@ -421,7 +422,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
       undefined,
       'api',
       '',
-      { recomputeForecast: true, latencyConfig: { maturity_days: 7 } }
+      { recomputeForecast: true, latencyConfig: { latency_parameter: true, t95: 7 } }
     );
     
     // Merge should still produce a canonical slice with dates/n/k/mean; no LAG stats.
@@ -433,7 +434,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
     // Simulate having t95 = 12 days
     const decision = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7, t95: 12 },
+      latencyConfig: { latency_parameter: true, t95: 12 },
       requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
@@ -454,7 +455,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
     // With small t95
     const decision1 = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7, t95: smallT95 },
+      latencyConfig: { latency_parameter: true, t95: smallT95 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
@@ -465,7 +466,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
     // With large t95
     const decision2 = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7, t95: largeT95 },
+      latencyConfig: { latency_parameter: true, t95: largeT95 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
@@ -512,7 +513,7 @@ describe('Scenario 4: Dual-Slice Interaction', () => {
       undefined,
       'api',
       '',
-      { recomputeForecast: true, latencyConfig: { maturity_days: 7 } }
+      { recomputeForecast: true, latencyConfig: { latency_parameter: true, t95: 7 } }
     );
     
     // Create cohort slice
@@ -693,7 +694,7 @@ describe('Scenario 5: Context-Segregated Slices', () => {
     // UK window query: should be gaps_only (mature window data)
     const ukDecision = shouldRefetch({
       existingSlice: ukSlice,
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { latency_parameter: true, t95: 7 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(20) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
@@ -703,7 +704,7 @@ describe('Scenario 5: Context-Segregated Slices', () => {
     // US cohort query: should need replace_slice (immature cohort)
     const usDecision = shouldRefetch({
       existingSlice: usSlice,
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { latency_parameter: true, t95: 7 },
       requestedWindow: { start: daysAgo(60), end: daysAgo(0) },
       isCohortQuery: true,
       referenceDate: REFERENCE_DATE,

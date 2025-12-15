@@ -89,7 +89,7 @@ I’ll go file by file.
 - **Tight coupling to specific day counts**:
   - Many assertions are like “daysToFetch should be 10” or “exactly 11 days available”. That is great when the refetch policy is final, but it makes tests brittle if you slightly tweak the maturity definition (e.g. inclusive vs exclusive cut‑off).
 - **Some duplication with `fetchRefetchPolicy.branches`**:
-  - Both files assert essentially the same decision behaviour for a number of cases (e.g. t95 vs maturity_days). Again, not fatal, but it increases maintenance work when tuning policy.
+  - Both files assert essentially the same decision behaviour for a number of cases (e.g. t95 vs legacy maturity field). Again, not fatal, but it increases maintenance work when tuning policy.
 - **Coverage gaps around mixed cohort/window param files**:
   - Here you mostly look at homogeneous window or homogeneous cohort setups. You do not have a scenario where a param file contains *both* window and cohort slices and you ask `calculateIncrementalFetch` to plan a fetch for one mode while the other is present.
 
@@ -107,7 +107,7 @@ I’ll go file by file.
 ### Strengths
 
 - **Excellent branch coverage mindset**: You clearly identify the decision tree branches, name them, and then explicitly cover all 5 cohort branches + 2 window branches.
-- **Maturity selection tests are very clear**: The t95 vs maturity_days matrix is well articulated, including invalid t95 (0/negative) and fractional t95.
+- **Maturity selection tests are very clear**: The t95 vs legacy maturity field matrix is well articulated, including invalid t95 (0/negative) and fractional t95.
 - **`analyzeSliceCoverage` and `computeFetchWindow` invariants are tested**:
   - You check “none/partial/full” coverage and ensure the mapping from coverage + decision → fetch window behaves correctly.
 
@@ -116,7 +116,7 @@ I’ll go file by file.
 - **Implicit assumptions about boundaries**:
   - Some tests depend on the current choice that “cutoff = maturity + 1 days ago” and that a window ending *exactly* at cutoff is treated as mature. If that spec ever changes, you’ll need to update both these tests and the higher‑level ones; it might be worth centralising this definition in a helper in the test suite.
 - **Cohort freshness logic is only tested in big steps**:
-  - You test “retrievedDaysAgo = 20” vs “1” vs “6”, but you don’t systematically explore the threshold boundary (e.g. exactly maturity_days, maturity_days+1, etc.) beyond a couple of examples.
+  - You test “retrievedDaysAgo = 20” vs “1” vs “6”, but you don’t systematically explore the threshold boundary (e.g. exactly legacy maturity field, legacy maturity field+1, etc.) beyond a couple of examples.
 
 ### Concrete improvements
 

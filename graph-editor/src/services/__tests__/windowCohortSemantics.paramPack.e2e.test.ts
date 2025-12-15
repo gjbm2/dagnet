@@ -21,9 +21,11 @@
  *
  * @vitest-environment node
  */
+/// <reference types="node" />
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as yaml from 'js-yaml';
 
 import { fetchItem, fetchDataService, createFetchItem, type FetchItem } from '../fetchDataService';
@@ -32,6 +34,8 @@ import { flattenParams } from '../ParamPackDSLService';
 import { fileRegistry } from '../../contexts/TabContext';
 import type { Graph } from '../../types';
 import { FORECAST_BLEND_LAMBDA } from '../../constants/statisticalConstants';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function loadTestParameterYaml(id: string): any {
   const paramPath = path.resolve(__dirname, `../../../../param-registry/test/parameters/${id}.yaml`);
@@ -346,6 +350,127 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       // p.mean is stored at standard precision (see UpdateManager rounding); we only
       // require correctness within that precision.
       expect(edge.p.mean).toBeCloseTo(expected, 4);
+    });
+
+    it('t95 tail constraint LOWERS completeness (and shifts p.mean toward forecast) at param-pack outcome level', async () => {
+      /**
+       * Outcome-first / first principles:
+       * - Completeness is computed as an n-weighted CDF of cohort ages under a lognormal lag model.
+       * - When authoritative t95 is much larger than what moments imply, we must enforce a fatter tail.
+       * - A fatter tail means *slower accumulation* for ages above the median, so completeness should drop.
+       * - Lower completeness decreases the evidence weight in the canonical blend, shifting p.mean toward forecast.
+       *
+       * This test proves the above through the full: file data + query → fetch pipeline → graph scalars → param pack.
+       */
+      const cohortDates = ['6-Dec-25', '7-Dec-25', '8-Dec-25']; // ages 9,8,7 days at 15-Dec-25 (set in beforeAll)
+      const nDaily = [100, 100, 100];
+      const kDaily = [20, 20, 20]; // evidenceMean = 0.2
+      const medianLagDays = [5, 5, 5]; // median = 5 days
+      const meanLagDays = [5.2, 5.2, 5.2]; // low skew => tight moment-fit tail
+
+      const windowForecast = 0.8; // far from evidence so p.mean shift is obvious
+      const windowN = 1000;
+      const windowK = 800;
+
+      function makeParamData(paramId: string): any {
+        return {
+          id: paramId,
+          type: 'probability',
+          parameter_type: 'probability',
+          connection: 'amplitude-test',
+          values: [
+            // Cohort slice provides evidence + per-cohort lag arrays used by LAG
+            {
+              sliceDSL: 'cohort(A,6-Dec-25:8-Dec-25)',
+              cohort_from: '6-Dec-25',
+              cohort_to: '8-Dec-25',
+              n: 300,
+              k: 60,
+              dates: cohortDates,
+              n_daily: nDaily,
+              k_daily: kDaily,
+              median_lag_days: medianLagDays,
+              mean_lag_days: meanLagDays,
+            },
+            // Window slice provides forecast baseline and baseline sample size backing forecast
+            {
+              sliceDSL: 'window(1-Nov-25:10-Nov-25)',
+              window_from: '1-Nov-25',
+              window_to: '10-Nov-25',
+              n: windowN,
+              k: windowK,
+              dates: ['1-Nov-25'],
+              n_daily: [windowN],
+              k_daily: [windowK],
+              forecast: windowForecast,
+            },
+          ],
+          latency: { latency_parameter: true, anchor_node_id: 'A' },
+        };
+      }
+
+      async function runOnce(args: { paramId: string; t95: number }): Promise<{ c: number; pMean: number; forecast: number; evidence: number }> {
+        const { paramId, t95 } = args;
+        await registerParameterFile(paramId, makeParamData(paramId));
+
+        let graph: Graph | null = makeSingleEdgeGraph({
+          edgeId: 'edge-A-B',
+          paramId,
+          latencyEnabled: true,
+        });
+        // Authoritative t95 lives on the latency config for the edge.
+        (graph as any).edges[0].p.latency.t95 = t95;
+
+        const setGraph = (g: Graph | null) => { graph = g; };
+        const getUpdatedGraph = () => graph;
+
+        const items: FetchItem[] = [createFetchItem('parameter', paramId, 'edge-A-B')];
+        const dsl = 'cohort(A,6-Dec-25:8-Dec-25)';
+        const results = await fetchDataService.fetchItems(items, { mode: 'from-file' }, graph as Graph, setGraph, dsl, getUpdatedGraph);
+        expect(results.every(r => r.success)).toBe(true);
+
+        const edge = (graph as any).edges.find((e: any) => e.id === 'edge-A-B');
+        expect(edge?.p?.latency?.completeness).toBeDefined();
+        expect(edge?.p?.forecast?.mean).toBeDefined();
+        expect(edge?.p?.evidence?.mean).toBeDefined();
+        expect(edge?.p?.mean).toBeDefined();
+
+        const pack = flattenParams(extractParamsFromGraph(graph));
+        const packMean = pack['e.edge-A-B.p.mean'];
+        const packC = pack['e.edge-A-B.p.latency.completeness'];
+
+        expect(typeof packMean).toBe('number');
+        expect(typeof packC).toBe('number');
+
+        return {
+          c: packC as number,
+          pMean: packMean as number,
+          forecast: edge.p.forecast.mean as number,
+          evidence: edge.p.evidence.mean as number,
+        };
+      }
+
+      // Baseline: small t95 → no tail constraint should apply; completeness should be high.
+      const small = await runOnce({ paramId: 'lag-tail-constraint-small-t95', t95: 7 });
+      // Constrained: large t95 → tail constraint applies; completeness should be LOWER (strict).
+      const large = await runOnce({ paramId: 'lag-tail-constraint-large-t95', t95: 60 });
+
+      expect(small.evidence).toBeCloseTo(0.2, 10);
+      expect(small.forecast).toBeCloseTo(windowForecast, 10);
+      expect(large.evidence).toBeCloseTo(0.2, 10);
+      expect(large.forecast).toBeCloseTo(windowForecast, 10);
+
+      // The point of the test: completeness strictly decreases under a fatter tail.
+      expect(large.c).toBeLessThan(small.c);
+
+      // And the param-pack p.mean shifts toward forecast (forecast > evidence here).
+      expect(large.pMean).toBeGreaterThan(small.pMean);
+
+      // Sanity: both remain bounded between evidence and forecast.
+      for (const r of [small, large]) {
+        expect(r.pMean).toBeGreaterThanOrEqual(Math.min(r.evidence, r.forecast) - 1e-6);
+        expect(r.pMean).toBeLessThanOrEqual(Math.max(r.evidence, r.forecast) + 1e-6);
+      }
     });
 
     it('enabling latency_parameter injects DEFAULT_T95_DAYS when t95 is missing (persists via dirty file)', async () => {

@@ -124,7 +124,7 @@ describe('Policy: use_cache – No Fetch Required', () => {
   
   describe('Cohort with all mature data', () => {
     it('shouldRefetch returns use_cache for mature cohort slice', () => {
-      // All cohort dates are > 10 days ago (mature with maturity_days=7)
+      // All cohort dates are > 10 days ago (mature with t95=7)
       const existingSlice = buildCohortValue({
         dates: [daysAgo(30), daysAgo(25), daysAgo(20), daysAgo(15), daysAgo(10)],
         retrievedDaysAgo: 2,
@@ -132,7 +132,7 @@ describe('Policy: use_cache – No Fetch Required', () => {
       
       const decision = shouldRefetch({
         existingSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: daysAgo(30), end: daysAgo(10) },
         isCohortQuery: true,
         referenceDate: REFERENCE_DATE,
@@ -186,12 +186,12 @@ describe('Policy: partial – Immature Portion Refetch', () => {
   
   describe('Window straddling maturity cutoff', () => {
     it('shouldRefetch identifies correct immature portion', () => {
-      // Request days 20-0 with maturity_days=7
+      // Request days 20-0 with t95=7
       // Cutoff is 8 days ago
       // Days 7-0 need refetch (immature)
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
@@ -299,10 +299,10 @@ describe('Policy: partial – Immature Portion Refetch', () => {
   
   describe('t95-driven partial refetch', () => {
     it('uses t95 to determine immature cutoff', () => {
-      // t95 = 14 days (longer than default maturity_days = 7)
+      // t95 = 14 days
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 7, t95: 14 },
+        latencyConfig: { latency_parameter: true, t95: 14 },
         requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
@@ -362,7 +362,7 @@ describe('Policy: replace_slice – Full Cohort Replacement', () => {
       
       const decision = shouldRefetch({
         existingSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
         isCohortQuery: true,
         referenceDate: REFERENCE_DATE,
@@ -422,7 +422,7 @@ describe('Policy: replace_slice – Full Cohort Replacement', () => {
       // For cohort mode with immature cohorts, policy says replace
       const decision = shouldRefetch({
         existingSlice: paramFile.values[0],
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
         isCohortQuery: true,
         referenceDate: REFERENCE_DATE,
@@ -448,11 +448,11 @@ describe('Policy: replace_slice – Full Cohort Replacement', () => {
 
 describe('Policy: gaps_only – Standard Incremental Fetch', () => {
   
-  describe('Non-latency edge (maturity_days = 0)', () => {
+  describe('Non-latency edge (latency disabled)', () => {
     it('shouldRefetch returns gaps_only regardless of data state', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 0 },
+        latencyConfig: { latency_parameter: false },
         requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
@@ -659,7 +659,7 @@ describe('Policy with Slice Isolation', () => {
       // Window query should see use_cache (window data is mature)
       const windowDecision = shouldRefetch({
         existingSlice: windowSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: daysAgo(30), end: daysAgo(20) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
@@ -669,7 +669,7 @@ describe('Policy with Slice Isolation', () => {
       // Cohort query should see replace_slice (has immature cohort)
       const cohortDecision = shouldRefetch({
         existingSlice: cohortSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: daysAgo(60), end: daysAgo(0) },
         isCohortQuery: true,
         referenceDate: REFERENCE_DATE,
@@ -690,7 +690,7 @@ describe('Policy with Slice Isolation', () => {
       
       const decision = shouldRefetch({
         existingSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: daysAgo(30), end: daysAgo(20) },
         isCohortQuery: true,
         referenceDate: REFERENCE_DATE,
@@ -747,7 +747,7 @@ describe('Bust Cache Override', () => {
     // Policy says use_cache
     const decision = shouldRefetch({
       existingSlice,
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { latency_parameter: true, t95: 7 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(10) },
       isCohortQuery: true,
       referenceDate: REFERENCE_DATE,

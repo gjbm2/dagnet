@@ -71,7 +71,7 @@ class TestLAGFieldExtraction:
                 't95': 21,
                 'path_t95': 35,
                 'completeness': 0.85,
-                'maturity_days': 30,
+                'latency_parameter': True,
             }
         }
         
@@ -83,7 +83,7 @@ class TestLAGFieldExtraction:
         assert latency['t95'] == 21
         assert latency['path_t95'] == 35
         assert latency['completeness'] == 0.85
-        assert latency['maturity_days'] == 30
+        assert latency['latency_parameter'] is True
 
     def test_extract_none_for_missing_fields(self):
         """Extractors should return None for missing data."""

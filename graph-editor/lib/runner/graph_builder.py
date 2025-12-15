@@ -338,9 +338,6 @@ def _extract_latency(p_param: Optional[dict]) -> Optional[dict]:
                 'median_lag_days': latency.get('median_lag_days'),
                 'mean_lag_days': latency.get('mean_lag_days'),
                 'completeness': latency.get('completeness'),
-                # DEPRECATED (migration)
-                'maturity_days': latency.get('maturity_days'),
-                'maturity_days_overridden': latency.get('maturity_days_overridden'),
             }
     
     return None

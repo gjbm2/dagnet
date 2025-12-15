@@ -10,7 +10,7 @@ query_overridden: false
 
 # Edge-level latency config (enables latency tracking)
 latency:
-  maturity_days: 10
+  latency_parameter: true
   anchor_node_id: landing-page
 
 values:

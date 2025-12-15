@@ -454,24 +454,13 @@ export interface CaseEvidence {
  * SEMANTICS:
  * - latency_parameter === true: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
  * - latency_parameter === false or undefined: Latency tracking DISABLED (standard window() behaviour)
- * 
- * NOTE: maturity_days is DEPRECATED for enablement; use latency_parameter instead.
- * maturity_days is retained temporarily for backward compatibility during migration.
  */
 export interface LatencyConfig {
   /** Explicit latency enablement flag - set true to enable latency tracking.
-   *  Replaces maturity_days > 0 semantics.
    */
   latency_parameter?: boolean;
   /** True if user manually set latency_parameter (vs derived from file) */
   latency_parameter_overridden?: boolean;
-  
-  /** @deprecated Use latency_parameter instead.
-   *  Maturity threshold in days - retained for backward compatibility.
-   */
-  maturity_days?: number;
-  /** True if user manually set maturity_days (vs derived from file) */
-  maturity_days_overridden?: boolean;
   
   /** Anchor node for cohort queries - furthest upstream START node from edge.from
    *  Computed by MSMDC at graph-edit time (not retrieval time)

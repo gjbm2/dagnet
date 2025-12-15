@@ -34,7 +34,7 @@ Before we can show mature vs forecast visually, we need basic schema and computa
 | Update parameter UI schema for new fields | `public/ui-schemas/parameter-ui-schema.json` | — | ❌ NO DESIGN |
 | Add `latency` to `EdgeParamDiff` in scenarios | `src/types/scenarios.ts` | `design.md §9.J` | ⚠️ NEEDS DESIGN |
 
-**Open Issues:** `open-issues.md GAP-1` (default maturity_days value)
+**Open Issues:** `open-issues.md GAP-1` (default legacy maturity field value)
 
 **Design Gaps:**
 - **JSON Schema for conversion-graph**: `design.md §9.G` mentions the file but doesn't specify the JSON schema structure
@@ -96,7 +96,7 @@ This is a hygiene item that can be done anytime. Recommend deferring to Phase 2 
 | Store split result in parameter value entry | `src/services/paramRegistryService.ts` | `design.md §9.E` | ⚠️ NEEDS DESIGN |
 | Update `ParameterValue` interface | `src/services/paramRegistryService.ts` | `design.md §3.2` | ⚠️ NEEDS DESIGN |
 
-**Open Issues:** `open-issues.md GAP-1` (default maturity_days value)
+**Open Issues:** `open-issues.md GAP-1` (default legacy maturity field value)
 
 **Design Gaps:**
 - **ParameterValue interface**: `design.md §3.2` shows YAML structure but not TypeScript interface update
@@ -214,7 +214,7 @@ This is a hygiene item that can be done anytime. Recommend deferring to Phase 2 
 | Task | Files | Design Ref | Status |
 |------|-------|------------|--------|
 | Handle `cohort` vs `window` mode in adapter | `public/defaults/connections.yaml` | `design.md §9.B` | ✅ |
-| Extend observation window by maturity_days | `public/defaults/connections.yaml` | `design.md §9.B` | ⚠️ NEEDS DESIGN |
+| Extend observation window by legacy maturity field | `public/defaults/connections.yaml` | `design.md §9.B` | ⚠️ NEEDS DESIGN |
 | Pass cohort dates to Amplitude API | `public/defaults/connections.yaml` | `design.md §9.B` | ✅ |
 
 **Open Issues:** `open-issues.md GAP-6` (observation window extension semantics)

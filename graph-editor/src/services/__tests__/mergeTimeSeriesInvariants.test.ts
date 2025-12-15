@@ -714,7 +714,7 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
       '',
       { 
         recomputeForecast: true,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
       }
     );
     
@@ -743,7 +743,7 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
       '',
       { 
         recomputeForecast: true,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
       }
     );
     
@@ -794,7 +794,7 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
       '',
       { 
         recomputeForecast: true,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
       }
     );
     
@@ -813,7 +813,7 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
       '',
       { 
         recomputeForecast: true,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
       }
     );
     

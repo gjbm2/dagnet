@@ -1,17 +1,31 @@
 # TODO
 
-- Some dodgy tests
-- may need to careful with long run path_t95 being overly aggressive -- we need cohorts to run ~45 days or so.
 
-- Add basic graphing for analysis??
+- What is skipped in: windowCohortSemantics.paramPack.e2e.test.ts & why? Should it be skipped??
+- 2dp for latency t95 and path_t95 calcs
+
+---
+
 - Check fetch logic properly -- some odd behaviour
 - +Contexts should show all if none pinned
 - querydsl isn't reading from graph on refresh -- is resetting to last 7 days.
 - on F5, we're trying to fetch before files have loaded and failing. Need a guard to hold back fetch until after files are available
-- we really have to re-factor the 2x god files...
+- we really have to re-factor the 3x god files (dataOperationsService, UpdateManager and GraphCanvas) -- cf. src-slimdown.md
 
 - Confidence band rendering in LAG view needs checking & improving (design and polish; semantics now centralised but visuals may lag)
 
+# Project-lag
+
+### Edge cases to consider
+- upstream visited() calls to Amplitude need to query on the right cohort window for the edges we actually care about NOT the upstream start window
+
+### Semantic linting / data depth health
+
+- Add a **semantic linting** pass to Graph Issues that checks **data depth/health** for latency edges:
+  - Flag edges where `p.forecast` is based on too few mature cohorts (low effective sample size)
+  - Flag edges where `completeness` is persistently low for the active DSL (window/cohort)
+  - Surface a **data health indicator** in the Graph Issues panel (e.g., "data shallow", "no mature cohorts yet")
+  - Treat this like other graph viewer issues: informational by default, with toggles to enable/disable
 ## LAG semantics (deferred requirement)
 
 - Add an explicit toggle for **“HAS completed”** (as-of now; allow conversions after `window.end` / `cohort.end`) vs **“completed by window end”** semantics.
@@ -31,15 +45,12 @@
 
 - Edge bead tooltips: add hover tooltips explaining each bead (latency: median lag + completeness; probability; costs)
 
-- Could we / should we show a wide edge that fades out x% of the way along the edge (to indicate completeness)?
-
 - Ensure integrity checker sensibly configured to support dual slice integrity checks
+
 - Structural ambiguity about analysis dsl over conditional_p journeys -- can we cover absent scenarios?
 
 ## E2E Test Coverage for Repository Operations (CRITICAL)
 Basic repo ops (switch repo, clear, pull) lack E2E tests and keep breaking. See `docs/current/project-contexts/e2e-test-plan.md`
-
-## GraphCanvas and GRaphEditor need a full reappraisal and refactor. It is a horror show.
 
 
 ## Graph issues panel
@@ -151,18 +162,7 @@ Reproduce the issue and share the console outpu
 
 - Tooltip Redesign (Future)
 
-## Project-lag
-
-### Edge cases to consider
-- upstream visited() calls to Amplitude need to query on the right cohort window for the edges we actually care about NOT the upstream start window
-
-### Semantic linting / data depth health
-
-- Add a **semantic linting** pass to Graph Issues that checks **data depth/health** for latency edges:
-  - Flag edges where `p.forecast` is based on too few mature cohorts (low effective sample size)
-  - Flag edges where `completeness` is persistently low for the active DSL (window/cohort)
-  - Surface a **data health indicator** in the Graph Issues panel (e.g., "data shallow", "no mature cohorts yet")
-  - Treat this like other graph viewer issues: informational by default, with toggles to enable/disable
+#
 
 ## Background Fetch Queue (DESIGN SKETCH)
 

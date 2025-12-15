@@ -1496,10 +1496,8 @@ export class IntegrityCheckService {
       if (outgoingEdges.length < 2) continue;
       
       // Only check edges with latency tracking enabled
-      // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
       const latencyEdges = outgoingEdges.filter((e: any) => 
-        e.p?.latency?.latency_parameter === true ||
-        (e.p?.latency?.maturity_days ?? 0) > 0
+        e.p?.latency?.latency_parameter === true
       );
       
       // Need at least 2 sibling latency edges for this check to be relevant

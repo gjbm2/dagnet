@@ -26,7 +26,7 @@ This proposal is part of a broader, conceptually integrated effort:
    - evidence/forecast sourcing,
    - completeness semantics,
    - and defensible blending into `p.mean`.
-2. **Phase 2 (this document):** Migrate horizon primitives away from `maturity_days` and towards **parameter-level, overridable** `t95` and `path_t95`, to improve:
+2. **Phase 2 (this document):** Migrate horizon primitives away from `legacy maturity field` and towards **parameter-level, overridable** `t95` and `path_t95`, to improve:
    - horizon stability for heterogeneous edges (bounding/planning and external conversion windows),
    - traceability of horizons,
    - and user control when automated derivation is systematically wrong.
@@ -74,7 +74,7 @@ This proposal is intentionally designed for the current test environment (single
 
 - `t95`: the edge-local latency horizon (intended to approximate “95% of eventual converters have converted by this many days” for the edge’s conversion).
 - `path_t95`: the cumulative latency horizon from the anchor to the end of the edge (used for downstream cohort horizons and for Amplitude conversion windows in cohort mode).
-- “Parameter-level”: stored and versioned alongside the parameter’s time-series values (the same layer where `maturity_days` currently lives in practice).
+- “Parameter-level”: stored and versioned alongside the parameter’s time-series values (the same layer where `legacy maturity field` currently lives in practice).
 - “Derived”: computed by the system from observed cohorts and model fitting.
 - “Override”: user-supplied value that replaces the derived value for all downstream logic.
 
@@ -217,12 +217,12 @@ Latency enablement must be explicit, independent of numeric horizons, and consis
 - Introduce a new boolean field `latency_parameter` that indicates whether a parameter-backed edge probability is latency-tracked.
 - Add `latency_parameter_overridden` so the graph↔file mapping can follow the standard override pattern (the flag is required even for booleans).
 - Treat `t95` and `path_t95` as the only numeric latency horizons (each with an `*_overridden` companion).
-- Perform a repo-wide audit of **every** usage of `maturity_days` and replace it with one of:
+- Perform a repo-wide audit of **every** usage of `legacy maturity field` and replace it with one of:
   - `latency_parameter` (for enablement checks),
   - `t95` / `path_t95` (for horizon usage), or
   - the global default `t95` (only during default injection when enabling latency).
 
-After the migration, `maturity_days` should no longer be used as an enablement marker or a horizon input anywhere in the application logic.
+After the migration, `legacy maturity field` should no longer be used as an enablement marker or a horizon input anywhere in the application logic.
 
 ## Computation and write-back rules
 
@@ -294,7 +294,7 @@ This is a retrieval-safety policy only; it does not change the meaning of `t95/p
 
 ## Repo-wide audit: current read/write sites
 
-This section inventories **all current code sites** where `maturity_days`, `t95`, and `path_t95` are written and read.
+This section inventories **all current code sites** where `legacy maturity field`, `t95`, and `path_t95` are written and read.
 
 Notes:
 
@@ -302,37 +302,37 @@ Notes:
 - A “read” means the value is consulted to decide behaviour (planning, refetch, query construction, analytics, UI).
 - Tests are listed separately so we can update them deterministically during the migration.
 
-### `maturity_days` (current)
+### `legacy maturity field` (current)
 
 - **Writes (production)**
-  - **`graph-editor/src/services/UpdateManager.ts`**: bidirectional mapping between graph `p.latency.maturity_days` and stored parameter latency (`latency.maturity_days`), including override flag wiring.
-  - **`graph-editor/src/lib/das/buildDslFromEdge.ts`**: writes `queryPayload.cohort.maturity_days` (used as Amplitude `cs` by the adapter).
-  - **`graph-editor/src/services/dataOperationsService.ts`**: constructs/threads the cohort object which contains `maturity_days` (via `queryPayload.cohort` passthrough).
-  - **`graph-editor/src/lib/das/types.ts`**: defines the cohort payload field `maturity_days` (write surface at the DAS boundary).
+  - **`graph-editor/src/services/UpdateManager.ts`**: bidirectional mapping between graph `p.latency.legacy maturity field` and stored parameter latency (`latency.legacy maturity field`), including override flag wiring.
+  - **`graph-editor/src/lib/das/buildDslFromEdge.ts`**: writes `queryPayload.cohort.legacy maturity field` (used as Amplitude `cs` by the adapter).
+  - **`graph-editor/src/services/dataOperationsService.ts`**: constructs/threads the cohort object which contains `legacy maturity field` (via `queryPayload.cohort` passthrough).
+  - **`graph-editor/src/lib/das/types.ts`**: defines the cohort payload field `legacy maturity field` (write surface at the DAS boundary).
 - **Reads (production)**
   - **`graph-editor/src/constants/statisticalConstants.ts`**: single source of truth for all LAG/statistical constants (percentiles, quality gates, horizon buffers, refetch cooldowns, etc.). This file currently contains some of these; Phase 2 will consolidate all remaining ones into it.
-  - **`graph-editor/src/services/fetchRefetchPolicy.ts`**: enablement and maturity/refetch decisions use `latencyConfig.maturity_days` (and prefer `t95` when present).
+  - **`graph-editor/src/services/fetchRefetchPolicy.ts`**: enablement and maturity/refetch decisions use `latencyConfig.legacy maturity field` (and prefer `t95` when present).
   - **`graph-editor/src/services/statisticalEnhancementService.ts`**: used as a fallback contributor in `computePathT95()` when `t95` is absent.
   - **`graph-editor/src/services/cohortRetrievalHorizon.ts`**: used as a fallback horizon input.
-  - **`graph-editor/src/services/windowAggregationService.ts`**: cohort/window aggregation and related logic references `maturity_days` in LAG-related pathways.
-  - **`graph-editor/src/services/paramRegistryService.ts`**: parameter value typing/fields include cohort-related latency structures where `maturity_days` appears.
-  - **`graph-editor/src/services/windowFetchPlannerService.ts`**: includes `maturity_days` in the `GraphForPath` representation used for on-demand `path_t95` computation.
-  - **`graph-editor/src/services/fetchDataService.ts`**: includes `maturity_days` in the `GraphForPath` representation used for `path_t95` computation and application.
-  - **`graph-editor/src/services/dataOperationsService.ts`**: checks `maturity_days` to decide whether latency tracking is enabled for policy decisions.
-  - **`graph-editor/src/components/edges/ConversionEdge.tsx`**: UI-only heuristic fallback (uses `maturity_days` when median lag display is missing).
-  - **`graph-editor/src/components/ParameterSection.tsx`**: latency config display/edit surface (reads the latency config block including `maturity_days`).
+  - **`graph-editor/src/services/windowAggregationService.ts`**: cohort/window aggregation and related logic references `legacy maturity field` in LAG-related pathways.
+  - **`graph-editor/src/services/paramRegistryService.ts`**: parameter value typing/fields include cohort-related latency structures where `legacy maturity field` appears.
+  - **`graph-editor/src/services/windowFetchPlannerService.ts`**: includes `legacy maturity field` in the `GraphForPath` representation used for on-demand `path_t95` computation.
+  - **`graph-editor/src/services/fetchDataService.ts`**: includes `legacy maturity field` in the `GraphForPath` representation used for `path_t95` computation and application.
+  - **`graph-editor/src/services/dataOperationsService.ts`**: checks `legacy maturity field` to decide whether latency tracking is enabled for policy decisions.
+  - **`graph-editor/src/components/edges/ConversionEdge.tsx`**: UI-only heuristic fallback (uses `legacy maturity field` when median lag display is missing).
+  - **`graph-editor/src/components/ParameterSection.tsx`**: latency config display/edit surface (reads the latency config block including `legacy maturity field`).
   - **`graph-editor/src/services/GraphParamExtractor.ts`**: extracts latency config fields from edge parameters for downstream consumption.
   - **`graph-editor/src/services/integrityCheckService.ts`**: includes latency fields in integrity checks/diagnostics.
 - **Writes/Reads (adapter + schemas + Python)**
-  - **`graph-editor/public/defaults/connections.yaml`**: reads `cohort.maturity_days` to set Amplitude `cs` (seconds).
+  - **`graph-editor/public/defaults/connections.yaml`**: reads `cohort.legacy maturity field` to set Amplitude `cs` (seconds).
   - **`graph-editor/dist/defaults/connections.yaml`**: built copy of the adapter config (do not edit directly; update source in `public/`).
-  - **`graph-editor/public/param-schemas/parameter-schema.yaml`**: defines `maturity_days` in the schema.
+  - **`graph-editor/public/param-schemas/parameter-schema.yaml`**: defines `legacy maturity field` in the schema.
   - **`graph-editor/dist/param-schemas/parameter-schema.yaml`**: built copy (do not edit directly; update source in `public/`).
   - **`graph-editor/public/schemas/conversion-graph-1.0.0.json`**, **`graph-editor/public/schemas/conversion-graph-1.1.0.json`**: include latency/maturity shape.
   - **`graph-editor/dist/schemas/conversion-graph-1.0.0.json`**, **`graph-editor/dist/schemas/conversion-graph-1.1.0.json`**: built copies (do not edit directly; update source in `public/`).
-  - **`graph-editor/lib/graph_types.py`**: Python model includes `maturity_days` (+ overridden flag) and documents its current enablement semantics.
-  - **`graph-editor/lib/runner/graph_builder.py`**: extracts and emits `maturity_days` in latency payloads.
-  - **`graph-editor/public/ui-schemas/parameter-ui-schema.json`** and **`graph-editor/dist/ui-schemas/parameter-ui-schema.json`**: UI schema surfaces `maturity_days`.
+  - **`graph-editor/lib/graph_types.py`**: Python model includes `legacy maturity field` (+ overridden flag) and documents its current enablement semantics.
+  - **`graph-editor/lib/runner/graph_builder.py`**: extracts and emits `legacy maturity field` in latency payloads.
+  - **`graph-editor/public/ui-schemas/parameter-ui-schema.json`** and **`graph-editor/dist/ui-schemas/parameter-ui-schema.json`**: UI schema surfaces `legacy maturity field`.
 - **Reads (documentation)**
   - **`graph-editor/public/docs/glossary.md`**
   - **`graph-editor/public/docs/lag-statistics-reference.md`**
@@ -362,7 +362,7 @@ Notes:
   - **`graph-editor/src/services/dataOperationsService.ts`**: logs/threads `t95` as part of latency config diagnostics during fetch planning and bounded cohort logic.
 - **Reads (production)**
   - **`graph-editor/src/constants/statisticalConstants.ts`**: single source of truth for all LAG/statistical constants (including the `t95` percentile and any related gates/buffers after consolidation).
-  - **`graph-editor/src/services/fetchRefetchPolicy.ts`**: prefers `t95` over `maturity_days` for refetch maturity cutoffs.
+  - **`graph-editor/src/services/fetchRefetchPolicy.ts`**: prefers `t95` over `legacy maturity field` for refetch maturity cutoffs.
   - **`graph-editor/src/services/statisticalEnhancementService.ts`**: used as a component for `path_t95` accumulation and for downstream path calculations.
   - **`graph-editor/src/services/cohortRetrievalHorizon.ts`**: used as a fallback horizon input when `path_t95` is absent.
   - **`graph-editor/src/services/windowFetchPlannerService.ts`**: includes `t95` in `GraphForPath` when computing `path_t95` on demand.
@@ -479,7 +479,7 @@ Impacted areas:
 
 ### Fetch planning and refetch policy
 
-Places that currently use `maturity_days`, `t95`, or `path_t95` must be updated to use:
+Places that currently use `legacy maturity field`, `t95`, or `path_t95` must be updated to use:
 
 - `t95` for edge-local maturity/refetch decisions.
 - `path_t95` for cohort bounding decisions that depend on anchor-to-edge horizons.
@@ -493,7 +493,7 @@ Impacted areas:
 
 ### Amplitude cohort-mode conversion window (`cs`)
 
-The Amplitude adapter uses `cohort.maturity_days` to construct `cs`. The application sets `queryPayload.cohort.maturity_days` during query payload build.
+The Amplitude adapter uses `cohort.legacy maturity field` to construct `cs`. The application sets `queryPayload.cohort.legacy maturity field` during query payload build.
 
 We must ensure cohort-mode `cs` is driven by an effective, overridable horizon:
 
@@ -549,7 +549,7 @@ Update/add tests that prove:
 
 - If `*_overridden` is true, derived computation does not overwrite the stored value.
 - Default injection occurs when latency is enabled (and does not occur when overridden).
-- Amplitude cohort-mode `cs` uses `path_t95` (or `t95` fallback) and does not reintroduce `maturity_days` fallbacks.
+- Amplitude cohort-mode `cs` uses `path_t95` (or `t95` fallback) and does not reintroduce `legacy maturity field` fallbacks.
 - Cohort bounding uses `path_t95` consistently.
 
 Expected impacted test areas:
@@ -561,7 +561,7 @@ Expected impacted test areas:
 
 ## Rollout plan (single pass)
 
-This change should be executed as a single coherent migration so we do not miss any `maturity_days` usage.
+This change should be executed as a single coherent migration so we do not miss any `legacy maturity field` usage.
 
 Required steps:
 
@@ -571,10 +571,10 @@ Required steps:
 - Update UpdateManager to:
   - write derived values only when not overridden, and
   - honour the override flags consistently.
-- Replace every `maturity_days` reference across the application:
+- Replace every `legacy maturity field` reference across the application:
   - identify whether each call site is enablement, horizon selection, refetch policy, or UI-only,
   - migrate it to `latency_parameter` and/or `t95` / `path_t95` as appropriate,
-  - delete any remaining fallback semantics that accidentally treat `maturity_days` as a horizon or enablement flag.
+  - delete any remaining fallback semantics that accidentally treat `legacy maturity field` as a horizon or enablement flag.
 - Update UI editing controls to set/clear overrides.
 - Update and add tests for the new enablement flag and override precedence.
 

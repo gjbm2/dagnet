@@ -18,8 +18,8 @@ This document simulates the implementation process for Project LAG (Latency-Awar
 2.  **Add `LatencyConfig` interface:**
     ```typescript
     export interface LatencyConfig {
-      maturity_days?: number;
-      maturity_days_overridden?: boolean;
+      legacy maturity field?: number;
+      legacy maturity override?: boolean;
       censor_days?: number;
       censor_days_overridden?: boolean;
       anchor_node_id?: string;
@@ -175,7 +175,7 @@ This document simulates the implementation process for Project LAG (Latency-Awar
 1.  **Update `QueryPayload` interface:**
     *   Add `cohort?: { anchor?: string; start: string; end: string; maturity?: number }`.
 2.  **Update `buildDslFromEdge`:**
-    *   Detect `latency.maturity_days > 0` on the edge.
+    *   Detect `latency.legacy maturity field > 0` on the edge.
     *   If true, and DSL contains `cohort()`, construct `cohort` payload.
     *   Resolve `anchor_node_id`: use edge's configured anchor or fallback to `edge.from`.
     *   Support dual-slice requests (if DSL implies both).
@@ -221,7 +221,7 @@ This document simulates the implementation process for Project LAG (Latency-Awar
 **Context:** Aggregates time-series data.
 
 **Changes Required:**
-1.  **Implement `computeMatureImmatureSplit`:** Logic to separate cohorts based on age vs `maturity_days`.
+1.  **Implement `computeMatureImmatureSplit`:** Logic to separate cohorts based on age vs `legacy maturity field`.
 2.  **Update `aggregateWindow`:** Handle cohort-based data structures (parallel arrays for latency).
 3.  **Implement `completeness` calculation:** Weighted average of cohort progress.
 4.  **Implement `computeTotalMaturity`:** Longest-path algorithm for cache policy.
@@ -278,7 +278,7 @@ This document simulates the implementation process for Project LAG (Latency-Awar
 
 **Changes Required:**
 1.  **Add Latency Bead:**
-    *   Check `latency.maturity_days > 0`.
+    *   Check `latency.legacy maturity field > 0`.
     *   Render bead with median lag and completeness (e.g., "6d (80%)").
 
 **File:** `graph-editor/src/components/edges/edgeBeadHelpers.tsx`
@@ -389,8 +389,8 @@ This document simulates the implementation process for Project LAG (Latency-Awar
     *   *Resolution:* Flat fields `forecast_mean`, `evidence_mean` in `EdgeParamDiff` align with the existing flat structure of overrides (`mean`, `stdev`). This avoids deep merging complexity.
 
 6.  **Latency Config "Track" Boolean:**
-    *   *Question:* The design mentions `maturity_days > 0` enables tracking, implies no separate boolean. Implementation plan mentions "no separate track boolean".
-    *   *Confirmation:* Stick to `maturity_days > 0` as the source of truth for enabling the feature to keep state minimal.
+    *   *Question:* The design mentions `legacy maturity field > 0` enables tracking, implies no separate boolean. Implementation plan mentions "no separate track boolean".
+    *   *Confirmation:* Stick to `legacy maturity field > 0` as the source of truth for enabling the feature to keep state minimal.
 
 7.  **Visual Clutter:**
     *   *Question:* With beads, tooltips, and now striped edges, is the UI getting too busy?

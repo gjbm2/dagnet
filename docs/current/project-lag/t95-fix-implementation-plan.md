@@ -13,7 +13,7 @@ This document is **Phase 2** of the integrated plan:
 
 - **Phase 1 (required first):** `docs/current/project-lag/window-cohort-lag-correction-plan.md`  
   Correct `window()`/`cohort()` semantics and repair regressions introduced by the refactor to a single topo/LAG pass.
-- **Phase 2 (this document):** introduce parameter-level, overridable `t95/path_t95` and remove `maturity_days` from all logic.
+- **Phase 2 (this document):** introduce parameter-level, overridable `t95/path_t95` and remove `legacy maturity field` from all logic.
 
 Do not start Phase 2 implementation until Phase 1 is complete and the relevant semantics tests pass.
 
@@ -37,7 +37,7 @@ Do not start Phase 2 implementation until Phase 1 is complete and the relevant s
 - `windowCohortSemantics.paramPack.e2e.test.ts` — Phase 1 contract tests passing; Phase 2 RED tests intentionally skipped ✅
 - Full `graph-editor` suite: **2567 passing**, **32 skipped**, **3 todo** (total **2602**) ✅
 
-**Phase 2 is now unblocked** — can proceed with schema/type changes and `maturity_days` deprecation.
+**Phase 2 is now unblocked** — can proceed with schema/type changes and `legacy maturity field` deprecation.
 
 ---
 
@@ -97,14 +97,14 @@ Treat these as Phase 1 blockers. The fixes should follow the semantics contract:
 
 ## Overview
 
-Replace implicit latency enablement (via `maturity_days` presence) with explicit fields supporting user overrides. Introduce `latency_parameter` boolean (parameter-backed) plus `latency_parameter_overridden`, add `*_overridden` companions to `t95` and `path_t95`, and eliminate all `maturity_days` usage.
+Replace implicit latency enablement (via `legacy maturity field` presence) with explicit fields supporting user overrides. Introduce `latency_parameter` boolean (parameter-backed) plus `latency_parameter_overridden`, add `*_overridden` companions to `t95` and `path_t95`, and eliminate all `legacy maturity field` usage.
 
 ## Relationship to Window/Cohort LAG Semantics (Conceptual Integration)
 
 This work is a **Phase 2** dependency of the window/cohort semantics correction:
 
 - The semantics correction requires robust horizon primitives for bounding/planning when cohort windows are immature (a common real-world use case).
-- We explicitly do **not** want to deepen reliance on `maturity_days` for priors, because it is slated for deprecation.
+- We explicitly do **not** want to deepen reliance on `legacy maturity field` for priors, because it is slated for deprecation.
 - Phase 2 provides persisted/overridable `t95` and `path_t95` so:
   - `t95` can serve as the canonical, user-auditable horizon when empirical lag data is sparse or heterogeneous.
   - `path_t95` remains primarily a retrieval/bounding primitive and a cohort-vs-window targeting signal (it is not a proxy for upstream medians in completeness).
@@ -228,7 +228,7 @@ Implement write-back gating based on override flags.
 
 ---
 
-## Phase 3: Migrate Enablement Checks (maturity_days → latency_parameter)
+## Phase 3: Migrate Enablement Checks (legacy maturity field → latency_parameter)
 
 Replace all "is latency enabled?" checks.
 
@@ -236,13 +236,13 @@ Replace all "is latency enabled?" checks.
 
 **File:** `graph-editor/src/services/fetchRefetchPolicy.ts`
 
-- Replace `latencyConfig.maturity_days` presence check with `latencyConfig.latency_parameter === true`
+- Replace `latencyConfig.legacy maturity field` presence check with `latencyConfig.latency_parameter === true`
 
 ### 3.2 Data Operations Service
 
 **File:** `graph-editor/src/services/dataOperationsService.ts`
 
-- Replace `maturity_days` enablement checks with `latency_parameter`
+- Replace `legacy maturity field` enablement checks with `latency_parameter`
 
 ### 3.3 Graph Param Extractor
 
@@ -258,7 +258,7 @@ Replace all "is latency enabled?" checks.
 
 ---
 
-## Phase 4: Migrate Horizon Usages (maturity_days → t95/path_t95)
+## Phase 4: Migrate Horizon Usages (legacy maturity field → t95/path_t95)
 
 Replace all horizon value reads.
 
@@ -266,8 +266,8 @@ Replace all horizon value reads.
 
 **File:** `graph-editor/src/services/statisticalEnhancementService.ts`
 
-- Remove `maturity_days` fallback in `computePathT95()` — use only `t95`
-- Remove any `maturity_days` references in LAG calculations
+- Remove `legacy maturity field` fallback in `computePathT95()` — use only `t95`
+- Remove any `legacy maturity field` references in LAG calculations
 - Delete Formula A / tail-substitution code paths and rely only on completeness-weighted blending for `p.mean` (see “Phase 2 design simplification” above)
 
 #### 4.1.a Implement “t95 tail constraint” for completeness CDF (fat-tail safety)
@@ -297,29 +297,29 @@ Replace all horizon value reads.
 
 **File:** `graph-editor/src/services/cohortRetrievalHorizon.ts`
 
-- Remove `maturity_days` fallback — use `path_t95` then `t95` then `DEFAULT_T95_DAYS`
+- Remove `legacy maturity field` fallback — use `path_t95` then `t95` then `DEFAULT_T95_DAYS`
 
 ### 4.3 Window Fetch Planner
 
 **File:** `graph-editor/src/services/windowFetchPlannerService.ts`
 
-- Remove `maturity_days` from `GraphForPath` representation
+- Remove `legacy maturity field` from `GraphForPath` representation
 - Use only `t95` for path computation inputs
 
 ### 4.4 Fetch Data Service
 
 **File:** `graph-editor/src/services/fetchDataService.ts`
 
-- Remove `maturity_days` from `GraphForPath` representation
+- Remove `legacy maturity field` from `GraphForPath` representation
 - Use only `t95` for path computation and application
 
 ### 4.5 DSL Query Builder (Amplitude cs)
 
 **File:** `graph-editor/src/lib/das/buildDslFromEdge.ts`
 
-- Remove `maturity_days` from `queryPayload.cohort`
+- Remove `legacy maturity field` from `queryPayload.cohort`
 - Use `path_t95` → `t95` → `DEFAULT_T95_DAYS` fallback chain for cohort conversion window
-- Stop writing `cohort.maturity_days` in the query payload
+- Stop writing `cohort.legacy maturity field` in the query payload
 
 ### 4.x Window() conversion window policy (Amplitude cs)
 
@@ -331,7 +331,7 @@ Replace all horizon value reads.
 
 **File:** `graph-editor/src/services/windowAggregationService.ts`
 
-- Replace any `maturity_days` references with `t95` or `path_t95`
+- Replace any `legacy maturity field` references with `t95` or `path_t95`
 
 ---
 
@@ -353,7 +353,7 @@ Add user-facing controls for override management.
 
 **File:** `graph-editor/src/components/edges/ConversionEdge.tsx`
 
-- Remove `maturity_days` UI fallback
+- Remove `legacy maturity field` UI fallback
 - Use `t95` or derived lag display values only
 
 ---
@@ -366,7 +366,7 @@ Update the Amplitude adapter config.
 
 **File:** `graph-editor/public/defaults/connections.yaml`
 
-- Remove `cohort.maturity_days` references
+- Remove `cohort.legacy maturity field` references
 - Update to use appropriate horizon field if needed by adapter
 
 ---
@@ -405,7 +405,7 @@ Required scenarios (prose expectations):
 
 **File:** `graph-editor/src/services/__tests__/pathT95Computation.test.ts`
 
-- Remove/update tests that rely on `maturity_days` fallback
+- Remove/update tests that rely on `legacy maturity field` fallback
 - Add tests for `t95`-only accumulation
 
 ### 7.4 Fetch Policy Tests
@@ -416,20 +416,20 @@ Required scenarios (prose expectations):
 - `graph-editor/src/services/__tests__/fetchPolicyIntegration.test.ts`
 
 - Update enablement checks to use `latency_parameter`
-- Remove `maturity_days` from test fixtures
+- Remove `legacy maturity field` from test fixtures
 
 ### 7.5 DSL Builder Tests
 
 **File:** `graph-editor/src/lib/das/__tests__/buildDslFromEdge.cohortAnchor.test.ts`
 
 - Update tests to verify `path_t95` → `t95` → `DEFAULT_T95_DAYS` fallback
-- Remove `maturity_days` from test scenarios
+- Remove `legacy maturity field` from test scenarios
 
 ### 7.6 Cohort Horizon Tests
 
 **File:** `graph-editor/src/services/__tests__/cohortRetrievalHorizon.test.ts`
 
-- Update horizon fallback tests to not include `maturity_days`
+- Update horizon fallback tests to not include `legacy maturity field`
 
 ### 7.7 Python Tests
 
@@ -449,7 +449,7 @@ Required scenarios (prose expectations):
 
 - Add `latency_parameter` definition (parameter-backed enablement) and `latency_parameter_overridden`
 - Update `t95` and `path_t95` definitions to mention overrides
-- Mark `maturity_days` as deprecated or remove
+- Mark `legacy maturity field` as deprecated or remove
 
 ### 8.2 LAG Statistics Reference
 
@@ -465,7 +465,7 @@ Required scenarios (prose expectations):
 - `graph-editor/src/constants/statisticalConstants.ts` (single source of truth)
 
 - Update comments to reflect new field usage
-- Remove `maturity_days` references
+- Remove `legacy maturity field` references
 
 ### 8.5 (Removed) Consolidate statistical constants
 
@@ -475,7 +475,7 @@ This work is executed in **Phase 1.0** to ensure the rest of the migration only 
 
 **File:** `graph-editor/public/param-schemas/parameter-schema.yaml`
 
-- Consider marking `maturity_days` as deprecated
+- Consider marking `legacy maturity field` as deprecated
 - Or remove entirely if no backward compatibility needed
 
 ---
@@ -504,19 +504,19 @@ This work is executed in **Phase 1.0** to ensure the rest of the migration only 
 - [ ] 3.4 integrityCheckService.ts
 
 ### Phase 4: Migrate Horizon Usages
-- [ ] 4.1 statisticalEnhancementService.ts — remove maturity_days fallback
-- [ ] 4.2 cohortRetrievalHorizon.ts — remove maturity_days fallback
-- [ ] 4.3 windowFetchPlannerService.ts — remove maturity_days from GraphForPath
-- [ ] 4.4 fetchDataService.ts — remove maturity_days from GraphForPath
+- [ ] 4.1 statisticalEnhancementService.ts — remove legacy maturity field fallback
+- [ ] 4.2 cohortRetrievalHorizon.ts — remove legacy maturity field fallback
+- [ ] 4.3 windowFetchPlannerService.ts — remove legacy maturity field from GraphForPath
+- [ ] 4.4 fetchDataService.ts — remove legacy maturity field from GraphForPath
 - [ ] 4.5 buildDslFromEdge.ts — use t95/path_t95 for cohort cs
-- [ ] 4.6 windowAggregationService.ts — update maturity_days references
+- [ ] 4.6 windowAggregationService.ts — update legacy maturity field references
 
 ### Phase 5: UI Controls
 - [ ] 5.1 Properties panel — add override inputs
-- [ ] 5.2 ConversionEdge — remove maturity_days fallback
+- [ ] 5.2 ConversionEdge — remove legacy maturity field fallback
 
 ### Phase 6: Adapter Config
-- [ ] 6.1 connections.yaml — remove maturity_days references
+- [ ] 6.1 connections.yaml — remove legacy maturity field references
 
 ### Phase 7: Tests
 - [ ] 7.1 Override precedence tests

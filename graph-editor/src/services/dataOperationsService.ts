@@ -1383,7 +1383,7 @@ class DataOperationsService {
             
             // Create a new aggregated value entry
             // 
-            // NOTE: LAG computation (Formula A, completeness, t95) happens in the
+            // NOTE: LAG computation (completeness, t95) happens in the
             // graph-level topo pass after all fetches complete. Here we store the
             // raw evidence mean. The graph edge's p.mean will be updated by the
             // topo pass with the path-adjusted blended value.
@@ -3663,7 +3663,6 @@ class DataOperationsService {
         start?: string;
         end?: string;
         anchor_event_id?: string;
-        maturity_days?: number;
         [key: string]: unknown;
       }
       let requestedCohort: CohortOptions | undefined;
@@ -3674,7 +3673,6 @@ class DataOperationsService {
             start: cohort.start,
             end: cohort.end,
             anchor_event_id: cohort.anchor_event_id,
-            maturity_days: cohort.maturity_days
           };
           console.log('[DataOps] Using cohort from DSL object:', requestedCohort);
         }
@@ -3748,9 +3746,7 @@ class DataOperationsService {
         const latencyConfig = targetEdgeForPolicy?.p?.latency as LatencyConfig | undefined;
         
         // Check if this edge has latency tracking enabled
-        // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
-        const isLatencyEnabled = latencyConfig?.latency_parameter === true || 
-                                (latencyConfig?.maturity_days ?? 0) > 0;
+        const isLatencyEnabled = latencyConfig?.latency_parameter === true;
         if (isLatencyEnabled) {
           // Get existing slice for this context/case family
           const existingValues = paramFile?.data?.values as ParameterValue[] | undefined;
@@ -3783,7 +3779,7 @@ class DataOperationsService {
             reason: refetchPolicy.reason,
           });
           
-          const effectiveHorizon = latencyConfig?.t95 ?? latencyConfig?.maturity_days ?? 30;
+          const effectiveHorizon = latencyConfig?.t95 ?? 30;
           sessionLogService.addChild(logOpId, 'info', 'REFETCH_POLICY',
             `Latency-aware policy: ${refetchPolicy.type}`,
             `Horizon: ${effectiveHorizon.toFixed(1)}d | Mode: ${isCohortQuery ? 'cohort' : 'window'}${refetchPolicy.matureCutoff ? ` | Cutoff: ${refetchPolicy.matureCutoff}` : ''}`,
@@ -3913,7 +3909,6 @@ class DataOperationsService {
                 requestedWindow,
                 pathT95: effectivePathT95,
                 edgeT95: latencyConfig.t95,
-                maturityDays: latencyConfig.maturity_days,
               });
               
               if (horizonResult.wasBounded) {
@@ -5069,9 +5064,7 @@ class DataOperationsService {
               ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) 
               : undefined;
             const latencyConfigForMerge = targetEdgeForMerge?.p?.latency;
-            // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
-            const shouldRecomputeForecast = latencyConfigForMerge?.latency_parameter === true ||
-                                           (latencyConfigForMerge?.maturity_days ?? 0) > 0;
+            const shouldRecomputeForecast = latencyConfigForMerge?.latency_parameter === true;
             
             if (allTimeSeriesData.length > 0) {
               // API returned data - store each gap as a separate value entry
@@ -5109,7 +5102,7 @@ class DataOperationsService {
                       // LAG: Pass latency config for forecast recomputation if available
                       ...(shouldRecomputeForecast && {
                         latencyConfig: {
-                          maturity_days: latencyConfigForMerge?.maturity_days,
+                          latency_parameter: latencyConfigForMerge?.latency_parameter,
                           anchor_node_id: latencyConfigForMerge?.anchor_node_id,
                         },
                         recomputeForecast: true,
@@ -6175,10 +6168,10 @@ class DataOperationsService {
         lines.push(`- **File**: \`${paramFileId}\` (${paramFile ? 'exists' : 'missing'})`);
         lines.push(`- **Connection**: ${connectionName ?? '(none)'}`);
         if (latencyConfig) {
-          const md = latencyConfig.maturity_days !== undefined ? `${latencyConfig.maturity_days}d` : '(none)';
+          const enabled = latencyConfig.latency_parameter === true ? 'true' : 'false';
           const t95 = latencyConfig.t95 !== undefined ? `${latencyConfig.t95.toFixed(2)}d` : '(none)';
           const pt95 = latencyConfig.path_t95 !== undefined ? `${latencyConfig.path_t95.toFixed(2)}d` : '(none)';
-          lines.push(`- **Latency config**: maturity_days=${md}; edge.t95=${t95}; graph.path_t95=${pt95}`);
+          lines.push(`- **Latency config**: latency_parameter=${enabled}; edge.t95=${t95}; graph.path_t95=${pt95}`);
         } else {
           lines.push(`- **Latency config**: (none)`);
         }
@@ -6248,9 +6241,7 @@ class DataOperationsService {
         });
 
         let refetchPolicy: RefetchDecision | undefined;
-        // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
-        const isLatencyEnabledForReport = latencyConfig?.latency_parameter === true || 
-                                         (latencyConfig?.maturity_days ?? 0) > 0;
+        const isLatencyEnabledForReport = latencyConfig?.latency_parameter === true;
         if (isLatencyEnabledForReport) {
           refetchPolicy = shouldRefetch({
             existingSlice,
@@ -6377,7 +6368,7 @@ class DataOperationsService {
         } else if (refetchPolicy?.type === 'replace_slice') {
           // Replacement fetch (cohort horizon bounding is applied in execution path; simulate it here).
           // For cohort queries, bounding uses path_t95 when available (planner provides it),
-          // otherwise falls back to edge_t95/maturity_days/default.
+          // otherwise falls back to edge_t95/default.
           let bounded = requestedWindowISO;
           if (isCohortQuery && latencyConfig) {
             // Prefer the moment-matched estimate if available from cached data in this report.
@@ -6393,7 +6384,6 @@ class DataOperationsService {
               requestedWindow: requestedWindowISO,
               pathT95: effectivePathT95ForBounding,
               edgeT95: latencyConfig.t95,
-              maturityDays: latencyConfig.maturity_days,
             });
             bounded = horizon.wasBounded ? horizon.boundedWindow : requestedWindowISO;
             horizonSummary = horizon.summary;
@@ -6483,7 +6473,7 @@ class DataOperationsService {
         } else if (isWindowSlice && refetchPolicy?.type === 'partial' && refetchPolicy.refetchWindow) {
           const effectiveMaturityDays = computeEffectiveMaturity(latencyConfig);
           const maturitySource =
-            latencyConfig?.t95 !== undefined && latencyConfig.t95 > 0 ? `t95=${latencyConfig.t95.toFixed(2)}d` : `maturity_days=${latencyConfig?.maturity_days ?? 0}d`;
+            latencyConfig?.t95 !== undefined && latencyConfig.t95 > 0 ? `t95=${latencyConfig.t95.toFixed(2)}d` : `default`;
           immatureWindows.push(refetchPolicy.refetchWindow);
           immaturityExplanation = `window(): latency-aware partial refetch — refresh last ${effectiveMaturityDays + 1}d (effective maturity from ${maturitySource}); cutoff=${refetchPolicy.matureCutoff ?? '(unknown)'}`;
         } else if (isCohortSlice && refetchPolicy?.type === 'replace_slice') {
@@ -6522,7 +6512,7 @@ class DataOperationsService {
             } else if (cohortBoundingPathT95Used?.source === 'graph.path_t95') {
               lines.push(`  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: graph.path_t95)`);
             } else {
-              lines.push(`  - effective path_t95 used for bounding: (none available; horizon uses edge.t95/maturity_days fallbacks)`);
+              lines.push(`  - effective path_t95 used for bounding: (none available; horizon uses edge.t95/default fallbacks)`);
             }
             lines.push(`  - ${horizonSummary ?? '(no horizon summary available)'}`);
             if (!latencyConfig?.path_t95) {

@@ -16,6 +16,7 @@ import {
 } from '../statisticalEnhancementService';
 import { computeAndApplyPathT95 } from '../fetchDataService';
 import type { Graph } from '../../types';
+import { DEFAULT_T95_DAYS } from '../../constants/statisticalConstants';
 
 describe('path_t95 computation', () => {
   describe('computePathT95', () => {
@@ -30,9 +31,9 @@ describe('path_t95 computation', () => {
           { id: 'D' },
         ],
         edges: [
-          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 10 } } },
-          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { t95: 10 } } },
-          { id: 'e3', from: 'C', to: 'D', p: { mean: 0.5, latency: { t95: 10 } } },
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
+          { id: 'e3', from: 'C', to: 'D', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
         ],
       };
       
@@ -58,10 +59,10 @@ describe('path_t95 computation', () => {
           { id: 'D' },
         ],
         edges: [
-          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 10 } } },
-          { id: 'e2', from: 'A', to: 'C', p: { mean: 0.5, latency: { t95: 15 } } },
-          { id: 'e3', from: 'B', to: 'D', p: { mean: 0.5, latency: { t95: 10 } } },
-          { id: 'e4', from: 'C', to: 'D', p: { mean: 0.5, latency: { t95: 5 } } },
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
+          { id: 'e2', from: 'A', to: 'C', p: { mean: 0.5, latency: { latency_parameter: true, t95: 15 } } },
+          { id: 'e3', from: 'B', to: 'D', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
+          { id: 'e4', from: 'C', to: 'D', p: { mean: 0.5, latency: { latency_parameter: true, t95: 5 } } },
         ],
       };
       
@@ -87,7 +88,7 @@ describe('path_t95 computation', () => {
           { id: 'C' },
         ],
         edges: [
-          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 10 } } },
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
           { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5 } },  // No latency
         ],
       };
@@ -109,7 +110,7 @@ describe('path_t95 computation', () => {
           { id: 'C' },
         ],
         edges: [
-          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 10 } } },
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
           { id: 'e2', from: 'B', to: 'C', p: { mean: 0 } },  // Inactive (zero prob)
         ],
       };
@@ -137,8 +138,8 @@ describe('path_t95 computation', () => {
           { id: 'C' },
         ],
         edges: [
-          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 10 } } },
-          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { t95: 15 } } },
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { latency_parameter: true, t95: 15 } } },
         ],
       };
       
@@ -217,11 +218,11 @@ describe('computeAndApplyPathT95 (integration)', () => {
       edges: [
         { 
           id: 'e1', uuid: 'e1', from: 'A', to: 'B', 
-          p: { mean: 0.5, latency: { t95: 10, maturity_days: 14 } } 
+          p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } 
         },
         { 
           id: 'e2', uuid: 'e2', from: 'B', to: 'C', 
-          p: { mean: 0.5, latency: { t95: 15, maturity_days: 14 } } 
+          p: { mean: 0.5, latency: { latency_parameter: true, t95: 15 } } 
         },
       ],
     } as any;
@@ -280,7 +281,7 @@ describe('implementation plan test scenarios (§8.2)', () => {
   describe('non-latency vs latency edges on the same path', () => {
     it('should compute distinct path_t95 for mixed latency paths', () => {
       // Path: a→b→c→d
-      // a→b: non-latency (maturity_days=0)
+      // a→b: non-latency (latency_parameter disabled)
       // b→c: moderate t95 (10 days)
       // c→d: shorter t95 (5 days)
       const graph: GraphForPath = {
@@ -291,9 +292,9 @@ describe('implementation plan test scenarios (§8.2)', () => {
           { id: 'd' },
         ],
         edges: [
-          { id: 'e1', from: 'a', to: 'b', p: { mean: 0.5, latency: { maturity_days: 0 } } },  // Non-latency
-          { id: 'e2', from: 'b', to: 'c', p: { mean: 0.5, latency: { t95: 10 } } },
-          { id: 'e3', from: 'c', to: 'd', p: { mean: 0.5, latency: { t95: 5 } } },
+          { id: 'e1', from: 'a', to: 'b', p: { mean: 0.5, latency: { latency_parameter: false } } },  // Non-latency
+          { id: 'e2', from: 'b', to: 'c', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
+          { id: 'e3', from: 'c', to: 'd', p: { mean: 0.5, latency: { latency_parameter: true, t95: 5 } } },
         ],
       };
       
@@ -320,8 +321,8 @@ describe('implementation plan test scenarios (§8.2)', () => {
         ],
         edges: [
           { id: 'ab', from: 'a', to: 'b', p: { mean: 0.8 } },  // Non-latency
-          { id: 'bc', from: 'b', to: 'c', p: { mean: 0.5, latency: { t95: 21 } } },
-          { id: 'cd', from: 'c', to: 'd', p: { mean: 0.3, latency: { t95: 7 } } },
+          { id: 'bc', from: 'b', to: 'c', p: { mean: 0.5, latency: { latency_parameter: true, t95: 21 } } },
+          { id: 'cd', from: 'c', to: 'd', p: { mean: 0.3, latency: { latency_parameter: true, t95: 7 } } },
         ],
       };
       
@@ -338,7 +339,7 @@ describe('implementation plan test scenarios (§8.2)', () => {
   });
   
   describe('scenarios where t95 is undefined or zero', () => {
-    it('should treat missing t95 as zero for path computation', () => {
+    it('should treat missing t95 as DEFAULT_T95_DAYS when latency is enabled', () => {
       const graph: GraphForPath = {
         nodes: [
           { id: 'a', type: 'start' },
@@ -346,24 +347,24 @@ describe('implementation plan test scenarios (§8.2)', () => {
           { id: 'c' },
         ],
         edges: [
-          { id: 'e1', from: 'a', to: 'b', p: { mean: 0.5, latency: { t95: undefined as any } } },
-          { id: 'e2', from: 'b', to: 'c', p: { mean: 0.5, latency: { t95: 10 } } },
+          { id: 'e1', from: 'a', to: 'b', p: { mean: 0.5, latency: { latency_parameter: true, t95: undefined as any } } },
+          { id: 'e2', from: 'b', to: 'c', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
         ],
       };
       
       const activeEdges = getActiveEdges(graph);
       const pathT95Map = computePathT95(graph, activeEdges);
       
-      // e1: 0 + 0 (undefined) = 0
-      expect(pathT95Map.get('e1')).toBe(0);
-      // e2: 0 + 10 = 10
-      expect(pathT95Map.get('e2')).toBe(10);
+      // e1: 0 + DEFAULT_T95_DAYS
+      expect(pathT95Map.get('e1')).toBe(DEFAULT_T95_DAYS);
+      // e2: DEFAULT_T95_DAYS + 10
+      expect(pathT95Map.get('e2')).toBe(DEFAULT_T95_DAYS + 10);
     });
   });
   
-  describe('maturity_days fallback (data sufficiency)', () => {
-    it('should use maturity_days when t95 is undefined', () => {
-      // First-fetch scenario: no t95 yet, but user configured maturity_days
+  describe('default t95 fallback (data sufficiency)', () => {
+    it('should use DEFAULT_T95_DAYS when t95 is undefined and latency is enabled', () => {
+      // First-fetch scenario: no computed t95 yet, but latency is enabled.
       const graph: GraphForPath = {
         nodes: [
           { id: 'A', type: 'start' },
@@ -371,22 +372,21 @@ describe('implementation plan test scenarios (§8.2)', () => {
           { id: 'C' },
         ],
         edges: [
-          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { maturity_days: 10 } } },  // No t95
-          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { maturity_days: 14 } } },  // No t95
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true } } },  // No t95
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { latency_parameter: true } } },  // No t95
         ],
       };
       
       const activeEdges = getActiveEdges(graph);
       const pathT95Map = computePathT95(graph, activeEdges);
       
-      // e1: 0 + 10 (maturity_days) = 10
-      expect(pathT95Map.get('e1')).toBe(10);
-      // e2: 10 + 14 = 24
-      expect(pathT95Map.get('e2')).toBe(24);
+      // e1: 0 + DEFAULT_T95_DAYS
+      expect(pathT95Map.get('e1')).toBe(DEFAULT_T95_DAYS);
+      // e2: DEFAULT_T95_DAYS + DEFAULT_T95_DAYS
+      expect(pathT95Map.get('e2')).toBe(DEFAULT_T95_DAYS * 2);
     });
     
-    it('should prefer t95 over maturity_days when both exist', () => {
-      // t95 is more accurate (from fitted distribution), maturity_days is conservative
+    it('should use explicit t95 values when present and latency is enabled', () => {
       const graph: GraphForPath = {
         nodes: [
           { id: 'A', type: 'start' },
@@ -394,22 +394,22 @@ describe('implementation plan test scenarios (§8.2)', () => {
           { id: 'C' },
         ],
         edges: [
-          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 7, maturity_days: 14 } } },
-          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { t95: 5, maturity_days: 10 } } },
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true, t95: 7 } } },
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { latency_parameter: true, t95: 5 } } },
         ],
       };
       
       const activeEdges = getActiveEdges(graph);
       const pathT95Map = computePathT95(graph, activeEdges);
       
-      // e1: 0 + 7 (t95 preferred) = 7
+      // e1: 0 + 7 = 7
       expect(pathT95Map.get('e1')).toBe(7);
       // e2: 7 + 5 = 12
       expect(pathT95Map.get('e2')).toBe(12);
     });
     
-    it('should handle mixed data sufficiency (some t95, some maturity_days only)', () => {
-      // Real scenario: first edge has t95 from previous fetch, second is new
+    it('should handle mixed data sufficiency (some explicit t95, some missing t95)', () => {
+      // Real scenario: one edge has an explicit t95; another is missing t95.
       const graph: GraphForPath = {
         nodes: [
           { id: 'A', type: 'start' },
@@ -418,9 +418,9 @@ describe('implementation plan test scenarios (§8.2)', () => {
           { id: 'D' },
         ],
         edges: [
-          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { t95: 8, maturity_days: 14 } } },  // Has t95
-          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { maturity_days: 10 } } },          // Only maturity_days
-          { id: 'e3', from: 'C', to: 'D', p: { mean: 0.5, latency: { t95: 5, maturity_days: 7 } } },   // Has t95
+          { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: { latency_parameter: true, t95: 8 } } },  // Has t95
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { latency_parameter: true } } },          // Missing t95
+          { id: 'e3', from: 'C', to: 'D', p: { mean: 0.5, latency: { latency_parameter: true, t95: 5 } } },  // Has t95
         ],
       };
       
@@ -429,13 +429,13 @@ describe('implementation plan test scenarios (§8.2)', () => {
       
       // e1: 0 + 8 (t95) = 8
       expect(pathT95Map.get('e1')).toBe(8);
-      // e2: 8 + 10 (maturity_days fallback) = 18
-      expect(pathT95Map.get('e2')).toBe(18);
-      // e3: 18 + 5 (t95) = 23
-      expect(pathT95Map.get('e3')).toBe(23);
+      // e2: 8 + DEFAULT_T95_DAYS
+      expect(pathT95Map.get('e2')).toBe(8 + DEFAULT_T95_DAYS);
+      // e3: 8 + DEFAULT_T95_DAYS + 5
+      expect(pathT95Map.get('e3')).toBe(8 + DEFAULT_T95_DAYS + 5);
     });
     
-    it('should use 0 when neither t95 nor maturity_days exist', () => {
+    it('should use 0 when neither latency_parameter nor t95 exist', () => {
       // Edge with latency object but no timing data
       const graph: GraphForPath = {
         nodes: [
@@ -445,7 +445,7 @@ describe('implementation plan test scenarios (§8.2)', () => {
         ],
         edges: [
           { id: 'e1', from: 'A', to: 'B', p: { mean: 0.5, latency: {} } },  // Empty latency
-          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { t95: 10 } } },
+          { id: 'e2', from: 'B', to: 'C', p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } },
         ],
       };
       
@@ -458,9 +458,9 @@ describe('implementation plan test scenarios (§8.2)', () => {
       expect(pathT95Map.get('e2')).toBe(10);
     });
     
-    it('should handle 3-step funnel: A → X → Y with cumulative maturity', () => {
+    it('should handle 3-step funnel: A → X → Y with cumulative t95', () => {
       // The specific use case from the bug: registration → intermediate → success
-      // Each edge has maturity_days configured but no t95 yet (first fetch)
+      // Each edge has t95 configured; downstream conversion windows should be cumulative.
       const graph: GraphForPath = {
         nodes: [
           { id: 'registration', type: 'start' },
@@ -472,13 +472,13 @@ describe('implementation plan test scenarios (§8.2)', () => {
             id: 'reg-to-int', 
             from: 'registration', 
             to: 'intermediate', 
-            p: { mean: 0.5, latency: { maturity_days: 10, anchor_node_id: 'registration' } } 
+            p: { mean: 0.5, latency: { latency_parameter: true, t95: 10 } } 
           },
           { 
             id: 'int-to-success', 
             from: 'intermediate', 
             to: 'success', 
-            p: { mean: 0.3, latency: { maturity_days: 10, anchor_node_id: 'registration' } } 
+            p: { mean: 0.3, latency: { latency_parameter: true, t95: 10 } } 
           },
         ],
       };

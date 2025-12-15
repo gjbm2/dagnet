@@ -42,8 +42,14 @@
       "accordion": true
     },
     "ui:description": "Latency tracking configuration",
-    "maturity_days": {
-      "ui:description": "Maturity threshold in days (>0 enables latency tracking)"
+    "latency_parameter": {
+      "ui:description": "Enable latency tracking for this parameter"
+    },
+    "t95": {
+      "ui:description": "t95 horizon in days (95th percentile lag)"
+    },
+    "path_t95": {
+      "ui:description": "Cumulative path t95 in days (computed)"
     },
     "anchor_node_id": {
       "ui:description": "Anchor node for cohort queries"

@@ -364,7 +364,7 @@ describe('Amplitude 3-Step Funnel Integration', () => {
           start: '2025-09-01T00:00:00Z',
           end: '2025-09-05T23:59:59Z',
           anchor_event_id: 'household-created',
-          maturity_days: 30
+          conversion_window_days: 30
         }
       });
       
@@ -414,7 +414,7 @@ describe('Amplitude 3-Step Funnel Integration', () => {
           start: '2025-09-01T00:00:00Z',
           end: '2025-09-05T23:59:59Z',
           anchor_event_id: 'household-created',
-          maturity_days: 30
+          conversion_window_days: 30
         }
       });
       
@@ -455,7 +455,7 @@ describe('Amplitude 3-Step Funnel Integration', () => {
           start: '2025-09-01T00:00:00Z',
           end: '2025-09-05T23:59:59Z',
           anchor_event_id: 'household-created',
-          maturity_days: 30
+          conversion_window_days: 30
         }
       });
       

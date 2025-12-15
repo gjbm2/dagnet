@@ -20,7 +20,7 @@ import type { ParameterValue } from './paramRegistryService';
 import {
   COHORT_HORIZON_MIN_DAYS,
   COHORT_HORIZON_BUFFER_DAYS,
-  COHORT_HORIZON_DEFAULT_DAYS,
+  DEFAULT_T95_DAYS,
 } from '../constants/statisticalConstants';
 
 // =============================================================================
@@ -31,14 +31,11 @@ export interface CohortHorizonInput {
   /** The user's requested cohort window from DSL */
   requestedWindow: DateRange;
   
-  /** Edge-level t95 (persisted, from CDF fitting or maturity_days fallback) */
+  /** Edge-level t95 (persisted, from CDF fitting) */
   edgeT95?: number;
   
   /** Path-level t95 (cumulative from anchor, computed on-demand) */
   pathT95?: number;
-  
-  /** Fallback maturity_days if no t95 available */
-  maturityDays?: number;
   
   /** Reference date for horizon calculations (defaults to today) */
   referenceDate?: Date;
@@ -66,7 +63,7 @@ export interface CohortHorizonResult {
   effectiveT95: number;
   
   /** Source of effective t95 */
-  t95Source: 'path_t95' | 'edge_t95' | 'maturity_days' | 'default';
+  t95Source: 'path_t95' | 'edge_t95' | 'default';
   
   /** Days trimmed from the start of the original window */
   daysTrimmed: number;
@@ -90,7 +87,7 @@ export interface CohortHorizonResult {
 // =============================================================================
 
 // Re-export for local use with shorter names
-const DEFAULT_MATURITY_DAYS = COHORT_HORIZON_DEFAULT_DAYS;
+const DEFAULT_HORIZON_DAYS = DEFAULT_T95_DAYS;
 const MIN_HORIZON_DAYS = COHORT_HORIZON_MIN_DAYS;
 const HORIZON_BUFFER_DAYS = COHORT_HORIZON_BUFFER_DAYS;
 
@@ -117,13 +114,12 @@ export function computeCohortRetrievalHorizon(input: CohortHorizonInput): Cohort
     requestedWindow,
     edgeT95,
     pathT95,
-    maturityDays,
     referenceDate = new Date(),
     existingCoverage,
   } = input;
   
   // Determine effective t95 with fallback chain
-  const { effectiveT95, t95Source } = selectEffectiveT95(pathT95, edgeT95, maturityDays);
+  const { effectiveT95, t95Source } = selectEffectiveT95(pathT95, edgeT95);
   
   // Add buffer and enforce minimum
   const horizonDays = Math.max(
@@ -210,12 +206,11 @@ export function computeCohortRetrievalHorizon(input: CohortHorizonInput): Cohort
 
 /**
  * Select effective t95 with fallback chain.
- * Priority: path_t95 > edge_t95 > maturity_days > default
+ * Priority: path_t95 > edge_t95 > default
  */
 function selectEffectiveT95(
   pathT95: number | undefined,
-  edgeT95: number | undefined,
-  maturityDays: number | undefined
+  edgeT95: number | undefined
 ): { effectiveT95: number; t95Source: CohortHorizonResult['t95Source'] } {
   if (pathT95 !== undefined && pathT95 > 0) {
     return { effectiveT95: pathT95, t95Source: 'path_t95' };
@@ -223,10 +218,7 @@ function selectEffectiveT95(
   if (edgeT95 !== undefined && edgeT95 > 0) {
     return { effectiveT95: edgeT95, t95Source: 'edge_t95' };
   }
-  if (maturityDays !== undefined && maturityDays > 0) {
-    return { effectiveT95: maturityDays, t95Source: 'maturity_days' };
-  }
-  return { effectiveT95: DEFAULT_MATURITY_DAYS, t95Source: 'default' };
+  return { effectiveT95: DEFAULT_HORIZON_DAYS, t95Source: 'default' };
 }
 
 /**
@@ -333,7 +325,6 @@ function buildSummary(
  * @param requestedWindow - User's cohort window from DSL
  * @param pathT95 - Path-level t95 for the edge
  * @param edgeT95 - Edge-level t95 fallback
- * @param maturityDays - maturity_days fallback
  * @param referenceDate - Reference date (defaults to today)
  * @returns true if the window would be bounded (narrowed)
  */
@@ -341,10 +332,9 @@ export function shouldBoundCohortWindow(
   requestedWindow: DateRange,
   pathT95?: number,
   edgeT95?: number,
-  maturityDays?: number,
   referenceDate: Date = new Date()
 ): boolean {
-  const { effectiveT95 } = selectEffectiveT95(pathT95, edgeT95, maturityDays);
+  const { effectiveT95 } = selectEffectiveT95(pathT95, edgeT95);
   const horizonDays = Math.max(effectiveT95 + HORIZON_BUFFER_DAYS, MIN_HORIZON_DAYS);
   
   const requestedStart = parseDate(requestedWindow.start);
@@ -365,15 +355,14 @@ export function shouldBoundCohortWindow(
  * @returns Effective t95 and its source
  */
 export function getEffectiveT95ForCohort(
-  edge: { p?: { latency?: { t95?: number; path_t95?: number; maturity_days?: number } } },
+  edge: { p?: { latency?: { t95?: number; path_t95?: number } } },
   computedPathT95?: number
 ): { effectiveT95: number; source: CohortHorizonResult['t95Source'] } {
   const latency = edge?.p?.latency;
   const pathT95 = computedPathT95 ?? latency?.path_t95;
   const edgeT95 = latency?.t95;
-  const maturityDays = latency?.maturity_days;
   
-  const { effectiveT95, t95Source } = selectEffectiveT95(pathT95, edgeT95, maturityDays);
+  const { effectiveT95, t95Source } = selectEffectiveT95(pathT95, edgeT95);
   return { effectiveT95, source: t95Source };
 }
 

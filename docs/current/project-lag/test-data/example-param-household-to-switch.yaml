@@ -9,15 +9,15 @@ source: amplitude:funnel
 description: Conversion from Household Created to Switch Registered. Latency tracking
   enabled.
 latency:
-  track: true
-  maturity_days: 30
+  latency_parameter: true
+  t95: 30
 values:
 - label: Cohorts 2024-09-01 to 2024-11-30
   cohort_window:
     start: '2024-09-01'
     end: '2024-11-30'
     query_date: '2024-12-02'
-    maturity_days: 30
+    t95: 30
   n: 2274
   k: 190
   mean: 0.0836

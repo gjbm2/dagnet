@@ -4,7 +4,7 @@
 
 In the current LAG implementation we treat latency and F/E display as primarily a **per‑edge** concern:
 
-- Edges that have a `latency` block (`maturity_days`, `t95`, etc.) get the full LAG treatment:
+- Edges that have a `latency` block (`legacy maturity field`, `t95`, etc.) get the full LAG treatment:
   - lag fitting (`t95`),
   - completeness,
   - forecast vs evidence vs blended `p.mean`,
@@ -53,13 +53,13 @@ Intuitively:
 - If cohort age ≪ `path_t95`, then even “instantaneous” downstream legs do not yet see their full conversion rate.
 - If cohort age ≫ `path_t95`, the entire path to that edge is effectively mature; both upstream and downstream legs have stabilised.
 
-So in cohort view, whether an edge’s evidence is mature or not is **not a function of its local `maturity_days` alone**, but of the full path maturity from the anchor.
+So in cohort view, whether an edge’s evidence is mature or not is **not a function of its local `legacy maturity field` alone**, but of the full path maturity from the anchor.
 
 ### 3. Implications for different edge types
 
 Given an anchor‑based cohort view:
 
-- **Lag edges (with `maturity_days > 0` and `t95`)**
+- **Lag edges (with `legacy maturity field > 0` and `t95`)**
   - They remain the primary source of path maturity information.
   - Their `t95` values are summed into `path_t95` for downstream edges.
   - They definitely carry F/E, completeness, and all existing LAG metadata.
@@ -81,7 +81,7 @@ Given an anchor‑based cohort view:
 
 - **Goal:** Show F/E and completeness where it meaningfully reflects lagged maturity at that edge.
 - **Behaviour:**
-  - **Edges with `latency`** (non‑trivial `maturity_days` / `t95`):
+  - **Edges with `latency`** (non‑trivial `legacy maturity field` / `t95`):
     - Continue to show F/E and completeness in F/E/F+E modes.
     - Completeness is computed per edge, for the current window, as today.
   - **Edges without `latency`** (effectively instantaneous):
@@ -107,7 +107,7 @@ This matches the current mental model and remains coherent: window() is about **
 Concretely, that means:
 
 - Downstream “instantaneous” edges behind lagged edges should **inherit path‑wise completeness** and not be treated as fully mature by default.
-- In cohort mode, the viewer should be able to show F/E view on any edge where the path maturity is still evolving, regardless of whether `maturity_days` is set on that edge itself.
+- In cohort mode, the viewer should be able to show F/E view on any edge where the path maturity is still evolving, regardless of whether `legacy maturity field` is set on that edge itself.
 
 ### 5. Implementation adjustments (prose only)
 

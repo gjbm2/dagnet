@@ -546,7 +546,7 @@ class WindowFetchPlannerService {
         to: e.to,
         p: e.p ? {
           latency: e.p.latency ? {
-            maturity_days: e.p.latency.maturity_days,
+            latency_parameter: e.p.latency.latency_parameter,
             t95: e.p.latency.t95,
             path_t95: e.p.latency.path_t95,
           } : undefined,
@@ -811,10 +811,7 @@ class WindowFetchPlannerService {
     // If path_t95 > 0, this edge is downstream of latency edges and needs
     // cohort-based treatment. If path_t95 = 0 (or undefined on first run),
     // treat as simple edge with no bounding.
-    // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
-    const hasLocalLatency = latencyConfig?.latency_parameter === true ||
-                           (latencyConfig?.maturity_days ?? 0) > 0 ||
-                           !!latencyConfig?.t95;
+    const hasLocalLatency = latencyConfig?.latency_parameter === true || !!latencyConfig?.t95;
     const isBehindLaggedPath = (pathT95 ?? 0) > 0;
     
     if (!hasLocalLatency && !isBehindLaggedPath) {
@@ -832,7 +829,6 @@ class WindowFetchPlannerService {
       requestedWindow: window,
       pathT95,
       edgeT95: latencyConfig?.t95,
-      maturityDays: latencyConfig?.maturity_days,
       existingCoverage: {
         dates: existingDates,
         retrievedAt,
@@ -861,10 +857,7 @@ class WindowFetchPlannerService {
     const latencyConfig = edge?.p?.latency as LatencyConfig | undefined;
     
     // No latency tracking: not stale by default
-    // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
-    const isLatencyEnabled = latencyConfig?.latency_parameter === true ||
-                            (latencyConfig?.maturity_days ?? 0) > 0 ||
-                            !!latencyConfig?.t95;
+    const isLatencyEnabled = latencyConfig?.latency_parameter === true || !!latencyConfig?.t95;
     if (!isLatencyEnabled) {
       return { isStale: false };
     }
@@ -936,9 +929,9 @@ class WindowFetchPlannerService {
       if (isCohortQuery) {
         // Try to get path_t95 (computed on-demand if not present on edge)
         const pathT95 = this.getPathT95ForEdge(edge, graph);
-        effectiveT95 = pathT95 ?? latencyConfig?.t95 ?? latencyConfig?.maturity_days ?? 0;
+        effectiveT95 = pathT95 ?? latencyConfig?.t95 ?? 0;
       } else {
-        effectiveT95 = latencyConfig?.t95 ?? latencyConfig?.maturity_days ?? 0;
+        effectiveT95 = latencyConfig?.t95 ?? 0;
       }
       
       // Get query end date

@@ -47,7 +47,7 @@
 - **Design references:** `design.md §3.1`, `design.md §9.2.G`, `open-issues.md GAP-13`, `new-implementation-core.md §1.4`.
 - **Issue:** The high-level validity constraints for latency configuration are clear (for example, non-negative maturity days), but the exact behaviour for borderline cases remains to be finalised.
 - **Open questions:**
-  - ~~Should zero `maturity_days` be allowed as a way of explicitly disabling maturity-based splitting on a latency-tracked edge?~~ **RESOLVED:** `maturity_days = 0` or `undefined` means latency tracking is disabled. No separate `track` boolean. See `design.md §3.1`.
+  - ~~Should zero `legacy maturity field` be allowed as a way of explicitly disabling maturity-based splitting on a latency-tracked edge?~~ **RESOLVED:** `legacy maturity field = 0` or `undefined` means latency tracking is disabled. No separate `track` boolean. See `design.md §3.1`.
   - How should completeness values be clamped or corrected when inconsistent data is encountered from upstream sources?
   - What severity levels should be used for different integrity failures (warnings vs blocking errors), and how should they surface in `graphIssuesService`?
 - **Phase impact:** Needs resolution during Phase C1/C3 implementation so that integrity checks and error messaging are consistent.

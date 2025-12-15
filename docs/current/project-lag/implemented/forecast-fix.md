@@ -43,7 +43,7 @@ For a latency-enabled edge and a query such as `cohort(9-Nov-25:15-Nov-25)`:
    - The engine:
      - Fits a lag distribution.
      - Computes t95 and completeness.
-     - Attempts to estimate an asymptotic p∞ (`p_infinity`) based on **mature cohorts** relative to t95/maturity_days.
+     - Attempts to estimate an asymptotic p∞ (`p_infinity`) based on **mature cohorts** relative to t95/legacy maturity field.
    - If LAG can find sufficient mature cohorts:
      - It computes an internal `p_mean` using Formula A and returns that as part of the latency stats.
    - If it **cannot** find mature cohorts for this window:
@@ -125,7 +125,7 @@ Concrete derivation of \( n_\text{baseline} \):
 
 - **Cohort-based p∞ fallback (no window baseline):**
   - When there is no suitable window slice and `p.forecast.mean` was obtained by running `computeEdgeLatencyStats` on cohort data (cohort-only forecast fallback), set \( n_\text{baseline} \) to the sum of n across the **mature cohorts** that the latency engine used to estimate p∞.
-  - “Mature cohorts” here follows the same maturity criteria as in the latency engine (age relative to `maturity_days`, t95 etc.); the implementation should reuse whatever subset of cohorts `computeEdgeLatencyStats` already identifies as mature for p∞ estimation.
+  - “Mature cohorts” here follows the same maturity criteria as in the latency engine (age relative to `legacy maturity field`, t95 etc.); the implementation should reuse whatever subset of cohorts `computeEdgeLatencyStats` already identifies as mature for p∞ estimation.
 
 Calibration:
 
