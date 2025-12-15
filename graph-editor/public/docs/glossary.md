@@ -209,9 +209,8 @@ Interpretation: “95% of eventual converters should convert within t95 days.”
 An **anchor-to-edge** conversion horizon used to bound `cohort()` retrieval windows (to avoid fetching cohorts that are far older than the conversion horizon).  
 When anchor lag arrays are available, DAGNet prefers a moment-matched estimate \(t95(A→X + X→Y)\); otherwise it falls back to a conservative topo accumulation.
 
-**maturity_days**  
-A user-configured fallback for lag/time-to-convert when empirical lag data is missing or too noisy.  
-Also used as a conservative fallback when computing t95.
+**t95**  
+The 95th percentile lag horizon in days. Used to decide when cohorts are “mature” and to bound retrieval windows. If no reliable empirical estimate is available, the system falls back to `DEFAULT_T95_DAYS`.
 
 ---
 

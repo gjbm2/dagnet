@@ -30,14 +30,13 @@ function ukDate(daysAgo: number, reference: Date = new Date()): string {
 describe('fetchRefetchPolicy', () => {
   const referenceDate = new Date('2025-12-09T12:00:00Z');
   
-  describe('shouldRefetch - t95 vs maturity_days preference', () => {
+  describe('shouldRefetch - t95 preference and conservative default', () => {
     it('should use t95 as effective maturity when available', () => {
-      // t95 = 14 days (from CDF fitting), maturity_days = 7 (user config)
-      // Should use t95 (14 days) for maturity calculation
+      // t95 = 14 days (from CDF fitting)
       const decision = shouldRefetch({
         existingSlice: undefined,
         latencyConfig: { 
-          maturity_days: 7,
+          latency_parameter: true,
           t95: 14, // 95th percentile lag
         },
         // Window from 20 days ago to today
@@ -47,15 +46,15 @@ describe('fetchRefetchPolicy', () => {
       });
       
       expect(decision.type).toBe('partial');
-      // Cutoff should be t95 + 1 = 15 days ago (not 8 days ago from maturity_days)
+      // Cutoff should be t95 + 1 = 15 days ago
       expect(decision.matureCutoff).toBe(ukDate(15, referenceDate));
     });
     
-    it('should fall back to maturity_days when t95 is not available', () => {
+    it('should fall back to conservative default when t95 is not available', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
         latencyConfig: { 
-          maturity_days: 7,
+          latency_parameter: true,
           t95: undefined, // Not yet computed
         },
         requestedWindow: { start: ukDate(20, referenceDate), end: ukDate(0, referenceDate) },
@@ -64,15 +63,15 @@ describe('fetchRefetchPolicy', () => {
       });
       
       expect(decision.type).toBe('partial');
-      // Cutoff should be maturity_days + 1 = 8 days ago
-      expect(decision.matureCutoff).toBe(ukDate(8, referenceDate));
+      // Cutoff should be default + 1 = 31 days ago
+      expect(decision.matureCutoff).toBe(ukDate(31, referenceDate));
     });
     
-    it('should fall back to maturity_days when t95 is 0', () => {
+    it('should treat t95=0 as missing and fall back to conservative default', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
         latencyConfig: { 
-          maturity_days: 7,
+          latency_parameter: true,
           t95: 0, // Invalid/degenerate t95
         },
         requestedWindow: { start: ukDate(20, referenceDate), end: ukDate(0, referenceDate) },
@@ -81,7 +80,7 @@ describe('fetchRefetchPolicy', () => {
       });
       
       expect(decision.type).toBe('partial');
-      expect(decision.matureCutoff).toBe(ukDate(8, referenceDate));
+      expect(decision.matureCutoff).toBe(ukDate(31, referenceDate));
     });
     
     it('should round up t95 to be conservative', () => {
@@ -89,7 +88,7 @@ describe('fetchRefetchPolicy', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
         latencyConfig: { 
-          maturity_days: 7,
+          latency_parameter: true,
           t95: 10.3,
         },
         requestedWindow: { start: ukDate(20, referenceDate), end: ukDate(0, referenceDate) },
@@ -116,10 +115,10 @@ describe('fetchRefetchPolicy', () => {
       expect(decision.type).toBe('gaps_only');
     });
     
-    it('should return gaps_only for edge with maturity_days = 0', () => {
+    it('should return gaps_only for edge with latency_parameter disabled', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 0 },
+        latencyConfig: { latency_parameter: false },
         requestedWindow: { start: ukDate(7, referenceDate), end: ukDate(0, referenceDate) },
         isCohortQuery: false,
         referenceDate,
@@ -133,7 +132,7 @@ describe('fetchRefetchPolicy', () => {
     it('should return partial refetch for window that includes immature dates', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: ukDate(14, referenceDate), end: ukDate(0, referenceDate) },
         isCohortQuery: false,
         referenceDate,
@@ -147,7 +146,7 @@ describe('fetchRefetchPolicy', () => {
     it('should return gaps_only for window that is entirely mature', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         // Window ends 10 days ago, beyond the 8-day maturity cutoff
         requestedWindow: { start: ukDate(20, referenceDate), end: ukDate(10, referenceDate) },
         isCohortQuery: false,
@@ -160,13 +159,13 @@ describe('fetchRefetchPolicy', () => {
     it('should calculate correct maturity cutoff', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: ukDate(14, referenceDate), end: ukDate(0, referenceDate) },
         isCohortQuery: false,
         referenceDate,
       });
       
-      // Cutoff should be maturity_days + 1 = 8 days ago
+      // Cutoff should be t95 + 1 = 8 days ago
       expect(decision.type).toBe('partial');
       expect(decision.matureCutoff).toBe(ukDate(8, referenceDate));
     });
@@ -188,7 +187,7 @@ describe('fetchRefetchPolicy', () => {
 
       const decision = shouldRefetch({
         existingSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: ukDate(14, referenceDate), end: ukDate(0, referenceDate) },
         isCohortQuery: false,
         referenceDate,
@@ -210,7 +209,7 @@ describe('fetchRefetchPolicy', () => {
         ukDate(30, referenceDate),
         ukDate(20, referenceDate),
         ukDate(10, referenceDate),
-        ukDate(5, referenceDate), // Immature if maturity_days > 5
+        ukDate(5, referenceDate), // Immature if effective maturity > 5
       ],
       n_daily: [100, 100, 100, 100],
       k_daily: [50, 50, 50, 50],
@@ -226,7 +225,7 @@ describe('fetchRefetchPolicy', () => {
     it('should return replace_slice when cohort has immature cohorts', () => {
       const decision = shouldRefetch({
         existingSlice: existingCohortSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(0, referenceDate) },
         isCohortQuery: true,
         referenceDate,
@@ -248,7 +247,7 @@ describe('fetchRefetchPolicy', () => {
 
       const decision = shouldRefetch({
         existingSlice: recentImmatureSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(0, referenceDate) },
         isCohortQuery: true,
         referenceDate,
@@ -276,7 +275,7 @@ describe('fetchRefetchPolicy', () => {
       
       const decision = shouldRefetch({
         existingSlice: matureSlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(10, referenceDate) },
         isCohortQuery: true,
         referenceDate,
@@ -289,7 +288,7 @@ describe('fetchRefetchPolicy', () => {
     it('should return replace_slice when no existing slice exists', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(0, referenceDate) },
         isCohortQuery: true,
         referenceDate,
@@ -311,7 +310,7 @@ describe('fetchRefetchPolicy', () => {
       
       const decision = shouldRefetch({
         existingSlice: emptySlice,
-        latencyConfig: { maturity_days: 7 },
+        latencyConfig: { latency_parameter: true, t95: 7 },
         requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(0, referenceDate) },
         isCohortQuery: true,
         referenceDate,

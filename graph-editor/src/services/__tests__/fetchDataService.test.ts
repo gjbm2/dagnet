@@ -446,7 +446,7 @@ describe('FetchDataService', () => {
             p: {
               mean: 0.5,
               evidence: { n: 1000, k: 500 },
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
             },
           },
           {
@@ -457,7 +457,7 @@ describe('FetchDataService', () => {
             p: {
               mean: 0.8,
               evidence: { n: 400, k: 320 },
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
             },
           },
         ],
@@ -897,7 +897,7 @@ describe('FetchDataService', () => {
             id: 'e-lag',
             from: 'A',
             to: 'B',
-            p: { id: 'p-lag', connection: {}, latency: { maturity_days: 5 } },
+            p: { id: 'p-lag', connection: {}, latency: { latency_parameter: true, t95: 5 } },
           } as any,
           // Simple edge branch (no local latency, not behind lagged path => path_t95 = 0)
           {

@@ -47,7 +47,7 @@ Restore and enforce behaviour that matches the canonical LAG statistics referenc
 This work will be delivered in **two phases** that are conceptually integrated:
 
 - **Phase 1 (Semantics + regressions):** Make `window()` vs `cohort()` behaviour correct and stable against the reference; restore missing scenario-visible fields (`p.stdev`, `p.evidence.*` where evidence exists); ensure the refactored topo pass matches the spec.
-- **Phase 2 (Horizon primitives migration):** Implement parameter-level override fields for `t95` and `path_t95`, deprecate `maturity_days`, and update the Phase 1 logic to use `t95/path_t95` as the canonical horizon/fallback sources.
+- **Phase 2 (Horizon primitives migration):** Implement parameter-level override fields for `t95` and `path_t95`, deprecate `legacy maturity field`, and update the Phase 1 logic to use `t95/path_t95` as the canonical horizon/fallback sources.
 
 ---
 
@@ -272,10 +272,10 @@ This should be tracked as a separate requirement in `/TODO.md` and revisited aft
 
 ### Phase 2 integration — Replace horizon dependencies with `t95/path_t95` overrides
 
-This plan intentionally avoids deepening reliance on `maturity_days`, since it is slated for deprecation. Phase 2 will:
+This plan intentionally avoids deepening reliance on `legacy maturity field`, since it is slated for deprecation. Phase 2 will:
 
 - Introduce parameter-level `t95` and `path_t95` with `*_overridden` semantics.
-- Replace any remaining “horizon fallback” use of `maturity_days` with:
+- Replace any remaining “horizon fallback” use of `legacy maturity field` with:
   - baseline window lag summaries when available, else
   - persisted/overridden `t95` (and `path_t95` for retrieval bounding, caching, and cohort-vs-window targeting; not as a median proxy for completeness).
 

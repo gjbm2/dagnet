@@ -14,7 +14,7 @@ The goal is to remove bespoke "path‑wise F/E hacks" and instead rely on the no
 **No new persisted params.** This plan uses only existing fields:
 
 - `p.mean`, `p.evidence.*`, `p.forecast.*`
-- `p.latency.{t95, path_t95, completeness, maturity_days, median_lag_days}`
+- `p.latency.{t95, path_t95, completeness, legacy maturity field, median_lag_days}`
 
 The LAG topo pass (`enhanceGraphLatencies`) **already computes `path_t95`** per edge and writes it to `p.latency.path_t95`. The planner simply reads this value to classify edges; no new schema or storage is required.
 
@@ -150,7 +150,7 @@ Changes must respect the existing "services as logic, UI as access points" rule.
     - Build an in‑memory map `{ edgeId → path_t95 }` for classification.
   - **No new computation is required** – `enhanceGraphLatencies` already runs the topological DP and writes `path_t95` to each edge's `p.latency`.
   - Handle the cold‑start case (first fetch, no `path_t95` yet):
-    - Either run a lightweight pre‑pass using `maturity_days` as a proxy, or
+    - Either run a lightweight pre‑pass using `legacy maturity field` as a proxy, or
     - Accept that the first fetch treats all edges as simple, and subsequent fetches (after LAG has run) use real `path_t95`.
 
 **3.2 Types and metadata**
@@ -209,7 +209,7 @@ Changes must respect the existing "services as logic, UI as access points" rule.
 
 - In `fetchDataService.ts`:
   - For items marked as **cohort candidates** by the planner:
-    - Use existing anchor‑based cohort fetch logic (already implemented for `maturity_days` edges).
+    - Use existing anchor‑based cohort fetch logic (already implemented for `legacy maturity field` edges).
     - Use existing merge logic in `dataOperationsService` to write cohort time‑series into parameter files.
   - For items marked as **simple candidates**:
     - Use existing window/simple retrieval and merge behaviour.

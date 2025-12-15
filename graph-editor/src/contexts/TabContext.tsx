@@ -253,9 +253,12 @@ class FileRegistry {
     
     // Emit dirty state change event for UI updates
     if (wasDirty !== file.isDirty) {
-      window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
-        detail: { fileId, isDirty: file.isDirty } 
-      }));
+      // In node-based tests there is no browser `window` / `CustomEvent`.
+      if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
+          detail: { fileId, isDirty: file.isDirty } 
+        }));
+      }
     }
     } finally {
       this.updatingFiles.delete(fileId);

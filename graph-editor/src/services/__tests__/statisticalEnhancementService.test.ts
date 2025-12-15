@@ -22,8 +22,6 @@ import {
   fitLagDistribution,
   computeT95,
   estimatePInfinity,
-  applyFormulaA,
-  applyFormulaAToAll,
   calculateCompleteness,
   computeEdgeLatencyStats,
   // Inbound-N functions
@@ -561,7 +559,7 @@ describe('LAG Lag Distribution Fitting (§5.4)', () => {
       expect(logNormalCDF(t95, fit.mu, fit.sigma)).toBeCloseTo(LATENCY_T95_PERCENTILE, 3);
     });
 
-    it('should fall back to maturityDays if fit is not valid', () => {
+    it('should fall back to configured/default t95 when fit is not valid', () => {
       const fit: LagDistributionFit = {
         mu: Math.log(5),
         sigma: LATENCY_DEFAULT_SIGMA,
@@ -631,136 +629,33 @@ describe('LAG P-Infinity Estimation (§5.6, Appendix C.1)', () => {
   });
 });
 
-describe('LAG Formula A (§5.3)', () => {
-  // Scenario: median lag = 5 days, mean lag = 7 days
-  const mu = Math.log(5);
-  const sigma = Math.sqrt(2 * Math.log(7 / 5));
-  const pInfinity = 0.5; // 50% asymptotic conversion rate
+describe('LAG completeness t95 tail constraint (Phase 2)', () => {
+  it('inflates sigma and reduces completeness for young cohorts when authoritative t95 is larger than implied', () => {
+    const cohorts: CohortData[] = [
+      { date: '1-Dec-25', n: 100, k: 10, age: 1 },
+      { date: '2-Dec-25', n: 100, k: 10, age: 2 },
+      { date: '3-Dec-25', n: 100, k: 10, age: 3 },
+    ];
 
-  describe('applyFormulaA', () => {
-    it('should return k for fully mature cohorts (F ≈ 1)', () => {
-      const cohort: CohortData = {
-        date: '1-Oct-25',
-        n: 100,
-        k: 50,
-        age: 100, // Very old, F(100) ≈ 1
-      };
+    // Moment-fit will imply a relatively tight distribution.
+    const statsNoConstraint = computeEdgeLatencyStats(cohorts, 5, 5.2, 7);
+    const statsWithConstraint = computeEdgeLatencyStats(cohorts, 5, 5.2, 60);
 
-      const kHat = applyFormulaA(cohort, pInfinity, mu, sigma);
-
-      // Should return observed k since cohort is fully mature
-      expect(kHat).toBeCloseTo(50, 1);
-    });
-
-    it('should forecast additional conversions for immature cohorts', () => {
-      const cohort: CohortData = {
-        date: '25-Nov-25',
-        n: 100,
-        k: 10,
-        age: 5, // Young cohort, F(5) ≈ 0.5 (at median)
-      };
-
-      const kHat = applyFormulaA(cohort, pInfinity, mu, sigma);
-
-      // Should be greater than observed k (forecasts additional conversions)
-      expect(kHat).toBeGreaterThan(10);
-      // But not greater than n (max possible)
-      expect(kHat).toBeLessThanOrEqual(100);
-    });
-
-    it('should return k = 0 for empty cohorts', () => {
-      const cohort: CohortData = {
-        date: '1-Dec-25',
-        n: 0,
-        k: 0,
-        age: 0,
-      };
-
-      const kHat = applyFormulaA(cohort, pInfinity, mu, sigma);
-
-      expect(kHat).toBe(0);
-    });
-
-    it('should handle brand new cohorts (age = 0, F = 0)', () => {
-      const cohort: CohortData = {
-        date: '1-Dec-25',
-        n: 100,
-        k: 0,
-        age: 0,
-      };
-
-      const kHat = applyFormulaA(cohort, pInfinity, mu, sigma);
-
-      // F(0) = 0, S(0) = 1
-      // Formula: k + (n-k) × (p_∞ × 1) / (1 - p_∞ × 0) = 0 + 100 × 0.5 / 1 = 50
-      expect(kHat).toBeCloseTo(50, 1);
-    });
-
-    it('should handle cohort at median age (F = 0.5)', () => {
-      const cohort: CohortData = {
-        date: '25-Nov-25',
-        n: 100,
-        k: 25, // Observed 25%, but we expect 50% eventually
-        age: 5, // At median
-      };
-
-      const kHat = applyFormulaA(cohort, pInfinity, mu, sigma);
-
-      // F(5) ≈ 0.5, S(5) ≈ 0.5
-      // k + (100-25) × (0.5 × 0.5) / (1 - 0.5 × 0.5) = 25 + 75 × 0.25/0.75 = 25 + 25 = 50
-      expect(kHat).toBeCloseTo(50, 1);
-    });
+    expect(statsNoConstraint.completeness_cdf.tail_constraint_applied).toBe(false);
+    expect(statsWithConstraint.completeness_cdf.tail_constraint_applied).toBe(true);
+    expect(statsWithConstraint.completeness).toBeLessThanOrEqual(statsNoConstraint.completeness);
   });
 
-  describe('applyFormulaAToAll', () => {
-    it('should aggregate across all cohorts', () => {
-      const cohorts: CohortData[] = [
-        { date: '1-Oct-25', n: 100, k: 50, age: 60 },  // Mature
-        { date: '15-Oct-25', n: 100, k: 48, age: 45 }, // Mature
-        { date: '1-Nov-25', n: 100, k: 45, age: 30 },  // At t95 boundary
-        { date: '15-Nov-25', n: 100, k: 30, age: 15 }, // Immature
-        { date: '1-Dec-25', n: 100, k: 10, age: 0 },   // Brand new
-      ];
+  it('does not deflate sigma when authoritative t95 is smaller than implied', () => {
+    const cohorts: CohortData[] = [
+      { date: '1-Oct-25', n: 100, k: 50, age: 60 },
+      { date: '15-Oct-25', n: 100, k: 48, age: 45 },
+    ];
 
-      const fit: LagDistributionFit = {
-        mu,
-        sigma,
-        empirical_quality_ok: true,
-        total_k: 183,
-      };
-
-      const result = applyFormulaAToAll(cohorts, pInfinity, fit, 30);
-
-      expect(result.total_n).toBe(500);
-      expect(result.p_infinity).toBe(pInfinity);
-      expect(result.p_mean).toBeGreaterThan(0);
-      expect(result.p_mean).toBeLessThanOrEqual(1);
-      // Blended should be >= evidence (forecasting adds to observed)
-      const pEvidence = 183 / 500;
-      expect(result.p_mean).toBeGreaterThanOrEqual(pEvidence - 0.01);
-    });
-
-    it('should include per-cohort details when requested', () => {
-      const cohorts: CohortData[] = [
-        { date: '1-Nov-25', n: 100, k: 50, age: 30 },
-        { date: '15-Nov-25', n: 100, k: 30, age: 15 },
-      ];
-
-      const fit: LagDistributionFit = {
-        mu,
-        sigma,
-        empirical_quality_ok: true,
-        total_k: 80,
-      };
-
-      const result = applyFormulaAToAll(cohorts, pInfinity, fit, 30, true);
-
-      expect(result.cohort_details).toBeDefined();
-      expect(result.cohort_details).toHaveLength(2);
-      expect(result.cohort_details![0].date).toBe('1-Nov-25');
-      expect(result.cohort_details![0].F_age).toBeGreaterThan(0);
-      expect(result.cohort_details![0].k_hat).toBeGreaterThanOrEqual(50);
-    });
+    const stats = computeEdgeLatencyStats(cohorts, 5, 7, 2);
+    expect(stats.completeness_cdf.tail_constraint_applied).toBe(false);
+    expect(stats.completeness_cdf.sigma_min_from_t95).toBeUndefined();
+    expect(stats.completeness_cdf.sigma).toBeCloseTo(stats.completeness_cdf.sigma_moments, 10);
   });
 });
 
@@ -844,12 +739,13 @@ describe('LAG computeEdgeLatencyStats (Main Entry Point)', () => {
     expect(stats.fit).toBeDefined();
     expect(stats.t95).toBeGreaterThan(0);
     expect(stats.p_infinity).toBeGreaterThan(0);
-    expect(stats.p_mean).toBeGreaterThan(0);
-    expect(stats.p_mean).toBeLessThanOrEqual(1);
     expect(stats.completeness).toBeGreaterThan(0);
     expect(stats.completeness).toBeLessThanOrEqual(1);
     expect(stats.p_evidence).toBeCloseTo(183 / 500, 3);
     expect(stats.forecast_available).toBe(true);
+    expect(stats.completeness_cdf).toBeDefined();
+    expect(Number.isFinite(stats.completeness_cdf.mu)).toBe(true);
+    expect(Number.isFinite(stats.completeness_cdf.sigma)).toBe(true);
   });
 
   it('should set forecast_available = false when no mature cohorts', () => {
@@ -862,8 +758,8 @@ describe('LAG computeEdgeLatencyStats (Main Entry Point)', () => {
 
     // No cohorts old enough for p_infinity estimation
     expect(stats.forecast_available).toBe(false);
-    // p_mean should equal p_evidence (no forecasting possible)
-    expect(stats.p_mean).toBeCloseTo(stats.p_evidence, 6);
+    // Without forecast fallback, p_infinity is set to p_evidence
+    expect(stats.p_infinity).toBeCloseTo(stats.p_evidence, 12);
   });
 
   it('should handle edge case: single mature cohort', () => {
@@ -899,7 +795,7 @@ describe('LAG computeEdgeLatencyStats (Main Entry Point)', () => {
 
     expect(stats.fit.empirical_quality_ok).toBe(false);
     expect(stats.fit.quality_failure_reason).toContain('Insufficient');
-    // Should fall back to maturityDays for t95
+    // Should fall back to configured/default t95 for t95
     expect(stats.t95).toBe(30);
   });
 });
@@ -958,7 +854,7 @@ describe('LAG Property-Based Tests', () => {
   });
 
   describe('Forecast bounds', () => {
-    it('should always return 0 ≤ p_mean ≤ 1', () => {
+    it('should always return 0 ≤ p_infinity ≤ 1', () => {
       const cohorts: CohortData[] = [
         { date: '1-Oct-25', n: 100, k: 50, age: 60 },
         { date: '1-Dec-25', n: 100, k: 0, age: 0 },
@@ -968,27 +864,14 @@ describe('LAG Property-Based Tests', () => {
       for (const medianLag of [1, 5, 10, 30]) {
         for (const meanLag of [medianLag, medianLag * 1.5, medianLag * 2]) {
           const stats = computeEdgeLatencyStats(cohorts, medianLag, meanLag, 30);
-          expect(stats.p_mean).toBeGreaterThanOrEqual(0);
-          expect(stats.p_mean).toBeLessThanOrEqual(1);
+          expect(stats.p_infinity).toBeGreaterThanOrEqual(0);
+          expect(stats.p_infinity).toBeLessThanOrEqual(1);
         }
       }
     });
   });
 
-  describe('Forecast ≥ evidence', () => {
-    it('should satisfy p_mean ≥ p_evidence (forecasting adds, not subtracts)', () => {
-      const cohorts: CohortData[] = [
-        { date: '1-Oct-25', n: 100, k: 50, age: 60 },
-        { date: '15-Nov-25', n: 100, k: 20, age: 15 },
-        { date: '1-Dec-25', n: 100, k: 5, age: 0 },
-      ];
-
-      const stats = computeEdgeLatencyStats(cohorts, 5, 7, 30);
-
-      // Allow small numerical tolerance
-      expect(stats.p_mean).toBeGreaterThanOrEqual(stats.p_evidence - 0.001);
-    });
-  });
+  // NOTE (Phase 2): p.mean is computed via the canonical blend in the topo pass, not here.
 
   describe('Zero n handling', () => {
     it('should handle n = 0 gracefully without division by zero', () => {
@@ -1013,9 +896,10 @@ describe('LAG Property-Based Tests', () => {
 
       expect(Number.isFinite(stats.t95)).toBe(true);
       expect(Number.isFinite(stats.p_infinity)).toBe(true);
-      expect(Number.isFinite(stats.p_mean)).toBe(true);
       expect(Number.isFinite(stats.completeness)).toBe(true);
       expect(Number.isFinite(stats.p_evidence)).toBe(true);
+      expect(Number.isFinite(stats.completeness_cdf.mu)).toBe(true);
+      expect(Number.isFinite(stats.completeness_cdf.sigma)).toBe(true);
     });
   });
 
@@ -1317,9 +1201,9 @@ describe('enhanceGraphLatencies', () => {
         { id: 'c' },
       ],
       edges: [
-        { id: 'start-to-a', from: 'start', to: 'a', p: { mean: 0.8, latency: { maturity_days: 30 } } },
-        { id: 'a-to-b', from: 'a', to: 'b', p: { mean: 0.6, latency: { maturity_days: 30 } } },
-        { id: 'b-to-c', from: 'b', to: 'c', p: { mean: 0.4, latency: { maturity_days: 30 } } },
+        { id: 'start-to-a', from: 'start', to: 'a', p: { mean: 0.8, latency: { latency_parameter: true, t95: 30 } } },
+        { id: 'a-to-b', from: 'a', to: 'b', p: { mean: 0.6, latency: { latency_parameter: true, t95: 30 } } },
+        { id: 'b-to-c', from: 'b', to: 'c', p: { mean: 0.4, latency: { latency_parameter: true, t95: 30 } } },
       ],
     };
   }
@@ -1419,7 +1303,7 @@ describe('enhanceGraphLatencies', () => {
     expect(bToC?.latency.completeness).toBeLessThanOrEqual(aToB?.latency.completeness || 1);
   });
 
-  it('should skip edges without maturity_days', () => {
+  it('should skip edges without latency_parameter', () => {
     const graph: GraphForPath = {
       nodes: [
         { id: 'start', entry: { is_start: true } },
@@ -1476,7 +1360,7 @@ describe('enhanceGraphLatencies', () => {
             to: 'end',
             p: {
               mean: 0.5,  // Initial mean (will be overwritten by blend)
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               evidence: { mean: 0.3, n: 1000 },
               forecast: { mean: 0.7 },
             },
@@ -1621,7 +1505,7 @@ describe('enhanceGraphLatencies', () => {
             to: 'end',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               // No evidence
               forecast: { mean: 0.7 },
             },
@@ -1650,7 +1534,7 @@ describe('enhanceGraphLatencies', () => {
             to: 'end',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               evidence: { mean: 0.3, n: 1000 },
               // No forecast
             },

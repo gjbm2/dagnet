@@ -9,7 +9,7 @@
 
 This thread systematically reviewed the **fetch, cache, and merge infrastructure** for window() and cohort() slices. The focus was on ensuring:
 
-1. **Maturity-aware refetch policy** (`shouldRefetch`) correctly uses t95 vs maturity_days
+1. **Maturity-aware refetch policy** (`shouldRefetch`) correctly uses t95 vs legacy maturity field
 2. **Canonical merge** policy for window() and cohort() slices
 3. **Evidence and forecast scalar transformation** matches design semantics
 4. **Test coverage** for the above is comprehensive and exercises real production code
@@ -24,7 +24,7 @@ This thread systematically reviewed the **fetch, cache, and merge infrastructure
 
 | Subsection | Status | Notes |
 |------------|--------|-------|
-| §3.1 LatencyConfig schema | ⚠️ REFERENCED | Tests use `maturity_days`, `anchor_node_id`, `t95` fields but we didn't verify TypeScript/Python type definitions |
+| §3.1 LatencyConfig schema | ⚠️ REFERENCED | Tests use `legacy maturity field`, `anchor_node_id`, `t95` fields but we didn't verify TypeScript/Python type definitions |
 | §3.2 Parameter file additions (cohort) | ✅ CONFIRMED | `mergeTimeSeriesInvariants.test.ts` verifies cohort_from/to, dates[], n_daily[], k_daily[], median_lag_days[], mean_lag_days[] |
 | §3.2.1 Window slice additions | ✅ CONFIRMED | Tests verify window_from/to, forecast, latency.t95 population |
 | §3.3 Canonical sliceDSL format | ✅ CONFIRMED | `mergeTimeSeriesIntoParameter` now generates `window(<abs>:<abs>)` and `cohort(<anchor>,<abs>:<abs>)` canonical formats |
@@ -38,7 +38,7 @@ This thread systematically reviewed the **fetch, cache, and merge infrastructure
 | §4.0 DSL Field Glossary | ❌ NOT REVIEWED | We didn't verify store vs persisted DSL field usage |
 | §4.1 window() syntax | ✅ CONFIRMED | Tests parse and use window() constraints |
 | §4.2 cohort() syntax | ✅ CONFIRMED | Tests parse cohort() with anchor, date ranges |
-| §4.3 Maturity is edge-level | ✅ CONFIRMED | `maturity_days` on latencyConfig, not DSL |
+| §4.3 Maturity is edge-level | ✅ CONFIRMED | `legacy maturity field` on latencyConfig, not DSL |
 | §4.4 Amplitude data extraction | ❌ NOT REVIEWED | dayMedianTransTimes, dayFunnels extraction not tested |
 | §4.5 Mature vs immature cohort examples | ✅ CONFIRMED | `fetchRefetchPolicy.branches.test.ts` table-driven boundary tests |
 | §4.6 Dual-slice retrieval | ⚠️ PARTIALLY | Merge logic handles both; actual dual-fetch from source not tested |
@@ -67,7 +67,7 @@ This thread systematically reviewed the **fetch, cache, and merge infrastructure
 
 | File | Lines | Coverage Focus |
 |------|-------|----------------|
-| `fetchRefetchPolicy.branches.test.ts` | ~705 | Branch coverage for t95/maturity_days selection, cohort decision tree, window decision tree |
+| `fetchRefetchPolicy.branches.test.ts` | ~705 | Branch coverage for t95/legacy maturity field selection, cohort decision tree, window decision tree |
 | `fetchPolicyIntegration.test.ts` | ~705 | Integration of shouldRefetch + calculateIncrementalFetch + analyzeSliceCoverage |
 | `mergeTimeSeriesInvariants.test.ts` | ~991 | Structural invariants for mergeTimeSeriesIntoParameter: canonical entry, union semantics, sliceDSL format |
 | `addEvidenceAndForecastScalars.test.ts` | ~708 | Evidence/forecast scalar transformation via __test_only__ harness |
@@ -91,7 +91,7 @@ This thread systematically reviewed the **fetch, cache, and merge infrastructure
 
 | Aspect | Confirmed Behaviour |
 |--------|---------------------|
-| t95 preference | Uses `t95` when available and positive; falls back to `maturity_days` |
+| t95 preference | Uses `t95` when available and positive; falls back to `legacy maturity field` |
 | t95 rounding | `ceil(t95)` for conservative maturity |
 | Cohort: no existing slice | Returns `replace_slice` with reason `no_existing_slice` |
 | Cohort: empty dates | Returns `replace_slice` with reason `no_cohort_dates` |

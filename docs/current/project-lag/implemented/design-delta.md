@@ -47,14 +47,14 @@ This section lists design elements that are **explicitly described in `design.md
   - Format: `window(<abs_start>:<abs_end>)[.context(...)]`.
   - Acts as a **canonical identifier** for that slice (anchor + absolute range + context).
 - **Merge policy (latency edges):**
-  - For `window()` with `maturity_days > 0`:
+  - For `window()` with `legacy maturity field > 0`:
     - Always re‑fetch **immature** portion of the window.
     - Keep cached data for mature dates.
     - **On merge**:
       - Replace data for dates in the immature window.
       - Keep cached data for mature dates.
       - **Update `sliceDSL` bounds** to reflect actual coverage: `window(<earliest>:<latest>).context(...)`.
-- For `window()` with `maturity_days = 0`:
+- For `window()` with `legacy maturity field = 0`:
   - Incremental gaps are allowed, but merged coverage should still be reflected in `sliceDSL`.
 
 **Current implementation:**
@@ -106,10 +106,10 @@ This section lists design elements that are **explicitly described in `design.md
 **Design (design.md §4.7.3, “Window slice (CHANGED from current behaviour)” and “Cohort slice”):**
 
 - Expected decision logic (summarised):
-  - If **no latency** (`maturity_days` not set):
+  - If **no latency** (`legacy maturity field` not set):
     - Use current incremental gaps behaviour.
   - For `window()` with latency:
-    - Compute mature / immature split relative to “today” and `maturity_days`.
+    - Compute mature / immature split relative to “today” and `legacy maturity field`.
     - **Always re‑fetch** immature portion (recent days).
     - Merge fetch with existing data as described in 3.1.
   - For `cohort()`:
@@ -169,7 +169,7 @@ This section lists the **concrete work items** required to bring the implementat
     - Apply the maturity‑based policy:
       - For non‑latency edges: merge by date (union of all dates), overwriting existing entries where new data exists.
       - For latency edges:
-        - Compute mature vs immature split relative to `maturity_days`.
+        - Compute mature vs immature split relative to `legacy maturity field`.
         - Replace immature dates from the new fetch.
         - Keep mature dates from the cache.
     - Produce a single merged slice:
@@ -194,7 +194,7 @@ This section lists the **concrete work items** required to bring the implementat
   - `fetchDataService.itemNeedsFetch` / `getItemsNeedingFetch`.
   - The “fetch from source” code paths (`getFromSource`, `getFromSourceDirect`).
 - Ensure decisions are:
-  - Aware of `latency.maturity_days` and `total_maturity` where applicable.
+  - Aware of `latency.legacy maturity field` and `total_maturity` where applicable.
   - Used to decide between:
     - “gaps only” incremental fetch.
     - Partial immature-window refresh for `window()`.

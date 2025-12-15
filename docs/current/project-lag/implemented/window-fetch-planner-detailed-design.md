@@ -373,8 +373,8 @@ The planner uses different latency thresholds depending on query mode:
 
 | Query Mode | Primary Field | Fallback |
 |------------|--------------|----------|
-| `window()` | `edge.p.latency.t95` | `edge.p.latency.maturity_days` |
-| `cohort()` | `edge.p.latency.path_t95` | `edge.p.latency.t95` → `maturity_days` |
+| `window()` | `edge.p.latency.t95` | `edge.p.latency.legacy maturity field` |
+| `cohort()` | `edge.p.latency.path_t95` | `edge.p.latency.t95` → `legacy maturity field` |
 
 Rationale:
 - `t95` is the 95th percentile lag for a single edge.
@@ -397,7 +397,7 @@ private checkStaleness(
   const latencyConfig = edge?.p?.latency;
   
   // No latency tracking: not stale by default
-  if (!latencyConfig?.maturity_days && !latencyConfig?.t95) {
+  if (!latencyConfig?.legacy maturity field && !latencyConfig?.t95) {
     return { isStale: false };
   }
   
@@ -460,8 +460,8 @@ private checkStaleness(
     
     // Select effective t95 based on query mode
     const effectiveT95 = isCohortQuery
-      ? (latencyConfig.path_t95 ?? latencyConfig.t95 ?? latencyConfig.maturity_days ?? 0)
-      : (latencyConfig.t95 ?? latencyConfig.maturity_days ?? 0);
+      ? (latencyConfig.path_t95 ?? latencyConfig.t95 ?? latencyConfig.legacy maturity field ?? 0)
+      : (latencyConfig.t95 ?? latencyConfig.legacy maturity field ?? 0);
     
     // Get query end date
     const queryEnd = this.extractWindowFromDSL(dsl)?.end;

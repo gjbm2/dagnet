@@ -31,7 +31,7 @@ This is an implementation plan: it specifies *what* needs to change and *where*,
     - `dates[]`, `n_daily[]`, `k_daily[]` cover the full effective coverage.
     - `window_from` / `window_to` and `sliceDSL` reflect the union of all covered dates in absolute UK date format.
 - Maturity‑based logic:
-  - `maturity_days` controls how far back data is considered “immature”.
+  - `legacy maturity field` controls how far back data is considered “immature”.
   - Immature portions of the window must be re‑fetched; mature portions may be reused.
 
 **Current implementation (window mode):**
@@ -106,7 +106,7 @@ Planned steps:
 - Introduce a **small policy helper** in the services layer (either a new module or a section within `dataOperationsService`):
   - Inputs:
     - The current slice (window or cohort) for a given slice family.
-    - The edge config (at least `latency.maturity_days` and potentially `latency.anchor_node_id`).
+    - The edge config (at least `latency.legacy maturity field` and potentially `latency.anchor_node_id`).
     - The graph (where total‑path maturity is needed).
   - Outputs (as described in `design.md`):
     - For non‑latency edges: “gaps only”.
@@ -133,7 +133,7 @@ Planned steps:
 Planned steps:
 
 - Extend the **merge options** for window mode so that `mergeTimeSeriesIntoParameter` has access to:
-  - The relevant latency configuration (`maturity_days`, `anchor_node_id`).
+  - The relevant latency configuration (`legacy maturity field`, `anchor_node_id`).
   - Optionally, any raw lag arrays or summary statistics provided by the upstream LAG service for the new fetch.
 
 - Within `mergeTimeSeriesIntoParameter` (window mode):

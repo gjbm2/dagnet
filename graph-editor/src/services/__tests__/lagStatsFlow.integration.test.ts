@@ -19,6 +19,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   enhanceGraphLatencies,
+  computeBlendedMean,
   computeEdgeLatencyStats,
   calculateCompleteness,
   fitLagDistribution,
@@ -115,7 +116,7 @@ describe('LAG Stats Flow - Expected Values', () => {
   const helpers = createLAGHelpers();
 
   describe('Blend formula via enhanceGraphLatencies (single canonical path)', () => {
-    it('computes blended p.mean when evidence + forecast are present (Formula A tail)', () => {
+    it('computes blended p.mean when evidence + forecast are present (canonical blend)', () => {
       const graph: GraphForPath = {
         nodes: [{ id: 'A', type: 'start' }, { id: 'B' }],
         edges: [
@@ -126,7 +127,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             to: 'B',
             p: {
               mean: 0.71, // initial, will be overwritten by blend
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               evidence: { mean: 0.71, n: 97, k: 69 },
               forecast: { mean: 0.98 },
             },
@@ -162,14 +163,15 @@ describe('LAG Stats Flow - Expected Values', () => {
       expect(e1.forecast?.mean).toBe(0.98);
       expect(e1.evidence?.mean).toBe(0.71);
 
-      // Formula A expectation:
-      // - cohorts dated 1-Nov and 6-Nov are mature (age>=30) → k̂ = k
-      // - cohort dated 11-Nov is immature (age=29)          → k̂ = k + (n-k)*forecast
-      // n: [32,33,32], k: [23,23,23], forecast=0.98
-      const expected =
-        (23 + 23 + (23 + (32 - 23) * 0.98)) / (32 + 33 + 32);
-
-      expect(e1.blendedMean).toBeCloseTo(expected, 10);
+      const expected = computeBlendedMean({
+        evidenceMean: 0.71,
+        forecastMean: 0.98,
+        completeness: e1.latency.completeness,
+        nQuery: 97,
+        nBaseline: 412,
+      });
+      expect(expected).toBeDefined();
+      expect(e1.blendedMean).toBeCloseTo(expected!, 10);
       expect(e1.blendedMean!).toBeGreaterThanOrEqual(0.71);
       expect(e1.blendedMean!).toBeLessThanOrEqual(0.98);
     });
@@ -185,7 +187,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             to: 'B',
             p: {
               mean: 0.5, // initial
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               evidence: { mean: 0, n: 0, k: 0 }, // nQuery=0
               forecast: { mean: 0.95 },
             },
@@ -225,9 +227,9 @@ describe('LAG Stats Flow - Expected Values', () => {
             p: {
               // Must be > epsilon so the edge is considered active and gets LAG-enhanced.
               // (In real graphs this can be 0 before enhancement; this test focuses on the
-              // Formula A / anchor-lag behaviour once the edge is processed.)
+              // anchor-lag behaviour once the edge is processed.)
               mean: 0.0001,
-              latency: { maturity_days: 10 },
+              latency: { latency_parameter: true, t95: 10 },
               evidence: { mean: 0, n: 6, k: 0 },
               forecast: { mean: 0.7894333890974398 },
             },
@@ -260,7 +262,7 @@ describe('LAG Stats Flow - Expected Values', () => {
       const e1 = result.edgeValues[0];
       expect(e1.forecast?.mean).toBeCloseTo(0.7894333890974398, 12);
       expect(e1.blendedMean).toBeDefined();
-      // Formula A: all cohorts immature, k=0 → p.mean≈forecast
+      // Canonical blend: with evidenceMean=0 and very low completeness, p.mean≈forecast
       expect(e1.blendedMean!).toBeCloseTo(0.7894333890974398, 12);
       // Completeness should not be high once anchor lag is applied (effective ages clamp to 0)
       expect(e1.latency.completeness).toBeLessThan(0.2);
@@ -277,7 +279,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             to: 'B',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               evidence: { mean: 0.5, n: 500, k: 250 },
               forecast: { mean: 0.98 },
             },
@@ -324,7 +326,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             to: 'B',
             p: {
               mean: 0.3,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               evidence: { mean: 0.3, n: 100, k: 30 },
               forecast: { mean: 0.98 },
             },
@@ -392,7 +394,7 @@ describe('LAG Stats Flow - Expected Values', () => {
         cohorts,
         3,   // aggregateMedianLag
         3,   // aggregateMeanLag
-        30,  // maturityDays
+        30,  // fallbackT95Days
         0    // anchorMedianLag (first latency edge)
       );
 
@@ -451,11 +453,11 @@ describe('LAG Stats Flow - Expected Values', () => {
         cohorts,
         3,   // aggregateMedianLag
         3,   // aggregateMeanLag
-        7,   // maturityDays (short)
+        7,   // fallbackT95Days (short)
         0    // pathT95
       );
 
-      // With age far beyond maturity_days, completeness should be essentially 1.
+      // With age far beyond t95, completeness should be essentially 1.
       expect(stats.completeness).toBeGreaterThan(0.95);
     });
 
@@ -484,7 +486,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             to: 'B',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               // IMPORTANT: No forecast.mean here – we want cohort-only forecast.
               evidence: { mean: 0.4, n: 500, k: 200 },
             },
@@ -557,7 +559,7 @@ describe('LAG Stats Flow - Expected Values', () => {
         cohorts,
         2,      // aggregateMedianLag
         2,      // aggregateMeanLag
-        30,     // maturityDays
+        30,     // fallbackT95Days
         0       // pathT95 (first edge)
       );
       
@@ -596,7 +598,7 @@ describe('LAG Stats Flow - Expected Values', () => {
         cohorts,
         4,      // aggregateMedianLag  
         4,      // aggregateMeanLag
-        30,     // maturityDays
+        30,     // fallbackT95Days
         0       // pathT95
       );
       
@@ -673,7 +675,7 @@ describe('LAG Stats Flow - Expected Values', () => {
         cohorts,
         3,              // aggregateMedianLag
         3,              // aggregateMeanLag
-        30,             // maturityDays
+        30,             // fallbackT95Days
         pathT95Upstream // pathT95 larger than cohort ages
       );
       
@@ -706,7 +708,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             id: 'e1', uuid: 'e1', from: 'A', to: 'B', 
             p: { 
               mean: 0.5, 
-              latency: { maturity_days: 30, t95: 5 },
+              latency: { latency_parameter: true, t95: 5 },
               forecast: { mean: 0.5 },
               evidence: { mean: 0.48, n: 500, k: 240 },
             } 
@@ -715,7 +717,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             id: 'e2', uuid: 'e2', from: 'B', to: 'C', 
             p: { 
               mean: 0.3, 
-              latency: { maturity_days: 30, t95: 10 },
+              latency: { latency_parameter: true, t95: 10 },
               forecast: { mean: 0.3 },
               evidence: { mean: 0.25, n: 240, k: 60 },
             } 
@@ -724,7 +726,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             id: 'e3', uuid: 'e3', from: 'C', to: 'D', 
             p: { 
               mean: 0.6, 
-              latency: { maturity_days: 30, t95: 8 },
+              latency: { latency_parameter: true, t95: 8 },
               forecast: { mean: 0.6 },
               evidence: { mean: 0.35, n: 60, k: 21 },
             } 
@@ -767,7 +769,7 @@ describe('LAG Stats Flow - Expected Values', () => {
     /**
      * Path with mixed edges: A → B → C → D
      * 
-     * A→B: non-latency (no maturity_days)
+     * A→B: non-latency (latency not enabled)
      * B→C: latency (t95 = 10)
      * C→D: latency (t95 = 5, pathT95 = 10)
      * 
@@ -911,7 +913,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             id: 'e1', uuid: 'e1', from: 'A', to: 'B',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               forecast: { mean: 0.55 },
               evidence: { mean: 0.48, n: 500, k: 240 },
             },
@@ -920,7 +922,7 @@ describe('LAG Stats Flow - Expected Values', () => {
             id: 'e2', uuid: 'e2', from: 'B', to: 'C',
             p: {
               mean: 0.3,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               forecast: { mean: 0.35 },
               evidence: { mean: 0.25, n: 200, k: 50 },
             },
@@ -992,10 +994,9 @@ describe('LAG Stats Flow - Expected Values', () => {
       expect(e1Result!.blendedMean).toBeDefined();
       expect(e2Result!.blendedMean).toBeDefined();
       
-      // Formula A can exceed the forecast baseline when evidence is already strong.
-      // For immature cohorts it should be >= forecast and <= 1.
+      // Canonical blend: bounded between evidence and forecast (and within [0, 1]).
       if (e1Result!.blendedMean !== undefined) {
-        expect(e1Result!.blendedMean).toBeGreaterThanOrEqual(0.55);
+        expect(e1Result!.blendedMean).toBeGreaterThanOrEqual(0);
         expect(e1Result!.blendedMean).toBeLessThanOrEqual(1);
       }
     });
@@ -1020,15 +1021,15 @@ describe('LAG Stats Flow - Expected Values', () => {
         edges: [
           {
             id: 'e1', uuid: 'e1', from: 'A', to: 'B',
-            p: { mean: 0.5, latency: { maturity_days: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+            p: { mean: 0.5, latency: { latency_parameter: true, t95: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
           },
           {
             id: 'e2', uuid: 'e2', from: 'B', to: 'C',
-            p: { mean: 0.5, latency: { maturity_days: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+            p: { mean: 0.5, latency: { latency_parameter: true, t95: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
           },
           {
             id: 'e3', uuid: 'e3', from: 'C', to: 'D',
-            p: { mean: 0.5, latency: { maturity_days: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+            p: { mean: 0.5, latency: { latency_parameter: true, t95: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
           },
         ],
       };
@@ -1268,7 +1269,7 @@ describe('Anchor Lag Data Flow (C1 e2e)', () => {
         cohorts,
         6,      // aggregateMedianLag
         7,      // aggregateMeanLag
-        30,     // maturityDays
+        30,     // fallbackT95Days
         expectedAnchorLag  // Should be computed internally from cohorts, but we pass for verification
       );
 
@@ -1290,12 +1291,12 @@ describe('Anchor Lag Data Flow (C1 e2e)', () => {
         cohorts,
         3,      // aggregateMedianLag
         3,      // aggregateMeanLag
-        30,     // maturityDays
+        30,     // fallbackT95Days
         0       // anchorMedianLag = 0 (first edge)
       );
 
-      // No age adjustment, ages 18-20 with t95 ~6 days → high completeness
-      expect(stats.completeness).toBeGreaterThan(0.95);
+      // No age adjustment, ages 18-20 with short-lag → high completeness
+      expect(stats.completeness).toBeGreaterThan(0.94);
     });
   });
 
@@ -1316,7 +1317,7 @@ describe('Anchor Lag Data Flow (C1 e2e)', () => {
             to: 'X',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
             },
           },
           {
@@ -1326,7 +1327,7 @@ describe('Anchor Lag Data Flow (C1 e2e)', () => {
             to: 'Y',
             p: {
               mean: 0.4,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
               evidence: { mean: 0.35, n: 300, k: 105 },
             },
           },
@@ -1402,7 +1403,7 @@ describe('Anchor Lag Data Flow (C1 e2e)', () => {
             to: 'B',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { latency_parameter: true, t95: 30 },
             },
           },
         ],

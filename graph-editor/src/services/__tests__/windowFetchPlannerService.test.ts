@@ -58,7 +58,7 @@ function createMockGraph(options: {
     id: string;
     paramId?: string;
     hasConnection?: boolean;
-    latencyConfig?: { maturity_days?: number; t95?: number; path_t95?: number };
+    latencyConfig?: { latency_parameter?: boolean; t95?: number; path_t95?: number };
   }>;
   nodes?: Array<{
     id: string;
@@ -308,7 +308,7 @@ describe('WindowFetchPlannerService', () => {
             id: 'edge1',
             paramId: 'param1',
             hasConnection: true,
-            latencyConfig: { maturity_days: 14, t95: 10 },
+            latencyConfig: { latency_parameter: true, t95: 10 },
           }],
         });
         
@@ -355,7 +355,7 @@ describe('WindowFetchPlannerService', () => {
             id: 'edge1',
             paramId: 'param1',
             hasConnection: true,
-            latencyConfig: { maturity_days: 7, t95: 5 },
+            latencyConfig: { latency_parameter: true, t95: 5 },
           }],
         });
         
@@ -619,7 +619,7 @@ describe('WindowFetchPlannerService', () => {
           id: 'edge1',
           paramId: 'param1',
           hasConnection: true,
-          latencyConfig: { maturity_days: 14, t95: 10 },
+          latencyConfig: { latency_parameter: true, t95: 10 },
         }],
       });
       
@@ -778,7 +778,7 @@ describe('WindowFetchPlannerService', () => {
           id: 'edge1',
           paramId: 'param1',
           hasConnection: true,
-          latencyConfig: { maturity_days: 14, t95: 10 },
+          latencyConfig: { latency_parameter: true, t95: 10 },
         }],
         nodes: [{ id: 'node1', caseId: 'case1', hasConnection: true }],
       });

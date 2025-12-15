@@ -8,8 +8,8 @@ type: probability
 source: amplitude:funnel
 description: Probability and latency of switch success after registration.
 latency:
-  track: true
-  maturity_days: 30
+  latency_parameter: true
+  t95: 30
   anchor_node_id: household-created
 values:
 - label: Cohorts 1-Sep-25 to 30-Nov-25

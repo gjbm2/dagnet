@@ -14,7 +14,8 @@
 /**
  * Minimum number of converters required for reliable lag distribution fitting.
  * Below this threshold, empirical lag stats are considered unreliable and
- * we fall back to maturity_days for t95.
+ * the fitted distribution is marked low quality and the system should use
+ * a conservative default horizon.
  * 
  * Rationale: With fewer than 30 converters, median/mean lag estimates
  * have high variance and the log-normal fit may be unstable.
@@ -40,7 +41,7 @@ export const LATENCY_MIN_FIT_CONVERTERS = 30;
  * 
  * CALIBRATION NOTE (Dec 2025):
  * - Observed Amplitude data with ratio = 0.9993 (mean=6.020d, median=6.024d)
- * - This was incorrectly rejected, causing fallback to maturity_days for t95
+ * - This was incorrectly rejected, causing conservative fallback behaviour
  * - Lowered to 0.9 to allow mean ≈ median cases while still catching bad data
  * 
  * When ratio is in [0.9, 1.0), we mark empirical_quality_ok = false but still
@@ -95,9 +96,7 @@ export const LATENCY_BASELINE_MAX_WINDOW_DAYS = 60;
 export const LATENCY_DEFAULT_SIGMA = 0.5;
 
 /**
- * Small epsilon for denominator safety in Formula A.
- * 
- * Used to prevent division by zero when (1 - p_∞ × F(a_i)) approaches 0.
+ * Small epsilon for denominator safety in numerical probability calculations.
  */
 export const LATENCY_EPSILON = 1e-9;
 

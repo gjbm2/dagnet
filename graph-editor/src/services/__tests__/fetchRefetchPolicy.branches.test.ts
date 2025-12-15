@@ -2,7 +2,7 @@
  * fetchRefetchPolicy – Branch Coverage & Invariant Tests
  * 
  * This file exhaustively tests every branch in the refetch policy logic:
- * - t95 vs maturity_days selection
+ * - latency enablement (latency_parameter) and effective t95 selection
  * - Cohort refetch decision tree (5 terminal branches)
  * - Window refetch decision tree (2 terminal branches)
  * - Coverage analysis helpers
@@ -19,6 +19,7 @@ import {
   type RefetchDecision,
 } from '../fetchRefetchPolicy';
 import type { ParameterValue } from '../paramRegistryService';
+import { DEFAULT_T95_DAYS } from '../../constants/statisticalConstants';
 
 // =============================================================================
 // Maturity Boundary Rule (Single Source of Truth for Tests)
@@ -30,19 +31,19 @@ import type { ParameterValue } from '../paramRegistryService';
  * A date is considered "mature" if it is STRICTLY BEFORE the cutoff date.
  * Cutoff = referenceDate - (effectiveMaturity days) - 1 day buffer
  * 
- * Example: With maturity=7 and referenceDate=9-Dec-25:
+ * Example: With effective t95 = 7 and referenceDate=9-Dec-25:
  * - Cutoff date = 9-Dec - 7 - 1 = 1-Dec
  * - Dates on or after 1-Dec are IMMATURE
  * - Dates before 1-Dec are MATURE
  * 
- * The +1 buffer ensures cohorts at exactly maturity_days are treated
+ * The +1 buffer ensures cohorts at exactly the effective t95 threshold are treated
  * conservatively (still immature) since they may have incomplete data.
  */
 const MATURITY_BUFFER_DAYS = 1;
 
 /** Calculate the maturity cutoff date string */
-function calculateCutoff(referenceDate: Date, maturityDays: number): string {
-  const cutoffMs = referenceDate.getTime() - ((maturityDays + MATURITY_BUFFER_DAYS) * 24 * 60 * 60 * 1000);
+function calculateCutoff(referenceDate: Date, effectiveT95Days: number): string {
+  const cutoffMs = referenceDate.getTime() - ((effectiveT95Days + MATURITY_BUFFER_DAYS) * 24 * 60 * 60 * 1000);
   return daysAgoFromDate(0, new Date(cutoffMs)); // Convert to UK format
 }
 
@@ -132,16 +133,16 @@ function windowSlice(options: {
 }
 
 // =============================================================================
-// 1. t95 vs maturity_days Selection Matrix
+// 1. Effective t95 selection matrix
 // =============================================================================
 
-describe('Effective Maturity Selection: t95 vs maturity_days', () => {
+describe('Effective maturity selection (latency_parameter + t95)', () => {
   
-  describe('When t95 is undefined', () => {
-    it('returns gaps_only when maturity_days is 0 (non-latency edge)', () => {
+  describe('When latency is not enabled', () => {
+    it('returns gaps_only when latency_parameter is false (non-latency edge)', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 0, t95: undefined },
+        latencyConfig: { latency_parameter: false, t95: undefined },
         requestedWindow: { start: daysAgo(14), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
@@ -150,29 +151,42 @@ describe('Effective Maturity Selection: t95 vs maturity_days', () => {
       expect(decision.type).toBe('gaps_only');
     });
     
-    it('uses maturity_days for window refetch when t95 undefined', () => {
-      const maturityDays = 7;
+    it('returns gaps_only when latency_parameter is missing (non-latency edge)', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: maturityDays, t95: undefined },
+        latencyConfig: { t95: undefined },
+        requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
+        isCohortQuery: false,
+        referenceDate: REFERENCE_DATE,
+      });
+      
+      expect(decision.type).toBe('gaps_only');
+    });
+
+  });
+  
+  describe('When latency is enabled but t95 is undefined', () => {
+    it('uses DEFAULT_T95_DAYS for window refetch', () => {
+      const decision = shouldRefetch({
+        existingSlice: undefined,
+        latencyConfig: { latency_parameter: true, t95: undefined },
         requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
       });
       
       expect(decision.type).toBe('partial');
-      // Cutoff should be maturity_days + 1 = 8 days ago
-      expect(decision.matureCutoff).toBe(daysAgo(maturityDays + 1));
+      // Cutoff should be DEFAULT_T95_DAYS + 1 days ago
+      expect(decision.matureCutoff).toBe(daysAgo(DEFAULT_T95_DAYS + 1));
     });
     
-    it('uses maturity_days for cohort refetch when t95 undefined', () => {
-      const maturityDays = 10;
-      // Cohort with one date that's 5 days ago (immature if maturity > 5)
+    it('uses DEFAULT_T95_DAYS for cohort refetch', () => {
+      // Cohort with one date that's 5 days ago (immature under DEFAULT_T95_DAYS)
       const slice = cohortSlice({ dates: [daysAgo(5)] });
       
       const decision = shouldRefetch({
         existingSlice: slice,
-        latencyConfig: { maturity_days: maturityDays, t95: undefined },
+        latencyConfig: { latency_parameter: true, t95: undefined },
         requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
         isCohortQuery: true,
         referenceDate: REFERENCE_DATE,
@@ -185,43 +199,40 @@ describe('Effective Maturity Selection: t95 vs maturity_days', () => {
   });
   
   describe('When t95 is 0 or negative (invalid)', () => {
-    it('falls back to maturity_days when t95 is 0', () => {
-      const maturityDays = 7;
+    it('falls back to DEFAULT_T95_DAYS when t95 is 0', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: maturityDays, t95: 0 },
+        latencyConfig: { latency_parameter: true, t95: 0 },
         requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
       });
       
       expect(decision.type).toBe('partial');
-      expect(decision.matureCutoff).toBe(daysAgo(maturityDays + 1));
+      expect(decision.matureCutoff).toBe(daysAgo(DEFAULT_T95_DAYS + 1));
     });
     
-    it('falls back to maturity_days when t95 is negative', () => {
-      const maturityDays = 5;
+    it('falls back to DEFAULT_T95_DAYS when t95 is negative', () => {
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: maturityDays, t95: -3 },
+        latencyConfig: { latency_parameter: true, t95: -3 },
         requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
       });
       
       expect(decision.type).toBe('partial');
-      expect(decision.matureCutoff).toBe(daysAgo(maturityDays + 1));
+      expect(decision.matureCutoff).toBe(daysAgo(DEFAULT_T95_DAYS + 1));
     });
   });
   
   describe('When t95 is valid and positive', () => {
-    it('uses ceil(t95) as effective maturity, ignoring maturity_days', () => {
+    it('uses ceil(t95) as effective maturity', () => {
       const t95 = 14;
-      const maturityDays = 7; // Should be ignored
       
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: maturityDays, t95 },
+        latencyConfig: { latency_parameter: true, t95 },
         requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
@@ -237,7 +248,7 @@ describe('Effective Maturity Selection: t95 vs maturity_days', () => {
       
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 5, t95 },
+        latencyConfig: { latency_parameter: true, t95 },
         requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
@@ -253,7 +264,7 @@ describe('Effective Maturity Selection: t95 vs maturity_days', () => {
       
       const decision = shouldRefetch({
         existingSlice: undefined,
-        latencyConfig: { maturity_days: 7, t95 },
+        latencyConfig: { latency_parameter: true, t95 },
         requestedWindow: { start: daysAgo(60), end: daysAgo(0) },
         isCohortQuery: false,
         referenceDate: REFERENCE_DATE,
@@ -272,7 +283,7 @@ describe('Effective Maturity Selection: t95 vs maturity_days', () => {
 
 describe('Cohort Refetch Decision Tree', () => {
   const MATURITY_DAYS = 7;
-  const latencyConfig = { maturity_days: MATURITY_DAYS };
+  const latencyConfig = { latency_parameter: true, t95: MATURITY_DAYS };
   const requestedWindow = { start: daysAgo(30), end: daysAgo(0) };
   
   describe('Branch 1: No existing slice', () => {
@@ -393,10 +404,10 @@ describe('Cohort Refetch Decision Tree', () => {
   
   describe('Branch 3b: Cohort maturity boundary (table-driven)', () => {
     // Table-driven test for cohort maturity boundaries
-    // Tests around the maturity_days threshold to ensure boundary is correct
+    // Tests around the effective t95 threshold to ensure boundary is correct
     // 
     // ACTUAL BOUNDARY RULE (from code analysis):
-    // - Cutoff = referenceDate - (maturity_days * 24h)
+    // - Cutoff = referenceDate - (effectiveT95Days * 24h)
     // - Cohort is IMMATURE if cohortDate >= cutoffDate
     // - So with maturity=7 and ref=9-Dec, cutoff=2-Dec at start of day
     // - Cohort at 7 days ago (2-Dec) is AT the cutoff, hence >= cutoff, hence IMMATURE
@@ -428,7 +439,7 @@ describe('Cohort Refetch Decision Tree', () => {
         
         const decision = shouldRefetch({
           existingSlice: slice,
-          latencyConfig: { maturity_days: MATURITY_DAYS_TEST },
+          latencyConfig: { latency_parameter: true, t95: MATURITY_DAYS_TEST },
           requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
           isCohortQuery: true,
           referenceDate: REFERENCE_DATE,
@@ -493,7 +504,7 @@ describe('Cohort Refetch Decision Tree', () => {
 
 describe('Window Refetch Decision Tree', () => {
   const MATURITY_DAYS = 7;
-  const latencyConfig = { maturity_days: MATURITY_DAYS };
+  const latencyConfig = { latency_parameter: true, t95: MATURITY_DAYS };
   
   describe('Branch 1: Entire requested window is mature (before cutoff)', () => {
     it('returns gaps_only when window ends before maturity cutoff', () => {

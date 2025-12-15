@@ -126,14 +126,14 @@ interface LatencyConfig {
   /** Maturity threshold in days - cohorts younger than this are "immature"
    *  
    *  SEMANTICS:
-   *  - maturity_days > 0: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
-   *  - maturity_days = 0 or undefined: Latency tracking DISABLED (standard window() behaviour)
+   *  - legacy maturity field > 0: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
+   *  - legacy maturity field = 0 or undefined: Latency tracking DISABLED (standard window() behaviour)
    *  
-   *  NOTE: No separate `track` boolean - tracking is derived from maturity_days.
+   *  NOTE: No separate `track` boolean - tracking is derived from legacy maturity field.
    */
-  maturity_days?: number;  // Default: undefined (no tracking). Set >0 to enable.
-  /** True if user manually set maturity_days (vs derived from file) */
-  maturity_days_overridden?: boolean;
+  legacy maturity field?: number;  // Default: undefined (no tracking). Set >0 to enable.
+  /** True if user manually set legacy maturity field (vs derived from file) */
+  legacy maturity override?: boolean;
   
   /** Anchor node for cohort queries - furthest upstream START node from edge.from
    *  Computed by MSMDC at graph-edit time (not retrieval time)
@@ -152,7 +152,7 @@ interface LatencyConfig {
 
 ### 3.2 Parameter File Additions (A‑anchored cohort evidence)
 
-For edges with `latency.maturity_days > 0` (latency tracking enabled), parameter files store **A‑anchored per‑cohort evidence** plus edge‑level latency summaries. The structure **extends the existing parameter schema pattern** (flat parallel arrays, `window_from`/`window_to`, `data_source` object) with new latency fields.
+For edges with `latency.legacy maturity field > 0` (latency tracking enabled), parameter files store **A‑anchored per‑cohort evidence** plus edge‑level latency summaries. The structure **extends the existing parameter schema pattern** (flat parallel arrays, `window_from`/`window_to`, `data_source` object) with new latency fields.
 
 ```yaml
 # parameter-{edge-id}.yaml  (example: A=HouseholdCreated, X=SwitchRegistered, Y=SwitchSuccess)
@@ -162,7 +162,7 @@ type: probability
 
 # Edge-level latency configuration (see §3.1)
 latency:
-  maturity_days: 30             # >0 enables latency tracking (no separate 'track' field)
+  legacy maturity field: 30             # >0 enables latency tracking (no separate 'track' field)
   anchor_node_id: household-created  # Cohort anchor node (A in A→X→Y)
 
 values:
@@ -422,7 +422,7 @@ Maturity is a client-side concept:
 Set on edge:
 ```yaml
 latency:
-  maturity_days: 30  # >0 enables tracking; cohorts <30 days old are "immature"
+  legacy maturity field: 30  # >0 enables tracking; cohorts <30 days old are "immature"
 ```
 
 The DSL just specifies the date range. Mature/immature split is computed after data returns.
@@ -471,7 +471,7 @@ If we only have A-anchored data, answering `window(-7d:)` requires convolving A-
 
 **Solution: Dual-slice ingestion for latency edges.**
 
-When the pinned DSL (e.g., `or(window(-7d:), cohort(-90d:)).context(channel)`) contains **both** `window()` and `cohort()` clauses, and the edge has `latency.maturity_days > 0` (latency tracking enabled):
+When the pinned DSL (e.g., `or(window(-7d:), cohort(-90d:)).context(channel)`) contains **both** `window()` and `cohort()` clauses, and the edge has `latency.legacy maturity field > 0` (latency tracking enabled):
 
 1. **Cohort slice** (A-anchored):
    - Fetch 3-step funnel `[A → X → Y]` for the cohort range.
@@ -573,18 +573,18 @@ values:
 
 | Query | Condition | Resolution |
 |-------|-----------|------------|
-| `cohort(...)` | `maturity_days > 0` | Use cohort slice (A-anchored); slice by date, aggregate n/k |
-| `cohort(...)` | `maturity_days = 0` BUT `upstream_maturity > 0` | **Use cohort slice** (A-anchored); population semantics must flow through |
-| `cohort(...)` | `maturity_days = 0` AND `upstream_maturity = 0` | Treat as `window()` (optimisation: no lag anywhere upstream) |
-| `window(...)` | `maturity_days > 0`, window slice exists | Use window slice (X-anchored); slice by date |
-| `window(...)` | `maturity_days > 0`, no window slice | Fall back to model-based convolution from cohort slice + lag CDF |
-| `window(...)` | `maturity_days = 0` | Existing `window()` logic (n_daily/k_daily by event date) |
+| `cohort(...)` | `legacy maturity field > 0` | Use cohort slice (A-anchored); slice by date, aggregate n/k |
+| `cohort(...)` | `legacy maturity field = 0` BUT `upstream_maturity > 0` | **Use cohort slice** (A-anchored); population semantics must flow through |
+| `cohort(...)` | `legacy maturity field = 0` AND `upstream_maturity = 0` | Treat as `window()` (optimisation: no lag anywhere upstream) |
+| `window(...)` | `legacy maturity field > 0`, window slice exists | Use window slice (X-anchored); slice by date |
+| `window(...)` | `legacy maturity field > 0`, no window slice | Fall back to model-based convolution from cohort slice + lag CDF |
+| `window(...)` | `legacy maturity field = 0` | Existing `window()` logic (n_daily/k_daily by event date) |
 
 Where `upstream_maturity = compute_a_x_maturity(graph, anchor_id, edge.from)` — see §4.7.2.
 
 **Rationale for upstream maturity check:**
 
-If ANY upstream edge from the anchor has lag, the cohort population is constrained by that lag. An "instant" edge (maturity_days=0) downstream of a latency edge still needs cohort semantics to:
+If ANY upstream edge from the anchor has lag, the cohort population is constrained by that lag. An "instant" edge (legacy maturity field=0) downstream of a latency edge still needs cohort semantics to:
 1. Show the correct A-anchored population (not random window events)
 2. Inherit upstream completeness (cohort may not have reached this edge yet)
 3. Avoid misleading "complete" appearance when upstream is immature
@@ -664,14 +664,14 @@ For cohort slices, we need **total maturity** to determine cache/refresh policy.
 
 **Total maturity = A→X maturity + X→Y maturity**
 
-**Prefer empirical data (T_95), fallback to configured `maturity_days`:**
+**Prefer empirical data (T_95), fallback to configured `legacy maturity field`:**
 
 For each edge, compute **T_95** (95th percentile of lag distribution) from stored `median_lag_days` and `mean_lag_days`:
 
 ```python
 def edge_t95(edge) -> float:
     """
-    Compute T_95 for an edge. Prefer empirical data, fallback to maturity_days.
+    Compute T_95 for an edge. Prefer empirical data, fallback to legacy maturity field.
     """
     latency = edge.p.latency or {}
     
@@ -686,8 +686,8 @@ def edge_t95(edge) -> float:
         t95 = median * math.exp(1.645 * sigma)
         return t95
     
-    # Fallback to configured maturity_days (or default 30)
-    return latency.get('maturity_days') or 30
+    # Fallback to configured legacy maturity field (or default 30)
+    return latency.get('legacy maturity field') or 30
 g```
 
 **Quality thresholds for empirical data:**
@@ -770,8 +770,8 @@ Total maturity = max(44) + 13 + 88 = 145 days
 
 **Edge cases:**
 - A = X (direct edge): A→X maturity = 0
-- Non-latency edges (`maturity_days = 0`): contribute 0 to path
-- No empirical data yet: falls back to `maturity_days`
+- Non-latency edges (`legacy maturity field = 0`): contribute 0 to path
+- No empirical data yet: falls back to `legacy maturity field`
 - X unreachable from A: error (invalid anchor)
 
 **Fetch ordering requirement:** To ensure upstream empirical data is available when computing downstream cache policy, batch fetches should be **topologically sorted** (edges near START nodes fetched first). See implementation plan.
@@ -802,16 +802,16 @@ Total maturity = max(44) + 13 + 88 = 145 days
 
 **Window slice (CHANGED from current behaviour):**
 
-For `window()` with `maturity_days=0` (non-latency or instant conversion):
+For `window()` with `legacy maturity field=0` (non-latency or instant conversion):
 ```
 Current incremental logic continues to work.
 Merge by date, update sliceDSL bounds to reflect coverage.
 sliceDSL: 'window(1-Sep-25:30-Nov-25).context(...)' ← absolute dates
 ```
 
-For `window()` with `maturity_days>0` (latency edge):
+For `window()` with `legacy maturity field>0` (latency edge):
 ```
-Query: window(-30d:-1d), maturity_days=7, today=T
+Query: window(-30d:-1d), legacy maturity field=7, today=T
 
 Mature portion:   [-30d:-8d]  → use cache if exists
 Immature portion: [-7d:-1d]   → ALWAYS re-fetch (data still accruing)
@@ -873,7 +873,7 @@ The `sliceDSL` reflects **effective coverage**, not the original query. Original
 **Implementation sketch (applies to any fetch-from-source, not only "fetch all"):**
 ```typescript
 function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDecision {
-  if (!edge.p?.latency?.maturity_days) {
+  if (!edge.p?.latency?.legacy maturity field) {
     return { type: 'gaps_only' };  // Current incremental logic
   }
   
@@ -892,10 +892,10 @@ function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDeci
   }
   
   // Window with latency
-  const maturityDays = edge.p.latency.maturity_days;
+  const legacy maturity threshold = edge.p.latency.legacy maturity field;
   return { 
     type: 'partial',
-    matureCutoff: daysAgo(maturityDays + 1),  // Re-fetch after this date
+    matureCutoff: daysAgo(legacy maturity threshold + 1),  // Re-fetch after this date
   };
 }
 ```
@@ -918,7 +918,7 @@ Any fetch from source (manual or overnight batch "fetch all slices") triggers st
 |------|--------|-----------|
 | `p.forecast` | Mature cohorts in **window() slice only** | Slice in param file |
 | `median_lag_days` | `dayMedianTransTimes` from Amplitude response | Slice in param file |
-| `completeness` | Computed from cohort ages vs maturity_days | Slice in param file |
+| `completeness` | Computed from cohort ages vs legacy maturity field | Slice in param file |
 | `evidence.n`, `evidence.k` | Raw funnel counts | Slice in param file |
 
 **Critical: `p.forecast` requires window() data.** The forecast baseline is computed from mature cohorts in window() slices (X-anchored, recent events). Cohort() slices (A-anchored) provide per-cohort tracking but NOT `p.forecast`.
@@ -972,7 +972,7 @@ Graphs must be able to operate **without parameter files**, and users may issue 
 
 - Whenever we need `p.forecast` for a latency edge under a given interactive DSL, and **no usable window() baseline exists** for that edge + context (no suitable window slice in the registry, or the query is cohort‑only), we construct an implicit **baseline window**:
 
-  - Let `maturity_days` be the edge’s configured maturity (default 30).
+  - Let `legacy maturity field` be the edge’s configured maturity (default 30).
   - Define:
     \[
     W_{\text{base}} = \min\big(\max(\text{maturity\_days}, 30\text{d}), 60\text{d}\big)
@@ -996,7 +996,7 @@ Graphs must be able to operate **without parameter files**, and users may issue 
   - Aggregates `median_lag_days[]`, `mean_lag_days[]` over the baseline window.
   - Fits the log‑normal lag CDF and derives `t_{95}` for the edge.
   - Computes `p_\infty = p.forecast` from “mature enough” days, with the existing quality gate.
-  - If the quality gate fails (too few converters / implausible mean/median), it falls back to `maturity_days` for `t_{95}` as per §4.7.2; `p.forecast` may then be hidden or marked as low‑confidence.
+  - If the quality gate fails (too few converters / implausible mean/median), it falls back to `legacy maturity field` for `t_{95}` as per §4.7.2; `p.forecast` may then be hidden or marked as low‑confidence.
 
 **Phase 1 constraint:** Only when we **cannot** obtain a usable baseline even after applying this implicit window policy (e.g. Amplitude returns no data for the baseline window) do we treat `p.forecast` as unavailable for that edge. In that case F‑only and F+E visibility modes are disabled for the affected edge; evidence‑only rendering remains available.
 
@@ -1438,7 +1438,7 @@ This flow is driven by the **pinned DSL** on the graph. It has two phases: **fet
 │         │                                                              │
 │         ▼                                                              │
 │  Graph JSON / IndexedDB                                                │
-│    - Stores p.latency.{maturity_days, anchor_node_id, t95}             │
+│    - Stores p.latency.{legacy maturity field, anchor_node_id, t95}             │
 │    - Tagged against the current query DSL                              │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1635,7 +1635,7 @@ Scenarios (cases and `conditional_ps`) define **which edges and parameters are a
 
 **Case (a) handling:**
 
-For siblings where both have `maturity_days > 0` and data-driven probabilities:
+For siblings where both have `legacy maturity field > 0` and data-driven probabilities:
 
 1. **p.evidence is always valid:** `Σ p.evidence ≤ 1` by construction (observed k cannot exceed n across siblings)
 
@@ -1680,7 +1680,7 @@ If `Σ p.mean - 1 > expected_artefact × 1.5`, show info message indicating fore
 **Behaviour when current view is an aggregate over multiple slices** (e.g. `contextAny(...)`, multiple `context(...)` combinations):
 
 1. **CONFIG/metadata: always written.**
-   - Latency config (`maturity_days`, `anchor_node_id`)
+   - Latency config (`legacy maturity field`, `anchor_node_id`)
    - Edge-level metadata (`query`, `n_query`, etc.)
    - These are top-level fields, not per-slice, so aggregation status is irrelevant.
 
@@ -1841,13 +1841,13 @@ Extend existing CI rendering logic; ensure stripes render within CI band.
 
 ### 7.4 Edge Bead: Latency Display
 
-A new bead displays latency information on edges with `latency.maturity_days > 0`:
+A new bead displays latency information on edges with `latency.legacy maturity field > 0`:
 
 | Property | Value |
 |----------|-------|
 | Position | **Right-aligned** on edge (new bead position) |
 | Format | **"13d ±3 (75%)"** — median lag ± σ + completeness (see §5.5) |
-| Show when | `latency.maturity_days > 0` AND `median_lag_days > 0` |
+| Show when | `latency.legacy maturity field > 0` AND `median_lag_days > 0` |
 | Colour | Standard bead styling (no new colour) |
 
 **Geometry / positioning considerations:**
@@ -1946,12 +1946,12 @@ Latency configuration fields are added to `ParameterSection` component — the s
 
 | Field | Type | Maps to | Override flag |
 |-------|------|---------|---------------|
-| Track Latency | Checkbox | `p.latency.maturity_days` (0 vs >0) | `maturity_days_overridden` |
-| Maturity Days | Number input (shown when enabled) | `p.latency.maturity_days` | `maturity_days_overridden` |
+| Track Latency | Checkbox | `p.latency.legacy maturity field` (0 vs >0) | `legacy maturity override` |
+| Maturity Days | Number input (shown when enabled) | `p.latency.legacy maturity field` | `legacy maturity override` |
 
 **Semantics:**
-- Checkbox **unchecked**: `maturity_days = 0` (latency tracking disabled)
-- Checkbox **checked**: `maturity_days > 0` (latency tracking enabled), shows Maturity + Recency fields
+- Checkbox **unchecked**: `legacy maturity field = 0` (latency tracking disabled)
+- Checkbox **checked**: `legacy maturity field > 0` (latency tracking enabled), shows Maturity + Recency fields
 
 **New fields to add** (insert after Distribution dropdown, before Query Expression Editor):
 ```
@@ -1964,7 +1964,7 @@ When checkbox unchecked, Maturity row is hidden.
 **Default inference when enabling:**
 When user checks "Track Latency" on an edge that has data:
 1. Look for `median_lag_days` in edge data (if previously fetched)
-2. If found, suggest `maturity_days = ceil(median_lag_days × 2)` (capped at 90)
+2. If found, suggest `legacy maturity field = ceil(median_lag_days × 2)` (capped at 90)
 3. If not found, default to 30 days
 
 This is a **frontend-only** convenience — the backend doesn't infer defaults.
@@ -2085,7 +2085,7 @@ cohort(<start>:<end>)
 cohort(<anchor_node_id>,<start>:<end>)
   - Anchor node id is provided explicitly (e.g. cohort(household-created,1-Nov-25:7-Nov-25))
 
-// NOTE: maturity_days comes from p.latency.maturity_days, not the DSL
+// NOTE: legacy maturity field comes from p.latency.legacy maturity field, not the DSL
 ```
 
 #### B. Amplitude Adapter
@@ -2102,13 +2102,13 @@ const startDate = queryPayload.window?.start;
 const endDate = queryPayload.window?.end;
 
 // New: for cohort mode, these are cohort entry dates
-// The observation window extends beyond endDate by maturity_days
+// The observation window extends beyond endDate by legacy maturity field
 if (queryPayload.cohort) {
   const cohortStart = queryPayload.cohort.start;
   const cohortEnd = queryPayload.cohort.end;
-  const maturityDays = queryPayload.cohort.maturity || 30;
+  const legacy maturity threshold = queryPayload.cohort.maturity || 30;
   // Amplitude query: cohort entered in [cohortStart, cohortEnd]
-  // but we observe conversions through cohortEnd + maturityDays
+  // but we observe conversions through cohortEnd + legacy maturity threshold
 }
 ```
 
@@ -2133,7 +2133,7 @@ if (queryPayload.cohort) {
 | `parameterToTimeSeries()` | Converts param file to time series | Handle cohort dates vs event dates |
 
 **Changes needed:**
-- New function: `computeMatureImmatureSplit(cohorts, currentDate, maturityDays)`
+- New function: `computeMatureImmatureSplit(cohorts, currentDate, legacy maturity threshold)`
 - Modify aggregation to separate mature vs immature cohorts
 - Return both aggregate p AND maturity breakdown
 
@@ -2291,7 +2291,7 @@ See §3.2 for full structure and field descriptions.
 ```
 Graph Edge / Probability      ↔    Param File
 ─────────────────────────────────────────────────────────────────
-edge.p.latency.maturity_days  ↔    latency.maturity_days (top-level CONFIG; >0 enables tracking)
+edge.p.latency.legacy maturity field  ↔    latency.legacy maturity field (top-level CONFIG; >0 enables tracking)
 edge.query                    ↔    query
 ─────────────────────────────────────────────────────────────────
 edge.p.mean                   ↔    values[].mean        (per-slice DATA)
@@ -2308,7 +2308,7 @@ edge.p.evidence.n/k           ↔    values[].n, values[].k
 
 | Graph / Prob | Param File | Override Flag | Notes |
 |--------------|-----------|---------------|-------|
-| `edge.p.latency.maturity_days` | `latency.maturity_days` | `maturity_days_overridden` | >0 enables latency tracking |
+| `edge.p.latency.legacy maturity field` | `latency.legacy maturity field` | `legacy maturity override` | >0 enables latency tracking |
 | `edge.p.latency.anchor_node_id` | `latency.anchor_node_id` | `anchor_node_id_overridden` | Cohort anchor (MSMDC-computed) |
 
 **`anchor_node_id` generation:**
@@ -2541,7 +2541,7 @@ High-level sequence when user clicks "Get from source" on a latency edge:
 **Backward compatibility:**
 - `window()` DSL remains valid for event-based queries
 - Existing parameter files without cohort metadata continue to work
-- Edges without `latency.maturity_days > 0` behave as before
+- Edges without `latency.legacy maturity field > 0` behave as before
 
 **Default behavior change:**
 - New fetches for conversion edges use `cohort()` by default
@@ -2557,7 +2557,7 @@ High-level sequence when user clicks "Get from source" on a latency edge:
 
 - [ ] Rename `cost_time` → `labour_cost` (global search/replace)
 - [ ] Add `LatencyConfig` to edge schema (TS, Python, YAML):
-  - `maturity_days?: number` (>0 enables tracking), `maturity_days_overridden?: boolean`
+  - `legacy maturity field?: number` (>0 enables tracking), `legacy maturity override?: boolean`
   - `anchor_node_id?: string`, `anchor_node_id_overridden?: boolean`
 - [ ] Extend MSMDC to compute `anchor_node_id` for latency-tracked edges
 - [ ] Add UpdateManager mappings for `anchor_node_id` (edge ↔ param file)
@@ -2584,7 +2584,7 @@ High-level sequence when user clicks "Get from source" on a latency edge:
 - [ ] Implement mature/immature split computation
 - [ ] Update `windowAggregationService` for cohort-aware aggregation
 - [ ] UpdateManager mappings for latency fields (with `_overridden` logic)
-- [ ] **Put to file**: Write `latency.maturity_days` from edge (>0 enables tracking)
+- [ ] **Put to file**: Write `latency.legacy maturity field` from edge (>0 enables tracking)
 - [ ] **Get from file**: Apply latency config only if `*_overridden` is false on edge
 - [ ] Tests for latency override behaviour:
   - Put latency config to file
@@ -2596,7 +2596,7 @@ High-level sequence when user clicks "Get from source" on a latency edge:
 - [ ] Per-scenario visibility state (4-state cycle: F+E → F → E → hidden)
 - [ ] Two-layer edge rendering (inner=evidence, outer=mean)
 - [ ] Edge data model: `p.evidence`, `p.forecast`, `p.mean`, `completeness`
-- [ ] Properties panel: latency settings (track toggle, maturity_days input)
+- [ ] Properties panel: latency settings (track toggle, legacy maturity field input)
 - [ ] Tooltip: data provenance (which sliceDSL contributed)
 - [ ] CI bands on striped portion (extend existing CI logic)
 
@@ -2663,11 +2663,11 @@ The dual-slice retrieval architecture introduces significant complexity that req
 
 | Test Case | Edge Config | Pinned DSL | Expected Behaviour |
 |-----------|-------------|------------|-------------------|
-| Latency edge, cohort only | `maturity_days: 30` | `cohort(-90d:)` | 3-step A-anchored fetch; store `cohort_data` |
-| Latency edge, window only | `maturity_days: 30` | `window(-7d:)` | 2-step X-anchored fetch; store `window_data` |
-| Latency edge, dual slice | `maturity_days: 30` | `or(cohort(-90d:), window(-7d:))` | Both fetches; both data blocks stored |
-| Non-latency edge, cohort | `maturity_days: 0` or undefined | `cohort(-90d:)` | Treat as `window()`; standard fetch |
-| Latency edge, no anchor defined | `maturity_days: 30`, no `anchor.node_id` | `cohort(-90d:)` | Error or fallback to graph START node |
+| Latency edge, cohort only | `legacy maturity field: 30` | `cohort(-90d:)` | 3-step A-anchored fetch; store `cohort_data` |
+| Latency edge, window only | `legacy maturity field: 30` | `window(-7d:)` | 2-step X-anchored fetch; store `window_data` |
+| Latency edge, dual slice | `legacy maturity field: 30` | `or(cohort(-90d:), window(-7d:))` | Both fetches; both data blocks stored |
+| Non-latency edge, cohort | `legacy maturity field: 0` or undefined | `cohort(-90d:)` | Treat as `window()`; standard fetch |
+| Latency edge, no anchor defined | `legacy maturity field: 30`, no `anchor.node_id` | `cohort(-90d:)` | Error or fallback to graph START node |
 
 #### D. Window Aggregation Tests (`windowAggregationService.test.ts`)
 
@@ -2722,7 +2722,7 @@ The dual-slice retrieval architecture introduces significant complexity that req
 | Test Case | Setup | Expected Behaviour |
 |-----------|-------|--------------------|
 | Single edge, good empirical lag | `median_lag_days` and `mean_lag_days` with k ≥ LATENCY_MIN_FIT_CONVERTERS | `p.latency.t95` matches log-normal formula from §5.4.2 |
-| Single edge, poor empirical lag | k < LATENCY_MIN_FIT_CONVERTERS or mean/median outside [LATENCY_MIN_MEAN_MEDIAN_RATIO, LATENCY_MAX_MEAN_MEDIAN_RATIO] | `p.latency.t95` falls back to `maturity_days` |
+| Single edge, poor empirical lag | k < LATENCY_MIN_FIT_CONVERTERS or mean/median outside [LATENCY_MIN_MEAN_MEDIAN_RATIO, LATENCY_MAX_MEAN_MEDIAN_RATIO] | `p.latency.t95` falls back to `legacy maturity field` |
 | Simple path A→X→Y | Edges A→X and X→Y both have persisted `p.latency.t95` | `compute_path_t95_for_all_edges` sums per-edge t95 and stores transient `path_t95` matching §4.7.2 |
 | Scenario with disabled edge | One edge on A→X path inactive under `whatIfDSL` | `path_t95` ignores inactive edge and uses only active edges’ t95 |
 
@@ -2761,7 +2761,7 @@ Given the complexity of dual-slice retrieval, implicit baselines, and path matur
 These tests verify end-to-end behaviour across the full pipeline.
 
 #### Scenario 1: Fresh Latency Edge Setup
-1. Create edge with `latency.maturity_days: 30` (enables latency tracking)
+1. Create edge with `latency.legacy maturity field: 30` (enables latency tracking)
 2. Set pinned DSL to `or(cohort(-90d:), window(-7d:)).context(channel:google)`
 3. Trigger data fetch
 4. **Verify:** Both `cohort_data` and `window_data` blocks present in param file
@@ -2794,7 +2794,7 @@ These tests verify end-to-end behaviour across the full pipeline.
 **Note:** If convolution fallback (Appendix C.2) is not implemented, return an error prompting user to fetch window() data.
 
 #### Scenario 6: Non-Latency Edge with cohort() Query
-1. Load param file for edge with `latency.maturity_days: 0` (tracking disabled)
+1. Load param file for edge with `latency.legacy maturity field: 0` (tracking disabled)
 2. Execute `cohort(-30d:)` query
 3. **Verify:** Treated as `window(-30d:)`
 4. **Verify:** Standard aggregation logic used
@@ -2805,7 +2805,7 @@ These tests verify end-to-end behaviour across the full pipeline.
 |-----------|-------------------|
 | `cohort()` query but no `cohort_data` in param | Error: "Cohort data not available for this edge" |
 | `window()` query on latency edge, no data at all | Error: "No data available for window query" |
-| Negative `maturity_days` | Validation error at edge config time |
+| Negative `legacy maturity field` | Validation error at edge config time |
 | `completeness` > 1.0 calculated | Clamp to 1.0 |
 | Empty cohort window (no rows match) | Return `p = null`, `n = 0`, `k = 0` |
 | Anchor node doesn't exist in graph | Error at fetch time |
@@ -3015,7 +3015,7 @@ Effective H =
 
 ```yaml
 latency:
-  maturity_days: 30
+  legacy maturity field: 30
   recency_half_life_days: 30              # NEW (optional)
   recency_half_life_days_overridden: false # NEW (optional)
 ```
@@ -3286,7 +3286,7 @@ Behavioural contract for when to auto-read from cache vs require explicit fetch:
 **Redux:** `implemented/retrieval-date-logic-redux.md`
 
 Analysis and implementation of retrieval windows, maturity, and staleness decisions:
-- t95 vs maturity_days usage
+- t95 vs legacy maturity field usage
 - path_t95 for downstream edges
 - Horizon and caching decisions
 

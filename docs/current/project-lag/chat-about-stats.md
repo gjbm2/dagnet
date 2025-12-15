@@ -1248,7 +1248,7 @@ export interface MergeOptions {
   
   // === LAG: Latency configuration for forecast recomputation (design.md §3.2) ===
   latencyConfig?: {
-    maturity_days?: number;   // Cohorts younger than this are "immature"
+    legacy maturity field?: number;   // Cohorts younger than this are "immature"
     anchor_node_id?: string;  // Anchor node for cohort queries
     path_t95?: number;        // Cumulative t95 from anchor to this edge's source node
   };
@@ -5518,7 +5518,7 @@ class DataOperationsService {
         start?: string;
         end?: string;
         anchor_event_id?: string;
-        maturity_days?: number;
+        legacy maturity field?: number;
         [key: string]: unknown;
       }
       let requestedCohort: CohortOptions | undefined;
@@ -5529,7 +5529,7 @@ class DataOperationsService {
             start: cohort.start,
             end: cohort.end,
             anchor_event_id: cohort.anchor_event_id,
-            maturity_days: cohort.maturity_days
+            legacy maturity field: cohort.legacy maturity field
           };
           console.log('[DataOps] Using cohort from DSL object:', requestedCohort);
         }
@@ -5603,7 +5603,7 @@ class DataOperationsService {
         const latencyConfig = targetEdgeForPolicy?.p?.latency as LatencyConfig | undefined;
         
         // Check if this edge has latency tracking enabled
-        if (latencyConfig?.maturity_days && latencyConfig.maturity_days > 0) {
+        if (latencyConfig?.legacy maturity field && latencyConfig.legacy maturity field > 0) {
           // Get existing slice for this context/case family
           const existingValues = paramFile?.data?.values as ParameterValue[] | undefined;
           const existingSlice = existingValues?.find(v => {
@@ -5625,7 +5625,7 @@ class DataOperationsService {
           });
           
           console.log('[DataOps:REFETCH_POLICY] Maturity-aware refetch decision:', {
-            maturityDays: latencyConfig.maturity_days,
+            legacy maturity threshold: latencyConfig.legacy maturity field,
             isCohortQuery,
             hasExistingSlice: !!existingSlice,
             policy: refetchPolicy.type,
@@ -5636,9 +5636,9 @@ class DataOperationsService {
           
           sessionLogService.addChild(logOpId, 'info', 'REFETCH_POLICY',
             `Maturity-aware policy: ${refetchPolicy.type}`,
-            `Maturity: ${latencyConfig.maturity_days}d | Mode: ${isCohortQuery ? 'cohort' : 'window'}${refetchPolicy.matureCutoff ? ` | Cutoff: ${refetchPolicy.matureCutoff}` : ''}`,
+            `Maturity: ${latencyConfig.legacy maturity field}d | Mode: ${isCohortQuery ? 'cohort' : 'window'}${refetchPolicy.matureCutoff ? ` | Cutoff: ${refetchPolicy.matureCutoff}` : ''}`,
             {
-              maturityDays: latencyConfig.maturity_days,
+              legacy maturity threshold: latencyConfig.legacy maturity field,
               isCohortQuery,
               policyType: refetchPolicy.type,
               matureCutoff: refetchPolicy.matureCutoff,
@@ -5762,7 +5762,7 @@ class DataOperationsService {
                 requestedWindow,
                 pathT95: effectivePathT95,
                 edgeT95: latencyConfig.t95,
-                maturityDays: latencyConfig.maturity_days,
+                legacy maturity threshold: latencyConfig.legacy maturity field,
               });
               
               if (horizonResult.wasBounded) {
@@ -6955,7 +6955,7 @@ class DataOperationsService {
                       // LAG: Pass latency config for downstream processing (no merge-time forecast derivation).
                       ...(latencyConfigForMerge && {
                         latencyConfig: {
-                          maturity_days: latencyConfigForMerge?.maturity_days,
+                          legacy maturity field: latencyConfigForMerge?.legacy maturity field,
                           anchor_node_id: latencyConfigForMerge?.anchor_node_id,
                         },
                       }),
@@ -8020,10 +8020,10 @@ class DataOperationsService {
         lines.push(`- **File**: \`${paramFileId}\` (${paramFile ? 'exists' : 'missing'})`);
         lines.push(`- **Connection**: ${connectionName ?? '(none)'}`);
         if (latencyConfig) {
-          const md = latencyConfig.maturity_days !== undefined ? `${latencyConfig.maturity_days}d` : '(none)';
+          const md = latencyConfig.legacy maturity field !== undefined ? `${latencyConfig.legacy maturity field}d` : '(none)';
           const t95 = latencyConfig.t95 !== undefined ? `${latencyConfig.t95.toFixed(2)}d` : '(none)';
           const pt95 = latencyConfig.path_t95 !== undefined ? `${latencyConfig.path_t95.toFixed(2)}d` : '(none)';
-          lines.push(`- **Latency config**: maturity_days=${md}; edge.t95=${t95}; graph.path_t95=${pt95}`);
+          lines.push(`- **Latency config**: legacy maturity field=${md}; edge.t95=${t95}; graph.path_t95=${pt95}`);
         } else {
           lines.push(`- **Latency config**: (none)`);
         }
@@ -8093,7 +8093,7 @@ class DataOperationsService {
         });
 
         let refetchPolicy: RefetchDecision | undefined;
-        if (latencyConfig?.maturity_days && latencyConfig.maturity_days > 0) {
+        if (latencyConfig?.legacy maturity field && latencyConfig.legacy maturity field > 0) {
           refetchPolicy = shouldRefetch({
             existingSlice,
             latencyConfig,
@@ -8219,7 +8219,7 @@ class DataOperationsService {
         } else if (refetchPolicy?.type === 'replace_slice') {
           // Replacement fetch (cohort horizon bounding is applied in execution path; simulate it here).
           // For cohort queries, bounding uses path_t95 when available (planner provides it),
-          // otherwise falls back to edge_t95/maturity_days/default.
+          // otherwise falls back to edge_t95/legacy maturity field/default.
           let bounded = requestedWindowISO;
           if (isCohortQuery && latencyConfig) {
             // Prefer the moment-matched estimate if available from cached data in this report.
@@ -8235,7 +8235,7 @@ class DataOperationsService {
               requestedWindow: requestedWindowISO,
               pathT95: effectivePathT95ForBounding,
               edgeT95: latencyConfig.t95,
-              maturityDays: latencyConfig.maturity_days,
+              legacy maturity threshold: latencyConfig.legacy maturity field,
             });
             bounded = horizon.wasBounded ? horizon.boundedWindow : requestedWindowISO;
             horizonSummary = horizon.summary;
@@ -8325,7 +8325,7 @@ class DataOperationsService {
         } else if (isWindowSlice && refetchPolicy?.type === 'partial' && refetchPolicy.refetchWindow) {
           const effectiveMaturityDays = computeEffectiveMaturity(latencyConfig);
           const maturitySource =
-            latencyConfig?.t95 !== undefined && latencyConfig.t95 > 0 ? `t95=${latencyConfig.t95.toFixed(2)}d` : `maturity_days=${latencyConfig?.maturity_days ?? 0}d`;
+            latencyConfig?.t95 !== undefined && latencyConfig.t95 > 0 ? `t95=${latencyConfig.t95.toFixed(2)}d` : `legacy maturity field=${latencyConfig?.legacy maturity field ?? 0}d`;
           immatureWindows.push(refetchPolicy.refetchWindow);
           immaturityExplanation = `window(): latency-aware partial refetch — refresh last ${effectiveMaturityDays + 1}d (effective maturity from ${maturitySource}); cutoff=${refetchPolicy.matureCutoff ?? '(unknown)'}`;
         } else if (isCohortSlice && refetchPolicy?.type === 'replace_slice') {
@@ -8364,7 +8364,7 @@ class DataOperationsService {
             } else if (cohortBoundingPathT95Used?.source === 'graph.path_t95') {
               lines.push(`  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: graph.path_t95)`);
             } else {
-              lines.push(`  - effective path_t95 used for bounding: (none available; horizon uses edge.t95/maturity_days fallbacks)`);
+              lines.push(`  - effective path_t95 used for bounding: (none available; horizon uses edge.t95/legacy maturity field fallbacks)`);
             }
             lines.push(`  - ${horizonSummary ?? '(no horizon summary available)'}`);
             if (!latencyConfig?.path_t95) {
@@ -9552,7 +9552,7 @@ describe('Window Mode: Forecast scalar preservation', () => {
       undefined,
       'api',
       '',
-      { latencyConfig: { maturity_days: 7 } }
+      { latencyConfig: { legacy maturity field: 7 } }
     );
 
     const merged = result.find(v => !isCohortModeValue(v))!;
@@ -9867,21 +9867,21 @@ class SimulatedParamFile {
     id: string;
     type: string;
     values: ParameterValue[];
-    latency?: { maturity_days?: number; anchor_node_id?: string };
+    latency?: { legacy maturity field?: number; anchor_node_id?: string };
   };
   
   constructor(options?: {
     id?: string;
     type?: string;
-    maturity_days?: number;
+    legacy maturity field?: number;
     anchor_node_id?: string;
   }) {
     this.data = {
       id: options?.id ?? 'test-param',
       type: options?.type ?? 'probability',
       values: [],
-      latency: options?.maturity_days ? {
-        maturity_days: options.maturity_days,
+      latency: options?.legacy maturity field ? {
+        legacy maturity field: options.legacy maturity field,
         anchor_node_id: options.anchor_node_id,
       } : undefined,
     };
@@ -9921,7 +9921,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
   
   beforeEach(() => {
     dasRunner = new SimulatedDASRunner({ conversionRate: 0.45, exposuresPerDay: 100 });
-    paramFile = new SimulatedParamFile({ maturity_days: 7, anchor_node_id: 'start-node' });
+    paramFile = new SimulatedParamFile({ legacy maturity field: 7, anchor_node_id: 'start-node' });
   });
   
   it('initial fetch captures full window (all immature)', () => {
@@ -9932,7 +9932,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
     // Policy decision
     const decision = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { legacy maturity field: 7 },
       requestedWindow,
       isCohortQuery: false,
       referenceDate,
@@ -9969,7 +9969,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
       undefined,
       'api',
       '',
-      { latencyConfig: { maturity_days: 7 } }
+      { latencyConfig: { legacy maturity field: 7 } }
     );
     
     paramFile.setValues(newValues);
@@ -9999,7 +9999,7 @@ describe('Scenario 1: Progressive Window Maturity', () => {
     // Policy decision
     const decision = shouldRefetch({
       existingSlice: paramFile.values[0],
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { legacy maturity field: 7 },
       requestedWindow,
       isCohortQuery: false,
       referenceDate: laterDate,
@@ -10047,7 +10047,7 @@ describe('Scenario 2: Cohort Slice Replacement', () => {
   
   beforeEach(() => {
     dasRunner = new SimulatedDASRunner({ conversionRate: 0.5 });
-    paramFile = new SimulatedParamFile({ maturity_days: 14, anchor_node_id: 'cohort-anchor' });
+    paramFile = new SimulatedParamFile({ legacy maturity field: 14, anchor_node_id: 'cohort-anchor' });
   });
   
   it('cohort fetch creates cohort value with anchor in sliceDSL', () => {
@@ -10137,7 +10137,7 @@ describe('Scenario 2: Cohort Slice Replacement', () => {
     
     const decision = shouldRefetch({
       existingSlice: cohortVal,
-      latencyConfig: { maturity_days: 14 },
+      latencyConfig: { legacy maturity field: 14 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(20) },
       isCohortQuery: true,
       referenceDate: REFERENCE_DATE,
@@ -10153,25 +10153,25 @@ describe('Scenario 2: Cohort Slice Replacement', () => {
 
 describe('Scenario 3: t95-Driven Maturity', () => {
   /**
-   * As we collect more data, t95 becomes available and replaces maturity_days.
+   * As we collect more data, t95 becomes available and replaces legacy maturity field.
    * 
    * This scenario tests:
-   * - Initial fetches use maturity_days (t95 not yet computed)
+   * - Initial fetches use legacy maturity field (t95 not yet computed)
    * - After sufficient data, t95 is computed
    * - Subsequent policy decisions use t95
    */
   
-  it('first fetch: no t95, uses maturity_days', () => {
+  it('first fetch: no t95, uses legacy maturity field', () => {
     const decision = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7, t95: undefined },
+      latencyConfig: { legacy maturity field: 7, t95: undefined },
       requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
     });
     
     expect(decision.type).toBe('partial');
-    // Cutoff based on maturity_days = 8 days ago
+    // Cutoff based on legacy maturity field = 8 days ago
     expect(decision.matureCutoff).toBe(daysAgo(8));
   });
   
@@ -10188,7 +10188,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
       undefined,
       'api',
       '',
-      { latencyConfig: { maturity_days: 7 } }
+      { latencyConfig: { legacy maturity field: 7 } }
     );
     
     // Merge should still produce a canonical slice with dates/n/k/mean; no LAG stats.
@@ -10200,7 +10200,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
     // Simulate having t95 = 12 days
     const decision = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7, t95: 12 },
+      latencyConfig: { legacy maturity field: 7, t95: 12 },
       requestedWindow: { start: daysAgo(20), end: daysAgo(0) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
@@ -10221,7 +10221,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
     // With small t95
     const decision1 = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7, t95: smallT95 },
+      latencyConfig: { legacy maturity field: 7, t95: smallT95 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
@@ -10232,7 +10232,7 @@ describe('Scenario 3: t95-Driven Maturity', () => {
     // With large t95
     const decision2 = shouldRefetch({
       existingSlice: undefined,
-      latencyConfig: { maturity_days: 7, t95: largeT95 },
+      latencyConfig: { legacy maturity field: 7, t95: largeT95 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(0) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
@@ -10279,7 +10279,7 @@ describe('Scenario 4: Dual-Slice Interaction', () => {
       undefined,
       'api',
       '',
-      { latencyConfig: { maturity_days: 7 } }
+      { latencyConfig: { legacy maturity field: 7 } }
     );
     
     // Create cohort slice
@@ -10456,7 +10456,7 @@ describe('Scenario 5: Context-Segregated Slices', () => {
     // UK window query: should be gaps_only (mature window data)
     const ukDecision = shouldRefetch({
       existingSlice: ukSlice,
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { legacy maturity field: 7 },
       requestedWindow: { start: daysAgo(30), end: daysAgo(20) },
       isCohortQuery: false,
       referenceDate: REFERENCE_DATE,
@@ -10466,7 +10466,7 @@ describe('Scenario 5: Context-Segregated Slices', () => {
     // US cohort query: should need replace_slice (immature cohort)
     const usDecision = shouldRefetch({
       existingSlice: usSlice,
-      latencyConfig: { maturity_days: 7 },
+      latencyConfig: { legacy maturity field: 7 },
       requestedWindow: { start: daysAgo(60), end: daysAgo(0) },
       isCohortQuery: true,
       referenceDate: REFERENCE_DATE,
@@ -10963,7 +10963,7 @@ export class UpdateManager {
         // - Latency edges: NEVER clobber an existing baseline forecast during rebalance.
         //   If forecast is missing, set a fallback so F mode can still render.
         const edgeP = nextGraph.edges[item.index].p;
-        const isLatencyEdge = !!(edgeP?.latency?.maturity_days && edgeP.latency.maturity_days > 0);
+        const isLatencyEdge = !!(edgeP?.latency?.legacy maturity field && edgeP.latency.legacy maturity field > 0);
         if (!edgeP.forecast) {
           edgeP.forecast = {};
         }
@@ -12253,10 +12253,10 @@ export class UpdateManager {
       
       // LAG: Latency CONFIG fields (graph → file, bidirectional)
       { 
-        sourceField: 'p.latency.maturity_days', 
-        targetField: 'latency.maturity_days',
-        overrideFlag: 'p.latency.maturity_days_overridden',
-        condition: (source) => source.p?.latency?.maturity_days !== undefined && source.p?.id
+        sourceField: 'p.latency.legacy maturity field', 
+        targetField: 'latency.legacy maturity field',
+        overrideFlag: 'p.latency.legacy maturity override',
+        condition: (source) => source.p?.latency?.legacy maturity field !== undefined && source.p?.id
       },
       { 
         sourceField: 'p.latency.anchor_node_id', 
@@ -12649,9 +12649,9 @@ export class UpdateManager {
       
       // LAG: Latency CONFIG fields (file → graph, bidirectional)
       { 
-        sourceField: 'latency.maturity_days', 
-        targetField: 'p.latency.maturity_days',
-        overrideFlag: 'p.latency.maturity_days_overridden',
+        sourceField: 'latency.legacy maturity field', 
+        targetField: 'p.latency.legacy maturity field',
+        overrideFlag: 'p.latency.legacy maturity override',
         condition: isProbType
       },
       { 
@@ -16933,10 +16933,10 @@ export class UpdateManager {
       
       // LAG: Latency CONFIG fields (graph → file, bidirectional)
       { 
-        sourceField: 'p.latency.maturity_days', 
-        targetField: 'latency.maturity_days',
-        overrideFlag: 'p.latency.maturity_days_overridden',
-        condition: (source) => source.p?.latency?.maturity_days !== undefined && source.p?.id
+        sourceField: 'p.latency.legacy maturity field', 
+        targetField: 'latency.legacy maturity field',
+        overrideFlag: 'p.latency.legacy maturity override',
+        condition: (source) => source.p?.latency?.legacy maturity field !== undefined && source.p?.id
       },
       { 
         sourceField: 'p.latency.anchor_node_id', 
@@ -17329,9 +17329,9 @@ export class UpdateManager {
       
       // LAG: Latency CONFIG fields (file → graph, bidirectional)
       { 
-        sourceField: 'latency.maturity_days', 
-        targetField: 'p.latency.maturity_days',
-        overrideFlag: 'p.latency.maturity_days_overridden',
+        sourceField: 'latency.legacy maturity field', 
+        targetField: 'p.latency.legacy maturity field',
+        overrideFlag: 'p.latency.legacy maturity override',
         condition: isProbType
       },
       { 
@@ -21802,10 +21802,10 @@ export class UpdateManager {
       
       // LAG: Latency CONFIG fields (graph → file, bidirectional)
       { 
-        sourceField: 'p.latency.maturity_days', 
-        targetField: 'latency.maturity_days',
-        overrideFlag: 'p.latency.maturity_days_overridden',
-        condition: (source) => source.p?.latency?.maturity_days !== undefined && source.p?.id
+        sourceField: 'p.latency.legacy maturity field', 
+        targetField: 'latency.legacy maturity field',
+        overrideFlag: 'p.latency.legacy maturity override',
+        condition: (source) => source.p?.latency?.legacy maturity field !== undefined && source.p?.id
       },
       { 
         sourceField: 'p.latency.anchor_node_id', 
@@ -22198,9 +22198,9 @@ export class UpdateManager {
       
       // LAG: Latency CONFIG fields (file → graph, bidirectional)
       { 
-        sourceField: 'latency.maturity_days', 
-        targetField: 'p.latency.maturity_days',
-        overrideFlag: 'p.latency.maturity_days_overridden',
+        sourceField: 'latency.legacy maturity field', 
+        targetField: 'p.latency.legacy maturity field',
+        overrideFlag: 'p.latency.legacy maturity override',
         condition: isProbType
       },
       { 
@@ -26377,7 +26377,7 @@ export interface CohortData {
  * but we *do* have a stable forecast baseline from the window() slice.
  *
  * For each cohort:
- * - If age >= maturityDays: k̂ = k
+ * - If age >= legacy maturity threshold: k̂ = k
  * - Else:                 k̂ = k + (n - k) * p_forecast
  *
  * Then p.mean = Σk̂ / Σn
@@ -26385,10 +26385,10 @@ export interface CohortData {
 function computeFormulaAMeanFromCohorts(
   cohorts: CohortData[],
   forecastMean: number | undefined,
-  maturityDays: number
+  legacy maturity threshold: number
 ): number | undefined {
   if (forecastMean === undefined || !Number.isFinite(forecastMean)) return undefined;
-  if (!Number.isFinite(maturityDays) || maturityDays <= 0) return undefined;
+  if (!Number.isFinite(legacy maturity threshold) || legacy maturity threshold <= 0) return undefined;
 
   let totalN = 0;
   let totalKHat = 0;
@@ -26399,7 +26399,7 @@ function computeFormulaAMeanFromCohorts(
     const k = c.k ?? 0;
     const age = c.age ?? 0;
 
-    const kHat = age >= maturityDays ? k : k + (n - k) * forecastMean;
+    const kHat = age >= legacy maturity threshold ? k : k + (n - k) * forecastMean;
     totalN += n;
     totalKHat += kHat;
   }
@@ -26758,15 +26758,15 @@ export function fitLagDistribution(
  * This is the time by which 95% of eventual converters have converted.
  * 
  * @param fit - Fitted distribution
- * @param maturityDays - Fallback if fit is not valid
+ * @param legacy maturity threshold - Fallback if fit is not valid
  * @returns t95 in days
  */
-export function computeT95(fit: LagDistributionFit, maturityDays: number): number {
+export function computeT95(fit: LagDistributionFit, legacy maturity threshold: number): number {
   if (fit.empirical_quality_ok) {
     return logNormalInverseCDF(LATENCY_T95_PERCENTILE, fit.mu, fit.sigma);
   }
   // Fallback to user-configured maturity days
-  return maturityDays;
+  return legacy maturity threshold;
 }
 
 /**
@@ -26946,7 +26946,7 @@ export function applyFormulaA(
  * @param cohorts - Array of cohort data
  * @param pInfinity - Asymptotic probability (from mature cohorts)
  * @param fit - Fitted lag distribution
- * @param maturityDays - Fallback maturity threshold
+ * @param legacy maturity threshold - Fallback maturity threshold
  * @param includeDetails - Whether to include per-cohort breakdown
  * @returns Formula A result with p_mean, completeness, t95
  */
@@ -26954,11 +26954,11 @@ export function applyFormulaAToAll(
   cohorts: CohortData[],
   pInfinity: number,
   fit: LagDistributionFit,
-  maturityDays: number,
+  legacy maturity threshold: number,
   includeDetails: boolean = false
 ): FormulaAResult {
   const { mu, sigma } = fit;
-  const t95 = computeT95(fit, maturityDays);
+  const t95 = computeT95(fit, legacy maturity threshold);
 
   let totalN = 0;
   let totalKHat = 0;
@@ -27080,7 +27080,7 @@ export function calculateCompleteness(
  * @param cohorts - Per-cohort data array (may include anchor_median_lag_days)
  * @param aggregateMedianLag - Weighted aggregate median lag for this edge
  * @param aggregateMeanLag - Weighted aggregate mean lag (optional)
- * @param maturityDays - User-configured maturity threshold
+ * @param legacy maturity threshold - User-configured maturity threshold
  * @param anchorMedianLag - Observed median lag from anchor to this edge's source (for downstream edges).
  *                          Use 0 for first latency edge from anchor. This is the central tendency
  *                          of cumulative upstream lag, NOT path_t95.
@@ -27090,7 +27090,7 @@ export function computeEdgeLatencyStats(
   cohorts: CohortData[],
   aggregateMedianLag: number,
   aggregateMeanLag: number | undefined,
-  maturityDays: number,
+  legacy maturity threshold: number,
   anchorMedianLag: number = 0,
   fitTotalKOverride?: number,
   pInfinityCohortsOverride?: CohortData[]
@@ -27105,7 +27105,7 @@ export function computeEdgeLatencyStats(
     cohortsCount: cohorts.length,
     aggregateMedianLag,
     aggregateMeanLag,
-    maturityDays,
+    legacy maturity threshold,
     anchorMedianLag,
     totalK,
     fitTotalK,
@@ -27164,7 +27164,7 @@ export function computeEdgeLatencyStats(
   });
 
   // Step 2: Compute t95
-  const t95 = computeT95(fit, maturityDays);
+  const t95 = computeT95(fit, legacy maturity threshold);
 
   // Step 3: Estimate p_infinity from mature cohorts
   // NOTE: Use ORIGINAL cohorts for p_infinity estimation (raw age determines maturity)
@@ -27189,7 +27189,7 @@ export function computeEdgeLatencyStats(
 
   // Step 4: Apply Formula A
   // Use ADJUSTED cohorts for completeness calculation
-  const result = applyFormulaAToAll(adjustedCohorts, pInfinityEstimate, fit, maturityDays);
+  const result = applyFormulaAToAll(adjustedCohorts, pInfinityEstimate, fit, legacy maturity threshold);
 
   return {
     fit,
@@ -27220,7 +27220,7 @@ export interface GraphEdgeForPath {
     /** Forecast population for this edge under the current DSL (inbound-n result). */
     n?: number;
     latency?: {
-      maturity_days?: number;
+      legacy maturity field?: number;
       t95?: number;
       path_t95?: number;
       median_lag_days?: number;
@@ -27543,12 +27543,12 @@ export function computePathT95(
     const outgoing = adjacency.get(nodeId) || [];
     for (const edge of outgoing) {
       const edgeId = getEdgeId(edge);
-      // Fallback chain: t95 (accurate) → maturity_days (conservative) → 0
+      // Fallback chain: t95 (accurate) → legacy maturity field (conservative) → 0
       // This handles different data sufficiency conditions:
       // - Full data: Uses actual t95 from fitted distribution
-      // - Partial data: Uses user-configured maturity_days as approximation
+      // - Partial data: Uses user-configured legacy maturity field as approximation
       // - No data: Contributes 0 (edge has no latency tracking)
-      const edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.maturity_days ?? 0;
+      const edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.legacy maturity field ?? 0;
 
       // path_t95 for this edge = path to source node + edge's own t95
       const edgePathT95 = nodePathT95 + edgeT95;
@@ -27877,18 +27877,18 @@ export function enhanceGraphLatencies(
       result.edgesProcessed++;
 
       // Get maturity config and path_t95 for classification
-      const maturityDays = edge.p?.latency?.maturity_days;
+      const legacy maturity threshold = edge.p?.latency?.legacy maturity field;
       const edgePrecomputedPathT95 = precomputedPathT95.get(edgeId) ?? 0;
       // Normalize edge.to for queue/inDegree operations
       const toNodeId = normalizeNodeRef(edge.to);
       
       // COHORT-VIEW: An edge needs LAG treatment if it has local latency OR
       // is downstream of latency edges (path_t95 > 0).
-      const hasLocalLatency = maturityDays !== undefined && maturityDays > 0;
+      const hasLocalLatency = legacy maturity threshold !== undefined && legacy maturity threshold > 0;
       const isBehindLaggedPath = edgePrecomputedPathT95 > 0;
       
       if (!hasLocalLatency && !isBehindLaggedPath) {
-        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, maturityDays, edgePrecomputedPathT95 });
+        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, legacy maturity threshold, edgePrecomputedPathT95 });
         // Truly simple edge: no latency config AND no upstream lag
         // Skip LAG computation but update topo state
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
@@ -27901,7 +27901,7 @@ export function enhanceGraphLatencies(
       
       // Effective maturity: local config if available, else use path_t95 as fallback
       // This handles edges downstream of latency edges that have no local config.
-      const effectiveMaturity = hasLocalLatency ? maturityDays : edgePrecomputedPathT95;
+      const effectiveMaturity = hasLocalLatency ? legacy maturity threshold : edgePrecomputedPathT95;
 
       // Get parameter values for this edge
       const paramValues = paramLookup.get(edgeId);
@@ -27923,7 +27923,7 @@ export function enhanceGraphLatencies(
       // - cohortsAll:    used for fitting lag distributions (t95) and path_t95 estimation
       //
       // Rationale: Narrow cohort windows (e.g. 3–4 days) often have k≈0, which would
-      // force the fit to fail and make t95/path_t95 fall back to maturity_days / topo sums.
+      // force the fit to fail and make t95/path_t95 fall back to legacy maturity field / topo sums.
       // That produces "stuck" persisted path_t95 values like 46.66d even when the file
       // contains rich anchor_* + lag data that yields a stable moment-matched estimate.
       const cohortsScoped = helpers.aggregateCohortData(paramValues, queryDate, cohortWindow);
@@ -27941,7 +27941,7 @@ export function enhanceGraphLatencies(
       console.log('[LAG_TOPO_PROCESS] edge:', { 
         edgeId, 
         hasLocalLatency, 
-        maturityDays, 
+        legacy maturity threshold, 
         effectiveMaturity, 
         cohortsCount: cohortsScoped.length,
         cohortsAllCount: cohortsAll.length
@@ -28231,7 +28231,7 @@ export function enhanceGraphLatencies(
       // IMPORTANT:
       // - This is the ONLY place where FORECAST_BLEND_LAMBDA should affect p.mean.
       // - If blend inputs are missing, fall back to a conservative cohort-tail estimate
-      //   (maturityDays cutoff) so we still produce a stable p.mean for latency edges.
+      //   (legacy maturity threshold cutoff) so we still produce a stable p.mean for latency edges.
       //
       const blendedMean =
         (forecastMean !== undefined && Number.isFinite(forecastMean))
@@ -28592,7 +28592,7 @@ and how the fuck didn't our testing spot it????
 We had **two different “blend” concepts**, and the main path was using the wrong one:
 
 - **λ‑blend exists** (`computeBlendedMean`) and is documented as the “single source of truth”, but it was **never called anywhere**.
-- The LAG topo pass (`enhanceGraphLatencies`) was instead computing `p.mean` via **`computeFormulaAMeanFromCohorts()`** — which is basically “if immature, fill tail with `forecastMean` after `maturityDays`”, **no λ, no `nBaseline`, no soft evidence weighting**.
+- The LAG topo pass (`enhanceGraphLatencies`) was instead computing `p.mean` via **`computeFormulaAMeanFromCohorts()`** — which is basically “if immature, fill tail with `forecastMean` after `legacy maturity threshold`”, **no λ, no `nBaseline`, no soft evidence weighting**.
 
 So changing `FORECAST_BLEND_LAMBDA` did nothing because the runtime path for your analysis never referenced it.
 
@@ -29009,7 +29009,7 @@ export interface CohortData {
  * but we *do* have a stable forecast baseline from the window() slice.
  *
  * For each cohort:
- * - If age >= maturityDays: k̂ = k
+ * - If age >= legacy maturity threshold: k̂ = k
  * - Else:                 k̂ = k + (n - k) * p_forecast
  *
  * Then p.mean = Σk̂ / Σn
@@ -29017,10 +29017,10 @@ export interface CohortData {
 function computeFormulaAMeanFromCohorts(
   cohorts: CohortData[],
   forecastMean: number | undefined,
-  maturityDays: number
+  legacy maturity threshold: number
 ): number | undefined {
   if (forecastMean === undefined || !Number.isFinite(forecastMean)) return undefined;
-  if (!Number.isFinite(maturityDays) || maturityDays <= 0) return undefined;
+  if (!Number.isFinite(legacy maturity threshold) || legacy maturity threshold <= 0) return undefined;
 
   let totalN = 0;
   let totalKHat = 0;
@@ -29031,7 +29031,7 @@ function computeFormulaAMeanFromCohorts(
     const k = c.k ?? 0;
     const age = c.age ?? 0;
 
-    const kHat = age >= maturityDays ? k : k + (n - k) * forecastMean;
+    const kHat = age >= legacy maturity threshold ? k : k + (n - k) * forecastMean;
     totalN += n;
     totalKHat += kHat;
   }
@@ -29390,15 +29390,15 @@ export function fitLagDistribution(
  * This is the time by which 95% of eventual converters have converted.
  * 
  * @param fit - Fitted distribution
- * @param maturityDays - Fallback if fit is not valid
+ * @param legacy maturity threshold - Fallback if fit is not valid
  * @returns t95 in days
  */
-export function computeT95(fit: LagDistributionFit, maturityDays: number): number {
+export function computeT95(fit: LagDistributionFit, legacy maturity threshold: number): number {
   if (fit.empirical_quality_ok) {
     return logNormalInverseCDF(LATENCY_T95_PERCENTILE, fit.mu, fit.sigma);
   }
   // Fallback to user-configured maturity days
-  return maturityDays;
+  return legacy maturity threshold;
 }
 
 /**
@@ -29578,7 +29578,7 @@ export function applyFormulaA(
  * @param cohorts - Array of cohort data
  * @param pInfinity - Asymptotic probability (from mature cohorts)
  * @param fit - Fitted lag distribution
- * @param maturityDays - Fallback maturity threshold
+ * @param legacy maturity threshold - Fallback maturity threshold
  * @param includeDetails - Whether to include per-cohort breakdown
  * @returns Formula A result with p_mean, completeness, t95
  */
@@ -29586,11 +29586,11 @@ export function applyFormulaAToAll(
   cohorts: CohortData[],
   pInfinity: number,
   fit: LagDistributionFit,
-  maturityDays: number,
+  legacy maturity threshold: number,
   includeDetails: boolean = false
 ): FormulaAResult {
   const { mu, sigma } = fit;
-  const t95 = computeT95(fit, maturityDays);
+  const t95 = computeT95(fit, legacy maturity threshold);
 
   let totalN = 0;
   let totalKHat = 0;
@@ -29712,7 +29712,7 @@ export function calculateCompleteness(
  * @param cohorts - Per-cohort data array (may include anchor_median_lag_days)
  * @param aggregateMedianLag - Weighted aggregate median lag for this edge
  * @param aggregateMeanLag - Weighted aggregate mean lag (optional)
- * @param maturityDays - User-configured maturity threshold
+ * @param legacy maturity threshold - User-configured maturity threshold
  * @param anchorMedianLag - Observed median lag from anchor to this edge's source (for downstream edges).
  *                          Use 0 for first latency edge from anchor. This is the central tendency
  *                          of cumulative upstream lag, NOT path_t95.
@@ -29722,7 +29722,7 @@ export function computeEdgeLatencyStats(
   cohorts: CohortData[],
   aggregateMedianLag: number,
   aggregateMeanLag: number | undefined,
-  maturityDays: number,
+  legacy maturity threshold: number,
   anchorMedianLag: number = 0,
   fitTotalKOverride?: number,
   pInfinityCohortsOverride?: CohortData[]
@@ -29737,7 +29737,7 @@ export function computeEdgeLatencyStats(
     cohortsCount: cohorts.length,
     aggregateMedianLag,
     aggregateMeanLag,
-    maturityDays,
+    legacy maturity threshold,
     anchorMedianLag,
     totalK,
     fitTotalK,
@@ -29796,7 +29796,7 @@ export function computeEdgeLatencyStats(
   });
 
   // Step 2: Compute t95
-  const t95 = computeT95(fit, maturityDays);
+  const t95 = computeT95(fit, legacy maturity threshold);
 
   // Step 3: Estimate p_infinity from mature cohorts
   // NOTE: Use ORIGINAL cohorts for p_infinity estimation (raw age determines maturity)
@@ -29821,7 +29821,7 @@ export function computeEdgeLatencyStats(
 
   // Step 4: Apply Formula A
   // Use ADJUSTED cohorts for completeness calculation
-  const result = applyFormulaAToAll(adjustedCohorts, pInfinityEstimate, fit, maturityDays);
+  const result = applyFormulaAToAll(adjustedCohorts, pInfinityEstimate, fit, legacy maturity threshold);
 
   return {
     fit,
@@ -29852,7 +29852,7 @@ export interface GraphEdgeForPath {
     /** Forecast population for this edge under the current DSL (inbound-n result). */
     n?: number;
     latency?: {
-      maturity_days?: number;
+      legacy maturity field?: number;
       t95?: number;
       path_t95?: number;
       median_lag_days?: number;
@@ -30175,12 +30175,12 @@ export function computePathT95(
     const outgoing = adjacency.get(nodeId) || [];
     for (const edge of outgoing) {
       const edgeId = getEdgeId(edge);
-      // Fallback chain: t95 (accurate) → maturity_days (conservative) → 0
+      // Fallback chain: t95 (accurate) → legacy maturity field (conservative) → 0
       // This handles different data sufficiency conditions:
       // - Full data: Uses actual t95 from fitted distribution
-      // - Partial data: Uses user-configured maturity_days as approximation
+      // - Partial data: Uses user-configured legacy maturity field as approximation
       // - No data: Contributes 0 (edge has no latency tracking)
-      const edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.maturity_days ?? 0;
+      const edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.legacy maturity field ?? 0;
 
       // path_t95 for this edge = path to source node + edge's own t95
       const edgePathT95 = nodePathT95 + edgeT95;
@@ -30509,18 +30509,18 @@ export function enhanceGraphLatencies(
       result.edgesProcessed++;
 
       // Get maturity config and path_t95 for classification
-      const maturityDays = edge.p?.latency?.maturity_days;
+      const legacy maturity threshold = edge.p?.latency?.legacy maturity field;
       const edgePrecomputedPathT95 = precomputedPathT95.get(edgeId) ?? 0;
       // Normalize edge.to for queue/inDegree operations
       const toNodeId = normalizeNodeRef(edge.to);
       
       // COHORT-VIEW: An edge needs LAG treatment if it has local latency OR
       // is downstream of latency edges (path_t95 > 0).
-      const hasLocalLatency = maturityDays !== undefined && maturityDays > 0;
+      const hasLocalLatency = legacy maturity threshold !== undefined && legacy maturity threshold > 0;
       const isBehindLaggedPath = edgePrecomputedPathT95 > 0;
       
       if (!hasLocalLatency && !isBehindLaggedPath) {
-        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, maturityDays, edgePrecomputedPathT95 });
+        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, legacy maturity threshold, edgePrecomputedPathT95 });
         // Truly simple edge: no latency config AND no upstream lag
         // Skip LAG computation but update topo state
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
@@ -30533,7 +30533,7 @@ export function enhanceGraphLatencies(
       
       // Effective maturity: local config if available, else use path_t95 as fallback
       // This handles edges downstream of latency edges that have no local config.
-      const effectiveMaturity = hasLocalLatency ? maturityDays : edgePrecomputedPathT95;
+      const effectiveMaturity = hasLocalLatency ? legacy maturity threshold : edgePrecomputedPathT95;
 
       // Get parameter values for this edge
       const paramValues = paramLookup.get(edgeId);
@@ -30555,7 +30555,7 @@ export function enhanceGraphLatencies(
       // - cohortsAll:    used for fitting lag distributions (t95) and path_t95 estimation
       //
       // Rationale: Narrow cohort windows (e.g. 3–4 days) often have k≈0, which would
-      // force the fit to fail and make t95/path_t95 fall back to maturity_days / topo sums.
+      // force the fit to fail and make t95/path_t95 fall back to legacy maturity field / topo sums.
       // That produces "stuck" persisted path_t95 values like 46.66d even when the file
       // contains rich anchor_* + lag data that yields a stable moment-matched estimate.
       const cohortsScoped = helpers.aggregateCohortData(paramValues, queryDate, cohortWindow);
@@ -30573,7 +30573,7 @@ export function enhanceGraphLatencies(
       console.log('[LAG_TOPO_PROCESS] edge:', { 
         edgeId, 
         hasLocalLatency, 
-        maturityDays, 
+        legacy maturity threshold, 
         effectiveMaturity, 
         cohortsCount: cohortsScoped.length,
         cohortsAllCount: cohortsAll.length
@@ -30869,7 +30869,7 @@ export function enhanceGraphLatencies(
       // IMPORTANT:
       // - This is the ONLY place where FORECAST_BLEND_LAMBDA should affect p.mean.
       // - If blend inputs are missing, fall back to a conservative cohort-tail estimate
-      //   (maturityDays cutoff) so we still produce a stable p.mean for latency edges.
+      //   (legacy maturity threshold cutoff) so we still produce a stable p.mean for latency edges.
       //
       const blendedMean =
         (forecastMean !== undefined && Number.isFinite(forecastMean))
@@ -31629,7 +31629,7 @@ export interface CohortData {
  * but we *do* have a stable forecast baseline from the window() slice.
  *
  * For each cohort:
- * - If age >= maturityDays: k̂ = k
+ * - If age >= legacy maturity threshold: k̂ = k
  * - Else:                 k̂ = k + (n - k) * p_forecast
  *
  * Then p.mean = Σk̂ / Σn
@@ -31637,10 +31637,10 @@ export interface CohortData {
 function computeFormulaAMeanFromCohorts(
   cohorts: CohortData[],
   forecastMean: number | undefined,
-  maturityDays: number
+  legacy maturity threshold: number
 ): number | undefined {
   if (forecastMean === undefined || !Number.isFinite(forecastMean)) return undefined;
-  if (!Number.isFinite(maturityDays) || maturityDays <= 0) return undefined;
+  if (!Number.isFinite(legacy maturity threshold) || legacy maturity threshold <= 0) return undefined;
 
   let totalN = 0;
   let totalKHat = 0;
@@ -31651,7 +31651,7 @@ function computeFormulaAMeanFromCohorts(
     const k = c.k ?? 0;
     const age = c.age ?? 0;
 
-    const kHat = age >= maturityDays ? k : k + (n - k) * forecastMean;
+    const kHat = age >= legacy maturity threshold ? k : k + (n - k) * forecastMean;
     totalN += n;
     totalKHat += kHat;
   }
@@ -32010,15 +32010,15 @@ export function fitLagDistribution(
  * This is the time by which 95% of eventual converters have converted.
  * 
  * @param fit - Fitted distribution
- * @param maturityDays - Fallback if fit is not valid
+ * @param legacy maturity threshold - Fallback if fit is not valid
  * @returns t95 in days
  */
-export function computeT95(fit: LagDistributionFit, maturityDays: number): number {
+export function computeT95(fit: LagDistributionFit, legacy maturity threshold: number): number {
   if (fit.empirical_quality_ok) {
     return logNormalInverseCDF(LATENCY_T95_PERCENTILE, fit.mu, fit.sigma);
   }
   // Fallback to user-configured maturity days
-  return maturityDays;
+  return legacy maturity threshold;
 }
 
 /**
@@ -32198,7 +32198,7 @@ export function applyFormulaA(
  * @param cohorts - Array of cohort data
  * @param pInfinity - Asymptotic probability (from mature cohorts)
  * @param fit - Fitted lag distribution
- * @param maturityDays - Fallback maturity threshold
+ * @param legacy maturity threshold - Fallback maturity threshold
  * @param includeDetails - Whether to include per-cohort breakdown
  * @returns Formula A result with p_mean, completeness, t95
  */
@@ -32206,11 +32206,11 @@ export function applyFormulaAToAll(
   cohorts: CohortData[],
   pInfinity: number,
   fit: LagDistributionFit,
-  maturityDays: number,
+  legacy maturity threshold: number,
   includeDetails: boolean = false
 ): FormulaAResult {
   const { mu, sigma } = fit;
-  const t95 = computeT95(fit, maturityDays);
+  const t95 = computeT95(fit, legacy maturity threshold);
 
   let totalN = 0;
   let totalKHat = 0;
@@ -32332,7 +32332,7 @@ export function calculateCompleteness(
  * @param cohorts - Per-cohort data array (may include anchor_median_lag_days)
  * @param aggregateMedianLag - Weighted aggregate median lag for this edge
  * @param aggregateMeanLag - Weighted aggregate mean lag (optional)
- * @param maturityDays - User-configured maturity threshold
+ * @param legacy maturity threshold - User-configured maturity threshold
  * @param anchorMedianLag - Observed median lag from anchor to this edge's source (for downstream edges).
  *                          Use 0 for first latency edge from anchor. This is the central tendency
  *                          of cumulative upstream lag, NOT path_t95.
@@ -32342,7 +32342,7 @@ export function computeEdgeLatencyStats(
   cohorts: CohortData[],
   aggregateMedianLag: number,
   aggregateMeanLag: number | undefined,
-  maturityDays: number,
+  legacy maturity threshold: number,
   anchorMedianLag: number = 0,
   fitTotalKOverride?: number,
   pInfinityCohortsOverride?: CohortData[]
@@ -32357,7 +32357,7 @@ export function computeEdgeLatencyStats(
     cohortsCount: cohorts.length,
     aggregateMedianLag,
     aggregateMeanLag,
-    maturityDays,
+    legacy maturity threshold,
     anchorMedianLag,
     totalK,
     fitTotalK,
@@ -32416,7 +32416,7 @@ export function computeEdgeLatencyStats(
   });
 
   // Step 2: Compute t95
-  const t95 = computeT95(fit, maturityDays);
+  const t95 = computeT95(fit, legacy maturity threshold);
 
   // Step 3: Estimate p_infinity from mature cohorts
   // NOTE: Use ORIGINAL cohorts for p_infinity estimation (raw age determines maturity)
@@ -32441,7 +32441,7 @@ export function computeEdgeLatencyStats(
 
   // Step 4: Apply Formula A
   // Use ADJUSTED cohorts for completeness calculation
-  const result = applyFormulaAToAll(adjustedCohorts, pInfinityEstimate, fit, maturityDays);
+  const result = applyFormulaAToAll(adjustedCohorts, pInfinityEstimate, fit, legacy maturity threshold);
 
   return {
     fit,
@@ -32472,7 +32472,7 @@ export interface GraphEdgeForPath {
     /** Forecast population for this edge under the current DSL (inbound-n result). */
     n?: number;
     latency?: {
-      maturity_days?: number;
+      legacy maturity field?: number;
       t95?: number;
       path_t95?: number;
       median_lag_days?: number;
@@ -32795,12 +32795,12 @@ export function computePathT95(
     const outgoing = adjacency.get(nodeId) || [];
     for (const edge of outgoing) {
       const edgeId = getEdgeId(edge);
-      // Fallback chain: t95 (accurate) → maturity_days (conservative) → 0
+      // Fallback chain: t95 (accurate) → legacy maturity field (conservative) → 0
       // This handles different data sufficiency conditions:
       // - Full data: Uses actual t95 from fitted distribution
-      // - Partial data: Uses user-configured maturity_days as approximation
+      // - Partial data: Uses user-configured legacy maturity field as approximation
       // - No data: Contributes 0 (edge has no latency tracking)
-      const edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.maturity_days ?? 0;
+      const edgeT95 = edge.p?.latency?.t95 ?? edge.p?.latency?.legacy maturity field ?? 0;
 
       // path_t95 for this edge = path to source node + edge's own t95
       const edgePathT95 = nodePathT95 + edgeT95;
@@ -33129,18 +33129,18 @@ export function enhanceGraphLatencies(
       result.edgesProcessed++;
 
       // Get maturity config and path_t95 for classification
-      const maturityDays = edge.p?.latency?.maturity_days;
+      const legacy maturity threshold = edge.p?.latency?.legacy maturity field;
       const edgePrecomputedPathT95 = precomputedPathT95.get(edgeId) ?? 0;
       // Normalize edge.to for queue/inDegree operations
       const toNodeId = normalizeNodeRef(edge.to);
       
       // COHORT-VIEW: An edge needs LAG treatment if it has local latency OR
       // is downstream of latency edges (path_t95 > 0).
-      const hasLocalLatency = maturityDays !== undefined && maturityDays > 0;
+      const hasLocalLatency = legacy maturity threshold !== undefined && legacy maturity threshold > 0;
       const isBehindLaggedPath = edgePrecomputedPathT95 > 0;
       
       if (!hasLocalLatency && !isBehindLaggedPath) {
-        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, maturityDays, edgePrecomputedPathT95 });
+        console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, legacy maturity threshold, edgePrecomputedPathT95 });
         // Truly simple edge: no latency config AND no upstream lag
         // Skip LAG computation but update topo state
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
@@ -33153,7 +33153,7 @@ export function enhanceGraphLatencies(
       
       // Effective maturity: local config if available, else use path_t95 as fallback
       // This handles edges downstream of latency edges that have no local config.
-      const effectiveMaturity = hasLocalLatency ? maturityDays : edgePrecomputedPathT95;
+      const effectiveMaturity = hasLocalLatency ? legacy maturity threshold : edgePrecomputedPathT95;
 
       // Get parameter values for this edge
       const paramValues = paramLookup.get(edgeId);
@@ -33175,7 +33175,7 @@ export function enhanceGraphLatencies(
       // - cohortsAll:    used for fitting lag distributions (t95) and path_t95 estimation
       //
       // Rationale: Narrow cohort windows (e.g. 3–4 days) often have k≈0, which would
-      // force the fit to fail and make t95/path_t95 fall back to maturity_days / topo sums.
+      // force the fit to fail and make t95/path_t95 fall back to legacy maturity field / topo sums.
       // That produces "stuck" persisted path_t95 values like 46.66d even when the file
       // contains rich anchor_* + lag data that yields a stable moment-matched estimate.
       const cohortsScoped = helpers.aggregateCohortData(paramValues, queryDate, cohortWindow);
@@ -33193,7 +33193,7 @@ export function enhanceGraphLatencies(
       console.log('[LAG_TOPO_PROCESS] edge:', { 
         edgeId, 
         hasLocalLatency, 
-        maturityDays, 
+        legacy maturity threshold, 
         effectiveMaturity, 
         cohortsCount: cohortsScoped.length,
         cohortsAllCount: cohortsAll.length
@@ -33514,7 +33514,7 @@ export function enhanceGraphLatencies(
 
         edgeLAGValues.blendedMean = formulaAResult.p_mean;
       } else {
-        // Fallback: conservative tail estimate (maturityDays cutoff)
+        // Fallback: conservative tail estimate (legacy maturity threshold cutoff)
         const fallbackMean = computeFormulaAMeanFromCohorts(
           cohortsScoped,
           forecastMean,
@@ -34384,7 +34384,7 @@ describe('LAG Lag Distribution Fitting (§5.4)', () => {
       expect(logNormalCDF(t95, fit.mu, fit.sigma)).toBeCloseTo(LATENCY_T95_PERCENTILE, 3);
     });
 
-    it('should fall back to maturityDays if fit is not valid', () => {
+    it('should fall back to legacy maturity threshold if fit is not valid', () => {
       const fit: LagDistributionFit = {
         mu: Math.log(5),
         sigma: LATENCY_DEFAULT_SIGMA,
@@ -34722,7 +34722,7 @@ describe('LAG computeEdgeLatencyStats (Main Entry Point)', () => {
 
     expect(stats.fit.empirical_quality_ok).toBe(false);
     expect(stats.fit.quality_failure_reason).toContain('Insufficient');
-    // Should fall back to maturityDays for t95
+    // Should fall back to legacy maturity threshold for t95
     expect(stats.t95).toBe(30);
   });
 });
@@ -35140,9 +35140,9 @@ describe('enhanceGraphLatencies', () => {
         { id: 'c' },
       ],
       edges: [
-        { id: 'start-to-a', from: 'start', to: 'a', p: { mean: 0.8, latency: { maturity_days: 30 } } },
-        { id: 'a-to-b', from: 'a', to: 'b', p: { mean: 0.6, latency: { maturity_days: 30 } } },
-        { id: 'b-to-c', from: 'b', to: 'c', p: { mean: 0.4, latency: { maturity_days: 30 } } },
+        { id: 'start-to-a', from: 'start', to: 'a', p: { mean: 0.8, latency: { legacy maturity field: 30 } } },
+        { id: 'a-to-b', from: 'a', to: 'b', p: { mean: 0.6, latency: { legacy maturity field: 30 } } },
+        { id: 'b-to-c', from: 'b', to: 'c', p: { mean: 0.4, latency: { legacy maturity field: 30 } } },
       ],
     };
   }
@@ -35242,7 +35242,7 @@ describe('enhanceGraphLatencies', () => {
     expect(bToC?.latency.completeness).toBeLessThanOrEqual(aToB?.latency.completeness || 1);
   });
 
-  it('should skip edges without maturity_days', () => {
+  it('should skip edges without legacy maturity field', () => {
     const graph: GraphForPath = {
       nodes: [
         { id: 'start', entry: { is_start: true } },
@@ -35299,7 +35299,7 @@ describe('enhanceGraphLatencies', () => {
             to: 'end',
             p: {
               mean: 0.5,  // Initial mean (will be overwritten by blend)
-              latency: { maturity_days: 30 },
+              latency: { legacy maturity field: 30 },
               evidence: { mean: 0.3, n: 1000 },
               forecast: { mean: 0.7 },
             },
@@ -35444,7 +35444,7 @@ describe('enhanceGraphLatencies', () => {
             to: 'end',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { legacy maturity field: 30 },
               // No evidence
               forecast: { mean: 0.7 },
             },
@@ -35473,7 +35473,7 @@ describe('enhanceGraphLatencies', () => {
             to: 'end',
             p: {
               mean: 0.5,
-              latency: { maturity_days: 30 },
+              latency: { legacy maturity field: 30 },
               evidence: { mean: 0.3, n: 1000 },
               // No forecast
             },

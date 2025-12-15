@@ -51,8 +51,6 @@ export interface RefetchDecision {
 export interface LatencyConfig {
   /** Explicit enablement flag (Phase 2). true = latency tracking enabled. */
   latency_parameter?: boolean;
-  /** @deprecated Use latency_parameter instead. Retained for migration. */
-  maturity_days?: number;
   anchor_node_id?: string;
   t95?: number;
   path_t95?: number;  // Cumulative latency from anchor, computed by statisticalEnhancementService
@@ -102,9 +100,8 @@ export function shouldRefetch(input: RefetchPolicyInput): RefetchDecision {
     referenceDate = new Date(),
   } = input;
 
-  // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
-  const isLatencyEnabled = latencyConfig?.latency_parameter === true || 
-                           (latencyConfig?.maturity_days ?? 0) > 0;
+  // Phase 2: latency_parameter is canonical enablement flag
+  const isLatencyEnabled = latencyConfig?.latency_parameter === true;
 
   // Non-latency edge: standard gap-based incremental fetch
   if (!isLatencyEnabled) {
@@ -114,63 +111,50 @@ export function shouldRefetch(input: RefetchPolicyInput): RefetchDecision {
   // ═══════════════════════════════════════════════════════════════════════════
   // EFFECTIVE MATURITY CALCULATION (design.md §5.4, §11.1.I)
   // 
-  // Use t95 (95th percentile lag) when available as the effective maturity
-  // threshold. This is more accurate than the user-configured maturity_days.
-  // Fall back to maturity_days when:
-  // - t95 is not yet computed (no data or first fetch)
-  // - t95 is of poor quality (handled by upstream - t95 already reflects fallback)
-  // 
-  // The design states: "Single edge, poor empirical lag | k < MIN_FIT_CONVERTERS
-  // or mean/median outside ratio bounds | p.latency.t95 falls back to maturity_days"
+  // Use t95 (95th percentile lag) when available as the effective maturity threshold.
+  // If t95 is missing, Phase 2 relies on default injection and uses a conservative fallback.
   // ═══════════════════════════════════════════════════════════════════════════
-  const effectiveMaturityDays = computeEffectiveMaturity(latencyConfig);
+  const effectiveT95Days = computeEffectiveMaturity(latencyConfig);
 
   // COHORT MODE: Check if any cohorts are still immature
   if (isCohortQuery) {
-    return evaluateCohortRefetch(existingSlice, effectiveMaturityDays, requestedWindow, referenceDate);
+    return evaluateCohortRefetch(existingSlice, effectiveT95Days, requestedWindow, referenceDate);
   }
 
   // WINDOW MODE with latency: partial refetch for immature dates
-  return evaluateWindowRefetch(existingSlice, effectiveMaturityDays, requestedWindow, referenceDate);
+  return evaluateWindowRefetch(existingSlice, effectiveT95Days, requestedWindow, referenceDate);
 }
 
 /**
  * Compute effective maturity threshold for refetch decisions.
  * 
  * Prefers t95 (95th percentile lag from CDF fitting) when available,
- * falls back to maturity_days (user-configured or default).
+ * otherwise falls back to a conservative default.
  * 
  * @param latencyConfig Latency configuration from edge
  * @returns Effective maturity in days
  */
 export function computeEffectiveMaturity(latencyConfig?: LatencyConfig): number {
-  const maturityDays = latencyConfig?.maturity_days ?? 0;
   const t95 = latencyConfig?.t95;
   
   // If t95 is available and positive, use it as the effective maturity
   // t95 represents the 95th percentile lag time, which is a better indicator
-  // of when cohorts are "mature" than the user-configured maturity_days
+  // of when cohorts are "mature"
   if (t95 !== undefined && t95 > 0) {
     // Round up to ensure we're conservative (don't declare mature too early)
     const effectiveMaturity = Math.ceil(t95);
     
     console.log('[fetchRefetchPolicy] Using t95 for effective maturity:', {
       t95,
-      maturityDays,
       effectiveMaturity,
     });
     
     return effectiveMaturity;
   }
   
-  // Fall back to maturity_days when t95 is not available
-  // This happens on first fetch or when empirical lag data is insufficient
-  console.log('[fetchRefetchPolicy] Falling back to maturity_days (t95 not available):', {
-    t95,
-    maturityDays,
-  });
-  
-  return maturityDays;
+  // If t95 is missing, the Phase 2 invariant is that default injection has not yet
+  // occurred or data is incomplete. Be conservative.
+  return 30;
 }
 
 // =============================================================================
@@ -182,12 +166,12 @@ export function computeEffectiveMaturity(latencyConfig?: LatencyConfig): number 
  * 
  * Cohort slices should be refetched when:
  * - No existing slice exists
- * - Any cohorts in the slice are still immature (age < maturity_days)
- * - Slice is stale (retrieved_at is old relative to maturity window)
+ * - Any cohorts in the slice are still immature (age < effective maturity)
+ * - Slice is stale (retrieved_at is old relative to effective t95 days)
  */
 function evaluateCohortRefetch(
   existingSlice: ParameterValue | undefined,
-  maturityDays: number,
+  effectiveT95Days: number,
   requestedWindow: DateRange,
   referenceDate: Date
 ): RefetchDecision {
@@ -211,7 +195,7 @@ function evaluateCohortRefetch(
   }
 
   // Calculate maturity cutoff date (cohorts before this are mature)
-  const maturityCutoffMs = referenceDate.getTime() - (maturityDays * 24 * 60 * 60 * 1000);
+  const maturityCutoffMs = referenceDate.getTime() - (effectiveT95Days * 24 * 60 * 60 * 1000);
   const maturityCutoffDate = new Date(maturityCutoffMs);
 
   // Check if any cohort dates are immature (date >= maturityCutoff means immature)
@@ -248,11 +232,11 @@ function evaluateCohortRefetch(
     };
   }
 
-  // Check staleness: if retrieved_at is older than maturity_days ago, refetch
+  // Check staleness: if retrieved_at is older than effective maturity ago, refetch
   const retrievedAt = existingSlice.data_source?.retrieved_at;
   if (retrievedAt) {
     const retrievedDate = new Date(retrievedAt);
-    const staleThresholdMs = referenceDate.getTime() - (maturityDays * 24 * 60 * 60 * 1000);
+    const staleThresholdMs = referenceDate.getTime() - (effectiveT95Days * 24 * 60 * 60 * 1000);
     
     if (retrievedDate.getTime() < staleThresholdMs) {
       return {
@@ -278,18 +262,18 @@ function evaluateCohortRefetch(
  * Evaluate refetch decision for window() slices with latency.
  * 
  * Window slices use partial refetch:
- * - Mature portion (dates older than maturity_days): use cache
+ * - Mature portion (dates older than effective maturity): use cache
  * - Immature portion (recent dates): always refetch
  */
 function evaluateWindowRefetch(
   existingSlice: ParameterValue | undefined,
-  maturityDays: number,
+  effectiveT95Days: number,
   requestedWindow: DateRange,
   referenceDate: Date
 ): RefetchDecision {
   // Calculate maturity cutoff: dates before this are mature
-  // Immature portion = last maturity_days + 1 day buffer
-  const maturityCutoffMs = referenceDate.getTime() - ((maturityDays + 1) * 24 * 60 * 60 * 1000);
+  // Immature portion = last effective maturity + 1 day buffer
+  const maturityCutoffMs = referenceDate.getTime() - ((effectiveT95Days + 1) * 24 * 60 * 60 * 1000);
   const maturityCutoffDate = new Date(maturityCutoffMs);
   const matureCutoff = normalizeDate(maturityCutoffDate.toISOString());
 

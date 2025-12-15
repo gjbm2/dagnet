@@ -94,7 +94,6 @@ describe('cohortRetrievalHorizon', () => {
           requestedWindow: { start: '9-Sep-25', end: '9-Dec-25' },
           pathT95: 40,
           edgeT95: 20,
-          maturityDays: 10,
           referenceDate,
         };
         
@@ -108,7 +107,6 @@ describe('cohortRetrievalHorizon', () => {
         const input: CohortHorizonInput = {
           requestedWindow: { start: '9-Sep-25', end: '9-Dec-25' },
           edgeT95: 25,
-          maturityDays: 10,
           referenceDate,
         };
         
@@ -118,17 +116,16 @@ describe('cohortRetrievalHorizon', () => {
         expect(result.t95Source).toBe('edge_t95');
       });
       
-      it('should fall back to maturity_days when t95 values are missing', () => {
+      it('should fall back to default when t95 values are missing', () => {
         const input: CohortHorizonInput = {
           requestedWindow: { start: '9-Sep-25', end: '9-Dec-25' },
-          maturityDays: 14,
           referenceDate,
         };
         
         const result = computeCohortRetrievalHorizon(input);
         
-        expect(result.effectiveT95).toBe(14);
-        expect(result.t95Source).toBe('maturity_days');
+        expect(result.effectiveT95).toBe(30);
+        expect(result.t95Source).toBe('default');
       });
       
       it('should use default (30 days) when all values are missing', () => {
@@ -139,7 +136,7 @@ describe('cohortRetrievalHorizon', () => {
         
         const result = computeCohortRetrievalHorizon(input);
         
-        expect(result.effectiveT95).toBe(30);  // DEFAULT_MATURITY_DAYS
+        expect(result.effectiveT95).toBe(30);  // DEFAULT_T95_DAYS
         expect(result.t95Source).toBe('default');
       });
       
@@ -148,14 +145,13 @@ describe('cohortRetrievalHorizon', () => {
           requestedWindow: { start: '9-Sep-25', end: '9-Dec-25' },
           pathT95: 0,
           edgeT95: -5,
-          maturityDays: 20,
           referenceDate,
         };
         
         const result = computeCohortRetrievalHorizon(input);
         
-        expect(result.effectiveT95).toBe(20);
-        expect(result.t95Source).toBe('maturity_days');
+        expect(result.effectiveT95).toBe(30);
+        expect(result.t95Source).toBe('default');
       });
     });
     
@@ -281,7 +277,6 @@ describe('cohortRetrievalHorizon', () => {
         { start: '9-Sep-25', end: '9-Dec-25' },  // 91 days
         30,  // path_t95
         undefined,
-        undefined,
         referenceDate
       );
       
@@ -292,7 +287,6 @@ describe('cohortRetrievalHorizon', () => {
       const result = shouldBoundCohortWindow(
         { start: '29-Nov-25', end: '9-Dec-25' },  // 10 days
         30,  // path_t95
-        undefined,
         undefined,
         referenceDate
       );
@@ -308,7 +302,6 @@ describe('cohortRetrievalHorizon', () => {
           latency: {
             t95: 20,
             path_t95: 45,
-            maturity_days: 14,
           },
         },
       };
@@ -324,7 +317,6 @@ describe('cohortRetrievalHorizon', () => {
         p: {
           latency: {
             t95: 20,
-            maturity_days: 14,
           },
         },
       };
@@ -336,12 +328,12 @@ describe('cohortRetrievalHorizon', () => {
     });
     
     it('should fall back through the chain', () => {
-      const edge = { p: { latency: { maturity_days: 21 } } };
+      const edge = { p: { latency: {} } };
       
       const result = getEffectiveT95ForCohort(edge);
       
-      expect(result.effectiveT95).toBe(21);
-      expect(result.source).toBe('maturity_days');
+      expect(result.effectiveT95).toBe(30);
+      expect(result.source).toBe('default');
     });
   });
 });
@@ -388,19 +380,18 @@ describe('implementation plan test scenarios (§8.2)', () => {
   });
   
   describe('scenarios where t95 is undefined or zero', () => {
-    it('should fall back to maturity_days', () => {
+    it('should fall back to default', () => {
       const input: CohortHorizonInput = {
         requestedWindow: { start: '9-Sep-25', end: '9-Dec-25' },
         pathT95: 0,
         edgeT95: undefined,
-        maturityDays: 28,
         referenceDate,
       };
       
       const result = computeCohortRetrievalHorizon(input);
       
-      expect(result.effectiveT95).toBe(28);
-      expect(result.t95Source).toBe('maturity_days');
+      expect(result.effectiveT95).toBe(30);
+      expect(result.t95Source).toBe('default');
     });
     
     it('should use conservative default when all are missing', () => {

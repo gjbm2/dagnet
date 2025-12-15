@@ -82,7 +82,7 @@ Global search/replace across:
 
 **File:** `graph-editor/src/types/index.ts`
 - Add a `LatencyConfig` interface with fields:
-  - `maturity_days?: number` and `maturity_days_overridden?: boolean` (>0 enables tracking).
+  - `legacy maturity field?: number` and `legacy maturity override?: boolean` (>0 enables tracking).
   - `anchor_node_id?: string` and `anchor_node_id_overridden?: boolean` (default anchor, inferred when not explicit in DSL).
   - Recency config (`recency_half_life_days`) is deferred to a fast-follow (Appendix C.1).
 - **anchor_node_id computation:** When DSL lacks explicit `cohort(anchor, dates)`, compute the default anchor as the furthest upstream START node from `edge.from` during query construction in `buildDslFromEdge.ts` (or its caller), NOT via a separate service hook.
@@ -103,7 +103,7 @@ Global search/replace across:
 - Add extraction for new LAG fields on `ProbabilityParam`:
   - `forecast_mean`, `forecast_stdev`
   - `evidence_mean`, `evidence_stdev`
-  - `latency` block (`maturity_days`, `anchor_node_id`, `t95`, `completeness`, `median_lag_days` as needed for display)
+  - `latency` block (`legacy maturity field`, `anchor_node_id`, `t95`, `completeness`, `median_lag_days` as needed for display)
 - **Critical for scenarios:** `extractEdgeParams()` and `extractDiffParams()` must include these fields so live scenario regeneration captures the full latency view per scenario DSL (see design §9.K.2)
 
 ### 1.2 Python Pydantic Models
@@ -139,7 +139,7 @@ Global search/replace across:
 - `graph-editor/public/schemas/conversion-graph-1.1.0.json`
 
 **Tasks:**
-- Add `LatencyConfig` to `$defs` with fields: `maturity_days`, `maturity_days_overridden`, `anchor_node_id`, `anchor_node_id_overridden`, `t95`, `median_lag_days`, `completeness`
+- Add `LatencyConfig` to `$defs` with fields: `legacy maturity field`, `legacy maturity override`, `anchor_node_id`, `anchor_node_id_overridden`, `t95`, `median_lag_days`, `completeness`
 - Add `ForecastParams` to `$defs` with fields: `mean`, `stdev`
 - Add `latency` and `forecast` fields to `ProbabilityParam` referencing the new `$defs`
 - Update `lib/tests/test_schema_parity.py` to include new types in `SCHEMA_TO_PYTHON` mapping
@@ -154,7 +154,7 @@ Global search/replace across:
 **Latency CONFIG fields (probability ↔ param file, bidirectional):**
 | Graph/Prob field | File field | Override flag |
 |------------------|------------|---------------|
-| `edge.p.latency.maturity_days` | `latency.maturity_days` | `maturity_days_overridden` |
+| `edge.p.latency.legacy maturity field` | `latency.legacy maturity field` | `legacy maturity override` |
 | `edge.p.latency.anchor_node_id` | `latency.anchor_node_id` | `anchor_node_id_overridden` |
 
 **Note:** `recency_half_life_days` deferred to fast-follow (design Appendix C.1).
@@ -230,7 +230,7 @@ queryDSL.ts → buildDslFromEdge.ts → dataOperationsService.ts → DASRunner.t
 **Design reference:** `design.md §9.A` (buildDslFromEdge), `§4.6` (Dual-Slice requirements)
 
 **File:** `graph-editor/src/lib/das/buildDslFromEdge.ts`
-- ✅ `QueryPayload.cohort` field added with `start`, `end`, `anchor_event_id`, `maturity_days`
+- ✅ `QueryPayload.cohort` field added with `start`, `end`, `anchor_event_id`, `legacy maturity field`
 - ✅ `resolveCohortDates()` function added (mirrors `resolveWindowDates`)
 - ⏸️ Cohort payload population from constraints — needs integration
 - ⏸️ Upstream maturity check logic — not yet implemented
@@ -261,7 +261,7 @@ This is the critical missing piece that connects parsed cohort to actual API cal
 - Add cohort mode detection in pre_request script (`if (cohort) { ... }`)
 - For cohort mode, build 3-step funnel: `[Anchor, From, To]` (vs 2-step `[From, To]`)
 - Use `cohort.start`/`cohort.end` as entry dates (vs `window.start`/`window.end` as event dates)
-- Pass `cs` (conversion window) parameter: `cohort.maturity_days * 86400` seconds
+- Pass `cs` (conversion window) parameter: `cohort.legacy maturity field * 86400` seconds
 - Extract latency fields from response:
   - `dayMedianTransTimes` → per-day median lag
   - `dayAvgTransTimes` → per-day mean lag  
@@ -418,7 +418,7 @@ Tests to add:
   - Filter and aggregate `median_lag_days[]`, `mean_lag_days[]`, `k_daily[]` for query window
   - Compute: `mu`, `sigma`, `t95`, `empirical_quality_ok`
   - Quality gate: `k >= LATENCY_MIN_FIT_CONVERTERS` AND `mean/median` in [`LATENCY_MIN_MEAN_MEDIAN_RATIO`, `LATENCY_MAX_MEAN_MEDIAN_RATIO`]
-  - Fallback: if quality fails, use `maturity_days` for `t95`
+  - Fallback: if quality fails, use `legacy maturity field` for `t95`
 - Attach computed values to `p.latency` on the `ProbabilityParam`:
   - Persist `t95` for this edge/probability (used for A→X maturity and caching).
   - Keep `mu`, `sigma`, `empirical_quality_ok` transient (service-level only).
@@ -446,7 +446,7 @@ Tests to add:
   - Optionally:
     - Persist the raw slices into param files for future reuse.
  - For latency edges where the interactive DSL is **cohort-only** (no explicit `window()`), the "window DSL for the current interactive query" should be constructed as an **implicit baseline window**:
-   - Compute `W_base` by clamping `maturity_days` between `LATENCY_BASELINE_MIN_WINDOW_DAYS` and `LATENCY_BASELINE_MAX_WINDOW_DAYS` (see `design.md §5.2.1`).
+   - Compute `W_base` by clamping `legacy maturity field` between `LATENCY_BASELINE_MIN_WINDOW_DAYS` and `LATENCY_BASELINE_MAX_WINDOW_DAYS` (see `design.md §5.2.1`).
    - Build an internal `window(T_query - W_base : T_query)` clause with the same context filters as the current DSL.
    - Use this implicit baseline window exactly as if the user had specified it explicitly in the DSL; do not surface it in the UI, but do log it via `sessionLogService` for provenance.
 
@@ -546,7 +546,7 @@ This section ties the conceptual flows to concrete services and files.
 
 **File:** `graph-editor/src/components/edges/EdgeBeads.tsx`
 - Add Latency Bead (e.g., "6d (80%)").
-- Show only when `latency.maturity_days > 0` and data exists.
+- Show only when `latency.legacy maturity field > 0` and data exists.
 
 **File:** `graph-editor/src/components/edges/edgeBeadHelpers.tsx`
 - Add helper functions for latency bead formatting and positioning.
@@ -561,8 +561,8 @@ Add latency fields after Distribution dropdown (applies to both `p` and `conditi
 
 | Field | Type | Override flag | Behaviour |
 |-------|------|---------------|-----------|
-| Track Latency | Checkbox | `maturity_days_overridden` | When unchecked: `maturity_days = 0`. When checked: shows Maturity field |
-| Maturity | Number input | `maturity_days_overridden` | Days threshold for cohort maturity |
+| Track Latency | Checkbox | `legacy maturity override` | When unchecked: `legacy maturity field = 0`. When checked: shows Maturity field |
+| Maturity | Number input | `legacy maturity override` | Days threshold for cohort maturity |
 
 **Note:** Recency slider deferred to fast-follow (design Appendix C.1).
 
@@ -632,7 +632,7 @@ When user checks "Track Latency" on an edge with data:
 - `graph-editor/src/services/graphIssuesService.ts`
 
 **Tasks:**
-- For each node with multiple outgoing edges where both have `maturity_days > 0`, compute `Σ p.mean` and `Σ p.evidence`.
+- For each node with multiple outgoing edges where both have `legacy maturity field > 0`, compute `Σ p.mean` and `Σ p.evidence`.
 - Issue classification:
   - `Σ p.evidence > 1.0`: Error (data inconsistency).
   - `Σ p.mean > 1.0` AND `Σ p.evidence ≤ 1.0`: Info-level (forecasting artefact, expected for immature data).
@@ -698,7 +698,7 @@ Create sample data files demonstrating latency tracking with `cohort()` and `win
 
 2. **Graph with latency-enabled edges:**
    - Update `param-registry/test/graphs/ecommerce-checkout-flow.json`
-   - Add `latency: { maturity_days: 14, anchor_node_id: "..." }` to relevant edges
+   - Add `latency: { legacy maturity field: 14, anchor_node_id: "..." }` to relevant edges
    - Include edges with varying maturity settings (0, 7, 14, 30 days)
 
 3. **Parameter with dual slices (cohort + window):**
@@ -780,7 +780,7 @@ values:
 
 **File:** `graph-editor/src/services/__tests__/nonLatencyRegression.test.ts` (NEW)
 
-**Purpose:** Freeze existing `window()` behaviour for edges with `maturity_days = 0` or undefined.
+**Purpose:** Freeze existing `window()` behaviour for edges with `legacy maturity field = 0` or undefined.
 
 | Test | Description |
 |------|-------------|
@@ -815,7 +815,7 @@ values:
 | Zero evidence | Stripe only, inner layer invisible |
 | 100% completeness | Full solid, minimal/no stripe |
 | Latency bead visible | "6d (80%)" bead positioned correctly |
-| Latency bead hidden | `maturity_days = 0` → no bead |
+| Latency bead hidden | `legacy maturity field = 0` → no bead |
 
 **File:** `graph-editor/src/components/panels/ScenariosPanel.stories.tsx`
 
@@ -860,7 +860,7 @@ To manage the implied complexity of Project LAG, we need **integration tests tha
 | Flow B: Direct get-from-source (interactive DSL → Amplitude → graph only) | `graph-editor/src/services/__tests__/dataOperationsService.integration.test.ts` | Starting from a graph-only state (no param files), issue `getFromSource` with cohort-only and window-only DSL; assert that `getFromSourceDirect` issues the right Amplitude calls (including implicit baseline window for cohort-only), passes results to `statisticalEnhancementService`, and updates graph edges without requiring files. |
 | Dual-slice latency flow (window + cohort for one edge) | `graph-editor/src/services/__tests__/dataOperationsService.integration.test.ts`, `graph-editor/src/services/__tests__/latencyBaseline.e2e.test.ts` | For a single latency edge with both window() and cohort() slices, verify: both slices are fetched and stored; window() drives `p.forecast` and `t95`; cohort() drives evidence and Formula A; the combined `p.mean` and completeness are written to graph and rendered correctly. |
 | Multi-edge path maturity & caching | `graph-editor/src/services/__tests__/versionedFetch.integration.test.ts`, `graph-editor/src/services/__tests__/forecastService.test.ts` (integration-style subset) | Build a small graph A→X→Y with latency on both edges; run a batch fetch and then verify: per-edge `p.latency.t95` values, `computePathT95` results, and that subsequent `getItemsNeedingFetch` calls honour A→X maturity (no re-fetch of mature windows, only immature/gap days). |
-| Non-latency regression | `graph-editor/src/services/__tests__/nonLatencyRegression.test.ts` | Run the existing versioned fetch flows on graphs with `maturity_days = 0` to assert that non-latency edges’ behaviour (window aggregation, contexts, put-to-file) is unchanged by LAG. |
+| Non-latency regression | `graph-editor/src/services/__tests__/nonLatencyRegression.test.ts` | Run the existing versioned fetch flows on graphs with `legacy maturity field = 0` to assert that non-latency edges’ behaviour (window aggregation, contexts, put-to-file) is unchanged by LAG. |
 
 #### UI-Driven End-to-End Scenarios
 
@@ -952,10 +952,10 @@ The following detailed design assets in `design.md` should be consulted during i
 | Question | Resolution |
 |----------|------------|
 | Caching strategy | Derived stats cached in parameter files (§3.2) |
-| Heavy tails | Controlled by `maturity_days` setting — user sets threshold |
+| Heavy tails | Controlled by `legacy maturity field` setting — user sets threshold |
 | Conditional edges (§12.4) | Same treatment as `p` — latency at edge level |
 | Cost params (§12.5) | No latency treatment — manual entry only |
-| Zero-lag edges | `maturity_days = 0` disables latency tracking |
+| Zero-lag edges | `legacy maturity field = 0` disables latency tracking |
 
 ## Appendix References
 
