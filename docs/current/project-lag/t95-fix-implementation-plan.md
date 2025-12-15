@@ -97,7 +97,7 @@ Treat these as Phase 1 blockers. The fixes should follow the semantics contract:
 
 ## Overview
 
-Replace implicit latency enablement (via `maturity_days` presence) with explicit fields supporting user overrides. Introduce `latency_edge` boolean, add `*_overridden` companions to `t95` and `path_t95`, and eliminate all `maturity_days` usage.
+Replace implicit latency enablement (via `maturity_days` presence) with explicit fields supporting user overrides. Introduce `latency_parameter` boolean (parameter-backed) plus `latency_parameter_overridden`, add `*_overridden` companions to `t95` and `path_t95`, and eliminate all `maturity_days` usage.
 
 ## Relationship to Window/Cohort LAG Semantics (Conceptual Integration)
 
@@ -135,7 +135,8 @@ Add new fields to all type definitions before any runtime changes.
 
 **File:** `graph-editor/src/types/index.ts`
 
-- Add `latency_edge?: boolean` to edge latency config interface
+- Add `latency_parameter?: boolean` to latency config interface
+- Add `latency_parameter_overridden?: boolean` to latency config interface
 - Add `t95_overridden?: boolean` to latency config
 - Add `path_t95_overridden?: boolean` to latency config
 
@@ -143,7 +144,8 @@ Add new fields to all type definitions before any runtime changes.
 
 **File:** `graph-editor/public/param-schemas/parameter-schema.yaml`
 
-- Add `latency_edge` boolean field to latency block
+- Add `latency_parameter` boolean field to latency block
+- Add `latency_parameter_overridden` boolean field to latency block
 - Add `t95_overridden` boolean field
 - Add `path_t95_overridden` boolean field
 
@@ -151,7 +153,8 @@ Add new fields to all type definitions before any runtime changes.
 
 **File:** `graph-editor/lib/graph_types.py`
 
-- Add `latency_edge: Optional[bool]` to LatencyConfig model
+- Add `latency_parameter: Optional[bool]` to LatencyConfig model
+- Add `latency_parameter_overridden: Optional[bool]` to LatencyConfig model
 - Add `t95_overridden: Optional[bool]`
 - Add `path_t95_overridden: Optional[bool]`
 
@@ -159,7 +162,8 @@ Add new fields to all type definitions before any runtime changes.
 
 **File:** `graph-editor/lib/runner/graph_builder.py`
 
-- Extract and emit `latency_edge` in latency payloads
+- Extract and emit `latency_parameter` in latency payloads
+- Extract and emit `latency_parameter_overridden` in latency payloads
 - Extract and emit override flags
 
 ---
@@ -192,7 +196,7 @@ Establish single source of truth for the default t95 value.
 
 **File:** `graph-editor/src/services/UpdateManager.ts`
 
-- When `latency_edge` transitions to `true`:
+- When `latency_parameter` transitions to `true`:
   - If `t95_overridden` is false and `t95` is missing/invalid, set `t95 = DEFAULT_T95_DAYS`
   - Mark parameter dirty so the default persists
 
@@ -224,7 +228,7 @@ Implement write-back gating based on override flags.
 
 ---
 
-## Phase 3: Migrate Enablement Checks (maturity_days → latency_edge)
+## Phase 3: Migrate Enablement Checks (maturity_days → latency_parameter)
 
 Replace all "is latency enabled?" checks.
 
@@ -232,25 +236,25 @@ Replace all "is latency enabled?" checks.
 
 **File:** `graph-editor/src/services/fetchRefetchPolicy.ts`
 
-- Replace `latencyConfig.maturity_days` presence check with `latencyConfig.latency_edge === true`
+- Replace `latencyConfig.maturity_days` presence check with `latencyConfig.latency_parameter === true`
 
 ### 3.2 Data Operations Service
 
 **File:** `graph-editor/src/services/dataOperationsService.ts`
 
-- Replace `maturity_days` enablement checks with `latency_edge`
+- Replace `maturity_days` enablement checks with `latency_parameter`
 
 ### 3.3 Graph Param Extractor
 
 **File:** `graph-editor/src/services/GraphParamExtractor.ts`
 
-- Extract `latency_edge` field alongside other latency fields
+- Extract `latency_parameter` field alongside other latency fields
 
 ### 3.4 Integrity Check Service
 
 **File:** `graph-editor/src/services/integrityCheckService.ts`
 
-- Update latency integrity checks to use `latency_edge`
+- Update latency integrity checks to use `latency_parameter`
 
 ---
 
@@ -394,8 +398,8 @@ Required scenarios (prose expectations):
 
 **File:** `graph-editor/src/services/__tests__/UpdateManager.test.ts` (or new file)
 
-- Test: enabling `latency_edge` injects `DEFAULT_T95_DAYS` when `t95` is missing
-- Test: enabling `latency_edge` does not inject default when `t95_overridden` is true
+- Test: enabling `latency_parameter` injects `DEFAULT_T95_DAYS` when `t95` is missing
+- Test: enabling `latency_parameter` does not inject default when `t95_overridden` is true
 
 ### 7.3 Path T95 Computation Tests
 
@@ -411,7 +415,7 @@ Required scenarios (prose expectations):
 - `graph-editor/src/services/__tests__/fetchRefetchPolicy.branches.test.ts`
 - `graph-editor/src/services/__tests__/fetchPolicyIntegration.test.ts`
 
-- Update enablement checks to use `latency_edge`
+- Update enablement checks to use `latency_parameter`
 - Remove `maturity_days` from test fixtures
 
 ### 7.5 DSL Builder Tests
@@ -431,7 +435,8 @@ Required scenarios (prose expectations):
 
 **File:** `graph-editor/lib/tests/test_lag_fields.py`
 
-- Add tests for `latency_edge` field extraction
+- Add tests for `latency_parameter` field extraction
+- Add tests for `latency_parameter_overridden` field extraction
 - Add tests for override flag extraction
 
 ---
@@ -442,7 +447,7 @@ Required scenarios (prose expectations):
 
 **File:** `graph-editor/public/docs/glossary.md`
 
-- Add `latency_edge` definition
+- Add `latency_parameter` definition (parameter-backed enablement) and `latency_parameter_overridden`
 - Update `t95` and `path_t95` definitions to mention overrides
 - Mark `maturity_days` as deprecated or remove
 
@@ -478,7 +483,7 @@ This work is executed in **Phase 1.0** to ensure the rest of the migration only 
 ## Implementation Checklist
 
 ### Phase 0: Schema & Types
-- [ ] 0.1 TypeScript types — add `latency_edge`, `t95_overridden`, `path_t95_overridden`
+- [ ] 0.1 TypeScript types — add `latency_parameter`, `latency_parameter_overridden`, `t95_overridden`, `path_t95_overridden`
 - [ ] 0.2 Parameter schema YAML — add new fields
 - [ ] 0.3 Python Pydantic models — add new fields
 - [ ] 0.4 Graph builder — extract new fields
