@@ -214,10 +214,11 @@ The following fields are treated as parameter-level fields (persisted in the par
 
 Latency enablement must be explicit, independent of numeric horizons, and consistent across the stack. We will implement this as a **single-pass migration** (no phased approach):
 
-- Introduce a new boolean field `latency_edge` that indicates whether an edge is latency-tracked.
+- Introduce a new boolean field `latency_parameter` that indicates whether a parameter-backed edge probability is latency-tracked.
+- Add `latency_parameter_overridden` so the graph↔file mapping can follow the standard override pattern (the flag is required even for booleans).
 - Treat `t95` and `path_t95` as the only numeric latency horizons (each with an `*_overridden` companion).
 - Perform a repo-wide audit of **every** usage of `maturity_days` and replace it with one of:
-  - `latency_edge` (for enablement checks),
+  - `latency_parameter` (for enablement checks),
   - `t95` / `path_t95` (for horizon usage), or
   - the global default `t95` (only during default injection when enabling latency).
 
@@ -264,7 +265,7 @@ Clarification:
 
 ### Default injection (first enablement)
 
-We must avoid ad-hoc fallback chains across the codebase. To achieve that, when a user enables latency on an edge (`latency_edge = true`), the system must ensure a conservative default exists immediately:
+We must avoid ad-hoc fallback chains across the codebase. To achieve that, when a user enables latency on an edge (`latency_parameter = true`), the system must ensure a conservative default exists immediately:
 
 - If `t95_overridden` is false and `t95` is missing or invalid, set `t95` to the global conservative default of 30 days.
 - `path_t95` will then be computed from the graph using the existing `path_t95` accumulation logic over per-edge `t95` values. This means that before the first fetch, `path_t95` is derived from defaults (and becomes more accurate after data-driven derivation writes improved values).
@@ -537,7 +538,7 @@ Overrides are a user policy tool. An overridden value should not be presented or
 
 Define a single global default `t95` used at latency enablement time:
 
-- When `latency_edge` is enabled and `t95` is not overridden and missing, set `t95` to the default immediately.
+- When `latency_parameter` is enabled and `t95` is not overridden and missing, set `t95` to the default immediately.
 - `path_t95` will be computed from the graph using the current `t95` values, so it will naturally build from defaults until the first fetch provides enough evidence to write improved derived values (unless overridden).
 
 The default should be documented and centrally defined (single source of truth) so it is consistent across fetch planning and query construction.
@@ -564,7 +565,7 @@ This change should be executed as a single coherent migration so we do not miss 
 
 Required steps:
 
-- Add the new boolean `latency_edge` field to the parameter schema and shared types.
+- Add the new boolean `latency_parameter` field (plus `latency_parameter_overridden`) to the parameter schema and shared types.
 - Implement the override fields (`t95_overridden`, `path_t95_overridden`) and the overwrite-gating rules.
 - Implement default injection for `t95` on latency enablement.
 - Update UpdateManager to:
@@ -572,7 +573,7 @@ Required steps:
   - honour the override flags consistently.
 - Replace every `maturity_days` reference across the application:
   - identify whether each call site is enablement, horizon selection, refetch policy, or UI-only,
-  - migrate it to `latency_edge` and/or `t95` / `path_t95` as appropriate,
+  - migrate it to `latency_parameter` and/or `t95` / `path_t95` as appropriate,
   - delete any remaining fallback semantics that accidentally treat `maturity_days` as a horizon or enablement flag.
 - Update UI editing controls to set/clear overrides.
 - Update and add tests for the new enablement flag and override precedence.
