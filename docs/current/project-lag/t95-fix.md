@@ -105,6 +105,79 @@ To avoid conceptual confusion:
 - Completeness is still computed from lag CDF evaluation over cohort ages (and is mode-dependent as per the canonical spec).
   `path_t95` is not a substitute for upstream median delay; we do not invert percentiles into medians.
 
+### Phase 2 design note: tail-safe completeness CDF using `t95` (recommended)
+
+We have identified a structural risk in the current system:
+
+- `p.mean` blending depends on `p.latency.completeness`.
+- `p.latency.completeness` depends on the latency CDF fit.
+- A lognormal fit can be systematically wrong for fat/long-tailed edges, which can cause mis-blending (often: evidence is overweighted too early).
+
+Phase 2 gives us a clean mitigation because `t95` becomes a persisted/overridable horizon:
+
+- If a large baseline window (or a user override) indicates the edge tail is long, we should not permit a “thin tail” completeness CDF that contradicts that horizon.
+
+**Proposed approach (simple, non-invasive):**
+
+- Continue to fit the completeness CDF from baseline-window lag summaries (`median_lag_days`, `mean_lag_days`) as the primary shape signal.
+- Additionally enforce a *tail constraint* so the fitted CDF is not more optimistic than the effective `t95`.
+
+#### Precise specification: “t95 tail constraint” for completeness CDF
+
+This is the design contract for Phase 2. It is deliberately simple: we only ever *inflate* tail weight (never deflate it), because the core failure mode we are correcting is **thin-tail optimism** on fat-tailed edges.
+
+**Inputs (per edge, per context slice family):**
+
+- `median_lag_days` (baseline window summary; required for meaningful fit)
+- `mean_lag_days` (baseline window summary; optional)
+- `t95_days` (the authoritative horizon):
+  - if `t95_overridden` is true: use the stored overridden value
+  - else: use the stored derived value (written from baseline-window evidence)
+- `LATENCY_T95_PERCENTILE` (single constant defining the meaning of “t95”)
+
+**Output:**
+
+- A lognormal distribution parameterisation used for **completeness CDF evaluation**:
+  - `mu` and `sigma` for `CDF_X_to_Y(t)`
+
+**Algorithm:**
+
+1. Compute the base fit (moment fit):
+   - `mu = ln(median_lag_days)`
+   - `sigma_moments`:
+     - if `mean_lag_days` is valid: `sigma_moments = sqrt(2 * ln(mean_lag_days / median_lag_days))`
+     - else: `sigma_moments = LATENCY_DEFAULT_SIGMA`
+2. Compute the minimum sigma needed to honour the horizon:
+   - `z = NormalInverseCDF(LATENCY_T95_PERCENTILE)` (a positive constant for 0.95)
+   - `sigma_min_from_t95 = ln(t95_days / median_lag_days) / z`
+3. Apply the tail constraint:
+   - `sigma = max(sigma_moments, sigma_min_from_t95)`
+
+**Guard rails:**
+
+- If `t95_days` is missing/invalid: do not apply the constraint.
+- If `median_lag_days` missing/invalid: fall back to existing defaults (constraint cannot be applied).
+- If `t95_days <= median_lag_days`: do not apply the constraint (it would imply a degenerate/contradictory tail).
+- Clamp any computed sigma to a sane maximum if needed for numerical stability (implementation detail).
+
+**How this affects completeness:**
+
+- Completeness is computed via `p.latency.completeness = Σ n[d] * CDF_X_to_Y(effective_age[d]) / Σ n[d]`.
+- The tail constraint can only make `sigma` larger (or unchanged).
+- For young cohorts/windows this makes `CDF_X_to_Y(t)` smaller and therefore reduces completeness.
+- That directly reduces the evidence weight in blending (because blend uses `n_eff = completeness * n_query`), preventing the “overweight evidence too early” failure mode on fat tails.
+
+**Semantics note (critical):**
+
+- This does **not** create a second meaning for `t95`.
+- `t95` remains a horizon primitive for bounding/planning and for external conversion windows.
+- The tail constraint simply prevents the completeness CDF from contradicting the authoritative horizon.
+
+#### Why this is “using the data we have”
+
+When `t95` is derived (not overridden), it represents what the wide baseline window evidence implies for the tail horizon under the system’s current fitting approach. When it is overridden, it represents user knowledge about the tail. In either case, the system must not then use a completeness CDF whose implied `t95` is *smaller* than that authoritative horizon.
+
+
 ## Data model changes
 
 ### New/standardised fields (parameter-level)
@@ -178,6 +251,24 @@ We must avoid ad-hoc fallback chains across the codebase. To achieve that, when 
 After this default injection, downstream consumers should read `t95` and `path_t95` directly without local fallbacks.
 
 ## Application impact areas
+
+### Amplitude `window()` conversion window (avoid accidental censoring)
+
+Although `cs` (conversion window) is most obviously associated with `cohort()` mode, we also require a **fixed conversion window** for `window()` queries when retrieving baseline window slices from Amplitude.
+
+Rationale:
+
+- Baseline `window()` slices are the stable source for lag-shape summaries and horizon derivation (including `t95`).
+- If we do not specify a conversion window for `window()` queries, we risk accidentally using a provider default that censors long journeys.
+- That would systematically bias baseline lag summaries and therefore any derived `t95` (especially for fat/long-tailed edges).
+
+Requirement (Phase 2 design):
+
+- All `window()` queries sent to Amplitude must set `cs` to a **constant 30 days**.
+- To avoid proliferating constants, this should use the same value as the global default horizon:
+  - `DEFAULT_T95_DAYS = 30`
+
+This is a retrieval-safety policy only; it does not change the meaning of `t95/path_t95` as horizon primitives.
 
 ## Repo-wide audit: current read/write sites
 

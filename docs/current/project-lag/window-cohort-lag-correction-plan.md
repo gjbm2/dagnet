@@ -1,7 +1,7 @@
 # Window/Cohort LAG Correction Plan
 
 **Created:** 14-Dec-25  
-**Status:** Draft (awaiting approval)  
+**Status:** Ready for implementation (no open design issues; explicit deferrals tracked in `/TODO.md`)  
 **Canonical spec:** `graph-editor/public/docs/lag-statistics-reference.md`  
 
 ---
@@ -93,6 +93,8 @@ The system must never conflate these:
 - upstream A→X delay estimation (for downstream edges),
 until cohort-specific anchor lag evidence becomes reliable.
 
+**Structural limitation (15-Dec-25):** completeness is currently computed from lag CDFs and cohort ages, and does not directly consult realised conversions-to-date (`p.evidence.k/n`). This can be counter-intuitive in edge cases. We explicitly defer an “evidence-informed completeness floor/blend” until after Phase 1 is stable (tracked in `/TODO.md`).
+
 ### 3.3 Evidence visibility rule (important)
 
 - Evidence should be present **only where evidence exists**.
@@ -163,18 +165,18 @@ which then cascades to missing keys in the param pack (because `GraphParamExtrac
 2. Soft transition for anchor delay (prior → observed):
    - **Problem:** cohort selections are often immature; `anchor_*` lag arrays may be sparse/noisy, but we still need an A→X delay adjustment to avoid overstating downstream completeness.
    - **Principle:** completeness is analytically derived; the question is how we infer the upstream delay used for the effective-age adjustment.
-   - **Prior anchor delay (`m0`)**: derive an A→X prior median delay from upstream baseline `window()` lag summaries (distribution-aware; uses median+mean where available). This is the stable “baseline” source.
-   - **Optional tail safety (revised proposal):** to reduce the risk of systematically optimistic upstream priors when one or more upstream edges have fat/long tails (and early evidence underestimates that tail), we may optionally apply a *tail constraint* using upstream `path_t95` horizons:
-     - Use the upstream horizon-to-X implied by the immediately upstream edges’ `path_t95` values (under the active scenario/paths).
-     - Use the percentile defined by `LATENCY_PATH_T95_PERCENTILE` (from the single stats constants file, `graph-editor/src/constants/statisticalConstants.ts`) as the meaning of that horizon (do not hard-code 0.95/0.99 in the maths).
-     - If enabled, inflate the prior distribution’s spread only as needed so that its \(p\)-quantile is not more optimistic than that upstream horizon.
-     - This behaviour must be guarded by a single stats constant toggle (enabled/disabled) so it can be tested and tuned (see `ENABLE_ANCHOR_PRIOR_TAIL_CONSTRAINT_FROM_PATH_T95` in the same constants file).
-   - **Observed anchor delay (`m̂`)**: compute a cohort-window observed median delay from cohort-slice `anchor_median_lag_days[]` when available (population-weighted over cohorts in the user’s selected window).
-   - **Weight (`w`)**: compute a simple confidence weight \(w \in [0,1]\) that increases with:
-     - cohort coverage (fraction of cohorts in-range with valid `anchor_median_lag_days[]`), and
-     - effective population (sum of denominators for cohorts contributing anchor lag).
-   - **Effective anchor delay (`m_eff`)**: \(m_\text{eff} = w \cdot \hat m + (1-w)\cdot m_0\).
-   - Use `m_eff` for the cohort-mode effective-age adjustment: `effective_age = max(0, anchor_age - m_eff)`.
+   - **Prior anchor delay (`prior_anchor_median_days`)**: derive an A→X prior median delay from upstream baseline `window()` lag summaries (distribution-aware; uses median+mean where available). This is the stable “baseline” source.
+   - **Observed anchor delay (`observed_anchor_median_days`)**: compute a cohort-window observed median delay from cohort-slice `anchor_median_lag_days[]` when available (population-weighted over cohorts in the user’s selected window).
+   - **Weight (`w`)** (finalised):
+     - `forecast_conversions = p.n * p.mean`
+     - `anchor_lag_coverage` = fraction of cohort-days in-range with valid `anchor_median_lag_days[d]`
+     - `effective_forecast_conversions = anchor_lag_coverage * forecast_conversions`
+     - `w = 1 - exp(-effective_forecast_conversions / ANCHOR_DELAY_BLEND_K_CONVERSIONS)`
+     - Constant: `ANCHOR_DELAY_BLEND_K_CONVERSIONS = 50`
+   - **Effective anchor delay (`effective_anchor_median_days`)**:
+     - `effective_anchor_median_days = w * observed_anchor_median_days + (1-w) * prior_anchor_median_days`
+   - Use `effective_anchor_median_days` for the cohort-mode effective-age adjustment:
+     - `effective_age_days = max(0, anchor_age_days - effective_anchor_median_days)`
    - **Note:** this does not introduce new persisted schema fields; it is an internal calculation/diagnostic in the LAG topo pass.
 3. Define behaviour for completely missing anchor evidence:
    - If cohort-slice `anchor_*` arrays are absent, \(w = 0\) and we fall back to the baseline-window-derived prior.
@@ -309,14 +311,9 @@ This plan intentionally avoids deepening reliance on `maturity_days`, since it i
 
 ---
 
-## 8. Open questions (for explicit sign-off)
+## 8. Deferred items (tracked elsewhere)
 
 1. (Deferred) “HAS completed” vs “completed by window end” toggle (tracked in `/TODO.md`).
-2. Cohort-mode fallback policy when anchor lag evidence is missing:
-   - preferred: derive upstream A→X delay prior from baseline-window lag summaries of upstream edges (median+mean → distribution proxy),
-   - confirm the soft-transition weight inputs (coverage + effective population) and the single tuning constant (if any),
-   - how to signal low confidence / “prior-heavy” completeness (diagnostics/logging),
-   - how this interacts with `t95/path_t95` overrides in Phase 2 (horizons remain bounding/planning primitives; completeness meaning does not change).
 
 **Resolved (no sign-off required): baseline window slice selection**
 
@@ -340,9 +337,12 @@ This section is a concrete “what to change where” plan for Phase 1. It inten
   - `graph-editor/src/constants/statisticalConstants.ts`
 
 - **Required changes (Phase 1)**
-  - Add a single **enabled/disabled** boolean flag for the optional anchor-prior tail safety behaviour in the stats constants (location to be finalised under Phase 2 consolidation).
-  - Ensure all code paths that interpret `path_t95` as a percentile horizon consult `LATENCY_PATH_T95_PERCENTILE` (do not hard-code 0.95/0.99).
-  - Keep any consolidation (“single constants file”) as Phase 2 work (see `t95-fix-implementation-plan.md`).
+  - Do not introduce new “stats constants” modules in Phase 1.
+  - Ensure docs and implementations treat percentiles as constants (no hard-coded 0.95/0.99).
+
+**Single source of truth requirement (approved):** all statistics-related constants must live in exactly one place:
+
+- `graph-editor/src/constants/statisticalConstants.ts`
 
 ### 9.2 Window evidence and completeness (window mode must not consult cohort slices)
 
@@ -367,7 +367,7 @@ This section is a concrete “what to change where” plan for Phase 1. It inten
   - Implement the **soft transition** for anchor delay used in cohort-mode completeness:
     - Prior A→X delay from baseline-window-derived upstream priors (median+mean, distribution-aware).
     - Observed A→X delay from cohort-slice `anchor_median_lag_days[]` where present.
-    - Weight \(w\) based on coverage + effective population (single tuning constant to be agreed).
+    - Weight `w` is defined in §5 Phase B above (no remaining tuning decisions).
     - Optional tail safety (if enabled): use upstream `path_t95` horizons at `LATENCY_PATH_T95_PERCENTILE` to avoid overly optimistic tails in the prior.
 
 ### 9.4 Forecast baseline attachment (dual-slice correctness)
