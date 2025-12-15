@@ -129,6 +129,19 @@ Add new fields to all type definitions before any runtime changes.
 
 Establish single source of truth for the default t95 value.
 
+### 1.0 Consolidate statistical constants (single source of truth)
+
+**Requirement (approved):** all statistics-related constants must live in exactly one place. Maintaining two files that both contain statistical constants is not acceptable.
+
+**Files:**
+- `graph-editor/src/constants/statisticalConstants.ts` (canonical home for all statistical constants)
+- `graph-editor/src/constants/latency.ts` (must not contain statistical constants after consolidation)
+
+**Work:**
+- Move any statistical constants currently defined outside `statisticalConstants.ts` into `statisticalConstants.ts`.
+- Update all imports to reference the single canonical file.
+- Leave `latency.ts` only for non-statistics latency-related constants (if any remain).
+
 ### 1.1 Define Default Constant
 
 **File:** `graph-editor/src/constants/statisticalConstants.ts` (single source of truth for stats constants)
@@ -213,6 +226,29 @@ Replace all horizon value reads.
 - Remove `maturity_days` fallback in `computePathT95()` — use only `t95`
 - Remove any `maturity_days` references in LAG calculations
 
+#### 4.1.a Implement “t95 tail constraint” for completeness CDF (fat-tail safety)
+
+**Design reference:** `docs/current/project-lag/t95-fix.md` (section “t95 tail constraint”)
+
+**Goal:** prevent thin-tail completeness on fat-tailed edges, which can cause systematic mis-blending of `p.mean`.
+
+**Implementation scope (explicit):**
+
+- This affects the distribution used for **completeness CDF evaluation** (`p.latency.completeness`) and therefore indirectly affects blending weights.
+- It must not change the meaning of `t95/path_t95` as horizon primitives; it only ensures completeness does not contradict the authoritative `t95`.
+
+**Concrete work:**
+
+- Add a helper in `statisticalEnhancementService.ts` that produces the lognormal CDF parameters used for completeness:
+  - inputs: `median_lag_days`, `mean_lag_days`, authoritative `t95`, and `LATENCY_T95_PERCENTILE`
+  - output: `{ mu, sigma }` where `sigma` is `max(sigma_moments, sigma_min_from_t95)` with guard rails
+- Ensure the completeness calculation path uses this constrained `{ mu, sigma }` whenever:
+  - `median_lag_days` is valid, and
+  - `t95` is present and valid (including user-overridden values)
+- Add session logging (via `sessionLogService`) for cases where the constraint is applied, including:
+  - `median_lag_days`, `mean_lag_days`, `t95`, `sigma_moments`, `sigma_min_from_t95`, `sigma_final`
+  - so we can diagnose fat-tail protection behaviour in the field.
+
 ### 4.2 Cohort Retrieval Horizon
 
 **File:** `graph-editor/src/services/cohortRetrievalHorizon.ts`
@@ -240,6 +276,12 @@ Replace all horizon value reads.
 - Remove `maturity_days` from `queryPayload.cohort`
 - Use `path_t95` → `t95` → `DEFAULT_T95_DAYS` fallback chain for cohort conversion window
 - Stop writing `cohort.maturity_days` in the query payload
+
+### 4.x Window() conversion window policy (Amplitude cs)
+
+**Design requirement:** all `window()` queries to Amplitude must set a fixed conversion window `cs = 30 days` to avoid accidental censoring when building baseline window slices used for lag summaries and `t95` derivation.
+
+- Use `DEFAULT_T95_DAYS = 30` as the single source of truth for this value.
 
 ### 4.6 Window Aggregation Service
 
@@ -295,6 +337,17 @@ Update and add tests for new behaviour.
 
 - Test: derived computation does not overwrite `t95` when `t95_overridden` is true
 - Test: derived computation does not overwrite `path_t95` when `path_t95_overridden` is true
+
+#### 7.1.a Tail constraint tests (completeness CDF respects authoritative t95)
+
+**File:** `graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts`
+
+Required scenarios (prose expectations):
+
+- When `t95` is larger than what the moment-fit would imply, sigma is inflated and completeness decreases for young cohorts.
+- When `t95` is smaller than implied, we do not deflate sigma (tail constraint is one-way).
+- Guard rails: missing/invalid `t95` or `median_lag_days` means no constraint application.
+- Overridden `t95` must be treated as authoritative for the constraint (no mixing).
 
 ### 7.2 Default Injection Tests
 
@@ -358,6 +411,7 @@ Update and add tests for new behaviour.
 
 - Document override behaviour
 - Update horizon descriptions
+- Add the canonical description of the “t95 tail constraint” and how it affects completeness and blending (post-implementation statement of system operation).
 
 ### 8.3 Constants Documentation
 
@@ -367,17 +421,9 @@ Update and add tests for new behaviour.
 - Update comments to reflect new field usage
 - Remove `maturity_days` references
 
-### 8.5 Consolidate statistical constants (single file)
+### 8.5 (Removed) Consolidate statistical constants
 
-All statistical constants used by LAG (percentiles, quality gates, refetch cooldowns, horizon buffers, etc.) should live in **one** file:
-
-- `graph-editor/src/constants/statisticalConstants.ts`
-
-This phase includes:
-
-- Moving any LAG-related constants currently defined elsewhere (e.g. `constants/latency.ts`) into `statisticalConstants.ts`.
-- Updating imports across services/tests to reference the single constants file.
-- Deleting the redundant constants module(s) once no longer referenced.
+This work is executed in **Phase 1.0** to ensure the rest of the migration only has one constants source of truth.
 
 ### 8.4 Schema Cleanup (Optional)
 
@@ -397,6 +443,7 @@ This phase includes:
 - [ ] 0.4 Graph builder — extract new fields
 
 ### Phase 1: Constants & Defaults
+- [ ] 1.0 Consolidate statistical constants into `graph-editor/src/constants/statisticalConstants.ts`
 - [ ] 1.1 Define `DEFAULT_T95_DAYS = 30` constant
 - [ ] 1.2 Default injection logic in UpdateManager
 

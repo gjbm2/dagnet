@@ -238,6 +238,12 @@ NOTE (14-Dec-25): We distinguish two “window” concepts:
 - **Baseline window**: the pinned/merged whole-window slice (typically ~90 days) stored in the param file, used for `p.forecast` and lag-shape priors.
 - **Query window** (`window(start:end)` in the DSL): the user-selected X-entry cohorts whose evidence/completeness are computed by aggregating within the available window-slice daily arrays (it is not necessarily stored as its own slice).
 
+NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
+
+- For `cohort()` queries: `cs` is driven by the cohort conversion horizon (Phase 2: `path_t95`/`t95` with overrides; currently carried via `cohort.maturity_days` as a transport field to the adapter).
+- For `window()` queries (baseline window retrieval): we must set a **fixed** `cs = 30 days` to avoid accidental censoring by provider defaults when building baseline lag summaries and derived horizons.
+  - Design: use `DEFAULT_T95_DAYS = 30` as the single source of truth for this value.
+
 ---
 
 ## 3. Lag Distribution Fitting
@@ -399,6 +405,14 @@ These constants are part of the statistical constants set and should be referenc
 │   evidence for those cohorts, because we care about what HAS happened so far.       │
 │                                                                                     │
 │   A separate “completed by window end” semantic toggle is a deferred requirement.   │
+│                                                                                     │
+│   STRUCTURAL LIMITATION (15-Dec-25): Completeness is currently **model-derived**     │
+│   from the fitted/assumed lag distribution and cohort ages. It does not directly    │
+│   consult realised conversions-to-date (`p.evidence.k/n`). This can be              │
+│   counter-intuitive in some edge cases (e.g. `p.evidence.k > 0` while completeness  │
+│   is ~0 due to a conservative upstream delay adjustment). A potential improvement   │
+│   is to introduce an evidence-informed completeness floor/blend, but this is        │
+│   deferred until after Phase 1 semantics/regression repair is stable.               │
 │                                                                                     │
 │   • completeness → 0:  Cohorts are too young; most conversions still pending        │
 │   • completeness → 1:  Cohorts are mature; nearly all conversions have occurred     │
