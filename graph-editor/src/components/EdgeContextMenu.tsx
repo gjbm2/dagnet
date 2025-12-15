@@ -265,24 +265,33 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   
   // Generic section-based handlers for data operations
   const handleSectionGetFromFile = (section: DataOperationSection) => {
-    const item = createFetchItem(
-      'parameter',
-      section.objectId,
-      section.targetId,
-      { paramSlot: section.paramSlot, conditionalIndex: section.conditionalIndex }
-    );
-    fetchItem(item, { mode: 'from-file' });
+    globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+      detail: {
+        operationType: 'get-from-files',
+        singleTarget: {
+          type: 'parameter',
+          objectId: section.objectId,
+          targetId: section.targetId,
+          paramSlot: section.paramSlot,
+          conditionalIndex: section.conditionalIndex,
+        },
+      },
+    }));
   };
 
   const handleSectionPutToFile = (section: DataOperationSection) => {
-    import('../services/dataOperationsService').then(({ dataOperationsService }) => {
-      dataOperationsService.putParameterToFile({
-        paramId: section.objectId,
-        edgeId: section.targetId,
-        graph,
-        setGraph,
-      });
-    });
+    globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+      detail: {
+        operationType: 'put-to-files',
+        singleTarget: {
+          type: 'parameter',
+          objectId: section.objectId,
+          targetId: section.targetId,
+          paramSlot: section.paramSlot,
+          conditionalIndex: section.conditionalIndex,
+        },
+      },
+    }));
   };
 
   const handleSectionGetFromSourceDirect = (section: DataOperationSection) => {

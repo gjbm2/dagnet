@@ -26,6 +26,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
 import type { Graph, DateRange } from '../types';
+import type { GetFromFileCopyOptions } from './dataOperationsService';
 import { showProgressToast, completeProgressToast } from '../components/ProgressToast';
 import { sessionLogService } from './sessionLogService';
 import { 
@@ -43,6 +44,8 @@ import {
 } from './statisticalEnhancementService';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { UpdateManager } from './UpdateManager';
+import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
+import { roundToDecimalPlaces } from '../utils/rounding';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -80,6 +83,20 @@ export interface FetchOptions {
   setAutoUpdating?: (updating: boolean) => void;
   /** Parent log ID for session log hierarchy linkage */
   parentLogId?: string;
+
+  /**
+   * When mode === 'from-file' and item.type === 'parameter', controls whether permission flags
+   * (`*_overridden`) are copied from file → graph.
+   *
+   * Default: false (do not mutate graph permissions as a side-effect of reads).
+   */
+  includePermissions?: boolean;
+
+  /**
+   * When mode === 'from-file' and item.type === 'parameter', controls what is copied from file → graph.
+   * If provided, this supersedes `includePermissions`.
+   */
+  copyOptions?: GetFromFileCopyOptions;
 }
 
 export interface FetchResult {
@@ -609,6 +626,8 @@ async function fetchSingleItemInternal(
           targetSlice,
           setAutoUpdating: options?.setAutoUpdating,
           conditionalIndex: item.conditionalIndex, // For conditional_p entries
+          includePermissions: options?.includePermissions === true,
+          copyOptions: options?.copyOptions,
         });
         // If getParameterFromFile returned a failure or warning, propagate it
         if (!result.success) {
@@ -838,7 +857,7 @@ export function computeAndApplyPathT95(
           ...edge.p,
           latency: {
             ...edge.p.latency,
-            path_t95: pathT95,
+            path_t95: roundToDecimalPlaces(pathT95, LATENCY_HORIZON_DECIMAL_PLACES),
           },
         },
       };

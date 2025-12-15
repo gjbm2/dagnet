@@ -92,6 +92,7 @@ class ProbabilityParam(BaseModel):
     distribution: Optional[Literal["normal", "beta", "uniform"]] = Field("beta", description="Distribution type")
     distribution_overridden: bool = Field(False, description="If true, distribution was manually edited")
     connection: Optional[str] = Field(None, description="Connection name from connections.yaml")
+    connection_overridden: bool = Field(False, description="If true, connection was manually edited")
     connection_string: Optional[str] = Field(None, description="JSON blob of provider-specific settings")
     evidence: Optional[Evidence] = None
     id: Optional[str] = Field(None, description="Reference to parameter file (FK to parameter-{id}.yaml)")
@@ -112,6 +113,7 @@ class CostParam(BaseModel):
     distribution: Optional[Literal["normal", "lognormal", "gamma", "uniform", "beta"]] = Field("normal")
     distribution_overridden: bool = Field(False, description="If true, distribution was manually edited")
     connection: Optional[str] = Field(None, description="Connection name from connections.yaml")
+    connection_overridden: bool = Field(False, description="If true, connection was manually edited")
     connection_string: Optional[str] = Field(None, description="JSON blob of provider-specific settings")
     evidence: Optional[Evidence] = None
     id: Optional[str] = Field(None, description="Reference to cost parameter file")
@@ -133,6 +135,7 @@ class ConditionalProbability(BaseModel):
     query: Optional[str] = Field(None, description="Full data retrieval query")
     query_overridden: bool = Field(False, description="If true, query was manually edited")
     p: ProbabilityParam
+    colour: Optional[str] = Field(None, description="Display colour for this condition (hex)")
 
 
 # ============================================================================
@@ -303,6 +306,7 @@ class Graph(BaseModel):
     edges: List[Edge]
     policies: Policies
     metadata: Metadata
+    baseDSL: Optional[str] = Field(None, description="Base DSL that is always applied (e.g. global context filters)")
     currentQueryDSL: Optional[str] = Field(None, description="Current user query DSL for UI persistence")
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")
     

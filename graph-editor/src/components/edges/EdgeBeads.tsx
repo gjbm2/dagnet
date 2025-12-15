@@ -5,12 +5,13 @@
  * Each bead can be expanded to show detailed information or collapsed to a circle.
  */
 
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState, useCallback } from 'react';
 import { EdgeLabelRenderer } from 'reactflow';
 import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_HEIGHT, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
+import { hasAnyEdgeQueryOverride, listOverriddenFlagPaths } from '../../utils/overrideFlags';
 
 // Helper to extract text content from React node for SVG textPath
 function extractTextFromReactNode(node: React.ReactNode): string {
@@ -138,13 +139,30 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge.p?.mean, // Probability value
     edge.p?.stdev, // Standard deviation
     edge.p?.mean_overridden, // Override flag for probability
+    edge.p?.stdev_overridden, // Override flag for probability stdev
+    edge.p?.distribution_overridden, // Override flag for probability distribution
+    edge.p?.latency?.latency_parameter_overridden, // Override flag for latency enablement
+    edge.p?.latency?.anchor_node_id_overridden, // Override flag for anchor node
+    edge.p?.latency?.t95_overridden, // Override flag for t95
+    edge.p?.latency?.path_t95_overridden, // Override flag for path_t95
     edge.cost_gbp?.mean, // GBP cost
     edge.cost_gbp?.mean_overridden, // Override flag for GBP cost
+    (edge.cost_gbp as any)?.stdev_overridden, // Override flag for GBP cost stdev
+    (edge.cost_gbp as any)?.distribution_overridden, // Override flag for GBP cost distribution
     edge.labour_cost?.mean, // Time cost
     edge.labour_cost?.mean_overridden, // Override flag for time cost
+    (edge.labour_cost as any)?.stdev_overridden, // Override flag for time cost stdev
+    (edge.labour_cost as any)?.distribution_overridden, // Override flag for time cost distribution
     edge.case_variant, // Case variant name
     edge.conditional_p?.length, // Conditional probabilities count
+    JSON.stringify(edge.conditional_p ?? []), // Conditional entries (override flags / query overrides)
     edge.query_overridden, // Override flag for query
+    (edge as any).n_query, // n_query presence is treated as an override indicator
+    (edge as any).n_query_overridden, // Override flag for n_query
+    // IMPORTANT: Some override flags live on fields we don't explicitly list here (e.g. connection_overridden).
+    // Include a compact override signature so EdgeBeads re-renders for ANY override changes.
+    listOverriddenFlagPaths(edge).join('|'),
+    hasAnyEdgeQueryOverride(edge),
     graph?.nodes?.length, // Graph structure indicator
     graph?.metadata?.updated_at, // Bump when graph data (e.g. case variants) changes
     // scenariosContext changes reference frequently - use stable indicators instead
@@ -157,6 +175,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     whatIfDSL, // What-If DSL
     visibleStartOffset, // Visible start offset
   ]);
+
   
   // Get expansion state for a specific bead
   const getBeadExpanded = useCallback((bead: BeadDefinition): boolean => {
@@ -571,7 +590,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             </g>
           )}
           
-          {/* ZapOff icon after plug (if query is overridden) */}
+          {/* ZapOff icon after plug (if overridden) */}
           {hasOverride && (() => {
             // Position ZapOff icon after plug (or after text if no plug)
             const zapOffDistance = hasPlug 
@@ -598,13 +617,16 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
                   height={BEAD_FONT_SIZE}
                   style={{ overflow: 'visible' }}
                 >
-                  <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    width: `${BEAD_FONT_SIZE}px`,
-                    height: `${BEAD_FONT_SIZE}px`
-                  }}>
+                  <div
+                    title={bead.overrideTooltip}
+                    style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      width: `${BEAD_FONT_SIZE}px`,
+                      height: `${BEAD_FONT_SIZE}px`
+                    }}
+                  >
                     <ZapOff 
                       size={BEAD_FONT_SIZE} 
                       strokeWidth={2}
@@ -772,13 +794,29 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.edge?.p?.mean === nextProps.edge?.p?.mean &&
     prevProps.edge?.p?.stdev === nextProps.edge?.p?.stdev &&
     prevProps.edge?.p?.mean_overridden === nextProps.edge?.p?.mean_overridden &&
+    prevProps.edge?.p?.stdev_overridden === nextProps.edge?.p?.stdev_overridden &&
+    prevProps.edge?.p?.distribution_overridden === nextProps.edge?.p?.distribution_overridden &&
+    prevProps.edge?.p?.latency?.latency_parameter_overridden === nextProps.edge?.p?.latency?.latency_parameter_overridden &&
+    prevProps.edge?.p?.latency?.anchor_node_id_overridden === nextProps.edge?.p?.latency?.anchor_node_id_overridden &&
+    prevProps.edge?.p?.latency?.t95_overridden === nextProps.edge?.p?.latency?.t95_overridden &&
+    prevProps.edge?.p?.latency?.path_t95_overridden === nextProps.edge?.p?.latency?.path_t95_overridden &&
     prevProps.edge?.query_overridden === nextProps.edge?.query_overridden &&
+    (prevProps.edge as any)?.n_query === (nextProps.edge as any)?.n_query &&
+    (prevProps.edge as any)?.n_query_overridden === (nextProps.edge as any)?.n_query_overridden &&
     prevProps.edge?.cost_gbp?.mean === nextProps.edge?.cost_gbp?.mean &&
     prevProps.edge?.cost_gbp?.mean_overridden === nextProps.edge?.cost_gbp?.mean_overridden &&
+    (prevProps.edge?.cost_gbp as any)?.stdev_overridden === (nextProps.edge?.cost_gbp as any)?.stdev_overridden &&
+    (prevProps.edge?.cost_gbp as any)?.distribution_overridden === (nextProps.edge?.cost_gbp as any)?.distribution_overridden &&
     prevProps.edge?.labour_cost?.mean === nextProps.edge?.labour_cost?.mean &&
     prevProps.edge?.labour_cost?.mean_overridden === nextProps.edge?.labour_cost?.mean_overridden &&
+    (prevProps.edge?.labour_cost as any)?.stdev_overridden === (nextProps.edge?.labour_cost as any)?.stdev_overridden &&
+    (prevProps.edge?.labour_cost as any)?.distribution_overridden === (nextProps.edge?.labour_cost as any)?.distribution_overridden &&
     prevProps.edge?.case_variant === nextProps.edge?.case_variant &&
     prevProps.edge?.conditional_p?.length === nextProps.edge?.conditional_p?.length &&
+    JSON.stringify(prevProps.edge?.conditional_p ?? []) === JSON.stringify(nextProps.edge?.conditional_p ?? []) &&
+    // Any override changes (including less-common flags like connection_overridden) must re-render
+    listOverriddenFlagPaths(prevProps.edge).join('|') === listOverriddenFlagPaths(nextProps.edge).join('|') &&
+    hasAnyEdgeQueryOverride(prevProps.edge) === hasAnyEdgeQueryOverride(nextProps.edge) &&
     // Graph structure and update timestamp - catches ALL graph changes
     prevProps.graph?.nodes?.length === nextProps.graph?.nodes?.length &&
     prevProps.graph?.metadata?.updated_at === nextProps.graph?.metadata?.updated_at &&

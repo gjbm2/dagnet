@@ -139,8 +139,8 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 
 ## Version Information
 
-- **Version**: 1.0.0
-- **Build Date**: January 2025
+- **Version**: 1.1
+- **Build Date**: December 2025
 - **License**: MIT
 - **Repository**: [github.com/gjbm2/dagnet](https://github.com/gjbm2/dagnet)
 

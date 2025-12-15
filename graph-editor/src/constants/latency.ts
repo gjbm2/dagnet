@@ -120,6 +120,32 @@ export const LATENCY_T95_PERCENTILE = 0.979
 export const LATENCY_PATH_T95_PERCENTILE = 0.99
 
 /**
+ * Decimal places to use when persisting latency horizon values (days).
+ *
+ * Applies to:
+ * - `p.latency.t95`
+ * - `p.latency.path_t95`
+ * - `latency.t95` / `latency.path_t95` in parameter files (graph ↔ file sync)
+ *
+ * Rationale:
+ * - Horizons are displayed in days; more than 2 d.p. is noise and makes diffs harder to read.
+ */
+export const LATENCY_HORIZON_DECIMAL_PLACES = 2;
+
+/**
+ * Decimal places to use for lag summary values (days).
+ *
+ * Applies to display-only lag summaries like:
+ * - `p.latency.median_lag_days`
+ * - `p.latency.mean_lag_days`
+ *
+ * Rationale:
+ * - These can be sub-day values (minutes). 2 d.p. would collapse them to 0.00d.
+ * - 4 d.p. keeps minute-level information while avoiding noisy 10+ d.p. churn.
+ */
+export const LATENCY_LAG_DECIMAL_PLACES = 4;
+
+/**
  * Cooldown for latency-aware refetching.
  *
  * When a slice was fetched very recently (based on `data_source.retrieved_at`),

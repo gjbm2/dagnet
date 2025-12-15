@@ -66,16 +66,43 @@ export function AutomatableField({
   const { isAutoUpdating } = useGraphStore();
   const [isDirty, setIsDirty] = useState(false);
   const [shouldAnimate, setShouldAnimate] = useState(false);
+  const [shouldPulseOverrideIcon, setShouldPulseOverrideIcon] = useState(false);
   const [hasFocus, setHasFocus] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
   const prevValueRef = useRef(value);
+  const prevOverriddenRef = useRef(overridden);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const animationTimeoutRef = useRef<NodeJS.Timeout>();
+  const overridePulseTimeoutRef = useRef<NodeJS.Timeout>();
   
   // Reset dirty when override changes (clear action or external set)
   useEffect(() => {
     if (overridden) {
       setIsDirty(false);
+    }
+  }, [overridden]);
+
+  // Pulse when a field becomes overridden (user manual edit commits)
+  useEffect(() => {
+    const prev = prevOverriddenRef.current;
+    const curr = overridden;
+    prevOverriddenRef.current = curr;
+
+    if (!prev && curr) {
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current);
+      }
+      if (overridePulseTimeoutRef.current) {
+        clearTimeout(overridePulseTimeoutRef.current);
+      }
+      setShouldAnimate(true);
+      setShouldPulseOverrideIcon(true);
+      overridePulseTimeoutRef.current = setTimeout(() => {
+        setShouldAnimate(false);
+        setShouldPulseOverrideIcon(false);
+        animationTimeoutRef.current = undefined;
+        overridePulseTimeoutRef.current = undefined;
+      }, 600);
     }
   }, [overridden]);
   
@@ -200,7 +227,7 @@ export function AutomatableField({
   // Render ZapOff button
   const renderZapOffButton = () => (
     <button
-      className={`override-toggle ${!showAsEnabled ? 'disabled' : ''}`}
+      className={`override-toggle ${!showAsEnabled ? 'disabled' : ''} ${shouldPulseOverrideIcon ? 'pulse-override' : ''}`}
       onClick={() => {
         onClearOverride();
         setIsDirty(false);

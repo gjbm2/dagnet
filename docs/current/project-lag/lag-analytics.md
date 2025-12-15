@@ -342,10 +342,10 @@ To support the Cohorts view without duplicating logic:
   - Reuses existing window aggregation and statistical enhancement functions to:
     - Compute cohort ages as at the analysis date.
     - Determine completeness per cohort and per edge on the path.
-    - Apply Formula A to project final conversion probabilities where evidence is immature.
+    - Use the **canonical completeness-weighted blend** (evidence + forecast) to project final conversion probabilities where evidence is immature (no “Formula A” tail substitution).
   - Exposes, per cohort and per edge:
     - Observed converters to date (from `k_daily`).
-    - Estimated eventual converters (from forecast/Formula A).
+    - Estimated eventual converters (from forecast + canonical blend).
     - Uncertainty bands (using LAG’s log‑normal distribution and, where appropriate, binomial variance heuristics).
 
 - The runner itself then:
@@ -389,7 +389,7 @@ For each `(cohort, scenario)` pair, the runner should aim to expose:
   - Path‑wise completeness (based on `path_t95` and anchor‑based lag semantics).
 
 - Projection and fan chart parameters:
-  - Projected eventual conversion probability (from Formula A).
+  - Projected eventual conversion probability (from the canonical completeness-weighted blend).
   - Projected eventual number of converters (probability × anchor cohort size).
   - Lower and upper bounds (e.g. a 90% or 95% interval) for final conversion counts.
   - Any quality flags indicating whether projections are extrapolation‑heavy (very low completeness) or data‑driven (high completeness, large n).

@@ -7,6 +7,7 @@
 
 import { paramRegistryService } from './paramRegistryService';
 import { fileRegistry } from '../contexts/TabContext';
+import { db } from '../db/appDatabase';
 
 export interface ContextDefinition {
   id: string;
@@ -44,8 +45,20 @@ export interface SourceMapping {
   patternFlags?: string;
 }
 
+export interface ContextSection {
+  id: string;
+  name: string;
+  values: ContextValue[];
+  otherPolicy?: ContextDefinition['otherPolicy'];
+}
+
 export class ContextRegistry {
   private cache: Map<string, ContextDefinition> = new Map();
+  
+  private cacheKey(id: string, workspace?: { repository: string; branch: string }): string {
+    if (!workspace) return id;
+    return `${workspace.repository}/${workspace.branch}:${id}`;
+  }
   
   /**
    * Clear the cache to force reload from source.
@@ -59,9 +72,13 @@ export class ContextRegistry {
    * Get context definition (loads and caches).
    * Tries param registry (filesystem) first for fresh data, then falls back to workspace.
    */
-  async getContext(id: string): Promise<ContextDefinition | undefined> {
-    if (this.cache.has(id)) {
-      return this.cache.get(id);
+  async getContext(
+    id: string,
+    options?: { workspace?: { repository: string; branch: string } }
+  ): Promise<ContextDefinition | undefined> {
+    const key = this.cacheKey(id, options?.workspace);
+    if (this.cache.has(key)) {
+      return this.cache.get(key);
     }
     
     try {
@@ -71,7 +88,7 @@ export class ContextRegistry {
         const context = await paramRegistryService.loadContext(id) as ContextDefinition;
         if (context) {
           console.log(`[ContextRegistry] Loaded ${id} from filesystem`);
-          this.cache.set(id, context);
+          this.cache.set(key, context);
           return context;
         }
       } catch (fsError) {
@@ -84,9 +101,32 @@ export class ContextRegistry {
         if (file.type === 'context' && file.data?.id === id) {
           console.log(`[ContextRegistry] Found ${id} in workspace as ${file.fileId}`);
           const context = file.data as ContextDefinition;
-          this.cache.set(id, context);
+          this.cache.set(key, context);
           return context;
         }
+      }
+
+      // Fall back to IndexedDB records for the current workspace even if the file isn't loaded into FileRegistry.
+      // This is critical for WindowSelector's "+ Contexts" flow: when the pinned DSL has no contexts, we still need
+      // to list all available contexts without requiring the user to open context files first.
+      try {
+        const allContextFiles = await db.files.where('type').equals('context').toArray();
+        const scoped = options?.workspace
+          ? allContextFiles.filter(f =>
+              f.source?.repository === options.workspace!.repository &&
+              f.source?.branch === options.workspace!.branch
+            )
+          : allContextFiles;
+        
+        const match = scoped.find(f => (f as any).data?.id === id);
+        if (match?.data) {
+          console.log(`[ContextRegistry] Found ${id} in IndexedDB as ${match.fileId}`);
+          const context = match.data as any as ContextDefinition;
+          this.cache.set(key, context);
+          return context;
+        }
+      } catch (idbError) {
+        console.warn(`[ContextRegistry] Could not load ${id} from IndexedDB:`, idbError);
       }
       
       console.error(`[ContextRegistry] Context ${id} not found in filesystem or workspace`);
@@ -101,21 +141,28 @@ export class ContextRegistry {
    * Get values for a context, respecting otherPolicy.
    * Returns values that should appear in UI dropdowns.
    */
-  async getValuesForContext(contextId: string): Promise<ContextValue[]> {
-    const ctx = await this.getContext(contextId);
+  async getValuesForContext(
+    contextId: string,
+    options?: { workspace?: { repository: string; branch: string } }
+  ): Promise<ContextValue[]> {
+    const ctx = await this.getContext(contextId, options);
     if (!ctx) return [];
     
     const policy = ctx.otherPolicy || 'undefined';
-    const hasOther = ctx.values.some(v => v.id === 'other');
+    const rawValues = Array.isArray((ctx as any).values) ? (ctx as any).values as ContextValue[] : [];
+    if (!Array.isArray((ctx as any).values)) {
+      console.warn(`[ContextRegistry] Context ${contextId} has no values array; treating as empty`);
+    }
+    const hasOther = rawValues.some(v => v.id === 'other');
     
     console.log(`[ContextRegistry] getValuesForContext(${contextId}):`, {
       otherPolicy: policy,
-      totalValues: ctx.values.length,
+      totalValues: rawValues.length,
       hasOther,
-      valueIds: ctx.values.map(v => v.id)
+      valueIds: rawValues.map(v => v.id)
     });
     
-    let values = [...ctx.values];
+    let values = [...rawValues];
     
     switch (policy) {
       case 'null':
@@ -149,6 +196,47 @@ export class ContextRegistry {
     console.log(`[ContextRegistry] Returning values (policy=${policy}):`, values.map(v => v.id));
     return values;
   }
+
+  /**
+   * Build a UI section object for a context key.
+   * Returns null if the context can't be loaded.
+   */
+  async getContextSection(
+    contextId: string,
+    options?: { workspace?: { repository: string; branch: string } }
+  ): Promise<ContextSection | null> {
+    const context = await this.getContext(contextId, options);
+    if (!context) return null;
+
+    const values = await this.getValuesForContext(contextId, options);
+    return {
+      id: contextId,
+      name: contextId.replace(/_/g, ' ').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+      values,
+      otherPolicy: context.otherPolicy,
+    };
+  }
+
+  /**
+   * Build UI sections for a list of context keys.
+   * Uses all-settled semantics so a single malformed context can't break the whole dropdown.
+   */
+  async getContextSections(
+    keys: Array<{ id: string }>,
+    options?: { workspace?: { repository: string; branch: string } }
+  ): Promise<ContextSection[]> {
+    const results = await Promise.allSettled(
+      keys.map(k => this.getContextSection(k.id, options))
+    );
+
+    const sections: ContextSection[] = [];
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) {
+        sections.push(r.value);
+      }
+    }
+    return sections;
+  }
   
   /**
    * Get source mapping for a specific (key, value, source) combination.
@@ -171,7 +259,7 @@ export class ContextRegistry {
    * Get all context keys.
    * Tries param registry (filesystem) first, then falls back to workspace.
    */
-  async getAllContextKeys(): Promise<Array<{ id: string; type: string; status: string; fileId?: string }>> {
+  async getAllContextKeys(options?: { workspace?: { repository: string; branch: string } }): Promise<Array<{ id: string; type: string; status: string; fileId?: string }>> {
     // Try param registry FIRST (loads from filesystem - always fresh)
     try {
       console.log('[ContextRegistry] Loading contexts index from param registry (filesystem)...');
@@ -184,28 +272,69 @@ export class ContextRegistry {
       console.log('[ContextRegistry] Could not load contexts index from filesystem:', fsError);
     }
     
-    // Fall back to workspace (IndexedDB)
+    // Fall back to workspace sources.
+    // Prefer IndexedDB (source of truth for files) because FileRegistry only contains a subset (open tabs).
     const contextKeys: Array<{ id: string; type: string; status: string; fileId?: string }> = [];
     
-    const allFiles = Array.from((fileRegistry as any).files?.values() || []) as any[];
-    console.log('[ContextRegistry] Scanning fileRegistry, total files:', allFiles.length);
-    const contextFiles = allFiles.filter((f: any) => f.type === 'context');
-    console.log('[ContextRegistry] Context files found:', contextFiles.map((f: any) => ({ fileId: f.fileId, dataId: f.data?.id })));
-    
-    for (const file of allFiles) {
-      if (file.type === 'context' && file.data?.id) {
-        console.log('[ContextRegistry] Found context file:', file.fileId, 'with id:', file.data.id);
+    try {
+      const allContextFiles = await db.files.where('type').equals('context').toArray();
+      const scoped = options?.workspace
+        ? allContextFiles.filter(f =>
+            f.source?.repository === options.workspace!.repository &&
+            f.source?.branch === options.workspace!.branch
+          )
+        : allContextFiles;
+      for (const file of scoped) {
+        const data: any = (file as any).data;
+        if (!data?.id) continue;
         contextKeys.push({
-          id: file.data.id,
-          type: file.data.type || 'categorical',
-          status: file.data.metadata?.status || 'active',
-          fileId: file.fileId
+          id: data.id,
+          type: data.type || 'categorical',
+          status: data.metadata?.status || 'active',
+          fileId: file.fileId,
         });
+      }
+    } catch (idbError) {
+      console.warn('[ContextRegistry] Could not load contexts from IndexedDB, falling back to FileRegistry scan:', idbError);
+      
+      const allFiles = Array.from((fileRegistry as any).files?.values() || []) as any[];
+      console.log('[ContextRegistry] Scanning fileRegistry, total files:', allFiles.length);
+      for (const file of allFiles) {
+        if (file.type === 'context' && file.data?.id) {
+          contextKeys.push({
+            id: file.data.id,
+            type: file.data.type || 'categorical',
+            status: file.data.metadata?.status || 'active',
+            fileId: file.fileId
+          });
+        }
       }
     }
     
-    console.log('[ContextRegistry] Found contexts in workspace:', contextKeys);
-    return contextKeys;
+    // Deduplicate by id (IDB can contain both prefixed and unprefixed copies).
+    const deduped = new Map<string, { id: string; type: string; status: string; fileId?: string }>();
+    for (const entry of contextKeys) {
+      const existing = deduped.get(entry.id);
+      if (!existing) {
+        deduped.set(entry.id, entry);
+        continue;
+      }
+      const existingFileId = existing.fileId || '';
+      const nextFileId = entry.fileId || '';
+      // Prefer unprefixed fileIds (usually start with "context-"), otherwise prefer the shorter one.
+      const existingIsUnprefixed = existingFileId.startsWith('context-');
+      const nextIsUnprefixed = nextFileId.startsWith('context-');
+      const shouldReplace =
+        (nextIsUnprefixed && !existingIsUnprefixed) ||
+        (!existingIsUnprefixed && !nextIsUnprefixed && nextFileId.length > 0 && nextFileId.length < existingFileId.length);
+      if (shouldReplace) {
+        deduped.set(entry.id, entry);
+      }
+    }
+    
+    const result = Array.from(deduped.values());
+    console.log('[ContextRegistry] Found contexts in workspace:', result);
+    return result;
   }
   
   /**
