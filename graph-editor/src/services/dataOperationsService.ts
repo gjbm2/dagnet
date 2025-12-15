@@ -73,6 +73,31 @@ import { DIAGNOSTIC_LOG } from '../constants/statisticalConstants';
 import { normalizeWindow } from './fetchDataService';
 import { LATENCY_T95_PERCENTILE, LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
 
+export type PermissionCopyMode = 'copy_all' | 'copy_if_false' | 'do_not_copy';
+export interface PutToFileCopyOptions {
+  includeValues?: boolean;
+  includeMetadata?: boolean;
+  permissionsMode?: PermissionCopyMode;
+}
+
+export interface GetFromFileCopyOptions {
+  /**
+   * If true, copy scalar/value fields from file → graph.
+   * Default true for explicit GET.
+   */
+  includeValues?: boolean;
+  /**
+   * If true, copy metadata/config fields from file → graph (query/connection/latency config/etc).
+   * Default true for explicit GET.
+   */
+  includeMetadata?: boolean;
+  /**
+   * Controls copying of permission flags (override flags) from file → graph.
+   * Default do_not_copy to avoid unexpected permission changes.
+   */
+  permissionsMode?: PermissionCopyMode;
+}
+
 // Cached DAS runner instance for connection lookups (avoid recreating per-call)
 let cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
 function getCachedDASRunner() {
@@ -640,6 +665,10 @@ class DataOperationsService {
     suppressSignatureWarning?: boolean; // If true, don't show warning about different query signatures (e.g., after bust cache)
     suppressMissingDataToast?: boolean; // If true, don't show toast about missing days (e.g., after fetch from source - user knows data may be incomplete)
     conditionalIndex?: number; // For conditional_p entries - which index to update
+    /** Back-compat: if true, copy permission flags (override flags) from file → graph. Defaults to false. */
+    includePermissions?: boolean;
+    /** New: explicit copy options for GET-from-file */
+    copyOptions?: GetFromFileCopyOptions;
   }): Promise<{ success: boolean; warning?: string }> {
     const timingStart = performance.now();
     const timings: Record<string, number> = {};
@@ -648,6 +677,14 @@ class DataOperationsService {
     };
     
     const { paramId, edgeId, graph, setGraph, setAutoUpdating, window: explicitWindow, targetSlice = '', suppressSignatureWarning = false, suppressMissingDataToast = false, conditionalIndex } = options;
+
+    const includeValues = options.copyOptions?.includeValues !== false;
+    const includeMetadata = options.copyOptions?.includeMetadata !== false;
+    const permissionsMode: PermissionCopyMode = options.copyOptions?.permissionsMode
+      ?? (options.includePermissions === true ? 'copy_all' : 'do_not_copy');
+
+    // Whether we copy any permission flags at all.
+    const includePermissions = permissionsMode !== 'do_not_copy';
     
     // Parse window AND cohort from targetSlice DSL if not explicitly provided
     // This ensures single source of truth - DSL contains window, cohort, and context
@@ -1668,7 +1705,13 @@ class DataOperationsService {
         targetEdge,        // target (graph edge) - used for override checks, not mutated
         'UPDATE',          // operation
         'parameter',       // sub-destination
-        { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
+        {
+          interactive: true,
+          validateOnly: true,
+          // IMPORTANT: explicit GET should be able to copy permission flags without forcing
+          // overwrites of overridden value fields.
+          allowPermissionFlagCopy: includePermissions,
+        }
       );
       markTime('afterUpdateManager');
       
@@ -1701,6 +1744,41 @@ class DataOperationsService {
       });
       
       if (edgeIndex >= 0 && result.changes) {
+        // Filter changes by requested copy options (values / metadata / permissions).
+        const isPermissionField = (field: string): boolean => field.includes('_overridden');
+        const isValueField = (field: string): boolean => {
+          // Probability
+          if (field === 'p.mean' || field === 'p.stdev' || field === 'p.distribution') return true;
+          if (field.startsWith('p.evidence.') || field.startsWith('p.forecast.')) return true;
+          // Latency *data* (display-only) fields
+          if (field === 'p.latency.median_lag_days' || field === 'p.latency.completeness') return true;
+          // Cost params
+          if (field === 'cost_gbp.mean' || field === 'cost_gbp.stdev' || field === 'cost_gbp.distribution') return true;
+          if (field.startsWith('cost_gbp.evidence.')) return true;
+          if (field === 'labour_cost.mean' || field === 'labour_cost.stdev' || field === 'labour_cost.distribution') return true;
+          if (field.startsWith('labour_cost.evidence.')) return true;
+          return false;
+        };
+
+        const filteredChanges = (result.changes as any[]).filter((c: any) => {
+          const field = String(c.field || '');
+          const isPerm = isPermissionField(field);
+          if (isPerm) {
+            if (permissionsMode === 'do_not_copy') return false;
+            if (permissionsMode === 'copy_if_false') {
+              return c.newValue === true && c.oldValue !== true;
+            }
+            return true; // copy_all
+          }
+
+          const isVal = isValueField(field);
+          if (isVal) return includeValues;
+          return includeMetadata;
+        });
+
+        // Replace changes with filtered list for downstream apply logic.
+        (result as any).changes = filteredChanges;
+
         // ===== CONDITIONAL_P HANDLING =====
         // Use unified UpdateManager code path for conditional probability updates
         if (conditionalIndex !== undefined) {
@@ -1931,13 +2009,20 @@ class DataOperationsService {
     graph: Graph | null;
     setGraph: (graph: Graph | null) => void;
     conditionalIndex?: number; // For conditional_p entries - which index to write from
+    copyOptions?: PutToFileCopyOptions;
   }): Promise<void> {
     const { paramId, edgeId, graph, conditionalIndex } = options;
+    const includeValues = options.copyOptions?.includeValues !== false;
+    const includeMetadata = options.copyOptions?.includeMetadata !== false;
+    const permissionsMode: PermissionCopyMode = options.copyOptions?.permissionsMode ?? 'copy_all';
     
     console.log('[DataOperationsService] putParameterToFile CALLED:', {
       paramId,
       edgeId,
       conditionalIndex,
+      includeValues,
+      includeMetadata,
+      permissionsMode,
       timestamp: new Date().toISOString()
     });
     
@@ -2026,7 +2111,68 @@ class DataOperationsService {
       // ===== END CONDITIONAL_P HANDLING =====
       else if (sourceEdge.p?.id === paramId) {
         // Writing probability parameter - keep only p field
-        filteredEdge = { p: sourceEdge.p };
+        // IMPORTANT: some parameter-file fields live on the EDGE (query/n_query + override flags),
+        // so we must include them for UpdateManager graph→file mappings.
+        const pClone = structuredClone(sourceEdge.p);
+
+        // Control whether we copy permission flags (override flags) into the parameter file.
+        // Defaults to copy_all to match current behaviour; caller can disable or make it one-way.
+        if (permissionsMode !== 'copy_all') {
+          // Query/N-query flags live on edge; latency flags live under p.latency.
+          // When permissions are not copied, remove all overridden flags from the payload.
+          // When copying only-if-false, only send true flags when the file isn't already locked.
+          const targetFile = paramFile?.data;
+          const targetLatency = targetFile?.latency ?? {};
+
+          // Latency flags under p.latency
+          if (pClone?.latency) {
+            const srcLat = pClone.latency;
+            const maybeKeepTrue = (flagKey: string, targetFlag: any) => {
+              if (permissionsMode === 'do_not_copy') {
+                delete srcLat[flagKey];
+                return;
+              }
+              if (permissionsMode === 'copy_if_false') {
+                if (targetFlag === true) {
+                  delete srcLat[flagKey];
+                  return;
+                }
+                if (srcLat[flagKey] === true) {
+                  // keep true (promote)
+                  return;
+                }
+                delete srcLat[flagKey];
+              }
+            };
+
+            maybeKeepTrue('latency_parameter_overridden', targetLatency.latency_parameter_overridden);
+            maybeKeepTrue('anchor_node_id_overridden', targetLatency.anchor_node_id_overridden);
+            maybeKeepTrue('t95_overridden', targetLatency.t95_overridden);
+            maybeKeepTrue('path_t95_overridden', targetLatency.path_t95_overridden);
+          }
+        }
+
+        filteredEdge = {
+          p: pClone,
+          query: sourceEdge.query,
+          query_overridden: sourceEdge.query_overridden,
+          n_query: sourceEdge.n_query,
+          n_query_overridden: sourceEdge.n_query_overridden,
+        };
+
+        // If user requested no permission copying, remove edge-level override flags from payload.
+        if (permissionsMode === 'do_not_copy') {
+          delete filteredEdge.query_overridden;
+          delete filteredEdge.n_query_overridden;
+        } else if (permissionsMode === 'copy_if_false') {
+          const targetFile = paramFile?.data;
+          if (targetFile?.query_overridden === true || filteredEdge.query_overridden !== true) {
+            delete filteredEdge.query_overridden;
+          }
+          if (targetFile?.n_query_overridden === true || filteredEdge.n_query_overridden !== true) {
+            delete filteredEdge.n_query_overridden;
+          }
+        }
       } else if (sourceEdge.cost_gbp?.id === paramId) {
         // Writing cost_gbp parameter - keep only cost_gbp field
         filteredEdge = { cost_gbp: sourceEdge.cost_gbp };
@@ -2056,28 +2202,39 @@ class DataOperationsService {
       }
       
       // Call UpdateManager to transform data (validateOnly mode - don't apply yet)
-      const result = await updateManager.handleGraphToFile(
-        filteredEdge,      // source (filtered to only relevant parameter)
-        paramFile.data,    // target (parameter file)
-        'APPEND',          // operation (append to values[])
-        'parameter',       // sub-destination
-        { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
-      );
-      
-      if (!result.success || !result.changes) {
-        toast.error('Failed to update file');
-        return;
+      let result: any = null;
+      if (includeValues) {
+        result = await updateManager.handleGraphToFile(
+          filteredEdge,      // source (filtered to only relevant parameter)
+          paramFile.data,    // target (parameter file)
+          'APPEND',          // operation (append to values[])
+          'parameter',       // sub-destination
+          { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
+        );
+        
+        if (!result.success || !result.changes) {
+          toast.error('Failed to update file');
+          return;
+        }
       }
       
       // Also update connection settings (UPDATE operation, not APPEND)
       // Connection settings go to top-level fields, not values[]
-      const updateResult = await updateManager.handleGraphToFile(
-        filteredEdge,      // source (filtered to only relevant parameter)
-        paramFile.data,    // target (parameter file)
-        'UPDATE',          // operation (update top-level fields)
-        'parameter',       // sub-destination
-        { interactive: true, validateOnly: true }  // Don't apply in UpdateManager, we'll use applyChanges
-      );
+      const ignoreOverrideFlags = permissionsMode === 'copy_all';
+      const updateResult = includeMetadata
+        ? await updateManager.handleGraphToFile(
+            filteredEdge,      // source (filtered to only relevant parameter)
+            paramFile.data,    // target (parameter file)
+            'UPDATE',          // operation (update top-level fields)
+            'parameter',       // sub-destination
+            {
+              interactive: true,
+              validateOnly: true,
+              ignoreOverrideFlags,
+              allowPermissionFlagCopy: permissionsMode !== 'do_not_copy',
+            }  // Explicit PUT: optionally copy permissions
+          )
+        : { success: true, changes: [] };
       
       // Apply changes to file data
       const updatedFileData = structuredClone(paramFile.data);
@@ -2085,7 +2242,7 @@ class DataOperationsService {
         paramId,
         isNewFile,
         createChanges: createResult?.changes ? JSON.stringify(createResult.changes, null, 2) : 'none',
-        appendChanges: JSON.stringify(result.changes, null, 2),
+        appendChanges: result?.changes ? JSON.stringify(result.changes, null, 2) : 'none',
         updateChanges: updateResult.changes ? JSON.stringify(updateResult.changes, null, 2) : 'none'
       });
       
@@ -2095,7 +2252,9 @@ class DataOperationsService {
       }
       
       // Apply APPEND changes (values[])
-      applyChanges(updatedFileData, result.changes);
+      if (includeValues && result?.changes) {
+        applyChanges(updatedFileData, result.changes);
+      }
       
       // Apply UPDATE changes (connection settings, etc.)
       if (updateResult.success && updateResult.changes) {
@@ -2958,31 +3117,80 @@ class DataOperationsService {
       let connectionName: string | undefined;
       let connectionString: any = {};
       
-      // Try to get connection info from parameter/case/node file (if objectId provided)
-      if (objectId) {
-      const fileId = `${objectType}-${objectId}`;
-      const file = fileRegistry.getFile(fileId);
-      
+      // Persisted config selection (critical):
+      // - Versioned parameter fetch: prefer parameter file connection/connection_string
+      // - Direct parameter fetch: prefer graph edge connection/connection_string
+      // - Cases: versionedCase uses file; direct uses node.case
+      if (objectType === 'parameter' && targetId && graph) {
+        const targetEdge: any = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
+        const paramFile = objectId ? fileRegistry.getFile(`parameter-${objectId}`) : undefined;
+        const { selectPersistedProbabilityConfig } = await import('./persistedParameterConfigService');
+        const graphParam =
+          conditionalIndex !== undefined ? targetEdge?.conditional_p?.[conditionalIndex]?.p : (paramSlot ? targetEdge?.[paramSlot] : targetEdge?.p);
+        const persisted = selectPersistedProbabilityConfig({
+          writeToFile: writeToFile === true,
+          fileParamData: paramFile?.data,
+          graphParam,
+          graphEdge: targetEdge,
+        });
+        connectionName = persisted.connection;
+        if (persisted.connection_string) {
+          try {
+            connectionString = typeof persisted.connection_string === 'string'
+              ? JSON.parse(persisted.connection_string)
+              : persisted.connection_string;
+          } catch (e) {
+            toast.error('Invalid connection_string JSON in persisted parameter config');
+            sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON in persisted parameter config');
+            return;
+          }
+        }
+      } else if (objectType === 'case' && targetId && graph) {
+        // Cases: choose persisted source by mode:
+        // - versionedCase=true → consult case file (persists schedules)
+        // - versionedCase=false → consult graph node inline case config
+        const targetNode: any = graph.nodes?.find((n: any) => n.uuid === targetId || n.id === targetId);
+        const caseFile = objectId ? fileRegistry.getFile(`case-${objectId}`) : undefined;
+        const { selectPersistedCaseConfig } = await import('./persistedCaseConfigService');
+        const persisted = selectPersistedCaseConfig({
+          versionedCase: versionedCase === true,
+          fileCaseData: caseFile?.data,
+          graphNode: targetNode,
+        });
+        connectionName = persisted.connection;
+        if (persisted.connection_string) {
+          try {
+            connectionString = typeof persisted.connection_string === 'string'
+              ? JSON.parse(persisted.connection_string)
+              : persisted.connection_string;
+          } catch (e) {
+            toast.error('Invalid connection_string JSON in persisted case config');
+            sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON in persisted case config');
+            return;
+          }
+        }
+      } else if (objectId) {
+        // Non-parameter, non-case fallback: keep existing behaviour (file if present).
+        const fileId = `${objectType}-${objectId}`;
+        const file = fileRegistry.getFile(fileId);
         if (file) {
-      const data = file.data;
+          const data = file.data;
           connectionName = data.connection;
-          
-          // Parse connection_string (it's a JSON string in the schema)
-      if (data.connection_string) {
-        try {
-          connectionString = typeof data.connection_string === 'string' 
-            ? JSON.parse(data.connection_string)
-            : data.connection_string;
+          if (data.connection_string) {
+            try {
+              connectionString = typeof data.connection_string === 'string'
+                ? JSON.parse(data.connection_string)
+                : data.connection_string;
             } catch (e) {
-              toast.error('Invalid connection_string JSON in parameter file');
-              sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON in parameter file');
+              toast.error('Invalid connection_string JSON in file');
+              sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON in file');
               return;
             }
           }
         }
       }
       
-      // If no connection from file, try to get it from the edge/node directly
+      // If still no connection, try to get it from the edge/node directly
       if (!connectionName && targetId && graph) {
         const target: any = objectType === 'parameter' 
           ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId)
@@ -3202,10 +3410,33 @@ class DataOperationsService {
               contextRegistry.clearCache();
               
               // Build DSL with event mapping for analytics-style connections (e.g., Amplitude)
+              // IMPORTANT: For versioned parameter operations (writeToFile=true), prefer persisted
+              // parameter-file config for connection/latency primitives (e.g. conversion_window_days).
+              const paramFileForCfg =
+                objectType === 'parameter' && objectId
+                  ? fileRegistry.getFile(`parameter-${objectId}`)
+                  : undefined;
+              const { selectPersistedProbabilityConfig } = await import('./persistedParameterConfigService');
+              const persistedCfg = selectPersistedProbabilityConfig({
+                writeToFile: writeToFile === true,
+                fileParamData: paramFileForCfg?.data,
+                graphParam: conditionalIndex !== undefined ? targetEdge?.conditional_p?.[conditionalIndex]?.p : targetEdge?.p,
+                graphEdge: targetEdge,
+              });
+
               // Create edge-like object with effective query (may be from conditional_p)
+              // and persisted config merged in (versioned only).
               const edgeForDsl = {
                 ...targetEdge,
-                query: effectiveQuery  // Use effective query (base or conditional_p)
+                query: effectiveQuery, // Use effective query (base or conditional_p)
+                p: targetEdge?.p
+                  ? {
+                      ...targetEdge.p,
+                      ...(persistedCfg.source === 'file' && persistedCfg.connection ? { connection: persistedCfg.connection } : {}),
+                      ...(persistedCfg.source === 'file' && persistedCfg.connection_string ? { connection_string: persistedCfg.connection_string } : {}),
+                      ...(persistedCfg.source === 'file' && persistedCfg.latency ? { latency: persistedCfg.latency } : {}),
+                    }
+                  : targetEdge?.p,
               };
               
               const buildResult = await buildDslFromEdge(
@@ -3296,8 +3527,32 @@ class DataOperationsService {
                 console.warn('[DataOps] Failed to parse constraints (fallback):', error);
               }
               
+              const paramFileForCfg =
+                objectType === 'parameter' && objectId
+                  ? fileRegistry.getFile(`parameter-${objectId}`)
+                  : undefined;
+              const { selectPersistedProbabilityConfig } = await import('./persistedParameterConfigService');
+              const persistedCfg = selectPersistedProbabilityConfig({
+                writeToFile: writeToFile === true,
+                fileParamData: paramFileForCfg?.data,
+                graphParam: targetEdge?.p,
+                graphEdge: targetEdge,
+              });
+
+              const targetEdgeWithPersisted = {
+                ...targetEdge,
+                p: targetEdge?.p
+                  ? {
+                      ...targetEdge.p,
+                      ...(persistedCfg.source === 'file' && persistedCfg.connection ? { connection: persistedCfg.connection } : {}),
+                      ...(persistedCfg.source === 'file' && persistedCfg.connection_string ? { connection_string: persistedCfg.connection_string } : {}),
+                      ...(persistedCfg.source === 'file' && persistedCfg.latency ? { latency: persistedCfg.latency } : {}),
+                    }
+                  : targetEdge?.p,
+              };
+
               const fallbackResult = await buildDslFromEdge(
-                targetEdge,
+                targetEdgeWithPersisted,
                 graph,
                 connectionProvider,
                 eventLoader,
@@ -3663,6 +3918,7 @@ class DataOperationsService {
         start?: string;
         end?: string;
         anchor_event_id?: string;
+        conversion_window_days?: number;
         [key: string]: unknown;
       }
       let requestedCohort: CohortOptions | undefined;
@@ -3673,6 +3929,7 @@ class DataOperationsService {
             start: cohort.start,
             end: cohort.end,
             anchor_event_id: cohort.anchor_event_id,
+            conversion_window_days: cohort.conversion_window_days,
           };
           console.log('[DataOps] Using cohort from DSL object:', requestedCohort);
         }
@@ -3740,10 +3997,19 @@ class DataOperationsService {
       
       if (shouldCheckIncrementalFetch) {
         const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
-        const targetEdgeForPolicy = targetId && graph 
-          ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) 
+        const targetEdgeForPolicy = targetId && graph
+          ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId)
           : undefined;
-        const latencyConfig = targetEdgeForPolicy?.p?.latency as LatencyConfig | undefined;
+        const { selectPersistedProbabilityConfig } = await import('./persistedParameterConfigService');
+        const graphLatencyConfig = targetEdgeForPolicy?.p?.latency as LatencyConfig | undefined;
+        const fileLatencyConfig = (paramFile?.data?.latency as LatencyConfig | undefined) ?? undefined;
+        const persistedCfg = selectPersistedProbabilityConfig({
+          writeToFile: writeToFile === true,
+          fileParamData: paramFile?.data,
+          graphParam: targetEdgeForPolicy?.p,
+          graphEdge: targetEdgeForPolicy,
+        });
+        const latencyConfig = (persistedCfg.latency as LatencyConfig | undefined) ?? (writeToFile ? fileLatencyConfig : graphLatencyConfig);
         
         // Check if this edge has latency tracking enabled
         const isLatencyEnabled = latencyConfig?.latency_parameter === true;
@@ -3820,10 +4086,15 @@ class DataOperationsService {
             }
             // 2. Fallback: recalculate using edge path_t95 (may be undefined on first load)
             else if (isCohortQuery && latencyConfig) {
-              // Prefer Option A (moment-matched anchor+edge) if we can compute it from cached cohort data.
-              // This avoids overly conservative topo-sum path_t95 values causing huge cohort refetch windows.
+              // Canonical behaviour (t95/path_t95 refactor intent):
+              // - Use the persisted path_t95 from the active source of truth (file for versioned, graph for direct).
+              // - Only fall back to on-demand estimates when persisted path_t95 is missing.
+              const persistedSource: 'file.latency.path_t95' | 'graph.latency.path_t95' =
+                persistedCfg.source === 'file' ? 'file.latency.path_t95' : 'graph.latency.path_t95';
+
               let effectivePathT95: number | undefined = latencyConfig.path_t95;
-              let effectivePathT95Source: 'moment-matched' | 'graph.path_t95' | 'none' = effectivePathT95 ? 'graph.path_t95' : 'none';
+              let effectivePathT95Source: 'moment-matched' | 'persisted.path_t95' | 'none' =
+                effectivePathT95 !== undefined ? 'persisted.path_t95' : 'none';
               let momentMatchDebug:
                 | {
                     percentile: number;
@@ -3839,7 +4110,13 @@ class DataOperationsService {
                   }
                 | undefined;
               try {
-                if (existingSlice && isCohortModeValue(existingSlice) && Array.isArray((existingSlice as any).dates)) {
+                // Only compute moment-matched estimate if we don't already have a persisted path_t95.
+                if (
+                  effectivePathT95 === undefined &&
+                  existingSlice &&
+                  isCohortModeValue(existingSlice) &&
+                  Array.isArray((existingSlice as any).dates)
+                ) {
                   const cohorts = aggregateCohortData([existingSlice as any], new Date(), undefined);
                   const anchorCandidates = cohorts.filter(c =>
                     c.n > 0 &&
@@ -3934,6 +4211,7 @@ class DataOperationsService {
                     t95Source: horizonResult.t95Source,
                     effectivePathT95,
                     effectivePathT95Source,
+                    persistedPathT95Source: persistedSource,
                   }
                 );
               }
@@ -6161,7 +6439,13 @@ class DataOperationsService {
 
         const targetEdge = ((graph.edges || []) as any[]).find((e: any) => (e.uuid === item.targetId || e.id === item.targetId));
         const slotData = targetEdge?.[item.paramSlot || 'p'];
-        const latencyConfig = slotData?.latency as LatencyConfig | undefined;
+        const fileLatencyConfig = (paramFile?.data?.latency as LatencyConfig | undefined) ?? undefined;
+        const graphLatencyConfig = slotData?.latency as LatencyConfig | undefined;
+        // Simulation models the versioned pathway: prefer persisted parameter file latency config when present.
+        const latencyConfig = fileLatencyConfig ?? graphLatencyConfig;
+        const latencyConfigSource: 'file' | 'graph' | 'none' = latencyConfig
+          ? (fileLatencyConfig ? 'file' : 'graph')
+          : 'none';
 
         lines.push(`### ${item.name}`);
         lines.push('');
@@ -6171,7 +6455,13 @@ class DataOperationsService {
           const enabled = latencyConfig.latency_parameter === true ? 'true' : 'false';
           const t95 = latencyConfig.t95 !== undefined ? `${latencyConfig.t95.toFixed(2)}d` : '(none)';
           const pt95 = latencyConfig.path_t95 !== undefined ? `${latencyConfig.path_t95.toFixed(2)}d` : '(none)';
-          lines.push(`- **Latency config**: latency_parameter=${enabled}; edge.t95=${t95}; graph.path_t95=${pt95}`);
+          const sourceLabel =
+            latencyConfigSource === 'file'
+              ? 'parameter file'
+              : latencyConfigSource === 'graph'
+                ? 'graph'
+                : 'unknown';
+          lines.push(`- **Latency config**: source=${sourceLabel}; latency_parameter=${enabled}; t95=${t95}; path_t95=${pt95}`);
         } else {
           lines.push(`- **Latency config**: (none)`);
         }
@@ -6252,11 +6542,10 @@ class DataOperationsService {
         }
 
         // -------------------------------------------------------------------
-        // path_t95 diagnostics (Option A)
+        // path_t95 diagnostics
         // For deep graphs, path_t95 is used to bound cohort() retrieval horizons.
-        // We now prefer a moment-matched A→Y estimate from:
-        //   A→X (anchor_*) + X→Y (median/mean lag)
-        // when cached cohort data contains anchor lag arrays.
+        // Canonical behaviour: prefer graph.path_t95 for bounding; moment-matched is informational
+        // and only a fallback if graph.path_t95 is missing.
         // -------------------------------------------------------------------
         if (isCohortQuery) {
           lines.push(`- **path_t95 diagnostics**:`);
@@ -6350,7 +6639,7 @@ class DataOperationsService {
         let horizonSummary: string | undefined;
         let cohortBoundedWindow: DateRange | undefined;
         let cohortBoundingPathT95Used:
-          | { value: number; source: 'moment-matched' | 'graph.path_t95' | 'none' }
+          | { value: number; source: 'moment-matched' | 'file.latency.path_t95' | 'graph.latency.path_t95' | 'none' }
           | undefined;
 
         if (bustCache) {
@@ -6371,14 +6660,17 @@ class DataOperationsService {
           // otherwise falls back to edge_t95/default.
           let bounded = requestedWindowISO;
           if (isCohortQuery && latencyConfig) {
-            // Prefer the moment-matched estimate if available from cached data in this report.
             const mm = (lines as any)._momentMatchedPathT95Estimate as number | undefined;
-            const effectivePathT95ForBounding = mm !== undefined ? mm : latencyConfig.path_t95;
+            const effectivePathT95ForBounding =
+              latencyConfig.path_t95 !== undefined ? latencyConfig.path_t95 : mm;
             cohortBoundingPathT95Used =
-              mm !== undefined
-                ? { value: mm, source: 'moment-matched' }
-                : latencyConfig.path_t95 !== undefined
-                  ? { value: latencyConfig.path_t95, source: 'graph.path_t95' }
+              latencyConfig.path_t95 !== undefined
+                ? {
+                    value: latencyConfig.path_t95,
+                    source: latencyConfigSource === 'file' ? 'file.latency.path_t95' : 'graph.latency.path_t95',
+                  }
+                : mm !== undefined
+                  ? { value: mm, source: 'moment-matched' }
                   : { value: 0, source: 'none' };
             const horizon = computeCohortRetrievalHorizon({
               requestedWindow: requestedWindowISO,
@@ -6502,15 +6794,26 @@ class DataOperationsService {
         if (isCohortQuery) {
           lines.push(`- **cohort() bounding**:`);
           if (refetchPolicy?.type === 'replace_slice') {
-            if (cohortBoundingPathT95Used?.source === 'moment-matched') {
+            if (cohortBoundingPathT95Used?.source === 'file.latency.path_t95') {
+              lines.push(`  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: parameter file latency.path_t95)`);
+              if ((lines as any)._momentMatchedPathT95Estimate !== undefined) {
+                const mm = (lines as any)._momentMatchedPathT95Estimate as number;
+                lines.push(
+                  `  - note: moment-matched estimate available (${mm.toFixed(2)}d at ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%), but persisted path_t95 is authoritative for bounding`
+                );
+              }
+            } else if (cohortBoundingPathT95Used?.source === 'graph.latency.path_t95') {
+              lines.push(`  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: graph latency.path_t95)`);
+              if ((lines as any)._momentMatchedPathT95Estimate !== undefined) {
+                const mm = (lines as any)._momentMatchedPathT95Estimate as number;
+                lines.push(
+                  `  - note: moment-matched estimate available (${mm.toFixed(2)}d at ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%), but persisted path_t95 is authoritative for bounding`
+                );
+              }
+            } else if (cohortBoundingPathT95Used?.source === 'moment-matched') {
               lines.push(
                 `  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: moment-matched from cached anchor_* + edge lag; percentile ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%)`
               );
-              if (latencyConfig?.path_t95 !== undefined) {
-                lines.push(`  - note: graph.path_t95 is ${latencyConfig.path_t95.toFixed(2)}d but is NOT used for bounding when a moment-matched estimate is available`);
-              }
-            } else if (cohortBoundingPathT95Used?.source === 'graph.path_t95') {
-              lines.push(`  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: graph.path_t95)`);
             } else {
               lines.push(`  - effective path_t95 used for bounding: (none available; horizon uses edge.t95/default fallbacks)`);
             }

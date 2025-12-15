@@ -26,6 +26,10 @@
     "dataInterestsDSL": {
       "type": "string",
       "description": "Pinned DSL for batch/overnight fetches. Determines which slices are pre-materialised in param files. Example: or(cohort(-90d:), window(-14d:)).context(channel)"
+    },
+    "baseDSL": {
+      "type": "string",
+      "description": "Base DSL used for live scenario inheritance (persistent). Composed with scenario meta.queryDSL via smart merge."
     }
   },
   "$defs": {
@@ -305,6 +309,7 @@
         },
         "distribution_overridden": { "type": "boolean", "default": false, "description": "If true, distribution was manually edited and should not be auto-updated" },
         "connection": { "type": "string", "description": "Connection name from connections.yaml" },
+        "connection_overridden": { "type": "boolean", "default": false, "description": "If true, connection settings were manually edited and should not be auto-synced" },
         "connection_string": { "type": "string", "description": "JSON blob of provider-specific settings" },
         "evidence": {
           "type": "object",
@@ -323,7 +328,7 @@
             "full_query": { "type": "string", "description": "Complete DSL query string used for this fetch (includes base query + window + context). Example: from(checkout).to(purchase).window(2025-01-01:2025-01-31).context(device:mobile)" },
             "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string (request, response, query, connection_string, etc.) for debugging/provenance. May be truncated if response is very large." }
           },
-          "required": ["retrieved_at", "source"]
+          "$comment": "retrieved_at/source are strongly recommended but not required (synthetic/legacy graphs may omit them)."
         },
         "id": { "type": "string", "description": "Reference to parameter file (FK to parameter-{id}.yaml)" },
         "data_source": {
@@ -400,6 +405,7 @@
         },
         "distribution_overridden": { "type": "boolean", "default": false, "description": "If true, distribution was manually edited and should not be auto-updated" },
         "connection": { "type": "string", "description": "Connection name from connections.yaml" },
+        "connection_overridden": { "type": "boolean", "default": false, "description": "If true, connection settings were manually edited and should not be auto-synced" },
         "connection_string": { "type": "string", "description": "JSON blob of provider-specific settings" },
         "evidence": {
           "type": "object",
@@ -418,7 +424,7 @@
             "full_query": { "type": "string", "description": "Complete DSL query string used for this fetch (includes base query + window + context)" },
             "debug_trace": { "type": "string", "description": "Complete execution trace as JSON string for debugging/provenance. May be truncated if response is very large." }
           },
-          "required": ["retrieved_at", "source"]
+          "$comment": "retrieved_at/source are strongly recommended but not required (synthetic/legacy graphs may omit them)."
         },
         "id": { "type": "string", "description": "Reference to cost parameter file (FK to parameter-{id}.yaml)" },
         "data_source": {
@@ -464,6 +470,11 @@
       "required": ["condition", "p"],
       "properties": {
         "condition": { "$ref": "#/$defs/Condition" },
+        "colour": {
+          "type": "string",
+          "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+          "description": "Display-only colour for this conditional branch (editor UI)."
+        },
         "query": {
           "type": "string",
           "pattern": "^from\\([a-z0-9_-]+\\)\\.to\\([a-z0-9_-]+\\)",

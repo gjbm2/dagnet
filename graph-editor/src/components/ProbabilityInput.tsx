@@ -55,7 +55,7 @@ export default function ProbabilityInput({
   // Update display value when external value changes (but not while editing)
   useEffect(() => {
     if (!isEditing) {
-      setDisplayValue(String(value));
+      setDisplayValue(String(roundTo4DP(value)));
     }
   }, [value, isEditing]);
 
@@ -115,7 +115,7 @@ export default function ProbabilityInput({
     onChange(roundTo4DP(snappedValue));
     
     // Update display value to match slider
-    setDisplayValue(String(snappedValue));
+    setDisplayValue(String(roundTo4DP(snappedValue)));
     
     // NO onCommit here - only onChange for real-time updates
     // onCommit should only be called on mouseUp

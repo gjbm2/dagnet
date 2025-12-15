@@ -83,7 +83,11 @@ export default defineConfig({
     poolOptions: {
       threads: {
         singleThread: false,
-        isolate: true,  // Full isolation for test correctness
+        // Isolation massively increases startup/import cost because each test file
+        // reloads modules instead of benefiting from per-worker module cache.
+        //
+        // Keep isolation in CI for correctness, but disable locally for speed.
+        isolate: process.env.CI ? true : false,
         minThreads: 1,
         maxThreads: 4
       },

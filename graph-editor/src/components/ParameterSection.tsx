@@ -9,6 +9,9 @@ import { GraphData, LatencyConfig } from '../types';
 import { useTabContext } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { useGraphStore } from '../contexts/GraphStoreContext';
+import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
+import { PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
+import { roundToDecimalPlaces } from '../utils/rounding';
 import './ParameterSection.css';
 
 interface ParameterSectionProps {
@@ -95,14 +98,19 @@ export function ParameterSection({
 }: ParameterSectionProps) {
   const { tabs, operations: tabOps } = useTabContext();
   const { graph: currentGraph, setGraph } = useGraphStore();
+
+  const formatOptionalNumber = (value: number | undefined, dp: number): string => {
+    if (value === undefined) return '';
+    return String(roundToDecimalPlaces(value, dp));
+  };
   
   // Local state for immediate input feedback
   const [localQuery, setLocalQuery] = useState(param?.query || '');
   const [localT95, setLocalT95] = useState<string>(
-    param?.latency?.t95?.toString() || ''
+    formatOptionalNumber(param?.latency?.t95, LATENCY_HORIZON_DECIMAL_PLACES)
   );
   const [localPathT95, setLocalPathT95] = useState<string>(
-    param?.latency?.path_t95?.toString() || ''
+    formatOptionalNumber(param?.latency?.path_t95, LATENCY_HORIZON_DECIMAL_PLACES)
   );
   // Note: isSettingsModalOpen state moved into ConnectionControl component
   
@@ -112,11 +120,11 @@ export function ParameterSection({
   }, [param?.query]);
   
   useEffect(() => {
-    setLocalT95(param?.latency?.t95?.toString() || '');
+    setLocalT95(formatOptionalNumber(param?.latency?.t95, LATENCY_HORIZON_DECIMAL_PLACES));
   }, [param?.latency?.t95]);
   
   useEffect(() => {
-    setLocalPathT95(param?.latency?.path_t95?.toString() || '');
+    setLocalPathT95(formatOptionalNumber(param?.latency?.path_t95, LATENCY_HORIZON_DECIMAL_PLACES));
   }, [param?.latency?.path_t95]);
   
   // Callback to initialize a newly created parameter file from current edge data
@@ -139,14 +147,20 @@ export function ParameterSection({
       }
     };
     
-    // Call putParameterToFile to copy all edge data to the new file
-    // This includes connection settings, mean, stdev, distribution, etc.
-    await dataOperationsService.putParameterToFile({
-      paramId,
-      edgeId: objectId,
-      graph: currentGraph,
-      setGraph: setGraphWrapper
-    });
+    // Open the same modal used for batch operations, but with a single target.
+    // This lets the user choose whether to copy values/metadata/permissions.
+    globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+      detail: {
+        operationType: 'put-to-files',
+        singleTarget: {
+          type: 'parameter',
+          objectId: paramId,
+          targetId: objectId,
+          paramSlot,
+          conditionalIndex,
+        },
+      },
+    }));
   };
   
   return (
@@ -322,7 +336,7 @@ export function ParameterSection({
                 type="number"
                 min="0"
                 step="0.01"
-                value={param?.stdev !== undefined ? param.stdev : ''}
+                value={param?.stdev !== undefined ? roundToDecimalPlaces(param.stdev, PRECISION_DECIMAL_PLACES) : ''}
                 onChange={(e) => {
                   const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
                   onUpdate({ stdev: value });
@@ -447,8 +461,12 @@ export function ParameterSection({
                     onChange={(e) => setLocalT95(e.target.value)}
                     onBlur={() => {
                       const value = parseFloat(localT95);
-                      const t95 = isNaN(value) || value < 0 ? undefined : value;
-                      setLocalT95(t95?.toString() || '');
+                      const t95Raw = isNaN(value) || value < 0 ? undefined : value;
+                      const t95 =
+                        t95Raw === undefined
+                          ? undefined
+                          : roundToDecimalPlaces(t95Raw, LATENCY_HORIZON_DECIMAL_PLACES);
+                      setLocalT95(t95 === undefined ? '' : String(t95));
                       onUpdate({
                         latency: {
                           ...param?.latency,
@@ -458,7 +476,7 @@ export function ParameterSection({
                       });
                     }}
                     min={0}
-                    step={0.1}
+                    step={0.01}
                     disabled={disabled}
                     className="parameter-input"
                     style={{ width: '70px' }}
@@ -491,8 +509,12 @@ export function ParameterSection({
                     onChange={(e) => setLocalPathT95(e.target.value)}
                     onBlur={() => {
                       const value = parseFloat(localPathT95);
-                      const path_t95 = isNaN(value) || value < 0 ? undefined : value;
-                      setLocalPathT95(path_t95?.toString() || '');
+                      const pathT95Raw = isNaN(value) || value < 0 ? undefined : value;
+                      const path_t95 =
+                        pathT95Raw === undefined
+                          ? undefined
+                          : roundToDecimalPlaces(pathT95Raw, LATENCY_HORIZON_DECIMAL_PLACES);
+                      setLocalPathT95(path_t95 === undefined ? '' : String(path_t95));
                       onUpdate({
                         latency: {
                           ...param?.latency,
@@ -502,7 +524,7 @@ export function ParameterSection({
                       });
                     }}
                     min={0}
-                    step={0.1}
+                    step={0.01}
                     disabled={disabled}
                     className="parameter-input"
                     style={{ width: '70px' }}

@@ -10,6 +10,7 @@
 import { IntegrityCheckService } from './integrityCheckService';
 import { fileRegistry } from '../contexts/TabContext';
 import type { ObjectType, TabState } from '../types';
+import { formatIssuesForClipboard } from './graphIssuesClipboardExport';
 
 type IssueSeverity = 'error' | 'warning' | 'info';
 
@@ -215,6 +216,21 @@ class GraphIssuesService {
   getState(): GraphIssuesState {
     return this.state;
   }
+
+  exportIssuesForClipboard(args: {
+    issues: GraphIssue[];
+    context?: {
+      searchTerm?: string;
+      graphFilter?: string;
+      includeReferencedFiles?: boolean;
+      severities?: IssueSeverity[];
+    };
+  }): string {
+    return formatIssuesForClipboard({
+      issues: args.issues,
+      context: { ...args.context, generatedAt: new Date().toISOString() },
+    });
+  }
   
   /**
    * Get issues filtered by criteria
@@ -366,12 +382,28 @@ class GraphIssuesService {
    * Get unique graph names from issues for filter dropdown.
    * Returns clean names without workspace prefixes.
    */
-  getGraphNames(): string[] {
+  getGraphNames(options?: { includeWorkspaceGraphs?: boolean }): string[] {
     const graphSet = new Set<string>();
+    
+    const includeWorkspaceGraphs = options?.includeWorkspaceGraphs !== false;
     
     for (const issue of this.state.issues) {
       if (issue.type === 'graph' || issue.fileId.includes('graph-')) {
         const name = this.extractGraphName(issue.fileId);
+        if (name) {
+          graphSet.add(name);
+        }
+      }
+    }
+
+    // Also include all graph files present in the workspace (even if there are currently only
+    // info issues on referenced files, or no issues at all for the graph file itself).
+    if (includeWorkspaceGraphs) {
+      const allFiles = fileRegistry.getAllFiles();
+      for (const file of allFiles) {
+        if (!file?.fileId) continue;
+        if (!file.fileId.includes('graph-')) continue;
+        const name = this.extractGraphName(file.fileId);
         if (name) {
           graphSet.add(name);
         }
@@ -479,4 +511,7 @@ class GraphIssuesService {
 
 // Singleton export
 export const graphIssuesService = new GraphIssuesService();
+
+// Debug exposure for console access
+(window as any).graphIssuesService = graphIssuesService;
 

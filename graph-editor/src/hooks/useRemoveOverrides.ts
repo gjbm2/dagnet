@@ -7,6 +7,8 @@
 
 import { useCallback, useMemo } from 'react';
 import type { GraphData, GraphNode, GraphEdge, ProbabilityParam, CostParam, ConditionalProbability, CaseVariant, NodeImage } from '../types';
+import { querySelectionUuids } from './useQuerySelectionUuids';
+import { hasAnyEdgeQueryOverride, hasAnyOverriddenFlag } from '../utils/overrideFlags';
 
 interface UseRemoveOverridesResult {
   /** Number of active overrides on the selected node/edge */
@@ -15,6 +17,16 @@ interface UseRemoveOverridesResult {
   removeOverrides: () => void;
   /** Whether there are any overrides to remove */
   hasOverrides: boolean;
+}
+
+interface UseRemoveOverridesOptions {
+  /**
+   * If true, operate on the current multi-selection (nodes + edges) rather than
+   * just the single selected node/edge IDs passed in.
+   *
+   * Falls back to the single IDs if the graph canvas is not mounted or selection is empty.
+   */
+  includeMultiSelection?: boolean;
 }
 
 /**
@@ -159,6 +171,33 @@ function clearCostParamOverrides(c: CostParam | undefined): void {
 }
 
 /**
+ * Clear all `_overridden` flags (recursively) from an object.
+ *
+ * This intentionally does NOT clear the underlying values, only the override markers.
+ */
+function clearAllOverriddenFlags(value: unknown, maxDepth = 6): void {
+  if (maxDepth <= 0) return;
+  if (!value || typeof value !== 'object') return;
+
+  if (Array.isArray(value)) {
+    for (const item of value) clearAllOverriddenFlags(item, maxDepth - 1);
+    return;
+  }
+
+  const obj = value as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (key.endsWith('_overridden')) {
+      delete obj[key];
+      continue;
+    }
+    const v = obj[key];
+    if (v && typeof v === 'object') {
+      clearAllOverriddenFlags(v, maxDepth - 1);
+    }
+  }
+}
+
+/**
  * Clear overrides from a ConditionalProbability (mutates in place)
  */
 function clearConditionalPOverrides(cp: ConditionalProbability | undefined): void {
@@ -214,6 +253,9 @@ function clearNodeOverrides(node: GraphNode): void {
       clearImageOverrides(img);
     }
   }
+
+  // Catch-all for newer/less-centralised override flags (e.g. latency.*_overridden in future node fields)
+  clearAllOverriddenFlags(node);
 }
 
 /**
@@ -223,6 +265,9 @@ function clearEdgeOverrides(edge: GraphEdge): void {
   // Direct edge overrides
   delete edge.description_overridden;
   delete edge.query_overridden;
+  // `n_query` presence is treated as a query override in the UI, so "remove overrides" must clear it too.
+  delete (edge as any).n_query_overridden;
+  delete (edge as any).n_query;
   
   // Base probability overrides
   clearProbabilityParamOverrides(edge.p);
@@ -237,6 +282,9 @@ function clearEdgeOverrides(edge: GraphEdge): void {
   // Cost overrides
   clearCostParamOverrides(edge.cost_gbp);
   clearCostParamOverrides(edge.labour_cost);
+
+  // Catch-all for newer/less-centralised override flags (e.g. latency.*_overridden, connection_overridden)
+  clearAllOverriddenFlags(edge);
 }
 
 /**
@@ -254,28 +302,59 @@ export function useRemoveOverrides(
   graph: GraphData | null | undefined,
   onUpdateGraph: (graph: GraphData, historyLabel: string, objectId?: string) => void,
   nodeId?: string | null,
-  edgeId?: string | null
+  edgeId?: string | null,
+  options?: UseRemoveOverridesOptions
 ): UseRemoveOverridesResult {
+  const includeMultiSelection = options?.includeMultiSelection === true;
+
+  const selection = useMemo(() => {
+    if (!includeMultiSelection) {
+      return { selectedNodeUuids: [], selectedEdgeUuids: [] };
+    }
+    return querySelectionUuids();
+  }, [includeMultiSelection]);
+
+  const targetNodeIds = useMemo(() => {
+    if (selection.selectedNodeUuids.length > 0) return selection.selectedNodeUuids;
+    return nodeId ? [nodeId] : [];
+  }, [selection.selectedNodeUuids, nodeId]);
+
+  const targetEdgeIds = useMemo(() => {
+    if (selection.selectedEdgeUuids.length > 0) return selection.selectedEdgeUuids;
+    return edgeId ? [edgeId] : [];
+  }, [selection.selectedEdgeUuids, edgeId]);
+
   // Find the selected node and edge
-  const node = useMemo(() => {
-    if (!graph || !nodeId) return undefined;
-    return graph.nodes.find(n => n.uuid === nodeId || n.id === nodeId);
-  }, [graph, nodeId]);
-  
-  const edge = useMemo(() => {
-    if (!graph || !edgeId) return undefined;
-    return graph.edges.find(e => e.uuid === edgeId || e.id === edgeId);
-  }, [graph, edgeId]);
+  const nodes = useMemo(() => {
+    if (!graph || targetNodeIds.length === 0) return [];
+    const ids = new Set(targetNodeIds);
+    const graphNodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+    return graphNodes.filter(n => ids.has(n.uuid) || (n.id ? ids.has(n.id) : false));
+  }, [graph, targetNodeIds]);
+
+  const edges = useMemo(() => {
+    if (!graph || targetEdgeIds.length === 0) return [];
+    const ids = new Set(targetEdgeIds);
+    const graphEdges = Array.isArray((graph as any).edges) ? (graph as any).edges : [];
+    return graphEdges.filter((e: any) => ids.has(e.uuid) || (e.id ? ids.has(e.id) : false));
+  }, [graph, targetEdgeIds]);
   
   // Count overrides
   const overrideCount = useMemo(() => {
     let count = 0;
-    if (node) count += countNodeOverrides(node);
-    if (edge) count += countEdgeOverrides(edge);
+    for (const n of nodes) count += countNodeOverrides(n);
+    for (const e of edges) count += countEdgeOverrides(e);
     return count;
-  }, [node, edge]);
+  }, [nodes, edges]);
   
-  const hasOverrides = overrideCount > 0;
+  // Note: overrideCount intentionally counts a conservative subset (legacy behaviour used in menus/tests).
+  // hasOverrides must reflect *any* override flags so the user can clear them reliably.
+  const hasOverrides = useMemo(() => {
+    if (overrideCount > 0) return true;
+    if (nodes.some(n => hasAnyOverriddenFlag(n))) return true;
+    if (edges.some(e => hasAnyOverriddenFlag(e) || hasAnyEdgeQueryOverride(e))) return true;
+    return false;
+  }, [overrideCount, nodes, edges]);
   
   // Remove all overrides - ALL LOGIC HERE, menu items just call this
   const removeOverrides = useCallback(() => {
@@ -284,19 +363,15 @@ export function useRemoveOverrides(
     const nextGraph = structuredClone(graph);
     
     // Clear node overrides
-    if (nodeId) {
-      const nodeIndex = nextGraph.nodes.findIndex(n => n.uuid === nodeId || n.id === nodeId);
-      if (nodeIndex >= 0) {
-        clearNodeOverrides(nextGraph.nodes[nodeIndex]);
-      }
+    for (const id of targetNodeIds) {
+      const nodeIndex = nextGraph.nodes.findIndex(n => n.uuid === id || n.id === id);
+      if (nodeIndex >= 0) clearNodeOverrides(nextGraph.nodes[nodeIndex]);
     }
     
     // Clear edge overrides
-    if (edgeId) {
-      const edgeIndex = nextGraph.edges.findIndex(e => e.uuid === edgeId || e.id === edgeId);
-      if (edgeIndex >= 0) {
-        clearEdgeOverrides(nextGraph.edges[edgeIndex]);
-      }
+    for (const id of targetEdgeIds) {
+      const edgeIndex = nextGraph.edges.findIndex(e => e.uuid === id || e.id === id);
+      if (edgeIndex >= 0) clearEdgeOverrides(nextGraph.edges[edgeIndex]);
     }
     
     // Update metadata
@@ -305,8 +380,10 @@ export function useRemoveOverrides(
     }
     
     // ALWAYS call with history label for proper graph update and re-render
-    onUpdateGraph(nextGraph, 'Remove overrides', edgeId || nodeId || undefined);
-  }, [graph, onUpdateGraph, nodeId, edgeId, hasOverrides]);
+    // For multi-selection, avoid pinning to a single object id.
+    const objectId = includeMultiSelection ? undefined : (targetEdgeIds[0] || targetNodeIds[0] || undefined);
+    onUpdateGraph(nextGraph, 'Remove overrides', objectId);
+  }, [graph, onUpdateGraph, targetNodeIds, targetEdgeIds, hasOverrides, includeMultiSelection]);
   
   return { overrideCount, hasOverrides, removeOverrides };
 }

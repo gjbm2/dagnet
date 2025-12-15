@@ -3054,10 +3054,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       nextGraph.edges[edgeIndex].fromHandle = sourceHandle;
       nextGraph.edges[edgeIndex].toHandle = targetHandle;
       
-      // Generate new ID based on new source/target
-      const newEdgeId = `${newConnection.source}->${newConnection.target}`;
-      nextGraph.edges[edgeIndex].id = newEdgeId;
-      
       if (nextGraph.metadata) {
         nextGraph.metadata.updated_at = new Date().toISOString();
       }
@@ -3079,7 +3075,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       skipNextRerouteRef.current = true;
       
       // Save history state for edge reconnection
-      saveHistoryState('Reconnect edge', undefined, nextGraph.edges[edgeIndex].id);
+      saveHistoryState('Reconnect edge', undefined, nextGraph.edges[edgeIndex].uuid || undefined);
       
       // Reset isSyncingRef after a short delay to allow Graph->ReactFlow sync to complete
       setTimeout(() => {

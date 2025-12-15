@@ -15,6 +15,14 @@ export type BatchOperationType =
   | 'get-from-sources-direct'
   | 'put-to-files';
 
+export interface SingleOperationTarget {
+  type: 'parameter' | 'case' | 'node';
+  objectId: string;
+  targetId: string;
+  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
+  conditionalIndex?: number;
+}
+
 interface BatchItem {
   id: string;
   type: 'parameter' | 'case' | 'node';
@@ -41,6 +49,8 @@ interface BatchOperationsModalProps {
   isOpen: boolean;
   onClose: () => void;
   operationType?: BatchOperationType; // Optional - can be selected in modal
+  /** If set, the modal runs in single-item mode (no item selection UI). */
+  singleTarget?: SingleOperationTarget | null;
   graph: GraphData | null;
   setGraph: (graph: GraphData | null) => void;
   /**
@@ -71,6 +81,7 @@ export function BatchOperationsModal({
   isOpen,
   onClose,
   operationType: initialOperationType,
+  singleTarget,
   graph,
   setGraph,
   currentDSL
@@ -86,6 +97,16 @@ export function BatchOperationsModal({
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [results, setResults] = useState<OperationResult[]>([]);
   const [logContent, setLogContent] = useState<string>('');
+
+  // Put-to-file copy options (applies to parameter items)
+  const [putIncludeMetadata, setPutIncludeMetadata] = useState(true);
+  const [putIncludeValues, setPutIncludeValues] = useState(true);
+  const [putPermissionsMode, setPutPermissionsMode] = useState<'copy_all' | 'copy_if_false' | 'do_not_copy'>('copy_all');
+
+  // Get-from-files options (parameters): whether to copy permission flags from file→graph.
+  const [getIncludeMetadata, setGetIncludeMetadata] = useState(true);
+  const [getIncludeValues, setGetIncludeValues] = useState(true);
+  const [getPermissionsMode, setGetPermissionsMode] = useState<'copy_all' | 'copy_if_false' | 'do_not_copy'>('do_not_copy');
   
   // Track DSL in ref for batch operations
   const currentDSLRef = useRef(currentDSL);
@@ -131,11 +152,106 @@ export function BatchOperationsModal({
     currentDSL: () => currentDSLRef.current,  // AUTHORITATIVE DSL from graphStore (via prop)
   });
 
+  const isSingleMode = !!singleTarget;
+
   // Collect all items from graph (without filtering by operation type)
-  const allItems = useMemo(() => {
+  const allItems = useMemo<BatchItem[]>(() => {
     if (!graph) return [];
 
     const items: BatchItem[] = [];
+
+    // Single-item mode: build exactly one item (or none if not found)
+    if (singleTarget) {
+      if (singleTarget.type === 'parameter') {
+        const edge = graph.edges?.find((e: any) => e.uuid === singleTarget.targetId || e.id === singleTarget.targetId);
+        if (!edge) return [];
+
+        const edgeUuidOrId = edge.uuid || edge.id || singleTarget.targetId;
+        const fromNode = graph.nodes?.find((n: any) => n.uuid === edge.from || n.id === edge.from);
+        const toNode = graph.nodes?.find((n: any) => n.uuid === edge.to || n.id === edge.to);
+        const edgeFrom = fromNode?.id || fromNode?.label || edge.from || '';
+        const edgeTo = toNode?.id || toNode?.label || edge.to || '';
+        const edgeDisplayId = edge.id || edge.uuid || `${edgeFrom}→${edgeTo}`;
+
+        const paramId = singleTarget.objectId;
+        const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+        const paramConnection = paramFile?.data?.connection;
+
+        const slotLabel = singleTarget.paramSlot ?? 'p';
+        const slotName =
+          slotLabel === 'p' ? `p: ${paramId}`
+            : slotLabel === 'cost_gbp' ? `cost_gbp: ${paramId}`
+            : `labour_cost: ${paramId}`;
+
+        const path =
+          slotLabel === 'p' ? `e.${edgeDisplayId}.p.mean`
+            : slotLabel === 'cost_gbp' ? `e.${edgeDisplayId}.cost_gbp.mean`
+            : `e.${edgeDisplayId}.labour_cost.mean`;
+
+        return [{
+          id: `param-${paramId}-${slotLabel}-${edgeUuidOrId}`,
+          type: 'parameter',
+          name: slotName,
+          objectId: paramId,
+          targetId: edgeUuidOrId,
+          paramSlot: slotLabel,
+          conditionalIndex: singleTarget.conditionalIndex,
+          path,
+          edgeId: edgeDisplayId,
+          edgeFrom,
+          edgeTo,
+          source: paramConnection || undefined,
+          hasFile: !!paramFile,
+          hasConnection: !!paramConnection,
+        }];
+      }
+
+      if (singleTarget.type === 'case') {
+        const node = graph.nodes?.find((n: any) => n.uuid === singleTarget.targetId || n.id === singleTarget.targetId);
+        if (!node) return [];
+        const nodeId = node.uuid || node.id || singleTarget.targetId;
+        const nodeDisplayId = node.id || node.label || nodeId;
+
+        const caseId = singleTarget.objectId;
+        const caseFile = fileRegistry.getFile(`case-${caseId}`);
+        const caseConnection = caseFile?.data?.connection;
+
+        return [{
+          id: `case-${caseId}-${nodeId}`,
+          type: 'case',
+          name: `case: ${caseId}`,
+          objectId: caseId,
+          targetId: nodeId,
+          path: `n.${nodeDisplayId}.case`,
+          nodeLabel: nodeDisplayId,
+          source: caseConnection || undefined,
+          hasFile: !!caseFile,
+          hasConnection: !!caseConnection,
+        }];
+      }
+
+      if (singleTarget.type === 'node') {
+        const node = graph.nodes?.find((n: any) => n.uuid === singleTarget.targetId || n.id === singleTarget.targetId);
+        if (!node) return [];
+        const nodeId = node.uuid || node.id || singleTarget.targetId;
+        const nodeDisplayId = node.id || node.label || nodeId;
+
+        const nodeFileId = singleTarget.objectId;
+        const nodeFile = fileRegistry.getFile(`node-${nodeFileId}`);
+
+        return [{
+          id: `node-${nodeFileId}-${nodeId}`,
+          type: 'node',
+          name: `node: ${nodeFileId}`,
+          objectId: nodeFileId,
+          targetId: nodeId,
+          path: `n.${nodeDisplayId}`,
+          nodeLabel: nodeDisplayId,
+          hasFile: !!nodeFile,
+          hasConnection: false,
+        }];
+      }
+    }
 
     // Collect parameters from edges
     if (graph.edges) {
@@ -263,7 +379,16 @@ export function BatchOperationsModal({
     }
 
     return items;
-  }, [graph]);
+  }, [graph, singleTarget]);
+
+  // In single mode, force the single item selected when opening/changing target.
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!isSingleMode) return;
+    const onlyId = allItems[0]?.id;
+    if (!onlyId) return;
+    setSelectedItems(new Set([onlyId]));
+  }, [isOpen, isSingleMode, allItems]);
 
   // Filter items based on selected operation type
   const batchItems = useMemo(() => {
@@ -297,6 +422,12 @@ export function BatchOperationsModal({
       setSelectedItems(new Set(batchItems.map(item => item.id)));
       setCreateLog(false);
       setBustCache(false);
+      setPutIncludeMetadata(true);
+      setPutIncludeValues(true);
+      setPutPermissionsMode('copy_all');
+      setGetIncludeMetadata(true);
+      setGetIncludeValues(true);
+      setGetPermissionsMode('do_not_copy');
       setProgress({ current: 0, total: 0 });
       setResults([]);
       setLogContent('');
@@ -304,6 +435,12 @@ export function BatchOperationsModal({
       setSelectedItems(new Set());
       setCreateLog(false);
       setBustCache(false);
+      setPutIncludeMetadata(true);
+      setPutIncludeValues(true);
+      setPutPermissionsMode('copy_all');
+      setGetIncludeMetadata(true);
+      setGetIncludeValues(true);
+      setGetPermissionsMode('do_not_copy');
       setProgress({ current: 0, total: 0 });
       setResults([]);
       setLogContent('');
@@ -431,7 +568,15 @@ export function BatchOperationsModal({
             }
           );
           
-          const result = await fetchItem(fetchItemData, { mode: fetchMode, bustCache });
+          const result = await fetchItem(fetchItemData, {
+            mode: fetchMode,
+            bustCache,
+            copyOptions: fetchMode === 'from-file' ? {
+              includeMetadata: getIncludeMetadata,
+              includeValues: getIncludeValues,
+              permissionsMode: getPermissionsMode,
+            } : undefined,
+          });
           success = result.success;
           details = result.details ? ` → ${result.details}` : '';
           if (result.error) {
@@ -444,7 +589,12 @@ export function BatchOperationsModal({
               paramId: item.objectId,
               edgeId: item.targetId,
               graph: graphRef.current,
-              setGraph: setGraphWithRef
+              setGraph: setGraphWithRef,
+              copyOptions: {
+                includeMetadata: putIncludeMetadata,
+                includeValues: putIncludeValues,
+                permissionsMode: putPermissionsMode,
+              },
             });
             details = ` → Written to parameter-${item.objectId}.yaml`;
             success = true;
@@ -691,6 +841,63 @@ export function BatchOperationsModal({
                   <option value="put-to-files">Put to Files</option>
                 </select>
               </div>
+
+              {/* Put-to-files copy options */}
+              {selectedOperationType === 'put-to-files' && (
+                <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f9f9f9', borderRadius: '6px', border: '1px solid #e0e0e0' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Put options (parameters)</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '6px' }}>
+                    <input type="checkbox" checked={putIncludeMetadata} onChange={(e) => setPutIncludeMetadata(e.target.checked)} />
+                    Metadata (query / connection / latency config)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '10px' }}>
+                    <input type="checkbox" checked={putIncludeValues} onChange={(e) => setPutIncludeValues(e.target.checked)} />
+                    Values (append to history)
+                  </label>
+
+                  <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>Permissions (override flags)</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '4px' }}>
+                    <input type="radio" name="put-permissions-mode" checked={putPermissionsMode === 'copy_all'} onChange={() => setPutPermissionsMode('copy_all')} />
+                    Copy all (force copy)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '4px' }}>
+                    <input type="radio" name="put-permissions-mode" checked={putPermissionsMode === 'copy_if_false'} onChange={() => setPutPermissionsMode('copy_if_false')} />
+                    Copy only if false (only promote to overridden=true)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                    <input type="radio" name="put-permissions-mode" checked={putPermissionsMode === 'do_not_copy'} onChange={() => setPutPermissionsMode('do_not_copy')} />
+                    Do not copy permissions
+                  </label>
+                </div>
+              )}
+
+              {selectedOperationType === 'get-from-files' && (
+                <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f9f9f9', borderRadius: '6px', border: '1px solid #e0e0e0' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Get options (parameters)</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '6px' }}>
+                    <input type="checkbox" checked={getIncludeMetadata} onChange={(e) => setGetIncludeMetadata(e.target.checked)} />
+                    Metadata (query / connection / latency config / labels / descriptions / etc.)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '10px' }}>
+                    <input type="checkbox" checked={getIncludeValues} onChange={(e) => setGetIncludeValues(e.target.checked)} />
+                    Values (edge values like mean/stdev/evidence/forecast; not full values[] history)
+                  </label>
+
+                  <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>Permissions (override flags)</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '4px' }}>
+                    <input type="radio" name="get-permissions-mode" checked={getPermissionsMode === 'copy_all'} onChange={() => setGetPermissionsMode('copy_all')} />
+                    Copy all (force copy)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '4px' }}>
+                    <input type="radio" name="get-permissions-mode" checked={getPermissionsMode === 'copy_if_false'} onChange={() => setGetPermissionsMode('copy_if_false')} />
+                    Copy only if false (only promote to overridden=true)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                    <input type="radio" name="get-permissions-mode" checked={getPermissionsMode === 'do_not_copy'} onChange={() => setGetPermissionsMode('do_not_copy')} />
+                    Do not copy permissions
+                  </label>
+                </div>
+              )}
 
               {/* Summary */}
               <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '6px' }}>

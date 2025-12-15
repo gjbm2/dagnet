@@ -15,6 +15,7 @@ import { darkenCaseColour } from '@/lib/conditionalColours';
 import type { ScenarioParams } from '../../types/scenarios';
 import type { Graph, GraphEdge } from '../../types';
 import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue } from './BeadLabelBuilder';
+import { hasAnyEdgeQueryOverride, hasAnyOverriddenFlag, listOverriddenFlagPaths } from '../../utils/overrideFlags';
 
 // Re-export for backwards compatibility
 export type { BeadValue, HiddenCurrentValue };
@@ -38,6 +39,7 @@ export interface BeadDefinition {
   backgroundColor: string; // Dark grey for normal params, colored for variant/conditional
   hasParameterConnection: boolean; // Show 🔌 icon when expanded
   isOverridden: boolean; // Show ⚡ icon when query is overridden
+  overrideTooltip?: string; // Optional tooltip describing which overrides are active
   
   // Position
   distance: number; // along spline from visible start (or from end if rightAligned)
@@ -116,6 +118,7 @@ function buildParameterBead(config: {
   backgroundColor: string;
   hasParameterConnection: boolean;
   isOverridden: boolean;
+  overrideTooltip?: string;
   
   // Position info
   baseDistance: number;
@@ -242,6 +245,7 @@ function buildParameterBead(config: {
     backgroundColor: config.backgroundColor,
     hasParameterConnection: config.hasParameterConnection,
     isOverridden: config.isOverridden,
+    overrideTooltip: config.overrideTooltip,
     distance: beadDistance,
     expanded: true,
     index: config.beadIndex,
@@ -656,7 +660,9 @@ export function buildBeadDefinitions(
   // 2. Probability Bead
   // ============================================================================
   // Check if edge has query-level overrides (query_overridden, n_query specified, or n_query_overridden)
-  const hasQueryOverride = !!(edge as any).query_overridden || !!(edge as any).n_query || !!(edge as any).n_query_overridden;
+  const hasQueryOverride = hasAnyEdgeQueryOverride(edge);
+  const probOverridePaths = listOverriddenFlagPaths((edge as any).p);
+  const hasProbabilityOverrides = probOverridePaths.length > 0;
   
   const probBead = buildParameterBead({
     beadType: 'probability',
@@ -668,7 +674,15 @@ export function buildBeadDefinitions(
     buildLabel: BeadLabelBuilder.buildProbabilityLabel,
     backgroundColor: '#000000',
     hasParameterConnection: !!(edge as any).p?.id,
-    isOverridden: !!(edge as any).p?.mean_overridden || hasQueryOverride,
+    // IMPORTANT: this must reflect *all* override flags under `edge.p` (including latency overrides),
+    // plus edge-level query overrides that affect probability semantics.
+    isOverridden: hasProbabilityOverrides || hasQueryOverride,
+    overrideTooltip: (hasProbabilityOverrides || hasQueryOverride)
+      ? `Overrides: ${[
+        ...probOverridePaths.map(p => p.replace(/_overridden$/, '')),
+        ...(hasQueryOverride ? ['query'] : []),
+      ].join(', ')}`
+      : undefined,
     baseDistance,
     beadIndex: beadIndex,
     orderedVisibleIds,
@@ -706,7 +720,12 @@ export function buildBeadDefinitions(
     buildLabel: BeadLabelBuilder.buildLatencyLabel,
     backgroundColor: '#374151', // Dark grey
     hasParameterConnection: false,
-    isOverridden: false,
+    isOverridden: hasAnyOverriddenFlag((edge as any).p?.latency),
+    overrideTooltip: (() => {
+      const paths = listOverriddenFlagPaths((edge as any).p?.latency);
+      if (paths.length === 0) return undefined;
+      return `Overrides: ${paths.map(p => p.replace(/_overridden$/, '')).join(', ')}`;
+    })(),
     baseDistance,
     beadIndex: beadIndex,
     orderedVisibleIds,
@@ -743,7 +762,12 @@ export function buildBeadDefinitions(
     buildLabel: BeadLabelBuilder.buildCostGBPLabel,
     backgroundColor: '#000000',
     hasParameterConnection: !!((edge as any).cost_gbp?.id),
-    isOverridden: !!((edge as any).cost_gbp?.mean_overridden),
+    isOverridden: hasAnyOverriddenFlag((edge as any).cost_gbp),
+    overrideTooltip: (() => {
+      const paths = listOverriddenFlagPaths((edge as any).cost_gbp);
+      if (paths.length === 0) return undefined;
+      return `Overrides: ${paths.map(p => p.replace(/_overridden$/, '')).join(', ')}`;
+    })(),
     baseDistance,
     beadIndex: beadIndex,
     orderedVisibleIds,
@@ -778,7 +802,12 @@ export function buildBeadDefinitions(
     buildLabel: BeadLabelBuilder.buildCostTimeLabel,
     backgroundColor: '#000000',
     hasParameterConnection: !!((edge as any).labour_cost?.id),
-    isOverridden: !!((edge as any).labour_cost?.mean_overridden),
+    isOverridden: hasAnyOverriddenFlag((edge as any).labour_cost),
+    overrideTooltip: (() => {
+      const paths = listOverriddenFlagPaths((edge as any).labour_cost);
+      if (paths.length === 0) return undefined;
+      return `Overrides: ${paths.map(p => p.replace(/_overridden$/, '')).join(', ')}`;
+    })(),
     baseDistance,
     beadIndex: beadIndex,
     orderedVisibleIds,
@@ -871,7 +900,12 @@ export function buildBeadDefinitions(
         allIdentical: allCondIdentical && !hiddenCurrentCond,
         backgroundColor: darkenedColour,
         hasParameterConnection: false,
-        isOverridden: !!(cp.p?.mean_overridden),
+        isOverridden: hasAnyOverriddenFlag(cp),
+        overrideTooltip: (() => {
+          const paths = listOverriddenFlagPaths(cp);
+          if (paths.length === 0) return undefined;
+          return `Overrides: ${paths.map(p => p.replace(/_overridden$/, '')).join(', ')}`;
+        })(),
         distance: baseDistance + beadIndex * BEAD_SPACING,
         expanded: false, // Default collapsed
         index: beadIndex++

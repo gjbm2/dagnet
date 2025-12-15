@@ -1,4 +1,10 @@
 import React from 'react';
+import {
+  EDGE_COMPLETENESS_PERCENT_DECIMAL_PLACES,
+  EDGE_MEDIAN_LAG_DAYS_DECIMAL_PLACES,
+  EDGE_PROBABILITY_PERCENT_DECIMAL_PLACES,
+  EDGE_PROBABILITY_STDEV_PERCENT_DECIMAL_PLACES,
+} from '@/constants/edgeDisplay';
 
 /**
  * BeadLabelBuilder: Standardized class for constructing bead labels
@@ -150,12 +156,17 @@ export class BeadLabelBuilder {
    */
   static formatProbability(value: number, stdev?: number): string {
     const percent = value * 100;
-    const stdevPercent = stdev ? stdev * 100 : undefined;
-    
-    if (stdevPercent && stdevPercent > 0) {
-      return `${Math.round(percent)}% ± ${Math.round(stdevPercent)}%`;
+    const roundedPercent = Number(percent.toFixed(EDGE_PROBABILITY_PERCENT_DECIMAL_PLACES));
+    const stdevPercent = stdev !== undefined ? stdev * 100 : undefined;
+    const roundedStdevPercent =
+      stdevPercent !== undefined
+        ? Number(stdevPercent.toFixed(EDGE_PROBABILITY_STDEV_PERCENT_DECIMAL_PLACES))
+        : undefined;
+
+    if (roundedStdevPercent !== undefined && roundedStdevPercent > 0) {
+      return `${roundedPercent}% ± ${roundedStdevPercent}%`;
     }
-    return `${Math.round(percent)}%`;
+    return `${roundedPercent}%`;
   }
   
   /**
@@ -244,8 +255,11 @@ export class BeadLabelBuilder {
    * Format: "5d / 70%" (median lag days / completeness percentage)
    */
   static formatLatency(value: number, stdev?: number): string {
-    const days = Math.round(value);
-    const compPct = stdev !== undefined ? Math.round(stdev * 100) : 0;
+    const days = Number(value.toFixed(EDGE_MEDIAN_LAG_DAYS_DECIMAL_PLACES));
+    const compPct =
+      stdev !== undefined
+        ? Number((stdev * 100).toFixed(EDGE_COMPLETENESS_PERCENT_DECIMAL_PLACES))
+        : 0;
     return `${days}d / ${compPct}%`;
   }
   

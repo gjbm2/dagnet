@@ -164,8 +164,16 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
 
   const handleGetNodeFromFile = () => {
     if (nodeData?.id) {
-      const item = createFetchItem('node', nodeData.id, nodeId);
-      fetchItem(item, { mode: 'from-file' });
+      globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+        detail: {
+          operationType: 'get-from-files',
+          singleTarget: {
+            type: 'node',
+            objectId: nodeData.id,
+            targetId: nodeId,
+          },
+        },
+      }));
     }
     onClose();
   };
@@ -323,31 +331,48 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
 
   const handlePutNodeToFile = () => {
     if (nodeData?.id) {
-      dataOperationsService.putNodeToFile({ 
-        nodeId: nodeData.id,
-        graph,
-        setGraph
-      });
+      globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+        detail: {
+          operationType: 'put-to-files',
+          singleTarget: {
+            type: 'node',
+            objectId: nodeData.id,
+            targetId: nodeId,
+          },
+        },
+      }));
     }
     onClose();
   };
 
   const handleGetCaseFromFile = () => {
     if (nodeData?.case?.id) {
-      const item = createFetchItem('case', nodeData.case.id, nodeId);
-      fetchItem(item, { mode: 'from-file' });
+      globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+        detail: {
+          operationType: 'get-from-files',
+          singleTarget: {
+            type: 'case',
+            objectId: nodeData.case.id,
+            targetId: nodeId,
+          },
+        },
+      }));
     }
     onClose();
   };
 
   const handlePutCaseToFile = () => {
     if (nodeData?.case?.id) {
-      dataOperationsService.putCaseToFile({ 
-        caseId: nodeData.case.id, 
-        nodeId,
-        graph,
-        setGraph
-      });
+      globalThis.window.dispatchEvent(new CustomEvent('dagnet:openBatchOperationsModal', {
+        detail: {
+          operationType: 'put-to-files',
+          singleTarget: {
+            type: 'case',
+            objectId: nodeData.case.id,
+            targetId: nodeId,
+          },
+        },
+      }));
     }
     onClose();
   };

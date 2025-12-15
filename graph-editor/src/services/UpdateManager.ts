@@ -32,6 +32,8 @@ import { sessionLogService } from './sessionLogService';
 import { DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
 import { normalizeToUK } from '../lib/dateFormat';
 import { PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
+import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
+import { roundToDecimalPlaces } from '../utils/rounding';
 
 // ============================================================
 // TYPES & INTERFACES
@@ -59,6 +61,26 @@ export interface UpdateOptions {
   
   /** Validate only, don't actually apply changes */
   validateOnly?: boolean;
+
+  /**
+   * If true, do NOT honour target-side override flags when applying mappings.
+   *
+   * Intended for explicit user actions where copying between persistence domains is the point:
+   * - graph → file ("Put to file")
+   * - file → graph ("Get from file")
+   *
+   * Automated/background flows should leave this false and respect override flags.
+   */
+  ignoreOverrideFlags?: boolean;
+
+  /**
+   * If true, enable mappings that copy permission flags (override flags) across domains.
+   *
+   * This is intentionally separate from `ignoreOverrideFlags`:
+   * - `ignoreOverrideFlags` bypasses override checks (force overwrite)
+   * - `allowPermissionFlagCopy` only enables the *_overridden field mappings
+   */
+  allowPermissionFlagCopy?: boolean;
   
   /** Stop on first error or continue */
   stopOnError?: boolean;
@@ -118,6 +140,8 @@ export interface FieldMapping {
   transform?: (value: any, source: any, target: any) => any;
   condition?: (source: any, target: any) => boolean;
   overrideFlag?: string;  // e.g., 'label_overridden'
+  /** If true, this mapping only runs when caller explicitly opts in via UpdateOptions.ignoreOverrideFlags */
+  requiresIgnoreOverrideFlags?: boolean;
 }
 
 export interface MappingConfiguration {
@@ -146,8 +170,17 @@ export class UpdateManager {
    * floating-point noise and ensure consistent values across the application.
    */
   private roundToDP(value: number): number {
-    const factor = Math.pow(10, PRECISION_DECIMAL_PLACES);
-    return Math.round(value * factor) / factor;
+    return roundToDecimalPlaces(value, PRECISION_DECIMAL_PLACES);
+  }
+
+  /**
+   * Round latency horizons (days) to standard persisted precision.
+   *
+   * These are not probabilities; we intentionally use a separate precision constant
+   * from `PRECISION_DECIMAL_PLACES`.
+   */
+  private roundHorizonDays(value: number): number {
+    return roundToDecimalPlaces(value, LATENCY_HORIZON_DECIMAL_PLACES);
   }
   
   /**
@@ -1283,9 +1316,18 @@ export class UpdateManager {
           console.log('[UpdateManager.applyMappings] SKIPPED - condition failed');
           continue;
         }
+
+        // Back-compat: historically these mappings were gated on ignoreOverrideFlags.
+        // New behaviour: enable them when caller opts into permission copying, without necessarily
+        // bypassing override checks for value fields.
+        const allowPermissionCopy = options.allowPermissionFlagCopy === true || options.ignoreOverrideFlags === true;
+        if (mapping.requiresIgnoreOverrideFlags && !allowPermissionCopy) {
+          console.log('[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)');
+          continue;
+        }
         
-        // Check override flag
-        if (mapping.overrideFlag) {
+        // Check override flag (unless explicitly bypassed by caller)
+        if (!options.ignoreOverrideFlags && mapping.overrideFlag) {
           const isOverridden = this.getNestedValue(target, mapping.overrideFlag);
           if (isOverridden) {
             console.log('[UpdateManager.applyMappings] SKIPPED - overridden flag set');
@@ -1508,6 +1550,27 @@ export class UpdateManager {
         targetField: 'query',
         overrideFlag: 'query_overridden' // Respect file-side override
       },
+      // Copy override flags on explicit PUT (graph → file).
+      // NOTE: This mapping does not mutate permissions in automated flows because callers must opt in
+      // via `ignoreOverrideFlags` (see UpdateOptions).
+      {
+        sourceField: 'query_overridden',
+        targetField: 'query_overridden',
+        requiresIgnoreOverrideFlags: true,
+        condition: (source) => source.query_overridden !== undefined
+      },
+      {
+        sourceField: 'n_query',
+        targetField: 'n_query',
+        overrideFlag: 'n_query_overridden',
+        condition: (source) => source.n_query !== undefined
+      },
+      {
+        sourceField: 'n_query_overridden',
+        targetField: 'n_query_overridden',
+        requiresIgnoreOverrideFlags: true,
+        condition: (source) => source.n_query_overridden !== undefined
+      },
       // Connection settings: always sync from graph to file
       // Probability parameter connection
       { 
@@ -1548,27 +1611,53 @@ export class UpdateManager {
       { 
         sourceField: 'p.latency.latency_parameter', 
         targetField: 'latency.latency_parameter',
-        overrideFlag: 'p.latency.latency_parameter_overridden',
+        overrideFlag: 'latency.latency_parameter_overridden',
         condition: (source) => source.p?.latency?.latency_parameter !== undefined && source.p?.id
+      },
+      {
+        sourceField: 'p.latency.latency_parameter_overridden',
+        targetField: 'latency.latency_parameter_overridden',
+        requiresIgnoreOverrideFlags: true,
+        condition: (source) => source.p?.latency?.latency_parameter_overridden !== undefined && source.p?.id
       },
       { 
         sourceField: 'p.latency.anchor_node_id', 
         targetField: 'latency.anchor_node_id',
-        overrideFlag: 'p.latency.anchor_node_id_overridden',
+        overrideFlag: 'latency.anchor_node_id_overridden',
         condition: (source) => source.p?.latency?.anchor_node_id !== undefined && source.p?.id
+      },
+      {
+        sourceField: 'p.latency.anchor_node_id_overridden',
+        targetField: 'latency.anchor_node_id_overridden',
+        requiresIgnoreOverrideFlags: true,
+        condition: (source) => source.p?.latency?.anchor_node_id_overridden !== undefined && source.p?.id
       },
       // t95 and path_t95: horizon fields (derived but user-overridable)
       { 
         sourceField: 'p.latency.t95', 
         targetField: 'latency.t95',
-        overrideFlag: 'p.latency.t95_overridden',
-        condition: (source) => source.p?.latency?.t95 !== undefined && source.p?.id
+        overrideFlag: 'latency.t95_overridden',
+        condition: (source) => source.p?.latency?.t95 !== undefined && source.p?.id,
+        transform: (value: number) => this.roundHorizonDays(value)
+      },
+      {
+        sourceField: 'p.latency.t95_overridden',
+        targetField: 'latency.t95_overridden',
+        requiresIgnoreOverrideFlags: true,
+        condition: (source) => source.p?.latency?.t95_overridden !== undefined && source.p?.id
       },
       { 
         sourceField: 'p.latency.path_t95', 
         targetField: 'latency.path_t95',
-        overrideFlag: 'p.latency.path_t95_overridden',
-        condition: (source) => source.p?.latency?.path_t95 !== undefined && source.p?.id
+        overrideFlag: 'latency.path_t95_overridden',
+        condition: (source) => source.p?.latency?.path_t95 !== undefined && source.p?.id,
+        transform: (value: number) => this.roundHorizonDays(value)
+      },
+      {
+        sourceField: 'p.latency.path_t95_overridden',
+        targetField: 'latency.path_t95_overridden',
+        requiresIgnoreOverrideFlags: true,
+        condition: (source) => source.p?.latency?.path_t95_overridden !== undefined && source.p?.id
       }
     ]);
     
@@ -1875,6 +1964,13 @@ export class UpdateManager {
       source.parameter_type === 'conditional_probability';
     
     this.addMapping('file_to_graph', 'UPDATE', 'parameter', [
+      // Edge-level query configuration (file → graph)
+      //
+      // Graph-mastered policy (15-Dec-25):
+      // - `edge.query`, `edge.n_query`, and `edge.p.latency.anchor_node_id` are graph-mastered,
+      //   because the graph has the context to generate and validate them.
+      // - Therefore, we DO NOT copy these fields from parameter files → graph edges.
+
       // Probability parameters → edge.p.*
       { 
         sourceField: 'values[latest].mean', 
@@ -1961,12 +2057,8 @@ export class UpdateManager {
         overrideFlag: 'p.latency.latency_parameter_overridden',
         condition: isProbType
       },
-      { 
-        sourceField: 'latency.anchor_node_id', 
-        targetField: 'p.latency.anchor_node_id',
-        overrideFlag: 'p.latency.anchor_node_id_overridden',
-        condition: isProbType
-      },
+      { sourceField: 'latency.latency_parameter_overridden', targetField: 'p.latency.latency_parameter_overridden', requiresIgnoreOverrideFlags: true },
+      // anchor_node_id is graph-mastered (see note above) – do not copy from file → graph.
       // t95 and path_t95: horizon fields (derived but user-overridable)
       { 
         sourceField: 'latency.t95', 
@@ -1974,12 +2066,14 @@ export class UpdateManager {
         overrideFlag: 'p.latency.t95_overridden',
         condition: isProbType
       },
+      { sourceField: 'latency.t95_overridden', targetField: 'p.latency.t95_overridden', requiresIgnoreOverrideFlags: true },
       { 
         sourceField: 'latency.path_t95', 
         targetField: 'p.latency.path_t95',
         overrideFlag: 'p.latency.path_t95_overridden',
         condition: isProbType
       },
+      { sourceField: 'latency.path_t95_overridden', targetField: 'p.latency.path_t95_overridden', requiresIgnoreOverrideFlags: true },
       
       // LAG: Latency DATA fields (file → graph only, display-only)
       { 
@@ -3341,11 +3435,11 @@ export class UpdateManager {
       }
       // Phase 2: respect override flags
       if (edge.p.latency.t95_overridden !== true) {
-        edge.p.latency.t95 = update.latency.t95;
+        edge.p.latency.t95 = this.roundHorizonDays(update.latency.t95);
       }
       edge.p.latency.completeness = update.latency.completeness;
       if (edge.p.latency.path_t95_overridden !== true) {
-        edge.p.latency.path_t95 = update.latency.path_t95;
+        edge.p.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);
       }
       
       // Apply forecast if provided

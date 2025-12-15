@@ -320,6 +320,172 @@ describe('EdgeBeads - buildBeadDefinitions', () => {
       const probBead = beads.find(b => b.type === 'probability');
       expect(probBead?.isOverridden).toBe(true);
     });
+
+    it('should set isOverridden=true when latency t95_overridden is true (probability bead)', () => {
+      const edge = createTestEdge({
+        p: {
+          mean: 0.5,
+          latency: {
+            t95: 12,
+            t95_overridden: true
+          }
+        }
+      }) as any;
+      const graph = createTestGraph();
+      const scenariosContext = createScenariosContext();
+      
+      const beads = buildBeadDefinitions(
+        edge,
+        graph,
+        scenariosContext,
+        [],
+        ['current'],
+        ['current'],
+        new Map([['current', '#000000']]),
+        null,
+        0
+      );
+      
+      const probBead = beads.find(b => b.type === 'probability');
+      expect(probBead?.isOverridden).toBe(true);
+    });
+
+    it('should set isOverridden=true when latency t95_overridden is true (latency bead)', () => {
+      const edge = createTestEdge({
+        p: {
+          mean: 0.5,
+          latency: {
+            median_lag_days: 2,
+            t95: 12,
+            t95_overridden: true
+          }
+        }
+      }) as any;
+      const graph = createTestGraph();
+      const scenariosContext = createScenariosContext();
+      
+      const beads = buildBeadDefinitions(
+        edge,
+        graph,
+        scenariosContext,
+        [],
+        ['current'],
+        ['current'],
+        new Map([['current', '#000000']]),
+        null,
+        0
+      );
+      
+      const latencyBead = beads.find(b => b.type === 'latency');
+      expect(latencyBead?.isOverridden).toBe(true);
+    });
+
+    it('should set isOverridden=true when a conditional probability has any override flag', () => {
+      const edge = createTestEdge({
+        p: { mean: 0.5 },
+        conditional_p: [
+          {
+            condition: 'case_id = test',
+            query_overridden: true,
+            p: { mean: 0.2 }
+          }
+        ]
+      }) as any;
+      const graph = createTestGraph();
+      const scenariosContext = createScenariosContext();
+      
+      const beads = buildBeadDefinitions(
+        edge,
+        graph,
+        scenariosContext,
+        [],
+        ['current'],
+        ['current'],
+        new Map([['current', '#000000']]),
+        null,
+        0
+      );
+      
+      const condBead = beads.find(b => b.type === 'conditional_p');
+      expect(condBead?.isOverridden).toBe(true);
+    });
+
+    it('should set isOverridden=true when cost_gbp has non-mean override flags', () => {
+      const edge = createTestEdge({
+        p: { mean: 0.5 },
+        cost_gbp: { mean: 10, stdev_overridden: true }
+      }) as any;
+      const graph = createTestGraph();
+      const scenariosContext = createScenariosContext();
+      
+      const beads = buildBeadDefinitions(
+        edge,
+        graph,
+        scenariosContext,
+        [],
+        ['current'],
+        ['current'],
+        new Map([['current', '#000000']]),
+        null,
+        0
+      );
+      
+      const costBead = beads.find(b => b.type === 'cost_gbp');
+      expect(costBead?.isOverridden).toBe(true);
+    });
+
+    it('should set isOverridden=true when probability distribution_overridden is true', () => {
+      const edge = createTestEdge({
+        p: { mean: 0.5, distribution: 'beta', distribution_overridden: true }
+      }) as any;
+      const graph = createTestGraph();
+      const scenariosContext = createScenariosContext();
+      
+      const beads = buildBeadDefinitions(
+        edge,
+        graph,
+        scenariosContext,
+        [],
+        ['current'],
+        ['current'],
+        new Map([['current', '#000000']]),
+        null,
+        0
+      );
+      
+      const probBead = beads.find(b => b.type === 'probability');
+      expect(probBead?.isOverridden).toBe(true);
+    });
+
+    it('should set isOverridden=true when latency anchor_node_id_overridden is true', () => {
+      const edge = createTestEdge({
+        p: {
+          mean: 0.5,
+          latency: {
+            median_lag_days: 2,
+            anchor_node_id: 'A',
+            anchor_node_id_overridden: true
+          }
+        }
+      }) as any;
+      const graph = createTestGraph();
+      const scenariosContext = createScenariosContext();
+      
+      const beads = buildBeadDefinitions(
+        edge,
+        graph,
+        scenariosContext,
+        [],
+        ['current'],
+        ['current'],
+        new Map([['current', '#000000']]),
+        null,
+        0
+      );
+      
+      const latencyBead = beads.find(b => b.type === 'latency');
+      expect(latencyBead?.isOverridden).toBe(true);
+    });
     
     it('should set isOverridden=false when no overrides are present', () => {
       const edge = createTestEdge({ 

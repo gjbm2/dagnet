@@ -1,6 +1,6 @@
 # DagNet User Guide
 
-**Version 1.0** | [Changelog](CHANGELOG.md)
+**Version 1.1** | [Changelog](CHANGELOG.md)
 
 ## Getting Started
 

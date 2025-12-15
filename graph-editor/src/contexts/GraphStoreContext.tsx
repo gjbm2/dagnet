@@ -4,6 +4,7 @@ import type { GraphData } from '../types';
 import { useTabContext, fileRegistry } from './TabContext';
 import { db } from '../db/appDatabase';
 import { parseDate } from '../services/windowAggregationService';
+import { parseConstraints } from '../lib/queryDSL';
 
 /**
  * DateRange normalization and equality
@@ -103,7 +104,33 @@ export function createGraphStore(): GraphStoreHook {
     // Graph data
     graph: null,
     setGraph: (graph: GraphData) => {
-      set({ graph });
+      // On initial load, hydrate the AUTHORITATIVE DSL from the graph's persisted DSL.
+      // This ensures any early startup logic (planner/fetch) sees the correct DSL
+      // even before WindowSelector mounts.
+      //
+      // NOTE: We still treat store.currentDSL as the source of truth during runtime;
+      // this is a one-way bootstrapping step only (we don't overwrite non-empty currentDSL).
+      const { currentDSL, window: currentWindow } = get();
+      const isBootstrap = !currentDSL && !!graph?.currentQueryDSL;
+
+      if (!isBootstrap) {
+        set({ graph });
+        return;
+      }
+
+      const nextDSL = graph.currentQueryDSL as string;
+
+      // Also hydrate the WindowSelector's window state from the persisted DSL,
+      // otherwise the UI will render a default "last 7 days" window and appear to ignore
+      // the graph's stored DSL on load.
+      const parsed = parseConstraints(nextDSL);
+      const range = parsed.cohort ?? parsed.window;
+      const nextWindow =
+        range?.start && range?.end
+          ? { start: range.start, end: range.end }
+          : currentWindow;
+
+      set({ graph, currentDSL: nextDSL, window: nextWindow });
     },
     
     // Auto-update flag
@@ -290,6 +317,17 @@ export function GraphStoreProvider({
   
   useEffect(() => {
     const loadWindowFromTabs = async () => {
+      // If the graph has a persisted DSL (or we've already bootstrapped currentDSL from it),
+      // we intentionally DO NOT override the store's window from tab persistence.
+      // The graph's DSL is the source of truth on load; tab window persistence is only a
+      // convenience fallback for graphs that have no stored DSL yet.
+      const stateAtStart = store.getState();
+      const hasGraphDSL = Boolean(stateAtStart.graph?.currentQueryDSL && String(stateAtStart.graph.currentQueryDSL).trim());
+      const hasBootstrappedDSL = Boolean(stateAtStart.currentDSL && String(stateAtStart.currentDSL).trim());
+      if (hasGraphDSL || hasBootstrappedDSL) {
+        return;
+      }
+
       // Find any tab for this fileId
       const fileTabs = tabs.filter(t => t.fileId === fileId);
       if (fileTabs.length > 0) {

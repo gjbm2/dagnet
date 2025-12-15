@@ -23,6 +23,8 @@ import { ObjectType } from '../types';
 import { LogFileService } from './logFileService';
 import type { TabOperations } from '../types';
 import { credentialsManager } from '../lib/credentials';
+import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
+import { roundToDecimalPlaces } from '../utils/rounding';
 
 type IssueSeverity = 'error' | 'warning' | 'info';
 
@@ -95,6 +97,54 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
  * Does NOT modify files - only reports issues.
  */
 export class IntegrityCheckService {
+  /**
+   * IndexedDB currently stores BOTH workspace-prefixed and unprefixed variants for the same file
+   * (e.g. "graph-x" and "repo-branch-graph-x"). For integrity checks we must only evaluate ONE,
+   * otherwise Graph Issues show duplicates.
+   *
+   * Policy: prefer the workspace-prefixed fileId when both exist for the same
+   * (repository, branch, type, canonicalFileId).
+   */
+  private static dedupeWorkspacePrefixedVariants(allFiles: any[]): any[] {
+    const byKey = new Map<string, any>();
+
+    const isWorkspacePrefixed = (file: any): boolean => {
+      const typeMarker = `${file.type}-`;
+      const idx = typeof file?.fileId === 'string' ? file.fileId.indexOf(typeMarker) : -1;
+      // unprefixed: "type-..." (idx=0). prefixed: "...-type-..." (idx>0)
+      return idx > 0;
+    };
+
+    for (const file of allFiles) {
+      const repo = file?.source?.repository ?? '';
+      const branch = file?.source?.branch ?? '';
+      const type = file?.type ?? '';
+
+      // If this is missing core fields, just keep it as-is (won't collide well anyway)
+      if (!repo || !branch || !type || !file?.fileId) {
+        byKey.set(`__raw__${Math.random()}`, file);
+        continue;
+      }
+
+      const canonical = this.getCanonicalFileId(file.fileId, type);
+      const key = `${repo}|${branch}|${type}|${canonical}`;
+
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, file);
+        continue;
+      }
+
+      const existingPrefixed = isWorkspacePrefixed(existing);
+      const nextPrefixed = isWorkspacePrefixed(file);
+      if (nextPrefixed && !existingPrefixed) {
+        byKey.set(key, file);
+      }
+      // else keep existing
+    }
+
+    return Array.from(byKey.values());
+  }
   
   /**
    * Check integrity of all files in the workspace
@@ -113,7 +163,7 @@ export class IntegrityCheckService {
     
     try {
       // Get files from IndexedDB - filter by workspace if provided
-      let allFiles;
+      let allFiles: any[];
       if (workspace) {
         allFiles = await db.files
           .where('source.repository').equals(workspace.repository)
@@ -124,6 +174,9 @@ export class IntegrityCheckService {
         allFiles = await db.files.toArray();
         console.log(`🔍 IntegrityCheckService: Deep checking ${allFiles.length} files from all workspaces`);
       }
+
+      // Avoid duplicate issue emission due to prefixed/unprefixed variants in IDB.
+      allFiles = this.dedupeWorkspacePrefixedVariants(allFiles);
       
       // ═══════════════════════════════════════════════════════════════════════
       // PHASE 1: Build comprehensive lookup maps
@@ -158,6 +211,7 @@ export class IntegrityCheckService {
       };
       
       // First pass: collect all IDs and build maps
+      const graphFileIds: string[] = [];
       for (const file of allFiles) {
         if (file.source?.repository === 'temporary') continue;
         
@@ -216,9 +270,12 @@ export class IntegrityCheckService {
           case 'graph':
             stats.graphs++;
             graphFiles.push(file);
+            graphFileIds.push(file.fileId);
             break;
         }
       }
+      
+      console.log(`🔍 IntegrityCheckService: Found ${graphFileIds.length} graphs:`, graphFileIds);
       
       // ═══════════════════════════════════════════════════════════════════════
       // PHASE 2: Validate each file individually
@@ -354,11 +411,16 @@ export class IntegrityCheckService {
         } else if (file.type === 'context') {
           this.validateContext(file, fileData, issues);
         } else if (file.type === 'graph') {
+          const issueCountBefore = issues.length;
           this.validateGraph(
             file, fileData, issues,
             parameterFiles, caseFiles, contextFiles, nodeFiles, eventFiles, connectionNames,
             referencedParams, referencedCases, referencedContexts, referencedNodes, referencedEvents
           );
+          const issuesAdded = issues.length - issueCountBefore;
+          if (issuesAdded > 0) {
+            console.log(`  📊 ${file.fileId}: ${issuesAdded} issues`);
+          }
         }
       }
       
@@ -1075,6 +1137,22 @@ export class IntegrityCheckService {
             nodeUuid: node.uuid
           });
         }
+
+        // GRAPH ↔ CASE FILE DRIFT (direct vs versionedCase behaviour)
+        // Even when a case is inline on a graph node, there may also be a case file used for
+        // versioned schedule snapshots. If their persisted configs drift, direct vs versioned
+        // operations can behave differently.
+        const caseFile = caseFiles.get(node.case.id);
+        if (caseFile?.data) {
+          this.validateGraphCaseDrift({
+            graphFileId,
+            nodeIndex: i,
+            node,
+            nodeUuid: node.uuid,
+            caseFile: caseFile.data,
+            issues,
+          });
+        }
         
         // Validate case connection
         if (node.case.connection && connectionNames.size > 0) {
@@ -1354,6 +1432,23 @@ export class IntegrityCheckService {
             });
           }
         }
+
+        // GRAPH ↔ FILE DRIFT (critical for direct vs versioned fetch behaviour)
+        // If graph and parameter file disagree on persisted parameter-backed fields, runtime behaviour can differ:
+        // - Direct fetch uses the graph's edge config
+        // - Versioned fetch uses the parameter file's config
+        const paramFile = parameterFiles.get(edge.p.id);
+        if (paramFile?.data) {
+          this.validateGraphParameterDrift({
+            graphFileId,
+            edgeIndex: i,
+            edge,
+            edgeUuid: edge.uuid,
+            slot: 'p',
+            paramFile: paramFile.data,
+            issues,
+          });
+        }
       }
       
       // Cost references
@@ -1370,6 +1465,18 @@ export class IntegrityCheckService {
             edgeUuid: edge.uuid
           });
         }
+        const paramFile = parameterFiles.get(edge.cost_gbp.id);
+        if (paramFile?.data) {
+          this.validateGraphParameterDrift({
+            graphFileId,
+            edgeIndex: i,
+            edge,
+            edgeUuid: edge.uuid,
+            slot: 'cost_gbp',
+            paramFile: paramFile.data,
+            issues,
+          });
+        }
       }
       
       if (edge.labour_cost?.id) {
@@ -1383,6 +1490,18 @@ export class IntegrityCheckService {
             field: `edges[${i}].labour_cost.id`,
             message: `Edge references non-existent time cost: ${edge.labour_cost.id}`,
             edgeUuid: edge.uuid
+          });
+        }
+        const paramFile = parameterFiles.get(edge.labour_cost.id);
+        if (paramFile?.data) {
+          this.validateGraphParameterDrift({
+            graphFileId,
+            edgeIndex: i,
+            edge,
+            edgeUuid: edge.uuid,
+            slot: 'labour_cost',
+            paramFile: paramFile.data,
+            issues,
           });
         }
       }
@@ -1465,6 +1584,22 @@ export class IntegrityCheckService {
                 field: `edges[${i}].conditional_p[${j}].p.id`,
                 message: `Conditional probability references non-existent parameter: ${cp.p.id}`,
                 edgeUuid: edge.uuid
+              });
+            }
+
+            // Drift check for conditional parameters too (direct vs versioned can diverge)
+            const paramFile = parameterFiles.get(cp.p.id);
+            if (paramFile?.data) {
+              this.validateGraphParameterDrift({
+                graphFileId,
+                edgeIndex: i,
+                edge,
+                edgeUuid: edge.uuid,
+                slot: 'p',
+                paramFile: paramFile.data,
+                issues,
+                graphParamOverride: cp.p,
+                fieldPrefixOverride: `edges[${i}].conditional_p[${j}].p`,
               });
             }
           }
@@ -1570,6 +1705,174 @@ export class IntegrityCheckService {
             message: `Node "${node.id || 'unnamed'}" is disconnected (no edges)`
           });
         }
+      }
+    }
+  }
+
+  private static validateGraphCaseDrift(args: {
+    graphFileId: string;
+    nodeIndex: number;
+    node: any;
+    nodeUuid?: string;
+    caseFile: any;
+    issues: IntegrityIssue[];
+  }): void {
+    const { graphFileId, nodeIndex, node, nodeUuid, caseFile, issues } = args;
+    const caseId = node?.case?.id;
+    if (!caseId) return;
+
+    const fieldPrefix = `nodes[${nodeIndex}].case`;
+
+    const drift = (field: string, fileValue: unknown, graphValue: unknown) => {
+      const isMissingSide = fileValue === undefined || graphValue === undefined;
+      issues.push({
+        fileId: graphFileId,
+        type: 'graph',
+        severity: isMissingSide ? 'info' : 'warning',
+        category: 'sync',
+        field: `${fieldPrefix}.${field}`,
+        message:
+          `Graph ↔ case drift for case:${caseId} at "${field}" (graph=${JSON.stringify(graphValue)} vs file=${JSON.stringify(fileValue)}). ` +
+          `Direct case fetch uses graph node; versioned case fetch uses case file.`,
+        nodeUuid,
+      });
+    };
+
+    if (caseFile?.connection !== node?.case?.connection) drift('connection', caseFile?.connection, node?.case?.connection);
+    if (caseFile?.connection_string !== node?.case?.connection_string) drift('connection_string', caseFile?.connection_string, node?.case?.connection_string);
+
+    // Case status can affect UI/workflow and should stay aligned when both exist.
+    const fileStatus = caseFile?.case?.status;
+    const graphStatus = node?.case?.status;
+    if (fileStatus !== graphStatus) drift('status', fileStatus, graphStatus);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GRAPH ↔ PARAMETER FILE DRIFT (direct vs versioned behaviour)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private static validateGraphParameterDrift(args: {
+    graphFileId: string;
+    edgeIndex: number;
+    edge: any;
+    edgeUuid?: string;
+    slot: 'p' | 'cost_gbp' | 'labour_cost';
+    paramFile: any;
+    issues: IntegrityIssue[];
+    /** Optional: override the graph-side parameter object to compare (e.g. conditional_p[i].p) */
+    graphParamOverride?: any;
+    /** Optional: override the field prefix in issue.field (e.g. "edges[0].conditional_p[1].p") */
+    fieldPrefixOverride?: string;
+  }): void {
+    const { graphFileId, edgeIndex, edge, edgeUuid, slot, paramFile, issues } = args;
+
+    const slotLabel = slot === 'p' ? 'p' : slot;
+    const slotObj = args.graphParamOverride ?? edge?.[slot];
+    const paramId = slotObj?.id;
+    if (!paramId) return;
+
+    const edgeDisplayId = edge?.id || edgeUuid || `edges[${edgeIndex}]`;
+    // Prefer the user-facing, graph-slot reference so the message matches how users think about edges.
+    // Example: p.viewed-coffee-screen-to-energy-rec.p
+    const slotRef = `${slotLabel}.${edgeDisplayId}.${slotLabel}`;
+
+    // Helper: push a drift issue (single field)
+    const fieldPrefix =
+      args.fieldPrefixOverride ?? `edges[${edgeIndex}].${slotLabel}`;
+    const drift = (field: string, fileValue: unknown, graphValue: unknown, severity?: IssueSeverity) => {
+      // If one side is missing, still flag it, but as info (less noisy than warning).
+      const isMissingSide = fileValue === undefined || graphValue === undefined;
+      issues.push({
+        fileId: graphFileId,
+        type: 'graph',
+        severity: severity ?? (isMissingSide ? 'info' : 'warning'),
+        category: 'sync',
+        field: `${fieldPrefix}.${field}`,
+        message:
+          `Graph ↔ parameter drift for ${slotRef} (paramId=${paramId}) at "${field}" (graph=${JSON.stringify(graphValue)} vs file=${JSON.stringify(fileValue)}). ` +
+          `Direct fetch uses graph; versioned fetch uses parameter file.`,
+        edgeUuid,
+      });
+    };
+
+    // Permission/override flags: treat missing as false; only warn on real divergence (true vs false).
+    const driftPermission = (field: string, fileValue: unknown, graphValue: unknown) => {
+      const fileFlag = fileValue === true;
+      const graphFlag = graphValue === true;
+      if (fileFlag !== graphFlag) {
+        drift(field, fileFlag, graphFlag, 'warning');
+      }
+    };
+
+    // Type mismatch is severe: graph slot vs parameter file type drives which path is used.
+    const expectedType = slot === 'p' ? 'probability' : slot; // cost_gbp/labour_cost match schema enum
+    const fileType = paramFile?.type ?? paramFile?.parameter_type;
+    if (fileType && fileType !== expectedType) {
+      issues.push({
+        fileId: graphFileId,
+        type: 'graph',
+        severity: 'error',
+        category: 'sync',
+        field: `edges[${edgeIndex}].${slotLabel}.id`,
+        message:
+          `Parameter type mismatch for ${slotLabel}:${paramId} (graph slot=${expectedType} vs file type=${fileType}). ` +
+          `This can cause inconsistent behaviour between direct and versioned operations.`,
+        edgeUuid,
+      });
+      // Continue; still useful to show the rest of drift.
+    }
+
+    // Shared persisted fields (parameter file top-level) that also exist on graph edge.
+    // Note: query/n_query live on the edge (not inside p/cost_gbp/labour_cost).
+    if (paramFile?.query !== edge?.query) drift('query', paramFile?.query, edge?.query);
+    if (paramFile?.n_query !== edge?.n_query) drift('n_query', paramFile?.n_query, edge?.n_query);
+    // Permission flags (override status) matter because they control whether future derived writes are allowed.
+    driftPermission('query_overridden', paramFile?.query_overridden, edge?.query_overridden);
+    driftPermission('n_query_overridden', paramFile?.n_query_overridden, edge?.n_query_overridden);
+
+    // Connection settings are stored on the param slot in the graph.
+    if (paramFile?.connection !== slotObj?.connection) drift('connection', paramFile?.connection, slotObj?.connection);
+    if (paramFile?.connection_string !== slotObj?.connection_string) drift('connection_string', paramFile?.connection_string, slotObj?.connection_string);
+
+    // Latency config is only relevant on probability params.
+    if (slot === 'p') {
+      const fileLatency = paramFile?.latency;
+      const graphLatency = slotObj?.latency;
+      if (fileLatency || graphLatency) {
+        // Drift detection is about direct vs versioned behaviour; override flags do not affect read-time precedence.
+        // We compare behaviour-driving values AND permission flags, because permission drift changes what can be overwritten.
+        const fileLatencyParam = fileLatency?.latency_parameter === true;
+        const graphLatencyParam = graphLatency?.latency_parameter === true;
+        if (fileLatencyParam !== graphLatencyParam) drift('latency.latency_parameter', fileLatencyParam, graphLatencyParam);
+
+        if (fileLatency?.anchor_node_id !== graphLatency?.anchor_node_id) {
+          drift('latency.anchor_node_id', fileLatency?.anchor_node_id, graphLatency?.anchor_node_id);
+        }
+        driftPermission('latency.latency_parameter_overridden', fileLatency?.latency_parameter_overridden, graphLatency?.latency_parameter_overridden);
+        driftPermission('latency.anchor_node_id_overridden', fileLatency?.anchor_node_id_overridden, graphLatency?.anchor_node_id_overridden);
+
+        // Horizons: compare at persisted precision to avoid float noise
+        const fileT95 =
+          typeof fileLatency?.t95 === 'number' && isFinite(fileLatency.t95)
+            ? roundToDecimalPlaces(fileLatency.t95, LATENCY_HORIZON_DECIMAL_PLACES)
+            : undefined;
+        const graphT95 =
+          typeof graphLatency?.t95 === 'number' && isFinite(graphLatency.t95)
+            ? roundToDecimalPlaces(graphLatency.t95, LATENCY_HORIZON_DECIMAL_PLACES)
+            : undefined;
+        if (fileT95 !== graphT95) drift('latency.t95', fileT95, graphT95);
+        driftPermission('latency.t95_overridden', fileLatency?.t95_overridden, graphLatency?.t95_overridden);
+
+        const filePathT95 =
+          typeof fileLatency?.path_t95 === 'number' && isFinite(fileLatency.path_t95)
+            ? roundToDecimalPlaces(fileLatency.path_t95, LATENCY_HORIZON_DECIMAL_PLACES)
+            : undefined;
+        const graphPathT95 =
+          typeof graphLatency?.path_t95 === 'number' && isFinite(graphLatency.path_t95)
+            ? roundToDecimalPlaces(graphLatency.path_t95, LATENCY_HORIZON_DECIMAL_PLACES)
+            : undefined;
+        if (filePathT95 !== graphPathT95) drift('latency.path_t95', filePathT95, graphPathT95);
+        driftPermission('latency.path_t95_overridden', fileLatency?.path_t95_overridden, graphLatency?.path_t95_overridden);
       }
     }
   }

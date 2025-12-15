@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { graphIssuesService, GraphIssue, GraphIssuesState } from '../../services/graphIssuesService';
 import { useTabContext } from '../../contexts/TabContext';
+import toast from 'react-hot-toast';
 import './GraphIssuesViewer.css';
 
 type IssueSeverity = 'error' | 'warning' | 'info';
@@ -61,8 +62,16 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
     return unsubscribe;
   }, []);
   
-  // Get graph names for filter dropdown
-  const graphNames = useMemo(() => graphIssuesService.getGraphNames(), [state.issues]);
+  // Get graph names for filter dropdown.
+  // IMPORTANT: include graphs from the workspace even if there are currently only info issues
+  // on referenced files (i.e. nothing directly attached to the graph fileId).
+  const graphNames = useMemo(
+    () => graphIssuesService.getGraphNames({ includeWorkspaceGraphs: true }),
+    // Note: graphNames depends on both issues and the workspace file set.
+    // We don't have a direct subscription to FileRegistry changes here, so we at least
+    // recompute whenever the integrity check result updates (totalFiles/lastUpdated).
+    [state.issues, state.totalFiles, state.lastUpdated?.getTime()]
+  );
   
   // Filter issues
   const filteredIssues = useMemo(() => {
@@ -183,6 +192,25 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
   const handleRefresh = useCallback(() => {
     graphIssuesService.forceCheck();
   }, []);
+
+  const handleCopyAll = useCallback(async () => {
+    try {
+      const text = graphIssuesService.exportIssuesForClipboard({
+        issues: filteredIssues,
+        context: {
+          searchTerm,
+          graphFilter,
+          includeReferencedFiles,
+          severities: Array.from(severityFilter),
+        },
+      });
+      await navigator.clipboard.writeText(text);
+      toast.success(`Copied ${filteredIssues.length} issue${filteredIssues.length === 1 ? '' : 's'}`);
+    } catch (error) {
+      console.error('Failed to copy issues:', error);
+      toast.error('Failed to copy issues');
+    }
+  }, [filteredIssues, searchTerm, graphFilter, includeReferencedFiles, severityFilter]);
   
   // Summary counts
   const errorCount = useMemo(() => 
@@ -251,6 +279,14 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
         </div>
         
         <div className="issues-toolbar-actions">
+          <button
+            onClick={handleCopyAll}
+            className="issues-btn"
+            title="Copy all filtered issues"
+            disabled={filteredIssues.length === 0}
+          >
+            ⧉
+          </button>
           <button onClick={expandAll} className="issues-btn" title="Expand all">
             ⊕
           </button>

@@ -387,17 +387,26 @@ connections:
           // Build query parameters for GET request
           // Dashboard REST API expects: /funnels?e={...}&e={...}&start=...&end=...&i=1&s={...}&cs=...
           // i=1 means daily breakdown (required for time-series)
-          // cs=seconds is conversion window (for cohort mode, set based on conversion_window_days)
+          // cs=seconds is conversion window (30 days default for window mode, or conversion_window_days for cohort mode)
           const intervalParam = (context && context.mode === 'daily') ? 'i=1' : 'i=1';  // Always daily for now
           
-          // Build conversion window parameter (cs) for cohort mode
-          // cs is in seconds - tells Amplitude how long to wait for conversions after cohort entry
+          // Build conversion window parameter (cs)
+          // cs is in seconds - tells Amplitude how long to wait for conversions after entry
+          // COHORT mode: use conversion_window_days from edge latency config
+          // WINDOW mode: use default 30 days (ensures consistent conversion attribution)
+          const DEFAULT_WINDOW_CONVERSION_DAYS = 30;
           let csParam = '';
+          let csDays = DEFAULT_WINDOW_CONVERSION_DAYS;  // Default for window mode
+          
           if (isCohortMode && cohort.conversion_window_days && cohort.conversion_window_days > 0) {
-            const csSeconds = cohort.conversion_window_days * 24 * 60 * 60;  // Convert days to seconds
-            csParam = 'cs=' + csSeconds;
-            console.log('[Amplitude Adapter] COHORT conversion window: ' + cohort.conversion_window_days + ' days (' + csSeconds + ' seconds)');
+            csDays = cohort.conversion_window_days;
+            console.log('[Amplitude Adapter] COHORT conversion window: ' + csDays + ' days');
+          } else {
+            console.log('[Amplitude Adapter] WINDOW conversion window (default): ' + csDays + ' days');
           }
+          
+          const csSeconds = csDays * 24 * 60 * 60;  // Convert days to seconds
+          csParam = 'cs=' + csSeconds;
           
           const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');
           const otherParams = [
@@ -405,7 +414,7 @@ connections:
             'end=' + endDate,
             intervalParam,
             segmentParam,
-            csParam  // Conversion window for cohort mode
+            csParam  // Conversion window (cohort or default 30 days)
           ].filter(p => p).join('&');  // Filter out empty strings
           
           queryPayload.query_params = eventParams + '&' + otherParams;

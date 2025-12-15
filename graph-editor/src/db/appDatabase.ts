@@ -215,6 +215,11 @@ export class AppDatabase extends Dexie {
 // Create singleton instance
 export const db = new AppDatabase();
 
+// Debug exposure for console access
+if (typeof window !== 'undefined') {
+  (window as any).db = db;
+}
+
 // Global error handler - if ANYTHING fails, nuke the DB and reload
 const handleStorageError = async (error: any, context: string) => {
   console.error(`❌ Storage error in ${context}:`, error);
@@ -227,8 +232,10 @@ const handleStorageError = async (error: any, context: string) => {
     console.error('Failed to delete storage (non-fatal):', e);
   }
   
-  // Reload page to start fresh
-  window.location.reload();
+  // Reload page to start fresh (only in browser, not in tests)
+  if (typeof window !== 'undefined' && window.location?.reload) {
+    window.location.reload();
+  }
 };
 
 // Wrap all DB operations to catch errors
@@ -262,9 +269,15 @@ const originalGetAppState = db.getAppState.bind(db);
   }
 };
 
-// Initialize on import
-db.initialize().catch(error => {
-  console.error('Failed to initialize database:', error);
-  handleStorageError(error, 'initialize');
-});
+// Initialize on import - but NOT in test environments where tests manage DB lifecycle
+// In tests, fake-indexeddb is used and tests call db.delete()/db.open() themselves
+const isTestEnvironment = typeof process !== 'undefined' && 
+  (process.env.NODE_ENV === 'test' || process.env.VITEST);
+
+if (!isTestEnvironment) {
+  db.initialize().catch(error => {
+    console.error('Failed to initialize database:', error);
+    handleStorageError(error, 'initialize');
+  });
+}
 

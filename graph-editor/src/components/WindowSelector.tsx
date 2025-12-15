@@ -36,6 +36,16 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // Use getState() in callbacks to avoid stale closure issues
   const getLatestGraph = () => (graphStore as any).getState?.()?.graph ?? graph;
   const { tabs, operations } = useTabContext();
+
+  // Workspace scoping for context loading (avoid mixing contexts across repos/branches in IndexedDB).
+  const workspaceForContextRegistry = useMemo(() => {
+    const tab = tabId ? tabs.find(t => t.id === tabId) : undefined;
+    if (!tab) return undefined;
+    const file = fileRegistry.getFile(tab.fileId);
+    const repository = file?.source?.repository;
+    const branch = file?.source?.branch;
+    return repository && branch ? { repository, branch } : undefined;
+  }, [tabId, tabs]);
   
   // CRITICAL: These refs must be defined BEFORE useFetchData hook since it uses them
   const isInitialMountRef = useRef(true);
@@ -81,6 +91,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // Context dropdown and unroll states
   const [showContextDropdown, setShowContextDropdown] = useState(false);
   const [availableKeySections, setAvailableKeySections] = useState<any[]>([]);
+  const [isContextLoading, setIsContextLoading] = useState(false);
+  const [contextLoadError, setContextLoadError] = useState<string | null>(null);
   
   // Cohort/Window mode toggle - determines DSL function: cohort() vs window()
   // Default to cohort mode as per design (§7.5)
@@ -179,9 +191,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       const defaultDSL = `${queryMode}(${formatDateUK(windowToUse.start)}:${formatDateUK(windowToUse.end)})`;
       console.log('[WindowSelector] Initializing AUTHORITATIVE DSL from window:', defaultDSL);
       setCurrentDSL(defaultDSL);
-      if (setGraph) {
-        setGraph({ ...graph, currentQueryDSL: defaultDSL });
-      }
       isInitializedRef.current = true;
     }
   }, [graph, window, setGraph, setCurrentDSL, defaultWindowDates, graphStore, queryMode]); // Dependencies
@@ -285,6 +294,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     // Always reload contexts when dropdown opens (don't cache stale data)
     if (showContextDropdown) {
       const loadContextsFromPinnedQuery = async () => {
+        setIsContextLoading(true);
+        setContextLoadError(null);
         // Clear cache to get fresh data
         contextRegistry.clearCache();
         // Parse dataInterestsDSL to get pinned context keys
@@ -294,20 +305,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         if (!pinnedDSL) {
           console.warn('[WindowSelector] No dataInterestsDSL set on graph - showing all available contexts');
           // Fall back to showing all available contexts
-          const keys = await contextRegistry.getAllContextKeys();
+          const keys = await contextRegistry.getAllContextKeys({ workspace: workspaceForContextRegistry });
           console.log('[WindowSelector] All available context keys:', keys);
-          const sections = await Promise.all(
-            keys.map(async key => {
-              const context = await contextRegistry.getContext(key.id);
-              const values = await contextRegistry.getValuesForContext(key.id);
-              return {
-                id: key.id,
-                name: key.id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-                values,
-                otherPolicy: context?.otherPolicy
-              };
-            })
-          );
+          const sections = await contextRegistry.getContextSections(keys, { workspace: workspaceForContextRegistry });
           setAvailableKeySections(sections);
           return;
         }
@@ -334,37 +334,17 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         // If no context keys in pinned DSL, fall back to showing all available
         if (contextKeySet.size === 0) {
           console.log('[WindowSelector] No context keys in pinned DSL - showing all available contexts');
-          const keys = await contextRegistry.getAllContextKeys();
+          const keys = await contextRegistry.getAllContextKeys({ workspace: workspaceForContextRegistry });
           console.log('[WindowSelector] All available context keys:', keys);
-          const allSections = await Promise.all(
-            keys.map(async key => {
-              const context = await contextRegistry.getContext(key.id);
-              const values = await contextRegistry.getValuesForContext(key.id);
-              return {
-                id: key.id,
-                name: key.id.replace(/_/g, ' ').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-                values,
-                otherPolicy: context?.otherPolicy
-              };
-            })
-          );
+          const allSections = await contextRegistry.getContextSections(keys, { workspace: workspaceForContextRegistry });
           setAvailableKeySections(allSections);
           return;
         }
         
-        // Load values for each pinned key
-        const sections = await Promise.all(
-          Array.from(contextKeySet).map(async keyId => {
-            const context = await contextRegistry.getContext(keyId);
-            const values = await contextRegistry.getValuesForContext(keyId);
-            console.log(`[WindowSelector] Loaded values for ${keyId}:`, values);
-            return {
-              id: keyId,
-              name: keyId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-              values,
-              otherPolicy: context?.otherPolicy
-            };
-          })
+        // Load values for each pinned key (resilient to malformed contexts)
+        const sections = await contextRegistry.getContextSections(
+          Array.from(contextKeySet).map(id => ({ id })),
+          { workspace: workspaceForContextRegistry }
         );
         
         console.log('[WindowSelector] Sections from pinned query:', sections);
@@ -373,9 +353,13 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       
       loadContextsFromPinnedQuery().catch(err => {
         console.error('Failed to load contexts from pinned query:', err);
+        setAvailableKeySections([]);
+        setContextLoadError(err instanceof Error ? err.message : 'Failed to load contexts');
+      }).finally(() => {
+        setIsContextLoading(false);
       });
     }
-  }, [showContextDropdown, showingAllContexts, graph?.dataInterestsDSL]);
+  }, [showContextDropdown, showingAllContexts, graph?.dataInterestsDSL, workspaceForContextRegistry]);
   
   // Close context dropdown when clicking outside
   useEffect(() => {
@@ -953,11 +937,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 onShowAll={async () => {
                   // Load ALL contexts from registry (not just pinned)
                   contextRegistry.clearCache();
-                  const keys = await contextRegistry.getAllContextKeys();
+                  const keys = await contextRegistry.getAllContextKeys({ workspace: workspaceForContextRegistry });
                   console.log('[WindowSelector] Loading ALL context keys:', keys);
                   const sections = await Promise.all(
                     keys.map(async key => {
-                      const context = await contextRegistry.getContext(key.id);
+                      const context = await contextRegistry.getContext(key.id, { workspace: workspaceForContextRegistry });
                       const values = await contextRegistry.getValuesForContext(key.id);
                       return {
                         id: key.id,
@@ -1033,7 +1017,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           {showContextDropdown && availableKeySections.length === 0 && (
             <div ref={contextDropdownRef} className="window-selector-dropdown context-dropdown">
               <div className="dropdown-message">
-                Loading contexts...
+                {isContextLoading ? 'Loading contexts...' : (contextLoadError ? `Failed to load contexts: ${contextLoadError}` : 'No contexts found')}
               </div>
             </div>
           )}
