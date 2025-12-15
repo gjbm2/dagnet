@@ -72,14 +72,25 @@ properties:
     type: object
     description: "Latency configuration for edges with time-delayed conversions"
     properties:
+      latency_parameter:
+        type: boolean
+        description: "Explicit enablement flag. true = latency tracking enabled."
       maturity_days:
         type: integer
         minimum: 0
-        description: "Maturity threshold in days. >0 enables latency tracking."
+        description: "DEPRECATED: Use latency_parameter instead. Retained for migration."
       anchor_node_id:
         type: string
         pattern: '^[a-zA-Z0-9_-]+$'
         description: "Anchor node for cohort queries (furthest upstream START node)"
+      t95:
+        type: number
+        minimum: 0
+        description: "95th percentile lag in days (computed from fitted log-normal CDF)"
+      path_t95:
+        type: number
+        minimum: 0
+        description: "Cumulative path latency (t95) from anchor to this edge"
     additionalProperties: false
   
   values:

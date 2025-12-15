@@ -49,6 +49,9 @@ export interface RefetchDecision {
 }
 
 export interface LatencyConfig {
+  /** Explicit enablement flag (Phase 2). true = latency tracking enabled. */
+  latency_parameter?: boolean;
+  /** @deprecated Use latency_parameter instead. Retained for migration. */
   maturity_days?: number;
   anchor_node_id?: string;
   t95?: number;
@@ -99,10 +102,12 @@ export function shouldRefetch(input: RefetchPolicyInput): RefetchDecision {
     referenceDate = new Date(),
   } = input;
 
-  const maturityDays = latencyConfig?.maturity_days ?? 0;
+  // Phase 2: latency_parameter is canonical, maturity_days is deprecated fallback
+  const isLatencyEnabled = latencyConfig?.latency_parameter === true || 
+                           (latencyConfig?.maturity_days ?? 0) > 0;
 
   // Non-latency edge: standard gap-based incremental fetch
-  if (maturityDays <= 0) {
+  if (!isLatencyEnabled) {
     return { type: 'gaps_only' };
   }
 

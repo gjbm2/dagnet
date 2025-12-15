@@ -57,15 +57,22 @@ class LatencyConfig(BaseModel):
     Latency configuration for edges with time-delayed conversions.
     
     SEMANTICS:
-    - maturity_days > 0: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
-    - maturity_days = 0 or None: Latency tracking DISABLED (standard window() behaviour)
+    - latency_parameter == True: Latency tracking ENABLED (cohort queries, forecasting, latency UI)
+    - latency_parameter == False or None: Latency tracking DISABLED (standard window() behaviour)
+    
+    NOTE: maturity_days is DEPRECATED for enablement; use latency_parameter instead.
+    maturity_days is retained temporarily for backward compatibility during migration.
     """
-    maturity_days: Optional[int] = Field(None, ge=0, description="Maturity threshold in days. >0 enables latency tracking.")
+    latency_parameter: Optional[bool] = Field(None, description="Explicit enablement flag. True = latency tracking enabled.")
+    latency_parameter_overridden: bool = Field(False, description="If true, user manually set latency_parameter")
+    maturity_days: Optional[int] = Field(None, ge=0, description="DEPRECATED: Use latency_parameter. Retained for migration.")
     maturity_days_overridden: bool = Field(False, description="If true, user manually set maturity_days")
     anchor_node_id: Optional[str] = Field(None, description="Anchor node for cohort queries (furthest upstream START)")
     anchor_node_id_overridden: bool = Field(False, description="If true, user manually set anchor_node_id")
     t95: Optional[float] = Field(None, ge=0, description="95th percentile lag in days (computed from fitted CDF)")
+    t95_overridden: bool = Field(False, description="If true, user manually set t95")
     path_t95: Optional[float] = Field(None, ge=0, description="Critical path t95 in days (max t95 from anchor to this edge)")
+    path_t95_overridden: bool = Field(False, description="If true, user manually set path_t95")
     median_lag_days: Optional[float] = Field(None, ge=0, description="Weighted median lag in days (display only)")
     mean_lag_days: Optional[float] = Field(None, ge=0, description="Weighted mean lag in days (used with median to compute t95)")
     completeness: Optional[float] = Field(None, ge=0, le=1, description="Maturity progress 0-1 (display only)")

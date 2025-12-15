@@ -93,14 +93,26 @@ export const COHORT_HORIZON_MIN_DAYS = 7;
 export const COHORT_HORIZON_BUFFER_DAYS = 2;
 
 /**
+ * DEFAULT_T95_DAYS
+ * 
+ * Default t95 (95th percentile lag) value when no computed or user-supplied t95 is available.
+ * Used as the fallback horizon for:
+ * - Cohort retrieval bounding (when path_t95 and t95 are both missing)
+ * - Default injection when user enables latency on an edge without historical data
+ * 
+ * This is the single source of truth for the default horizon fallback.
+ * 
+ * See: t95-fix.md §2.2, retrieval-date-logic-implementation-plan.md §9.1
+ */
+export const DEFAULT_T95_DAYS = 30;
+
+/**
  * COHORT_HORIZON_DEFAULT_DAYS
  * 
- * Default maturity horizon when no t95, path_t95, or maturity_days is available.
- * Used as a conservative fallback to prevent fetching excessive historical data.
- * 
- * See: retrieval-date-logic-implementation-plan.md §9.1
+ * @deprecated Use DEFAULT_T95_DAYS instead.
+ * Retained as alias for backward compatibility during migration.
  */
-export const COHORT_HORIZON_DEFAULT_DAYS = 30;
+export const COHORT_HORIZON_DEFAULT_DAYS = DEFAULT_T95_DAYS;
 
 /**
  * DIAGNOSTIC_LOG

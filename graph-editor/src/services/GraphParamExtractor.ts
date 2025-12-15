@@ -91,12 +91,13 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
       if (Object.keys(forecast).length > 0) p.forecast = forecast;
     }
     
-    // === LATENCY: Only completeness, t95, median_lag_days (display-relevant) ===
-    // NOTE: maturity_days, anchor_node_id, mean_lag_days are NOT in param packs
+    // === LATENCY: Only computed stats (completeness, t95, path_t95, median_lag_days) ===
+    // NOTE: latency_parameter, anchor_node_id, mean_lag_days, *_overridden are NOT in param packs
     if (pAny.latency) {
       const latency: any = {};
       if (pAny.latency.completeness !== undefined) latency.completeness = pAny.latency.completeness;
       if (pAny.latency.t95 !== undefined) latency.t95 = pAny.latency.t95;
+      if (pAny.latency.path_t95 !== undefined) latency.path_t95 = pAny.latency.path_t95;
       if (pAny.latency.median_lag_days !== undefined) latency.median_lag_days = pAny.latency.median_lag_days;
       if (Object.keys(latency).length > 0) p.latency = latency;
     }
@@ -132,11 +133,12 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
         if (Object.keys(forecast).length > 0) condP.forecast = forecast;
       }
       
-      // === LATENCY: Only completeness, t95, median_lag_days ===
+      // === LATENCY: Only computed stats (completeness, t95, path_t95, median_lag_days) ===
       if (condPAny?.latency) {
         const latency: any = {};
         if (condPAny.latency.completeness !== undefined) latency.completeness = condPAny.latency.completeness;
         if (condPAny.latency.t95 !== undefined) latency.t95 = condPAny.latency.t95;
+        if (condPAny.latency.path_t95 !== undefined) latency.path_t95 = condPAny.latency.path_t95;
         if (condPAny.latency.median_lag_days !== undefined) latency.median_lag_days = condPAny.latency.median_lag_days;
         if (Object.keys(latency).length > 0) condP.latency = latency;
       }
