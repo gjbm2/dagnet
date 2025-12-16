@@ -78,7 +78,7 @@
  * - distribution, min, max, alpha, beta
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
@@ -94,6 +94,9 @@ import type { Graph } from '../../types';
 // ============================================================================
 // TEST DATA: Expected values from sample files
 // ============================================================================
+
+// Fixed "now" for query-date-dependent completeness (used only around the fetch call).
+const FIXED_NOW = new Date('2025-12-09T12:00:00Z');
 
 // From: param-registry/test/parameters/checkout-to-payment-latency.yaml
 const CHECKOUT_TO_PAYMENT_COHORT = {
@@ -124,6 +127,7 @@ const CHECKOUT_TO_PAYMENT_WINDOW = {
     t95: 10.5,
   },
 };
+
 
 const CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE = {
   sliceDSL: 'cohort(landing-page,1-Sep-25:30-Nov-25).context(channel:google)',
@@ -236,6 +240,8 @@ describe('Sample File Query Flow E2E', () => {
         paramSlot: 'p',
       };
 
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
       const result = await fetchSingleItem(
         item,
         { mode: 'from-file' },
@@ -243,6 +249,7 @@ describe('Sample File Query Flow E2E', () => {
         setGraph,
         dsl,
       );
+      vi.useRealTimers();
 
       expect(result.success).toBe(true);
 
@@ -279,7 +286,9 @@ describe('Sample File Query Flow E2E', () => {
       
       // === LATENCY (IN param pack - only these 3 fields) ===
       expect(paramPack['e.checkout-to-payment.p.latency.median_lag_days']).toBe(CHECKOUT_TO_PAYMENT_COHORT.latency.median_lag_days);
-      expect(paramPack['e.checkout-to-payment.p.latency.completeness']).toBe(CHECKOUT_TO_PAYMENT_COHORT.latency.completeness);
+      // Completeness is query-date dependent (computed in the LAG topo pass), not a stored-file invariant.
+      // For this cohort window at FIXED_NOW, it should be very high (near 1).
+      expect(paramPack['e.checkout-to-payment.p.latency.completeness']).toBeGreaterThan(0.98);
       expect(paramPack['e.checkout-to-payment.p.latency.t95']).toBe(CHECKOUT_TO_PAYMENT_COHORT.latency.t95);
       
       // === NOT IN PARAM PACK (should be undefined) ===
@@ -312,6 +321,8 @@ describe('Sample File Query Flow E2E', () => {
         paramSlot: 'p',
       };
 
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
       const result = await fetchSingleItem(
         item,
         { mode: 'from-file' },
@@ -319,6 +330,7 @@ describe('Sample File Query Flow E2E', () => {
         setGraph,
         dsl,
       );
+      vi.useRealTimers();
 
       // There is genuinely no cached data for this cohort window in the sample files,
       // so the real pipeline MUST report a failure, not silently succeed.
@@ -358,6 +370,8 @@ describe('Sample File Query Flow E2E', () => {
         paramSlot: 'p',
       };
 
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
       const result = await fetchSingleItem(
         item,
         { mode: 'from-file' },
@@ -365,6 +379,7 @@ describe('Sample File Query Flow E2E', () => {
         setGraph,
         dsl,
       );
+      vi.useRealTimers();
 
       expect(result.success).toBe(true);
 
@@ -406,6 +421,8 @@ describe('Sample File Query Flow E2E', () => {
         paramSlot: 'p',
       };
 
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
       const result = await fetchSingleItem(
         item,
         { mode: 'from-file' },
@@ -413,6 +430,7 @@ describe('Sample File Query Flow E2E', () => {
         setGraph,
         dsl,
       );
+      vi.useRealTimers();
 
       expect(result.success).toBe(true);
 
@@ -468,6 +486,8 @@ describe('Sample File Query Flow E2E', () => {
         paramSlot: 'p',
       };
 
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
       const result = await fetchSingleItem(
         item,
         { mode: 'from-file' },
@@ -475,6 +495,7 @@ describe('Sample File Query Flow E2E', () => {
         setGraph,
         dsl,
       );
+      vi.useRealTimers();
 
       expect(result.success).toBe(true);
 
@@ -514,6 +535,8 @@ describe('Sample File Query Flow E2E', () => {
         paramSlot: 'p',
       };
 
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
       const result = await fetchSingleItem(
         item,
         { mode: 'from-file' },
@@ -521,6 +544,7 @@ describe('Sample File Query Flow E2E', () => {
         setGraph,
         dsl,
       );
+      vi.useRealTimers();
 
       expect(result.success).toBe(true);
 
@@ -554,6 +578,8 @@ describe('Sample File Query Flow E2E', () => {
         paramSlot: 'p',
       };
 
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
       const result = await fetchSingleItem(
         item,
         { mode: 'from-file' },
@@ -561,6 +587,7 @@ describe('Sample File Query Flow E2E', () => {
         setGraph,
         dsl,
       );
+      vi.useRealTimers();
 
       expect(result.success).toBe(true);
 
@@ -591,7 +618,8 @@ describe('Sample File Query Flow E2E', () => {
       
       // === LATENCY (IN param pack) ===
       expect(paramPack['e.checkout-to-payment.p.latency.median_lag_days']).toBe(CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.latency.median_lag_days);
-      expect(paramPack['e.checkout-to-payment.p.latency.completeness']).toBe(CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.latency.completeness);
+      // Completeness is query-date dependent (computed in the LAG topo pass), not a stored-file invariant.
+      expect(paramPack['e.checkout-to-payment.p.latency.completeness']).toBeGreaterThan(0.98);
       expect(paramPack['e.checkout-to-payment.p.latency.t95']).toBe(CHECKOUT_TO_PAYMENT_CONTEXT_GOOGLE.latency.t95);
       
       // === NOT IN PARAM PACK ===
@@ -620,6 +648,8 @@ describe('Sample File Query Flow E2E', () => {
         paramSlot: 'p',
       };
 
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_NOW);
       const result = await fetchSingleItem(
         item,
         { mode: 'from-file' },
@@ -627,6 +657,7 @@ describe('Sample File Query Flow E2E', () => {
         setGraph,
         dsl,
       );
+      vi.useRealTimers();
 
       expect(result.success).toBe(true);
 

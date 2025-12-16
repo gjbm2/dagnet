@@ -2017,14 +2017,17 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       // Colours are assigned in activation order, so append to end
       newColourOrderIds = [...currentState.visibleColourOrderIds, scenarioId];
       
-      // NEW: Inherit F/E visibility mode from "current" when making a scenario visible
-      // This ensures new scenarios start with the same F/E state as the current layer
+      // Inherit F/E visibility mode from "current" ONLY when this scenario has never had a mode set.
+      // Hide/show must NOT mutate an existing scenario's mode.
       if (scenarioId !== 'current' && scenarioId !== 'base') {
-        const currentLayerMode = currentState.visibilityMode?.['current'] || 'f+e';
-        newVisibilityMode = {
-          ...newVisibilityMode,
-          [scenarioId]: currentLayerMode,
-        };
+        const existingMode = currentState.visibilityMode?.[scenarioId];
+        if (existingMode === undefined) {
+          const currentLayerMode = currentState.visibilityMode?.['current'] || 'f+e';
+          newVisibilityMode = {
+            ...newVisibilityMode,
+            [scenarioId]: currentLayerMode,
+          };
+        }
       }
     }
 

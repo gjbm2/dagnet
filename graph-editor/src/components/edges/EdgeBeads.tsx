@@ -10,6 +10,7 @@ import { EdgeLabelRenderer } from 'reactflow';
 import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
+import type { ScenarioVisibilityMode } from '../../types';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_HEIGHT, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
 import { hasAnyEdgeQueryOverride, listOverriddenFlagPaths } from '../../utils/overrideFlags';
 
@@ -64,6 +65,10 @@ interface EdgeBeadsProps {
   onDoubleClick?: () => void;
   useSankeyView?: boolean;
   edgeWidth?: number;
+  /** Scenario visibility mode (E/F/F+E) affects which probability basis is shown on the probability bead */
+  getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode;
+  /** Stable key that changes when scenario visibility modes change (forces recompute) */
+  visibilityModesKey?: string;
 }
 
 interface BeadState {
@@ -87,7 +92,9 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     visibleEndOffset = 0,
     onDoubleClick,
     useSankeyView = false,
-    edgeWidth = 0
+    edgeWidth = 0,
+    getScenarioVisibilityMode,
+    visibilityModesKey
   } = props;
   
   // Create a memoized path element from pathD for accurate position calculations
@@ -130,7 +137,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       visibleColourOrderIds.length > 0 ? visibleColourOrderIds : ['current'],
       scenarioColours,
       whatIfDSL,
-      visibleStartOffset
+      visibleStartOffset,
+      getScenarioVisibilityMode
     );
     
     return beads;
@@ -138,6 +146,11 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge.uuid || edge.id, // Stable edge identifier
     edge.p?.mean, // Probability value
     edge.p?.stdev, // Standard deviation
+    // Basis fields for probability bead when in F or E mode
+    edge.p?.forecast?.mean,
+    edge.p?.forecast?.stdev,
+    edge.p?.evidence?.mean,
+    edge.p?.evidence?.stdev,
     edge.p?.mean_overridden, // Override flag for probability
     edge.p?.stdev_overridden, // Override flag for probability stdev
     edge.p?.distribution_overridden, // Override flag for probability distribution
@@ -174,6 +187,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     Array.from(scenarioColours.entries()).join(','), // Scenario colours (stable string)
     whatIfDSL, // What-If DSL
     visibleStartOffset, // Visible start offset
+    visibilityModesKey, // Visibility modes (stable string)
   ]);
 
   
@@ -789,6 +803,8 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.visibleScenarioIds?.join(',') === nextProps.visibleScenarioIds?.join(',') &&
     prevProps.visibleColourOrderIds?.join(',') === nextProps.visibleColourOrderIds?.join(',') &&
     prevProps.whatIfDSL === nextProps.whatIfDSL &&
+    // CRITICAL: scenario visibility modes (E/F/F+E) must trigger bead recompute
+    prevProps.visibilityModesKey === nextProps.visibilityModesKey &&
     // Compare edge properties that matter
     prevProps.edge?.uuid === nextProps.edge?.uuid &&
     prevProps.edge?.p?.mean === nextProps.edge?.p?.mean &&

@@ -1448,24 +1448,7 @@ export async function fetchItems(
                   ? (() => {
                       const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
                       const existing = edge?.p?.latency;
-                      const hasExistingSummary =
-                        existing?.median_lag_days !== undefined ||
-                        existing?.mean_lag_days !== undefined;
-
-                      // If the file already populated a latency summary on the edge, preserve it.
-                      // Otherwise (e.g. file only has per-day lag arrays), apply the topo-computed summary.
-                      if (!hasExistingSummary) {
-                        return ev.latency;
-                      }
-                      return {
-                        // Preserve existing slice-level latency summary (from file)
-                        median_lag_days: existing?.median_lag_days,
-                        mean_lag_days: existing?.mean_lag_days,
-                        t95: existing?.t95 ?? ev.latency.t95,
-                        completeness: existing?.completeness ?? ev.latency.completeness,
-                        // Still apply computed path_t95
-                        path_t95: ev.latency?.path_t95,
-                      };
+                      return selectLatencyToApplyForTopoPass(ev.latency, existing, true);
                     })()
                   : ev.latency,
                 blendedMean: ev.blendedMean,
@@ -1540,6 +1523,20 @@ export async function fetchItems(
                     pathT95: v.latency.path_t95.toFixed(1),
                     mu: v.debug.mu.toFixed(3),
                     sigma: v.debug.sigma.toFixed(3),
+                    // Forecast/blend diagnostics (needed to debug “forecast too low”)
+                    baseForecastMean: v.debug.baseForecastMean,
+                    fallbackForecastMean: v.debug.fallbackForecastMean,
+                    forecastMeanUsed: v.debug.forecastMeanUsed,
+                    forecastMeanSource: v.debug.forecastMeanSource,
+                    nQuery: v.debug.nQuery,
+                    nBaseline: v.debug.nBaseline,
+                    nBaselineSource: v.debug.nBaselineSource,
+                    baselineWindowSliceDSL: v.debug.baselineWindowSliceDSL,
+                    baselineWindowRetrievedAt: v.debug.baselineWindowRetrievedAt,
+                    baselineWindowN: v.debug.baselineWindowN,
+                    baselineWindowK: v.debug.baselineWindowK,
+                    baselineWindowForecast: v.debug.baselineWindowForecast,
+                    wEvidence: v.debug.wEvidence,
                     totalN: v.debug.totalN,
                     totalK: v.debug.totalK,
                     dataQuality: hasKGreaterThanN ? 'ERROR: k > n in some cohorts' : 'OK',
@@ -1683,6 +1680,46 @@ export async function fetchItems(
   }
   
   return results;
+}
+
+/**
+ * Decide which latency fields to apply during the Stage-2 LAG topo pass.
+ *
+ * In `from-file` mode we may want to preserve *shape* fields that were authored
+ * from file slices (median/mean lag, and sometimes t95), but **completeness is
+ * always query-date dependent** and must never be preserved from a previous run.
+ *
+ * This helper is exported purely for unit testing to prevent regressions where
+ * the graph renders a stale completeness value after a fetch.
+ */
+export function selectLatencyToApplyForTopoPass(
+  computed: { median_lag_days?: number; mean_lag_days?: number; t95: number; completeness: number; path_t95: number },
+  existing: { median_lag_days?: number; mean_lag_days?: number; t95?: number; completeness?: number } | undefined,
+  preserveLatencySummaryFromFile: boolean
+): { median_lag_days?: number; mean_lag_days?: number; t95: number; completeness: number; path_t95: number } {
+  if (!preserveLatencySummaryFromFile) {
+    return computed;
+  }
+
+  const hasExistingSummary =
+    existing?.median_lag_days !== undefined ||
+    existing?.mean_lag_days !== undefined;
+
+  if (!hasExistingSummary) {
+    return computed;
+  }
+
+  return {
+    // Preserve existing slice-level latency summary (from file)
+    median_lag_days: existing?.median_lag_days,
+    mean_lag_days: existing?.mean_lag_days,
+    // Keep existing t95 if present (UpdateManager will still respect t95_overridden).
+    t95: existing?.t95 ?? computed.t95,
+    // CRITICAL: completeness must always come from the topo pass (query-date dependent).
+    completeness: computed.completeness,
+    // Still apply computed path_t95 (UpdateManager will respect path_t95_overridden).
+    path_t95: computed.path_t95,
+  };
 }
 
 // ============================================================================

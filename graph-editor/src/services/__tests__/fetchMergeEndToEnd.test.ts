@@ -38,6 +38,15 @@ import type { ParameterValue } from '../paramRegistryService';
 
 const REFERENCE_DATE = new Date('2025-12-09T12:00:00Z');
 
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(REFERENCE_DATE);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 function daysAgo(n: number, fromDate: Date = REFERENCE_DATE): string {
   const d = new Date(fromDate);
   d.setDate(d.getDate() - n);
@@ -668,6 +677,7 @@ describe('Scenario 5: Context-Segregated Slices', () => {
   
   it('shouldRefetch evaluates per-context slice independently', () => {
     // Create UK slice (all mature)
+    const retrievedOldEnough = new Date(REFERENCE_DATE.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString();
     const ukSlice: ParameterValue = {
       mean: 0.5, n: 600, k: 300,
       dates: [daysAgo(30), daysAgo(25), daysAgo(20)],
@@ -676,7 +686,7 @@ describe('Scenario 5: Context-Segregated Slices', () => {
       window_from: daysAgo(30),
       window_to: daysAgo(20),
       sliceDSL: `window(${daysAgo(30)}:${daysAgo(20)}).context(geo=UK)`,
-      data_source: { type: 'api', retrieved_at: new Date().toISOString() },
+      data_source: { type: 'api', retrieved_at: retrievedOldEnough },
     };
     
     // Create US slice (has immature cohort for cohort query)
@@ -688,7 +698,7 @@ describe('Scenario 5: Context-Segregated Slices', () => {
       cohort_from: daysAgo(60),
       cohort_to: daysAgo(5),
       sliceDSL: `cohort(anchor,${daysAgo(60)}:${daysAgo(5)}).context(geo=US)`,
-      data_source: { type: 'api', retrieved_at: new Date().toISOString() },
+      data_source: { type: 'api', retrieved_at: retrievedOldEnough },
     };
     
     // UK window query: should be gaps_only (mature window data)

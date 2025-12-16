@@ -14,6 +14,7 @@ import { getConditionalProbabilityColour, ensureDarkBeadColour } from '@/lib/con
 import { darkenCaseColour } from '@/lib/conditionalColours';
 import type { ScenarioParams } from '../../types/scenarios';
 import type { Graph, GraphEdge } from '../../types';
+import type { ScenarioVisibilityMode } from '../../types';
 import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue } from './BeadLabelBuilder';
 import { hasAnyEdgeQueryOverride, hasAnyOverriddenFlag, listOverriddenFlagPaths } from '../../utils/overrideFlags';
 
@@ -27,9 +28,7 @@ export interface BeadDefinition {
   values: BeadValue[];
   
   // Hidden current value (if 'current' not visible but differs)
-  hiddenCurrent?: {
-    value: number | string;
-  };
+  hiddenCurrent?: HiddenCurrentValue;
   
   // Display
   displayText: React.ReactNode; // Coloured segments + optional grey brackets
@@ -103,7 +102,7 @@ function buildParameterBead(config: {
   checkExists: () => boolean;
   
   // Extract value from specific layer (returns {mean/value, stdev} or undefined)
-  extractFromLayer: (layerId: string) => { mean?: number; value?: number; stdev?: number } | undefined;
+  extractFromLayer: (layerId: string) => { mean?: number; value?: number; stdev?: number; prefix?: string } | undefined;
   
   // Build label using BeadLabelBuilder
   // The third boolean parameter indicates whether there is existence variation
@@ -142,13 +141,13 @@ function buildParameterBead(config: {
   let hiddenCurrent: HiddenCurrentValue | undefined;
   
   // First pass: inspect raw extracted values per visible layer
-  const rawLayerValues = new Map<string, { value?: number; stdev?: number } | null>();
+  const rawLayerValues = new Map<string, { value?: number; stdev?: number; prefix?: string } | null>();
   for (const layerId of config.orderedVisibleIds) {
     const extracted = config.extractFromLayer(layerId);
     const extractedValue = extracted?.mean ?? extracted?.value;
     rawLayerValues.set(
       layerId, 
-      extracted ? { value: extractedValue, stdev: extracted?.stdev } : null
+      extracted ? { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix } : null
     );
   }
   
@@ -164,10 +163,10 @@ function buildParameterBead(config: {
     hasAnyExplicitValue && config.beadType !== 'probability';
   
   // Second pass: construct final layerValues with optional zero-filling
-  const layerValues = new Map<string, { value: number; stdev?: number } | null>();
+  const layerValues = new Map<string, { value: number; stdev?: number; prefix?: string } | null>();
   for (const [layerId, raw] of rawLayerValues.entries()) {
     if (raw && raw.value !== undefined) {
-      layerValues.set(layerId, { value: raw.value, stdev: raw.stdev });
+      layerValues.set(layerId, { value: raw.value, stdev: raw.stdev, prefix: raw.prefix });
     } else if (shouldTreatMissingAsZero) {
       layerValues.set(layerId, { value: 0, stdev: undefined });
     } else {
@@ -187,7 +186,8 @@ function buildParameterBead(config: {
         scenarioId: layerId,
         value: extracted.value,
         colour: config.getScenarioColour(layerId),
-        stdev: extracted.stdev
+        stdev: extracted.stdev,
+        prefix: extracted.prefix
       });
     }
   }
@@ -202,15 +202,15 @@ function buildParameterBead(config: {
       if (values.length > 0) {
         const tempBuilder = new BeadLabelBuilder(
           values,
-          { value: extractedValue, stdev: extracted?.stdev },
+          { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix },
           (v: number | string, stdev?: number) => String(v)
         );
         if (!tempBuilder.doesHiddenCurrentMatch()) {
-          hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev };
+          hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix };
         }
       } else {
         // No visible values but hidden current exists - definitely different
-        hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev };
+        hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix };
       }
     } else if (values.length > 0) {
       // Hidden current doesn't exist but visible layers do - that's also a difference
@@ -314,6 +314,105 @@ function getEdgeProbabilityForLayer(
     
     return { probability: prob, stdev };
   }
+}
+
+function getProbabilityBeadValueForLayer(
+  layerId: string,
+  edge: GraphEdge,
+  graph: Graph,
+  scenariosContext: any,
+  getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode,
+  whatIfDSL?: string | null
+): { value: number; stdev?: number; prefix?: string } {
+  // Mode selection is per-layer (scenario). Default is F+E which uses p.mean.
+  const mode: ScenarioVisibilityMode = getScenarioVisibilityMode?.(layerId) ?? 'f+e';
+
+  const edgeKey = edge.id || edge.uuid;
+  const fallbackP: any = (edge as any).p || {};
+
+  let pForLayer: any = fallbackP;
+  if (layerId === 'current') {
+    pForLayer = fallbackP;
+  } else if (layerId === 'base') {
+    pForLayer = scenariosContext.baseParams.edges?.[edgeKey]?.p ?? fallbackP;
+  } else {
+    const composedParams = getComposedParamsForLayer(
+      layerId,
+      scenariosContext.baseParams,
+      scenariosContext.currentParams,
+      scenariosContext.scenarios
+    );
+    pForLayer = composedParams.edges?.[edgeKey]?.p
+      ?? scenariosContext.baseParams.edges?.[edgeKey]?.p
+      ?? fallbackP;
+  }
+
+  // Normalise evidence/forecast means.
+  // IMPORTANT: LAG pipeline supports both scalar and object forms:
+  // - p.evidence: 0.12               (scalar)
+  // - p.evidence.mean: 0.12          (object)
+  // - p.evidence.k/n                 (counts)
+  const evidenceMean = (() => {
+    if (typeof pForLayer?.evidence === 'number') return pForLayer.evidence;
+    if (typeof pForLayer?.evidence?.mean === 'number') return pForLayer.evidence.mean;
+    if (
+      typeof pForLayer?.evidence?.n === 'number' &&
+      typeof pForLayer?.evidence?.k === 'number' &&
+      pForLayer.evidence.n > 0
+    ) {
+      return pForLayer.evidence.k / pForLayer.evidence.n;
+    }
+    if (typeof fallbackP?.evidence === 'number') return fallbackP.evidence;
+    if (typeof fallbackP?.evidence?.mean === 'number') return fallbackP.evidence.mean;
+    return undefined;
+  })();
+
+  const evidenceStdev = (() => {
+    if (typeof pForLayer?.evidence?.stdev === 'number') return pForLayer.evidence.stdev;
+    if (typeof fallbackP?.evidence?.stdev === 'number') return fallbackP.evidence.stdev;
+    return undefined;
+  })();
+
+  const forecastMean = (() => {
+    if (typeof pForLayer?.forecast === 'number') return pForLayer.forecast;
+    if (typeof pForLayer?.forecast?.mean === 'number') return pForLayer.forecast.mean;
+    if (typeof fallbackP?.forecast === 'number') return fallbackP.forecast;
+    if (typeof fallbackP?.forecast?.mean === 'number') return fallbackP.forecast.mean;
+    return undefined;
+  })();
+
+  const forecastStdev = (() => {
+    if (typeof pForLayer?.forecast?.stdev === 'number') return pForLayer.forecast.stdev;
+    if (typeof fallbackP?.forecast?.stdev === 'number') return fallbackP.forecast.stdev;
+    return undefined;
+  })();
+
+  // Mean/stdev basis (for F+E mode)
+  const mean =
+    typeof pForLayer?.mean === 'number' ? pForLayer.mean
+      : (typeof fallbackP?.mean === 'number' ? fallbackP.mean : 0);
+  const stdev =
+    typeof pForLayer?.stdev === 'number' ? pForLayer.stdev
+      : (typeof fallbackP?.stdev === 'number' ? fallbackP.stdev : undefined);
+
+  if (mode === 'f') {
+    return {
+      value: (typeof forecastMean === 'number' ? forecastMean : mean) ?? 0,
+      stdev: typeof forecastMean === 'number' ? forecastStdev : stdev,
+      prefix: 'F'
+    };
+  }
+
+  if (mode === 'e') {
+    return {
+      value: (typeof evidenceMean === 'number' ? evidenceMean : mean) ?? 0,
+      stdev: typeof evidenceMean === 'number' ? evidenceStdev : stdev,
+      prefix: 'E'
+    };
+  }
+
+  // F+E (default): show blended p.mean
+  return { value: mean ?? 0, stdev };
 }
 
 function getEdgeCostGBPForLayer(
@@ -519,7 +618,8 @@ export function buildBeadDefinitions(
   visibleColourOrderIds: string[],
   scenarioColours: Map<string, string>,
   whatIfDSL?: string | null,
-  visibleStartOffset?: number // Distance from path start to visible start (after chevron)
+  visibleStartOffset?: number, // Distance from path start to visible start (after chevron)
+  getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode
 ): BeadDefinition[] {
   if (!scenariosContext || !graph) {
     console.warn('[buildBeadDefinitions] Missing scenariosContext or graph');
@@ -668,8 +768,15 @@ export function buildBeadDefinitions(
     beadType: 'probability',
     checkExists: () => true, // Every edge has probability
     extractFromLayer: (layerId) => {
-      const { probability, stdev } = getEdgeProbabilityForLayer(layerId, edge, graph, scenariosContext, whatIfDSL);
-      return { value: probability, stdev };
+      const { value, stdev, prefix } = getProbabilityBeadValueForLayer(
+        layerId,
+        edge,
+        graph,
+        scenariosContext,
+        getScenarioVisibilityMode,
+        whatIfDSL
+      );
+      return { value, stdev, prefix };
     },
     buildLabel: BeadLabelBuilder.buildProbabilityLabel,
     backgroundColor: '#000000',

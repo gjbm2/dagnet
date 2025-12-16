@@ -69,7 +69,7 @@ import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
-import { DIAGNOSTIC_LOG } from '../constants/statisticalConstants';
+import { DIAGNOSTIC_LOG, RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
 import { normalizeWindow } from './fetchDataService';
 import { LATENCY_T95_PERCENTILE, LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
 
@@ -5382,6 +5382,9 @@ class DataOperationsService {
                         latencyConfig: {
                           latency_parameter: latencyConfigForMerge?.latency_parameter,
                           anchor_node_id: latencyConfigForMerge?.anchor_node_id,
+                          // CRITICAL: t95 is required to exclude immature window days when computing forecast baseline.
+                          // Without this, recomputeForecast degenerates to forecast≈mean which is systematically low.
+                          t95: latencyConfigForMerge?.t95,
                         },
                         recomputeForecast: true,
                       }),
@@ -7197,6 +7200,53 @@ class DataOperationsService {
       ...aggregatedData,
       values: valuesWithEvidence,
     };
+
+    const computeRecencyWeightedMatureForecast = (args: {
+      bestWindow: any;
+      // Use a conservative maturity threshold (days) when we can infer it; otherwise fall back
+      t95Days?: number;
+      referenceDate: Date;
+    }): number | undefined => {
+      const { bestWindow, t95Days, referenceDate } = args;
+      const dates: string[] | undefined = bestWindow?.dates;
+      const nDaily: number[] | undefined = bestWindow?.n_daily;
+      const kDaily: number[] | undefined = bestWindow?.k_daily;
+      if (!Array.isArray(dates) || !Array.isArray(nDaily) || !Array.isArray(kDaily)) return undefined;
+      if (dates.length === 0 || nDaily.length !== dates.length || kDaily.length !== dates.length) return undefined;
+
+      // Mature cutoff: exclude the most recent (ceil(t95)+1) days, which are systematically under-counted for lagged conversions.
+      // If we don't have t95, fall back to DEFAULT_T95_DAYS for safety.
+      const effectiveT95 =
+        (t95Days !== undefined && Number.isFinite(t95Days) && t95Days > 0) ? t95Days : DEFAULT_T95_DAYS;
+      const maturityDays = Math.ceil(effectiveT95) + 1;
+      const cutoffMs = referenceDate.getTime() - maturityDays * 24 * 60 * 60 * 1000;
+
+      let weightedN = 0;
+      let weightedK = 0;
+
+      for (let i = 0; i < dates.length; i++) {
+        const d = parseDate(dates[i]);
+        if (Number.isNaN(d.getTime())) continue;
+        if (d.getTime() > cutoffMs) {
+          // Immature day → exclude from baseline forecast
+          continue;
+        }
+
+        const ageDays = Math.max(0, (referenceDate.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+        // Mirror statisticalEnhancementService (w = exp(-age/H))
+        const w = Math.exp(-ageDays / RECENCY_HALF_LIFE_DAYS);
+
+        const n = typeof nDaily[i] === 'number' ? nDaily[i] : 0;
+        const k = typeof kDaily[i] === 'number' ? kDaily[i] : 0;
+        if (n <= 0) continue;
+
+        weightedN += w * n;
+        weightedK += w * k;
+      }
+
+      if (weightedN <= 0) return undefined;
+      return weightedK / weightedN;
+    };
     
     // === 2) Forecast scalars (copy from matching window() slice) ===
     // This applies to BOTH cohort() and window() queries:
@@ -7229,20 +7279,56 @@ class DataOperationsService {
           return bDate.localeCompare(aDate);
         })[0] as any;
         
-        const forecastValue = bestWindow.forecast;
-        const nBaseline = bestWindow.n; // Sample size behind the forecast
-        
-        if (forecastValue !== undefined) {
+        const rawForecastValue = bestWindow.forecast;
+
+        // If the stored forecast looks "naive" (forecast ≈ mean), recompute it from daily data
+        // using maturity exclusion + light recency bias.
+        //
+        // This avoids systematic underestimation when window() includes immature recent days.
+        const storedLooksNaive =
+          typeof rawForecastValue === 'number' &&
+          typeof bestWindow.mean === 'number' &&
+          Math.abs(rawForecastValue - bestWindow.mean) < 1e-9;
+
+        // Prefer t95 from the requested (cohort/window) value latency summary; fall back to window slice latency.t95.
+        const latestAggregatedValue: any = (nextAggregated.values as any[])?.[(nextAggregated.values as any[]).length - 1];
+        const inferredT95Days =
+          typeof latestAggregatedValue?.latency?.t95 === 'number'
+            ? latestAggregatedValue.latency.t95
+            : (typeof bestWindow?.latency?.t95 === 'number' ? bestWindow.latency.t95 : undefined);
+
+        const recomputedForecast =
+          storedLooksNaive
+            ? computeRecencyWeightedMatureForecast({
+                bestWindow,
+                t95Days: inferredT95Days,
+                referenceDate: new Date(),
+              })
+            : undefined;
+
+        const forecastValueToUse =
+          recomputedForecast !== undefined ? recomputedForecast : rawForecastValue;
+
+        if (forecastValueToUse !== undefined) {
           nextAggregated = {
             ...nextAggregated,
             values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
-              // Do not overwrite an existing forecast on the value
-              if (v.forecast !== undefined) return v;
+              // Overwrite an existing forecast ONLY if it looks naive (forecast≈mean) and we have a better recomputation.
+              if (v.forecast !== undefined) {
+                const existingLooksNaive =
+                  typeof v.forecast === 'number' &&
+                  typeof v.mean === 'number' &&
+                  Math.abs(v.forecast - v.mean) < 1e-9;
+                if (existingLooksNaive && recomputedForecast !== undefined) {
+                  return { ...v, forecast: forecastValueToUse };
+                }
+                return v;
+              }
               
               // Attach forecast scalar only; LAG blending is handled in enhanceGraphLatencies.
               return {
                 ...v,
-                forecast: forecastValue,
+                forecast: forecastValueToUse,
               };
             }),
           };
