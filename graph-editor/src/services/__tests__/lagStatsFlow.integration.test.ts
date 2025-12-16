@@ -1158,9 +1158,15 @@ describe('LAG Stats Flow - Expected Values', () => {
         { date: '2-Oct-25', n: 100, k: 48, age: 59, median_lag_days: 3 },
       ];
       
-      // With ages 59-60 days and typical t95 ~8 days, should be 100% complete
+      // With ages 59-60 days and a short median lag, cohorts should be highly complete.
+      //
+      // NOTE: We deliberately apply a one-way tail constraint using the authoritative t95
+      // (fallbackT95Days here), which can keep completeness < 1 even for "old" cohorts
+      // when the authoritative tail is much longer than implied by the moments.
       const stats = computeEdgeLatencyStats(cohorts, 3, 3, 30, 0);
-      expect(stats.completeness).toBeGreaterThan(0.99);
+      expect(stats.completeness_cdf.tail_constraint_applied).toBe(true);
+      expect(stats.completeness).toBeGreaterThan(0.95);
+      expect(stats.completeness).toBeLessThanOrEqual(1);
     });
     
     it('should handle cohorts with k > n as invalid data', () => {
@@ -1298,8 +1304,11 @@ describe('Anchor Lag Data Flow (C1 e2e)', () => {
         0       // anchorMedianLag = 0 (first edge)
       );
 
-      // No age adjustment, ages 18-20 with short-lag → high completeness
-      expect(stats.completeness).toBeGreaterThan(0.94);
+      // No age adjustment, ages 18-20 with short median lag → high completeness.
+      // As above, the authoritative t95 tail constraint may keep this below "near-1".
+      expect(stats.completeness_cdf.tail_constraint_applied).toBe(true);
+      expect(stats.completeness).toBeGreaterThan(0.85);
+      expect(stats.completeness).toBeLessThanOrEqual(1);
     });
   });
 

@@ -18,7 +18,7 @@ import { useTabContext } from '../../contexts/TabContext';
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { graphComputeClient, AnalysisResponse, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { constructQueryDSL } from '../../lib/dslConstruction';
-import { buildGraphForLayer } from '../../services/CompositionService';
+import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code } from 'lucide-react';
@@ -349,13 +349,12 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         const scenarioGraphs = orderedVisibleScenarios.map(scenarioId => {
           // Pass whatIfDSL only for 'current' layer - scenario layers have their
           // What-If already baked into their params at snapshot time
-          const scenarioGraph = buildGraphForLayer(
+          const scenarioGraph = buildGraphForAnalysisLayer(
             scenarioId,
             graph,
             scenariosContext.baseParams,
             scenariosContext.currentParams,
             scenariosContext.scenarios,
-            visibleScenarioIds,
             scenarioId === 'current' ? whatIfDSL : undefined
           );
           
@@ -396,13 +395,12 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         // Build the graph with What-If applied (if current layer)
         let analysisGraph = graph;
         if (scenariosContext) {
-          analysisGraph = buildGraphForLayer(
+          analysisGraph = buildGraphForAnalysisLayer(
             scenarioId,
             graph,
             scenariosContext.baseParams,
             scenariosContext.currentParams,
             scenariosContext.scenarios,
-            visibleScenarioIds,
             scenarioId === 'current' ? whatIfDSL : undefined
           );
         } else if (scenarioId === 'current' && whatIfDSL) {

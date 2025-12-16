@@ -106,7 +106,7 @@ export const LATENCY_EPSILON = 1e-9;
  * Percentile of the lag distribution used to define `t95` (naming kept for compatibility).
  * This is the time by which \(p\) of eventual converters have converted.
  */
-export const LATENCY_T95_PERCENTILE = 0.979
+export const LATENCY_T95_PERCENTILE = 0.95
 
 /**
  * Percentile used when computing *path* latency horizons for cohort bounding (path_t95 / A→Y horizon).
