@@ -1,0 +1,8 @@
+dsl,as_of_date
+window(1-Jul-25:31-Jul-25),31-Jul-25
+cohort(1-Jul-25:31-Jul-25),31-Jul-25
+window(1-Aug-25:31-Aug-25),31-Aug-25
+cohort(1-Aug-25:31-Aug-25),31-Aug-25
+window(1-Jul-25:31-Aug-25),31-Aug-25
+cohort(1-Jul-25:31-Aug-25),31-Aug-25
+

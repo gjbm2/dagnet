@@ -2150,16 +2150,17 @@ export function enhanceGraphLatencies(
       if (!isWindowMode) {
         // Determine authoritative path_t95 (days) for A→Y tail pull.
         // Precedence:
-        //  - If graph has an overridden path_t95, treat it as authoritative.
-        //  - Otherwise, use the most conservative of available computed estimates.
+        //  - If graph already has a persisted path_t95, treat it as an available candidate.
+        //    Override flags MUST NOT change semantic meaning; they only gate overwrite permissions.
+        //  - Use the most conservative of available estimates.
         const latencyAny = (edge.p as any)?.latency as any | undefined;
-        const overriddenPathT95 =
-          latencyAny?.path_t95_overridden === true && typeof latencyAny?.path_t95 === 'number'
+        const storedPathT95 =
+          typeof latencyAny?.path_t95 === 'number' && Number.isFinite(latencyAny?.path_t95) && latencyAny.path_t95 > 0
             ? latencyAny.path_t95
             : undefined;
 
         const candidates = [
-          overriddenPathT95,
+          storedPathT95,
           edgePathT95,
           edgePrecomputedPathT95,
         ].filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);

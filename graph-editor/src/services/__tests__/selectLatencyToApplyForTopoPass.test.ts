@@ -23,7 +23,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
 
     expect(selected.median_lag_days).toBe(existing.median_lag_days);
     expect(selected.mean_lag_days).toBe(existing.mean_lag_days);
-    expect(selected.t95).toBe(existing.t95);
+    expect(selected.t95).toBe(computed.t95);
     expect(selected.path_t95).toBe(computed.path_t95);
     expect(selected.completeness).toBe(computed.completeness);
   });

@@ -1727,8 +1727,10 @@ export function selectLatencyToApplyForTopoPass(
     // Preserve existing slice-level latency summary (from file)
     median_lag_days: existing?.median_lag_days,
     mean_lag_days: existing?.mean_lag_days,
-    // Keep existing t95 if present (UpdateManager will still respect t95_overridden).
-    t95: existing?.t95 ?? computed.t95,
+    // t95 is a derived horizon and should come from the topo/LAG pass.
+    // Override flags only gate whether we may overwrite the stored value (enforced in UpdateManager),
+    // they do not change semantic meaning or which value the stats engine computes.
+    t95: computed.t95,
     // CRITICAL: completeness must always come from the topo pass (query-date dependent).
     completeness: computed.completeness,
     // Still apply computed path_t95 (UpdateManager will respect path_t95_overridden).

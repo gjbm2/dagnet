@@ -3373,6 +3373,7 @@ export class UpdateManager {
         mean?: number;
         n?: number;
         k?: number;
+        stdev?: number;
       };
     }>
   ): any {
@@ -3457,6 +3458,19 @@ export class UpdateManager {
         }
         if (update.evidence.k !== undefined) {
           edge.p.evidence.k = update.evidence.k;
+        }
+        if (update.evidence.stdev !== undefined) {
+          edge.p.evidence.stdev = update.evidence.stdev;
+        }
+      }
+
+      // Keep p.stdev consistently populated when the topo/LAG pass updates p.mean but
+      // does not provide a corresponding blended stdev. Use evidence.stdev if available.
+      // Respect explicit overrides.
+      if (edge.p.stdev_overridden !== true && edge.p.stdev === undefined) {
+        const es = (edge.p.evidence as any)?.stdev;
+        if (typeof es === 'number' && Number.isFinite(es)) {
+          edge.p.stdev = this.roundToDP(es);
         }
       }
       
