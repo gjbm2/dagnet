@@ -7259,7 +7259,12 @@ class DataOperationsService {
       const targetDims = extractSliceDimensions(targetSlice);
       const originalValues = originalParamData.values as ParameterValue[];
       
-      // Find window() slices in the same param file with matching context/case dimensions
+      // Find window() slices in the same param file with matching context/case dimensions.
+      //
+      // IMPORTANT:
+      // - If the window slice already has a stored scalar `forecast`, we can use (or improve) it.
+      // - If the window slice has daily arrays but *no* `forecast` scalar (common in older files / migrations),
+      //   we can compute a mature, lightly-recency-weighted forecast from those arrays.
       const windowCandidates = originalValues.filter((v) => {
         if (!v.sliceDSL) return false;
         const parsed = parseConstraints(v.sliceDSL);
@@ -7268,7 +7273,18 @@ class DataOperationsService {
         if (!hasWindow || hasCohort) return false;
         
         const dims = extractSliceDimensions(v.sliceDSL);
-        return dims === targetDims && (v as any).forecast !== undefined;
+        if (dims !== targetDims) return false;
+
+        // Candidate if it already has a forecast scalar, OR if we can compute one from daily arrays.
+        if ((v as any).forecast !== undefined) return true;
+        const hasDailyArrays =
+          Array.isArray((v as any).dates) &&
+          Array.isArray((v as any).n_daily) &&
+          Array.isArray((v as any).k_daily) &&
+          (v as any).dates.length > 0 &&
+          (v as any).n_daily.length === (v as any).dates.length &&
+          (v as any).k_daily.length === (v as any).dates.length;
+        return hasDailyArrays;
       });
       
       if (windowCandidates.length > 0) {
@@ -7281,10 +7297,11 @@ class DataOperationsService {
         
         const rawForecastValue = bestWindow.forecast;
 
-        // If the stored forecast looks "naive" (forecast ≈ mean), recompute it from daily data
-        // using maturity exclusion + light recency bias.
+        // If the stored forecast looks "naive" (forecast ≈ mean), OR if it is missing,
+        // recompute it from daily data using maturity exclusion + light recency bias.
         //
-        // This avoids systematic underestimation when window() includes immature recent days.
+        // This avoids systematic underestimation when window() includes immature recent days,
+        // and allows older files (missing `forecast`) to still drive F-mode correctly.
         const storedLooksNaive =
           typeof rawForecastValue === 'number' &&
           typeof bestWindow.mean === 'number' &&
@@ -7297,8 +7314,9 @@ class DataOperationsService {
             ? latestAggregatedValue.latency.t95
             : (typeof bestWindow?.latency?.t95 === 'number' ? bestWindow.latency.t95 : undefined);
 
+        const shouldRecomputeForecast = rawForecastValue === undefined || storedLooksNaive;
         const recomputedForecast =
-          storedLooksNaive
+          shouldRecomputeForecast
             ? computeRecencyWeightedMatureForecast({
                 bestWindow,
                 t95Days: inferredT95Days,

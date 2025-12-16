@@ -937,25 +937,23 @@ export default function ConversionEdge({
     const baseWidth = strokeWidth;
 
     if (mode === 'e') {
-      // E mode: evidence width proportional to evidence/mean ratio
+      // E mode:
+      // In the unified pipeline, the *geometry* width (strokeWidth/baseWidth) is already driven
+      // by the evidence basis (explicit or derived) in E mode. So the E lane should be full width,
+      // except for the explicit k=0 case (hairline).
       let evidenceWidth = 0;
       let evidenceRatio = ld.evidenceRatio ?? 0;
       
-      if (hasEvidence && !evidenceIsZero && pEvidence! > 0 && pMean && pMean > 0) {
-        // Evidence exists and is non-zero: compute ratio if not pre-computed
-        if (evidenceRatio === 0) {
-          evidenceRatio = Math.min(1, Math.max(0, pEvidence! / pMean));
-        }
-        evidenceWidth = Math.max(MIN_EDGE_WIDTH, baseWidth * evidenceRatio);
+      if (hasEvidence && !evidenceIsZero && pEvidence! > 0) {
+        evidenceRatio = 1;
+        evidenceWidth = baseWidth;
       } else if (evidenceIsZero) {
-        // Evidence exists but is zero (k=0): thin dashed line
         evidenceWidth = 0;
         evidenceRatio = 0;
       } else if (!hasEvidence) {
-        // No evidence block at all (e.g., rebalanced edge): 
-        // Use full width with NO_EVIDENCE_E_MODE_OPACITY (handled in rendering)
+        // No evidence anywhere: fall back to mean behaviour but keep the E-mode signalling.
         evidenceWidth = baseWidth;
-        evidenceRatio = 1;  // Full width, but opacity will be reduced
+        evidenceRatio = 1;
       }
       
       return {
@@ -971,17 +969,13 @@ export default function ConversionEdge({
     }
 
     if (mode === 'f') {
-      // F mode: width is proportional to p.forecast / p.mean.
-      // IMPORTANT: allow forecast to exceed mean (immature edges can have p.mean pulled down by evidence),
-      // so do NOT clamp ratio to 1.
-      const ratio =
-        (typeof pForecast === 'number' && typeof pMean === 'number' && pMean > 0)
-          ? Math.max(0, pForecast / pMean)
-          : 1;
+      // F mode:
+      // In the unified pipeline, the geometry width (strokeWidth/baseWidth) is already driven by
+      // the forecast basis in F mode. Do not apply a second p_forecast/p_mean scaling here.
       return {
         mode: 'f' as const,
         evidenceWidth: 0,
-        meanWidth: Math.max(MIN_EDGE_WIDTH, baseWidth * ratio),
+        meanWidth: Math.max(MIN_EDGE_WIDTH, baseWidth),
         evidenceRatio: 0,
         evidence: pEvidence ?? 0,
         mean: pForecast ?? pMean ?? 0,

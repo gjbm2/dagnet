@@ -1165,6 +1165,8 @@ export interface MergeOptions {
   latencyConfig?: {
     latency_parameter?: boolean; // Explicit enablement flag
     anchor_node_id?: string;  // Anchor node for cohort queries
+    /** Local edge t95 (days). Used for maturity exclusion when recomputing window baseline forecast (p∞). */
+    t95?: number;
     path_t95?: number;        // Cumulative t95 from anchor to this edge's source node
   };
   
@@ -1545,7 +1547,14 @@ export function mergeTimeSeriesIntoParameter(
     // topo pass (enhanceGraphLatencies). This stored forecast is a window-baseline scalar used
     // during query-time enhancement and for cohort() dual-slice retrieval.
     ...(mergeOptions?.recomputeForecast
-      ? { forecast: (recomputedForecast ?? mergedMean) }
+      ? (
+          // CRITICAL: Never write forecast as a naive copy of mean.
+          // Forecast must come from mature-window computation (recomputedForecast),
+          // or be preserved from an existing window slice value if already present.
+          (recomputedForecast !== undefined)
+            ? { forecast: recomputedForecast }
+            : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})
+        )
       : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})),
     data_source: {
       type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',

@@ -1456,6 +1456,13 @@ export async function fetchItems(
                 evidence: ev.evidence,
               }))
             );
+
+            // CRITICAL: Commit the post-LAG graph to state immediately.
+            //
+            // Otherwise, if inbound-n is a no-op (or setGraph is suppressed by a batching wrapper),
+            // the UI can display stale p.latency.* / p.mean until a subsequent fetch triggers
+            // another state update. This was showing up as "only updates when I fetch AGAIN".
+            trackingSetGraph(finalGraph);
             
             // DEBUG: Log p.mean values AFTER LAG application
             console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
