@@ -1,0 +1,27 @@
+id: bc-smooth-lag
+type: probability
+parameter_type: probability
+name: B→C (smooth, A-anchored, 5-day lag)
+connection: amplitude-prod
+query: "from(B).to(C).visited(A)"
+query_overridden: false
+
+latency:
+  latency_parameter: true
+  anchor_node_id: A
+
+# Values are intentionally empty: this parameter is meant to be filled by
+# "Get from source" during tests via the mocked Amplitude HTTP executor.
+values: []
+
+metadata:
+  description: >
+    Fixture parameter for B→C with perfectly smooth daily data from 1-Jul-25 to 31-Aug-25.
+    July: B→C k=25/day from n=100/day (p=25%). August: k=50/day from n=100/day (p=50%).
+    Used by stats/param-pack end-to-end tests (window vs cohort equivalence in July).
+  created_at: "2025-12-16T00:00:00Z"
+  updated_at: "2025-12-16T00:00:00Z"
+  author: "test-fixtures"
+  status: active
+
+

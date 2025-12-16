@@ -1,0 +1,26 @@
+id: ab-smooth-lag
+type: probability
+parameter_type: probability
+name: A→B (smooth, 10-day lag)
+connection: amplitude-prod
+query: "from(A).to(B)"
+query_overridden: false
+
+latency:
+  latency_parameter: true
+  anchor_node_id: A
+
+# Values are intentionally empty: this parameter is meant to be filled by
+# "Get from source" during tests via the mocked Amplitude HTTP executor.
+values: []
+
+metadata:
+  description: >
+    Fixture parameter for A→B with perfectly smooth daily data from 1-Jul-25 to 31-Aug-25.
+    Used by stats/param-pack end-to-end tests.
+  created_at: "2025-12-16T00:00:00Z"
+  updated_at: "2025-12-16T00:00:00Z"
+  author: "test-fixtures"
+  status: active
+
+

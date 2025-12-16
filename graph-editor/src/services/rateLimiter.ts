@@ -35,16 +35,18 @@ interface RateLimiterState {
 const PROVIDER_CONFIGS: Record<string, RateLimiterConfig> = {
   // Amplitude has cost-based rate limiting (~360-1000 cost/min)
   // Each funnel query costs ~200-500, so we can do ~2-5 queries/min safely
-  // 3 seconds = 20 queries/min is aggressive but usually works
+  // NOTE (16-Dec-25): We no longer enforce a proactive minimum delay between requests.
+  // This "always sleep" behaviour was pathological for local/dev and fixture-backed e2e tests.
+  // Instead we rely on reactive backoff when we actually receive 429s.
   'amplitude': {
-    minDelayMs: 3000,           // 3 seconds between requests
+    minDelayMs: 0,              // No proactive delay (reactive backoff only)
     backoffInitialMs: 10000,    // 10 seconds on first 429
     backoffMaxMs: 120000,       // 2 minutes max backoff
     backoffMultiplier: 2,       // Double backoff each time
   },
   // Default for unknown providers - conservative
   'default': {
-    minDelayMs: 1000,           // 1 second between requests
+    minDelayMs: 0,              // No proactive delay (reactive backoff only)
     backoffInitialMs: 5000,     // 5 seconds on first 429
     backoffMaxMs: 60000,        // 1 minute max backoff
     backoffMultiplier: 2,
