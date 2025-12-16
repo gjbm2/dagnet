@@ -565,6 +565,12 @@ export interface EdgeLatencyDisplay {
   
   /** True when edge has no evidence block but p.mean > 0 (use NO_EVIDENCE_E_MODE_OPACITY) */
   useNoEvidenceOpacity?: boolean;
+
+  // === Derived basis flags (view-only) ===
+  /** True when the evidence basis value used in E mode was derived via sibling residual allocation (display-only). */
+  evidenceIsDerived?: boolean;
+  /** True when the forecast basis value used in F mode was derived via sibling residual allocation (display-only). */
+  forecastIsDerived?: boolean;
   
   // === Latency bead policy (pre-computed based on query mode) ===
   
