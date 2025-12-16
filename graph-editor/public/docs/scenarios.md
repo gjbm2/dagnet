@@ -279,7 +279,7 @@ Flatten is a good way to **lock in** a scenario you like as the new baseline bef
 ## 8. Tips & Gotchas
 
 - **Keep scenarios small** – prefer diff snapshots over full snapshots once you have a solid baseline.  
-- **Name scenarios clearly** – include date, window, and intent (e.g. `2025-01 window – Mobile uplift`).  
+- **Name scenarios clearly** – include date, window, and intent (e.g. `Jan-25 window – Mobile uplift`).  
 - **Don’t hand‑edit Base lightly** – instead, snapshot and edit scenarios; use Flatten only when you’re sure.  
 - **Validate before Apply** – the editor runs validation, but read warnings; unresolved HRNs mean the key didn’t match any current node/edge.
 

@@ -693,6 +693,32 @@ Phase 2 clarifies that **`p.mean` is the canonical completeness-weighted blend**
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### 7.0 Cohort-path evidence de-biasing (right-censor correction) — Updated 16-Dec-25
+
+In `cohort(...)` mode, `p.evidence.mean = k/n` for a downstream edge is often **right-censored**: many cohort members have started the journey, but have not yet had time to complete the edge by the query date.
+
+When cohort completeness is computed in **path-anchored mode** (A→Y maturity; see §9), LAG treats:
+
+- `p.latency.completeness` as an estimate of “fraction of eventual conversions that have already occurred by now” for the A-anchored cohorts.
+
+Under that interpretation, the observed `k/n` is expected to be biased low by approximately that factor:
+
+- `E[k/n] ≈ p∞ × completeness`
+
+So for blending (and **only** in cohort path-anchored mode), we de-bias the evidence rate before applying the canonical blend weight:
+
+```
+evidence_mean_used_for_blend = clamp01( (k/n) / completeness )
+```
+
+Guardrails:
+
+- Applies only when **cohort-mode completeness is path-anchored** (A→Y), not in `window(...)` mode.
+- Does not apply when cohort completeness is a fallback/conditional estimate.
+- Uses a small floor on completeness (to avoid division blow-ups); if completeness is extremely small, we keep using raw `k/n`.
+
+This change reduces the systematic “mid-window tug” where evidence is incomplete but was still treated as an estimate of the eventual rate.
+
 ### 7.1 Recency Weighting in Forecast Baseline
 
 When deriving `p.forecast.mean` from cohort data (either from window() slices or from LAG's `p_infinity` fallback), **recent mature cohorts are weighted more heavily** than older ones. This ensures the forecast reflects current conversion behaviour rather than stale historical patterns.
@@ -859,11 +885,15 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │   WHAT path_t95 IS NOT USED FOR                                                     │
 │   ─────────────────────────────                                                     │
 │                                                                                     │
-│   ✗  Computing effective ages for completeness                                      │
-│       → Use anchor_median_lag instead (observed central tendency)                   │
-│                                                                                     │
 │   ✗  Direct subtraction from cohort ages                                            │
-│       → path_t95 is too conservative; would understate completeness                 │
+│       → path_t95 is too conservative; would understate maturity                     │
+│                                                                                     │
+│   ✗  Using path_t95 as a “time-to-reach-X” median prior                              │
+│       → category error; use observed anchor lag medians/means instead               │
+│                                                                                     │
+│   NOTE (16-Dec-25): path_t95 IS used to *pull the tail* of cohort completeness      │
+│   (one-way σ increase) when computing path-anchored A→Y maturity. It is NOT used    │
+│   as a subtraction term.                                                            │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -882,6 +912,8 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │                             │  by completeness and population)                     │
 │                             │                                                      │
 │  p.evidence.mean            │  Observed k/n for this DSL cohort window             │
+│                             │  NOTE: In cohort path-anchored mode, this is        │
+│                             │  right-censored; blending uses §7.0 de-biasing.     │
 │  p.evidence.n               │  Total observed population (Σ n_daily)               │
 │  p.evidence.k               │  Total observed conversions (Σ k_daily)              │
 │                             │                                                      │
@@ -952,6 +984,7 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 ├─────────────────────────────┼──────────────────────────────────────────────────────┤
 │  anchor_age[d]              │  TODAY - cohort_date[d] (days since anchor entry)    │
 │  effective_age[d]           │  Age at this edge = anchor_age - anchor_median_lag   │
+│  evidence_mean_used_for_blend│ In cohort path-anchored mode: clamp01((k/n)/comp)   │
 │  μ (mu)                     │  ln(median_lag_days) – log-normal location param     │
 │  σ (sigma)                  │  Log-normal scale param (from mean/median ratio)     │
 │  F(t; μ, σ)                 │  Log-normal CDF at time t                            │

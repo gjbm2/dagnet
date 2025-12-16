@@ -1,14 +1,7 @@
 # DagNet Release Notes
-## Version 1.0.12b
-**Released:** December 15, 2025
-
-Regressions in rendering, and still weird completeness data. Stats fixing work continues...
-
----
-
 
 ## Version 1.1
-**Release:** 15-Dec-2025
+**Released:** 16-Dec-25
 
 ### 📊 LAG Semantics: Stabilisation & Correctness
 
@@ -17,7 +10,12 @@ This release completes the Project LAG work begun in v1.0, hardening the statist
 #### Completeness & Blending
 - **Window vs Cohort completeness separation**: Completeness is now scoped to the query mode (`window(start:end)` or `cohort(start:end)`). This ensures evidence and completeness reflect the same temporal slice.
 - **Upstream delay adjustment**: Cohort-mode completeness on downstream edges now accounts for anchor-to-source delay (soft prior→observed blend).
+  - **Path-anchored cohort completeness (A→Y)**: maturity is computed for the full path from the cohort anchor (A) to the end of the edge (Y), rather than only the local segment (X→Y).
+  - **Moment-matched path latency**: where upstream anchor latency is available, A→Y latency is derived via moment-matched convolution (Fenton–Wilkinson) of A→X and X→Y lognormal approximations, preventing downstream cohorts from appearing “too complete” too early.
+  - **Tail pull using authoritative horizons**: completeness CDF fitting applies a one-way tail constraint using authoritative `path_t95` (or `t95` fallback) to avoid thin-tail fits that would overstate maturity for immature cohorts.
 - **Evidence–Forecast blending**: Overhauled to use mode-specific completeness consistently, preventing over/underweighting of immature cohorts.
+  - **Cohort evidence de-biasing for blending**: in cohort path-anchored mode, the blend uses a censoring-aware evidence estimate \((k/n)/completeness\) (clamped to \([0,1]\)) so right-censored cohorts don’t unduly drag `p.mean` down.
+  - **Observability**: additional LAG calculation detail is logged for completeness mode, authoritative t95 selection, tail-constraint application, and the evidence term used for blending.
 
 #### Horizon Primitives (`t95` / `path_t95`)
 - **`path_t95` moment-matched estimate**: When 3-step Amplitude lag arrays are available, DAGNet estimates `path_t95 ≈ t95(A→X + X→Y)` via Fenton–Wilkinson approximation, reducing over-greediness on deep DAGs.
@@ -32,6 +30,7 @@ This release completes the Project LAG work begun in v1.0, hardening the statist
 - Redesigned edge probability bar with solid (evidence) vs hatched (forecast) regions.
 - Improved tooltip layout: shows probability ± stdev, n/k, window dates, completeness, median lag, and maturity status indicator.
 - Non-latency edges now render correctly (no spurious latency beads).
+- **E-only / F-only modes now show coherent sibling probabilities**: when a sibling group has any explicit evidence/forecast, missing sibling values are derived at render-time to keep outgoing probabilities sensible. Derived probability bead values are shown in **square brackets** (e.g. `E [0.61]`, `F [0.39]`), and edge widths/offsets use the same basis so geometry stays aligned.
 
 ### ⚡ Performance & Fetch Pipeline
 - Unified single-fetch refactor: reduced redundant Amplitude calls.
@@ -46,8 +45,8 @@ This release completes the Project LAG work begun in v1.0, hardening the statist
 - **Keyboard Shortcuts** updated with Navigator copy/paste and drag-and-drop actions.
 
 ### ⚙️ Migration Notes
-- No breaking changes to stored parameter files; existing `maturity_days` values continue to work.
-- A future release (Phase 2 of `t95-fix`) will promote `t95` and `path_t95` to explicit overridable schema fields and introduce a `latency_parameter` enablement flag, deprecating implicit `maturity_days` semantics. See `docs/current/project-lag/t95-fix.md` for details.
+- **Breaking:** `maturity_days` is no longer honoured for LAG fetch horizons or maturity/completeness logic. DagNet now derives horizons from `t95` / `path_t95` (with authoritative tail constraints) and will ignore legacy `maturity_days` values.
+- If you have older parameter files that still include `maturity_days`, they can remain on disk but should be treated as historical/obsolete; the runtime will compute and use `t95` / `path_t95` instead.
 
 ---
 
@@ -175,7 +174,7 @@ Major improvements to Amplitude query generation:
   - MECE partition support with configurable `otherPolicy`
 - **Time Windows**: `window()` function for time-bounded queries
   - Relative windows: `window(-30d:)` for last 30 days
-  - Absolute windows: `window(2025-01-01:2025-03-31)`
+  - Absolute windows: `window(1-Jan-25:31-Mar-25)`
 - **SHA-Based Commit Detection**: Reliable uncommitted change detection
 
 ### 🐛 Bug Fixes

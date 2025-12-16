@@ -144,7 +144,7 @@ Last 30 days of Google channel data.
 ### Absolute Windows
 
 ```
-context(channel:google).window(2025-01-01:2025-03-31)
+context(channel:google).window(1-Jan-25:31-Mar-25)
 ```
 
 Q1 2025 data for Google channel.
