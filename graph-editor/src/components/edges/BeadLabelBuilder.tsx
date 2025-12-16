@@ -23,11 +23,15 @@ export interface BeadValue {
   value: number | string;
   colour: string;
   stdev?: number;
+  /** Optional prefix shown before formatted value (e.g. 'F' or 'E') */
+  prefix?: string;
 }
 
 export interface HiddenCurrentValue {
   value: number | string;
   stdev?: number;
+  /** Optional prefix shown before formatted value (e.g. 'F' or 'E') */
+  prefix?: string;
 }
 
 export type ValueFormatter = (value: number | string, stdev?: number) => string;
@@ -66,7 +70,7 @@ export class BeadLabelBuilder {
     
     const first = this.values[0];
     return this.values.every(v => 
-      v.value === first.value && v.stdev === first.stdev
+      v.value === first.value && v.stdev === first.stdev && v.prefix === first.prefix
     );
   }
   
@@ -79,7 +83,13 @@ export class BeadLabelBuilder {
     
     const first = this.values[0];
     return first.value === this.hiddenCurrent.value 
-      && first.stdev === this.hiddenCurrent.stdev;
+      && first.stdev === this.hiddenCurrent.stdev
+      && first.prefix === this.hiddenCurrent.prefix;
+  }
+
+  private formatWithOptionalPrefix(value: number | string, stdev?: number, prefix?: string): string {
+    const formatted = this.formatter(value, stdev);
+    return prefix ? `${prefix} ${formatted}` : formatted;
   }
   
   /**
@@ -107,7 +117,7 @@ export class BeadLabelBuilder {
     if (this.shouldFullyDeduplicate()) {
       return (
         <span style={{ color: '#FFFFFF' }}>
-          {this.formatter(this.values[0].value, this.values[0].stdev)}
+          {this.formatWithOptionalPrefix(this.values[0].value, this.values[0].stdev, this.values[0].prefix)}
         </span>
       );
     }
@@ -120,7 +130,7 @@ export class BeadLabelBuilder {
       // Show single white value + grey bracketed hidden
       segments.push(
         <span key="visible" style={{ color: '#FFFFFF' }}>
-          {this.formatter(this.values[0].value, this.values[0].stdev)}
+          {this.formatWithOptionalPrefix(this.values[0].value, this.values[0].stdev, this.values[0].prefix)}
         </span>
       );
     } else {
@@ -128,7 +138,7 @@ export class BeadLabelBuilder {
       this.values.forEach((val, idx) => {
         segments.push(
           <span key={`value-${idx}`} style={{ color: val.colour }}>
-            {this.formatter(val.value, val.stdev)}
+            {this.formatWithOptionalPrefix(val.value, val.stdev, val.prefix)}
           </span>
         );
         if (idx < this.values.length - 1) {
@@ -142,7 +152,7 @@ export class BeadLabelBuilder {
       segments.push(' (');
       segments.push(
         <span key="hidden" style={{ color: '#808080' }}>
-          {this.formatter(this.hiddenCurrent.value, this.hiddenCurrent.stdev)}
+          {this.formatWithOptionalPrefix(this.hiddenCurrent.value, this.hiddenCurrent.stdev, this.hiddenCurrent.prefix)}
         </span>
       );
       segments.push(')');

@@ -20,7 +20,7 @@
  * Every assertion is about the structure of the output.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   mergeTimeSeriesIntoParameter,
   isCohortModeValue,
@@ -42,6 +42,15 @@ function daysAgo(n: number): string {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return `${day}-${months[d.getMonth()]}-${String(d.getFullYear() % 100).padStart(2, '0')}`;
 }
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(REFERENCE_DATE);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Create time series points for a date range */
 function makeTimeSeries(
@@ -723,6 +732,52 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
     // Should have forecast field
     expect((merged as any).forecast).toBeDefined();
     expect(typeof (merged as any).forecast).toBe('number');
+  });
+
+  it('excludes immature tail when recomputeForecast is enabled (forecast > naive mean when tail is undercounted)', () => {
+    const existing: ParameterValue[] = [];
+
+    // Build a 31-day window where the last ~8 days are undercounted (k=0)
+    // If we include them, mean is dragged down. If we exclude immature tail (t95=7 → cutoff 8 days),
+    // forecast should be materially higher than the naive mean.
+    const newTimeSeries: TimeSeriesPointWithLatency[] = [];
+    for (let i = 30; i >= 0; i--) {
+      const n = 100;
+      const k = i <= 7 ? 0 : 50; // last 8 days have zero conversions (immature)
+      newTimeSeries.push({
+        date: daysAgo(i),
+        n,
+        k,
+        p: n > 0 ? k / n : 0,
+        median_lag_days: 6,
+        mean_lag_days: 7,
+      });
+    }
+
+    const result = mergeTimeSeriesIntoParameter(
+      existing,
+      newTimeSeries,
+      { start: daysAgo(30), end: daysAgo(0) },
+      undefined,
+      undefined,
+      undefined,
+      'api',
+      '',
+      {
+        recomputeForecast: true,
+        latencyConfig: { latency_parameter: true, t95: 7 },
+      }
+    );
+
+    const merged = result.find(v => !isCohortModeValue(v)) as any;
+    expect(merged).toBeDefined();
+    expect(typeof merged.forecast).toBe('number');
+
+    // Naive mean includes the undercounted tail → below 0.5
+    expect(merged.mean).toBeLessThan(0.5);
+    // Forecast excludes immature tail → should be close to the mature-days rate (0.5)
+    expect(merged.forecast).toBeGreaterThan(merged.mean);
+    expect(merged.forecast).toBeGreaterThan(0.45);
   });
   
   it('does NOT add latency at merge time (latency computed in graph-level topo pass)', () => {

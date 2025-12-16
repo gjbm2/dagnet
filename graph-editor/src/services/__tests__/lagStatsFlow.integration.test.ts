@@ -215,6 +215,9 @@ describe('LAG Stats Flow - Expected Values', () => {
       expect(e1.blendedMean).toBeCloseTo(0.95, 10);
     });
 
+    // NOTE: nBaseline is intentionally taken from the window slice header `n` (not recency-weighted),
+    // so that limited/immature evidence does not override the long-run baseline too aggressively.
+
     it('uses forecast when cohorts are immature and k=0, and anchor lag prevents false completeness', () => {
       const graph: GraphForPath = {
         nodes: [{ id: 'A', type: 'start' }, { id: 'B' }],

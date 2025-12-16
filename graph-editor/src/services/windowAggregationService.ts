@@ -15,6 +15,7 @@ import type { ParameterValue } from './paramRegistryService';
 import { isolateSlice, hasContextAny, expandContextAny, extractSliceDimensions } from './sliceIsolation';
 import { parseConstraints } from '../lib/queryDSL';
 import { normalizeToUK, isUKDate, parseUKDate } from '../lib/dateFormat';
+import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
 // LAG: CohortData type is used for aggregation helpers further down in this file
 import type { CohortData } from './statisticalEnhancementService';
 
@@ -1465,6 +1466,52 @@ export function mergeTimeSeriesIntoParameter(
   const mergedTotalK = mergedK.reduce((sum, k) => sum + k, 0);
   const mergedMean = mergedTotalN > 0 ? Math.round((mergedTotalK / mergedTotalN) * 1000) / 1000 : 0;
 
+  // Window-forecast recomputation (design.md §5.6, Appendix C.1):
+  // Exclude immature tail (last ceil(t95)+1 days) and apply recency weighting over mature days.
+  //
+  // IMPORTANT: This is the baseline p∞ stored on window() slices. It must NOT include
+  // immature recent days, otherwise we systematically underestimate forecast.
+  const computeWindowForecastFromDaily = (): number | undefined => {
+    if (!mergeOptions?.recomputeForecast) return undefined;
+    if (!Array.isArray(mergedDates) || !Array.isArray(mergedN) || !Array.isArray(mergedK)) return undefined;
+    if (mergedDates.length === 0) return undefined;
+
+    const t95Raw =
+      typeof mergeOptions?.latencyConfig?.t95 === 'number' && Number.isFinite(mergeOptions.latencyConfig.t95) && mergeOptions.latencyConfig.t95 > 0
+        ? mergeOptions.latencyConfig.t95
+        : DEFAULT_T95_DAYS;
+    const maturityDays = Math.ceil(t95Raw) + 1;
+    const now = new Date();
+    const cutoffMs = now.getTime() - maturityDays * 24 * 60 * 60 * 1000;
+
+    let weightedN = 0;
+    let weightedK = 0;
+
+    for (let i = 0; i < mergedDates.length; i++) {
+      const d = parseDate(mergedDates[i]);
+      if (Number.isNaN(d.getTime())) continue;
+
+      // Exclude immature tail
+      if (d.getTime() > cutoffMs) continue;
+
+      // Recency weighting: mirror statisticalEnhancementService (w = exp(-age/H))
+      const ageDays = Math.max(0, (now.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+      const w = Math.exp(-ageDays / RECENCY_HALF_LIFE_DAYS);
+
+      const n = typeof mergedN[i] === 'number' ? mergedN[i] : 0;
+      const k = typeof mergedK[i] === 'number' ? mergedK[i] : 0;
+      if (n <= 0) continue;
+
+      weightedN += w * n;
+      weightedK += w * k;
+    }
+
+    if (weightedN <= 0) return undefined;
+    return weightedK / weightedN;
+  };
+
+  const recomputedForecast = computeWindowForecastFromDaily();
+
   const windowFrom = mergedDates.length > 0 ? mergedDates[0] : normalizeToUK(newWindow.start);
   const windowTo = mergedDates.length > 0 ? mergedDates[mergedDates.length - 1] : normalizeToUK(newWindow.end);
 
@@ -1498,7 +1545,7 @@ export function mergeTimeSeriesIntoParameter(
     // topo pass (enhanceGraphLatencies). This stored forecast is a window-baseline scalar used
     // during query-time enhancement and for cohort() dual-slice retrieval.
     ...(mergeOptions?.recomputeForecast
-      ? { forecast: mergedMean }
+      ? { forecast: (recomputedForecast ?? mergedMean) }
       : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})),
     data_source: {
       type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
