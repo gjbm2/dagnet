@@ -9,6 +9,7 @@
 import { Edge } from 'reactflow';
 import { computeEffectiveEdgeProbability } from '../../lib/whatIf';
 import { getComposedParamsForLayer } from '../../services/CompositionService';
+import { computeEFBasisForLayer } from '../../services/efBasisResolver';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, SANKEY_MAX_EDGE_WIDTH, EDGE_OPACITY } from '../../lib/nodeEdgeConstants';
 import type { EdgeLatencyDisplay, ScenarioVisibilityMode } from '../../types';
 
@@ -214,6 +215,17 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
     const isVisible = visibleScenarioIds.includes(scenarioId);
     const colour = getScenarioColour(scenarioId, isVisible);
 
+    // Resolve scenario visibility mode once per layer so geometry + styling stay coherent.
+    // This mode determines which probability basis drives widths (and therefore offsets/text-path positioning).
+    let layerMode: ScenarioVisibilityMode = 'f+e';
+    if (getScenarioVisibilityMode) {
+      try {
+        layerMode = getScenarioVisibilityMode(scenarioId);
+      } catch {
+        layerMode = 'f+e';
+      }
+    }
+
     // Compose params based on layer type - use centralized composition.
     // IMPORTANT:
     // - For 'base' and scenario layers we compose from baseParams + overlays (frozen snapshots).
@@ -227,6 +239,10 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
       scenarios,
       visibleScenarioIds
     );
+
+    // Precompute sibling-derived basis values for this layer.
+    // This is view-only and must not be persisted.
+    const efBasisMaps = computeEFBasisForLayer(graph, composedParams);
     
     // Skip unknown scenarios that couldn't be composed
     if (scenarioId !== 'base' && scenarioId !== 'current' && !scenario) {
@@ -236,6 +252,106 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
     // Probability resolver: current uses What-If, others use frozen params
     const probResolver = (e: Edge) => {
+      // Helper: resolve the base (mean) probability for this edge (What-If aware for 'current').
+      const resolveBaseMean = (): number => {
+        if (scenarioId === 'current') {
+          const edgeId = e.id || `${e.source}->${e.target}`;
+          return computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL });
+        }
+
+        // For 'base' and scenario layers: ONLY use params (frozen snapshots)
+        const flowEdgeUuid = (e.data as any)?.uuid;
+        const graphEdge = graph.edges?.find((ge: any) =>
+          ge.uuid === flowEdgeUuid || ge.id === e.id
+        );
+
+        if (graphEdge) {
+          const key = graphEdge.id || graphEdge.uuid;
+          // First try composed params, then fall back to graph edge's p.mean
+          // This ensures edges not explicitly in params still render at their graph-defined probability
+          let probability = composedParams.edges?.[key]?.p?.mean;
+
+          if (typeof probability !== 'number') {
+            // Fall back to graph edge's probability
+            probability = graphEdge.p?.mean;
+          }
+
+          if (typeof probability !== 'number') {
+            return 0;
+          }
+
+          // Apply case variant weight if this is a case edge
+          if (graphEdge.case_variant) {
+            let caseId = graphEdge.case_id;
+            if (!caseId) {
+              const sourceNode = graph.nodes?.find((n: any) =>
+                n.uuid === graphEdge.from || n.id === graphEdge.from
+              );
+              if (sourceNode?.type === 'case') {
+                caseId = sourceNode.case?.id || sourceNode.uuid || sourceNode.id;
+              }
+            }
+
+            if (caseId) {
+              const caseNodeKey = graph.nodes?.find((n: any) =>
+                n.type === 'case' && (
+                  n.case?.id === caseId ||
+                  n.uuid === caseId ||
+                  n.id === caseId
+                )
+              )?.id || caseId;
+
+              const variants = composedParams.nodes?.[caseNodeKey]?.case?.variants;
+              if (variants) {
+                const variant = variants.find((v: any) => v.name === graphEdge.case_variant);
+                const variantWeight = variant?.weight ?? 0;
+                probability = probability * variantWeight;
+              } else {
+                const caseNode = graph.nodes?.find((n: any) =>
+                  n.type === 'case' && (
+                    n.case?.id === caseId ||
+                    n.uuid === caseId ||
+                    n.id === caseId
+                  )
+                );
+                const variant = caseNode?.case?.variants?.find((v: any) =>
+                  v.name === graphEdge.case_variant
+                );
+                const variantWeight = variant?.weight ?? 0;
+                probability = probability * variantWeight;
+              }
+            }
+          }
+
+          return probability;
+        }
+
+        return 0;
+      };
+
+      // In E/F single-basis modes, geometry (widths/offsets/text path positioning) must be driven
+      // by the same derived basis values we render on the edge lanes/beads.
+      if (layerMode === 'e' || layerMode === 'f') {
+        const flowEdgeUuid = (e.data as any)?.uuid;
+        const graphEdge = graph.edges?.find((ge: any) =>
+          ge.uuid === flowEdgeUuid || ge.id === e.id
+        );
+        const basisKey = graphEdge ? (graphEdge.id || graphEdge.uuid) : undefined;
+
+        if (basisKey) {
+          if (layerMode === 'e') {
+            const b = efBasisMaps.evidence.get(basisKey);
+            if (b?.groupHasAnyExplicit) return b.value;
+          } else {
+            const b = efBasisMaps.forecast.get(basisKey);
+            if (b?.groupHasAnyExplicit) return b.value;
+          }
+        }
+
+        // No explicit basis anywhere in the sibling group → fall back to mean behaviour.
+        return resolveBaseMean();
+      }
+
       if (scenarioId === 'current') {
         const edgeId = e.id || `${e.source}->${e.target}`;
         return computeEffectiveEdgeProbability(graph, edgeId, { whatIfDSL });
@@ -402,10 +518,10 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           });
         }
 
-        // Two-layer rendering: evidence vs forecast
+        // Two-layer rendering: evidence vs forecast (explicit layer values with fallback chain)
         // DSL: e.X.p.evidence (scalar) or e.X.p.evidence.mean (nested)
         // Handle both scalar (p.evidence: 0.1) and nested (p.evidence.mean: 0.1) formats
-        const p_evidence = typeof scenarioProb.evidence === 'number'
+        const p_evidence_explicit = typeof scenarioProb.evidence === 'number'
           ? scenarioProb.evidence
           : (typeof scenarioProb.evidence?.mean === 'number'
               ? scenarioProb.evidence.mean
@@ -415,7 +531,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
                       ? baseP.evidence.mean
                       : undefined)));
 
-        const p_forecast = typeof scenarioProb.forecast === 'number'
+        const p_forecast_explicit = typeof scenarioProb.forecast === 'number'
           ? scenarioProb.forecast
           : (typeof scenarioProb.forecast?.mean === 'number'
               ? scenarioProb.forecast.mean
@@ -438,9 +554,8 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           : baseLatency.completeness;
 
         // === Derived booleans ===
-        const hasEvidence = typeof p_evidence === 'number';
-        const evidenceIsZero = hasEvidence && p_evidence === 0;
-        const hasForecast = typeof p_forecast === 'number';
+        const hasEvidenceExplicit = typeof p_evidence_explicit === 'number';
+        const hasForecastExplicit = typeof p_forecast_explicit === 'number';
         const hasLatency = (typeof median_days === 'number' && median_days > 0) ||
                           (typeof baseLatency.t95 === 'number' && baseLatency.t95 > 0) ||
                           (typeof completeness === 'number');
@@ -463,6 +578,35 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           }
         }
 
+        // === Apply sibling-derived basis ONLY in single-basis modes (E or F) ===
+        // Default policy: do NOT introduce derived basis into F+E mode unless explicitly desired.
+        const basisKey = paramsKey;
+        const evidenceBasis = basisKey ? efBasisMaps.evidence.get(basisKey) : undefined;
+        const forecastBasis = basisKey ? efBasisMaps.forecast.get(basisKey) : undefined;
+
+        const useDerivedEvidence =
+          mode === 'e' && !!evidenceBasis?.groupHasAnyExplicit && evidenceBasis.value !== undefined;
+        const useDerivedForecast =
+          mode === 'f' && !!forecastBasis?.groupHasAnyExplicit && forecastBasis.value !== undefined;
+
+        const p_evidence = useDerivedEvidence ? evidenceBasis!.value : p_evidence_explicit;
+        const p_forecast = useDerivedForecast ? forecastBasis!.value : p_forecast_explicit;
+
+        const evidenceIsDerived = !!(useDerivedEvidence && evidenceBasis?.isDerived);
+        const forecastIsDerived = !!(useDerivedForecast && forecastBasis?.isDerived);
+
+        const hasEvidence = mode === 'e'
+          ? (hasEvidenceExplicit || evidenceIsDerived)
+          : hasEvidenceExplicit;
+
+        // EvidenceIsZero must ONLY represent an explicit k=0/mean=0 evidence condition.
+        // A derived value of 0 must NOT trigger the "k=0 hairline" behaviour.
+        const evidenceIsZero = hasEvidenceExplicit && p_evidence_explicit === 0;
+
+        const hasForecast = mode === 'f'
+          ? (hasForecastExplicit || forecastIsDerived)
+          : hasForecastExplicit;
+
         // === Compute widths ===
         // preScaled is the base stroke width for this edge (before offset/layout adjustments).
         // The renderer will ultimately scale against its own strokeWidth, but we still populate
@@ -476,13 +620,14 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
 
         if (mode === 'e') {
           // E-only mode:
-          // - If evidence exists and is >0 → render evidence lane proportional to evidence/mean.
-          // - If evidence exists and is 0 → 0-width evidence lane (renderer shows dashed hairline).
-          // - If NO evidence block → render full width at p.mean, but low opacity (renderer applies NO_EVIDENCE_E_MODE_OPACITY).
+          // Geometry (and thus baseWidth) is already driven by the E-basis via probResolver.
+          // So the evidence lane should render at full base width when evidence exists (explicit or derived).
+          // Only the explicit k=0 case renders as a hairline (evidenceWidth=0 + dashed styling).
           if (hasEvidence && p_evidence! > 0) {
-            evidenceRatio = Math.min(1, Math.max(0, p_evidence! / (p_mean || 1)));
-            evidenceWidth = Math.max(MIN_WIDTH, baseWidth * evidenceRatio);
+            evidenceRatio = 1;
+            evidenceWidth = baseWidth;
           } else if (!hasEvidence && (p_mean ?? 0) > 0) {
+            // No evidence anywhere in the group: fall back to mean behaviour but keep the E-mode signalling.
             evidenceRatio = 1;
             evidenceWidth = baseWidth;
           } else {
@@ -491,12 +636,10 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           }
           meanWidth = baseWidth;
         } else if (mode === 'f') {
-          // F-only mode: width is proportional to p.forecast / p.mean (can exceed mean; do not clamp).
-          const ratio =
-            (hasForecast && typeof p_forecast === 'number' && typeof p_mean === 'number' && p_mean > 0)
-              ? Math.max(0, p_forecast / p_mean)
-              : 1;
-          meanWidth = Math.max(MIN_WIDTH, baseWidth * ratio);
+          // F-only mode:
+          // Geometry (and thus baseWidth) is already driven by the F-basis via probResolver.
+          // Do NOT apply a second p_forecast/p_mean scaling here; that creates "double scaling" and breaks offsets.
+          meanWidth = baseWidth;
           evidenceWidth = 0;
         } else {
           // F+E mode: outer = mean/forecast, inner = evidence (0-width if evidence=0 or missing)
@@ -514,8 +657,11 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
         // isDashed: edge has no mass (p.mean=0) OR in E mode with evidence.mean = 0
         const isDashed = edgeProb === 0 || (mode === 'e' && evidenceIsZero);
 
-        // useNoEvidenceOpacity: no evidence block but p.mean > 0 in E mode
-        const useNoEvidenceOpacity = mode === 'e' && !hasEvidence && (p_mean ?? 0) > 0;
+        // useNoEvidenceOpacity:
+        // - legacy: no evidence block but p.mean > 0 in E mode
+        // - new: derived evidence basis in E mode (still show faint to signal derivation)
+        const useNoEvidenceOpacity =
+          mode === 'e' && ((evidenceIsDerived) || (!hasEvidence && (p_mean ?? 0) > 0));
 
         // === Latency bead policy (based on query mode) ===
         const hasLocalLatency = typeof median_days === 'number' && median_days > 0;
@@ -555,7 +701,10 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           useNoEvidenceOpacity,
           // Latency bead policy
           showLatencyBead,
-          showCompletenessOnly
+          showCompletenessOnly,
+          // Derived basis flags (view-only)
+          evidenceIsDerived: evidenceIsDerived,
+          forecastIsDerived: forecastIsDerived
         };
         
         // DEBUG: Log final LAG decision for shipped-to-delivered

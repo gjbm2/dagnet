@@ -25,6 +25,8 @@ export interface BeadValue {
   stdev?: number;
   /** Optional prefix shown before formatted value (e.g. 'F' or 'E') */
   prefix?: string;
+  /** True if value is derived (view-only) and should be bracketed for honesty. */
+  isDerived?: boolean;
 }
 
 export interface HiddenCurrentValue {
@@ -32,6 +34,8 @@ export interface HiddenCurrentValue {
   stdev?: number;
   /** Optional prefix shown before formatted value (e.g. 'F' or 'E') */
   prefix?: string;
+  /** True if value is derived (view-only) and should be bracketed for honesty. */
+  isDerived?: boolean;
 }
 
 export type ValueFormatter = (value: number | string, stdev?: number) => string;
@@ -70,7 +74,7 @@ export class BeadLabelBuilder {
     
     const first = this.values[0];
     return this.values.every(v => 
-      v.value === first.value && v.stdev === first.stdev && v.prefix === first.prefix
+      v.value === first.value && v.stdev === first.stdev && v.prefix === first.prefix && v.isDerived === first.isDerived
     );
   }
   
@@ -84,12 +88,19 @@ export class BeadLabelBuilder {
     const first = this.values[0];
     return first.value === this.hiddenCurrent.value 
       && first.stdev === this.hiddenCurrent.stdev
-      && first.prefix === this.hiddenCurrent.prefix;
+      && first.prefix === this.hiddenCurrent.prefix
+      && first.isDerived === this.hiddenCurrent.isDerived;
   }
 
-  private formatWithOptionalPrefix(value: number | string, stdev?: number, prefix?: string): string {
+  private formatWithOptionalPrefix(
+    value: number | string,
+    stdev?: number,
+    prefix?: string,
+    isDerived?: boolean
+  ): string {
     const formatted = this.formatter(value, stdev);
-    return prefix ? `${prefix} ${formatted}` : formatted;
+    const maybeBracketed = isDerived ? `[${formatted}]` : formatted;
+    return prefix ? `${prefix} ${maybeBracketed}` : maybeBracketed;
   }
   
   /**
@@ -117,7 +128,7 @@ export class BeadLabelBuilder {
     if (this.shouldFullyDeduplicate()) {
       return (
         <span style={{ color: '#FFFFFF' }}>
-          {this.formatWithOptionalPrefix(this.values[0].value, this.values[0].stdev, this.values[0].prefix)}
+          {this.formatWithOptionalPrefix(this.values[0].value, this.values[0].stdev, this.values[0].prefix, this.values[0].isDerived)}
         </span>
       );
     }
@@ -130,7 +141,7 @@ export class BeadLabelBuilder {
       // Show single white value + grey bracketed hidden
       segments.push(
         <span key="visible" style={{ color: '#FFFFFF' }}>
-          {this.formatWithOptionalPrefix(this.values[0].value, this.values[0].stdev, this.values[0].prefix)}
+          {this.formatWithOptionalPrefix(this.values[0].value, this.values[0].stdev, this.values[0].prefix, this.values[0].isDerived)}
         </span>
       );
     } else {
@@ -138,7 +149,7 @@ export class BeadLabelBuilder {
       this.values.forEach((val, idx) => {
         segments.push(
           <span key={`value-${idx}`} style={{ color: val.colour }}>
-            {this.formatWithOptionalPrefix(val.value, val.stdev, val.prefix)}
+            {this.formatWithOptionalPrefix(val.value, val.stdev, val.prefix, val.isDerived)}
           </span>
         );
         if (idx < this.values.length - 1) {
@@ -152,7 +163,7 @@ export class BeadLabelBuilder {
       segments.push(' (');
       segments.push(
         <span key="hidden" style={{ color: '#808080' }}>
-          {this.formatWithOptionalPrefix(this.hiddenCurrent.value, this.hiddenCurrent.stdev, this.hiddenCurrent.prefix)}
+          {this.formatWithOptionalPrefix(this.hiddenCurrent.value, this.hiddenCurrent.stdev, this.hiddenCurrent.prefix, this.hiddenCurrent.isDerived)}
         </span>
       );
       segments.push(')');

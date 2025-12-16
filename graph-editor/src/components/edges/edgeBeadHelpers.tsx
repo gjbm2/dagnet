@@ -17,6 +17,7 @@ import type { Graph, GraphEdge } from '../../types';
 import type { ScenarioVisibilityMode } from '../../types';
 import { BeadLabelBuilder, type BeadValue, type HiddenCurrentValue } from './BeadLabelBuilder';
 import { hasAnyEdgeQueryOverride, hasAnyOverriddenFlag, listOverriddenFlagPaths } from '../../utils/overrideFlags';
+import { computeEFBasisForLayer } from '../../services/efBasisResolver';
 
 // Re-export for backwards compatibility
 export type { BeadValue, HiddenCurrentValue };
@@ -102,7 +103,7 @@ function buildParameterBead(config: {
   checkExists: () => boolean;
   
   // Extract value from specific layer (returns {mean/value, stdev} or undefined)
-  extractFromLayer: (layerId: string) => { mean?: number; value?: number; stdev?: number; prefix?: string } | undefined;
+  extractFromLayer: (layerId: string) => { mean?: number; value?: number; stdev?: number; prefix?: string; isDerived?: boolean } | undefined;
   
   // Build label using BeadLabelBuilder
   // The third boolean parameter indicates whether there is existence variation
@@ -141,13 +142,13 @@ function buildParameterBead(config: {
   let hiddenCurrent: HiddenCurrentValue | undefined;
   
   // First pass: inspect raw extracted values per visible layer
-  const rawLayerValues = new Map<string, { value?: number; stdev?: number; prefix?: string } | null>();
+  const rawLayerValues = new Map<string, { value?: number; stdev?: number; prefix?: string; isDerived?: boolean } | null>();
   for (const layerId of config.orderedVisibleIds) {
     const extracted = config.extractFromLayer(layerId);
     const extractedValue = extracted?.mean ?? extracted?.value;
     rawLayerValues.set(
       layerId, 
-      extracted ? { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix } : null
+      extracted ? { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix, isDerived: extracted?.isDerived } : null
     );
   }
   
@@ -163,10 +164,10 @@ function buildParameterBead(config: {
     hasAnyExplicitValue && config.beadType !== 'probability';
   
   // Second pass: construct final layerValues with optional zero-filling
-  const layerValues = new Map<string, { value: number; stdev?: number; prefix?: string } | null>();
+  const layerValues = new Map<string, { value: number; stdev?: number; prefix?: string; isDerived?: boolean } | null>();
   for (const [layerId, raw] of rawLayerValues.entries()) {
     if (raw && raw.value !== undefined) {
-      layerValues.set(layerId, { value: raw.value, stdev: raw.stdev, prefix: raw.prefix });
+      layerValues.set(layerId, { value: raw.value, stdev: raw.stdev, prefix: raw.prefix, isDerived: raw.isDerived });
     } else if (shouldTreatMissingAsZero) {
       layerValues.set(layerId, { value: 0, stdev: undefined });
     } else {
@@ -187,7 +188,8 @@ function buildParameterBead(config: {
         value: extracted.value,
         colour: config.getScenarioColour(layerId),
         stdev: extracted.stdev,
-        prefix: extracted.prefix
+        prefix: extracted.prefix,
+        isDerived: extracted.isDerived
       });
     }
   }
@@ -202,15 +204,15 @@ function buildParameterBead(config: {
       if (values.length > 0) {
         const tempBuilder = new BeadLabelBuilder(
           values,
-          { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix },
+          { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix, isDerived: extracted?.isDerived },
           (v: number | string, stdev?: number) => String(v)
         );
         if (!tempBuilder.doesHiddenCurrentMatch()) {
-          hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix };
+          hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix, isDerived: extracted?.isDerived };
         }
       } else {
         // No visible values but hidden current exists - definitely different
-        hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix };
+        hiddenCurrent = { value: extractedValue, stdev: extracted?.stdev, prefix: extracted?.prefix, isDerived: extracted?.isDerived };
       }
     } else if (values.length > 0) {
       // Hidden current doesn't exist but visible layers do - that's also a difference
@@ -323,7 +325,7 @@ function getProbabilityBeadValueForLayer(
   scenariosContext: any,
   getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode,
   whatIfDSL?: string | null
-): { value: number; stdev?: number; prefix?: string } {
+): { value: number; stdev?: number; prefix?: string; isDerived?: boolean } {
   // Mode selection is per-layer (scenario). Default is F+E which uses p.mean.
   const mode: ScenarioVisibilityMode = getScenarioVisibilityMode?.(layerId) ?? 'f+e';
 
@@ -331,10 +333,13 @@ function getProbabilityBeadValueForLayer(
   const fallbackP: any = (edge as any).p || {};
 
   let pForLayer: any = fallbackP;
+  let paramsForLayer: any = scenariosContext?.currentParams;
   if (layerId === 'current') {
     pForLayer = fallbackP;
+    paramsForLayer = scenariosContext?.currentParams;
   } else if (layerId === 'base') {
     pForLayer = scenariosContext.baseParams.edges?.[edgeKey]?.p ?? fallbackP;
+    paramsForLayer = scenariosContext?.baseParams;
   } else {
     const composedParams = getComposedParamsForLayer(
       layerId,
@@ -345,6 +350,7 @@ function getProbabilityBeadValueForLayer(
     pForLayer = composedParams.edges?.[edgeKey]?.p
       ?? scenariosContext.baseParams.edges?.[edgeKey]?.p
       ?? fallbackP;
+    paramsForLayer = composedParams;
   }
 
   // Normalise evidence/forecast means.
@@ -394,6 +400,38 @@ function getProbabilityBeadValueForLayer(
   const stdev =
     typeof pForLayer?.stdev === 'number' ? pForLayer.stdev
       : (typeof fallbackP?.stdev === 'number' ? fallbackP.stdev : undefined);
+
+  // === Derived sibling basis (E/F modes only) ===
+  // For E mode: if any sibling has explicit evidence, missing siblings get residual allocation.
+  // For F mode: analogous for forecast.
+  let derivedFlag: boolean | undefined = undefined;
+  if (graph && paramsForLayer && (mode === 'e' || mode === 'f') && edgeKey) {
+    const basisMaps = computeEFBasisForLayer(graph, paramsForLayer);
+    if (mode === 'e') {
+      const basis = basisMaps.evidence.get(edgeKey);
+      if (basis?.groupHasAnyExplicit) {
+        derivedFlag = basis.isDerived;
+        return {
+          value: basis.value,
+          stdev: typeof evidenceMean === 'number' ? evidenceStdev : stdev,
+          prefix: 'E',
+          isDerived: derivedFlag
+        };
+      }
+    }
+    if (mode === 'f') {
+      const basis = basisMaps.forecast.get(edgeKey);
+      if (basis?.groupHasAnyExplicit) {
+        derivedFlag = basis.isDerived;
+        return {
+          value: basis.value,
+          stdev: typeof forecastMean === 'number' ? forecastStdev : stdev,
+          prefix: 'F',
+          isDerived: derivedFlag
+        };
+      }
+    }
+  }
 
   if (mode === 'f') {
     return {
@@ -768,7 +806,7 @@ export function buildBeadDefinitions(
     beadType: 'probability',
     checkExists: () => true, // Every edge has probability
     extractFromLayer: (layerId) => {
-      const { value, stdev, prefix } = getProbabilityBeadValueForLayer(
+      const { value, stdev, prefix, isDerived } = getProbabilityBeadValueForLayer(
         layerId,
         edge,
         graph,
@@ -776,7 +814,7 @@ export function buildBeadDefinitions(
         getScenarioVisibilityMode,
         whatIfDSL
       );
-      return { value, stdev, prefix };
+      return { value, stdev, prefix, isDerived };
     },
     buildLabel: BeadLabelBuilder.buildProbabilityLabel,
     backgroundColor: '#000000',

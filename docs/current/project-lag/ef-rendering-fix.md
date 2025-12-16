@@ -218,7 +218,7 @@ This design assumes we **do not** “formally rebalance forecasts” as a persis
 Concretely:
 
 - We continue to **formally rebalance only `p.mean`** (the canonical sibling PMF that the graph stores).
-- In F mode, the forecast values shown for siblings (including residual \(1-\sum f\) allocations) are treated as a **view-layer projection** computed by the shared resolver.
+- In F mode, the forecast values shown for siblings (including residual \(1-\sum f\) allocations) are treated as a **view-layer projection** computed by the shared resolver **only for sibling groups that have at least one explicit forecast** (forecasts only exist on window() edges with data).
 - Therefore, we should **not rely on UpdateManager rebalance to write forecast values** (e.g. `p.forecast.mean = p.mean`) as the mechanism for sibling forecast coherence.
 
 Implication for implementation:

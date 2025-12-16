@@ -24,7 +24,7 @@ import {
   LATENCY_PATH_T95_PERCENTILE,
   LATENCY_HORIZON_DECIMAL_PLACES,
 } from '../constants/latency';
-import { FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
+import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
 import { roundToDecimalPlaces } from '../utils/rounding';
@@ -1974,14 +1974,14 @@ export function enhanceGraphLatencies(
       //   Weight is based on coverage and forecast conversions.
       //   See: window-cohort-lag-correction-plan.md §5 Phase B
       
-      // 1. Get prior anchor delay from accumulated path t95 (already computed via topo pass)
+      // 1. Get prior anchor delay from accumulated *baseline median lags* to reach this edge's source.
       //
       // IMPORTANT:
-      // We use the upstream path_t95 as a conservative prior for "time to reach this edge's source".
-      // Using only upstream median lags can dramatically overstate effective ages on deep/fat-tailed paths,
-      // which in turn overstates completeness and causes early undercounted evidence to drag p.mean down.
+      // This prior is about A→X *typical* time-to-reach (central tendency), not A→Y horizon.
+      // Using upstream path_t95 here is a category error: it can be ~40d on deep paths and will
+      // incorrectly collapse effective ages (and therefore completeness) for downstream edges.
       const fromNodeId = normalizeNodeRef(edge.from);
-      const priorAnchorDelayDays = nodePathT95.get(fromNodeId) ?? 0;
+      const priorAnchorDelayDays = nodeMedianLagPrior.get(fromNodeId) ?? 0;
       
       // 2. Compute observed anchor delay from cohort-slice anchor_median_lag_days[]
       // We compute an n-weighted average of per-cohort anchor_median_lag_days.
@@ -2014,7 +2014,13 @@ export function enhanceGraphLatencies(
       // 4. Compute blend weight using exponential credibility
       //    w = 1 - exp(-effective_forecast_conversions / K)
       //    where effective_forecast_conversions = coverage * forecast_conversions
-      const forecastConversions = (edge.p?.n ?? 0) * (edge.p?.mean ?? 0);
+      // We are in the LAG topo pass *before* inbound-n has been computed, so edge.p.n is often undefined.
+      // Use cohort-scoped starter volume as a proxy for arrivals-at-X, and use the forecast baseline
+      // as the best available conversion rate for credibility.
+      const startersAtX = cohortsScoped.reduce((sum, c) => sum + (c.n ?? 0), 0);
+      const rateForCredibility =
+        (edge.p?.forecast?.mean !== undefined ? edge.p.forecast.mean : (edge.p?.mean ?? 0));
+      const forecastConversions = startersAtX * rateForCredibility;
       const effectiveForecastConversions = anchorLagCoverage * forecastConversions;
       const blendWeight = 1 - Math.exp(-effectiveForecastConversions / ANCHOR_DELAY_BLEND_K_CONVERSIONS);
       
