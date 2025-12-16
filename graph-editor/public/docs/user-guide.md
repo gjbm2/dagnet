@@ -216,6 +216,8 @@ The Analytics panel respects scenario visibility:
 
 Toggle visibility modes using the eye icons in the Scenarios panel.
 
+**Note on sibling edges in E-only / F-only:** if a sibling group has any explicit evidence/forecast, DagNet will derive the missing sibling probabilities at render-time so outgoing probabilities remain coherent. Derived probability bead values are shown in **square brackets** (e.g. `E [0.61]`, `F [0.39]`), and the canvas geometry (edge widths/offsets/labels) uses the same basis.
+
 ### Interpreting Results
 
 Analysis results include:

@@ -1660,6 +1660,24 @@ export interface EdgeLAGValues {
     baselineWindowForecast?: number;
     /** Blend weight on evidence (0–1) */
     wEvidence?: number;
+
+    /** Which completeness semantics were used for this edge under the current query mode */
+    completenessMode?: 'window_edge' | 'cohort_path_anchored' | 'cohort_conditional_fallback';
+
+    /** Authoritative t95 used to pull the cohort completeness tail (days), when applicable */
+    completenessAuthoritativeT95Days?: number;
+
+    /** Whether the cohort completeness tail constraint was applied */
+    completenessTailConstraintApplied?: boolean;
+
+    /** Evidence mean from the graph edge (raw k/n within the current query window) */
+    evidenceMeanRaw?: number;
+
+    /** Evidence mean actually used for blending (may be de-biased by completeness in cohort-path mode) */
+    evidenceMeanUsedForBlend?: number;
+
+    /** Whether evidenceMeanUsedForBlend was de-biased by completeness */
+    evidenceMeanDebiasedByCompleteness?: boolean;
   };
 }
 
@@ -2108,11 +2126,111 @@ export function enhanceGraphLatencies(
           }
         }
       }
+
+      // ---------------------------------------------------------------------
+      // COHORT MODE COMPLETENESS (FIX): A→Y path-anchored completeness
+      //
+      // In cohort() queries, completeness for downstream edges must be anchored to the
+      // cohort's entry at A (raw age since A), not conditional "time since reaching X".
+      //
+      // We model A→Y as: T(A→Y) = T(A→X) + T(X→Y) and evaluate the A→Y CDF on raw ages.
+      //
+      // To prevent thin-tail bias from immature/censored cohort medians/means, we apply
+      // the same one-way tail pull already used elsewhere: sigma may only increase so
+      // the implied t95 is >= authoritative path_t95.
+      // ---------------------------------------------------------------------
+      let completenessUsed = latencyStats.completeness;
+      // NOTE: EdgeLAGValues['debug'] is optional (can be undefined), so avoid conditional types that
+      // collapse to `never` under union-with-undefined. Use the actual field type.
+      let completenessMode: NonNullable<EdgeLAGValues['debug']>['completenessMode'] =
+        (isWindowMode ? 'window_edge' : 'cohort_conditional_fallback');
+      let completenessAuthoritativeT95Days: number | undefined;
+      let completenessTailConstraintApplied: boolean | undefined;
+
+      if (!isWindowMode) {
+        // Determine authoritative path_t95 (days) for A→Y tail pull.
+        // Precedence:
+        //  - If graph has an overridden path_t95, treat it as authoritative.
+        //  - Otherwise, use the most conservative of available computed estimates.
+        const latencyAny = (edge.p as any)?.latency as any | undefined;
+        const overriddenPathT95 =
+          latencyAny?.path_t95_overridden === true && typeof latencyAny?.path_t95 === 'number'
+            ? latencyAny.path_t95
+            : undefined;
+
+        const candidates = [
+          overriddenPathT95,
+          edgePathT95,
+          edgePrecomputedPathT95,
+        ].filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+
+        completenessAuthoritativeT95Days = candidates.length > 0 ? Math.max(...candidates) : undefined;
+
+        // If we have usable anchor lag (A→X) moments and a usable X→Y fit, compute A→Y.
+        const canComputeAnchorMoments = cohortsForPathEstimate.some(
+          (c) =>
+            (typeof c.anchor_median_lag_days === 'number' && Number.isFinite(c.anchor_median_lag_days) && c.anchor_median_lag_days > 0) ||
+            (typeof c.anchor_mean_lag_days === 'number' && Number.isFinite(c.anchor_mean_lag_days) && c.anchor_mean_lag_days > 0)
+        );
+
+        if (canComputeAnchorMoments && completenessAuthoritativeT95Days !== undefined) {
+          // Aggregate anchor lag (A→X) stats using n-weighting.
+          const anchorLagCandidates = cohortsForPathEstimate.filter((c) =>
+            c.n > 0 &&
+            typeof c.anchor_median_lag_days === 'number' &&
+            Number.isFinite(c.anchor_median_lag_days) &&
+            c.anchor_median_lag_days > 0
+          );
+
+          if (anchorLagCandidates.length > 0) {
+            const totalNForAnchor = anchorLagCandidates.reduce((sum, c) => sum + c.n, 0);
+            const anchorMedian =
+              anchorLagCandidates.reduce((sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
+            const anchorMean =
+              anchorLagCandidates.reduce(
+                (sum, c) => sum + c.n * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
+                0
+              ) / (totalNForAnchor || 1);
+
+            const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
+            const ayFit = approximateLogNormalSumFit(anchorFit, latencyStats.fit);
+
+            if (ayFit) {
+              const ayMedianDays = Math.exp(ayFit.mu);
+              const ayCdfParams = getCompletenessCdfParams(
+                {
+                  mu: ayFit.mu,
+                  sigma: ayFit.sigma,
+                  empirical_quality_ok: true,
+                  total_k: totalKForFit,
+                },
+                ayMedianDays,
+                completenessAuthoritativeT95Days
+              );
+
+              const ayCompleteness = calculateCompletenessWithTailConstraint(
+                // Raw anchor ages: cohortsScoped.age is already "days since A" in cohort mode.
+                cohortsScoped,
+                ayCdfParams.mu,
+                ayCdfParams.sigma_moments,
+                ayCdfParams.sigma,
+                ayCdfParams.tail_constraint_applied
+              );
+
+              if (Number.isFinite(ayCompleteness)) {
+                completenessUsed = ayCompleteness;
+                completenessMode = 'cohort_path_anchored';
+                completenessTailConstraintApplied = ayCdfParams.tail_constraint_applied;
+              }
+            }
+          }
+        }
+      }
       
       console.log('[LAG_TOPO_COMPUTED] stats:', {
         edgeId,
         t95: latencyStats.t95,
-        completeness: latencyStats.completeness,
+        completeness: completenessUsed,
         pathT95: edgePathT95,
       });
       
@@ -2144,7 +2262,7 @@ export function enhanceGraphLatencies(
           median_lag_days: aggregateMedianLag,
           mean_lag_days: aggregateMeanLag,
           t95: latencyStats.t95,
-          completeness: latencyStats.completeness,
+          completeness: completenessUsed,
           path_t95: edgePathT95,
         },
         debug: {
@@ -2165,6 +2283,9 @@ export function enhanceGraphLatencies(
           cohortsWithAnchorLag: cohortsWithAnchorLag.length,
           mu,
           sigma,
+          completenessMode,
+          completenessAuthoritativeT95Days,
+          completenessTailConstraintApplied,
           totalN: cohortsScoped.reduce((sum, c) => sum + c.n, 0),
           totalK: cohortsScoped.reduce((sum, c) => sum + c.k, 0),
           sampleCohorts: cohortsScoped.slice(0, 5).map((c, i) => ({
@@ -2203,8 +2324,28 @@ export function enhanceGraphLatencies(
       //   - forecast comes from WINDOW slices (mature baseline p_∞)
       //   - evidence comes from COHORT slices (observed rates)
       // 
-      const completeness = latencyStats.completeness;
-      const evidenceMean = edge.p?.evidence?.mean;
+      const completeness = completenessUsed;
+      const evidenceMeanRaw = edge.p?.evidence?.mean;
+
+      // COHORT MODE (PATH-ANCHORED): Evidence is right-censored by time-to-success.
+      // If completeness estimates the fraction of eventual successes that have landed by now,
+      // then k/n underestimates the eventual probability by approximately that factor:
+      //   E[k/n] ≈ p∞ × completeness  →  p∞ ≈ (k/n) / completeness.
+      //
+      // Use this de-biased evidence mean only when we are explicitly in cohort_path_anchored mode,
+      // so we don't accidentally reinterpret conditional/fallback completeness.
+      const shouldDebiasEvidenceByCompleteness =
+        !isWindowMode &&
+        completenessMode === 'cohort_path_anchored' &&
+        typeof evidenceMeanRaw === 'number' &&
+        Number.isFinite(evidenceMeanRaw) &&
+        typeof completeness === 'number' &&
+        Number.isFinite(completeness) &&
+        completeness > 0.01;
+
+      const evidenceMeanForBlend = shouldDebiasEvidenceByCompleteness
+        ? Math.max(0, Math.min(1, evidenceMeanRaw / completeness))
+        : evidenceMeanRaw;
 
       // Prefer forecast from WINDOW slices (design.md §3.2.1), but if no
       // window() baseline exists and LAG has estimated a reliable p_infinity,
@@ -2223,6 +2364,10 @@ export function enhanceGraphLatencies(
         edgeLAGValues.debug.forecastMeanSource =
           baseForecastMean !== undefined ? 'edge.p.forecast.mean'
           : (fallbackForecastMean !== undefined ? 'lag.p_infinity' : 'none');
+
+        edgeLAGValues.debug.evidenceMeanRaw = evidenceMeanRaw;
+        edgeLAGValues.debug.evidenceMeanUsedForBlend = evidenceMeanForBlend;
+        edgeLAGValues.debug.evidenceMeanDebiasedByCompleteness = shouldDebiasEvidenceByCompleteness;
       }
 
       // nQuery: forecast population for this edge
@@ -2289,7 +2434,9 @@ export function enhanceGraphLatencies(
       console.log('[enhanceGraphLatencies] Blend check:', {
         edgeId,
         completeness,
-        evidenceMean,
+        evidenceMeanRaw,
+        evidenceMeanUsedForBlend: evidenceMeanForBlend,
+        evidenceMeanDebiasedByCompleteness: shouldDebiasEvidenceByCompleteness,
         forecastMean,
         nQuery,
         nBaseline,
@@ -2311,7 +2458,7 @@ export function enhanceGraphLatencies(
       // Phase 2: p.mean is computed ONLY via the canonical blend (computeBlendedMean),
       // in both window() and cohort() modes.
       const blendedMeanFromBlend = computeBlendedMean({
-        evidenceMean,
+        evidenceMean: evidenceMeanForBlend,
         forecastMean: forecastMean ?? 0,
         completeness,
         nQuery: cohortsLookSampled && typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery,
@@ -2346,7 +2493,7 @@ export function enhanceGraphLatencies(
       }
 
       // If blend cannot be computed (e.g., missing forecast baseline), fall back to evidence.
-      const blendedMean = blendedMeanFromBlend ?? evidenceMean;
+      const blendedMean = blendedMeanFromBlend ?? evidenceMeanRaw;
 
       if (blendedMean !== undefined) {
         edgeLAGValues.blendedMean = blendedMean;
@@ -2357,7 +2504,8 @@ export function enhanceGraphLatencies(
           completeness: (completeness ?? 0).toFixed(3),
           nQuery,
           nBaseline,
-          evidenceMean: (evidenceMean ?? 0).toFixed(3),
+          evidenceMeanRaw: (evidenceMeanRaw ?? 0).toFixed(3),
+          evidenceMeanUsedForBlend: (evidenceMeanForBlend ?? 0).toFixed(3),
           forecastMean: (forecastMean ?? 0).toFixed(3),
           blendedMean: blendedMean.toFixed(3),
           blendMethod: blendedMeanFromBlend !== undefined ? 'canonical-blend' : 'evidence-fallback',

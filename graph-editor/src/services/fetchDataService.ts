@@ -1530,11 +1530,18 @@ export async function fetchItems(
                     pathT95: v.latency.path_t95.toFixed(1),
                     mu: v.debug.mu.toFixed(3),
                     sigma: v.debug.sigma.toFixed(3),
+                    // Completeness semantics (cohort fix)
+                    completenessMode: v.debug.completenessMode,
+                    completenessAuthoritativeT95Days: v.debug.completenessAuthoritativeT95Days,
+                    completenessTailConstraintApplied: v.debug.completenessTailConstraintApplied,
                     // Forecast/blend diagnostics (needed to debug “forecast too low”)
                     baseForecastMean: v.debug.baseForecastMean,
                     fallbackForecastMean: v.debug.fallbackForecastMean,
                     forecastMeanUsed: v.debug.forecastMeanUsed,
                     forecastMeanSource: v.debug.forecastMeanSource,
+                    evidenceMeanRaw: v.debug.evidenceMeanRaw,
+                    evidenceMeanUsedForBlend: v.debug.evidenceMeanUsedForBlend,
+                    evidenceMeanDebiasedByCompleteness: v.debug.evidenceMeanDebiasedByCompleteness,
                     nQuery: v.debug.nQuery,
                     nBaseline: v.debug.nBaseline,
                     nBaselineSource: v.debug.nBaselineSource,

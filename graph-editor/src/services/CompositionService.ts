@@ -298,6 +298,45 @@ export function buildGraphForLayer(
 }
 
 /**
+ * Build a scenario-modified graph for analysis.
+ *
+ * IMPORTANT:
+ * Analytics expects each scenario to be evaluated **independently** (base + that scenario only),
+ * NOT cumulatively through the visible overlay stack. Otherwise adding/reordering visible scenarios
+ * can change the computed results for an earlier scenario.
+ *
+ * This function is a thin wrapper over the shared composition logic:
+ * - For scenario layers: forces "single overlay" composition by passing an empty visibleScenarioIds list,
+ *   which triggers the layerIndex === -1 codepath in getComposedParamsForLayer().
+ * - For 'current': uses currentParams and optional What-If DSL, as usual.
+ */
+export function buildGraphForAnalysisLayer(
+  layerId: string,
+  graph: Graph,
+  baseParams: ScenarioParams,
+  currentParams: ScenarioParams,
+  scenarios: ScenarioLike[],
+  whatIfDSL?: string | null
+): Graph {
+  // Force non-cumulative composition for scenario layers.
+  const composedParams = getComposedParamsForLayer(
+    layerId,
+    baseParams,
+    currentParams,
+    scenarios,
+    []
+  );
+
+  let result = applyComposedParamsToGraph(graph, composedParams);
+
+  if (layerId === 'current' && whatIfDSL) {
+    result = applyWhatIfToGraph(result, whatIfDSL);
+  }
+
+  return result;
+}
+
+/**
  * Compose multiple scenario parameter overlays into a single merged result.
  * 
  * @param base - Base parameters to start from
