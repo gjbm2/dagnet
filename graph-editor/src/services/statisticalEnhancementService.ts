@@ -24,7 +24,7 @@ import {
   LATENCY_PATH_T95_PERCENTILE,
   LATENCY_HORIZON_DECIMAL_PLACES,
 } from '../constants/latency';
-import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
+import { FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
 import { roundToDecimalPlaces } from '../utils/rounding';
@@ -1636,6 +1636,30 @@ export interface EdgeLAGValues {
       cdf: number;
       anchorLag?: number;
     }>;
+
+    // === Forecast / blend diagnostics (to explain “forecast too low”) ===
+    /** Forecast mean available on edge before blending (typically from window() baseline slice) */
+    baseForecastMean?: number;
+    /** Forecast mean fallback computed from mature cohorts (p∞), if available */
+    fallbackForecastMean?: number;
+    /** Forecast mean actually used for the blend */
+    forecastMeanUsed?: number;
+    /** Where forecastMeanUsed came from */
+    forecastMeanSource?: 'edge.p.forecast.mean' | 'lag.p_infinity' | 'none';
+    /** Query population used for the blend */
+    nQuery?: number;
+    /** Baseline sample size used for the blend */
+    nBaseline?: number;
+    /** How nBaseline was determined */
+    nBaselineSource?: 'window_slice' | 'mature_cohorts' | 'fallback_to_nQuery';
+    /** Which window() value (sliceDSL) provided the baseline, if any */
+    baselineWindowSliceDSL?: string;
+    baselineWindowRetrievedAt?: string;
+    baselineWindowN?: number;
+    baselineWindowK?: number;
+    baselineWindowForecast?: number;
+    /** Blend weight on evidence (0–1) */
+    wEvidence?: number;
   };
 }
 
@@ -1950,9 +1974,14 @@ export function enhanceGraphLatencies(
       //   Weight is based on coverage and forecast conversions.
       //   See: window-cohort-lag-correction-plan.md §5 Phase B
       
-      // 1. Get prior anchor delay from accumulated baseline (already computed via topo pass)
+      // 1. Get prior anchor delay from accumulated path t95 (already computed via topo pass)
+      //
+      // IMPORTANT:
+      // We use the upstream path_t95 as a conservative prior for "time to reach this edge's source".
+      // Using only upstream median lags can dramatically overstate effective ages on deep/fat-tailed paths,
+      // which in turn overstates completeness and causes early undercounted evidence to drag p.mean down.
       const fromNodeId = normalizeNodeRef(edge.from);
-      const priorAnchorMedianDays = nodeMedianLagPrior.get(fromNodeId) ?? 0;
+      const priorAnchorDelayDays = nodePathT95.get(fromNodeId) ?? 0;
       
       // 2. Compute observed anchor delay from cohort-slice anchor_median_lag_days[]
       // We compute an n-weighted average of per-cohort anchor_median_lag_days.
@@ -1990,14 +2019,14 @@ export function enhanceGraphLatencies(
       const blendWeight = 1 - Math.exp(-effectiveForecastConversions / ANCHOR_DELAY_BLEND_K_CONVERSIONS);
       
       // 5. Blend to get effective anchor median delay
-      const effectiveAnchorMedianDays = blendWeight * observedAnchorMedianDays + (1 - blendWeight) * priorAnchorMedianDays;
+      const effectiveAnchorMedianDays = blendWeight * observedAnchorMedianDays + (1 - blendWeight) * priorAnchorDelayDays;
       
       // For compatibility, expose as anchorMedianLag (the effective value)
       const anchorMedianLag = effectiveAnchorMedianDays;
       
       console.log('[LAG_TOPO_ANCHOR] soft transition anchor delay:', {
         edgeId,
-        priorAnchorMedianDays: priorAnchorMedianDays.toFixed(2),
+        priorAnchorMedianDays: priorAnchorDelayDays.toFixed(2),
         observedAnchorMedianDays: observedAnchorMedianDays.toFixed(2),
         anchorLagCoverage: anchorLagCoverage.toFixed(2),
         forecastConversions: forecastConversions.toFixed(1),
@@ -2181,6 +2210,14 @@ export function enhanceGraphLatencies(
       const fallbackForecastMean =
         latencyStats.forecast_available ? latencyStats.p_infinity : undefined;
       const forecastMean = baseForecastMean ?? fallbackForecastMean;
+      if (edgeLAGValues.debug) {
+        edgeLAGValues.debug.baseForecastMean = baseForecastMean;
+        edgeLAGValues.debug.fallbackForecastMean = fallbackForecastMean;
+        edgeLAGValues.debug.forecastMeanUsed = forecastMean;
+        edgeLAGValues.debug.forecastMeanSource =
+          baseForecastMean !== undefined ? 'edge.p.forecast.mean'
+          : (fallbackForecastMean !== undefined ? 'lag.p_infinity' : 'none');
+      }
 
       // nQuery: forecast population for this edge
       // Prefer p.n (computed by computeInboundN from upstream forecast_k),
@@ -2203,6 +2240,10 @@ export function enhanceGraphLatencies(
       //      original behaviour: sum of n over "mature" cohorts in this query.
       //
       let nBaseline = 0;
+      let nBaselineSource: 'window_slice' | 'mature_cohorts' | 'fallback_to_nQuery' = 'mature_cohorts';
+      let bestWindowMeta:
+        | { sliceDSL?: string; retrievedAt?: string; n?: number; k?: number; forecast?: number }
+        | undefined;
 
       // Prefer true window() baseline sample size backing the forecast
       const windowCandidates = (paramValues as ParameterValueForLAG[]).filter(v => {
@@ -2221,12 +2262,21 @@ export function enhanceGraphLatencies(
           return bDate.localeCompare(aDate);
         })[0];
         nBaseline = typeof bestWindow.n === 'number' ? bestWindow.n : 0;
+        nBaselineSource = 'window_slice';
+        bestWindowMeta = {
+          sliceDSL: bestWindow.sliceDSL,
+          retrievedAt: bestWindow.data_source?.retrieved_at,
+          n: bestWindow.n,
+          k: bestWindow.k,
+          forecast: bestWindow.forecast,
+        };
       }
 
       // Fallback: if no window baseline is available, approximate from mature cohorts
       if (nBaseline === 0) {
         const matureCohorts = cohortsScoped.filter(c => c.age >= effectiveHorizonDays);
         nBaseline = matureCohorts.reduce((sum, c) => sum + c.n, 0);
+        nBaselineSource = 'mature_cohorts';
       }
       
       // Debug: Log blend inputs
@@ -2261,6 +2311,33 @@ export function enhanceGraphLatencies(
         nQuery: cohortsLookSampled && typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery,
         nBaseline: nBaseline > 0 ? nBaseline : nQuery,
       });
+
+      // Capture blend diagnostics for session logging
+      if (edgeLAGValues.debug) {
+        const nQueryForBlend = cohortsLookSampled && typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery;
+        const nBaselineUsed = nBaseline > 0 ? nBaseline : nQueryForBlend;
+        if (nBaselineUsed === nQueryForBlend && nBaseline === 0) {
+          nBaselineSource = 'fallback_to_nQuery';
+        }
+
+        // Mirror computeBlendedMean weighting so logs can explain low forecasts
+        const nEff = (completeness ?? 0) * (nQueryForBlend ?? 0);
+        const m0 = FORECAST_BLEND_LAMBDA * (nBaselineUsed ?? 0);
+        const wEvidence = (m0 + nEff) > 0 ? (nEff / (m0 + nEff)) : 0;
+
+        edgeLAGValues.debug.nQuery = nQueryForBlend;
+        edgeLAGValues.debug.nBaseline = nBaselineUsed;
+        edgeLAGValues.debug.nBaselineSource = nBaselineSource;
+        edgeLAGValues.debug.wEvidence = wEvidence;
+
+        if (bestWindowMeta) {
+          edgeLAGValues.debug.baselineWindowSliceDSL = bestWindowMeta.sliceDSL;
+          edgeLAGValues.debug.baselineWindowRetrievedAt = bestWindowMeta.retrievedAt;
+          edgeLAGValues.debug.baselineWindowN = bestWindowMeta.n;
+          edgeLAGValues.debug.baselineWindowK = bestWindowMeta.k;
+          edgeLAGValues.debug.baselineWindowForecast = bestWindowMeta.forecast;
+        }
+      }
 
       // If blend cannot be computed (e.g., missing forecast baseline), fall back to evidence.
       const blendedMean = blendedMeanFromBlend ?? evidenceMean;

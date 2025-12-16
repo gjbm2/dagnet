@@ -220,6 +220,13 @@ export default function ConversionEdge({
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
 
+  // Visibility mode key to force bead recompute when user toggles E/F/F+E
+  const visibilityModesKey = React.useMemo(() => {
+    if (!activeTabId) return '';
+    const ids = visibleScenarioIds.length > 0 ? visibleScenarioIds : ['current'];
+    return ids.map(id => `${id}:${tabOps.getScenarioVisibilityMode(activeTabId, id)}`).join('|');
+  }, [activeTabId, visibleScenarioIds.join('|'), tabOps]);
+
   // Identify which scenario layer this edge belongs to (current vs overlay scenario)
   const scenarioIdForEdge: string = React.useMemo(() => {
     if (data?.scenarioOverlay && data.scenarioId) {
@@ -2876,6 +2883,8 @@ export default function ConversionEdge({
                 scenarioColours={scenarioColours}
                 scenariosContext={scenariosContext}
                 whatIfDSL={whatIfDSL}
+                getScenarioVisibilityMode={activeTabId ? (scenarioId: string) => tabOps.getScenarioVisibilityMode(activeTabId, scenarioId) : undefined}
+                visibilityModesKey={visibilityModesKey}
                 visibleStartOffset={visibleStartOffset}
                 visibleEndOffset={visibleEndOffset}
                 onDoubleClick={handleDoubleClick}

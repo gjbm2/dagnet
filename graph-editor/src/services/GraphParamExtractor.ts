@@ -8,6 +8,101 @@
 import { Graph, GraphEdge, GraphNode } from '../types';
 import { ScenarioParams, EdgeParamDiff, NodeParamDiff } from '../types/scenarios';
 
+function topoSortNodesForGraph(graph: Graph): string[] | undefined {
+  const nodes = graph.nodes ?? [];
+  const edges = graph.edges ?? [];
+  if (nodes.length === 0 || edges.length === 0) return undefined;
+
+  const uuidById = new Map<string, string>();
+  const nodeUuids = new Set<string>();
+  for (const n of nodes) {
+    if (n.uuid) nodeUuids.add(n.uuid);
+    if ((n as any).id && n.uuid) uuidById.set((n as any).id, n.uuid);
+  }
+
+  const resolveNode = (ref: any): string => {
+    if (typeof ref !== 'string') return String(ref ?? '');
+    if (nodeUuids.has(ref)) return ref;
+    const mapped = uuidById.get(ref);
+    return mapped ?? ref;
+  };
+
+  const indegree = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (n.uuid) indegree.set(n.uuid, 0);
+  }
+
+  for (const e of edges) {
+    const from = resolveNode((e as any).from);
+    const to = resolveNode((e as any).to);
+    if (!from || !to) continue;
+    if (!adj.has(from)) adj.set(from, []);
+    adj.get(from)!.push(to);
+    indegree.set(to, (indegree.get(to) ?? 0) + 1);
+    if (!indegree.has(from)) indegree.set(from, indegree.get(from) ?? 0);
+  }
+
+  const queue: string[] = [];
+  for (const [id, deg] of indegree.entries()) {
+    if (deg === 0) queue.push(id);
+  }
+
+  const order: string[] = [];
+  while (queue.length > 0) {
+    const n = queue.shift()!;
+    order.push(n);
+    for (const to of adj.get(n) ?? []) {
+      const nextDeg = (indegree.get(to) ?? 1) - 1;
+      indegree.set(to, nextDeg);
+      if (nextDeg === 0) queue.push(to);
+    }
+  }
+
+  // Cycle / unresolved nodes: bail to preserve existing order
+  if (order.length === 0) return undefined;
+  return order;
+}
+
+function sortEdgesTopologically(graph: Graph): GraphEdge[] {
+  const edges = graph.edges ?? [];
+  const nodeOrder = topoSortNodesForGraph(graph);
+  if (!nodeOrder) return edges;
+
+  const rank = new Map<string, number>();
+  for (let i = 0; i < nodeOrder.length; i++) rank.set(nodeOrder[i], i);
+
+  const uuidById = new Map<string, string>();
+  const nodes = graph.nodes ?? [];
+  const nodeUuids = new Set<string>();
+  for (const n of nodes) {
+    if (n.uuid) nodeUuids.add(n.uuid);
+    if ((n as any).id && n.uuid) uuidById.set((n as any).id, n.uuid);
+  }
+  const resolveNode = (ref: any): string => {
+    if (typeof ref !== 'string') return String(ref ?? '');
+    if (nodeUuids.has(ref)) return ref;
+    const mapped = uuidById.get(ref);
+    return mapped ?? ref;
+  };
+
+  return [...edges].sort((a, b) => {
+    const aFrom = resolveNode((a as any).from);
+    const bFrom = resolveNode((b as any).from);
+    const aTo = resolveNode((a as any).to);
+    const bTo = resolveNode((b as any).to);
+    const aFromRank = rank.get(aFrom) ?? Number.MAX_SAFE_INTEGER;
+    const bFromRank = rank.get(bFrom) ?? Number.MAX_SAFE_INTEGER;
+    if (aFromRank !== bFromRank) return aFromRank - bFromRank;
+    const aToRank = rank.get(aTo) ?? Number.MAX_SAFE_INTEGER;
+    const bToRank = rank.get(bTo) ?? Number.MAX_SAFE_INTEGER;
+    if (aToRank !== bToRank) return aToRank - bToRank;
+    const aKey = (a as any).id || (a as any).uuid || '';
+    const bKey = (b as any).id || (b as any).uuid || '';
+    return String(aKey).localeCompare(String(bKey));
+  });
+}
+
 /**
  * Extract all parameters from a graph
  */
@@ -23,7 +118,7 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
 
   // Extract edge parameters
   if (graph.edges) {
-    for (const edge of graph.edges) {
+    for (const edge of sortEdgesTopologically(graph)) {
       const edgeParams = extractEdgeParams(edge);
       if (edgeParams && Object.keys(edgeParams).length > 0) {
         // Use human-readable ID if available, fallback to UUID
@@ -350,7 +445,7 @@ export function extractParamsFromSelection(
 
   // Extract parameters from selected edges
   if (selectedEdgeUuids.length > 0 && graph.edges) {
-    for (const edge of graph.edges) {
+    for (const edge of sortEdgesTopologically(graph)) {
       if (selectedEdgeUuids.includes(edge.uuid)) {
         const edgeParams = extractEdgeParams(edge);
         if (edgeParams && Object.keys(edgeParams).length > 0) {
