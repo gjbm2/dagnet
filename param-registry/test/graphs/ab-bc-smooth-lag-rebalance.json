@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0.0",
+  "id": "ab-bc-smooth-lag-rebalance",
+  "name": "A→B→C with implicit failure edges (smooth lag fixtures)",
+  "description": "Test graph for stats/param-pack e2e: A→B and B→C are parameter edges; A→D and B→E are free edges rebalanced by complement. C is success, D/E are failures.",
+  "nodes": [
+    {
+      "uuid": "A",
+      "id": "A",
+      "label": "A",
+      "event_id": "event-a",
+      "entry": { "is_start": true, "entry_weight": 1.0 },
+      "layout": { "x": 0, "y": 0 }
+    },
+    {
+      "uuid": "B",
+      "id": "B",
+      "label": "B",
+      "event_id": "event-b",
+      "layout": { "x": 200, "y": 0 }
+    },
+    {
+      "uuid": "C",
+      "id": "C",
+      "label": "C",
+      "event_id": "event-c",
+      "absorbing": true,
+      "outcome_type": "success",
+      "layout": { "x": 400, "y": -80 }
+    },
+    {
+      "uuid": "D",
+      "id": "D",
+      "label": "D",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": { "x": 200, "y": 120 }
+    },
+    {
+      "uuid": "E",
+      "id": "E",
+      "label": "E",
+      "absorbing": true,
+      "outcome_type": "failure",
+      "layout": { "x": 400, "y": 80 }
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "A-B",
+      "id": "A-B",
+      "from": "A",
+      "to": "B",
+      "query": "from(A).to(B)",
+      "p": {
+        "id": "ab-smooth-lag",
+        "connection": "amplitude-prod",
+        "mean": 0.5,
+        "latency": {
+          "latency_parameter": true,
+          "anchor_node_id": "A"
+        }
+      }
+    },
+    {
+      "uuid": "A-D",
+      "id": "A-D",
+      "from": "A",
+      "to": "D",
+      "p": { "mean": 0.5 }
+    },
+    {
+      "uuid": "B-C",
+      "id": "B-C",
+      "from": "B",
+      "to": "C",
+      "query": "from(B).to(C).visited(A)",
+      "p": {
+        "id": "bc-smooth-lag",
+        "connection": "amplitude-prod",
+        "mean": 0.5,
+        "latency": {
+          "latency_parameter": true,
+          "anchor_node_id": "A"
+        }
+      }
+    },
+    {
+      "uuid": "B-E",
+      "id": "B-E",
+      "from": "B",
+      "to": "E",
+      "p": { "mean": 0.5 }
+    }
+  ],
+  "policies": {
+    "default_outcome": "C",
+    "overflow_policy": "normalize",
+    "free_edge_policy": "complement"
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created_at": "2025-12-16T00:00:00Z",
+    "updated_at": "2025-12-16T00:00:00Z",
+    "author": "test-fixtures",
+    "tags": ["stats", "amplitude", "lag", "e2e", "fixtures"]
+  }
+}
+
+

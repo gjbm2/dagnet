@@ -1,0 +1,15 @@
+id: event-c
+name: Event C
+description: Fixture event C for smooth-lag end-to-end tests
+category: fixture
+tags:
+  - fixtures
+  - stats
+provider_event_names:
+  amplitude: Event C
+metadata:
+  created_at: "2025-12-16T00:00:00Z"
+  updated_at: "2025-12-16T00:00:00Z"
+  status: active
+
+
