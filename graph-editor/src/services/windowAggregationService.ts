@@ -767,6 +767,20 @@ export function calculateIncrementalFetch(
   bustCache: boolean = false,
   targetSlice: string = ''  // NEW: Slice DSL to isolate (default '' = uncontexted)
 ): IncrementalFetchResult {
+  // Signature filtering:
+  // If a querySignature is provided and the file contains ANY signed entries,
+  // only consider entries with a matching signature as "cached".
+  //
+  // This prevents stale cache hits when the effective query changes (e.g. context mapping changes)
+  // but the slice identifier (sliceDSL) stays the same.
+  const allValues = (paramFileData.values && Array.isArray(paramFileData.values))
+    ? (paramFileData.values as ParameterValue[])
+    : [];
+  const hasAnySignedValues = !!querySignature && allValues.some(v => !!v.query_signature);
+  const signatureFilteredValues = hasAnySignedValues
+    ? allValues.filter(v => v.query_signature === querySignature)
+    : allValues;
+
   // Normalize requested window dates
   const normalizedWindow: DateRange = {
     start: normalizeDate(requestedWindow.start),
@@ -791,14 +805,18 @@ export function calculateIncrementalFetch(
   // we SKIP this fast path and fall back to the full MECE / incremental logic below.
   // CRITICAL: Also verify the slice's date range overlaps with the requested window!
   // Otherwise we'd incorrectly report "data available" for dates outside the cached range.
-  if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
+  // IMPORTANT: Do NOT apply this fast path for contextAny (multi-slice) queries.
+  // In contextAny mode, cache coverage must be computed across ALL component slices,
+  // which is handled by the full path below. The fast path uses `.some(...)` and
+  // would incorrectly treat "one slice fully cached" as "all cached".
+  if (!bustCache && signatureFilteredValues.length > 0 && !hasContextAny(targetSlice)) {
     try {
       // IMPORTANT: Keep cohort-mode and window-mode caches isolated.
       // If the file contains both a window() entry and a cohort() entry for the same slice family,
       // cache cutting must only consider values matching the requested mode.
       const targetIsCohort = typeof targetSlice === 'string' && targetSlice.includes('cohort(');
       const targetIsWindow = typeof targetSlice === 'string' && targetSlice.includes('window(');
-      const modeFilteredValues = isolateSlice(paramFileData.values, targetSlice).filter(v => {
+      const modeFilteredValues = isolateSlice(signatureFilteredValues, targetSlice).filter(v => {
         if (targetIsCohort) return isCohortModeValue(v);
         if (targetIsWindow) return !isCohortModeValue(v);
         return true; // no explicit mode in targetSlice (fallback behaviour)
@@ -869,7 +887,7 @@ export function calculateIncrementalFetch(
   let missingDates: string[];
   
   // If bustCache is true, skip checking existing dates
-  if (!bustCache && paramFileData.values && Array.isArray(paramFileData.values)) {
+  if (!bustCache && signatureFilteredValues.length > 0) {
     const targetIsCohort = typeof targetSlice === 'string' && targetSlice.includes('cohort(');
     const targetIsWindow = typeof targetSlice === 'string' && targetSlice.includes('window(');
     const modeMatchesTarget = (v: ParameterValue): boolean => {
@@ -890,7 +908,7 @@ export function calculateIncrementalFetch(
       for (const sliceId of expandedSlices) {
         const sliceDates = new Set<string>();
         // Filter values matching this specific slice
-        const sliceValues = paramFileData.values.filter(v => {
+        const sliceValues = signatureFilteredValues.filter(v => {
           if (!modeMatchesTarget(v)) return false;
           const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
           return valueSlice === sliceId;
@@ -919,6 +937,7 @@ export function calculateIncrementalFetch(
       
       console.log(`[calculateIncrementalFetch] contextAny expansion:`, {
         targetSlice,
+        querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
         expandedSlices,
         sliceCoverage: Object.fromEntries(
           expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
@@ -933,14 +952,14 @@ export function calculateIncrementalFetch(
       const normalizedTarget = extractSliceDimensions(targetSlice);
       // IMPORTANT: "contexted" here means "has non-empty slice dimensions" (e.g. `.context(...)`),
       // not merely "has a non-empty sliceDSL". Window/cohort functions are not "dimensions".
-      const hasContextedData = paramFileData.values.some(v => extractSliceDimensions(v.sliceDSL ?? '') !== '');
-      const hasUncontextedData = paramFileData.values.some(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
+      const hasContextedData = signatureFilteredValues.some(v => extractSliceDimensions(v.sliceDSL ?? '') !== '');
+      const hasUncontextedData = signatureFilteredValues.some(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
       
       if (normalizedTarget === '' && hasContextedData && !hasUncontextedData) {
         // Query has no context, but file has contexted data
         // Extract all unique slices from the file and check ALL have data (MECE aggregation)
         const uniqueSlices = new Set<string>();
-        for (const value of paramFileData.values) {
+        for (const value of signatureFilteredValues) {
           if (!modeMatchesTarget(value)) continue;
           const sliceDSL = extractSliceDimensions(value.sliceDSL ?? '');
           if (sliceDSL) uniqueSlices.add(sliceDSL);
@@ -953,7 +972,7 @@ export function calculateIncrementalFetch(
         
         for (const sliceId of expandedSlices) {
           const sliceDates = new Set<string>();
-          const sliceValues = paramFileData.values.filter(v => {
+          const sliceValues = signatureFilteredValues.filter(v => {
             if (!modeMatchesTarget(v)) return false;
             const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
             return valueSlice === sliceId;
@@ -989,6 +1008,7 @@ export function calculateIncrementalFetch(
         
         console.log(`[calculateIncrementalFetch] MECE aggregation (uncontexted query with contexted data):`, {
           targetSlice,
+          querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
           expandedSlices,
           sliceCoverage: Object.fromEntries(
             expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
@@ -998,7 +1018,7 @@ export function calculateIncrementalFetch(
         });
       } else {
         // CRITICAL: Isolate to target slice first
-        const sliceValues = isolateSlice(paramFileData.values, targetSlice).filter(modeMatchesTarget);
+        const sliceValues = isolateSlice(signatureFilteredValues, targetSlice).filter(modeMatchesTarget);
         
         for (const value of sliceValues) {
           // Extract dates from this value entry
