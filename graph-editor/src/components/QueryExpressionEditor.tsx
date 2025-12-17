@@ -19,6 +19,13 @@ interface QueryExpressionEditorProps {
   placeholder?: string;
   height?: string;
   readonly?: boolean;
+  /**
+   * Override the set of recognised function names for diagnostics.
+   *
+   * Default is `QUERY_FUNCTIONS` (atomic query DSL). For slice-plan DSLs (pinned data interests),
+   * callers should include compound operators like `or` to avoid false "Unknown function" warnings.
+   */
+  allowedFunctions?: string[];
   
   // Self-contained mode: handle override state internally
   overridden?: boolean;
@@ -143,7 +150,8 @@ export function QueryExpressionEditor({
   edgeId,
   placeholder = 'from(node).to(node)',
   height = '60px',
-  readonly = false
+  readonly = false,
+  allowedFunctions,
 }: QueryExpressionEditorProps) {
   const monacoRef = useRef<typeof Monaco | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -151,6 +159,8 @@ export function QueryExpressionEditor({
   const [caseRegistry, setCaseRegistry] = useState<any[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const isEditingRef = useRef(false); // Ref for keyboard commands to check current editing state
+
+  const allowedFunctionList = allowedFunctions ?? QUERY_FUNCTIONS;
   
   // Helper to update both state and ref together
   const updateIsEditing = (editing: boolean) => {
@@ -267,7 +277,7 @@ export function QueryExpressionEditor({
     
     // Check for unknown function names
     const functionPattern = /\b([a-z_-]+)\s*\(/g;
-    const validFunctions = new Set(QUERY_FUNCTIONS);
+    const validFunctions = new Set(allowedFunctionList);
     let match;
     while ((match = functionPattern.exec(cleanValue)) !== null) {
       if (!validFunctions.has(match[1])) {
@@ -982,7 +992,7 @@ export function QueryExpressionEditor({
       
       // 2. Check for unknown function names
       const functionPattern = /\b([a-z_-]+)\s*\(/g;
-      const validFunctions = new Set(QUERY_FUNCTIONS);
+      const validFunctions = new Set(allowedFunctionList);
       let match;
       while ((match = functionPattern.exec(text)) !== null) {
         const funcName = match[1];
@@ -991,7 +1001,7 @@ export function QueryExpressionEditor({
           const endPos = model.getPositionAt(match.index + funcName.length);
           markers.push({
             severity: monaco.MarkerSeverity.Warning,
-            message: `Unknown function '${funcName}'. Valid functions: ${QUERY_FUNCTIONS.join(', ')}`,
+            message: `Unknown function '${funcName}'. Valid functions: ${allowedFunctionList.join(', ')}`,
             startLineNumber: startPos.lineNumber,
             startColumn: startPos.column,
             endLineNumber: endPos.lineNumber,

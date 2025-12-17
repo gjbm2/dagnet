@@ -41,6 +41,7 @@ import {
   parseDate,
   isDateInRange,
   aggregateCohortData,
+  aggregateWindowData,
   aggregateLatencyStats,
   isCohortModeValue,
   type TimeSeriesPointWithLatency,
@@ -62,6 +63,7 @@ import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
+import { resolveMECEPartitionForImplicitUncontexted } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
@@ -891,13 +893,38 @@ class DataOperationsService {
             });
             
             if (isUncontextedQuery && hasContextedData && !hasUncontextedData) {
-              // MECE aggregation: return ALL values (they'll be summed later)
-              // For uncontexted queries on PURELY contexted data, we want ALL context slices
-              sliceFilteredValues = candidateValues;
-              console.log('[DataOperationsService] MECE aggregation path: returning ALL values for uncontexted query on contexted data', {
-                targetSlice,
-                valueCount: candidateValues.length,
-              });
+              // Implicit uncontexted via MECE partition selection (single context key only).
+              const mece = await resolveMECEPartitionForImplicitUncontexted(candidateValues);
+              if (mece.kind === 'mece_partition' && mece.canAggregate) {
+                sliceFilteredValues = mece.values;
+                console.log('[DataOperationsService] MECE aggregation path: selected MECE partition for implicit uncontexted', {
+                  targetSlice,
+                  key: mece.key,
+                  isComplete: mece.isComplete,
+                  missingValues: mece.missingValues,
+                  valueCount: mece.values.length,
+                });
+              } else if (mece.kind === 'not_resolvable') {
+                // Refuse to synthesise an uncontexted total when we cannot do so safely.
+                console.warn('[DataOperationsService] Cannot resolve MECE partition for implicit uncontexted', {
+                  targetSlice,
+                  reason: mece.reason,
+                  warnings: mece.warnings,
+                });
+                toast(`Cannot compute uncontexted total from cached slices: ${mece.reason}`, {
+                  icon: '⚠️',
+                  duration: 4000,
+                });
+                sessionLogService.endOperation(logOpId, 'warning', `Cannot compute implicit uncontexted total: ${mece.reason}`);
+                return { success: false, warning: `Cannot compute implicit uncontexted total: ${mece.reason}` };
+              } else {
+                // Explicit uncontexted present shouldn't happen here due to hasUncontextedData check.
+                // If canAggregate=false, degrade gracefully by summing what we have, with warning.
+                sliceFilteredValues = candidateValues;
+                console.warn('[DataOperationsService] MECE partition not aggregatable; summing available context slices as subset', {
+                  targetSlice,
+                });
+              }
             } else {
               // Standard path: use isolateSlice (handles contextAny and specific context queries)
               sliceFilteredValues = isolateSlice(candidateValues, targetSlice);
@@ -1323,17 +1350,22 @@ class DataOperationsService {
                         const oldK = allTimeSeries[existingIndex].k;
                         const newN = oldN + value.n_daily[i];
                         const newK = oldK + value.k_daily[i];
-                        // For lag data in multi-slice: use weighted average if both have data, else use whichever has data
+                        // For lag data in multi-slice: keep existing behaviour here (weighted average by k).
+                        // NOTE: mathematically defensible mixture-median aggregation is implemented at the cohort/window
+                        // LAG aggregation layer (aggregateCohortData / aggregateWindowData), where we can operate on
+                        // full per-slice component sets rather than sequentially folding.
                         const oldLag = allTimeSeries[existingIndex].median_lag_days;
                         const newLag = value.median_lag_days?.[i];
-                        const combinedMedianLag = (oldLag !== undefined && newLag !== undefined)
-                          ? (oldLag * oldK + newLag * value.k_daily[i]) / newK  // Weighted average by k
-                          : (newLag ?? oldLag);
+                        const combinedMedianLag =
+                          oldLag !== undefined && newLag !== undefined
+                            ? (oldLag * oldK + newLag * value.k_daily[i]) / newK // Weighted average by k
+                            : newLag ?? oldLag;
                         const oldMeanLag = allTimeSeries[existingIndex].mean_lag_days;
                         const newMeanLag = value.mean_lag_days?.[i];
-                        const combinedMeanLag = (oldMeanLag !== undefined && newMeanLag !== undefined)
-                          ? (oldMeanLag * oldK + newMeanLag * value.k_daily[i]) / newK
-                          : (newMeanLag ?? oldMeanLag);
+                        const combinedMeanLag =
+                          oldMeanLag !== undefined && newMeanLag !== undefined
+                            ? (oldMeanLag * oldK + newMeanLag * value.k_daily[i]) / newK
+                            : newMeanLag ?? oldMeanLag;
                         allTimeSeries[existingIndex] = {
                           date: value.dates[i],
                           n: newN,
@@ -1699,11 +1731,71 @@ class DataOperationsService {
       // simple slice-to-edge updates). This guarantees:
       // - values[latest].evidence.mean/stdev → p.evidence.mean/stdev
       // - values[latest].forecast           → p.forecast.mean
-      aggregatedData = this.addEvidenceAndForecastScalars(
-        aggregatedData,
-        paramFile.data,
-        targetSlice
-      );
+      //
+      // IMPORTANT: The evidence/forecast helper is intentionally synchronous (used by unit tests).
+      // Any async MECE resolution for an implicit uncontexted window baseline (for cohort forecasts)
+      // is handled here, before invoking the helper.
+      let paramDataForScalars: any = paramFile.data;
+      try {
+        const parsedForScalars = targetSlice ? parseConstraints(targetSlice) : null;
+        const isCohortForScalars = !!parsedForScalars?.cohort;
+        const targetDims = extractSliceDimensions(targetSlice || '');
+        if (
+          isCohortForScalars &&
+          targetDims === '' &&
+          paramFile.data?.values &&
+          Array.isArray(paramFile.data.values)
+        ) {
+          const originalValues = paramFile.data.values as ParameterValue[];
+          const hasUncontextedWindowBaseline = originalValues.some((v) => {
+            if (!v.sliceDSL) return false;
+            const parsed = parseConstraints(v.sliceDSL);
+            if (!parsed.window || parsed.cohort) return false;
+            return extractSliceDimensions(v.sliceDSL) === '';
+          });
+
+          if (!hasUncontextedWindowBaseline) {
+            const allWindowValues = originalValues.filter((v) => {
+              if (!v.sliceDSL) return false;
+              const parsed = parseConstraints(v.sliceDSL);
+              return !!parsed.window && !parsed.cohort;
+            });
+
+            const mece = await resolveMECEPartitionForImplicitUncontexted(allWindowValues);
+            if (mece.kind === 'mece_partition' && mece.canAggregate) {
+              const now = new Date();
+              const cohorts = aggregateWindowData(mece.values, now);
+              const dates = cohorts.map((c) => c.date);
+              const nDaily = cohorts.map((c) => c.n);
+              const kDaily = cohorts.map((c) => c.k);
+              const totalN = nDaily.reduce((s, n) => s + n, 0);
+              const totalK = kDaily.reduce((s, k) => s + k, 0);
+              if (dates.length > 0) {
+                const synthetic: any = {
+                  sliceDSL: `window(${dates[0]}:${dates[dates.length - 1]})`,
+                  window_from: dates[0],
+                  window_to: dates[dates.length - 1],
+                  dates,
+                  n_daily: nDaily,
+                  k_daily: kDaily,
+                  n: totalN,
+                  k: totalK,
+                  mean: totalN > 0 ? totalK / totalN : 0,
+                  data_source: {
+                    type: 'amplitude',
+                    retrieved_at: new Date().toISOString(),
+                  },
+                };
+                paramDataForScalars = { ...paramFile.data, values: [...originalValues, synthetic] };
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[DataOperationsService] Failed to prepare synthetic MECE window baseline for scalars:', e);
+      }
+
+      aggregatedData = this.addEvidenceAndForecastScalars(aggregatedData, paramDataForScalars, targetSlice);
       
       // Log forecast data if present
       const latestValue = aggregatedData?.values?.[aggregatedData.values.length - 1];
@@ -7538,7 +7630,7 @@ class DataOperationsService {
           (v as any).k_daily.length === (v as any).dates.length;
         return hasDailyArrays;
       });
-      
+
       if (windowCandidates.length > 0) {
         // Prefer most recent window slice by retrieved_at / window_to (same strategy as aggregation)
         const bestWindow = [...windowCandidates].sort((a, b) => {

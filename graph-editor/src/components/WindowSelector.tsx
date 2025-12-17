@@ -15,6 +15,7 @@ import { FileText, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
 import { parseConstraints } from '../lib/queryDSL';
 import { formatDateUK, resolveRelativeDate } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
+import { validatePinnedDataInterestsDSL } from '../services/slicePlanValidationService';
 import './WindowSelector.css';
 import { ContextValueSelector } from './ContextValueSelector';
 import { contextRegistry } from '../services/contextRegistry';
@@ -1151,6 +1152,16 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           if (setGraph && graph) {
             setGraph({ ...graph, dataInterestsDSL: newDSL });
             toast.success('Pinned query updated');
+            // Non-blocking warnings on save
+            validatePinnedDataInterestsDSL(newDSL)
+              .then((res) => {
+                for (const w of res.warnings) {
+                  toast(w, { icon: '⚠️', duration: 6000 });
+                }
+              })
+              .catch((e) => {
+                console.warn('[WindowSelector] Failed to validate pinned DSL:', e);
+              });
             // Reload context sections if dropdown is open
             setAvailableKeySections([]);
           }

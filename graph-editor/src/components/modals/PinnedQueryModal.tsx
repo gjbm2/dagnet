@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { explodeDSL } from '../../lib/dslExplosion';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
+import { QUERY_FUNCTIONS } from '../../lib/queryDSL';
 import './Modal.css';
 
 interface PinnedQueryModalProps {
@@ -85,6 +86,7 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
               value={draftDSL}
               onChange={(value) => setDraftDSL(value)}
               graph={null}
+              allowedFunctions={[...new Set(['or', ...QUERY_FUNCTIONS])]}
               height="120px"
               placeholder="context(key);context(key).window(start:end)"
               readonly={false}

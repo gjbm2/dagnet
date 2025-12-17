@@ -48,8 +48,19 @@ function parseExpression(dsl: string): string[] {
   const trimmed = dsl.trim();
   
   // Handle or(...).suffix
-  if (trimmed.startsWith('or(')) {
-    const parenEnd = findMatchingParen(trimmed, trimmed.indexOf('('));
+  const startsWithOr = (() => {
+    if (!trimmed.startsWith('or')) return false;
+    let j = 2;
+    while (j < trimmed.length && /\s/.test(trimmed[j])) j++;
+    return trimmed[j] === '(';
+  })();
+  if (startsWithOr) {
+    let openIndex = 2;
+    while (openIndex < trimmed.length && /\s/.test(trimmed[openIndex])) openIndex++;
+    const parenEnd = findMatchingParen(trimmed, openIndex);
+    if (parenEnd === -1) {
+      throw new Error(`Unbalanced parentheses in DSL near: ${trimmed}`);
+    }
     const orPart = trimmed.substring(0, parenEnd + 1);
     const suffix = trimmed.substring(parenEnd + 1);
     
@@ -60,7 +71,8 @@ function parseExpression(dsl: string): string[] {
       const partBranches = parseExpression(part);
       // Apply suffix to each branch
       for (const branch of partBranches) {
-        branches.push(branch + suffix);
+        // Re-parse after suffix application so suffix expressions like `.or(...)` are handled.
+        branches.push(...parseExpression(branch + suffix));
       }
     }
     return branches;
@@ -90,13 +102,68 @@ function parseExpression(dsl: string): string[] {
   }
   
   // Handle prefix.(...) 
-  const dotParenIndex = trimmed.indexOf('.(');
+  const dotParenIndex = (() => {
+    let depth = 0;
+    for (let i = 0; i < trimmed.length - 1; i++) {
+      const ch = trimmed[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      if (depth === 0 && trimmed.startsWith('.(', i)) return i;
+    }
+    return -1;
+  })();
   if (dotParenIndex > 0) {
     const prefix = trimmed.substring(0, dotParenIndex);
     const rest = trimmed.substring(dotParenIndex + 1);
     
     const restBranches = parseExpression(rest);
     return restBranches.map(b => prefix + '.' + b);
+  }
+
+  // Handle prefix.or(...)
+  // This is a common pattern in pinned DSLs: `or(cohort(...),window(...)).or(context(channel),context(geo))`
+  // Semantics: distribute the OR branches as if written `prefix.(a;b)` / `or(prefix.a,prefix.b)`.
+  //
+  // Without this, the `.or(...)` remains as text and bare-key expansion can incorrectly
+  // interpret `context(channel)` and `context(geo)` as simultaneous constraints (Cartesian product).
+  const dotOrIndex = (() => {
+    let depth = 0;
+    for (let i = 0; i < trimmed.length - 4; i++) {
+      const ch = trimmed[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+      if (depth !== 0) continue;
+      if (trimmed[i] !== '.') continue;
+      // Allow optional whitespace between '.or' and '('
+      const rest = trimmed.substring(i + 1);
+      if (!rest.startsWith('or')) continue;
+      let j = i + 1 + 2; // after 'or'
+      while (j < trimmed.length && /\s/.test(trimmed[j])) j++;
+      if (trimmed[j] === '(') return i;
+    }
+    return -1;
+  })();
+  if (dotOrIndex > 0) {
+    const prefix = trimmed.substring(0, dotOrIndex);
+    const orStart = dotOrIndex + 1; // points at 'o' in 'or('
+    const openParenIndex = trimmed.indexOf('(', orStart);
+    const parenEnd = findMatchingParen(trimmed, openParenIndex);
+    if (parenEnd === -1) {
+      throw new Error(`Unbalanced parentheses in DSL near: ${trimmed.substring(orStart)}`);
+    }
+    const orPart = trimmed.substring(orStart, parenEnd + 1); // 'or(...)'
+    const suffix = trimmed.substring(parenEnd + 1); // may be empty, or include further constraints
+
+    const prefixBranches = parseExpression(prefix);
+    const orBranches = parseExpression(orPart);
+
+    const branches: string[] = [];
+    for (const pb of prefixBranches) {
+      for (const ob of orBranches) {
+        branches.push(...parseExpression(`${pb}.${ob}${suffix}`));
+      }
+    }
+    return branches;
   }
   
   // Handle semicolons at top level
@@ -121,6 +188,9 @@ function extractFunctionContents(str: string, funcName: string): string {
   if (start === -1) return '';
   
   const end = findMatchingParen(str, start);
+  if (end === -1) {
+    throw new Error(`Unbalanced parentheses in ${funcName}() expression: ${str}`);
+  }
   return str.substring(start + 1, end);
 }
 
@@ -136,7 +206,7 @@ function findMatchingParen(str: string, openIndex: number): number {
       if (depth === 0) return i;
     }
   }
-  return str.length - 1;
+  return -1;
 }
 
 /**

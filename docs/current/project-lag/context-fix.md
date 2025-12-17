@@ -1,6 +1,6 @@
 ## Context MECE: implicit uncontexted slices (window + cohort) and forecast/evidence aggregation
 
-**Status**: Draft (proposal)  
+**Status**: Implemented (core semantics)  
 **Last updated**: 17-Dec-25  
 **Owner**: DagNet  
 **Context**: Reduce wasted fetches and eliminate the requirement to retrieve explicit uncontexted slices when a contexted slice family is MECE. Ensure uncontexted queries (and implicit forecast baselines) can be satisfied from MECE partitions for both `window()` and `cohort()` modes.
@@ -67,6 +67,34 @@ For cohort-mode (`cohort()`) queries on latency edges:
   - Otherwise, if a complete MECE partition of window slices exists, compute an implicit baseline by summing the MECE window slices (then apply the same maturity exclusion / recency weighting logic used for a single baseline).
 
 This removes the requirement to fetch explicit uncontexted window slices just to support cohort forecasts.
+
+### Implementation status (what is now implemented)
+
+Core behaviour described in this document is now implemented in `graph-editor/`, with outcome-oriented e2e tests proving equivalence in the intended cases.
+
+Implemented:
+
+- **Implicit uncontexted from MECE (user-declared)**:
+  - Uncontexted reads will use explicit uncontexted slices when present; otherwise they can use a MECE partition (single context key only) when the context definition declares MECE via `otherPolicy`.
+- **Window-mode aggregation from MECE slices**:
+  - Daily n/k are summed across context pools, and lag medians are computed as mixture medians (not averages of medians).
+- **Cohort-mode implicit forecast baseline**:
+  - When `edge.p.forecast.mean` is missing (common in MECE-only files), we now derive a stable baseline from window slices via mature-cohort \(p_\infty\) estimation, so cohort queries do not require explicit uncontexted window slices.
+- **Partial fetch resumability (versioned mode)**:
+  - Successful gaps are persisted as they complete, so re-running “Retrieve all slices” naturally picks up where it left off after rate limiting or transient provider failures.
+- **Lag-maths single source of truth (Option A core)**:
+  - Lognormal fitting + CDF/quantile maths is now centralised in a pure utility module and re-used by both LAG and MECE mixture aggregation.
+
+Proof (tests):
+
+- `graph-editor/src/services/__tests__/contextMECEEquivalence.paramPack.red.e2e.test.ts` (uncontexted cohort equivalence: explicit vs MECE-only)
+- `graph-editor/src/services/__tests__/contextMECEEquivalence.windowAndIncomplete.e2e.test.ts` (uncontexted window equivalence + incomplete partition non-equivalence)
+- `graph-editor/src/services/__tests__/lagDistribution.golden.test.ts` (numerical golden lock for lag maths refactor)
+- `graph-editor/src/services/__tests__/dataOperationsService.incrementalGapPersistence.test.ts` (gap persistence/resume)
+
+Notable follow-ups (optional):
+
+- **`lagTypes.ts` clean-up** from the original Option A proposal was not required to achieve correctness and has not been done. The lag-maths single source of truth is already achieved via `lagDistributionUtils.ts`.
 
 ### Mathematical aggregation rules (defensible defaults)
 
