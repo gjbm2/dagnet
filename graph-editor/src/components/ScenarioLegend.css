@@ -112,7 +112,8 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 150px;
+  /* Allow wider labels (DSL strings etc.) without making chips unbounded */
+  max-width: clamp(200px, 28vw, 420px);
   user-select: none;
 }
 

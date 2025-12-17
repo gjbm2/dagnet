@@ -5,6 +5,7 @@ import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useSankeyView } from '../../hooks/useSankeyView';
+import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { sessionLogService } from '../../services/sessionLogService';
 import { graphIssuesService } from '../../services/graphIssuesService';
 
@@ -19,6 +20,7 @@ import { graphIssuesService } from '../../services/graphIssuesService';
 export function ViewMenu() {
   const { activeTabId, tabs, operations } = useTabContext();
   const { operations: navOps } = useNavigatorContext();
+  const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
   
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-') ?? false;
@@ -53,6 +55,10 @@ export function ViewMenu() {
 
   const handleToggleNavigator = () => {
     navOps.toggleNavigator();
+  };
+
+  const handleToggleDashboardMode = () => {
+    toggleDashboardMode({ updateUrl: true });
   };
 
   // Graph-specific handlers
@@ -329,6 +335,13 @@ export function ViewMenu() {
           )}
 
           {/* General view options */}
+          <Menubar.Item
+            className="menubar-item"
+            onSelect={handleToggleDashboardMode}
+          >
+            {isDashboardMode ? '✓ ' : ''}Dashboard mode
+          </Menubar.Item>
+
           <Menubar.Item 
             className="menubar-item" 
             onSelect={handleToggleNavigator}
