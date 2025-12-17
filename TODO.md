@@ -1,6 +1,6 @@
 # TODO
 
-- context fixes
+- context fixes: /home/reg/dev/dagnet/docs/current/project-lag/context-fix.md
 - use Amplitude latency histograms to translate lognormals
 - grouping / ungrouping nodes (zoom in to complexity)
 - show current (dates range) in dashboard mode
