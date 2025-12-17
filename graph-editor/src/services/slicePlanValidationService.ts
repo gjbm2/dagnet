@@ -101,6 +101,16 @@ export async function validatePinnedDataInterestsDSL(dsl: string): Promise<Slice
   const hasExplicitWindowUncontexted = windowSlices.some(isUncontextedSlice);
   const hasExplicitCohortUncontexted = cohortSlices.some(isUncontextedSlice);
 
+  // Cohort-mode queries derive forecasts/baselines from window-mode slices of the same slice family.
+  // If the pinned plan includes cohort slices but no window slices at all, warn explicitly (advisory only).
+  const dslMentionsCohort = dsl.includes('cohort(');
+  const dslMentionsWindow = dsl.includes('window(');
+  if ((cohortSlices.length > 0 || dslMentionsCohort) && windowSlices.length === 0 && !dslMentionsWindow) {
+    warnings.push(
+      'Pinned data interests include cohort() slices but no window() slices. Cohort-mode forecasts/baselines are derived from window() data, so some cohort() results may be unavailable or behave unexpectedly until a matching window() slice is fetched.'
+    );
+  }
+
   const windowMECE = hasExplicitWindowUncontexted ? { ok: false as const } : await findAnyCompleteMECEKeyForMode(windowSlices);
   const cohortMECE = hasExplicitCohortUncontexted ? { ok: false as const } : await findAnyCompleteMECEKeyForMode(cohortSlices);
 

@@ -69,19 +69,20 @@ export function useRetrieveAllSlices(options: UseRetrieveAllSlicesOptions): UseR
     // Update graph with new pinned query
     setGraph({ ...graph, dataInterestsDSL: newDSL });
 
-    // Non-blocking warnings on save
-    try {
-      const result = await validatePinnedDataInterestsDSL(newDSL);
-      for (const w of result.warnings) {
-        toast(w, { icon: '⚠️', duration: 6000 });
-      }
-    } catch (e) {
-      // Never block saving; warnings are advisory only.
-      console.warn('[useRetrieveAllSlices] Failed to validate pinned DSL:', e);
-    }
-    
     // Close the pinned query modal
     setShowPinnedQueryModal(false);
+
+    // Non-blocking warnings on save (do not delay modal close / follow-on flow)
+    validatePinnedDataInterestsDSL(newDSL)
+      .then((result) => {
+        for (const w of result.warnings) {
+          toast(w, { icon: '⚠️', duration: 6000 });
+        }
+      })
+      .catch((e) => {
+        // Never block saving; warnings are advisory only.
+        console.warn('[useRetrieveAllSlices] Failed to validate pinned DSL:', e);
+      });
     
     // If we were pending an all slices operation, continue with it
     if (pendingAllSlices && newDSL) {
