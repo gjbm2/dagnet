@@ -2453,11 +2453,9 @@ export function enhanceGraphLatencies(
       let windowDerivedForecastMean: number | undefined;
       if (baseForecastMean === undefined) {
         try {
-          const windowCohortsForForecast = helpers.aggregateWindowData(
-            paramValues as any,
-            queryDate,
-            cohortWindow
-          );
+          // Use the already-normalised window aggregate function (aggregateWindowData if available,
+          // otherwise fall back to cohort aggregation) to avoid calling an optional helper.
+          const windowCohortsForForecast = windowAggregateFn(paramValues, queryDate, cohortWindow);
           windowDerivedForecastMean = estimatePInfinity(windowCohortsForForecast, effectiveHorizonDays);
         } catch (e) {
           // Non-fatal: fall back to cohort-derived p_infinity if window aggregation fails
