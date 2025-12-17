@@ -22,6 +22,7 @@ import {
   aggregateLatencyStats,
 } from './windowAggregationService';
 import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
+import { resolveMECEPartitionForImplicitUncontexted } from './meceSliceService';
 import { fileRegistry } from '../contexts/TabContext';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
@@ -1294,13 +1295,52 @@ export async function fetchItems(
             
             if (allValues && allValues.length > 0) {
               // Filter values to:
-              // 1. Same context/case dimensions
-              // 2. COHORT slices with dates overlapping the query window
-              // 3. WINDOW slices (for forecast baseline) - include all with matching dims
-              const filteredValues = allValues.filter((v: any) => {
-                // Check context/case dimensions match
-                const valueDims = extractSliceDimensions(v.sliceDSL ?? '');
-                if (valueDims !== targetDims) return false;
+              // 1. Same context/case dimensions (or implicit MECE partition when target is uncontexted)
+              // 2. COHORT slices with dates overlapping the query window (when explicit cohort() DSL)
+              // 3. WINDOW slices (for forecast baseline)
+
+              const hasAnyExplicitUncontexted = allValues.some((v: any) => extractSliceDimensions(v.sliceDSL ?? '') === '');
+
+              // Implicit uncontexted fallback:
+              // If the active DSL is uncontexted (targetDims='') but the param file has ONLY contexted slices,
+              // attempt to treat a MECE partition as the implicit uncontexted truth for LAG.
+              let filteredValues: ParameterValueForLAG[] | null = null;
+              if (targetDims === '' && !hasAnyExplicitUncontexted) {
+                const cohortVals = (allValues as any[]).filter((v) => (v.sliceDSL ?? '').includes('cohort('));
+                const windowVals = (allValues as any[]).filter((v) => (v.sliceDSL ?? '').includes('window(') && !(v.sliceDSL ?? '').includes('cohort('));
+
+                const out: ParameterValueForLAG[] = [];
+                try {
+                  const meceCohort = await resolveMECEPartitionForImplicitUncontexted(cohortVals as any);
+                  if (meceCohort.kind === 'mece_partition' && meceCohort.canAggregate) {
+                    out.push(...(meceCohort.values as any));
+                  }
+                } catch (e) {
+                  console.warn('[fetchDataService] Failed MECE cohort partition resolution for LAG:', e);
+                }
+                try {
+                  const meceWindow = await resolveMECEPartitionForImplicitUncontexted(windowVals as any);
+                  if (meceWindow.kind === 'mece_partition' && meceWindow.canAggregate) {
+                    out.push(...(meceWindow.values as any));
+                  }
+                } catch (e) {
+                  console.warn('[fetchDataService] Failed MECE window partition resolution for LAG:', e);
+                }
+
+                if (out.length > 0) {
+                  // De-dup identical object refs
+                  const uniq = Array.from(new Set(out));
+                  filteredValues = uniq;
+                } else {
+                  filteredValues = [];
+                }
+              }
+
+              // Default path: match exact dimensions
+              if (!filteredValues) {
+                filteredValues = allValues.filter((v: any) => {
+                  const valueDims = extractSliceDimensions(v.sliceDSL ?? '');
+                  if (valueDims !== targetDims) return false;
                 
                 const sliceDSL = v.sliceDSL ?? '';
                 const isCohortSlice = sliceDSL.includes('cohort(');
@@ -1325,7 +1365,8 @@ export async function fetchItems(
                 
                 // No cohort window in DSL, or value has no dates - include it
                 return true;
-              });
+                });
+              }
               
               console.log('[fetchDataService] Filtered param values for LAG:', {
                 edgeId,

@@ -18,6 +18,8 @@ import { normalizeToUK, isUKDate, parseUKDate } from '../lib/dateFormat';
 import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 // LAG: CohortData type is used for aggregation helpers further down in this file
 import type { CohortData } from './statisticalEnhancementService';
+import { mixtureLogNormalMedian } from './lagMixtureAggregationService';
+import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
 
 export interface RawAggregation {
   method: 'naive';
@@ -203,23 +205,30 @@ export function hasFullSliceCoverageByHeader(
 
   if (normalizedTarget === '' && hasContextedData && !hasUncontextedData) {
     // MECE aggregation: uncontexted query over contexted-only file.
-    // Coverage requires ALL component slices to cover the requested window.
+    // Correct behaviour: accept coverage if ANY ONE complete MECE partition exists for a key.
+    const modeFiltered = values.filter((v) => {
+      if (wantsCohort) return isCohortModeValue(v);
+      if (wantsWindow) return !isCohortModeValue(v);
+      return true;
+    });
+    const mece = resolveMECEPartitionForImplicitUncontextedSync(modeFiltered);
+    if (mece.kind !== 'mece_partition' || !mece.canAggregate || !mece.isComplete) {
+      return false;
+    }
+
     const uniqueSlices = new Set<string>();
-    for (const value of values) {
+    for (const value of mece.values) {
       const sliceId = extractSliceDimensions(value.sliceDSL ?? '');
       if (sliceId) uniqueSlices.add(sliceId);
     }
+    if (uniqueSlices.size === 0) return false;
 
-    // For each MECE slice, require at least one entry that covers the window
     for (const sliceId of uniqueSlices) {
       const sliceValues = values.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === sliceId);
       const anyCovering = sliceValues.some(coversWindow);
-      if (!anyCovering) {
-        return false;
-      }
+      if (!anyCovering) return false;
     }
-
-    return uniqueSlices.size > 0;
+    return true;
   }
 
   // Standard slice family coverage:
@@ -956,16 +965,26 @@ export function calculateIncrementalFetch(
       const hasUncontextedData = signatureFilteredValues.some(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
       
       if (normalizedTarget === '' && hasContextedData && !hasUncontextedData) {
-        // Query has no context, but file has contexted data
-        // Extract all unique slices from the file and check ALL have data (MECE aggregation)
-        const uniqueSlices = new Set<string>();
-        for (const value of signatureFilteredValues) {
-          if (!modeMatchesTarget(value)) continue;
-          const sliceDSL = extractSliceDimensions(value.sliceDSL ?? '');
-          if (sliceDSL) uniqueSlices.add(sliceDSL);
-        }
-        
-        const expandedSlices = Array.from(uniqueSlices).sort();
+        // Query has no context, but file has contexted data.
+        // Correct behaviour: if ANY ONE complete MECE partition exists for a key, we can satisfy the uncontexted query
+        // from that partition (we do NOT require all context families present in the file).
+        const modeFiltered = signatureFilteredValues.filter(modeMatchesTarget);
+        const mece = resolveMECEPartitionForImplicitUncontextedSync(modeFiltered);
+        if (mece.kind !== 'mece_partition' || !mece.canAggregate || !mece.isComplete) {
+          console.log('[calculateIncrementalFetch] No complete MECE partition available for implicit uncontexted:', {
+            targetSlice,
+            meceKind: mece.kind,
+            ...(mece.kind === 'mece_partition'
+              ? { key: mece.key, isComplete: mece.isComplete, canAggregate: mece.canAggregate }
+              : { reason: (mece as any).reason }),
+          });
+        } else {
+          const uniqueSlices = new Set<string>();
+          for (const value of mece.values) {
+            const sliceDSL = extractSliceDimensions(value.sliceDSL ?? '');
+            if (sliceDSL) uniqueSlices.add(sliceDSL);
+          }
+          const expandedSlices = Array.from(uniqueSlices).sort();
         
         // For MECE, a date is "existing" only if it exists in ALL slices
         const datesPerSlice: Map<string, Set<string>> = new Map();
@@ -1009,6 +1028,7 @@ export function calculateIncrementalFetch(
         console.log(`[calculateIncrementalFetch] MECE aggregation (uncontexted query with contexted data):`, {
           targetSlice,
           querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
+          meceKey: mece.key,
           expandedSlices,
           sliceCoverage: Object.fromEntries(
             expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
@@ -1016,6 +1036,7 @@ export function calculateIncrementalFetch(
           datesWithFullCoverage: existingDates.size,
           totalDatesRequested: allDatesInWindow.length,
         });
+        }
       } else {
         // CRITICAL: Isolate to target slice first
         const sliceValues = isolateSlice(signatureFilteredValues, targetSlice).filter(modeMatchesTarget);
@@ -1673,20 +1694,8 @@ export function aggregateCohortData(
   queryDate: Date,
   cohortWindow?: { start: Date; end: Date }
 ): CohortData[] {
-  // IMPORTANT: Only use COHORT slices for LAG calculations!
-  // WINDOW slices have different n_daily/k_daily semantics and should NOT be used
-  // for computing completeness (which requires per-cohort population data).
-  //
-  // Forecast baseline (from WINDOW slices) is handled separately in enhanceGraphLatencies
-  // via the nBaseline calculation which looks at window slices directly.
-  
-  const cohortValues = values.filter(v => {
-    const sliceDSL = (v as any).sliceDSL ?? '';
-    const isCohort = sliceDSL.includes('cohort(');
-    const isWindow = sliceDSL.includes('window(') && !isCohort;
-    // Only include cohort slices for LAG calculations
-    return isCohort && !isWindow;
-  });
+  // IMPORTANT: Only use COHORT slices for cohort-mode calculations.
+  const cohortValues = values.filter((v) => isCohortModeValue(v));
   
   console.log('[LAG_DEBUG] aggregateCohortData filtering:', {
     totalValues: values.length,
@@ -1698,22 +1707,24 @@ export function aggregateCohortData(
     sliceDSLs: values.map((v: any) => v.sliceDSL?.substring(0, 50) ?? 'none'),
   });
   
-  // Collect all cohorts from COHORT values only
-  const dateMap = new Map<string, { cohort: CohortData; retrieved_at: string }>();
+  // Step 1: de-dup WITHIN each slice family (context/case dims) by date (latest retrieved_at wins).
+  const perSliceByDate: Map<string, Map<string, CohortData & { retrieved_at: string }>> = new Map();
 
   for (const value of cohortValues) {
-    const cohorts = parameterValueToCohortData(value, queryDate);
+    const sliceKey = extractSliceDimensions((value as any).sliceDSL ?? '');
     const retrievedAt = value.data_source?.retrieved_at || '';
+    const cohorts = parameterValueToCohortData(value, queryDate);
+
+    if (!perSliceByDate.has(sliceKey)) perSliceByDate.set(sliceKey, new Map());
+    const dateMap = perSliceByDate.get(sliceKey)!;
 
     for (const cohort of cohorts) {
       // Filter by cohort window if provided
       if (cohortWindow) {
         const cohortDate = parseDate(cohort.date);
-        if (cohortDate < cohortWindow.start || cohortDate > cohortWindow.end) {
-          continue; // Skip cohorts outside the query window
-        }
+        if (cohortDate < cohortWindow.start || cohortDate > cohortWindow.end) continue;
       }
-      
+
       // Sanity check: k should never exceed n
       if (cohort.k > cohort.n) {
         console.warn('[LAG_DEBUG] INVALID COHORT: k > n!', {
@@ -1723,20 +1734,102 @@ export function aggregateCohortData(
           sliceDSL: (value as any).sliceDSL,
         });
       }
-      
+
       const existing = dateMap.get(cohort.date);
-      
-      // Keep the more recent data for each date
       if (!existing || retrievedAt > existing.retrieved_at) {
-        dateMap.set(cohort.date, { cohort, retrieved_at: retrievedAt });
+        dateMap.set(cohort.date, { ...cohort, retrieved_at: retrievedAt });
       }
     }
   }
 
-  // Extract cohorts sorted by date
-  const result = Array.from(dateMap.values())
-    .map(item => item.cohort)
-    .sort((a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime());
+  // Step 2: sum ACROSS slice families by date.
+  const byDate: Map<string, Array<CohortData>> = new Map();
+  for (const [, dateMap] of perSliceByDate) {
+    for (const c of dateMap.values()) {
+      if (!byDate.has(c.date)) byDate.set(c.date, []);
+      byDate.get(c.date)!.push(c);
+    }
+  }
+
+  const result: CohortData[] = [];
+  for (const [date, comps] of byDate.entries()) {
+    const totalN = comps.reduce((s, c) => s + (c.n ?? 0), 0);
+    const totalK = comps.reduce((s, c) => s + (c.k ?? 0), 0);
+
+    // Edge lag mean: conversion-weighted mean
+    let edgeMean: number | undefined;
+    if (totalK > 0) {
+      let wSum = 0;
+      let wkSum = 0;
+      for (const c of comps) {
+        const w = c.k ?? 0;
+        const m = c.mean_lag_days;
+        if (w > 0 && typeof m === 'number' && Number.isFinite(m) && m > 0) {
+          wSum += w;
+          wkSum += w * m;
+        }
+      }
+      if (wSum > 0) edgeMean = wkSum / wSum;
+    }
+
+    // Edge lag median: mixture median weighted by k
+    const edgeMedian =
+      totalK > 0
+        ? mixtureLogNormalMedian(
+            comps.map((c) => ({
+              medianDays: c.median_lag_days,
+              meanDays: c.mean_lag_days,
+              weight: c.k ?? 0,
+            }))
+          )
+        : undefined;
+
+    // Anchor lag mean: N-weighted mean
+    let anchorMean: number | undefined;
+    if (totalN > 0) {
+      let wSum = 0;
+      let wnSum = 0;
+      for (const c of comps) {
+        const w = c.n ?? 0;
+        const m = (c as any).anchor_mean_lag_days as number | undefined;
+        if (w > 0 && typeof m === 'number' && Number.isFinite(m) && m > 0) {
+          wSum += w;
+          wnSum += w * m;
+        }
+      }
+      if (wSum > 0) anchorMean = wnSum / wSum;
+    }
+
+    // Anchor lag median: mixture median weighted by n
+    const anchorMedian =
+      totalN > 0
+        ? mixtureLogNormalMedian(
+            comps.map((c) => ({
+              medianDays: (c as any).anchor_median_lag_days as number | undefined,
+              meanDays: (c as any).anchor_mean_lag_days as number | undefined,
+              weight: c.n ?? 0,
+            }))
+          )
+        : undefined;
+
+    // Age from queryDate (date is cohort entry)
+    const cohortDate = parseDate(date);
+    const ageMs = queryDate.getTime() - cohortDate.getTime();
+    const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+
+    result.push({
+      date,
+      n: totalN,
+      k: totalK,
+      age: Math.max(0, ageDays),
+      ...(edgeMedian !== undefined && { median_lag_days: edgeMedian }),
+      ...(edgeMean !== undefined && { mean_lag_days: edgeMean }),
+      ...(anchorMedian !== undefined && { anchor_median_lag_days: anchorMedian }),
+      ...(anchorMean !== undefined && { anchor_mean_lag_days: anchorMean }),
+    });
+  }
+
+  result.sort((a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime());
   
   console.log('[LAG_DEBUG] aggregateCohortData result:', {
     inputCount: values.length,
@@ -1782,14 +1875,8 @@ export function aggregateWindowData(
   queryDate: Date,
   windowFilter?: { start: Date; end: Date }
 ): CohortData[] {
-  // Only use WINDOW slices for window-mode LAG calculations
-  const windowValues = values.filter(v => {
-    const sliceDSL = (v as any).sliceDSL ?? '';
-    const hasWindow = sliceDSL.includes('window(');
-    const hasCohort = sliceDSL.includes('cohort(');
-    // Include window slices only (not cohort slices)
-    return hasWindow && !hasCohort;
-  });
+  // Only use WINDOW slices for window-mode calculations
+  const windowValues = values.filter((v) => !isCohortModeValue(v));
   
   console.log('[LAG_DEBUG] aggregateWindowData filtering:', {
     totalValues: values.length,
@@ -1801,49 +1888,95 @@ export function aggregateWindowData(
     sliceDSLs: values.map((v: any) => v.sliceDSL?.substring(0, 50) ?? 'none'),
   });
   
-  // Collect data from window values
-  const dateMap = new Map<string, { cohort: CohortData; retrieved_at: string }>();
-  
+  // Step 1: de-dup WITHIN each slice family by date (latest retrieved_at wins).
+  const perSliceByDate: Map<string, Map<string, CohortData & { retrieved_at: string }>> = new Map();
   for (const value of windowValues) {
-    // Convert window slice to CohortData using parameterValueToCohortData
-    // This handles the daily array extraction
-    const cohorts = parameterValueToCohortData(value, queryDate);
+    const sliceKey = extractSliceDimensions((value as any).sliceDSL ?? '');
     const retrievedAt = value.data_source?.retrieved_at || '';
-    
+    const cohorts = parameterValueToCohortData(value, queryDate);
+
+    if (!perSliceByDate.has(sliceKey)) perSliceByDate.set(sliceKey, new Map());
+    const dateMap = perSliceByDate.get(sliceKey)!;
+
     for (const cohort of cohorts) {
-      // Filter by window if provided
       if (windowFilter) {
-        const cohortDate = parseDate(cohort.date);
-        if (cohortDate < windowFilter.start || cohortDate > windowFilter.end) {
-          continue;
-        }
+        const d = parseDate(cohort.date);
+        if (d < windowFilter.start || d > windowFilter.end) continue;
       }
-      
-      // For window mode, explicitly clear anchor_median_lag_days
-      // Window mode is X-anchored; there's no upstream delay to subtract
-      const windowCohort: CohortData = {
-        date: cohort.date,
-        n: cohort.n,
-        k: cohort.k,
-        age: cohort.age,
-        median_lag_days: cohort.median_lag_days,
-        mean_lag_days: cohort.mean_lag_days,
-        // Explicitly NO anchor_median_lag_days for window mode
-      };
-      
+
       const existing = dateMap.get(cohort.date);
-      
-      // Keep the more recent data for each date
       if (!existing || retrievedAt > existing.retrieved_at) {
-        dateMap.set(cohort.date, { cohort: windowCohort, retrieved_at: retrievedAt });
+        // For window mode, explicitly omit anchor lag fields (X-anchored).
+        dateMap.set(cohort.date, {
+          date: cohort.date,
+          n: cohort.n,
+          k: cohort.k,
+          age: cohort.age,
+          median_lag_days: cohort.median_lag_days,
+          mean_lag_days: cohort.mean_lag_days,
+          retrieved_at: retrievedAt,
+        });
       }
     }
   }
-  
-  // Extract cohorts sorted by date
-  const result = Array.from(dateMap.values())
-    .map(item => item.cohort)
-    .sort((a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime());
+
+  // Step 2: sum ACROSS slice families by date.
+  const byDate: Map<string, Array<CohortData>> = new Map();
+  for (const [, dateMap] of perSliceByDate) {
+    for (const c of dateMap.values()) {
+      if (!byDate.has(c.date)) byDate.set(c.date, []);
+      byDate.get(c.date)!.push(c);
+    }
+  }
+
+  const result: CohortData[] = [];
+  for (const [date, comps] of byDate.entries()) {
+    const totalN = comps.reduce((s, c) => s + (c.n ?? 0), 0);
+    const totalK = comps.reduce((s, c) => s + (c.k ?? 0), 0);
+
+    let edgeMean: number | undefined;
+    if (totalK > 0) {
+      let wSum = 0;
+      let wkSum = 0;
+      for (const c of comps) {
+        const w = c.k ?? 0;
+        const m = c.mean_lag_days;
+        if (w > 0 && typeof m === 'number' && Number.isFinite(m) && m > 0) {
+          wSum += w;
+          wkSum += w * m;
+        }
+      }
+      if (wSum > 0) edgeMean = wkSum / wSum;
+    }
+
+    const edgeMedian =
+      totalK > 0
+        ? mixtureLogNormalMedian(
+            comps.map((c) => ({
+              medianDays: c.median_lag_days,
+              meanDays: c.mean_lag_days,
+              weight: c.k ?? 0,
+            }))
+          )
+        : undefined;
+
+    // Age from queryDate (date is X-entry date)
+    const d = parseDate(date);
+    const ageMs = queryDate.getTime() - d.getTime();
+    const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+
+    result.push({
+      date,
+      n: totalN,
+      k: totalK,
+      age: Math.max(0, ageDays),
+      ...(edgeMedian !== undefined && { median_lag_days: edgeMedian }),
+      ...(edgeMean !== undefined && { mean_lag_days: edgeMean }),
+      // Explicitly NO anchor_* fields for window mode
+    });
+  }
+
+  result.sort((a, b) => parseDate(a.date).getTime() - parseDate(b.date).getTime());
   
   console.log('[LAG_DEBUG] aggregateWindowData result:', {
     inputCount: values.length,

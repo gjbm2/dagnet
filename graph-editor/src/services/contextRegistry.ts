@@ -401,6 +401,90 @@ export class ContextRegistry {
       policy
     };
   }
+
+  /**
+   * Synchronous MECE detection using only in-memory sources (cache + FileRegistry).
+   *
+   * This exists because some cache-cutting utilities are synchronous. We intentionally
+   * avoid filesystem/IndexedDB reads here; if a context definition is not already
+   * present in memory, we conservatively return non-MECE.
+   */
+  detectMECEPartitionSync(
+    windows: Array<{ sliceDSL?: string }>,
+    contextKey: string,
+    options?: { workspace?: { repository: string; branch: string } }
+  ): {
+    isMECE: boolean;
+    isComplete: boolean;
+    canAggregate: boolean;
+    missingValues: string[];
+    policy: string;
+  } {
+    const key = this.cacheKey(contextKey, options?.workspace);
+    let contextDef = this.cache.get(key);
+
+    // Fall back to fileRegistry scan (sync) if not cached
+    if (!contextDef) {
+      const allFiles = Array.from((fileRegistry as any).files?.values() || []) as any[];
+      for (const file of allFiles) {
+        if (file.type === 'context' && file.data?.id === contextKey) {
+          contextDef = file.data as ContextDefinition;
+          this.cache.set(key, contextDef);
+          break;
+        }
+      }
+    }
+
+    if (!contextDef) {
+      return { isMECE: false, isComplete: false, canAggregate: false, missingValues: [], policy: 'unknown' };
+    }
+
+    const policy = contextDef.otherPolicy || 'undefined';
+
+    // Compute expected values (sync version of getExpectedValues)
+    const expectedValues = new Set<string>();
+    switch (policy) {
+      case 'null':
+        for (const v of contextDef.values) {
+          if (v.id !== 'other') expectedValues.add(v.id);
+        }
+        break;
+      case 'computed':
+      case 'explicit':
+        for (const v of contextDef.values) expectedValues.add(v.id);
+        break;
+      case 'undefined':
+        for (const v of contextDef.values) {
+          if (v.id !== 'other') expectedValues.add(v.id);
+        }
+        break;
+    }
+
+    // Extract values from windows
+    const windowValues = new Set<string>();
+    for (const window of windows) {
+      const parsed = parseConstraints(window.sliceDSL || '');
+      const contextConstraint = parsed.context.find((c) => c.key === contextKey);
+      if (contextConstraint) windowValues.add(contextConstraint.value);
+    }
+
+    // Duplicates (non-MECE)
+    if (windowValues.size < windows.length) {
+      return { isMECE: false, isComplete: false, canAggregate: false, missingValues: [], policy };
+    }
+
+    // Extras (values not in registry)
+    const hasExtras = Array.from(windowValues).some((v) => !expectedValues.has(v));
+    if (hasExtras) {
+      return { isMECE: false, isComplete: false, canAggregate: false, missingValues: [], policy };
+    }
+
+    const missingValues = Array.from(expectedValues).filter((v) => !windowValues.has(v));
+    const isComplete = missingValues.length === 0;
+    const canAggregate = this.determineAggregationSafety(policy, isComplete);
+
+    return { isMECE: true, isComplete, canAggregate, missingValues, policy };
+  }
   
   /**
    * Get expected values for a context based on its otherPolicy.
