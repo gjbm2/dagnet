@@ -83,7 +83,7 @@ export interface CohortHorizonResult {
 }
 
 // =============================================================================
-// Constants (imported from statisticalConstants.ts)
+// Constants
 // =============================================================================
 
 // Re-export for local use with shorter names

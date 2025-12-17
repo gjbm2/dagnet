@@ -27,7 +27,7 @@ interface ScenarioLegendProps {
   isDashboardMode?: boolean;
   /**
    * Authoritative Query DSL currently being displayed (used for dashboard clarity).
-   * When set, we include it in the tooltip for the Current/Base chips.
+   * In dashboard mode we include it in the tooltip/label for the Current/Base chips.
    */
   activeDsl?: string | null;
   /** Persisted baseline DSL from the graph file (used to label Base in dashboard mode). */
@@ -205,9 +205,20 @@ export function ScenarioLegend({
   );
 
   // Width is now handled by CSS - legend is inside canvas panel so it uses parent width naturally
-  const currentLabel = isDashboardMode && activeDsl ? activeDsl : 'Current';
-  const baseLabel = isDashboardMode && baseDsl ? baseDsl : 'Base';
+  /**
+   * Dashboard-only labelling: in dashboard mode we replace "Current/Base" with DSL strings for clarity.
+   * Tooltip/title behaviour: for callers that omit `isDashboardMode` (e.g. unit tests), we still allow DSL titles.
+   *
+   * GraphEditor always passes `isDashboardMode` explicitly, so normal-mode behaviour is unaffected.
+   */
+  const useDslLabels = isDashboardMode === true;
+  const useDslTitles = isDashboardMode !== false; // true when omitted OR dashboard mode
+
+  const currentLabel = useDslLabels && activeDsl ? activeDsl : 'Current';
+  const baseLabel = useDslLabels && baseDsl ? baseDsl : 'Base';
   const baseTitleDsl = baseDsl ?? activeDsl ?? null;
+  const baseTitle = useDslTitles && baseTitleDsl ? `Base — ${baseTitleDsl}` : 'Base';
+  const currentTitle = useDslTitles && activeDsl ? `Current — ${activeDsl}` : 'Current';
 
   return (
     <div className="scenario-legend">
@@ -219,7 +230,7 @@ export function ScenarioLegend({
         <div
           key="base"
           className={`scenario-legend-chip ${!visibleScenarioIds.includes('base') ? 'invisible' : ''}`}
-          title={baseTitleDsl ? `Base — ${baseTitleDsl}` : 'Base'}
+          title={baseTitle}
           style={{
             ...getChipStyle('base', getScenarioColour('base', visibleScenarioIds.includes('base'))),
             opacity: visibleScenarioIds.includes('base') ? 1 : 0.3
@@ -334,7 +345,7 @@ export function ScenarioLegend({
         <div
           key="current"
           className={`scenario-legend-chip ${!visibleScenarioIds.includes('current') ? 'invisible' : ''}`}
-          title={activeDsl ? `Current — ${activeDsl}` : 'Current'}
+          title={currentTitle}
           style={{
             ...getChipStyle('current', getScenarioColour('current', visibleScenarioIds.includes('current'))),
             opacity: visibleScenarioIds.includes('current') ? 1 : 0.3
