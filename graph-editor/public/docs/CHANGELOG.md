@@ -1,4 +1,15 @@
 # DagNet Release Notes
+## Version 1.1.1b
+**Released:** December 17, 2025
+
+I've done some tuning of the stats model. It's no longer spouting nonsense, and I think in general the tool is starting to provide some stable insight.
+
+I still worry that while forecasts are probably OK, and older cohorts are OK, the 'tricky middle' remains we have small amounts of evidence in medium-mature cohorts. These are pulling the numbers down a bit too much.
+
+This not a trivial issue to resolve and relates to how we're fitting latency distributions. I've made improvements this evening, and have some further bits planned, but for now, I'd say you'll get not insane but systematically somewhat conservative estimates for Reach Probability, when you query 2-4 weeks of cohort data at a time for partially mature cohorts.
+
+---
+
 
 ## Version 1.1
 **Released:** 16-Dec-25
