@@ -1,5 +1,9 @@
 # TODO
 
+- context fixes
+- use Amplitude latency histograms to translate lognormals
+- grouping / ungrouping nodes (zoom in to complexity)
+- show current (dates range) in dashboard mode
 - are we overfitting to lognormal when most latency edges NEVER start immediately? COULD we use histogram data to shift the start point & fit a better distro? What improvements on lognormal might we consider in general, if that's causing us lots of issues (and we acutally have: histo data, t95 clamps, median && mean, which should be enough for a much better analytic shape...)
 - latency variance?
 - PgDn / up / home / end /arrows should work in md viewer, etc.
@@ -34,7 +38,6 @@
 
 ## Major components
 - Tabulated & graphing analytics output
-- Dashboarding views
 - Bayesian modelling
 - Asynch / api updates
 - Cyclic graphs...

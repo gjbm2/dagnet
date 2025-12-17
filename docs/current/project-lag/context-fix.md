@@ -225,4 +225,194 @@ Add new tests (do not edit existing tests unless explicitly authorised):
 - Incomplete MECE partition should not be treated as implicit uncontexted (must remain partial/missing).
 - Median/mean combination rules: verify conversion-weighted behaviour for means and a clear, deterministic approximation for medians.
 
+### Outcome-oriented RED tests (TDD gate)
+
+This change is high-risk and semantics-heavy. We should therefore add outcome-oriented RED tests before implementation, written as end-to-end assertions from:
+
+- Parameter file contents (values array, sliceDSLs, dates, n/k, lag arrays, forecast scalars)
+- Through production query-time logic (fetch-from-file, aggregation, LAG topo pass)
+- To flattened param pack outputs (scenario-visible fields)
+
+The core contract we want to enforce:
+
+- For a MECE key and complete MECE partitions, “explicit uncontexted slices” and “implicit MECE-derived uncontexted slices” must yield the same param packs for the same query, within tight tolerance.
+
+Suggested RED test shape:
+
+- Build two parameter files representing the same underlying world:
+  - File A: includes explicit uncontexted `window(...)` and `cohort(...)` slices (no contexts required for the query to work).
+  - File B: includes only the MECE contexted slices for both modes (no explicit uncontexted slices).
+- Run the same uncontexted query (e.g. `cohort(A, 1-Dec-25:7-Dec-25)`) through the production “from-file” pipeline and produce param packs.
+- Assert that the param packs’ edge fields (`p.mean`, `p.evidence.*`, `p.forecast.*`, `p.latency.*`) match exactly or within a strict numeric tolerance.
+
+Implementation notes:
+
+- These tests should be introduced as RED tests using `describe.skip` (consistent with existing outcome-first test patterns) and then un-skipped as the implementation work proceeds.
+- No mocking should be used other than the Amplitude HTTP boundary when a test exercises source fetches; for pure “from-file” equivalence tests, no HTTP mocking is needed.
+- Where medians are involved, the baseline (File A) should encode the agreed aggregation rule so equivalence is unambiguous (e.g. conversion-weighted mean for means; and an explicitly chosen median aggregation rule).
+
+### Architecture proposal: Option A (extract pure lag distribution utilities for reuse)
+
+This section reasons through “Option A” in detail: extracting the lognormal and quantile machinery into a shared module so it can be reused at aggregation time (MECE implicit uncontexted slices) and at graph-level enhancement time (LAG topo pass), without duplicating logic.
+
+#### Why Option A exists (problem restatement)
+
+The MECE work requires computing mixture quantiles (in particular mixture medians) and tail-constrained distribution parameters in at least two places:
+
+- Query-time aggregation: building implicit uncontexted baselines from MECE context slices for both `window()` and `cohort()`.
+- Graph-level latency enhancement (LAG): fitting, tail constraints, completeness CDF construction, path horizon handling.
+
+Today, most of the lognormal fitting and quantile machinery lives inside the statistical enhancement layer, which is oriented around graph-level orchestration and session logging. Calling that directly from aggregation code risks:
+
+- growing existing coupling between services,
+- introducing or worsening circular dependencies,
+- and creating two inconsistent implementations if we duplicate maths.
+
+Option A is the clean path: share pure maths, keep orchestration where it belongs.
+
+#### Current architectural constraint (important)
+
+There is already cross-coupling between the layers:
+
+- Statistical enhancement references aggregation types.
+- Aggregation references statistical enhancement types.
+
+If we add more “statistical” logic into aggregation without restructuring, we will make the dependency graph harder to reason about and more brittle.
+
+Option A is explicitly about using this work to fix the dependency shape rather than worsen it.
+
+#### Target dependency shape (what “good” looks like)
+
+We want to end up with three conceptual layers:
+
+- **Pure maths utilities (shared)**: deterministic functions; no session logging; no graph knowledge; no file registry; no UI.
+- **Aggregation layer (query-time)**: slice isolation, MECE set selection, date aggregation, and invoking the shared maths utilities.
+- **Graph-level enhancement layer (LAG)**: topo ordering, join semantics, path horizon propagation, and invoking the shared maths utilities; owns detailed session logging for user-facing observability.
+
+This ensures:
+
+- There is exactly one implementation of lognormal fitting, inverse CDF, and tail constraint logic.
+- Aggregation can compute mixture medians and synthetic baselines without pulling in graph-level orchestration.
+- Graph-level LAG continues to own “system behaviour” and logging.
+
+#### Proposed module split (concrete)
+
+Create a new shared module for distribution maths:
+
+- `graph-editor/src/services/lagDistributionUtils.ts` (or `graph-editor/src/lib/lagDistributionUtils.ts`)
+
+Contents (pure, deterministic):
+
+- Lognormal CDF and inverse CDF utilities used today for quantiles.
+- Fit-from-moments routine (median/mean → lognormal parameters) including quality gating inputs.
+- One-way tail constraint helpers (t95/path_t95) that return both:
+  - the adjusted parameters, and
+  - structured diagnostics describing what was changed (so callers can log).
+- Mixture quantile solver:
+  - given a set of component distributions and weights, return the mixture quantile for a requested percentile.
+  - intended first use: mixture median for MECE aggregation.
+- Optional mixture helpers for shifted distributions once histogram-derived delay is introduced later (do not implement delay now; just keep the utilities extensible).
+
+Create a new shared types module to break circular imports:
+
+- `graph-editor/src/services/lagTypes.ts`
+
+Move types that are currently shared across layers into this file. Candidates include:
+
+- Cohort-like data point types used by both aggregation and LAG.
+- Fit result shapes returned by the pure maths utilities.
+
+Then:
+
+- Statistical enhancement imports types from `lagTypes.ts` and pure maths from `lagDistributionUtils.ts`.
+- Aggregation imports types from `lagTypes.ts` and pure maths from `lagDistributionUtils.ts`.
+- Aggregation must not import statistical enhancement just to get types.
+
+#### Logging and observability under Option A
+
+The shared maths module must not write session logs. Instead:
+
+- Functions return “diagnostic facts” as plain objects (for example: whether a tail constraint was applied; input vs output sigma; which horizon was used; whether quality gates were met).
+- Callers decide how to log:
+  - Statistical enhancement should log extensively because it is user-facing and graph-global.
+  - Aggregation should log only high-signal events (e.g. “used implicit MECE baseline; key=channel; values included=…; median computed by mixture quantile”).
+
+This avoids:
+
+- coupling maths to session log categories,
+- flooding session logs from per-date aggregation loops,
+- and making unit tests brittle due to logging side effects.
+
+#### How this enables MECE mixture medians without re-architecting LAG
+
+Once the shared utilities exist, the MECE work can safely compute mixture medians (and other quantiles) at aggregation time by:
+
+- Fitting per-slice distributions from the stored per-slice median/mean lag series (with conversion-weighted inputs).
+- Applying one-way tail constraints using the same logic as LAG uses today.
+- Computing mixture quantiles using the solver (weighted by conversions).
+
+This has two important benefits:
+
+- The median aggregation rule becomes explicit and testable as a pure function.
+- The result matches the same distribution semantics that LAG uses, reducing semantic drift.
+
+#### Implementation steps (migration plan)
+
+1. **Extract types to a shared types file**:
+   - Introduce `lagTypes.ts`.
+   - Move the shared types out of statistical enhancement into this file.
+   - Update imports so aggregation uses `lagTypes.ts` rather than importing statistical enhancement.
+
+2. **Lock in behaviour with numerical “golden” tests (before refactor)**:
+   - Add a small, explicit set of deterministic numerical tests that exercise the public/statistically-relevant surfaces we are about to extract (lognormal fit from moments, tail constraint behaviour, inverse CDF/quantiles, and any completeness-CDF parameterisation used by LAG).
+   - These tests should assert exact or near-exact numeric outputs (tight tolerances) for a curated set of inputs that cover:
+     - Typical medians/means
+     - Edge cases (small K, extreme mean/median ratios, invalid inputs)
+     - Tail-constraint cases where sigma must increase (and cases where it must not)
+   - The intention is not to test implementation details, but to “freeze” the externally observable numerical behaviour so the subsequent refactor can be proven correct.
+
+2. **Extract pure distribution utilities**:
+   - Introduce `lagDistributionUtils.ts` containing the lognormal maths and fitting logic.
+   - Ensure there are no imports from services with side effects (no file registry, no session logs).
+   - Return diagnostics rather than logging.
+
+3. **Refactor statistical enhancement to consume the shared utilities**:
+   - Replace internal references to the moved maths with imports from the new module.
+   - Keep existing behaviour the same (this refactor should be behaviour-preserving).
+   - Use the pre-built numerical “golden” tests plus the existing test suite as proof that behaviour did not change.
+
+4. **Update aggregation paths to use the shared utilities**:
+   - Implement the MECE “implicit uncontexted” baseline logic using the shared maths.
+   - Implement mixture median aggregation in the MECE cohort and window aggregators.
+   - Keep all behaviour behind the MECE detection guardrails described earlier in this doc.
+
+5. **Enable the outcome-oriented RED tests**:
+   - Unskip the param-pack equivalence RED tests and iterate until they pass.
+   - Add additional RED tests for incomplete MECE and median aggregation edge cases as needed.
+
+6. **Confirm 100% behavioural equivalence for the refactor, then delete old code entirely**:
+   - Once the numerical “golden” tests and the relevant existing integration tests pass, treat that as the correctness proof for the extraction refactor.
+   - Remove the duplicated in-file implementations from `statisticalEnhancementService.ts` (do not keep compatibility shims or deprecated aliases).
+   - Keep only the single source of truth: the shared pure module plus the service-level orchestration that calls it.
+
+#### Risks introduced by Option A (and mitigations)
+
+- **Risk: subtle behavioural changes during refactor**:
+  - Mitigation: treat steps 1–3 as behaviour-preserving; rely on existing tests to lock behaviour; add a small set of deterministic unit tests for the extracted utilities.
+
+- **Risk: circular dependency remains**:
+  - Mitigation: the explicit objective of `lagTypes.ts` is to eliminate the need for aggregation to import statistical enhancement types.
+
+- **Risk: logging becomes inconsistent**:
+  - Mitigation: define structured diagnostics returned by the utilities; standardise how statistical enhancement emits session logs from those diagnostics.
+
+- **Risk: two definitions of “tail constraint” semantics**:
+  - Mitigation: tail constraint lives only in the shared maths module; callers do not implement their own versions.
+
+#### Why this is preferable to alternatives
+
+- It avoids duplicating lognormal maths in multiple services.
+- It prevents the MECE aggregation work from becoming entangled with graph-level topo orchestration code.
+- It reduces long-term maintenance risk by creating a single source of truth for fitting and quantiles.
+
 
