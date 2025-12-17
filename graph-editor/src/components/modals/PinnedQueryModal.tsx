@@ -9,6 +9,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { explodeDSL } from '../../lib/dslExplosion';
+import { validatePinnedDataInterestsDSL } from '../../services/slicePlanValidationService';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { QUERY_FUNCTIONS } from '../../lib/queryDSL';
 import './Modal.css';
@@ -24,6 +25,7 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
   const [draftDSL, setDraftDSL] = useState(currentDSL);
   const [impliedSlices, setImpliedSlices] = useState<string[]>([]);
   const [sliceCount, setSliceCount] = useState(0);
+  const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   
   // Update draft when modal opens with new value
   useEffect(() => {
@@ -55,6 +57,34 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
     
     calculateSlices();
   }, [draftDSL]);
+
+  // Live (non-blocking) validation warnings for pinned DSL while editing.
+  // UI is a pure access point: all logic lives in slicePlanValidationService.
+  useEffect(() => {
+    if (!isOpen) {
+      setValidationWarnings([]);
+      return;
+    }
+
+    let cancelled = false;
+    const handle = window.setTimeout(() => {
+      validatePinnedDataInterestsDSL(draftDSL)
+        .then((res) => {
+          if (cancelled) return;
+          setValidationWarnings(res.warnings);
+        })
+        .catch((e) => {
+          // Warnings are advisory only; never block typing.
+          console.warn('[PinnedQueryModal] Failed to validate pinned DSL:', e);
+          if (!cancelled) setValidationWarnings([]);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [draftDSL, isOpen]);
   
   if (!isOpen) return null;
   
@@ -91,6 +121,27 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
               placeholder="context(key);context(key).window(start:end)"
               readonly={false}
             />
+            {validationWarnings.length > 0 && (
+              <div
+                style={{
+                  marginTop: '10px',
+                  padding: '10px 12px',
+                  background: '#FEF3C7',
+                  border: '1px solid #FDE047',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  color: '#854D0E',
+                  lineHeight: '1.4',
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: '6px' }}>Warnings</div>
+                <ul style={{ margin: 0, paddingLeft: '16px' }}>
+                  {validationWarnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', fontFamily: 'monospace' }}>
               💡 Tip: Use ; or or() for alternatives. Examples:<br/>
               • <code>context(channel);context(browser-type)</code><br/>
