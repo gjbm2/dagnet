@@ -298,7 +298,23 @@ async function analyzeReachProbabilityViaPython(
   return probability;
 }
 
-describe('E2E: Smooth lag Amplitude responses → param-pack stats', () => {
+async function isPythonGraphComputeReachable(): Promise<boolean> {
+  const baseUrl = process.env.DAGNET_PYTHON_API_URL || process.env.VITE_PYTHON_API_URL || 'http://localhost:9000';
+  const url = `${baseUrl}/api/runner/analyze`;
+  try {
+    // Minimal reachability check; we only care whether the socket is reachable.
+    await undiciFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const PYTHON_GRAPHCOMPUTE_AVAILABLE = process.env.CI ? await isPythonGraphComputeReachable() : true;
+const describePython = (process.env.CI && !PYTHON_GRAPHCOMPUTE_AVAILABLE) ? describe.skip : describe;
+
+describePython('E2E: Smooth lag Amplitude responses → param-pack stats', () => {
+
   beforeAll(() => {
     globalThis.indexedDB = new IDBFactory();
   });
