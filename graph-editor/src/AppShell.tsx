@@ -25,6 +25,9 @@ import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
 import { getObjectTypeTheme } from './theme/objectTypeTheme';
+import { DashboardModeProvider } from './contexts/DashboardModeContext';
+import { useDashboardMode } from './hooks/useDashboardMode';
+import { DashboardShell } from './components/Dashboard/DashboardShell';
 import 'rc-dock/dist/rc-dock.css'; // Import rc-dock base styles
 import './styles/dock-theme.css'; // Safe customizations
 import './styles/active-tab-highlight.css'; // Active tab highlighting
@@ -36,7 +39,7 @@ import './styles/file-state-indicators.css'; // File state visual indicators
  * Main application shell with rc-dock layout
  * Integrates all components: Menu, Navigator, Tabs, Editors
  */
-function AppShellContent() {
+function MainAppShellContent() {
   const { tabs, activeTabId, operations: tabOperations } = useTabContext();
   const { state: navState, operations: navOperations } = useNavigatorContext();
   const dialogOps = useDialog();
@@ -1104,7 +1107,7 @@ function AppShellContent() {
             }}
             style={{ width: '100%', height: '100%' }}
           >
-            <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} onChange={() => {}} />
+            <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} onChange={() => {}} />
           </div>
         ),
         closable: true,  // Main app tabs are always closable
@@ -1811,6 +1814,14 @@ function AppShellContent() {
   );
 }
 
+function AppShellContent() {
+  const { isDashboardMode } = useDashboardMode();
+  if (isDashboardMode) {
+    return <DashboardShell />;
+  }
+  return <MainAppShellContent />;
+}
+
 /**
  * App Shell with Providers
  */
@@ -1875,19 +1886,21 @@ export function AppShell() {
           },
         }}
       />
-      <DialogProvider>
-        <ValidationProvider>
-          <TabProvider>
-            <NavigatorProvider>
-              <VisibleTabsProvider>
-                <CopyPasteProvider>
-                  <AppShellContent />
-                </CopyPasteProvider>
-              </VisibleTabsProvider>
-            </NavigatorProvider>
-          </TabProvider>
-        </ValidationProvider>
-      </DialogProvider>
+      <DashboardModeProvider>
+        <DialogProvider>
+          <ValidationProvider>
+            <TabProvider>
+              <NavigatorProvider>
+                <VisibleTabsProvider>
+                  <CopyPasteProvider>
+                    <AppShellContent />
+                  </CopyPasteProvider>
+                </VisibleTabsProvider>
+              </NavigatorProvider>
+            </TabProvider>
+          </ValidationProvider>
+        </DialogProvider>
+      </DashboardModeProvider>
     </ErrorBoundary>
   );
 }

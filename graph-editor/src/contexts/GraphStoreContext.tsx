@@ -260,6 +260,18 @@ export const GraphStoreContext = createContext<GraphStoreHook | null>(null);
 const storeRegistry = new Map<string, GraphStoreHook>();
 
 /**
+ * Global instance counters + cleanup timers per fileId.
+ *
+ * IMPORTANT:
+ * We cannot use per-Provider-instance refs for cleanup, because dashboard/normal mode
+ * transitions can fully unmount and remount a new GraphStoreProvider tree. A timeout
+ * scheduled by the *old* provider would then still see its own ref at 0 and would
+ * incorrectly wipe the store used by the *new* provider instance.
+ */
+const storeInstanceCounts = new Map<string, number>();
+const storeCleanupTimers = new Map<string, number>();
+
+/**
  * Force cleanup of a store for a specific file
  * Used when user discards changes to a file
  */
@@ -576,20 +588,38 @@ export function GraphStoreProvider({
   }, [store, fileId]);
   
   useEffect(() => {
-    instanceCountRef.current++;
-    const currentCount = instanceCountRef.current;
-    console.log(`GraphStoreProvider: Instance mounted for ${fileId} (count: ${currentCount})`);
+    const prevCount = storeInstanceCounts.get(fileId) ?? 0;
+    const nextCount = prevCount + 1;
+    storeInstanceCounts.set(fileId, nextCount);
+
+    // If a cleanup timer was pending for this file, cancel it on remount.
+    const existingTimer = storeCleanupTimers.get(fileId);
+    if (existingTimer !== undefined) {
+      clearTimeout(existingTimer);
+      storeCleanupTimers.delete(fileId);
+    }
+
+    console.log(`GraphStoreProvider: Instance mounted for ${fileId} (count: ${nextCount})`);
     
     return () => {
-      instanceCountRef.current--;
-      const remainingCount = instanceCountRef.current;
+      const prev = storeInstanceCounts.get(fileId) ?? 0;
+      const remainingCount = Math.max(0, prev - 1);
+      storeInstanceCounts.set(fileId, remainingCount);
+
       console.log(`GraphStoreProvider: Instance unmounted for ${fileId} (remaining: ${remainingCount})`);
       
       // If this was the last instance, cleanup the store after a delay
       // (delay allows for quick tab switches without losing state)
       if (remainingCount === 0) {
-        setTimeout(() => {
-          if (instanceCountRef.current === 0) {
+        // Avoid stacking timers.
+        const existing = storeCleanupTimers.get(fileId);
+        if (existing !== undefined) {
+          clearTimeout(existing);
+        }
+
+        const timerId = window.setTimeout(() => {
+          const stillZero = (storeInstanceCounts.get(fileId) ?? 0) === 0;
+          if (stillZero) {
             console.log(`GraphStoreProvider: Cleaning up store for ${fileId}`);
             const storeToClean = storeRegistry.get(fileId);
             if (storeToClean) {
@@ -603,8 +633,14 @@ export function GraphStoreProvider({
                 history: []
               });
             }
+
+            // Cleanup bookkeeping
+            storeInstanceCounts.delete(fileId);
           }
+          storeCleanupTimers.delete(fileId);
         }, 1000); // 1 second grace period
+
+        storeCleanupTimers.set(fileId, timerId);
       }
     };
   }, [fileId]);

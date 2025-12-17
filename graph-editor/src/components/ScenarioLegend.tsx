@@ -23,6 +23,15 @@ interface ScenarioLegendProps {
   baseColour: string;
   showCurrent: boolean;
   showBase: boolean;
+  /** True when legend is rendered in dashboard mode (affects labelling). */
+  isDashboardMode?: boolean;
+  /**
+   * Authoritative Query DSL currently being displayed (used for dashboard clarity).
+   * When set, we include it in the tooltip for the Current/Base chips.
+   */
+  activeDsl?: string | null;
+  /** Persisted baseline DSL from the graph file (used to label Base in dashboard mode). */
+  baseDsl?: string | null;
   onToggleVisibility: (scenarioId: string) => void;
   onCycleVisibilityMode?: (scenarioId: string) => void;
   getVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode;
@@ -38,6 +47,9 @@ export function ScenarioLegend({
   baseColour,
   showCurrent,
   showBase,
+  isDashboardMode,
+  activeDsl,
+  baseDsl,
   onToggleVisibility,
   onCycleVisibilityMode,
   getVisibilityMode,
@@ -193,6 +205,10 @@ export function ScenarioLegend({
   );
 
   // Width is now handled by CSS - legend is inside canvas panel so it uses parent width naturally
+  const currentLabel = isDashboardMode && activeDsl ? activeDsl : 'Current';
+  const baseLabel = isDashboardMode && baseDsl ? baseDsl : 'Base';
+  const baseTitleDsl = baseDsl ?? activeDsl ?? null;
+
   return (
     <div className="scenario-legend">
       {/* Order chips from bottom of stack (left) to top of stack (right) */}
@@ -203,6 +219,7 @@ export function ScenarioLegend({
         <div
           key="base"
           className={`scenario-legend-chip ${!visibleScenarioIds.includes('base') ? 'invisible' : ''}`}
+          title={baseTitleDsl ? `Base — ${baseTitleDsl}` : 'Base'}
           style={{
             ...getChipStyle('base', getScenarioColour('base', visibleScenarioIds.includes('base'))),
             opacity: visibleScenarioIds.includes('base') ? 1 : 0.3
@@ -239,7 +256,7 @@ export function ScenarioLegend({
             {getModeIcon('base')}
           </button>
           
-          <span className="scenario-legend-name">Base</span>
+          <span className="scenario-legend-name">{baseLabel}</span>
         </div>
       )}
       
@@ -317,6 +334,7 @@ export function ScenarioLegend({
         <div
           key="current"
           className={`scenario-legend-chip ${!visibleScenarioIds.includes('current') ? 'invisible' : ''}`}
+          title={activeDsl ? `Current — ${activeDsl}` : 'Current'}
           style={{
             ...getChipStyle('current', getScenarioColour('current', visibleScenarioIds.includes('current'))),
             opacity: visibleScenarioIds.includes('current') ? 1 : 0.3
@@ -353,12 +371,12 @@ export function ScenarioLegend({
             {getModeIcon('current')}
           </button>
           
-          <span className="scenario-legend-name">Current</span>
+          <span className="scenario-legend-name">{currentLabel}</span>
         </div>
       )}
       
-      {/* New Scenario button - wrapper reserves expanded width, chip visually expands on hover */}
-      {onNewScenario && (
+      {/* New Scenario button - not shown in dashboard mode */}
+      {onNewScenario && !isDashboardMode && (
         <span className="scenario-legend-new-wrapper">
           {/* Invisible spacer to reserve full expanded width */}
           <span className="scenario-legend-new-spacer" aria-hidden="true">

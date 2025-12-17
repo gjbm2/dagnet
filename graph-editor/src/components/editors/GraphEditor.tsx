@@ -20,6 +20,7 @@ import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useURLScenarios } from '../../hooks/useURLScenarios';
+import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
@@ -79,6 +80,9 @@ function URLScenariosProcessor({ fileId }: { fileId: string }) {
 function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
   const scenariosContext = useScenariosContextOptional();
   const { operations, tabs } = useTabContext();
+  const activeDsl = useGraphStore((s) => s.currentDSL);
+  const baseDsl = useGraphStore((s) => (s.graph as any)?.currentQueryDSL ?? null);
+  const { isDashboardMode } = useDashboardMode();
   
   if (!scenariosContext || !tabId) {
     return null;
@@ -144,8 +148,11 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       visibleScenarioIds={visibleScenarioIds}
       currentColour={currentColour}
       baseColour={baseColour}
-      showCurrent={scenarios.length >= 1}
+      showCurrent={true}
       showBase={baseVisible}
+      isDashboardMode={isDashboardMode}
+      activeDsl={activeDsl}
+      baseDsl={baseDsl}
       onToggleVisibility={handleToggleVisibility}
       onCycleVisibilityMode={handleCycleVisibilityMode}
       getVisibilityMode={getVisibilityMode}
@@ -163,6 +170,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
  */
 const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<GraphData> & { tabId?: string }) {
   const { data, isDirty, updateData } = useFileState<GraphData>(fileId);
+  const { isDashboardMode } = useDashboardMode();
   
   // Phase 1: Use refs to avoid subscribing to all tabs changes
   // Only subscribe to activeTabId and operations, not the tabs array
@@ -936,7 +944,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     // Gate heavy rendering based on visibility
     // Re-read isVisible from context to ensure we have the latest value
     const { isTabVisible: checkTabVisible } = useVisibleTabs();
-    const currentIsVisible = tabId ? checkTabVisible(tabId) : true;
+    const currentIsVisible = isDashboardMode ? true : (tabId ? checkTabVisible(tabId) : true);
     
     console.log(`[CanvasHost ${fileId}] Rendering: tabId=${tabId}, isVisible=${currentIsVisible}`);
     
@@ -968,9 +976,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           externalSelectedNodeId={selectedNodeId}
           externalSelectedEdgeId={selectedEdgeId}
         />
-        {/* WindowSelector inside canvas panel - naturally constrained by canvas width */}
-        <WindowSelector tabId={tabId} />
-        {/* ScenarioLegend inside canvas panel - positioned below WindowSelector */}
+        {/* WindowSelector is chrome; keep it out of dashboard mode.
+            ScenarioLegend chips are required in dashboard mode for clarity. */}
+        {!isDashboardMode && <WindowSelector tabId={tabId} />}
         {tabId && <ScenarioLegendWrapper tabId={tabId} />}
       </div>
     );
@@ -980,10 +988,12 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // whatIfDSL is passed as a prop (not in key) so changes use fast path instead of full remount
   const canvasComponent = useMemo(() => {
     // Include visibility in the component to force re-render when it changes
-    const currentIsVisible = tabId ? isTabVisible(tabId) : true;
-    console.log(`[GraphEditor ${fileId}] Creating canvasComponent: tabId=${tabId}, isVisible=${currentIsVisible}`);
-    return <CanvasHost key={`canvas-${tabId}-${currentIsVisible}`} />;
-  }, [fileId, tabId, isTabVisible]); // whatIfDSL passed as prop, not in key (use fast path for updates)
+    const currentIsVisible = isDashboardMode ? true : (tabId ? isTabVisible(tabId) : true);
+    console.log(`[GraphEditor ${fileId}] Creating canvasComponent: tabId=${tabId}, isVisible=${currentIsVisible}, dashboard=${isDashboardMode}`);
+    // In dashboard mode we must keep the canvas mounted; do not key it off visibility.
+    const keySuffix = isDashboardMode ? 'dashboard' : String(currentIsVisible);
+    return <CanvasHost key={`canvas-${tabId}-${keySuffix}`} />;
+  }, [fileId, tabId, isTabVisible, isDashboardMode]); // whatIfDSL passed as prop, not in key (use fast path for updates)
   
   const whatIfComponent = useMemo(() => <WhatIfPanel tabId={tabId} />, [tabId]);
   
@@ -1711,6 +1721,26 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Only visible tabs will actually render GraphCanvas (see CanvasHost component above)
 
   const SUPPRESS_LAYOUT_HANDLERS = false; // Re-enabled: needed for restore-closed-tabs logic
+
+  // Dashboard mode: suppress GraphEditor chrome (sidebars, tools, selectors, etc.)
+  if (isDashboardMode) {
+    return (
+      <SelectionContext.Provider value={selectionContextValue}>
+        <ScenariosProvider fileId={fileId} tabId={tabId}>
+          <URLScenariosProcessor fileId={fileId} />
+          <ViewPreferencesProvider tabId={tabId}>
+            <div
+              className="graph-editor-dashboard"
+              style={{ position: 'relative', height: '100%', width: '100%', overflow: 'hidden' }}
+            >
+              {canvasComponent}
+            </div>
+          </ViewPreferencesProvider>
+        </ScenariosProvider>
+      </SelectionContext.Provider>
+    );
+  }
+
   return (
     <SelectionContext.Provider value={selectionContextValue}>
       <ScenariosProvider fileId={fileId} tabId={tabId}>
