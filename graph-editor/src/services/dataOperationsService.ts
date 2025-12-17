@@ -516,6 +516,30 @@ export async function computeQuerySignature(
     // Create a canonical representation of the query
     // Include both node IDs (for backward compatibility) and event_ids (for change detection)
     // CRITICAL: Also include the ORIGINAL query string to detect minus()/plus() changes
+    //
+    // IMPORTANT: include context_filters (structured, provider-specific predicates) so that
+    // changes to pinned slice definitions (e.g. regex/pattern changes, computed "other" policy)
+    // invalidate cache even when the high-level context(key:value) label is unchanged.
+    const normalizedContextFilters = (() => {
+      const raw = queryPayload?.context_filters;
+      if (!raw || !Array.isArray(raw)) return [];
+      return raw
+        .map((f: any) => ({
+          field: String(f.field ?? ''),
+          op: String(f.op ?? ''),
+          values: Array.isArray(f.values) ? [...f.values].map((v: any) => String(v)).sort() : [],
+          pattern: f.pattern !== undefined ? String(f.pattern) : undefined,
+          patternFlags: f.patternFlags !== undefined ? String(f.patternFlags) : undefined,
+        }))
+        .sort((a: any, b: any) =>
+          a.field.localeCompare(b.field) ||
+          a.op.localeCompare(b.op) ||
+          String(a.pattern ?? '').localeCompare(String(b.pattern ?? '')) ||
+          String(a.patternFlags ?? '').localeCompare(String(b.patternFlags ?? '')) ||
+          a.values.join(',').localeCompare(b.values.join(','))
+        );
+    })();
+
     const canonical = JSON.stringify({
       connection: connectionName || '',
       // Provider-specific event names (from DSL)
@@ -531,6 +555,7 @@ export async function computeQuerySignature(
       event_filters: queryPayload.event_filters || {},
       context: (queryPayload.context || []).sort(),
       case: (queryPayload.case || []).sort(),
+      context_filters: normalizedContextFilters,
       // IMPORTANT: Include original query string to capture minus()/plus() terms
       // which are NOT preserved in the DSL object by buildDslFromEdge
       original_query: edge?.query || '',
