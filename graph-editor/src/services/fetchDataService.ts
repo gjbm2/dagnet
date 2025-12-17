@@ -1541,7 +1541,7 @@ export async function fetchItems(
                     forecastMeanSource: v.debug.forecastMeanSource,
                     evidenceMeanRaw: v.debug.evidenceMeanRaw,
                     evidenceMeanUsedForBlend: v.debug.evidenceMeanUsedForBlend,
-                    evidenceMeanDebiasedByCompleteness: v.debug.evidenceMeanDebiasedByCompleteness,
+                    evidenceMeanBayesAdjusted: v.debug.evidenceMeanBayesAdjusted,
                     nQuery: v.debug.nQuery,
                     nBaseline: v.debug.nBaseline,
                     nBaselineSource: v.debug.nBaselineSource,

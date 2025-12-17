@@ -29,9 +29,8 @@ import { generateUniqueId } from '../lib/idUtils';
 import { getSiblingEdges } from '../lib/conditionalColours';
 import { normalizeConstraintString } from '../lib/queryDSL';
 import { sessionLogService } from './sessionLogService';
-import { DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
+import { DEFAULT_T95_DAYS, PRECISION_DECIMAL_PLACES } from '../constants/latency';
 import { normalizeToUK } from '../lib/dateFormat';
-import { PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
 

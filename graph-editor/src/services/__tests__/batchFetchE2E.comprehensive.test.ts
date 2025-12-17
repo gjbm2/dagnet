@@ -753,6 +753,14 @@ describe('Comprehensive Batch Fetch E2E Tests', () => {
       let currentGraph = graph;
       const setGraph = (g: Graph | null) => { if (g) currentGraph = g; };
       const getUpdatedGraph = () => currentGraph;
+
+      // IMPORTANT: This test is specifically verifying that t95 is DERIVED from lag arrays.
+      // If the graph already has edge.p.latency.t95 set, it is treated as authoritative and
+      // will intentionally override any computed value.
+      const edge0: any = graph.edges?.[0];
+      if (edge0?.p?.latency) {
+        delete edge0.p.latency.t95;
+      }
       
       // Setup file with PER-DAY lag data arrays (NOT pre-computed t95)
       // Median lag ~5 days, mean lag ~6 days → should compute t95 around 15-20 days

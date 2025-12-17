@@ -10,7 +10,7 @@ import { useTabContext } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
-import { PRECISION_DECIMAL_PLACES } from '../constants/statisticalConstants';
+import { PRECISION_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
 import './ParameterSection.css';
 

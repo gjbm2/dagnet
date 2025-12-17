@@ -118,6 +118,18 @@ parameters:
     tags: [delivery, fulfilment, latency, long-lag]
 
   # LAG semantics fixtures (Phase 1/2 integration)
+  - id: ab-smooth-lag
+    file_path: parameters/ab-smooth-lag.yaml
+    type: probability
+    status: active
+    tags: [lag, smooth, fixture]
+
+  - id: bc-smooth-lag
+    file_path: parameters/bc-smooth-lag.yaml
+    type: probability
+    status: active
+    tags: [lag, smooth, fixture]
+
   - id: lag-window-baseline-subset
     file_path: parameters/lag-window-baseline-subset.yaml
     type: probability

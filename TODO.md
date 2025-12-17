@@ -24,6 +24,8 @@
   - Treat this like other graph viewer issues: informational by default, with toggles to enable/disable
 ## LAG semantics (deferred requirement)
 
+- (16-Dec-25) `ParameterSection.tsx` currently contains inline “commit ⇒ set *_overridden=true” logic for latency fields (`t95`, `path_t95`, `anchor_node_id`, `latency_parameter`). `AutomatableField` doesn’t own override semantics (it only renders/clears), so this should be centralised behind a hook/service to keep UI as access-point only.
+
 - Add an explicit toggle for **“HAS completed”** (as-of now; allow conversions after `window.end` / `cohort.end`) vs **“completed by window end”** semantics.
   - This is deferred because it complicates Phase 1 semantics/regression repair, and it may not be trivial to derive “events occurred within the window” from the current Amplitude return shapes without additional query structure.
 
