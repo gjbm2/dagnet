@@ -23,8 +23,17 @@ import {
   LATENCY_T95_PERCENTILE,
   LATENCY_PATH_T95_PERCENTILE,
   LATENCY_HORIZON_DECIMAL_PLACES,
+  LATENCY_EPSILON,
+  LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE,
 } from '../constants/latency';
-import { RECENCY_HALF_LIFE_DAYS, FORECAST_BLEND_LAMBDA, PRECISION_DECIMAL_PLACES, ANCHOR_DELAY_BLEND_K_CONVERSIONS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
+import {
+  RECENCY_HALF_LIFE_DAYS,
+  FORECAST_BLEND_LAMBDA,
+  LATENCY_BLEND_COMPLETENESS_POWER,
+  PRECISION_DECIMAL_PLACES,
+  ANCHOR_DELAY_BLEND_K_CONVERSIONS,
+  DEFAULT_T95_DAYS,
+} from '../constants/latency';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
 import { roundToDecimalPlaces } from '../utils/rounding';
@@ -81,7 +90,16 @@ export function computeBlendedMean(inputs: BlendInputs): number | undefined {
   }
   
   // With nQuery=0, wEvidence=0, returns pure forecast (correct for no-arrivals case)
-  const nEff = completeness * nQuery;
+  // Short-term mitigation knob:
+  // Use a more conservative completeness ONLY for blend weighting to avoid immature cohorts
+  // dragging p.mean down too aggressively when early-time completeness is biased high.
+  //
+  // η = 1.0 → preserves current behaviour exactly.
+  const completenessForBlendWeight =
+    Number.isFinite(completeness) && completeness > 0
+      ? Math.min(1, Math.max(0, Math.pow(completeness, LATENCY_BLEND_COMPLETENESS_POWER)))
+      : 0;
+  const nEff = completenessForBlendWeight * nQuery;
   const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
   const wEvidence = nEff / (m0 + nEff);
   
@@ -698,15 +716,24 @@ export function fitLagDistribution(
  * This is the time by which 95% of eventual converters have converted.
  * 
  * @param fit - Fitted distribution
- * @param fallbackT95Days - Fallback t95-days if fit is not valid
+ * @param defaultT95Days - Default t95-days to use if fit is not valid
+ * @param edgeT95 - Optional t95 value from edge.p.latency.t95. If provided and finite, this is authoritative.
  * @returns t95 in days
  */
-export function computeT95(fit: LagDistributionFit, fallbackT95Days: number): number {
+export function computeT95(fit: LagDistributionFit, defaultT95Days: number, edgeT95?: number): number {
+  // If edge.p.latency.t95 is set, use it directly (authoritative).
+  // Override flags are permissions-only; the presence of the value itself indicates it should be used.
+  if (typeof edgeT95 === 'number' && Number.isFinite(edgeT95) && edgeT95 > 0) {
+    return edgeT95;
+  }
+  
+  // Otherwise, compute from fit if valid
   if (fit.empirical_quality_ok) {
     return logNormalInverseCDF(LATENCY_T95_PERCENTILE, fit.mu, fit.sigma);
   }
-  // Fallback to configured/default t95
-  return fallbackT95Days;
+  
+  // If fit is invalid, use default
+  return defaultT95Days;
 }
 
 /**
@@ -764,6 +791,36 @@ export function approximateLogNormalSumPercentileDays(
   const fit = approximateLogNormalSumFit(a, b);
   if (!fit) return undefined;
   return logNormalInverseCDF(percentile, fit.mu, fit.sigma);
+}
+
+/**
+ * Compute a weighted quantile over (value, weight) pairs.
+ *
+ * Notes:
+ * - We treat weights as non-negative and normalise internally.
+ * - If all weights are zero/invalid, this falls back to equal weights.
+ * - This is used to approximate a *mixture* path horizon at joins (A→X) so a tiny-mass
+ *   long-tail branch does not automatically dominate the "authoritative" horizon.
+ */
+function weightedQuantile(
+  pairs: Array<{ value: number; weight: number }>,
+  q: number
+): number | undefined {
+  const qq = typeof q === 'number' && Number.isFinite(q) ? Math.max(0, Math.min(1, q)) : 0.95;
+  const cleaned = pairs
+    .filter((p) => typeof p.value === 'number' && Number.isFinite(p.value) && p.value > 0)
+    .map((p) => ({ value: p.value, weight: typeof p.weight === 'number' && Number.isFinite(p.weight) && p.weight > 0 ? p.weight : 0 }));
+  if (cleaned.length === 0) return undefined;
+  const totalW = cleaned.reduce((s, p) => s + p.weight, 0);
+  const w = totalW > 0 ? cleaned.map((p) => ({ ...p, weight: p.weight / totalW })) : cleaned.map((p) => ({ ...p, weight: 1 / cleaned.length }));
+
+  w.sort((a, b) => a.value - b.value);
+  let c = 0;
+  for (const p of w) {
+    c += p.weight;
+    if (c + 1e-12 >= qq) return p.value;
+  }
+  return w[w.length - 1]?.value;
 }
 
 // =============================================================================
@@ -913,6 +970,75 @@ function calculateCompletenessWithTailConstraint(
   return totalN > 0 ? weightedSum / totalN : 0;
 }
 
+/**
+ * Improve a lognormal fit by applying t95 constraint.
+ * If authoritative t95 > moment-fit t95, adjust sigma to match authoritative t95.
+ * This improves the fit itself, not just completeness calculations.
+ * 
+ * @param fit - Initial fit from median/mean
+ * @param medianLagDays - Median lag in days
+ * @param authoritativeT95Days - Authoritative t95 (from edge or derived)
+ * @returns Improved fit with sigma adjusted if needed
+ */
+function improveFitWithT95(
+  fit: LagDistributionFit,
+  medianLagDays: number,
+  authoritativeT95Days: number
+): LagDistributionFit {
+  const sigmaMoments = fit.sigma;
+  const sigmaMomentsSafe =
+    Number.isFinite(sigmaMoments) && sigmaMoments > 0 ? sigmaMoments : LATENCY_DEFAULT_SIGMA;
+
+  const z = standardNormalInverseCDF(LATENCY_T95_PERCENTILE);
+  const canComputeSigmaMin =
+    Number.isFinite(z) &&
+    z > 0 &&
+    Number.isFinite(medianLagDays) &&
+    medianLagDays > 0 &&
+    Number.isFinite(authoritativeT95Days) &&
+    authoritativeT95Days > 0;
+
+  const sigmaMinFromT95 =
+    canComputeSigmaMin && authoritativeT95Days > medianLagDays
+      ? Math.log(authoritativeT95Days / medianLagDays) / z
+      : undefined;
+
+  const tailConstraintApplied =
+    sigmaMinFromT95 !== undefined &&
+    Number.isFinite(sigmaMinFromT95) &&
+    sigmaMinFromT95 > sigmaMomentsSafe;
+
+  // One-way constraint only: do not reduce sigma if t95 is smaller than implied.
+  // Cap sigma to avoid catastrophic blow-ups from pathological inputs.
+  const sigmaFinalRaw = tailConstraintApplied ? sigmaMinFromT95! : sigmaMomentsSafe;
+  const sigmaFinal =
+    Number.isFinite(sigmaFinalRaw) && sigmaFinalRaw > 0 ? Math.min(sigmaFinalRaw, 10) : sigmaMomentsSafe;
+
+  if (tailConstraintApplied) {
+    sessionLogService.info(
+      'graph',
+      'LAG_T95_FIT_IMPROVEMENT',
+      'Improved lognormal fit using t95 constraint',
+      undefined,
+      {
+        valuesAfter: {
+          median_lag_days: medianLagDays,
+          t95_authoritative_days: authoritativeT95Days,
+          percentile: LATENCY_T95_PERCENTILE,
+          sigma_moments: sigmaMomentsSafe,
+          sigma_min_from_t95: sigmaMinFromT95,
+          sigma_final: sigmaFinal,
+        },
+      }
+    );
+  }
+
+  return {
+    ...fit,
+    sigma: sigmaFinal,
+  };
+}
+
 function getCompletenessCdfParams(
   fit: LagDistributionFit,
   medianLagDays: number,
@@ -1001,20 +1127,24 @@ function getCompletenessCdfParams(
  * @param cohorts - Per-cohort data array (may include anchor_median_lag_days)
  * @param aggregateMedianLag - Weighted aggregate median lag for this edge
  * @param aggregateMeanLag - Weighted aggregate mean lag (optional)
- * @param fallbackT95Days - Fallback t95-days threshold (t95 or configured default)
+ * @param defaultT95Days - Default t95-days to use if fit is invalid (typically DEFAULT_T95_DAYS)
  * @param anchorMedianLag - Observed median lag from anchor to this edge's source (for downstream edges).
  *                          Use 0 for first latency edge from anchor. This is the central tendency
  *                          of cumulative upstream lag, NOT path_t95.
+ * @param fitTotalKOverride - Optional override for total k used in fit quality gate
+ * @param pInfinityCohortsOverride - Optional override cohorts for p∞ estimation
+ * @param edgeT95 - Optional t95 value from edge.p.latency.t95. If provided, this is authoritative.
  * @returns Full edge latency statistics
  */
 export function computeEdgeLatencyStats(
   cohorts: CohortData[],
   aggregateMedianLag: number,
   aggregateMeanLag: number | undefined,
-  fallbackT95Days: number,
+  defaultT95Days: number,
   anchorMedianLag: number = 0,
   fitTotalKOverride?: number,
-  pInfinityCohortsOverride?: CohortData[]
+  pInfinityCohortsOverride?: CohortData[],
+  edgeT95?: number
 ): EdgeLatencyStats {
   // Calculate total k for quality gate
   const totalK = cohorts.reduce((sum, c) => sum + c.k, 0);
@@ -1026,7 +1156,8 @@ export function computeEdgeLatencyStats(
     cohortsCount: cohorts.length,
     aggregateMedianLag,
     aggregateMeanLag,
-    fallbackT95Days,
+    defaultT95Days,
+    edgeT95,
     anchorMedianLag,
     totalK,
     fitTotalK,
@@ -1072,26 +1203,90 @@ export function computeEdgeLatencyStats(
     });
   }
 
-  // Step 1: Fit lag distribution
-  const fit = fitLagDistribution(aggregateMedianLag, aggregateMeanLag, fitTotalK);
+  // Step 1: Fit lag distribution from median/mean
+  const fitInitial = fitLagDistribution(aggregateMedianLag, aggregateMeanLag, fitTotalK);
   
-  // DEBUG: Log fit result
+  // DEBUG: Log initial fit result
   console.log('[LAG_DEBUG] COMPUTE_FIT result:', {
-    mu: fit.mu,
-    sigma: fit.sigma,
-    empirical_quality_ok: fit.empirical_quality_ok,
-    quality_failure_reason: fit.quality_failure_reason,
-    total_k: fit.total_k,
+    mu: fitInitial.mu,
+    sigma: fitInitial.sigma,
+    empirical_quality_ok: fitInitial.empirical_quality_ok,
+    quality_failure_reason: fitInitial.quality_failure_reason,
+    total_k: fitInitial.total_k,
   });
 
-  // Step 2: Compute t95
-  const t95 = computeT95(fit, fallbackT95Days);
-
-  // Completeness CDF parameters: use the configured/authoritative t95 as a one-way
-  // constraint to prevent thin-tail completeness on fat-tailed edges.
+  // Step 2: Derive t95 from initial fit
+  const t95FromFit = fitInitial.empirical_quality_ok
+    ? logNormalInverseCDF(LATENCY_T95_PERCENTILE, fitInitial.mu, fitInitial.sigma)
+    : defaultT95Days;
+  
+  // Step 3: Determine authoritative t95 for fit improvement
+  // If edge.p.latency.t95 is set (from graph/file), use it to constrain the fit.
+  // Otherwise, use the derived t95 from the moment-fit.
+  // This authoritative value will be used to "drag" the lognormal tail out (increase sigma).
   const authoritativeT95Days =
-    Number.isFinite(fallbackT95Days) && fallbackT95Days > 0 ? fallbackT95Days : DEFAULT_T95_DAYS;
-  const completenessCdf = getCompletenessCdfParams(fit, aggregateMedianLag, authoritativeT95Days);
+    (typeof edgeT95 === 'number' && Number.isFinite(edgeT95) && edgeT95 > 0)
+      ? edgeT95
+      : (Number.isFinite(t95FromFit) && t95FromFit > 0 ? t95FromFit : DEFAULT_T95_DAYS);
+
+  // Step 4: Improve fit using authoritative t95 constraint
+  // If authoritative t95 > moment-fit t95, adjust sigma to match authoritative t95.
+  // This "drags" the lognormal tail out to the right, improving the fit.
+  // The improved fit will be used for all calculations (completeness, blending, evidence shaping).
+  const fit = improveFitWithT95(fitInitial, aggregateMedianLag, authoritativeT95Days);
+  
+  // Step 5: Compute final t95 from improved fit
+  // This is the t95 that will be written to graph/file (unless overridden).
+  // If we improved the fit using edgeT95, this should match authoritativeT95Days.
+  // If we used derived t95, this is the improved fit's t95.
+  const t95 = fit.empirical_quality_ok
+    ? logNormalInverseCDF(LATENCY_T95_PERCENTILE, fit.mu, fit.sigma)
+    : authoritativeT95Days;
+
+  // Completeness CDF parameters:
+  //
+  // IMPORTANT CORRECTNESS RULE:
+  // If a t95 constraint increases sigma, completeness must NOT increase (one-way safety).
+  // The `calculateCompletenessWithTailConstraint` helper enforces this *only when*
+  // `tail_constraint_applied` is true, so this flag must reflect whether sigma was
+  // increased relative to the *moment* sigma (pre-improvement), not relative to the
+  // already-improved sigma.
+  const completenessCdf: EdgeLatencyStats['completeness_cdf'] = (() => {
+    const mu = fit.mu;
+
+    const sigmaMomentsRaw = fitInitial.sigma;
+    const sigmaMomentsSafe =
+      Number.isFinite(sigmaMomentsRaw) && sigmaMomentsRaw > 0 ? sigmaMomentsRaw : LATENCY_DEFAULT_SIGMA;
+
+    const sigmaConstrainedRaw = fit.sigma;
+    const sigmaConstrained =
+      Number.isFinite(sigmaConstrainedRaw) && sigmaConstrainedRaw > 0 ? sigmaConstrainedRaw : sigmaMomentsSafe;
+
+    const z = standardNormalInverseCDF(LATENCY_T95_PERCENTILE);
+    const canComputeSigmaMin =
+      Number.isFinite(z) &&
+      z > 0 &&
+      Number.isFinite(aggregateMedianLag) &&
+      aggregateMedianLag > 0 &&
+      Number.isFinite(authoritativeT95Days) &&
+      authoritativeT95Days > 0;
+
+    const sigmaMinFromT95 =
+      canComputeSigmaMin && authoritativeT95Days > aggregateMedianLag
+        ? Math.log(authoritativeT95Days / aggregateMedianLag) / z
+        : undefined;
+
+    // Track whether the constraint materially increased sigma vs the moment estimate.
+    const tailConstraintApplied = sigmaConstrained > sigmaMomentsSafe + 1e-12;
+
+    return {
+      mu,
+      sigma: sigmaConstrained,
+      sigma_moments: sigmaMomentsSafe,
+      sigma_min_from_t95: sigmaMinFromT95,
+      tail_constraint_applied: tailConstraintApplied,
+    };
+  })();
 
   // Step 3: Estimate p_infinity from mature cohorts
   // NOTE: Use ORIGINAL cohorts for p_infinity estimation (raw age determines maturity)
@@ -1660,6 +1855,8 @@ export interface EdgeLAGValues {
     baselineWindowForecast?: number;
     /** Blend weight on evidence (0–1) */
     wEvidence?: number;
+    /** Completeness value used specifically for blend weighting (after power adjustment) */
+    completenessForBlendWeight?: number;
 
     /** Which completeness semantics were used for this edge under the current query mode */
     completenessMode?: 'window_edge' | 'cohort_path_anchored' | 'cohort_conditional_fallback';
@@ -1673,11 +1870,11 @@ export interface EdgeLAGValues {
     /** Evidence mean from the graph edge (raw k/n within the current query window) */
     evidenceMeanRaw?: number;
 
-    /** Evidence mean actually used for blending (may be de-biased by completeness in cohort-path mode) */
+    /** Evidence mean actually used for blending (may be Bayesian completeness-adjusted in cohort-path mode) */
     evidenceMeanUsedForBlend?: number;
 
-    /** Whether evidenceMeanUsedForBlend was de-biased by completeness */
-    evidenceMeanDebiasedByCompleteness?: boolean;
+    /** Whether evidenceMeanUsedForBlend was Bayesian completeness-adjusted */
+    evidenceMeanBayesAdjusted?: boolean;
   };
 }
 
@@ -1806,6 +2003,20 @@ export function enhanceGraphLatencies(
   for (const startId of startNodes) {
     nodePathT95.set(startId, 0);
   }
+  // In-pass path_t95 per edge (based on derived/overridden t95 and/or anchor+edge moment matching).
+  // Used for join-aware A→X horizon constraints when computing A→Y path horizons.
+  const edgePathT95InPass = new Map<string, number>();
+  // In-pass flow mass per edge (topo product of p.mean from START).
+  // This is the relevant weighting proxy at joins: share of *arriving* mass into a node.
+  const edgeFlowMassInPass = new Map<string, number>();
+  const nodeArrivingMass = new Map<string, number>();
+  for (const startId of startNodes) {
+    // If a start node has an entry weight, respect it; otherwise treat as 1.
+    const startNode = graph.nodes.find((n) => n.id === startId);
+    const w = (startNode as any)?.entry?.entry_weight;
+    const ww = typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : 1;
+    nodeArrivingMass.set(startId, ww);
+  }
   
   // DP state: accumulated median lag prior (from baseline window data) to reach each node.
   // Used for cohort mode soft transition: when observed anchor lag is sparse,
@@ -1851,7 +2062,24 @@ export function enhanceGraphLatencies(
   // Process nodes in topological order
   while (queue.length > 0) {
     const nodeId = queue.shift()!;
-    const pathT95ToNode = nodePathT95.get(nodeId) ?? 0;
+    const pathT95ToNodeMax = nodePathT95.get(nodeId) ?? 0;
+    // Join-aware path horizon to reach this node: treat inbound paths as a mixture and take the
+    // (flow-mass) weighted 95th percentile. This avoids a tiny-mass long-tail branch dominating
+    // downstream horizons.
+    const pathT95ToNode = (() => {
+      if (startNodes.includes(nodeId)) return 0;
+      const incoming = reverseAdj.get(nodeId) || [];
+      const pairs = incoming
+        .map((incEdge) => {
+          const incId = getEdgeId(incEdge as any);
+          const v = edgePathT95InPass.get(incId) ?? 0;
+          const w = edgeFlowMassInPass.get(incId) ?? 0;
+          return { value: v, weight: w };
+        })
+        .filter((p) => typeof p.value === 'number' && Number.isFinite(p.value) && p.value > 0);
+      const q = weightedQuantile(pairs, LATENCY_PATH_T95_PERCENTILE);
+      return q !== undefined ? q : pathT95ToNodeMax;
+    })();
 
     // Process all outgoing edges from this node
     const outgoing = adjacency.get(nodeId) || [];
@@ -1871,6 +2099,16 @@ export function enhanceGraphLatencies(
       const edgePrecomputedPathT95 = precomputedPathT95.get(edgeId) ?? 0;
       // Normalize edge.to for queue/inDegree operations
       const toNodeId = normalizeNodeRef(edge.to);
+
+      // Compute and propagate flow mass for this edge (independent of whether LAG runs on it).
+      // This is used later for join-aware weighting of inbound path_t95 horizons.
+      const fromMass = nodeArrivingMass.get(nodeId) ?? 0;
+      const edgeProb = typeof edge.p?.mean === 'number' && Number.isFinite(edge.p.mean) ? Math.max(0, edge.p.mean) : 0;
+      const edgeMass = fromMass * edgeProb;
+      edgeFlowMassInPass.set(edgeId, edgeMass);
+      if (edgeMass > 0) {
+        nodeArrivingMass.set(toNodeId, (nodeArrivingMass.get(toNodeId) ?? 0) + edgeMass);
+      }
       
       // COHORT-VIEW: An edge needs LAG treatment if it has local latency OR
       // is downstream of latency edges (path_t95 > 0).
@@ -1889,9 +2127,17 @@ export function enhanceGraphLatencies(
         continue;
       }
       
-      // Effective t95 days: local latency edges rely on their own settings; downstream edges
-      // may still need treatment if path_t95 indicates upstream latency.
-      const effectiveHorizonDays = hasLocalLatency ? (edge.p?.latency?.t95 ?? DEFAULT_T95_DAYS) : edgePrecomputedPathT95;
+      // For local latency edges, extract t95 from edge (if set) or use default.
+      // For downstream edges without local latency, use precomputed path_t95 as horizon.
+      //
+      // NOTE: edge.p.latency.t95 comes from:
+      //   - FILE (from-file/versioned mode): via UpdateManager file→graph mapping
+      //   - GRAPH (direct mode): from previous computation or default
+      // We honor the active source of truth (file for versioned, graph for direct).
+      const edgeT95 = hasLocalLatency && typeof edge.p?.latency?.t95 === 'number' && Number.isFinite(edge.p.latency.t95) && edge.p.latency.t95 > 0
+        ? edge.p.latency.t95
+        : undefined;
+      const effectiveHorizonDays = hasLocalLatency ? (edgeT95 ?? DEFAULT_T95_DAYS) : edgePrecomputedPathT95;
 
       // Get parameter values for this edge
       const paramValues = paramLookup.get(edgeId);
@@ -2062,15 +2308,17 @@ export function enhanceGraphLatencies(
       });
 
       // Compute edge LAG stats with anchor-adjusted ages (NOT path_t95!)
-      // Use effectiveHorizonDays for edges behind lagged paths that have no local config.
+      // For local latency edges, pass edgeT95 if available (authoritative) and DEFAULT_T95_DAYS as default.
+      // For downstream edges, effectiveHorizonDays is path_t95 (used as horizon, not as edge t95).
       const latencyStats = computeEdgeLatencyStats(
         cohortsScoped,
         aggregateMedianLag,
         aggregateMeanLag,
-        effectiveHorizonDays,
+        DEFAULT_T95_DAYS,  // Default t95 if fit is invalid
         anchorMedianLag,  // Use observed anchor lag, NOT path_t95
         totalKForFit,     // Fit quality gate should consider full-history converters when available
-        cohortsAll.length > 0 ? cohortsAll : cohortsScoped // p∞ estimation should use full-history mature cohorts
+        cohortsAll.length > 0 ? cohortsAll : cohortsScoped, // p∞ estimation should use full-history mature cohorts
+        edgeT95  // Authoritative t95 from edge.p.latency.t95 if set
       );
 
       // ---------------------------------------------------------------------
@@ -2105,7 +2353,29 @@ export function enhanceGraphLatencies(
             0
           ) / (totalNForAnchor || 1);
 
-          const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
+          // Anchor fit: A→X distribution inferred from anchor moments on downstream cohort data.
+          const anchorFitInitial = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
+
+          // Join-aware horizon constraint for A→X:
+          // Use upstream computed path horizons (A→X) from inbound edges to X, weighted by their p.mean,
+          // as an "authoritative" 95th-percentile horizon to pull the anchor fit tail out.
+          //
+          // This explicitly avoids muddling medians and t95s: we DO NOT treat path_t95 as a central tendency;
+          // we only use it as a percentile constraint (one-way sigma increase).
+          const inboundToFrom = reverseAdj.get(fromNodeId) || [];
+          const inboundPairs = inboundToFrom
+            .map((incEdge) => {
+              const incId = getEdgeId(incEdge as any);
+              const incPath = edgePathT95InPass.get(incId) ?? 0;
+              const w = edgeFlowMassInPass.get(incId) ?? 0;
+              return { value: incPath, weight: typeof w === 'number' && Number.isFinite(w) ? Math.max(0, w) : 0 };
+            })
+            .filter((p) => p.value > 0);
+          const axTopoP95 = weightedQuantile(inboundPairs, LATENCY_PATH_T95_PERCENTILE);
+          const anchorFit = (axTopoP95 !== undefined && axTopoP95 > 0)
+            ? improveFitWithT95(anchorFitInitial, anchorMedian, axTopoP95)
+            : anchorFitInitial;
+
           const combinedT95 = approximateLogNormalSumPercentileDays(
             anchorFit,
             latencyStats.fit,
@@ -2113,7 +2383,11 @@ export function enhanceGraphLatencies(
           );
 
           if (combinedT95 !== undefined && Number.isFinite(combinedT95) && combinedT95 > 0) {
-            edgePathT95 = combinedT95;
+            // Safety: never let the empirical/moment-matched estimate shrink below the edge-local horizon.
+            // This preserves the guarantee that path_t95(A→Y) ≥ t95(X→Y), while still allowing the
+            // moment-matched estimate to be smaller than the conservative topo sum (avoids compounding
+            // conservatism with depth).
+            edgePathT95 = Math.max(latencyStats.t95, combinedT95);
             console.log('[LAG_TOPO_PATH_T95] Using anchor+edge moment-matched t95:', {
               edgeId,
               anchorMedian: anchorMedian.toFixed(2),
@@ -2126,6 +2400,8 @@ export function enhanceGraphLatencies(
           }
         }
       }
+      // Persist the in-pass path_t95 for join-aware downstream constraints.
+      edgePathT95InPass.set(edgeId, edgePathT95);
 
       // ---------------------------------------------------------------------
       // COHORT MODE COMPLETENESS (FIX): A→Y path-anchored completeness
@@ -2149,10 +2425,19 @@ export function enhanceGraphLatencies(
 
       if (!isWindowMode) {
         // Determine authoritative path_t95 (days) for A→Y tail pull.
-        // Precedence:
-        //  - If graph already has a persisted path_t95, treat it as an available candidate.
-        //    Override flags MUST NOT change semantic meaning; they only gate overwrite permissions.
-        //  - Use the most conservative of available estimates.
+        //
+        // IMPORTANT:
+        // `edgePrecomputedPathT95` comes from the *pre-pass* `computePathT95(...)` map (computed before
+        // this LAG pass). That map uses `DEFAULT_T95_DAYS` whenever an edge's t95 isn't already set.
+        // Including it here would silently force huge horizons (e.g. 30d per hop) and mask the real
+        // per-query/path_t95 behaviour we are trying to model.
+        //
+        // Therefore, for completeness tail constraints we only consider:
+        // - Any persisted path_t95 on the edge (from file/graph)
+        // - The path_t95 computed within this LAG pass (`edgePathT95`), which is based on derived t95
+        //   and/or moment-matched A→Y fit when available.
+        //
+        // Override flags MUST NOT change semantic meaning; they only gate overwrite permissions.
         const latencyAny = (edge.p as any)?.latency as any | undefined;
         const storedPathT95 =
           typeof latencyAny?.path_t95 === 'number' && Number.isFinite(latencyAny?.path_t95) && latencyAny.path_t95 > 0
@@ -2162,7 +2447,6 @@ export function enhanceGraphLatencies(
         const candidates = [
           storedPathT95,
           edgePathT95,
-          edgePrecomputedPathT95,
         ].filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
 
         completenessAuthoritativeT95Days = candidates.length > 0 ? Math.max(...candidates) : undefined;
@@ -2173,7 +2457,7 @@ export function enhanceGraphLatencies(
             (typeof c.anchor_median_lag_days === 'number' && Number.isFinite(c.anchor_median_lag_days) && c.anchor_median_lag_days > 0) ||
             (typeof c.anchor_mean_lag_days === 'number' && Number.isFinite(c.anchor_mean_lag_days) && c.anchor_mean_lag_days > 0)
         );
-
+        
         if (canComputeAnchorMoments && completenessAuthoritativeT95Days !== undefined) {
           // Aggregate anchor lag (A→X) stats using n-weighting.
           const anchorLagCandidates = cohortsForPathEstimate.filter((c) =>
@@ -2308,6 +2592,10 @@ export function enhanceGraphLatencies(
       }
       if (edge.p?.evidence) {
         edgeLAGValues.evidence = {
+          // IMPORTANT:
+          // `p.evidence.mean` should remain the *raw observed* signal (k/n in the current query window).
+          // Any completeness/Bayes adjustments are used ONLY for blending (see evidenceMeanForBlend below)
+          // and surfaced via debug.evidenceMeanUsedForBlend.
           mean: edge.p.evidence.mean,
           n: edge.p.evidence.n,
           k: edge.p.evidence.k,
@@ -2327,26 +2615,17 @@ export function enhanceGraphLatencies(
       // 
       const completeness = completenessUsed;
       const evidenceMeanRaw = edge.p?.evidence?.mean;
-
-      // COHORT MODE (PATH-ANCHORED): Evidence is right-censored by time-to-success.
-      // If completeness estimates the fraction of eventual successes that have landed by now,
-      // then k/n underestimates the eventual probability by approximately that factor:
-      //   E[k/n] ≈ p∞ × completeness  →  p∞ ≈ (k/n) / completeness.
-      //
-      // Use this de-biased evidence mean only when we are explicitly in cohort_path_anchored mode,
-      // so we don't accidentally reinterpret conditional/fallback completeness.
-      const shouldDebiasEvidenceByCompleteness =
-        !isWindowMode &&
-        completenessMode === 'cohort_path_anchored' &&
-        typeof evidenceMeanRaw === 'number' &&
-        Number.isFinite(evidenceMeanRaw) &&
-        typeof completeness === 'number' &&
-        Number.isFinite(completeness) &&
-        completeness > 0.01;
-
-      const evidenceMeanForBlend = shouldDebiasEvidenceByCompleteness
-        ? Math.max(0, Math.min(1, evidenceMeanRaw / completeness))
-        : evidenceMeanRaw;
+      const evidenceNRaw = edge.p?.evidence?.n;
+      const evidenceKRaw = edge.p?.evidence?.k;
+      const evidenceMeanObserved =
+        typeof evidenceNRaw === 'number' &&
+        Number.isFinite(evidenceNRaw) &&
+        evidenceNRaw > 0 &&
+        typeof evidenceKRaw === 'number' &&
+        Number.isFinite(evidenceKRaw) &&
+        evidenceKRaw >= 0
+          ? Math.max(0, Math.min(1, evidenceKRaw / evidenceNRaw))
+          : evidenceMeanRaw;
 
       // Prefer forecast from WINDOW slices (design.md §3.2.1), but if no
       // window() baseline exists and LAG has estimated a reliable p_infinity,
@@ -2358,6 +2637,88 @@ export function enhanceGraphLatencies(
       const fallbackForecastMean =
         latencyStats.forecast_available ? latencyStats.p_infinity : undefined;
       const forecastMean = baseForecastMean ?? fallbackForecastMean;
+
+      // COHORT MODE (PATH-ANCHORED): Bayesian completeness adjustment for blending.
+      //
+      // IMPORTANT:
+      // - `p.evidence.mean` remains raw observed k/n for semantic clarity.
+      // - The adjusted signal is used ONLY for blending and surfaced in debug as
+      //   evidenceMeanUsedForBlend (+ evidenceMeanBayesAdjusted).
+      //
+      // Goal:
+      // - evidenceMeanObserved = k_obs / n is right-censored for immature cohorts (low completeness),
+      //   so it systematically underestimates the eventual conversion probability.
+      // - We want a continuous, inspectable signal for "eventual p" that:
+      //     - approaches k/n when cohorts are mature (completeness → 1)
+      //     - shrinks to forecastMean when information is low (n_eff small)
+      //     - avoids the aggressive (k/n)/completeness blow-up for small completeness
+      //
+      // Model (conjugate approximation):
+      // - Treat observed conversions as arising from an effective number of trials:
+      //     n_eff = n * completeness
+      //   so k_obs ≈ Binomial(n_eff, p_eventual)
+      // - Place a Beta prior on p_eventual centred on the stable baseline forecastMean:
+      //     p ~ Beta(alpha, beta), where alpha = p0*s, beta = (1-p0)*s
+      // - Posterior mean:
+      //     E[p | k_obs] = (k_obs + alpha) / (n_eff + alpha + beta)
+      //
+      // We reuse LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE as the prior strength s to avoid adding new knobs.
+      const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+      const shouldBayesAdjustEvidenceMean =
+        !isWindowMode &&
+        completenessMode === 'cohort_path_anchored' &&
+        typeof evidenceNRaw === 'number' &&
+        Number.isFinite(evidenceNRaw) &&
+        evidenceNRaw > 0 &&
+        typeof evidenceKRaw === 'number' &&
+        Number.isFinite(evidenceKRaw) &&
+        evidenceKRaw >= 0 &&
+        typeof completeness === 'number' &&
+        Number.isFinite(completeness) &&
+        completeness > 0 &&
+        typeof forecastMean === 'number' &&
+        Number.isFinite(forecastMean);
+
+      // ─────────────────────────────────────────────────────────────────────
+      // TEMPORARY EVIDENCE MANIPULATION (port-to-blend later)
+      // ─────────────────────────────────────────────────────────────────────
+      const evidenceMeanForBlend = (() => {
+        if (!shouldBayesAdjustEvidenceMean) return evidenceMeanObserved;
+
+        const nObs = Math.max(0, evidenceNRaw as number);
+        const kObs = Math.max(0, evidenceKRaw as number);
+        const cRaw = Math.max(LATENCY_EPSILON, Math.min(1, completeness as number));
+        // Conservative completeness for evidence correction (tuned power blend):
+        // Use cEff = c^γ with γ in (0.5, 1.0) to moderate the correction strength.
+        // - γ = 1.0  → most aggressive (uses c directly)
+        // - γ = 0.5  → most conservative (uses sqrt(c))
+        // This setting (γ = 0.6) is a pragmatic middle ground that reduces slight
+        // upward drift in p.evidence at mid-completeness while keeping the tail smooth.
+        const cEff = Math.max(LATENCY_EPSILON, Math.min(1, Math.pow(cRaw, 0.7)));
+
+        // Effective trials behind observed conversions under right-censoring.
+        // Guard: ensure n_eff is not below k_obs (can happen with fractional n_eff + discrete k).
+        const nEffRaw = nObs * cEff;
+        const nEff = Math.max(nEffRaw, kObs);
+
+        const p0 = clamp01(forecastMean as number);
+        // Make the prior dominate harder as completeness → 0:
+        // scale pseudo-sample strength as s' = s / c so that extremely immature cohorts
+        // shrink more strongly to the stable baseline p0.
+        const s = LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE / cRaw;
+        const alpha = p0 * s;
+        const beta = (1 - p0) * s;
+
+        return clamp01((kObs + alpha) / (nEff + alpha + beta));
+      })();
+
+      const evidenceMeanWasAdjusted =
+        shouldBayesAdjustEvidenceMean &&
+        typeof evidenceMeanForBlend === 'number' &&
+        typeof evidenceMeanObserved === 'number' &&
+        Number.isFinite(evidenceMeanForBlend) &&
+        Number.isFinite(evidenceMeanObserved) &&
+        Math.abs(evidenceMeanForBlend - evidenceMeanObserved) > 1e-12;
       if (edgeLAGValues.debug) {
         edgeLAGValues.debug.baseForecastMean = baseForecastMean;
         edgeLAGValues.debug.fallbackForecastMean = fallbackForecastMean;
@@ -2366,12 +2727,14 @@ export function enhanceGraphLatencies(
           baseForecastMean !== undefined ? 'edge.p.forecast.mean'
           : (fallbackForecastMean !== undefined ? 'lag.p_infinity' : 'none');
 
-        edgeLAGValues.debug.evidenceMeanRaw = evidenceMeanRaw;
+        edgeLAGValues.debug.evidenceMeanRaw = evidenceMeanObserved;
         edgeLAGValues.debug.evidenceMeanUsedForBlend = evidenceMeanForBlend;
-        edgeLAGValues.debug.evidenceMeanDebiasedByCompleteness = shouldDebiasEvidenceByCompleteness;
+        edgeLAGValues.debug.evidenceMeanBayesAdjusted = evidenceMeanWasAdjusted;
       }
 
-      // nQuery: forecast population for this edge
+      // Do NOT overwrite p.evidence.mean here; it must remain raw observed k/n.
+
+      // nQuery: forecast population for this edge.
       // Prefer p.n (computed by computeInboundN from upstream forecast_k),
       // then fall back to evidence.n (raw from Amplitude), then cohort sum.
       // This ensures downstream edges with n=0 from Amplitude still get
@@ -2397,14 +2760,20 @@ export function enhanceGraphLatencies(
         | { sliceDSL?: string; retrievedAt?: string; n?: number; k?: number; forecast?: number }
         | undefined;
 
-      // Prefer true window() baseline sample size backing the forecast
+      // Prefer true window() baseline sample size backing the forecast.
+      //
+      // IMPORTANT:
+      // `nBaseline` is a *sample size* concept, not a "forecast value present" concept.
+      // In production, forecast.mean is stored on the edge, and the window slice carries n/k.
+      // Requiring `v.forecast` here creates discontinuities because we fall back to a hard
+      // maturity threshold (age >= horizon) which changes abruptly as the cohort window slides.
       const windowCandidates = (paramValues as ParameterValueForLAG[]).filter(v => {
         const dsl = v.sliceDSL;
         if (!dsl) return false;
         const hasWindow = dsl.includes('window(');
         const hasCohort = dsl.includes('cohort(');
         if (!hasWindow || hasCohort) return false;
-        return typeof v.forecast === 'number' && typeof v.n === 'number' && v.n > 0;
+        return typeof v.n === 'number' && v.n > 0;
       });
 
       if (windowCandidates.length > 0) {
@@ -2437,7 +2806,7 @@ export function enhanceGraphLatencies(
         completeness,
         evidenceMeanRaw,
         evidenceMeanUsedForBlend: evidenceMeanForBlend,
-        evidenceMeanDebiasedByCompleteness: shouldDebiasEvidenceByCompleteness,
+        evidenceMeanBayesAdjusted: evidenceMeanWasAdjusted,
         forecastMean,
         nQuery,
         nBaseline,
@@ -2458,24 +2827,32 @@ export function enhanceGraphLatencies(
 
       // Phase 2: p.mean is computed ONLY via the canonical blend (computeBlendedMean),
       // in both window() and cohort() modes.
+      const nQueryRawForBlend = cohortsLookSampled && typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery;
+      // If we de-bias evidence by dividing by completeness, information content drops ~1/completeness².
+      // Reduce the effective query population accordingly so immature cohorts remain forecast-dominant.
+      const nQueryForBlend = nQueryRawForBlend;
+
       const blendedMeanFromBlend = computeBlendedMean({
         evidenceMean: evidenceMeanForBlend,
         forecastMean: forecastMean ?? 0,
         completeness,
-        nQuery: cohortsLookSampled && typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery,
-        nBaseline: nBaseline > 0 ? nBaseline : nQuery,
+        nQuery: nQueryForBlend,
+        nBaseline: nBaseline > 0 ? nBaseline : nQueryForBlend,
       });
 
       // Capture blend diagnostics for session logging
       if (edgeLAGValues.debug) {
-        const nQueryForBlend = cohortsLookSampled && typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery;
         const nBaselineUsed = nBaseline > 0 ? nBaseline : nQueryForBlend;
         if (nBaselineUsed === nQueryForBlend && nBaseline === 0) {
           nBaselineSource = 'fallback_to_nQuery';
         }
 
         // Mirror computeBlendedMean weighting so logs can explain low forecasts
-        const nEff = (completeness ?? 0) * (nQueryForBlend ?? 0);
+        const completenessForBlendWeight =
+          Number.isFinite(completeness as number) && (completeness as number) > 0
+            ? Math.min(1, Math.max(0, Math.pow(completeness as number, LATENCY_BLEND_COMPLETENESS_POWER)))
+            : 0;
+        const nEff = completenessForBlendWeight * (nQueryForBlend ?? 0);
         const m0 = FORECAST_BLEND_LAMBDA * (nBaselineUsed ?? 0);
         const wEvidence = (m0 + nEff) > 0 ? (nEff / (m0 + nEff)) : 0;
 
@@ -2483,6 +2860,7 @@ export function enhanceGraphLatencies(
         edgeLAGValues.debug.nBaseline = nBaselineUsed;
         edgeLAGValues.debug.nBaselineSource = nBaselineSource;
         edgeLAGValues.debug.wEvidence = wEvidence;
+        edgeLAGValues.debug.completenessForBlendWeight = completenessForBlendWeight;
 
         if (bestWindowMeta) {
           edgeLAGValues.debug.baselineWindowSliceDSL = bestWindowMeta.sliceDSL;

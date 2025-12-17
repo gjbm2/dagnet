@@ -69,7 +69,7 @@ import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
-import { DIAGNOSTIC_LOG, RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
+import { DIAGNOSTIC_LOG, RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 import { normalizeWindow } from './fetchDataService';
 import { LATENCY_T95_PERCENTILE, LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
 

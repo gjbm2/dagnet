@@ -161,10 +161,15 @@ describe('LAG Stats Flow - Expected Values', () => {
       const e1 = result.edgeValues[0];
       expect(e1.blendedMean).toBeDefined();
       expect(e1.forecast?.mean).toBe(0.98);
+      const evidenceMeanExact = 69 / 97;
+      // Evidence block on the edge may be pre-populated / rounded by the pipeline;
+      // the blend itself uses cohort-derived totals. Keep this assertion aligned with the fixture.
       expect(e1.evidence?.mean).toBe(0.71);
 
       const expected = computeBlendedMean({
-        evidenceMean: 0.71,
+        // Use the exact cohort-derived evidence mean (k/n), not a rounded literal.
+        // enhanceGraphLatencies uses cohort totals, so rounding here can create ~1e-3 drift.
+        evidenceMean: evidenceMeanExact,
         forecastMean: 0.98,
         completeness: e1.latency.completeness,
         nQuery: 97,
@@ -1024,15 +1029,18 @@ describe('LAG Stats Flow - Expected Values', () => {
         edges: [
           {
             id: 'e1', uuid: 'e1', from: 'A', to: 'B',
-            p: { mean: 0.5, latency: { latency_parameter: true, t95: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+            // IMPORTANT: Do NOT pre-seed t95 here; edge.p.latency.t95 is treated as authoritative
+            // and will override the computed t95 derived from lag arrays. This scenario is
+            // explicitly validating the computed/moment-matched path behaviour.
+            p: { mean: 0.5, latency: { latency_parameter: true }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
           },
           {
             id: 'e2', uuid: 'e2', from: 'B', to: 'C',
-            p: { mean: 0.5, latency: { latency_parameter: true, t95: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+            p: { mean: 0.5, latency: { latency_parameter: true }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
           },
           {
             id: 'e3', uuid: 'e3', from: 'C', to: 'D',
-            p: { mean: 0.5, latency: { latency_parameter: true, t95: 30 }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
+            p: { mean: 0.5, latency: { latency_parameter: true }, forecast: { mean: 0.5 }, evidence: { mean: 0.5, n: 1000, k: 500 } },
           },
         ],
       };
@@ -1100,7 +1108,7 @@ describe('LAG Stats Flow - Expected Values', () => {
       // Option A uses anchor+edge moment-matched estimate (A→C + C→D as lognormal sum).
       // Since anchor median (8d) << topo sum (much larger with variance),
       // the combined A→D estimate should be materially smaller.
-      expect(e3Result!.latency.path_t95).toBeLessThan(topoFallbackForE3);
+      expect(e3Result!.latency.path_t95).toBeLessThan(topoFallbackForE3 - 1e-9);
       // Still must be at least the edge-local t95
       expect(e3Result!.latency.path_t95).toBeGreaterThanOrEqual(e3Result!.latency.t95);
     });
@@ -1159,12 +1167,11 @@ describe('LAG Stats Flow - Expected Values', () => {
       ];
       
       // With ages 59-60 days and a short median lag, cohorts should be highly complete.
-      //
-      // NOTE: We deliberately apply a one-way tail constraint using the authoritative t95
-      // (fallbackT95Days here), which can keep completeness < 1 even for "old" cohorts
-      // when the authoritative tail is much longer than implied by the moments.
+      // NOTE: The tail constraint is one-way and only applies when an authoritative t95
+      // (edge.p.latency.t95) is provided and is larger than the moment-implied tail.
+      // Here we do not provide an authoritative t95, so the constraint should not apply.
       const stats = computeEdgeLatencyStats(cohorts, 3, 3, 30, 0);
-      expect(stats.completeness_cdf.tail_constraint_applied).toBe(true);
+      expect(stats.completeness_cdf.tail_constraint_applied).toBe(false);
       expect(stats.completeness).toBeGreaterThan(0.95);
       expect(stats.completeness).toBeLessThanOrEqual(1);
     });
@@ -1305,8 +1312,8 @@ describe('Anchor Lag Data Flow (C1 e2e)', () => {
       );
 
       // No age adjustment, ages 18-20 with short median lag → high completeness.
-      // As above, the authoritative t95 tail constraint may keep this below "near-1".
-      expect(stats.completeness_cdf.tail_constraint_applied).toBe(true);
+      // No authoritative edge t95 is provided here, so the tail constraint should not apply.
+      expect(stats.completeness_cdf.tail_constraint_applied).toBe(false);
       expect(stats.completeness).toBeGreaterThan(0.85);
       expect(stats.completeness).toBeLessThanOrEqual(1);
     });
