@@ -152,4 +152,25 @@ These are more complex and require careful guardrails to avoid overfitting.
 - How do we reconcile join heterogeneity where one branch has a much longer dead-time but low mass?
 - Should histogram-derived \(\delta\) ever be persisted, or treated as transient per fetch?
 
+## Related issue: MECE context slices and mixture quantiles (future reference)
+
+Separately from histogram-derived \(\delta\), we have an emerging requirement around **MECE context slicing**:
+
+- When a context key is MECE (mutually exclusive and collectively exhaustive), the system should be able to treat the set of contexted slices as an **implicit uncontexted truth** for both `window()` and `cohort()` modes (to avoid wasteful explicit uncontexted fetches).
+
+This has a direct implication for histogram-assisted fitting and for latency summaries generally:
+
+- Aggregating medians across slices is not additive. The mathematically correct target is the median of the pooled population, i.e. the 0.5 quantile of the **mixture distribution** \(F(t)=\sum_i w_i F_i(t)\).
+- If histogram bins are available (even only early bins), pooling histograms across MECE slices (by summing counts) provides a principled way to estimate early mixture quantiles and to detect onset delays that are stable across segments.
+- Even without histograms, a practical approach is to approximate per-slice lag distributions (e.g. lognormal fits with one-way tail constraints) and compute mixture quantiles via monotone root finding.
+
+### Architectural note: shared lag distribution utilities
+
+At present, most lognormal fitting and quantile utilities live inside the statistical enhancement layer (graph-level LAG). If we want to compute mixture quantiles at aggregation time (e.g. when building an implicit uncontexted baseline from MECE slices), we will likely need to **service-ify / library-ify** the distribution machinery:
+
+- Move pure distribution utilities (CDF, inverse CDF, fitting from moments, tail-constraint improvement, mixture quantile solver) into a shared module that does not depend on graph-level services or session logging.
+- Keep graph-level orchestration (topo pass, join semantics, path_t95 handling, logging) in the statistical enhancement service.
+
+This is referenced in `docs/current/project-lag/context-fix.md` and should be considered when implementing histogram-assisted fitting so we do not duplicate distribution logic in multiple places.
+
 
