@@ -37,6 +37,22 @@ https://dagnet.vercel.app/?data=%7B%22nodes%22%3A%5B%7B%22id%22%3A%22a%22%2C%22d
 
 Opens a specific graph from the default repository by name.
 
+### `?pullalllatest`
+
+Pulls the latest repository changes **before** processing any other URL parameters (e.g. `graph`, `parameter`, `context`, `case`, `node`, `data`).
+
+This is useful for shared links where you want the app to self-update first:
+
+```
+https://dagnet.vercel.app/?graph=conversion-flow-v2-recs-collapsed&pullalllatest
+```
+
+**How it works:**
+- Runs the same “Pull All Latest” operation as the UI (incremental, 3-way merge).
+- Uses the repository/branch currently selected in Navigator; if none is selected yet, it falls back to `defaultGitRepo` from credentials.
+- If the pull fails (e.g. missing credentials), the app continues and still attempts to load the requested file.
+- The `pullalllatest` parameter is removed from the URL after it runs (so refresh won’t repeatedly pull).
+
 **Usage:**
 ```
 https://dagnet.vercel.app/?graph=<graph_name>
