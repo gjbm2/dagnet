@@ -112,6 +112,10 @@ Basic repo ops (switch repo, clear, pull) lack E2E tests and keep breaking. See 
 
 ---
 
+## Vite dynamic import chunk failures (DEPLOY CACHE ISSUE)
+
+- (17-Dec-25) Intermittent prod error: **“Failed to fetch dynamically imported module”** for the Vite chunk behind `../lib/das/compositeQueryExecutor` (triggered by composite queries / inclusion–exclusion). Likely stale cached entrypoint / SW after deploy → chunk hash 404s. Add a small resilience layer: retry once; if still failing, show a “new version deployed — hard refresh” prompt (and/or trigger reload), so data fetch doesn’t fail with an opaque error.
+
 ## Keyboard jamming issue
 
 Now when the bug happens:
