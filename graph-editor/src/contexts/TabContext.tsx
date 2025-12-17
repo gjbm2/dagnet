@@ -1012,6 +1012,25 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   const loadFromURLData = async () => {
     try {
       const urlParams = new URLSearchParams(window.location.search);
+
+      // Optional preflight: pull latest before any URL-driven loads.
+      // Example:
+      //   `/?graph=conversion-flow-v2-recs-collapsed&pullalllatest`
+      // will pull first, then open the graph.
+      if (urlParams.has('pullalllatest')) {
+        try {
+          const { repositoryOperationsService } = await import('../services/repositoryOperationsService');
+          await repositoryOperationsService.pullLatestForCurrentNavigatorSelection();
+        } catch (e) {
+          // Best-effort: if pull fails (e.g. no creds), still attempt to load requested graph.
+          console.warn('TabContext: pullalllatest preflight failed:', e);
+        }
+
+        // Clean up URL parameter so refresh doesn't repeatedly pull.
+        const url = new URL(window.location.href);
+        url.searchParams.delete('pullalllatest');
+        window.history.replaceState({}, document.title, url.toString());
+      }
       
       // Handle ?data parameter (compressed/uncompressed JSON)
       const dataParam = urlParams.get('data');
