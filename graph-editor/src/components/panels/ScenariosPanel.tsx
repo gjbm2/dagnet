@@ -27,6 +27,7 @@ import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import { parseConstraints } from '@/lib/queryDSL';
 import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/scenarioRegenerationService';
 import { fetchDataService } from '../../services/fetchDataService';
+import { useCopyAllScenarioParamPacks } from '../../hooks/useCopyAllScenarioParamPacks';
 import { 
   Eye, 
   EyeOff,
@@ -44,7 +45,8 @@ import {
   Layers,
   Zap,
   RefreshCw,
-  ArrowDownFromLine
+  ArrowDownFromLine,
+  ClipboardCopy
 } from 'lucide-react';
 import type { ScenarioVisibilityMode } from '../../types';
 import toast from 'react-hot-toast';
@@ -110,6 +112,8 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   const { operations, tabs } = useTabContext();
   const graphStore = useGraphStore();
   const graph = graphStore?.getState().graph || null;
+  const { copyAllScenarioParamPacks } = useCopyAllScenarioParamPacks(tabId);
+  const [copiedPulse, setCopiedPulse] = useState(false);
   
   // Early return if context not available yet
   if (!scenariosContext) {
@@ -731,6 +735,22 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     }
   }, [regenerateAllLive]);
 
+  const handleCopyAllScenarioParamPacks = useCallback(async () => {
+    const res = await copyAllScenarioParamPacks();
+    if (!res.ok) {
+      if (res.reason === 'no-tab') toast.error('No active tab');
+      else if (res.reason === 'no-context') toast.error('Scenarios not ready');
+      else toast.error('Clipboard copy failed (permission?)');
+      return;
+    }
+
+    toast.success(
+      `Copied ${res.scenarioCount} visible scenario param pack${res.scenarioCount === 1 ? '' : 's'} (of ${res.totalScenarioCount}) (${Math.round(res.byteLength / 1024)} KB)`
+    );
+    setCopiedPulse(true);
+    window.setTimeout(() => setCopiedPulse(false), 900);
+  }, [copyAllScenarioParamPacks]);
+
   /**
    * "To Base" - push current DSL to base and regenerate all live scenarios
    * Shows confirmation modal if any scenarios need data fetch.
@@ -1173,17 +1193,25 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         <div className="scenarios-header">
           <Layers size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
           <h3 className="scenarios-title">Scenarios</h3>
-          {/* Refresh All button - only shown if there are live scenarios */}
-          {hasLiveScenarios && (
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <button
               className="scenarios-header-btn"
-              onClick={handleRefreshAllLive}
-              title="Refresh all live scenarios"
-              style={{ marginLeft: 'auto' }}
+              onClick={handleCopyAllScenarioParamPacks}
+              title="Copy ALL scenario param packs as JSON to clipboard"
             >
-              <RefreshCw size={14} />
+              <ClipboardCopy size={14} style={copiedPulse ? { color: '#10B981' } : undefined} />
             </button>
-          )}
+            {/* Refresh All button - only shown if there are live scenarios */}
+            {hasLiveScenarios && (
+              <button
+                className="scenarios-header-btn"
+                onClick={handleRefreshAllLive}
+                title="Refresh all live scenarios"
+              >
+                <RefreshCw size={14} />
+              </button>
+            )}
+          </div>
         </div>
       )}
       

@@ -36,7 +36,7 @@ import { computePathT95, getActiveEdges, type GraphForPath } from './statistical
 import { computeCohortRetrievalHorizon, type CohortHorizonResult } from './cohortRetrievalHorizon';
 import type { ParameterValue } from './paramRegistryService';
 import { sessionLogService } from './sessionLogService';
-import { DIAGNOSTIC_LOG } from '../constants/statisticalConstants';
+import { DIAGNOSTIC_LOG } from '../constants/latency';
 import type { Graph, DateRange } from '../types';
 
 // =============================================================================

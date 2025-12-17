@@ -21,7 +21,7 @@ import {
   COHORT_HORIZON_MIN_DAYS,
   COHORT_HORIZON_BUFFER_DAYS,
   DEFAULT_T95_DAYS,
-} from '../constants/statisticalConstants';
+} from '../constants/latency';
 
 // =============================================================================
 // Types

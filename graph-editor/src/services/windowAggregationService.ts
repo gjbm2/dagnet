@@ -15,7 +15,7 @@ import type { ParameterValue } from './paramRegistryService';
 import { isolateSlice, hasContextAny, expandContextAny, extractSliceDimensions } from './sliceIsolation';
 import { parseConstraints } from '../lib/queryDSL';
 import { normalizeToUK, isUKDate, parseUKDate } from '../lib/dateFormat';
-import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/statisticalConstants';
+import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 // LAG: CohortData type is used for aggregation helpers further down in this file
 import type { CohortData } from './statisticalEnhancementService';
 

@@ -638,10 +638,13 @@ describe('LAG completeness t95 tail constraint (Phase 2)', () => {
     ];
 
     // Moment-fit will imply a relatively tight distribution.
+    // IMPORTANT: defaultT95Days is only used when the fit fails. To apply an "authoritative" t95
+    // tail-constraint, pass it via the edgeT95 parameter (authoritative horizon).
     const statsNoConstraint = computeEdgeLatencyStats(cohorts, 5, 5.2, 7);
-    const statsWithConstraint = computeEdgeLatencyStats(cohorts, 5, 5.2, 60);
+    const statsWithConstraint = computeEdgeLatencyStats(cohorts, 5, 5.2, 7, 0, undefined, undefined, 60);
 
-    expect(statsNoConstraint.completeness_cdf.tail_constraint_applied).toBe(false);
+    expect(statsNoConstraint.fit.sigma).toBeLessThan(statsWithConstraint.fit.sigma);
+    expect(statsWithConstraint.t95).toBeCloseTo(60, 2);
     expect(statsWithConstraint.completeness_cdf.tail_constraint_applied).toBe(true);
     expect(statsWithConstraint.completeness).toBeLessThanOrEqual(statsNoConstraint.completeness);
   });
@@ -652,9 +655,12 @@ describe('LAG completeness t95 tail constraint (Phase 2)', () => {
       { date: '15-Oct-25', n: 100, k: 48, age: 45 },
     ];
 
-    const stats = computeEdgeLatencyStats(cohorts, 5, 7, 2);
+    // Provide an authoritative t95 that is smaller than the moment-implied t95 (but still > median).
+    // The one-way constraint must NOT reduce sigma; it should only increase sigma when authoritative t95 is larger.
+    const stats = computeEdgeLatencyStats(cohorts, 5, 7, 30, 0, undefined, undefined, 6);
     expect(stats.completeness_cdf.tail_constraint_applied).toBe(false);
-    expect(stats.completeness_cdf.sigma_min_from_t95).toBeUndefined();
+    // sigma_min_from_t95 is still computed when authoritative t95 > median; it simply must not be applied.
+    expect(stats.completeness_cdf.sigma_min_from_t95).toBeDefined();
     expect(stats.completeness_cdf.sigma).toBeCloseTo(stats.completeness_cdf.sigma_moments, 10);
   });
 });

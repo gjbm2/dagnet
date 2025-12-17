@@ -47,6 +47,7 @@ import { extractParamsFromGraph } from '../GraphParamExtractor';
 import { flattenParams } from '../ParamPackDSLService';
 import { parseDate } from '../windowAggregationService';
 import { formatDateUK } from '../../lib/dateFormat';
+import { fitLagDistribution, logNormalCDF } from '../statisticalEnhancementService';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -86,6 +87,10 @@ async function withFixedNow<T>(isoDateTime: string, fn: () => Promise<T>): Promi
   } finally {
     vi.useRealTimers();
   }
+}
+
+function daysBetween(a: Date, b: Date): number {
+  return (a.getTime() - b.getTime()) / (1000 * 60 * 60 * 24);
 }
 
 type DataRow = {
@@ -218,6 +223,15 @@ function firstFinite(xs: Array<number | undefined>): number | undefined {
   return undefined;
 }
 
+function parseCohortStartIsoFromDsl(dsl: string): string | undefined {
+  // Expected: cohort(<start>:<end>)
+  const m = dsl.match(/cohort\(([^:]+):([^)]+)\)/);
+  if (!m) return undefined;
+  const startRaw = m[1]?.trim();
+  if (!startRaw) return undefined;
+  return toIsoDate(startRaw);
+}
+
 function applyLatencyOverrides(
   graph: Graph,
   edgeId: string,
@@ -310,7 +324,7 @@ describe('Tool: CSV → TS stats → param-pack CSV', () => {
     const abLag = daily.map(r => r.ab_median_lag_days);
     const abMeanLag = daily.map(r => r.ab_mean_lag_days ?? r.ab_median_lag_days);
     const bcN = daily.map(r => r.bc_n);
-    const bcK = daily.map(r => r.bc_k);
+    const bcKUltimate = daily.map(r => r.bc_k);
     const bcLag = daily.map(r => r.bc_median_lag_days);
     const bcMeanLag = daily.map(r => r.bc_mean_lag_days ?? r.bc_median_lag_days);
 
@@ -318,6 +332,13 @@ describe('Tool: CSV → TS stats → param-pack CSV', () => {
     const abPathT95 = firstFinite(daily.map(r => r.ab_path_t95));
     const bcT95 = firstFinite(daily.map(r => r.bc_t95));
     const bcPathT95 = firstFinite(daily.map(r => r.bc_path_t95));
+
+    // Map by ISO date for per-query override selection.
+    // The daily CSV can supply t95/path_t95 per parameter *per day*; to emulate that in this
+    // cohort-sweep harness (one query per cohort window), we interpret the override value as
+    // "the parameter configuration as of the cohort START date".
+    const byIso = new Map<string, DataRow>();
+    for (const r of daily) byIso.set(r.dateIso, r);
 
     // Write values into the param files in FileRegistry (this is the “source data” for TS stats).
     const abFile = fileRegistry.getFile('parameter-ab-smooth-lag')!;
@@ -327,6 +348,10 @@ describe('Tool: CSV → TS stats → param-pack CSV', () => {
       mean: sum(abK) / sum(abN),
       n: sum(abN),
       k: sum(abK),
+      // Provide `forecast` on the window slice so the production blend logic can
+      // recover a stable nBaseline (window slice backing data) rather than falling
+      // back to "mature cohort" approximations that create visible kinks.
+      forecast: sum(abK) / sum(abN),
       dates,
       n_daily: abN,
       k_daily: abK,
@@ -353,12 +378,14 @@ describe('Tool: CSV → TS stats → param-pack CSV', () => {
     };
 
     const bcWindowValue = {
-      mean: sum(bcK) / sum(bcN),
+      mean: sum(bcKUltimate) / sum(bcN),
       n: sum(bcN),
-      k: sum(bcK),
+      k: sum(bcKUltimate),
+      // Provide `forecast` on the window slice for stable nBaseline extraction (see above).
+      forecast: sum(bcKUltimate) / sum(bcN),
       dates,
       n_daily: bcN,
-      k_daily: bcK,
+      k_daily: bcKUltimate,
       median_lag_days: bcLag,
       mean_lag_days: bcMeanLag,
       sliceDSL: sliceWindowDSL,
@@ -367,12 +394,13 @@ describe('Tool: CSV → TS stats → param-pack CSV', () => {
       data_source: { type: 'file', retrieved_at: new Date().toISOString(), full_query: 'csv:bc:window' },
     };
     const bcCohortValue = {
-      mean: sum(bcK) / sum(bcN),
+      // NOTE: `k_daily` is right-censored per query `as_of_date` below. Initialise with ultimate totals.
+      mean: sum(bcKUltimate) / sum(bcN),
       n: sum(bcN),
-      k: sum(bcK),
+      k: sum(bcKUltimate),
       dates,
       n_daily: bcN,
-      k_daily: bcK,
+      k_daily: bcKUltimate,
       median_lag_days: bcLag,
       mean_lag_days: bcMeanLag,
       // Anchor arrays derived from AB (A→B is the anchor path to B)
@@ -414,10 +442,61 @@ describe('Tool: CSV → TS stats → param-pack CSV', () => {
       let graph: Graph | null = structuredClone(graphBase);
       const setGraph = (g: Graph | null) => { graph = g; };
 
+      // Emulate production cohort evidence: right-censor conversions by `as_of_date`.
+      //
+      // The input CSV provides "ultimate" k per cohort-day; production evidence is observed k so far.
+      // For each cohort-day i:
+      //   age = days(as_of - cohort_date)
+      //   adjusted_age = max(0, age - anchor_median_lag_days[i])  // B happens after A
+      //   completeness_i = CDF_lognormal(adjusted_age; mu,sigma)   // for B→C lag
+      //   k_obs_i = k_ultimate_i * completeness_i
+      //
+      // This ensures that recent cohorts (low completeness) have shallow observed evidence, matching prod.
+      {
+        const asOf = parseDate(q.asOfIso);
+        const kObs: number[] = [];
+        for (let i = 0; i < dates.length; i++) {
+          const cohortDate = parseDate(dates[i]);
+          const age = Math.max(0, daysBetween(asOf, cohortDate));
+          const anchorLagDays = abLag[i] ?? 0;
+          const adjustedAge = Math.max(0, age - anchorLagDays);
+
+          const fit = fitLagDistribution(bcLag[i], bcMeanLag[i]);
+          const mu = fit.mu;
+          const sigma = fit.sigma;
+          const cdf = logNormalCDF(adjustedAge, mu, sigma);
+
+          const kUltimate = bcKUltimate[i];
+          const kObserved = Math.min(bcN[i], Math.max(0, kUltimate * cdf));
+          kObs.push(kObserved);
+        }
+        // Update the cohort slice payload for this query.
+        bcCohortValue.k_daily = kObs;
+        bcCohortValue.k = sum(kObs);
+        bcCohortValue.mean = bcCohortValue.k / Math.max(1, bcCohortValue.n);
+      }
+
       // Optional latency overrides (blank in CSV => derived by production pipeline)
       if (graph) {
-        applyLatencyOverrides(graph, 'A-B', { t95: abT95, path_t95: abPathT95 });
-        applyLatencyOverrides(graph, 'B-C', { t95: bcT95, path_t95: bcPathT95 });
+        const startIso = parseCohortStartIsoFromDsl(q.dsl);
+        const startRow = startIso ? byIso.get(startIso) : undefined;
+
+        // Choose per-query overrides from the cohort-start day if present.
+        //
+        // IMPORTANT (fix for “alternating row t95” bug):
+        // - If the cohort-start day has a BLANK value for t95/path_t95, that means “no override”.
+        // - We must NOT fall back to a “global firstFinite(...)” default in that case, otherwise
+        //   alternating (value, blank, value, blank...) collapses to always using the first value.
+        //
+        // Fallback to `firstFinite(...)` only when we cannot locate a cohort-start row at all.
+        applyLatencyOverrides(graph, 'A-B', {
+          t95: startRow ? startRow.ab_t95 : abT95,
+          path_t95: startRow ? startRow.ab_path_t95 : abPathT95,
+        });
+        applyLatencyOverrides(graph, 'B-C', {
+          t95: startRow ? startRow.bc_t95 : bcT95,
+          path_t95: startRow ? startRow.bc_path_t95 : bcPathT95,
+        });
       }
 
       await withFixedNow(`${q.asOfIso}T12:00:00Z`, async () => {

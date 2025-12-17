@@ -16,7 +16,7 @@ import {
 } from '../statisticalEnhancementService';
 import { computeAndApplyPathT95 } from '../fetchDataService';
 import type { Graph } from '../../types';
-import { DEFAULT_T95_DAYS } from '../../constants/statisticalConstants';
+import { DEFAULT_T95_DAYS } from '../../constants/latency';
 
 describe('path_t95 computation', () => {
   describe('computePathT95', () => {

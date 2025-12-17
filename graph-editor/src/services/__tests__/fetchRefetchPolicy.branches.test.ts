@@ -19,7 +19,7 @@ import {
   type RefetchDecision,
 } from '../fetchRefetchPolicy';
 import type { ParameterValue } from '../paramRegistryService';
-import { DEFAULT_T95_DAYS } from '../../constants/statisticalConstants';
+import { DEFAULT_T95_DAYS } from '../../constants/latency';
 
 // =============================================================================
 // Maturity Boundary Rule (Single Source of Truth for Tests)
