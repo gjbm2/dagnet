@@ -11,6 +11,8 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import type { GraphData } from '../types';
+import toast from 'react-hot-toast';
+import { validatePinnedDataInterestsDSL } from '../services/slicePlanValidationService';
 
 export interface UseRetrieveAllSlicesOptions {
   graph: GraphData | null;
@@ -61,11 +63,22 @@ export function useRetrieveAllSlices(options: UseRetrieveAllSlicesOptions): UseR
   }, [hasPinnedQuery]);
   
   // Handle saving the pinned query from the modal
-  const handleSavePinnedQuery = useCallback((newDSL: string) => {
+  const handleSavePinnedQuery = useCallback(async (newDSL: string) => {
     if (!graph) return;
     
     // Update graph with new pinned query
     setGraph({ ...graph, dataInterestsDSL: newDSL });
+
+    // Non-blocking warnings on save
+    try {
+      const result = await validatePinnedDataInterestsDSL(newDSL);
+      for (const w of result.warnings) {
+        toast(w, { icon: '⚠️', duration: 6000 });
+      }
+    } catch (e) {
+      // Never block saving; warnings are advisory only.
+      console.warn('[useRetrieveAllSlices] Failed to validate pinned DSL:', e);
+    }
     
     // Close the pinned query modal
     setShowPinnedQueryModal(false);

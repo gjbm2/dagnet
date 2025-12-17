@@ -13,12 +13,14 @@
  * @vitest-environment node
  */
 /// <reference types="node" />
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { fileRegistry } from '../../contexts/TabContext';
 import type { Graph } from '../../types';
 import { fetchDataService, createFetchItem, type FetchItem } from '../fetchDataService';
 import { extractParamsFromGraph } from '../GraphParamExtractor';
 import { flattenParams } from '../ParamPackDSLService';
+import { contextRegistry } from '../contextRegistry';
+import { extractSliceDimensions } from '../sliceIsolation';
 
 type ParamFile = {
   id: string;
@@ -80,21 +82,93 @@ function expectPacksClose(a: Record<string, any>, b: Record<string, any>, tol = 
     const av = a[k];
     const bv = b[k];
     if (typeof av === 'number' && typeof bv === 'number') {
-      expect(Math.abs(av - bv), `Key ${k} differs: ${av} vs ${bv}`).toBeLessThanOrEqual(tol);
+      const tolForKey =
+        k.endsWith('.p.stdev') || k.endsWith('.p.evidence.stdev')
+          ? 1e-4 // stdev is often rounded in the pipeline; keep tight but realistic
+          : tol;
+      const extra =
+        k.endsWith('.p.mean')
+          ? `\nA: ${JSON.stringify(
+              {
+                mean: a[k],
+                evidenceMean: a[k.replace('.p.mean', '.p.evidence.mean')],
+                evidenceN: a[k.replace('.p.mean', '.p.evidence.n')],
+                evidenceK: a[k.replace('.p.mean', '.p.evidence.k')],
+                forecastMean: a[k.replace('.p.mean', '.p.forecast.mean')],
+                completeness: a[k.replace('.p.mean', '.p.latency.completeness')],
+                t95: a[k.replace('.p.mean', '.p.latency.t95')],
+              },
+              null,
+              0
+            )}\nB: ${JSON.stringify(
+              {
+                mean: b[k],
+                evidenceMean: b[k.replace('.p.mean', '.p.evidence.mean')],
+                evidenceN: b[k.replace('.p.mean', '.p.evidence.n')],
+                evidenceK: b[k.replace('.p.mean', '.p.evidence.k')],
+                forecastMean: b[k.replace('.p.mean', '.p.forecast.mean')],
+                completeness: b[k.replace('.p.mean', '.p.latency.completeness')],
+                t95: b[k.replace('.p.mean', '.p.latency.t95')],
+              },
+              null,
+              0
+            )}`
+          : '';
+      expect(Math.abs(av - bv), `Key ${k} differs: ${av} vs ${bv}${extra}`).toBeLessThanOrEqual(tolForKey);
     } else {
       expect(av, `Key ${k} differs`).toEqual(bv);
     }
   }
 }
 
-describe.skip('RED: MECE context slices should be an implicit uncontexted truth (forecast + evidence)', () => {
+describe('MECE context slices should be an implicit uncontexted truth (forecast + evidence)', () => {
   beforeAll(async () => {
     // ensure isolated registry state
-    await fileRegistry.clear();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fr: any = fileRegistry as any;
+    if (typeof fr.clear === 'function') {
+      await fr.clear();
+    } else if (fr._files?.clear) {
+      fr._files.clear();
+    } else if (fr.files?.clear) {
+      fr.files.clear();
+    }
+
+    // Declare the MECE context used by this test (channel) so MECE aggregation is enabled in node env.
+    // This is the "user declaration" of MECE via otherPolicy.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (contextRegistry as any).clearCache?.();
+    vi.spyOn(contextRegistry, 'getContext').mockImplementation(async (id: string) => {
+      if (id !== 'channel') return undefined;
+      return {
+        id: 'channel',
+        name: 'Channel',
+        description: 'Test',
+        type: 'categorical',
+        otherPolicy: 'null',
+        values: [
+          { id: 'google', label: 'Google' },
+          { id: 'meta', label: 'Meta' },
+        ],
+        metadata: {
+          created_at: '17-Dec-25',
+          version: '1.0.0',
+          status: 'active',
+        },
+      } as any;
+    });
   });
 
   afterAll(async () => {
-    await fileRegistry.clear();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fr: any = fileRegistry as any;
+    if (typeof fr.clear === 'function') {
+      await fr.clear();
+    } else if (fr._files?.clear) {
+      fr._files.clear();
+    } else if (fr.files?.clear) {
+      fr.files.clear();
+    }
   });
 
   it('uncontexted cohort() query produces identical param packs: explicit uncontexted baseline vs MECE-only context slices', async () => {
@@ -227,6 +301,10 @@ describe.skip('RED: MECE context slices should be an implicit uncontexted truth 
       ],
     };
 
+    // Sanity: slice dimension extraction must see the context dimension for contexted window slices
+    expect(extractSliceDimensions('window(1-Dec-25:3-Dec-25).context(channel:google)')).toBe('context(channel:google)');
+    expect(extractSliceDimensions('cohort(A,1-Dec-25:3-Dec-25).context(channel:meta)')).toBe('context(channel:meta)');
+
     await registerParameterFile(baselineParamId, fileA);
     await registerParameterFile(meceOnlyParamId, fileB);
 
@@ -249,6 +327,30 @@ describe.skip('RED: MECE context slices should be an implicit uncontexted truth 
 
     const aEdgePack = toEdgePack(packA, edgeId);
     const bEdgePack = toEdgePack(packB, edgeId);
+
+    // Debug: print the high-signal fields when comparing (helps diagnose MECE vs explicit mismatches)
+    console.log('[MECE_EQ_DEBUG] A', {
+      mean: aEdgePack[`e.${edgeId}.p.mean`],
+      evidenceMean: aEdgePack[`e.${edgeId}.p.evidence.mean`],
+      evidenceN: aEdgePack[`e.${edgeId}.p.evidence.n`],
+      evidenceK: aEdgePack[`e.${edgeId}.p.evidence.k`],
+      forecastMean: aEdgePack[`e.${edgeId}.p.forecast.mean`],
+      completeness: aEdgePack[`e.${edgeId}.p.latency.completeness`],
+      t95: aEdgePack[`e.${edgeId}.p.latency.t95`],
+      pathT95: aEdgePack[`e.${edgeId}.p.latency.path_t95`],
+      medianLag: aEdgePack[`e.${edgeId}.p.latency.median_lag_days`],
+    });
+    console.log('[MECE_EQ_DEBUG] B', {
+      mean: bEdgePack[`e.${edgeId}.p.mean`],
+      evidenceMean: bEdgePack[`e.${edgeId}.p.evidence.mean`],
+      evidenceN: bEdgePack[`e.${edgeId}.p.evidence.n`],
+      evidenceK: bEdgePack[`e.${edgeId}.p.evidence.k`],
+      forecastMean: bEdgePack[`e.${edgeId}.p.forecast.mean`],
+      completeness: bEdgePack[`e.${edgeId}.p.latency.completeness`],
+      t95: bEdgePack[`e.${edgeId}.p.latency.t95`],
+      pathT95: bEdgePack[`e.${edgeId}.p.latency.path_t95`],
+      medianLag: bEdgePack[`e.${edgeId}.p.latency.median_lag_days`],
+    });
 
     // Contract: identical edge param pack outputs (or within tight tolerance) for MECE-only vs explicit baseline.
     // This is expected to FAIL until implicit MECE aggregation exists for BOTH:

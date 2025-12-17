@@ -37,6 +37,27 @@ import {
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
 import { roundToDecimalPlaces } from '../utils/rounding';
+import type { LagDistributionFit } from './lagDistributionUtils';
+import {
+  erf,
+  standardNormalCDF,
+  standardNormalInverseCDF,
+  logNormalCDF,
+  logNormalInverseCDF,
+  logNormalSurvival,
+  fitLagDistribution,
+} from './lagDistributionUtils';
+
+export type { LagDistributionFit } from './lagDistributionUtils';
+export {
+  erf,
+  standardNormalCDF,
+  standardNormalInverseCDF,
+  logNormalCDF,
+  logNormalInverseCDF,
+  logNormalSurvival,
+  fitLagDistribution,
+};
 
 // =============================================================================
 // Shared Blend Calculation (Single Source of Truth)
@@ -396,18 +417,7 @@ export interface CohortData {
  * Fitted log-normal distribution parameters.
  * See design.md §5.4.1 for the log-normal CDF formula.
  */
-export interface LagDistributionFit {
-  /** μ parameter (location) - ln(median) */
-  mu: number;
-  /** σ parameter (scale/spread) */
-  sigma: number;
-  /** Whether the fit passed quality gates */
-  empirical_quality_ok: boolean;
-  /** Total converters used for fitting */
-  total_k: number;
-  /** Reason if quality failed */
-  quality_failure_reason?: string;
-}
+// LagDistributionFit is defined in lagDistributionUtils and re-exported above.
 
 /**
  * Result of computing edge latency statistics.
@@ -447,9 +457,7 @@ export interface EdgeLatencyStats {
  * @param x - Input value
  * @returns Probability P(Z ≤ x) where Z ~ N(0,1)
  */
-export function standardNormalCDF(x: number): number {
-  return 0.5 * (1 + erf(x / Math.SQRT2));
-}
+// standardNormalCDF is imported from lagDistributionUtils
 
 /**
  * Error function (erf) approximation.
@@ -459,25 +467,7 @@ export function standardNormalCDF(x: number): number {
  * @param x - Input value
  * @returns erf(x)
  */
-export function erf(x: number): number {
-  // Constants for the approximation
-  const a1 =  0.254829592;
-  const a2 = -0.284496736;
-  const a3 =  1.421413741;
-  const a4 = -1.453152027;
-  const a5 =  1.061405429;
-  const p  =  0.3275911;
-
-  // Save the sign of x
-  const sign = x < 0 ? -1 : 1;
-  x = Math.abs(x);
-
-  // A&S formula 7.1.26
-  const t = 1.0 / (1.0 + p * x);
-  const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
-
-  return sign * y;
-}
+// erf is imported from lagDistributionUtils
 
 /**
  * Inverse standard normal CDF (Φ⁻¹) - quantile function.
@@ -486,65 +476,7 @@ export function erf(x: number): number {
  * @param p - Probability (0 < p < 1)
  * @returns x such that Φ(x) = p
  */
-export function standardNormalInverseCDF(p: number): number {
-  if (p <= 0) return -Infinity;
-  if (p >= 1) return Infinity;
-  if (p === 0.5) return 0;
-
-  // Coefficients for the rational approximation
-  const a = [
-    -3.969683028665376e+01,
-     2.209460984245205e+02,
-    -2.759285104469687e+02,
-     1.383577518672690e+02,
-    -3.066479806614716e+01,
-     2.506628277459239e+00,
-  ];
-  const b = [
-    -5.447609879822406e+01,
-     1.615858368580409e+02,
-    -1.556989798598866e+02,
-     6.680131188771972e+01,
-    -1.328068155288572e+01,
-  ];
-  const c = [
-    -7.784894002430293e-03,
-    -3.223964580411365e-01,
-    -2.400758277161838e+00,
-    -2.549732539343734e+00,
-     4.374664141464968e+00,
-     2.938163982698783e+00,
-  ];
-  const d = [
-     7.784695709041462e-03,
-     3.224671290700398e-01,
-     2.445134137142996e+00,
-     3.754408661907416e+00,
-  ];
-
-  const pLow = 0.02425;
-  const pHigh = 1 - pLow;
-
-  let q: number, r: number;
-
-  if (p < pLow) {
-    // Rational approximation for lower region
-    q = Math.sqrt(-2 * Math.log(p));
-    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-           ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
-  } else if (p <= pHigh) {
-    // Rational approximation for central region
-    q = p - 0.5;
-    r = q * q;
-    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
-           (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
-  } else {
-    // Rational approximation for upper region
-    q = Math.sqrt(-2 * Math.log(1 - p));
-    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-            ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
-  }
-}
+// standardNormalInverseCDF is imported from lagDistributionUtils
 
 // =============================================================================
 // Log-Normal Distribution Functions
@@ -561,14 +493,7 @@ export function standardNormalInverseCDF(p: number): number {
  * @param sigma - Scale parameter
  * @returns P(T ≤ t) where T ~ LogNormal(μ, σ)
  */
-export function logNormalCDF(t: number, mu: number, sigma: number): number {
-  if (t <= 0) return 0;
-  if (sigma <= 0) {
-    // Degenerate case: all mass at exp(mu)
-    return t >= Math.exp(mu) ? 1 : 0;
-  }
-  return standardNormalCDF((Math.log(t) - mu) / sigma);
-}
+// logNormalCDF is imported from lagDistributionUtils
 
 /**
  * Log-normal survival function (complement of CDF).
@@ -579,9 +504,7 @@ export function logNormalCDF(t: number, mu: number, sigma: number): number {
  * @param sigma - Scale parameter
  * @returns P(T > t)
  */
-export function logNormalSurvival(t: number, mu: number, sigma: number): number {
-  return 1 - logNormalCDF(t, mu, sigma);
-}
+// logNormalSurvival is imported from lagDistributionUtils
 
 /**
  * Log-normal inverse CDF (quantile function).
@@ -592,124 +515,13 @@ export function logNormalSurvival(t: number, mu: number, sigma: number): number 
  * @param sigma - Scale parameter
  * @returns Quantile value
  */
-export function logNormalInverseCDF(p: number, mu: number, sigma: number): number {
-  if (p <= 0) return 0;
-  if (p >= 1) return Infinity;
-  return Math.exp(mu + sigma * standardNormalInverseCDF(p));
-}
+// logNormalInverseCDF is imported from lagDistributionUtils
 
 // =============================================================================
 // Lag Distribution Fitting
 // =============================================================================
 
-/**
- * Fit log-normal distribution from median and mean lag data.
- * 
- * From design.md §5.4.2:
- * - μ = ln(median)
- * - σ = sqrt(2 * ln(mean/median))
- * 
- * @param medianLag - Median lag in days
- * @param meanLag - Mean lag in days (optional, uses default σ if not provided)
- * @param totalK - Total converters (for quality gate)
- * @returns Fitted distribution parameters
- */
-export function fitLagDistribution(
-  medianLag: number,
-  meanLag: number | undefined,
-  totalK: number
-): LagDistributionFit {
-  // Guard against non-finite medianLag (undefined/NaN) early to avoid NaN propagation
-  if (!Number.isFinite(medianLag)) {
-    return {
-      mu: 0,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
-      total_k: totalK,
-      quality_failure_reason: `Invalid median lag (non-finite): ${String(medianLag)}`,
-    };
-  }
-  // Quality gate: minimum converters
-  if (totalK < LATENCY_MIN_FIT_CONVERTERS) {
-    return {
-      mu: medianLag > 0 ? Math.log(medianLag) : 0,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
-      total_k: totalK,
-      quality_failure_reason: `Insufficient converters: ${totalK} < ${LATENCY_MIN_FIT_CONVERTERS}`,
-    };
-  }
-
-  // Edge case: zero or negative median
-  if (medianLag <= 0) {
-    return {
-      mu: 0,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
-      total_k: totalK,
-      quality_failure_reason: `Invalid median lag: ${medianLag}`,
-    };
-  }
-
-  const mu = Math.log(medianLag);
-
-  // If mean not available, fall back to default σ but ALLOW fit to be used.
-  // We have valid median, so we can compute a reasonable t95 with default σ.
-  if (meanLag === undefined || meanLag <= 0) {
-    return {
-      mu,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: true,  // Allow fit - we have valid median
-      total_k: totalK,
-      quality_failure_reason: 'Mean lag not available, using default σ',
-    };
-  }
-
-  // Check mean/median ratio
-  const ratio = meanLag / medianLag;
-  
-  // CRITICAL: Math requires ratio >= 1.0 for valid sigma calculation.
-  // sigma = sqrt(2 * ln(ratio)) → ln(ratio) must be >= 0 → ratio must be >= 1.0
-  // For ratios < 1.0 (mean < median, which shouldn't happen for log-normal but can
-  // occur due to data noise), use default sigma but allow fit to proceed if ratio
-  // is close to 1.0 (i.e., >= LATENCY_MIN_MEAN_MEDIAN_RATIO).
-  if (ratio < 1.0) {
-    // Ratio below 1.0 means we can't compute sigma from the formula.
-    // If it's close to 1.0 (>= 0.9), treat as valid but use default sigma.
-    // If it's too low (< 0.9), mark as quality failure.
-    const isCloseToOne = ratio >= LATENCY_MIN_MEAN_MEDIAN_RATIO;
-    return {
-      mu,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: isCloseToOne,
-      total_k: totalK,
-      quality_failure_reason: isCloseToOne
-        ? `Mean/median ratio ${ratio.toFixed(3)} < 1.0 (using default σ)`
-        : `Mean/median ratio too low: ${ratio.toFixed(3)} < ${LATENCY_MIN_MEAN_MEDIAN_RATIO}`,
-    };
-  }
-
-  if (ratio > LATENCY_MAX_MEAN_MEDIAN_RATIO) {
-    return {
-      mu,
-      sigma: LATENCY_DEFAULT_SIGMA,
-      empirical_quality_ok: false,
-      total_k: totalK,
-      quality_failure_reason: `Mean/median ratio too high: ${ratio.toFixed(3)} > ${LATENCY_MAX_MEAN_MEDIAN_RATIO}`,
-    };
-  }
-
-  // Compute sigma from mean/median ratio
-  // mean/median = exp(σ²/2) → σ = sqrt(2 * ln(mean/median))
-  const sigma = Math.sqrt(2 * Math.log(ratio));
-
-  return {
-    mu,
-    sigma,
-    empirical_quality_ok: true,
-    total_k: totalK,
-  };
-}
+// fitLagDistribution is imported from lagDistributionUtils and re-exported above.
 
 /**
  * Compute t95 (95th percentile) from fitted distribution.
@@ -1840,7 +1652,7 @@ export interface EdgeLAGValues {
     /** Forecast mean actually used for the blend */
     forecastMeanUsed?: number;
     /** Where forecastMeanUsed came from */
-    forecastMeanSource?: 'edge.p.forecast.mean' | 'lag.p_infinity' | 'none';
+    forecastMeanSource?: 'edge.p.forecast.mean' | 'window_slices' | 'lag.p_infinity' | 'none';
     /** Query population used for the blend */
     nQuery?: number;
     /** Baseline sample size used for the blend */
@@ -2585,8 +2397,9 @@ export function enhanceGraphLatencies(
         },
       };
       
-      // Capture forecast and evidence from edge to pass through to UpdateManager
-      // These MUST be preserved on the output graph for rendering
+      // Capture forecast/evidence from edge to pass through to UpdateManager.
+      // NOTE: We may later derive forecastMean from window slices; that is applied after
+      // forecastMean is computed (to avoid temporal-dead-zone issues).
       if (edge.p?.forecast?.mean !== undefined) {
         edgeLAGValues.forecast = { mean: edge.p.forecast.mean };
       }
@@ -2627,16 +2440,41 @@ export function enhanceGraphLatencies(
           ? Math.max(0, Math.min(1, evidenceKRaw / evidenceNRaw))
           : evidenceMeanRaw;
 
-      // Prefer forecast from WINDOW slices (design.md §3.2.1), but if no
-      // window() baseline exists and LAG has estimated a reliable p_infinity,
-      // use p_infinity as a cohort-based fallback forecast baseline.
+      // Prefer forecast from WINDOW slices (design.md §3.2.1).
       //
-      // This ensures that edges with only cohort() data can still participate
-      // in the blend, rather than collapsing to pure evidence.
+      // If edge.p.forecast.mean is not already populated (common when the active query is
+      // uncontexted but the file only contains MECE contexted window slices), derive a stable
+      // window-baseline forecast directly from the available window slices:
+      //   - aggregate window slices (including MECE sums) into CohortData[]
+      //   - estimate p∞ from mature cohorts with the same recency weighting used elsewhere
+      //
+      // If that is not available, fall back to cohort-derived p_infinity (legacy fallback).
       const baseForecastMean = edge.p?.forecast?.mean;
+      let windowDerivedForecastMean: number | undefined;
+      if (baseForecastMean === undefined) {
+        try {
+          const windowCohortsForForecast = helpers.aggregateWindowData(
+            paramValues as any,
+            queryDate,
+            cohortWindow
+          );
+          windowDerivedForecastMean = estimatePInfinity(windowCohortsForForecast, effectiveHorizonDays);
+        } catch (e) {
+          // Non-fatal: fall back to cohort-derived p_infinity if window aggregation fails
+          console.warn('[enhanceGraphLatencies] Failed to derive forecast from window slices:', e);
+        }
+      }
+
       const fallbackForecastMean =
         latencyStats.forecast_available ? latencyStats.p_infinity : undefined;
-      const forecastMean = baseForecastMean ?? fallbackForecastMean;
+      const forecastMean = baseForecastMean ?? windowDerivedForecastMean ?? fallbackForecastMean;
+
+      // Ensure forecast.mean is populated on the output graph when we have any usable forecast.
+      // This is required for the "implicit uncontexted" MECE case where window slices exist
+      // but edge.p.forecast.mean was not pre-populated.
+      if (typeof forecastMean === 'number' && Number.isFinite(forecastMean)) {
+        edgeLAGValues.forecast = { mean: forecastMean };
+      }
 
       // COHORT MODE (PATH-ANCHORED): Bayesian completeness adjustment for blending.
       //
@@ -2724,8 +2562,11 @@ export function enhanceGraphLatencies(
         edgeLAGValues.debug.fallbackForecastMean = fallbackForecastMean;
         edgeLAGValues.debug.forecastMeanUsed = forecastMean;
         edgeLAGValues.debug.forecastMeanSource =
-          baseForecastMean !== undefined ? 'edge.p.forecast.mean'
-          : (fallbackForecastMean !== undefined ? 'lag.p_infinity' : 'none');
+          baseForecastMean !== undefined
+            ? 'edge.p.forecast.mean'
+            : (windowDerivedForecastMean !== undefined
+                ? 'window_slices'
+                : (fallbackForecastMean !== undefined ? 'lag.p_infinity' : 'none'));
 
         edgeLAGValues.debug.evidenceMeanRaw = evidenceMeanObserved;
         edgeLAGValues.debug.evidenceMeanUsedForBlend = evidenceMeanForBlend;
@@ -2782,13 +2623,16 @@ export function enhanceGraphLatencies(
           const bDate = b.data_source?.retrieved_at || b.window_to || '';
           return bDate.localeCompare(aDate);
         })[0];
-        nBaseline = typeof bestWindow.n === 'number' ? bestWindow.n : 0;
+        // For MECE implicit-uncontexted cases, `paramValues` may include multiple window slices
+        // (one per context pool). `nBaseline` is a *sample size* concept, so we sum n/k across
+        // all window candidates in the slice family, not just the latest single slice.
+        nBaseline = windowCandidates.reduce((sum, v) => sum + (typeof v.n === 'number' ? v.n : 0), 0);
         nBaselineSource = 'window_slice';
         bestWindowMeta = {
           sliceDSL: bestWindow.sliceDSL,
           retrievedAt: bestWindow.data_source?.retrieved_at,
-          n: bestWindow.n,
-          k: bestWindow.k,
+          n: nBaseline,
+          k: windowCandidates.reduce((sum, v) => sum + (typeof v.k === 'number' ? v.k : 0), 0),
           forecast: bestWindow.forecast,
         };
       }

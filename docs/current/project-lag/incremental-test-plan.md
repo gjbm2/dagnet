@@ -1,7 +1,8 @@
 # Project LAG – Incremental Test Plan
 
 **Created:** 10-Dec-25  
-**Status:** Proposal for post-Alpha work  
+**Status:** Partially implemented (Phase A largely complete; Phase C partially complete)  
+**Last reviewed:** 17-Dec-25  
 **Reference:** `graph-editor/public/docs/lag-statistics-reference.md`
 
 This plan extends the existing LAG test suite to more completely cover the behaviour described in the LAG Statistics Reference. It is designed to be incremental: each phase can be implemented and landed independently.
@@ -10,7 +11,7 @@ The plan is prose-only by design. It describes *what* to test and *where*, not s
 
 **Priority for Alpha v1.0:**
 - Core LAG tests (T1–T6) are complete and passing
-- Phase A (Scenario / conditional_p) is the highest priority for post-Alpha
+- Phase A (Scenario / conditional_p) was the highest priority for post-Alpha and is now largely implemented
 - Phases B–E can be scheduled based on risk assessment
 
 ---
@@ -172,11 +173,15 @@ This section maps the schematic to the current tests and rates indicative covera
   - Path_t95 → retrieval horizon behaviour.
 - `amplitudeThreeStepFunnel.integration.test.ts`:
   - Full DAS pipeline from Amplitude response → time series → param values.
+ - `batchFetchE2E.comprehensive.test.ts`:
+   - End-to-end (service-level) batch fetch pipeline with real `fetchDataService`/`UpdateManager` behaviour, including mixed latency/non-latency paths, blending, and path_t95.
+ - `reachProbabilitySweep.*` sweep harness tests:
+   - Optional, environment-gated sweep that uses production fetch paths plus the Python analysis runner to make end-to-end behaviour observable over time.
 
 **Assessment**
-- Coverage is **strong** at the “service-level” and “DAS-level” integration boundaries.
-- There is **no single test** that links:
-  - Realistic DAS data → param files → full LAG + inbound-n + blend in a single flow.
+ - Coverage is **strong** at the “service-level” and “DAS-level” integration boundaries.
+ - There is now meaningful “pipeline-spanning” coverage (especially via the batch fetch e2e tests), but there is still room for a single, minimal “golden path” that explicitly links:
+   - realistic DAS data → persisted param files → full LAG + inbound-n + blend (in one flow), if we decide that end-to-end boundary is worth hardening.
 
 **Implication**
 - We have strong overlapping integration tests, but not yet a true end-to-end “golden path” that spans all layers.
@@ -218,15 +223,22 @@ This section maps the schematic to the current tests and rates indicative covera
   - Scenario tests for `computeInboundN` using effective probability callbacks.
 - `lagStatsFlow.integration.test.ts`:
   - Phase 3 tests for `getActiveEdges` basic behaviour (no scenario, zero probabilities, epsilon).
+- Scenario / what-if parsing & composition:
+  - `scenarioRegenerationService.test.ts` (DSL splitting/building and inheritance)
+  - `CompositionService.analysisIsolation.test.ts` (analysis scenario isolation)
+  - `caseRuntime.test.ts` (case node weights and what-if case overrides)
+- conditional probability (`conditional_p`) behaviour and parity:
+  - `scenarios.conditional.test.ts` (param pack/YAML snapshot format for `conditional_p`)
+  - `conditionalProbability.integration.test.ts` (conditional fetch query selection + connection fallback)
+  - `conditionalPRebalance.integration.test.ts` (rebalance siblings on conditional updates; cross-contamination checks)
 - `what-ifs-with-conditionals.md` (design doc, not tests).
 
 **Assessment**
-- Coverage is **weak / partial**:
-  - There are no full integration tests where:
-    - A scenario DSL with case allocations or conditional branches is applied.
-    - Active edges change.
-    - Inbound-n and path_t95 are recomputed per scenario.
-    - Scenario-specific `p.mean(S)` is observed in param packs.
+- Coverage is **good and improving**:
+  - Case node runtime semantics, what-if DSL splitting/building, and conditional probability plumbing have dedicated tests.
+  - The remaining gap is less about “does the feature exist” and more about deeper scenario-e2e assertions:
+    - scenario-driven changes in active edge sets flowing through to path_t95 (beyond the basic `p.mean = 0` exclusion cases),
+    - and scenario-specific `p.mean(S)` / `p.n(S)` observable in a single integration test that exercises scenario composition + fetch + LAG + pack output together.
 
 **Implication**
 - Scenario behaviour is the least tested area relative to the schematic’s detailed description.

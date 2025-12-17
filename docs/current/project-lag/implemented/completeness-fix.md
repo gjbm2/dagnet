@@ -1,9 +1,17 @@
 ## Cohort completeness fix (A‑anchored semantics + t95 tail pull)
 
-**Status**: Draft (implementation pending)  
-**Last updated**: 16-Dec-25  
+**Status**: Implemented (with explicit fallbacks)  
+**Last updated**: 17-Dec-25  
 **Owner**: DagNet  
 **Context**: `project-lag` completeness semantics regression for downstream cohort edges (e.g. “73% complete” under `cohort(-30d:-1d)` on a trailing edge despite long upstream delay).
+
+### Status (de facto, as implemented)
+
+This fix is now implemented in the LAG topo pass:
+
+- **Primary behaviour (cohort mode)**: downstream edge completeness is computed as **A→Y path‑anchored** completeness, i.e. evaluate a fitted **A→Y** lag CDF on **raw anchor ages** (days since A), where \(T(A→Y)=T(A→X)+T(X→Y)\).
+- **Tail pull**: a one-way t95 tail constraint is applied using an **authoritative path horizon** (effectively `path_t95(A→Y)` from either persisted values or in-pass computation). This can only make tails fatter (σ can increase, never decrease).
+- **Fallback behaviour**: when A→Y cannot be computed robustly (e.g. missing usable anchor lag moments or missing authoritative horizon), completeness falls back to the older “conditional/post‑X” semantics (subtract A→X median then evaluate X→Y on the adjusted ages). This is explicitly recorded as a different `completenessMode` in debug/session logging.
 
 ### Problem statement
 
@@ -15,7 +23,9 @@ In other words, cohort completeness should be **A‑anchored** (unconditional on
 
 ### Current behaviour (wrong for cohort semantics)
 
-Today, downstream edge completeness is computed using an edge-local maturity model:
+This behaviour still exists as a **fallback** path, but it is no longer the intended/default cohort-mode semantics when the required A→Y inputs are present.
+
+Fallback semantics:
 
 - Construct an “effective age at edge” by subtracting an estimate of A→X delay from the anchor age:  
   `effective_age ≈ max(0, anchor_age − anchor_median_lag(A→X))`

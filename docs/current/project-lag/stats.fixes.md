@@ -1,9 +1,9 @@
 
 # stats-fixes.md
 
-Date: 12-Dec-25
+Date: 17-Dec-25
 
-## Context (not yet implemented)
+## Context (was “not yet implemented”; now mostly implemented)
 
 This note captures a set of issues observed while comparing cohort-based analyses over different horizons on the same graph configuration. This is **diagnostic** and describes **known gaps** in the current behaviour (work still pending). The focus is the interaction between:
 
@@ -11,6 +11,61 @@ This note captures a set of issues observed while comparing cohort-based analyse
 - **`p.forecast`**: baseline/asymptotic conversion probability derived from window-based baseline data.
 - **`p.mean`**: the probability used for graph calculations, intended to incorporate latency awareness for immature cohorts.
 - **Latency maturity**: long-lag edges (high `t95`) mean recent cohorts are structurally immature.
+
+## Status (de facto, as implemented)
+
+This section records what is **already implemented in the codebase**, vs what is still **open / partial**. The headings below mirror the hypotheses in this doc.
+
+### 1) Baseline forecast derivation may be biased for long-lag edges
+
+**Implemented (mostly):**
+
+- **Forecast baseline comes from `window()` slices** and is then attached to cohort-mode results as `p.forecast.mean` (dual-slice behaviour).
+- **Mature-tail exclusion + light recency weighting for “naive/missing” forecasts**:
+  - If a window slice forecast is missing, or if stored `forecast ≈ mean` (a strong indicator of a naive value), the code can recompute a “mature-only” forecast from the slice’s daily arrays by excluding the most recent \(\lceil t95 \rceil + 1\) days, then applying a light recency weighting.
+  - This is a pragmatic correction for the “immature tail in window()” failure mode described in this note.
+
+**Still open / partial:**
+
+- This is not a full “forecast provenance contract” (e.g. it does not guarantee all historical param files have high-quality `forecast` fields persisted). Instead, it ensures query-time consumers can obtain a reasonable baseline forecast even when stored fields are missing/naive.
+
+### 2) Cohort-mode `p.mean` should be computed via completeness-weighted blending (no “Formula A”)
+
+**Implemented:**
+
+- `p.mean` for latency-aware evaluation is computed via a **canonical completeness-weighted blend** of:
+  - **evidence** (`p.evidence.mean`, computed from the relevant query window), and
+  - **forecast baseline** (`p.forecast.mean` from a matching `window()` slice; if absent, a cohort-based fallback forecast may be used when available).
+- The blend is centralised in a single helper (single source of truth), and applied in the **topological LAG pass** so that downstream edges can use stable upstream populations and horizons.
+- **Completeness Phase 2 (“t95 tail constraint”) is implemented** for completeness CDF evaluation (one-way constraint: it can only inflate tail weight, never deflate it).
+
+**Still open / partial / caveats:**
+
+- There is still some additional evidence manipulation used *only for blending* in cohort path-anchored mode (a Bayesian shrinkage / effective-sample correction). Importantly:
+  - `p.evidence.mean` remains the raw observed \(k/n\) signal.
+  - The adjusted signal affects blending only and is exposed via debug metadata (not surfaced as `p.evidence.mean`).
+- If a usable forecast baseline cannot be established for an edge, the blend can fall back to evidence.
+
+### 3) Conditional probability handling can change the effective evidence view of success
+
+**Implemented (in general system terms):**
+
+- The codebase supports conditional probability parameters (stored as `conditional_p` in param packs) and scenario/what-if evaluation that can select different effective edge probabilities under conditions (e.g. `visited(...)`, `exclude(...)`).
+
+**Still open / needs care in analysis usage:**
+
+- This note’s “overall success” comparisons can still be misleading if they implicitly collapse conditional branches into a single unconditional scalar without making the condition explicit.
+- The LAG blending itself operates on the effective edge probability it is given for that evaluation context; it does not automatically compute an unconditional mixture across conditional branches.
+
+### “No cross-layer mutation”
+
+**Mostly true for graph semantics:**
+
+- Forecast/evidence are carried as separate scalars (`p.forecast.*`, `p.evidence.*`) and the blended `p.mean` is computed without mutating `p.forecast.mean`.
+
+**However (important nuance):**
+
+- In query-time aggregation, the system may **attach** or **replace** a forecast scalar in the aggregated view when the stored window forecast looks naive/missing. This is an in-memory/query-time correction to make downstream use safe; it is not intended to be a silent rewrite of the underlying file unless an explicit save path later persists it.
 
 ## Observations
 
@@ -62,6 +117,8 @@ Edges with conditional cases (e.g. a conditional applied when `visited(gave-bds-
 - Confirm that the analysis path being used (and any “overall” success computation) applies conditional branches correctly.
 
 ## Run outputs (verbatim)
+
+Note: these Run A / Run B outputs were originally captured to illustrate the suspected issues. Given the de facto implementation status above, these outputs may now be **pre-fix**. If these comparisons are still needed, re-run them against current code and update this section with fresh outputs.
 
 ### Run A output
 
