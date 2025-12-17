@@ -4625,6 +4625,138 @@ class DataOperationsService {
           : connectionName?.includes('statsig')
           ? 'statsig'
           : 'api';
+
+      // ---------------------------------------------------------------------
+      // Versioned parameter fetch resilience:
+      // Persist each successful gap immediately so partial runs are resumable.
+      // ---------------------------------------------------------------------
+      const shouldPersistPerGap =
+        writeToFile && objectType === 'parameter' && !!objectId && !dontExecuteHttp;
+
+      let paramFileForGapWrites: any | undefined;
+      let existingValuesForGapWrites: ParameterValue[] | undefined;
+      let sliceDSLForGapWrites: string | undefined;
+      let shouldRecomputeForecastForGapWrites = false;
+      let latencyConfigForGapWrites: any | undefined;
+      let didPersistAnyGap = false;
+      let hadGapFailureAfterSomeSuccess = false;
+      let gapFailureMessage: string | undefined;
+      let failedGapIndex: number | undefined;
+
+      if (shouldPersistPerGap) {
+        paramFileForGapWrites = fileRegistry.getFile(`parameter-${objectId}`);
+        if (paramFileForGapWrites) {
+          existingValuesForGapWrites = (paramFileForGapWrites.data.values || []) as ParameterValue[];
+          // CRITICAL: Use targetSlice (the specific slice being fetched), not currentDSL
+          sliceDSLForGapWrites = targetSlice || extractSliceDimensions(currentDSL || '');
+
+          const targetEdgeForMerge =
+            targetId && graph
+              ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId)
+              : undefined;
+          latencyConfigForGapWrites = targetEdgeForMerge?.p?.latency;
+          shouldRecomputeForecastForGapWrites = latencyConfigForGapWrites?.latency_parameter === true;
+        }
+      }
+
+      const persistGapIfNeeded = async (fetchWindow: DateRange): Promise<void> => {
+        if (
+          !shouldPersistPerGap ||
+          !paramFileForGapWrites ||
+          !existingValuesForGapWrites ||
+          !sliceDSLForGapWrites ||
+          !objectId
+        ) {
+          return;
+        }
+
+        try {
+          const gapTimeSeries = allTimeSeriesData.filter((point: any) => {
+            const pointDate = normalizeDate(point.date);
+            return isDateInRange(pointDate, fetchWindow);
+          });
+
+          if (gapTimeSeries.length > 0) {
+            existingValuesForGapWrites = mergeTimeSeriesIntoParameter(
+              existingValuesForGapWrites,
+              gapTimeSeries,
+              fetchWindow,
+              querySignature,
+              queryParamsForStorage,
+              fullQueryForStorage,
+              dataSourceType,
+              sliceDSLForGapWrites,
+              {
+                isCohortMode: isCohortQuery,
+                ...(shouldRecomputeForecastForGapWrites && {
+                  latencyConfig: {
+                    latency_parameter: latencyConfigForGapWrites?.latency_parameter,
+                    anchor_node_id: latencyConfigForGapWrites?.anchor_node_id,
+                    t95: latencyConfigForGapWrites?.t95,
+                  },
+                  recomputeForecast: true,
+                }),
+              }
+            );
+          } else {
+            // Cache a "no data" marker for this gap only so subsequent runs can skip it.
+            const startD = parseDate(normalizeDate(fetchWindow.start));
+            const endD = parseDate(normalizeDate(fetchWindow.end));
+            const dates: string[] = [];
+            const currentD = new Date(startD);
+            while (currentD <= endD) {
+              dates.push(normalizeDate(currentD.toISOString()));
+              currentD.setDate(currentD.getDate() + 1);
+            }
+
+            const noDataEntry: ParameterValue = {
+              mean: 0,
+              n: 0,
+              k: 0,
+              dates: dates.map((d) => normalizeToUK(d)),
+              n_daily: dates.map(() => 0),
+              k_daily: dates.map(() => 0),
+              window_from: normalizeToUK(fetchWindow.start),
+              window_to: normalizeToUK(fetchWindow.end),
+              sliceDSL: sliceDSLForGapWrites,
+              data_source: {
+                type: 'amplitude',
+                retrieved_at: new Date().toISOString(),
+                full_query: fullQueryForStorage,
+              },
+              query_signature: querySignature,
+            };
+            existingValuesForGapWrites.push(noDataEntry);
+          }
+
+          const updatedFileData = structuredClone(paramFileForGapWrites.data);
+          updatedFileData.values = existingValuesForGapWrites;
+
+          // Keep query/n_query synced from graph master on every persisted write.
+          if (queryString) {
+            updatedFileData.query = queryString;
+            if (targetEdge?.query_overridden !== undefined) {
+              updatedFileData.query_overridden = targetEdge.query_overridden;
+            }
+          }
+          if (explicitNQuery) {
+            updatedFileData.n_query = explicitNQuery;
+            if (nQueryEdge?.n_query_overridden !== undefined) {
+              updatedFileData.n_query_overridden = nQueryEdge.n_query_overridden;
+            }
+          } else if (updatedFileData.n_query && !nQueryEdge?.n_query) {
+            delete updatedFileData.n_query;
+            delete updatedFileData.n_query_overridden;
+          }
+
+          await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);
+          // Keep local reference fresh to avoid stale clones across gaps
+          paramFileForGapWrites.data = updatedFileData;
+          didPersistAnyGap = true;
+        } catch (error) {
+          console.error('[DataOperationsService] Failed to persist gap incrementally:', error);
+        }
+      };
       
       // Chain requests for each contiguous gap
       for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
@@ -4693,6 +4825,18 @@ class DataOperationsService {
                 rateLimiter.reportRateLimitError(connectionName, errorMsg);
               }
               toast.error(`n_query composite query failed: ${errorMsg}`, { id: 'das-fetch' });
+              // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
+              if (shouldPersistPerGap && didPersistAnyGap) {
+                hadGapFailureAfterSomeSuccess = true;
+                gapFailureMessage = errorMsg;
+                failedGapIndex = gapIndex;
+                sessionLogService.endOperation(
+                  logOpId,
+                  'warning',
+                  `Partial fetch persisted; n_query composite failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${errorMsg}`
+                );
+                break;
+              }
               sessionLogService.endOperation(logOpId, 'error', `n_query composite query failed: ${error}`);
               return;
             }
@@ -4718,6 +4862,18 @@ class DataOperationsService {
                 rateLimiter.reportRateLimitError(connectionName, baseResult.error);
               }
               toast.error(`Base query failed: ${baseResult.error}`, { id: 'das-fetch' });
+              // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
+              if (shouldPersistPerGap && didPersistAnyGap) {
+                hadGapFailureAfterSomeSuccess = true;
+                gapFailureMessage = baseResult.error;
+                failedGapIndex = gapIndex;
+                sessionLogService.endOperation(
+                  logOpId,
+                  'warning',
+                  `Partial fetch persisted; base query failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${baseResult.error}`
+                );
+                break;
+              }
               sessionLogService.endOperation(logOpId, 'error', `Base query failed: ${baseResult.error}`);
               return;
             }
@@ -4885,9 +5041,22 @@ class DataOperationsService {
                 
                 console.log(`[DataOperationsService] Extracted ${timeSeries.length} days from composite query (gap ${gapIndex + 1})`);
                 allTimeSeriesData.push(...timeSeries);
+                await persistGapIfNeeded(fetchWindow);
               } else {
                 console.warn(`[DataOperationsService] No time-series in composite result for gap ${gapIndex + 1}`, combined);
                 toast.error(`Composite query returned no daily data for gap ${gapIndex + 1}`, { id: 'das-fetch' });
+                // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
+                if (shouldPersistPerGap && didPersistAnyGap) {
+                  hadGapFailureAfterSomeSuccess = true;
+                  gapFailureMessage = 'Composite query returned no daily data';
+                  failedGapIndex = gapIndex;
+                  sessionLogService.endOperation(
+                    logOpId,
+                    'warning',
+                    `Partial fetch persisted; composite query returned no daily data on gap ${gapIndex + 1}/${actualFetchWindows.length}`
+                  );
+                  break;
+                }
                 sessionLogService.endOperation(logOpId, 'error', `Composite query returned no daily data for gap ${gapIndex + 1}`);
                 return;
               }
@@ -4907,6 +5076,18 @@ class DataOperationsService {
               rateLimiter.reportRateLimitError(connectionName, errorMsg);
             }
             toast.error(`Composite query failed for gap ${gapIndex + 1}: ${errorMsg}`, { id: 'das-fetch' });
+            // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
+            if (shouldPersistPerGap && didPersistAnyGap) {
+              hadGapFailureAfterSomeSuccess = true;
+              gapFailureMessage = errorMsg;
+              failedGapIndex = gapIndex;
+              sessionLogService.endOperation(
+                logOpId,
+                'warning',
+                `Partial fetch persisted; composite query failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${errorMsg}`
+              );
+              break;
+            }
             sessionLogService.endOperation(logOpId, 'error', `Composite query failed: ${errorMsg}`);
             return;
           }
@@ -4935,6 +5116,18 @@ class DataOperationsService {
               rateLimiter.reportRateLimitError(connectionName, condResult.error);
             }
             toast.error(`Conditioned query failed: ${condResult.error}`, { id: 'das-fetch' });
+            // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
+            if (shouldPersistPerGap && didPersistAnyGap) {
+              hadGapFailureAfterSomeSuccess = true;
+              gapFailureMessage = condResult.error;
+              failedGapIndex = gapIndex;
+              sessionLogService.endOperation(
+                logOpId,
+                'warning',
+                `Partial fetch persisted; conditioned query failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${condResult.error}`
+              );
+              break;
+            }
             sessionLogService.endOperation(logOpId, 'error', `Conditioned query failed: ${condResult.error}`);
             return;
           }
@@ -5034,6 +5227,7 @@ class DataOperationsService {
             });
             
             allTimeSeriesData.push(...combinedTimeSeries);
+            await persistGapIfNeeded(fetchWindow);
           } else {
             // Non-writeToFile mode: use combined aggregates
             updateData = {
@@ -5088,6 +5282,18 @@ class DataOperationsService {
             // Show user-friendly message in toast
             const userMessage = result.error || 'Failed to fetch data from source';
             toast.error(`${userMessage} (gap ${gapIndex + 1}/${actualFetchWindows.length})`, { id: 'das-fetch' });
+            // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
+            if (shouldPersistPerGap && didPersistAnyGap) {
+              hadGapFailureAfterSomeSuccess = true;
+              gapFailureMessage = userMessage;
+              failedGapIndex = gapIndex;
+              sessionLogService.endOperation(
+                logOpId,
+                'warning',
+                `Partial fetch persisted; API failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${userMessage}`
+              );
+              break;
+            }
             sessionLogService.endOperation(logOpId, 'error', `API call failed: ${userMessage}`);
             return;
           }
@@ -5172,6 +5378,7 @@ class DataOperationsService {
               });
               allTimeSeriesData.push(timeSeries as { date: string; n: number; k: number; p: number });
             }
+            await persistGapIfNeeded(fetchWindow);
           }
           
           // Parse the updates to extract values for simple queries (use latest result for non-writeToFile mode)
@@ -5354,6 +5561,25 @@ class DataOperationsService {
       // For parameters: write time-series data (or "no data" marker if API returned empty)
       if (writeToFile && objectType === 'parameter' && objectId) {
         try {
+          // If we already persisted incrementally per-gap, do not bulk-merge/write again here.
+          // The post-fetch getParameterFromFile step will still refresh the graph from file.
+          if (shouldPersistPerGap && didPersistAnyGap) {
+            sessionLogService.addChild(
+              logOpId,
+              hadGapFailureAfterSomeSuccess ? 'warning' : 'success',
+              'FILE_UPDATED',
+              `Updated parameter file incrementally: ${objectId}`,
+              hadGapFailureAfterSomeSuccess
+                ? `Partial fetch persisted; failed on gap ${(failedGapIndex ?? 0) + 1}/${actualFetchWindows.length}`
+                : `Persisted ${allTimeSeriesData.length} day${allTimeSeriesData.length !== 1 ? 's' : ''} across ${actualFetchWindows.length} gap${actualFetchWindows.length !== 1 ? 's' : ''}`,
+              {
+                fileId: `parameter-${objectId}`,
+                rowCount: allTimeSeriesData.length,
+                gapsCount: actualFetchWindows.length,
+                failedGapIndex,
+              }
+            );
+          } else {
           // Get parameter file (re-read to get latest state)
           let paramFile = fileRegistry.getFile(`parameter-${objectId}`);
           if (paramFile) {
@@ -5532,6 +5758,7 @@ class DataOperationsService {
               { fileId: `parameter-${objectId}`, rowCount: allTimeSeriesData.length });
           } else {
             console.warn('[DataOperationsService] Parameter file not found, skipping time-series storage');
+          }
           }
         } catch (error) {
           console.error('[DataOperationsService] Failed to append time-series data:', error);

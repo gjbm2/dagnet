@@ -29,7 +29,9 @@ We want:
   - `cohort()` mode: dates represent cohort entry (A) dates for latency edges
 - **Explicit uncontexted slice**: a stored `ParameterValue` entry whose `sliceDSL` has no context/case dimensions (e.g. `window(...)` or `cohort(...)` only).
 - **Implicit uncontexted slice**: not stored as a distinct entry; instead derived at query time by aggregating a complete MECE partition of contexted slices.
-- **MECE key**: a context key whose values represent a partition that is safe to aggregate by summing disjoint pools (e.g. marketing channel buckets, depending on `otherPolicy` and mapping semantics).
+- **MECE key**: a context key whose values represent a partition that is safe to aggregate by summing disjoint pools.
+  - In DagNet, we do not “certify” MECE status by analysing raw data; the user’s context specification is the source of truth.
+  - Practically: MECE-eligibility is declared via the context definition semantics (especially `otherPolicy` and how the “other” bucket is treated), and the system trusts that declaration when deciding whether it is safe to sum slices.
 
 ### Current behaviour (why it is insufficient)
 
@@ -88,11 +90,29 @@ This applies to both window and cohort modes (where n/k are counts of users in t
 #### Lag median (median_lag_days) and anchor median (anchor_median_lag_days)
 
 - Do not average medians directly (not invariant under mixtures).
-- Preferred: compute a mixture median by:
-  - Building per-slice distribution approximations (using existing fitting utilities), then computing mixture quantiles weighted by \(K_i\).
-- Acceptable initial approximation (explicitly labelled as such): weighted median of slice medians using weights \(K_i\).
+- Use the mathematically correct target: the median of the pooled population, i.e. the 0.5 quantile of the mixture distribution:
+  - For component CDFs \(F_i(t)\) and weights \(w_i\), mixture CDF \(F(t)=\sum_i w_i F_i(t) / \sum_i w_i\).
+  - The pooled median is the smallest \(t\) such that \(F(t)\ge 0.5\).
+- Implementation approach:
+  - Approximate per-slice distributions (lognormal fits from median/mean with one-way tail constraints).
+  - Compute mixture quantiles via monotone root finding (binary search on \(t\)).
 
 All lag-aggregation decisions must be logged in session logs as they materially affect interpretation.
+
+#### K=0 is normal: explicit handling rules
+
+K=0 (no conversions) is an expected condition on many days/slices. Proposed rules:
+
+- **Evidence/probability**:
+  - Summation is always well-defined: \(K=\sum K_i\), \(N=\sum N_i\), \(p=K/N\) (with \(p\) undefined if \(N=0\)).
+  - A MECE aggregate with \(K=0\) and \(N>0\) should produce \(p=0\) (not missing).
+
+- **Lag moments/quantiles** (edge and anchor lag arrays):
+  - Lag statistics are defined over converting users (or an explicitly documented population). When \(\sum K_i = 0\) for the aggregate on a given day/window, lag moments and medians are undefined and should remain unset (and we should warn at a high level).
+  - Weighting:
+    - **Edge lag** (`median_lag_days`, `mean_lag_days`) uses weights \(w_i = K_i\) for that date/window.
+    - **Anchor lag** (`anchor_median_lag_days`, `anchor_mean_lag_days`) should follow existing DagNet semantics: weight by cohort population \(N_i\) for that date/window (this matches current anchor aggregation behaviour).
+  - Missing/invalid per-slice lag values for a date should cause that slice to contribute zero weight for that specific lag statistic only (do not drop the slice from evidence aggregation).
 
 ### Proposed implementation changes (survey + concrete touch points)
 
@@ -104,11 +124,15 @@ Add a new service (suggested location):
 
 Responsibilities:
 
-- Identify which context keys are eligible as MECE keys (via `contextRegistry` semantics).
+- Identify which context keys are eligible as MECE keys (via the user-declared `contextRegistry` semantics; especially `otherPolicy`).
 - Given a set of `ParameterValue` entries + a target mode (`window` or `cohort`) + a slice family descriptor (context/case dims + signature rules), determine:
   - Whether a complete MECE partition exists
   - Which values comprise the partition
   - Whether it is safe to sum (guardrails against mixed dimensions)
+
+Guardrail (non-vague, explicit):
+
+- Implicit uncontexted aggregation is only permitted when the participating slices vary by **exactly one** context key (the MECE key) and share identical other slice dimensions (case dims and any non-context qualifiers). We do not attempt to treat multi-key context products as MECE in this work.
 
 This service becomes the single source of truth used by:
 
@@ -158,6 +182,36 @@ Important guardrail:
 
 - The synthetic baseline must be derived only from slices that form a complete MECE partition for the chosen key; otherwise it risks double counting or missing mass.
 
+#### 4a) Realistic edge cases and expected behaviour (graceful degradation)
+
+We should explicitly define “what happens” in the realistic failure/mismatch cases:
+
+- **Some MECE slices exist, but the partition is incomplete** (user didn’t fetch all contexts):
+  - Behaviour: do not treat it as implicit uncontexted; surface a non-blocking warning that uncontexted results may be incomplete; allow partial display from explicit slices.
+
+- **Per-day coverage gaps differ across slices** (e.g. one channel has data, another has missing days):
+  - Behaviour: implicit uncontexted is only “complete” for the intersection of covered days; for missing days, treat as missing and (if in fetch mode) schedule those gaps; warn that MECE aggregate is partially defined.
+
+- **“No data” markers present for some slices**:
+  - Behaviour: treat markers as explicit zero evidence for those days for that slice (they participate in MECE summation as zeros).
+  - Warn only if a large fraction of the MECE mass is “no data” so the user can interpret evidence correctly.
+
+- **K=0 on some or all slices/days**:
+  - Behaviour: evidence aggregation is still defined (p=0 when N>0). Lag medians/means remain undefined when totalK=0, and blend should fall back towards forecast (consistent with existing philosophy).
+
+- **Different retrieved_at timestamps across slices**:
+  - Behaviour: do not attempt to align by timestamp; treat each slice as “best available” for its covered days. If the implicit MECE aggregate is computed from slices with widely different retrieval times, emit a warning that the aggregate is built from mixed freshness.
+
+- **Mixed query signatures across slices** (e.g. a pinned slice definition changed and only some contexts were re-fetched):
+  - Behaviour: never sum across incompatible signatures.
+  - Proposed rule: for any implicit MECE aggregate, only consider slices whose `query_signature` matches the currently effective signature for the active query.
+    - If that yields an incomplete partition, treat the implicit uncontexted result as incomplete and warn (non-blocking).
+    - In “Retrieve all slices” workflows, the next run should naturally converge the signatures by refreshing all slices.
+
+- **Partial fetches / provider rate limits mid-run**:
+  - Behaviour: any successfully fetched gap should be persisted to the parameter file immediately (versioned mode), so a later re-run simply fetches the remaining missing gaps.
+  - If a later gap fails, the system should warn that the run partially completed and that re-running later will resume.
+
 #### 5) LAG topo pass: ensure it consumes MECE-aggregated cohorts consistently
 
 Update:
@@ -186,7 +240,8 @@ We should warn users when a proposed “Retrieve all slices” configuration doe
 
 #### Where to implement the warning
 
-- The warning should be surfaced in the slice selection UX that drives “Retrieve all slices” (and in the pinned query tooling), without duplicating business logic in UI components.
+- The warning should be surfaced when the user **sets pinned queries** (and when configuring “Retrieve all slices”), without duplicating business logic in UI components.
+- Warnings are **never blocking**: they are advisory and explain what will and won’t be available implicitly/explicitly.
 - Implement as a service-level validator returning structured warning messages, then render in UI.
 
 Suggested service entry point:
@@ -371,26 +426,26 @@ This has two important benefits:
      - Tail-constraint cases where sigma must increase (and cases where it must not)
    - The intention is not to test implementation details, but to “freeze” the externally observable numerical behaviour so the subsequent refactor can be proven correct.
 
-2. **Extract pure distribution utilities**:
+3. **Extract pure distribution utilities**:
    - Introduce `lagDistributionUtils.ts` containing the lognormal maths and fitting logic.
    - Ensure there are no imports from services with side effects (no file registry, no session logs).
    - Return diagnostics rather than logging.
 
-3. **Refactor statistical enhancement to consume the shared utilities**:
+4. **Refactor statistical enhancement to consume the shared utilities**:
    - Replace internal references to the moved maths with imports from the new module.
    - Keep existing behaviour the same (this refactor should be behaviour-preserving).
    - Use the pre-built numerical “golden” tests plus the existing test suite as proof that behaviour did not change.
 
-4. **Update aggregation paths to use the shared utilities**:
+5. **Update aggregation paths to use the shared utilities**:
    - Implement the MECE “implicit uncontexted” baseline logic using the shared maths.
    - Implement mixture median aggregation in the MECE cohort and window aggregators.
    - Keep all behaviour behind the MECE detection guardrails described earlier in this doc.
 
-5. **Enable the outcome-oriented RED tests**:
+6. **Enable the outcome-oriented RED tests**:
    - Unskip the param-pack equivalence RED tests and iterate until they pass.
    - Add additional RED tests for incomplete MECE and median aggregation edge cases as needed.
 
-6. **Confirm 100% behavioural equivalence for the refactor, then delete old code entirely**:
+7. **Confirm 100% behavioural equivalence for the refactor, then delete old code entirely**:
    - Once the numerical “golden” tests and the relevant existing integration tests pass, treat that as the correctness proof for the extraction refactor.
    - Remove the duplicated in-file implementations from `statisticalEnhancementService.ts` (do not keep compatibility shims or deprecated aliases).
    - Keep only the single source of truth: the shared pure module plus the service-level orchestration that calls it.
