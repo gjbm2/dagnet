@@ -990,6 +990,39 @@ class RepositoryOperationsService {
       throw error;
     }
   }
+
+  /**
+   * Pull latest changes for the repository/branch currently selected in Navigator (app-state),
+   * falling back to credentials.defaultGitRepo when no selection exists yet.
+   *
+   * Used for URL-driven boot flows (e.g. `?graph=...&pullalllatest`) where we want
+   * "pull first, then load" without duplicating repo/branch resolution logic in UI code.
+   *
+   * NOTE:
+   * - Returns {skipped:true} when there is no repository context yet (e.g. first boot without creds).
+   * - Conflicts are returned but the pull is still considered successful (the workspace is updated).
+   */
+  async pullLatestForCurrentNavigatorSelection(): Promise<
+    | { success: true; repository: string; branch: string; conflicts?: any[] }
+    | { success: false; skipped: true; reason: string }
+  > {
+    const appState = await db.appState.get('app-state');
+    const selectedRepo = appState?.navigatorState?.selectedRepo;
+    const selectedBranch = appState?.navigatorState?.selectedBranch || 'main';
+
+    const credsResult = await credentialsManager.loadCredentials();
+    if (!credsResult.success || !credsResult.credentials) {
+      return { success: false, skipped: true, reason: 'No credentials available' };
+    }
+
+    const repoToUse = selectedRepo || credsResult.credentials.defaultGitRepo;
+    if (!repoToUse) {
+      return { success: false, skipped: true, reason: 'No repository selected and no defaultGitRepo configured' };
+    }
+
+    const res = await this.pullLatest(repoToUse, selectedBranch);
+    return { success: true, repository: repoToUse, branch: selectedBranch, conflicts: res.conflicts };
+  }
 }
 
 // Export singleton instance
