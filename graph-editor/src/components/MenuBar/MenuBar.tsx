@@ -8,6 +8,7 @@ import { DataMenu } from './DataMenu';
 import { RepositoryMenu } from './RepositoryMenu';
 import { HelpMenu } from './HelpMenu';
 import { useTabContext } from '../../contexts/TabContext';
+import { useDashboardMode } from '../../hooks/useDashboardMode';
 import packageJson from '../../../package.json';
 import './MenuBar.css';
 
@@ -21,15 +22,10 @@ const APP_VERSION = packageJson.version;
  */
 export function MenuBarComponent() {
   const { operations } = useTabContext();
+  const { toggleDashboardMode } = useDashboardMode();
 
   const handleBrandClick = async () => {
-    const aboutItem = {
-      id: 'about-dagnet',
-      type: 'markdown' as const,
-      name: 'About DagNet',
-      path: 'docs/about.md'
-    };
-    await operations.openTab(aboutItem, 'interactive', true);
+    toggleDashboardMode({ updateUrl: true });
   };
 
   return (

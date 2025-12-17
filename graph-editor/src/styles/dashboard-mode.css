@@ -1,0 +1,100 @@
+.dashboard-shell {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #0b1020;
+  position: relative;
+}
+
+.dashboard-shell .dock-layout {
+  background: transparent;
+}
+
+/* Hide all rc-dock chrome in dashboard mode */
+.dashboard-shell .dock-bar,
+.dashboard-shell .dock-tabbar,
+.dashboard-shell .dock-panel-header,
+.dashboard-shell .dock-nav,
+.dashboard-shell .dock-tab-close-btn,
+.dashboard-shell .dock-tab-btn,
+.dashboard-shell .dock-panel-title {
+  display: none !important;
+}
+
+/* Ensure rc-dock + ReactFlow get non-zero, stable sizing */
+.dashboard-shell .dock-layout,
+.dashboard-shell .dock-top,
+.dashboard-shell .dock-box,
+.dashboard-shell .dock-panel,
+.dashboard-shell .dock-panel-content,
+.dashboard-shell .dock-content {
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Remove padding/margins that assumed headers exist */
+.dashboard-shell .dock-content {
+  background: transparent;
+}
+
+.dashboard-shell .dock-panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dashboard-shell .dock-ink-bar {
+  display: none !important;
+}
+
+/* ReactFlow chrome: hide minimap in dashboard mode */
+.dashboard-shell .react-flow__minimap {
+  display: none !important;
+}
+
+/* Scenario legend: in dashboard mode there is no WindowSelector, so keep chips nearer the top */
+.dashboard-shell .scenario-legend {
+  top: 16px;
+}
+
+.dashboard-overlay {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(12, 16, 28, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+}
+
+.dashboard-overlay .dashboard-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.dashboard-overlay img {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.dashboard-overlay .dashboard-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: rgba(255, 255, 255, 0.9);
+  user-select: none;
+}
+
+

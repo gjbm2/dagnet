@@ -47,6 +47,7 @@ import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { NodeContextMenu } from './NodeContextMenu';
 import { EdgeContextMenu } from './EdgeContextMenu';
+import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileRegistry } from '../contexts/TabContext';
@@ -168,6 +169,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const store = useGraphStore();
   const { graph, setGraph: setGraphDirect, setAutoUpdating } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
+  const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
   
   // Initialize lastSavedViewportRef from tab state to avoid unnecessary saves
   React.useEffect(() => {
@@ -2513,6 +2515,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }, 250);
     }
   }, [fitView]); // Removed nodes.length dependency
+
+  // External request: fit the current graph to view (used by dashboard mode, but safe elsewhere).
+  useEffect(() => {
+    const handler = (e: any) => {
+      const requestedTabId = e?.detail?.tabId as string | undefined;
+      if (requestedTabId && tabId && requestedTabId !== tabId) return;
+      try {
+        fitView({ padding: 0.08, duration: 350 });
+      } catch {}
+    };
+    window.addEventListener('dagnet:fitView', handler as any);
+    return () => window.removeEventListener('dagnet:fitView', handler as any);
+  }, [fitView, tabId]);
   
   // Reset fitView flag when graph changes (new file loaded)
   useEffect(() => {
@@ -2850,6 +2865,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
     
     if (nodes.length === 0 && graph.nodes.length > 0) {
+      return;
+    }
+    // IMPORTANT: Prevent a transient ReactFlow edge reset (e.g. during dashboard enter/exit,
+    // rc-dock visibility flicker, or ReactFlow remount) from wiping edges in the graph store.
+    // If ReactFlow edges are empty but the graph still has edges, treat this as not-yet-hydrated.
+    if (edges.length === 0 && (graph.edges?.length || 0) > 0) {
       return;
     }
     
@@ -4693,12 +4714,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     setEdgeContextMenu(null);
   }, [graph, setGraph]);
 
-  if (!graph) {
-    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-      Loading...
-    </div>;
-  }
-
   // Scenario visibility state (for colouring/suppression decisions)
   const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
 
@@ -4725,6 +4740,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Replaces the old base/overlay split with a single scenario-based approach
   const renderEdges = React.useMemo(() => {
     try {
+      if (!graph) {
+        return edges;
+      }
       if (!scenariosContext) {
         // Fallback: no scenarios, return base edges
         return edges;
@@ -4814,6 +4832,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
+        {!graph && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', fontSize: '14px', zIndex: 5, pointerEvents: 'none' }}>
+            Loading...
+          </div>
+        )}
         <ReactFlow
           nodes={nodes}
           edges={renderEdges}
@@ -5065,6 +5088,44 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             zIndex: 10000
           }}
         >
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              setContextMenu(null);
+              toggleDashboardMode({ updateUrl: true });
+            }}
+            style={{
+              padding: '8px 12px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: '#333',
+              borderRadius: '2px'
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          >
+            🖥️ {isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode'}
+          </div>
+          {tabId && (
+            <div
+              onClick={async (e) => {
+                e.stopPropagation();
+                setContextMenu(null);
+                await tabOperations.closeTab(tabId);
+              }}
+              style={{
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: '#333',
+                borderRadius: '2px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              ✖ Close tab
+            </div>
+          )}
           <div
             onClick={(e) => {
               e.stopPropagation();

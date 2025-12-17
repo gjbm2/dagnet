@@ -720,17 +720,15 @@ export default function PropertiesPanel({
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
-  if (!graph) return null;
-
   // Add null checks to prevent crashes when nodes/edges are deleted
-  const selectedNode = selectedNodeId && graph.nodes ? graph.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId) : null;
-  const selectedEdge = selectedEdgeId && graph.edges ? graph.edges.find((e: any) => 
+  const selectedNode = selectedNodeId && graph?.nodes ? graph.nodes.find((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId) : null;
+  const selectedEdge = selectedEdgeId && graph?.edges ? graph.edges.find((e: any) => 
     e.uuid === selectedEdgeId
   ) : null;
 
   // Calculate if edge probability is unbalanced (siblings don't sum to 1)
   const isEdgeProbabilityUnbalanced = React.useMemo(() => {
-    if (!selectedEdge || !graph?.edges || selectedEdge.p?.mean === undefined) return false;
+    if (!graph || !selectedEdge || !graph?.edges || selectedEdge.p?.mean === undefined) return false;
     
     const sourceNode = selectedEdge.from;
     
@@ -760,6 +758,7 @@ export default function PropertiesPanel({
   // Calculate if conditional probabilities are unbalanced (for each condition group)
   // Uses generalized helper function
   const isConditionalProbabilityUnbalanced = React.useMemo(() => {
+    if (!graph) return new Map<number, boolean>();
     return getConditionalProbabilityUnbalancedMap(graph, selectedEdge, localConditionalP);
   }, [selectedEdge, graph, localConditionalP]); // Depend on entire graph to detect rebalance changes
 
@@ -949,6 +948,17 @@ export default function PropertiesPanel({
       toast.error(`Failed to regenerate query: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: loadingToast });
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
+
+  // IMPORTANT: Never early-return before all hooks. Graph can transiently be undefined
+  // during shell transitions (e.g., exiting dashboard mode). At this point in the file,
+  // all hooks have been declared, so it is safe to render a placeholder.
+  if (!graph) {
+    return (
+      <div className="properties-panel">
+        <div className="properties-panel-content" />
+      </div>
+    );
+  }
   
   // DIAGNOSTIC: Log selectedEdge lookup result
   if (selectedEdgeId && !selectedEdge) {
@@ -993,7 +1003,7 @@ export default function PropertiesPanel({
                 <label className="property-label">Description</label>
                 <textarea
                   className="property-input"
-                  value={graph.metadata?.description || ''}
+                  value={graph?.metadata?.description || ''}
                   onChange={(e) => updateGraph(['metadata', 'description'], e.target.value)}
                   placeholder="Enter graph description..."
                 />
@@ -1003,7 +1013,7 @@ export default function PropertiesPanel({
                 <label className="property-label">Version</label>
                 <input
                   className="property-input"
-                  value={graph.metadata?.version || ''}
+                  value={graph?.metadata?.version || ''}
                   onChange={(e) => updateGraph(['metadata', 'version'], e.target.value)}
                   placeholder="1.0.0"
                 />
@@ -1013,7 +1023,7 @@ export default function PropertiesPanel({
                 <label className="property-label">Author</label>
                 <input
                   className="property-input"
-                  value={graph.metadata?.author || ''}
+                  value={graph?.metadata?.author || ''}
                   onChange={(e) => updateGraph(['metadata', 'author'], e.target.value)}
                   placeholder="Your name"
                 />
