@@ -1,4 +1,4 @@
-import type { LayoutData } from 'rc-dock';
+import type { LayoutData, TabData } from 'rc-dock';
 
 function chunk<T>(items: T[], chunkSize: number): T[][] {
   if (chunkSize <= 0) return [items];
@@ -32,14 +32,17 @@ export function buildDashboardDockLayout(tabIds: string[]): LayoutData {
           // One-tab panels: active tab is the only tab, so VisibleTabsContext will mark all as visible.
           activeId: tabId,
           tabs: [
-            {
+            // NOTE:
+            // rc-dock's `TabData` typing requires `content`, but for dashboard mode we MUST omit it
+            // so `DockLayout.loadTab` is invoked to provide the actual React content.
+            // We cast here to satisfy TypeScript without changing runtime behaviour.
+            ({
               id: tabId,
               title: '', // hidden via CSS in dashboard mode
-              // IMPORTANT: do NOT set `content: null` here.
-              // rc-dock will skip `loadTab` if content is present (even null), which would render blank.
+              // IMPORTANT: do NOT set `content: null/undefined` here; omit it entirely.
               cached: true,
               closable: false,
-            },
+            } as unknown as TabData),
           ],
           panelLock: {
             panelStyle: 'dashboard',

@@ -148,7 +148,9 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       visibleScenarioIds={visibleScenarioIds}
       currentColour={currentColour}
       baseColour={baseColour}
-      showCurrent={true}
+      // Dashboard requires the Current chip even when there are no user scenarios.
+      // Keep legacy behaviour in normal mode to avoid unintended UX changes.
+      showCurrent={isDashboardMode ? true : scenarios.length >= 1}
       showBase={baseVisible}
       isDashboardMode={isDashboardMode}
       activeDsl={activeDsl}
