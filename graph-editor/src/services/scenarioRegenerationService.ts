@@ -480,32 +480,31 @@ export function generateSmartLabel(dsl: string | null | undefined): string {
   const parsed = parseConstraints(dsl);
   const parts: string[] = [];
   
+  const formatWindowDate = (date: string): string => {
+    if (!date) return '';
+    
+    // Relative date: -90d, -30d, etc.
+    const relativeMatch = date.match(/^(-?\d+)([dwmy])$/);
+    if (relativeMatch) {
+      const num = Math.abs(parseInt(relativeMatch[1], 10));
+      const unit = relativeMatch[2];
+      const unitLabel = unit === 'd' ? 'd' : unit === 'w' ? 'w' : unit === 'm' ? 'mo' : 'y';
+      return `${num}${unitLabel} ago`;
+    }
+    
+    // Absolute date: 2-Dec-25 → "2-Dec"
+    const absoluteMatch = date.match(/^(\d{1,2})-([A-Za-z]{3})-\d{2}$/);
+    if (absoluteMatch) {
+      return `${absoluteMatch[1]}-${absoluteMatch[2]}`;
+    }
+    
+    return date;
+  };
+
   // Format window
   if (parsed.window) {
     const start = parsed.window.start || '';
     const end = parsed.window.end || '';
-    
-    const formatWindowDate = (date: string): string => {
-      if (!date) return '';
-      
-      // Relative date: -90d, -30d, etc.
-      const relativeMatch = date.match(/^(-?\d+)([dwmy])$/);
-      if (relativeMatch) {
-        const num = Math.abs(parseInt(relativeMatch[1], 10));
-        const unit = relativeMatch[2];
-        const unitLabel = unit === 'd' ? 'd' : unit === 'w' ? 'w' : unit === 'm' ? 'mo' : 'y';
-        return `${num}${unitLabel} ago`;
-      }
-      
-      // Absolute date: 2-Dec-25 → "2-Dec"
-      const absoluteMatch = date.match(/^(\d{1,2})-([A-Za-z]{3})-\d{2}$/);
-      if (absoluteMatch) {
-        return `${absoluteMatch[1]}-${absoluteMatch[2]}`;
-      }
-      
-      return date;
-    };
-    
     const startLabel = formatWindowDate(start);
     const endLabel = formatWindowDate(end);
     
@@ -515,6 +514,26 @@ export function generateSmartLabel(dsl: string | null | undefined): string {
       parts.push(`From ${startLabel}`);
     } else if (endLabel) {
       parts.push(`Until ${endLabel}`);
+    }
+  }
+
+  // Format cohort (entry window)
+  if (parsed.cohort) {
+    const start = parsed.cohort.start || '';
+    const end = parsed.cohort.end || '';
+    const startLabel = formatWindowDate(start);
+    const endLabel = formatWindowDate(end);
+
+    const prefix = parsed.cohort.anchor ? `Cohort(${parsed.cohort.anchor})` : 'Cohort';
+
+    if (startLabel && endLabel) {
+      parts.push(`${prefix}: ${startLabel} – ${endLabel}`);
+    } else if (startLabel) {
+      parts.push(`${prefix}: From ${startLabel}`);
+    } else if (endLabel) {
+      parts.push(`${prefix}: Until ${endLabel}`);
+    } else {
+      parts.push(prefix);
     }
   }
   
@@ -557,6 +576,62 @@ export function generateSmartLabel(dsl: string | null | undefined): string {
   }
   
   return parts.join(' · ');
+}
+
+export type QueryDateMode = 'window' | 'cohort';
+
+/**
+ * Infer whether a DSL is "window mode" or "cohort mode".
+ *
+ * NOTE: If both are present, cohort wins (we treat this as cohort mode for safety),
+ * but callers should ideally normalise to avoid mixed-mode DSLs.
+ */
+export function inferDateModeFromDSL(dsl: string | null | undefined): QueryDateMode {
+  const s = (dsl || '').trim();
+  if (!s) return 'window';
+  if (s.includes('cohort(')) return 'cohort';
+  return 'window';
+}
+
+/**
+ * Normalise a candidate scenario DSL so it does NOT mix `window()` and `cohort()`.
+ *
+ * Why:
+ * - WindowSelector is either window() OR cohort() mode (single source of truth).
+ * - Mixed-mode DSLs like `cohort(...).window(...)` lead to cache misses and, worse,
+ *   ambiguous/ignored date ranges in downstream fetch/aggregation.
+ *
+ * Behaviour:
+ * - If `mode === 'cohort'`: prefer `cohort()`, convert any `window()` range into `cohort()`, and drop `window()`.
+ * - If `mode === 'window'`: prefer `window()`, convert any `cohort()` range into `window()`, and drop `cohort()`.
+ * - Preserve context / contextAny and all what-if clauses.
+ */
+export function normaliseScenarioDateRangeDSL(candidateDSL: string, mode: QueryDateMode): string {
+  const { fetchParts, whatIfParts } = splitDSLParts(candidateDSL);
+
+  const nextFetch: FetchParts = {
+    window: fetchParts.window,
+    cohort: fetchParts.cohort,
+    context: fetchParts.context,
+    contextAny: fetchParts.contextAny,
+  };
+
+  if (mode === 'cohort') {
+    if (!nextFetch.cohort && nextFetch.window) {
+      nextFetch.cohort = { start: nextFetch.window.start, end: nextFetch.window.end };
+    }
+    nextFetch.window = null;
+  } else {
+    if (!nextFetch.window && nextFetch.cohort) {
+      nextFetch.window = { start: nextFetch.cohort.start, end: nextFetch.cohort.end };
+    }
+    nextFetch.cohort = null;
+  }
+
+  const fetchDSL = buildFetchDSL(nextFetch);
+  const whatIfDSL = buildWhatIfDSL(whatIfParts);
+  if (fetchDSL && whatIfDSL) return `${fetchDSL}.${whatIfDSL}`;
+  return fetchDSL || whatIfDSL || '';
 }
 
 /**
