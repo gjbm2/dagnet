@@ -118,7 +118,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     bulkCreateModal,
     closeBulkCreateModal,
     createScenariosForContext
-  } = useBulkScenarioCreation();
+  } = useBulkScenarioCreation(tabId);
   const [showingAllContexts, setShowingAllContexts] = useState(false);
   
   const contextButtonRef = useRef<HTMLButtonElement>(null);
