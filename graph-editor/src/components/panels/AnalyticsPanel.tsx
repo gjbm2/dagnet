@@ -359,6 +359,11 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       if (hasMultipleScenarios) {
         // Build scenario-modified graphs for each visible scenario (in legend order)
         const scenarioGraphs = orderedVisibleScenarios.map(scenarioId => {
+          // Get visibility mode (F/E/F+E) for this scenario from tab state
+          const visibilityMode = tabId 
+            ? operations.getScenarioVisibilityMode(tabId, scenarioId)
+            : 'f+e';
+
           // Pass whatIfDSL only for 'current' layer - scenario layers have their
           // What-If already baked into their params at snapshot time
           const scenarioGraph = buildGraphForAnalysisLayer(
@@ -367,15 +372,11 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
             scenariosContext.baseParams,
             scenariosContext.currentParams,
             scenariosContext.scenarios,
-            scenarioId === 'current' ? whatIfDSL : undefined
+            scenarioId === 'current' ? whatIfDSL : undefined,
+            visibilityMode
           );
           
           const colour = getScenarioColour(scenarioId);
-          
-          // Get visibility mode (F/E/F+E) for this scenario from tab state
-          const visibilityMode = tabId 
-            ? operations.getScenarioVisibilityMode(tabId, scenarioId)
-            : 'f+e';
           
           return {
             scenario_id: scenarioId,
@@ -413,7 +414,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
             scenariosContext.baseParams,
             scenariosContext.currentParams,
             scenariosContext.scenarios,
-            scenarioId === 'current' ? whatIfDSL : undefined
+            scenarioId === 'current' ? whatIfDSL : undefined,
+            visibilityMode
           );
         } else if (scenarioId === 'current' && whatIfDSL) {
           // No scenario context but we have whatIfDSL - apply it directly
