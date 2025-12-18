@@ -20,7 +20,7 @@ import { useScenariosContextOptional, SCENARIO_PALETTE } from '../contexts/Scena
 import { Scenario } from '../types/scenarios';
 import { useTabContext } from '../contexts/TabContext';
 import { contextRegistry } from '../services/contextRegistry';
-import { deriveBaseDSLForRebase, generateSmartLabel } from '../services/scenarioRegenerationService';
+import { deriveBaseDSLForRebase, inferDateModeFromDSL, normaliseScenarioDateRangeDSL } from '../services/scenarioRegenerationService';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 
 interface ContextValue {
@@ -43,11 +43,19 @@ interface UseBulkScenarioCreationReturn {
   getWindowDSLForPreset: (preset: 7 | 30 | 90, offset?: number) => string;
 }
 
-export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
+/**
+ * NOTE: This hook is used from multiple UI surfaces. Some of those surfaces may be visible
+ * while a different dock tab is "active" (e.g. Session Log tab focused).
+ *
+ * To avoid writing scenario visibility state into the wrong tab, callers that know the
+ * correct graph tab should pass `tabIdOverride`.
+ */
+export function useBulkScenarioCreation(tabIdOverride?: string): UseBulkScenarioCreationReturn {
   const scenariosContext = useScenariosContextOptional();
   const { activeTabId, operations } = useTabContext();
   const graphStore = useGraphStore();
   const [bulkCreateModal, setBulkCreateModal] = useState<BulkCreateModalState | null>(null);
+  const effectiveTabId = tabIdOverride || activeTabId;
   
   const closeBulkCreateModal = useCallback(() => {
     setBulkCreateModal(null);
@@ -106,7 +114,7 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
     contextKey: string,
     valueIds: string[]
   ): Promise<number> => {
-    if (!scenariosContext || !activeTabId) {
+    if (!scenariosContext || !effectiveTabId) {
       toast.error('Scenarios not available');
       return 0;
     }
@@ -135,7 +143,7 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
         const scenario = await scenariosContext.createLiveScenario(
           queryDSL, 
           undefined, 
-          activeTabId, 
+          effectiveTabId, 
           colours[i]
         );
         createdScenarios.push(scenario);
@@ -145,7 +153,7 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
       // Use addVisibleScenarios which uses functional state updates
       // to avoid stale closure issues when called rapidly
       const newScenarioIds = createdScenarios.map(s => s.id);
-      await operations.addVisibleScenarios(activeTabId, newScenarioIds);
+      await operations.addVisibleScenarios(effectiveTabId, newScenarioIds);
 
       // PHASE 3: Regenerate Data
       // We must pass the FULL list of scenarios (existing + created) to ensure proper inheritance
@@ -154,7 +162,7 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
       const allScenarios = [...[...createdScenarios].reverse(), ...existingScenarios]; // Newest first
       
       // Get the visible order from tab state
-      const scenarioState = operations.getScenarioState(activeTabId);
+      const scenarioState = operations.getScenarioState(effectiveTabId);
       const existingVisibleIds = scenarioState?.visibleScenarioIds || [];
       // New scenarios are added at the front (top of stack)
       const visibleOrder = [...newScenarioIds, ...existingVisibleIds];
@@ -183,7 +191,7 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
     } finally {
       toast.dismiss(toastId);
     }
-  }, [scenariosContext, activeTabId, operations, getAssignedColours]);
+  }, [scenariosContext, effectiveTabId, operations, getAssignedColours]);
   
   /**
    * Create a single window scenario
@@ -198,7 +206,7 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
    * Create multiple window scenarios
    */
   const createMultipleWindowScenarios = useCallback(async (windowDSLs: string[]): Promise<number> => {
-    if (!scenariosContext || !activeTabId) {
+    if (!scenariosContext || !effectiveTabId) {
       toast.error('Scenarios not available');
       return 0;
     }
@@ -211,6 +219,8 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
     if (newBaseDSL) {
       scenariosContext.setBaseDSL(newBaseDSL);
     }
+
+    const dateMode = inferDateModeFromDSL(currentDSL);
     
     const toastId = toast.loading(`Creating scenarios (0/${windowDSLs.length})...`);
     const createdScenarios: Scenario[] = [];
@@ -220,11 +230,14 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
       // PHASE 1: Create
       for (let i = 0; i < windowDSLs.length; i++) {
         toast.loading(`Creating scenarios (${i + 1}/${windowDSLs.length})...`, { id: toastId });
-        
+
+        // CRITICAL: Do not create mixed-mode DSLs (cohort + window) – normalise to current mode.
+        const queryDSL = normaliseScenarioDateRangeDSL(windowDSLs[i], dateMode);
+
         const scenario = await scenariosContext.createLiveScenario(
-          windowDSLs[i], 
+          queryDSL, 
           undefined, 
-          activeTabId, 
+          effectiveTabId, 
           colours[i]
         );
         createdScenarios.push(scenario);
@@ -234,14 +247,14 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
       // Use addVisibleScenarios which uses functional state updates
       // to avoid stale closure issues when called rapidly
       const newScenarioIds = createdScenarios.map(s => s.id);
-      await operations.addVisibleScenarios(activeTabId, newScenarioIds);
+      await operations.addVisibleScenarios(effectiveTabId, newScenarioIds);
       
       // PHASE 3: Regenerate
       const existingScenarios = scenariosContext.scenarios || [];
       const allScenarios = [...[...createdScenarios].reverse(), ...existingScenarios];
       
       // Get the visible order from tab state
-      const scenarioState = operations.getScenarioState(activeTabId);
+      const scenarioState = operations.getScenarioState(effectiveTabId);
       const existingVisibleIds = scenarioState?.visibleScenarioIds || [];
       // New scenarios are added at the front (top of stack)
       const visibleOrder = [...newScenarioIds, ...existingVisibleIds];
@@ -269,12 +282,14 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
     } finally {
       toast.dismiss(toastId);
     }
-  }, [scenariosContext, activeTabId, operations, getAssignedColours]);
+  }, [scenariosContext, effectiveTabId, operations, getAssignedColours]);
   
   const getWindowDSLForPreset = useCallback((preset: 7 | 30 | 90, offset: number = 0): string => {
     const endDays = 1 + (offset * preset);
     const startDays = endDays + preset - 1;
-    return `window(-${startDays}d:-${endDays}d)`;
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    const mode = inferDateModeFromDSL(currentDSL);
+    return `${mode}(-${startDays}d:-${endDays}d)`;
   }, []);
   
   return {
