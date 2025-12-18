@@ -10,6 +10,7 @@
 import { LucideIcon } from 'lucide-react';
 import { 
   FileJson,      // Graph
+  LineChart,     // Chart
   Box,           // Node
   Layers,        // Case
   FileText,      // Context
@@ -24,7 +25,7 @@ import {
   Image          // Image
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log' | 'image';
+export type ObjectType = 'graph' | 'chart' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log' | 'image';
 
 export interface ObjectTypeTheme {
   /** Light pastel background colour */
@@ -46,6 +47,13 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     icon: FileJson,
     label: 'Graph',
     emoji: '📊'
+  },
+  chart: {
+    lightColour: '#E0F2FE',  // light sky
+    accentColour: '#0EA5E9', // sky-500
+    icon: LineChart,
+    label: 'Chart',
+    emoji: '📈'
   },
   node: {
     lightColour: '#DBEAFE',  // light blue

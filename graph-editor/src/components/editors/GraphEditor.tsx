@@ -20,6 +20,7 @@ import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useURLScenarios } from '../../hooks/useURLScenarios';
+import { useURLDailyRetrieveAll } from '../../hooks/useURLDailyRetrieveAll';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
@@ -72,6 +73,16 @@ function URLScenariosProcessor({ fileId }: { fileId: string }) {
   // The graph is loaded if we're rendering (GraphEditorInner gates on data)
   useURLScenarios(true, fileId);
   return null; // No UI - just processes URL params
+}
+
+/**
+ * URLDailyRetrieveAllProcessor - processes URL daily automation parameters after graph loads
+ * Must be inside TabProvider + NavigatorProvider (AppShell) so services have context.
+ */
+function URLDailyRetrieveAllProcessor({ fileId }: { fileId: string }) {
+  // The graph is loaded if we're rendering (GraphEditorInner gates on data)
+  useURLDailyRetrieveAll(true, fileId);
+  return null;
 }
 
 /**
@@ -1730,6 +1741,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       <SelectionContext.Provider value={selectionContextValue}>
         <ScenariosProvider fileId={fileId} tabId={tabId}>
           <URLScenariosProcessor fileId={fileId} />
+          <URLDailyRetrieveAllProcessor fileId={fileId} />
           <ViewPreferencesProvider tabId={tabId}>
             <div
               className="graph-editor-dashboard"
@@ -1748,6 +1760,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       <ScenariosProvider fileId={fileId} tabId={tabId}>
       {/* Process URL scenario parameters after graph loads */}
       <URLScenariosProcessor fileId={fileId} />
+      <URLDailyRetrieveAllProcessor fileId={fileId} />
       <ViewPreferencesProvider tabId={tabId}>
       <div 
         ref={containerRef}

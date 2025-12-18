@@ -1083,7 +1083,12 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       }
       
       // Handle ?graph parameter (graph name from default repo)
-      const graphName = urlParams.get('graph');
+      //
+      // Also support `?retrieveall=<graph-name>` as a convenience for headless daily automation:
+      // - TabContext opens the graph tab
+      // - A separate hook (`useURLDailyRetrieveAll`) runs pull → retrieve → commit after load
+      const retrieveAllGraphName = urlParams.get('retrieveall');
+      const graphName = urlParams.get('graph') || (retrieveAllGraphName && retrieveAllGraphName.trim() !== '' ? retrieveAllGraphName : null);
       if (graphName) {
         console.log(`TabContext: Loading graph '${graphName}' from default repo`);
         

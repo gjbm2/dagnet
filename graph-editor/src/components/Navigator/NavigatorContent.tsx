@@ -267,6 +267,7 @@ export function NavigatorContent() {
   const groupedEntries = useMemo(() => {
     const groups: Record<ObjectType, NavigatorEntry[]> = {
       graph: [],
+      chart: [],
       parameter: [],
       context: [],
       case: [],

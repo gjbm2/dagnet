@@ -44,6 +44,13 @@ vi.mock('../../contexts/TabContext', () => ({
     operations: { updateTabData: hoisted.updateTabData },
   }),
   useFileRegistry: () => ({ getFile: hoisted.getFile }),
+  // Used by sessionLogService (which updates the in-memory log file on each log entry)
+  fileRegistry: {
+    getFile: hoisted.getFile,
+    notifyListeners: vi.fn(),
+    getOrCreateFile: vi.fn(),
+    addViewTab: vi.fn(),
+  },
 }));
 
 vi.mock('../usePullAll', () => ({
@@ -210,6 +217,34 @@ describe('useStalenessNudges', () => {
 
     // Should NOT show the modal
     expect(screen.queryByText('Updates recommended')).toBeNull();
+  });
+
+  it('should skip retrieve-all after pull when post-pull staleness is no longer due', async () => {
+    hoisted.shouldPromptReload.mockReturnValue(false);
+    hoisted.shouldCheckGitPull.mockResolvedValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+
+    // First call (modal due computation): stale → shows Retrieve action as due/checked.
+    // Second call (post-pull re-check): not stale → should skip retrieve.
+    hoisted.getRetrieveAllSlicesStalenessStatus
+      .mockReturnValueOnce({ isStale: true, parameterCount: 1, staleParameterCount: 1 })
+      .mockReturnValueOnce({ isStale: false, parameterCount: 1, staleParameterCount: 0 });
+
+    render(<Harness />);
+
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+    expect(screen.getByText('Pull latest from git')).toBeTruthy();
+    expect(screen.getByText('Retrieve all slices (active graph)')).toBeTruthy();
+
+    screen.getByText('Run selected').click();
+
+    await waitFor(() => {
+      expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
+    });
+
+    // Retrieve should be skipped (no request event, no direct execute)
+    expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
+    expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
   });
 });
 
