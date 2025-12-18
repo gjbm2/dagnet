@@ -18,6 +18,7 @@
 
 import { fileRegistry } from '../contexts/TabContext';
 import type { TabState } from '../types';
+import { DIAGNOSTIC_LOG as DIAGNOSTIC_LOG_DEFAULT } from '../constants/latency';
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 
@@ -109,8 +110,10 @@ class SessionLogService {
   private activeOperations: Map<string, ActiveOperation> = new Map();
   private fileId = 'session-log';
   private listeners: Set<(entries: LogEntry[]) => void> = new Set();
+  private settingsListeners: Set<() => void> = new Set();
   private isInitialized = false;
   private operationCounter = 0;
+  private diagnosticLoggingEnabled = DIAGNOSTIC_LOG_DEFAULT;
 
   private constructor() {}
 
@@ -138,6 +141,38 @@ class SessionLogService {
       `DagNet v${(import.meta as any).env?.VITE_APP_VERSION || '0.9x'}`);
     
     console.log('[SessionLogService] Initialized');
+  }
+
+  /**
+   * Runtime control: whether verbose diagnostic data should be included in session logs.
+   * Defaults from constants/latency.ts but can be toggled via UI.
+   */
+  getDiagnosticLoggingEnabled(): boolean {
+    return this.diagnosticLoggingEnabled;
+  }
+
+  setDiagnosticLoggingEnabled(enabled: boolean): void {
+    const next = !!enabled;
+    if (this.diagnosticLoggingEnabled === next) return;
+    this.diagnosticLoggingEnabled = next;
+    this.notifySettingsListeners();
+  }
+
+  subscribeSettings(listener: () => void): () => void {
+    this.settingsListeners.add(listener);
+    return () => {
+      this.settingsListeners.delete(listener);
+    };
+  }
+
+  private notifySettingsListeners(): void {
+    for (const l of this.settingsListeners) {
+      try {
+        l();
+      } catch (e) {
+        console.warn('[SessionLogService] settings listener threw:', e);
+      }
+    }
   }
 
   private generateId(): string {

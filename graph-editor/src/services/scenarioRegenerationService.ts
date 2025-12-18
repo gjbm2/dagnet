@@ -43,6 +43,16 @@ export interface SplitDSLResult {
 }
 
 /**
+ * Internal sentinel used to represent a "live scenario with no diff".
+ *
+ * Why:
+ * - Many parts of the codebase treat empty queryDSL as "not live".
+ * - We want to support "differences" scenarios whose DSL diff can be empty,
+ *   without changing that existing contract everywhere.
+ */
+export const LIVE_EMPTY_DIFF_DSL = '__DAGNET_LIVE_EMPTY_DIFF__';
+
+/**
  * Split a DSL string into fetch parts (window, context) and what-if parts (case, visited, exclude).
  * 
  * This is the core function that enables mixed DSL handling:
@@ -61,6 +71,13 @@ export interface SplitDSLResult {
  * // }
  */
 export function splitDSLParts(queryDSL: string | null | undefined): SplitDSLResult {
+  // Treat the internal sentinel as an empty/no-op DSL.
+  if (queryDSL === LIVE_EMPTY_DIFF_DSL) {
+    return {
+      fetchParts: { window: null, cohort: null, context: [], contextAny: [] },
+      whatIfParts: { cases: [], visited: [], visitedAny: [], exclude: [] },
+    };
+  }
   const parsed = parseConstraints(queryDSL);
   
   return {
@@ -322,6 +339,25 @@ export function computeEffectiveFetchDSL(
 }
 
 /**
+ * Derive a base DSL for "re-base" operations.
+ *
+ * UX principle:
+ * - Base should normally carry the *date range* (window/cohort) for the current view.
+ * - Context-value scenarios should then be created WITHOUT date ranges (so they inherit from base),
+ *   which preserves the scenario system’s "build from base" semantics and avoids confusing users.
+ */
+export function deriveBaseDSLForRebase(currentDSL: string | null | undefined): string {
+  const { fetchParts } = splitDSLParts(currentDSL);
+  const windowCohortOnly: FetchParts = {
+    window: fetchParts.window,
+    cohort: fetchParts.cohort,
+    context: [],
+    contextAny: [],
+  };
+  return buildFetchDSL(windowCohortOnly);
+}
+
+/**
  * Check if a scenario is a live scenario.
  * 
  * @param scenario - Scenario to check
@@ -329,6 +365,100 @@ export function computeEffectiveFetchDSL(
  */
 export function isLiveScenario(scenario: { meta?: { queryDSL?: string; isLive?: boolean } }): boolean {
   return Boolean(scenario?.meta?.queryDSL && scenario.meta.queryDSL.trim());
+}
+
+/**
+ * Compute the minimal query DSL fragment that, when layered on top of baseDSL, yields currentDSL.
+ *
+ * Notes:
+ * - This is used for "Live scenario (differences)".
+ * - It's intentionally conservative: it only emits clauses that exist in currentDSL and differ from baseDSL.
+ * - If currentDSL equals baseDSL (for the parts we track), this returns an empty string.
+ */
+export function diffQueryDSLFromBase(
+  baseDSL: string | null | undefined,
+  currentDSL: string | null | undefined
+): string {
+  const base = splitDSLParts(baseDSL);
+  const cur = splitDSLParts(currentDSL);
+
+  const deltaFetch: FetchParts = {
+    window: null,
+    cohort: null,
+    context: [],
+    contextAny: [],
+  };
+
+  // Window/cohort: include only if changed relative to base.
+  const baseWindow = base.fetchParts.window;
+  const curWindow = cur.fetchParts.window;
+  if (
+    curWindow &&
+    (!baseWindow || baseWindow.start !== curWindow.start || baseWindow.end !== curWindow.end)
+  ) {
+    deltaFetch.window = curWindow;
+  }
+
+  const baseCohort = base.fetchParts.cohort;
+  const curCohort = cur.fetchParts.cohort;
+  if (
+    curCohort &&
+    (!baseCohort || baseCohort.start !== curCohort.start || baseCohort.end !== curCohort.end)
+  ) {
+    deltaFetch.cohort = curCohort;
+  }
+
+  // Context pairs: include those present in current but not in base (exact match).
+  const baseCtxSet = new Set((base.fetchParts.context || []).map(c => `${c.key}:${c.value || ''}`));
+  for (const c of cur.fetchParts.context || []) {
+    const key = `${c.key}:${c.value || ''}`;
+    if (!baseCtxSet.has(key)) deltaFetch.context.push(c);
+  }
+
+  // ContextAny: best-effort compare by serialised pair list.
+  const normaliseCtxAny = (x: FetchParts['contextAny'][number]) =>
+    (x.pairs || []).map(p => `${p.key}:${p.value}`).join(',');
+  const baseCtxAnySet = new Set((base.fetchParts.contextAny || []).map(normaliseCtxAny));
+  for (const grp of cur.fetchParts.contextAny || []) {
+    const key = normaliseCtxAny(grp);
+    if (!baseCtxAnySet.has(key)) deltaFetch.contextAny.push(grp);
+  }
+
+  const deltaWhatIf: WhatIfParts = {
+    cases: [],
+    visited: [],
+    visitedAny: [],
+    exclude: [],
+  };
+
+  // What-if: include only those present in current but not base (exact match).
+  const baseCaseSet = new Set((base.whatIfParts.cases || []).map(c => `${c.key}:${c.value}`));
+  for (const c of cur.whatIfParts.cases || []) {
+    const key = `${c.key}:${c.value}`;
+    if (!baseCaseSet.has(key)) deltaWhatIf.cases.push(c);
+  }
+
+  const baseVisitedSet = new Set(base.whatIfParts.visited || []);
+  for (const v of cur.whatIfParts.visited || []) {
+    if (!baseVisitedSet.has(v)) deltaWhatIf.visited.push(v);
+  }
+
+  const baseVisitedAnySet = new Set((base.whatIfParts.visitedAny || []).map(g => g.join(',')));
+  for (const g of cur.whatIfParts.visitedAny || []) {
+    const key = g.join(',');
+    if (!baseVisitedAnySet.has(key)) deltaWhatIf.visitedAny.push(g);
+  }
+
+  const baseExcludeSet = new Set(base.whatIfParts.exclude || []);
+  for (const e of cur.whatIfParts.exclude || []) {
+    if (!baseExcludeSet.has(e)) deltaWhatIf.exclude.push(e);
+  }
+
+  const fetchDSL = buildFetchDSL(deltaFetch);
+  const whatIfDSL = buildWhatIfDSL(deltaWhatIf);
+  if (fetchDSL && whatIfDSL) return `${fetchDSL}.${whatIfDSL}`;
+  const out = fetchDSL || whatIfDSL || '';
+  return out.trim().length > 0 ? out : LIVE_EMPTY_DIFF_DSL;
 }
 
 /**
@@ -345,6 +475,7 @@ export function isLiveScenario(scenario: { meta?: { queryDSL?: string; isLive?: 
  */
 export function generateSmartLabel(dsl: string | null | undefined): string {
   if (!dsl || !dsl.trim()) return '';
+  if (dsl === LIVE_EMPTY_DIFF_DSL) return 'No overrides';
   
   const parsed = parseConstraints(dsl);
   const parts: string[] = [];

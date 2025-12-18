@@ -34,6 +34,10 @@ vi.mock('../sessionLogService', () => ({
     startOperation: vi.fn().mockReturnValue('mock-log-id'),
     addChild: vi.fn(),
     endOperation: vi.fn(),
+    // New runtime diagnostic logging toggle (defaults from constants/latency.ts in real app)
+    getDiagnosticLoggingEnabled: vi.fn().mockReturnValue(false),
+    setDiagnosticLoggingEnabled: vi.fn(),
+    subscribeSettings: vi.fn().mockReturnValue(() => {}),
   },
 }));
 

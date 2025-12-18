@@ -118,7 +118,7 @@ def run_single_node_entry(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
@@ -187,6 +187,14 @@ def run_path_to_end(
         }
         
         result = calculate_path_to_absorbing(scenario_G, node_id, pruning)
+        cost_per_success_gbp = None
+        cost_per_success_labour = None
+        if result.probability and result.probability > 0:
+            # Commercial framing: "total expected cost per starter" apportioned across successes.
+            # This is E(cost) / P(reach target).
+            cost_per_success_gbp = result.expected_cost_gbp / result.probability
+            cost_per_success_labour = result.expected_labour_cost / result.probability
+
         data_rows.append({
             'scenario_id': scenario_id,
             'scenario_name': scenario_name,
@@ -195,6 +203,10 @@ def run_path_to_end(
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
             'expected_labour_cost': result.expected_labour_cost,
+            'expected_cost_gbp_given_success': result.expected_cost_gbp_given_success,
+            'expected_labour_cost_given_success': result.expected_labour_cost_given_success,
+            'cost_per_success_gbp': cost_per_success_gbp,
+            'cost_per_success_labour': cost_per_success_labour,
         })
     
     # IMPORTANT: probability basis is per-scenario (visibility_mode may differ),
@@ -202,7 +214,7 @@ def run_path_to_end(
     # to display the actual basis in the UI.
     metric_name = 'Probability'
 
-    return {
+    result_obj = {
         'metadata': {
             'node_id': node_id,
             'node_label': node_label,
@@ -214,7 +226,11 @@ def run_path_to_end(
             'metrics': [
                 {'id': 'probability', 'name': metric_name, 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_cost_gbp_given_success', 'name': 'Cost (£) Given success', 'type': 'currency', 'format': 'currency_gbp'},
+                {'id': 'expected_labour_cost_given_success', 'name': 'Cost (Labour) Given success', 'type': 'duration', 'format': 'number'},
+                {'id': 'cost_per_success_gbp', 'name': 'Cost (£) per success', 'type': 'currency', 'format': 'currency_gbp'},
+                {'id': 'cost_per_success_labour', 'name': 'Cost (Labour) per success', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar',
@@ -226,6 +242,27 @@ def run_path_to_end(
         },
         'data': data_rows,
     }
+
+    # If a metric is all-zero / all-null across all scenarios, omit it to reduce UI noise.
+    cost_metric_ids = [
+        'expected_cost_gbp',
+        'expected_labour_cost',
+        'expected_cost_gbp_given_success',
+        'expected_labour_cost_given_success',
+        'cost_per_success_gbp',
+        'cost_per_success_labour',
+    ]
+    filtered_metrics = []
+    for m in result_obj['semantics']['metrics']:
+        mid = m.get('id')
+        if mid in cost_metric_ids:
+            vals = [(row.get(mid)) for row in data_rows]
+            if all(v is None or v == 0 for v in vals):
+                continue
+        filtered_metrics.append(m)
+    result_obj['semantics']['metrics'] = filtered_metrics
+
+    return result_obj
 
 
 def run_path_through(
@@ -294,7 +331,7 @@ def run_path_through(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar',
@@ -383,7 +420,7 @@ def run_end_comparison(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
@@ -510,7 +547,7 @@ def run_branch_comparison(
                 {'id': 'completeness', 'name': 'Completeness', 'type': 'ratio', 'format': 'percent'},
                 {'id': 'path_through_probability', 'name': 'Path Through', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
@@ -756,7 +793,7 @@ def run_path(
                 {'id': 'forecast_k', 'name': 'Expected Conversions', 'type': 'count', 'format': 'integer'},
                 {'id': 'dropoff', 'name': 'Dropoff', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'funnel',
@@ -879,7 +916,7 @@ def run_partial_path(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
@@ -1100,7 +1137,7 @@ def run_graph_overview(
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
-                {'id': 'expected_labour_cost', 'name': 'Expected Time', 'type': 'duration', 'format': 'number'},
+                {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',

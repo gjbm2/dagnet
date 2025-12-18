@@ -192,13 +192,25 @@ export function extractParamDetails(param: any): string {
 // ============================================================================
 
 function stripCohortClause(dsl: string): string {
-  // Remove a single cohort(...) clause from a semicolon-separated DSL string.
-  const without = dsl.replace(/(^|;)\s*cohort\([^;]*\)\s*(;|$)/, (m, p1, p2) => (p1 && p2 ? ';' : ''));
-  return without
+  // Remove cohort(...) clauses from a DSL string.
+  //
+  // IMPORTANT: Our DSL uses dot-chained constraints (e.g. "context(x).cohort(a:b)")
+  // and sometimes semicolon-separated clauses (e.g. "window(...);context(x)").
+  // This helper must support BOTH, otherwise we can accidentally produce invalid combined
+  // slices like "window(...);context(x).cohort(...)" which will never match stored sliceDSL.
+  const parts = dsl
     .split(';')
     .map(s => s.trim())
     .filter(Boolean)
-    .join(';');
+    .map((part) => {
+      // Remove ".cohort(...)" or leading "cohort(...)".
+      let out = part.replace(/(^|[.])\s*cohort\([^)]+\)/g, '');
+      // Clean up dot artefacts
+      out = out.replace(/\.\./g, '.').replace(/^\./, '').replace(/\.$/, '');
+      return out.trim();
+    })
+    .filter(Boolean);
+  return parts.join(';');
 }
 
 function buildWindowClauseFromCohort(dsl: string): string | null {
@@ -266,7 +278,8 @@ function computeTargetSliceOverrideForItem(
 
   const withoutCohort = stripCohortClause(dsl);
   if (withoutCohort.includes('window(')) return withoutCohort;
-  return withoutCohort ? `${windowClause};${withoutCohort}` : windowClause;
+  // Prefer dot-chaining over semicolons so this matches stored sliceDSL semantics.
+  return withoutCohort ? `${withoutCohort}.${windowClause}` : windowClause;
 }
 
 // ============================================================================
@@ -1078,6 +1091,23 @@ export async function fetchItems(
 ): Promise<FetchResult[]> {
   if (!graph || items.length === 0) return [];
 
+  // Intent integrity guardrail (warn & proceed):
+  // An empty DSL means we cannot honour any window/context intent. Default it explicitly and log.
+  // This prevents "silent defaults" when a caller forgets to pass the authoritative DSL.
+  const effectiveDSL = dsl && dsl.trim() ? dsl : getDefaultDSL();
+  if ((!dsl || !dsl.trim()) && (options?.parentLogId || items.length > 1)) {
+    const logId = options?.parentLogId;
+    if (logId) {
+      sessionLogService.addChild(
+        logId,
+        'warning',
+        'DSL_EMPTY_DEFAULTED',
+        'Empty DSL provided to fetchItems(); defaulting to a 7-day window',
+        effectiveDSL
+      );
+    }
+  }
+
   // CRITICAL: Track the freshest graph as we go.
   //
   // Many callers (including tests) pass a setGraph callback but do NOT provide
@@ -1094,11 +1124,11 @@ export async function fetchItems(
   // COHORT-VIEW: Apply per-item targetSlice overrides so cohort-mode tabs only use
   // cohort-shaped retrieval for edges behind lagged paths (path_t95 > 0) or with
   // local latency config. Truly simple edges are fetched via window().
-  const pathT95Map = dsl.includes('cohort(') ? computePathT95MapForGraph(graph) : new Map<string, number>();
+  const pathT95Map = effectiveDSL.includes('cohort(') ? computePathT95MapForGraph(graph) : new Map<string, number>();
   const effectiveItems: FetchItem[] = items.map((it) => {
-    if (!dsl.includes('cohort(')) return it;
+    if (!effectiveDSL.includes('cohort(')) return it;
     if (it.type !== 'parameter') return it;
-    const override = it.targetSliceOverride ?? computeTargetSliceOverrideForItem(it, graph, dsl, pathT95Map);
+    const override = it.targetSliceOverride ?? computeTargetSliceOverrideForItem(it, graph, effectiveDSL, pathT95Map);
     return override ? { ...it, targetSliceOverride: override } : it;
   });
 
@@ -1118,7 +1148,7 @@ export async function fetchItems(
     : shouldUseBatchMode 
       ? sessionLogService.startOperation('info', 'data-fetch', 'BATCH_FETCH',
           `Batch fetch: ${effectiveItems.length} items`,
-          { dsl, itemCount: effectiveItems.length, mode: itemOptions?.mode || 'versioned' })
+          { dsl: effectiveDSL, itemCount: effectiveItems.length, mode: itemOptions?.mode || 'versioned' })
       : undefined;
   
   if (shouldUseBatchMode) {
@@ -1149,7 +1179,7 @@ export async function fetchItems(
         itemOptions,
         currentGraph,
         trackingSetGraph,
-        dsl,
+        effectiveDSL,
         getUpdatedGraph
       );
       results.push(result);

@@ -526,7 +526,7 @@
 
 .analytics-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 10px 12px;
   background: #f9fafb;
@@ -538,6 +538,8 @@
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+  /* Align with the title line (not vertically centred across title + subtitle) */
+  margin-top: 4px;
 }
 
 .analytics-card-stage-number {
@@ -552,12 +554,35 @@
   font-size: 10px;
   font-weight: 600;
   flex-shrink: 0;
+  /* Keep stage number aligned with the title line when a subtitle is present */
+  margin-top: 1px;
 }
 
 .analytics-card-title {
   font-weight: 600;
   font-size: 13px;
   color: #374151;
+}
+
+.analytics-card-title-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* allow ellipsis */
+}
+
+.analytics-card-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  color: #6b7280;
+  /* Wrap long DSLs sensibly without letting cards grow unbounded */
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  word-break: break-word;
 }
 
 .analytics-card-content {

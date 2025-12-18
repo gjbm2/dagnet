@@ -1,0 +1,211 @@
+/**
+ * Regression tests: open-ended relative window resolution and default-window transparency.
+ *
+ * - window(-60d:) must resolve to a ~60-day window ending "today" (no fallback to ~7 days).
+ * - If we ever do fall back to a default window, it must never be silent (session log warning).
+ *
+ * @vitest-environment node
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { Graph } from '../../types';
+
+vi.mock('react-hot-toast', () => ({
+  default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() },
+}));
+
+vi.mock('../rateLimiter', () => ({
+  rateLimiter: {
+    waitForRateLimit: vi.fn(async () => {}),
+    isRateLimitError: vi.fn(() => false),
+    reportRateLimitError: vi.fn(() => {}),
+    reportSuccess: vi.fn(() => {}),
+  },
+}));
+
+vi.mock('../../db/appDatabase', () => ({
+  db: {
+    getSettings: vi.fn(async () => ({ data: { excludeTestAccounts: true } })),
+  },
+}));
+
+// Minimal session log mock (must include addChild because we explicitly warn on default-window fallback)
+const addChildSpy = vi.fn();
+vi.mock('../sessionLogService', () => ({
+  sessionLogService: {
+    startOperation: vi.fn(() => 'mock-op'),
+    endOperation: vi.fn(),
+    addChild: (...args: any[]) => addChildSpy(...args),
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
+// Minimal fileRegistry mock (must match production import path)
+vi.mock('../../contexts/TabContext', () => {
+  const mockFiles = new Map<string, any>();
+  return {
+    fileRegistry: {
+      getFile: vi.fn((id: string) => mockFiles.get(id)),
+      updateFile: vi.fn(async () => {}),
+      registerFile: vi.fn(async (id: string, data: any) => {
+        mockFiles.set(id, { data: structuredClone(data), isDirty: false });
+      }),
+      _mockFiles: mockFiles,
+    },
+  };
+});
+
+// Mock DAS runner and capture execute options (window payload)
+const executeSpy = vi.fn(async (_connection: string, _payload: any, opts: any) => ({
+  success: true,
+  raw: { request: { method: 'GET', url: 'https://example.test', opts } },
+}));
+
+vi.mock('../../lib/das', () => ({
+  createDASRunner: () => ({
+    connectionProvider: {
+      getConnection: vi.fn(async () => ({
+        provider: 'statsig',
+        requires_event_ids: false,
+        capabilities: { supports_daily_time_series: false },
+      })),
+    },
+    execute: (...args: any[]) => executeSpy(...args),
+  }),
+}));
+
+const { fileRegistry } = await import('../../contexts/TabContext');
+const { dataOperationsService } = await import('../dataOperationsService');
+
+function createTestGraph(edgeQuery: string): Graph {
+  return {
+    schema_version: '1.0.0',
+    id: 'g1',
+    name: 'Test',
+    description: '',
+    nodes: [
+      { id: 'A', uuid: 'A', label: 'A', layout: { x: 0, y: 0 }, event_id: 'event-a' } as any,
+      { id: 'B', uuid: 'B', label: 'B', layout: { x: 1, y: 1 }, event_id: 'event-b' } as any,
+    ],
+    edges: [
+      {
+        id: 'E1',
+        uuid: 'E1',
+        from: 'A',
+        to: 'B',
+        query: edgeQuery,
+        p: { id: 'p1', connection: 'statsig', mean: 0.1 },
+      } as any,
+    ],
+  } as any;
+}
+
+describe('dataOperationsService window resolution regressions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    addChildSpy.mockClear();
+    (fileRegistry as any)._mockFiles.clear();
+
+    // Fix "today" deterministically: 17-Dec-25 (UTC midnight normalised internally)
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-12-17T12:34:56.000Z'));
+
+    // Minimal event files required by buildDslFromEdge event loader
+    (fileRegistry as any).registerFile('event-event-a', {
+      id: 'event-a',
+      provider_event_names: { statsig: 'Event A' },
+    });
+    (fileRegistry as any).registerFile('event-event-b', {
+      id: 'event-b',
+      provider_event_names: { statsig: 'Event B' },
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves window(-60d:) to a ~60-day fetch window ending today (no ~7d fallback)', async () => {
+    const graph = createTestGraph('from(A).to(B)');
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'E1',
+      graph,
+      setGraph: () => {},
+      currentDSL: 'window(-60d:)',
+      dontExecuteHttp: true,
+    });
+
+    expect(executeSpy).toHaveBeenCalled();
+
+    const payload = executeSpy.mock.calls[0][1];
+    const opts = executeSpy.mock.calls[0][2];
+    expect(opts?.dryRun).toBe(true);
+
+    // Expected: 17-Dec-25 (today) and 60 days earlier: 18-Oct-25
+    expect(payload?.start).toBe('2025-10-18T00:00:00.000Z');
+    expect(payload?.end).toBe('2025-12-17T00:00:00.000Z');
+    expect(opts.window).toEqual({
+      start: '2025-10-18T00:00:00.000Z',
+      end: '2025-12-17T00:00:00.000Z',
+    });
+  });
+
+  it('emits a DEFAULT_WINDOW_APPLIED warning when no explicit window/cohort range exists (never silent)', async () => {
+    const graph = createTestGraph('from(A).to(B)');
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'E1',
+      graph,
+      setGraph: () => {},
+      // No window(...) or cohort(...) at all -> must use default, but must warn.
+      currentDSL: '',
+      dontExecuteHttp: true,
+    });
+
+    expect(executeSpy).toHaveBeenCalled();
+
+    const opts = executeSpy.mock.calls[0][2];
+    expect(opts?.dryRun).toBe(true);
+    expect(opts.window).toEqual({
+      start: '2025-12-10T00:00:00.000Z',
+      end: '2025-12-17T00:00:00.000Z',
+    });
+
+    // Ensure we logged the warning (opId, level, code, message, ...)
+    const warned = addChildSpy.mock.calls.some((call) => call[1] === 'warning' && call[2] === 'DEFAULT_WINDOW_APPLIED');
+    expect(warned).toBe(true);
+  });
+
+  it('warns when DSL contains an unparseable window() clause and proceeds with explicit fallbacks', async () => {
+    const graph = createTestGraph('from(A).to(B)');
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'E1',
+      graph,
+      setGraph: () => {},
+      // Comma separator is invalid for our DSL parser; this is the "intent present but dropped" class.
+      currentDSL: 'window(1-Oct-25,31-Oct-25)',
+      dontExecuteHttp: true,
+    });
+
+    // We should still proceed (warn & proceed), but must log that window intent was dropped.
+    const dropped = addChildSpy.mock.calls.some((call) => call[1] === 'warning' && call[2] === 'WINDOW_INTENT_DROPPED');
+    expect(dropped).toBe(true);
+
+    // And because the intent could not be honoured, we will end up defaulting a window (which is also warned).
+    const defaulted = addChildSpy.mock.calls.some((call) => call[1] === 'warning' && call[2] === 'DEFAULT_WINDOW_APPLIED');
+    expect(defaulted).toBe(true);
+  });
+});
+
+

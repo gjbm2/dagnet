@@ -71,7 +71,7 @@ import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
-import { DIAGNOSTIC_LOG, RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
+import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 import { normalizeWindow } from './fetchDataService';
 import { LATENCY_T95_PERCENTILE, LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
 
@@ -726,20 +726,22 @@ class DataOperationsService {
       const parsed = parseConstraints(targetSlice);
       
       // Check for cohort() first - cohort evidence window
-      if (parsed.cohort?.start && parsed.cohort?.end) {
+      const todayUK = formatDateUK(new Date());
+
+      if (parsed.cohort?.start) {
         cohortWindow = {
           start: resolveRelativeDate(parsed.cohort.start),
-          end: resolveRelativeDate(parsed.cohort.end),
+          end: resolveRelativeDate(parsed.cohort.end ?? todayUK),
         };
         isCohortQuery = true;
         console.log('[DataOperationsService] Parsed cohort window from DSL:', cohortWindow);
       }
       
       // Also check for window() - observation window (may also be present for dual-slice queries)
-      if (!window && parsed.window?.start && parsed.window?.end) {
+      if (!window && parsed.window?.start) {
         window = {
           start: resolveRelativeDate(parsed.window.start),
-          end: resolveRelativeDate(parsed.window.end),
+          end: resolveRelativeDate(parsed.window.end ?? todayUK),
         };
       }
     }
@@ -3229,6 +3231,45 @@ class DataOperationsService {
         targetId
       }
     );
+
+    // ============================================================================
+    // Intent integrity guardrails (warn & proceed)
+    // ============================================================================
+    // Class of failure: DSL expresses a window()/cohort() intent, but it is dropped and
+    // execution proceeds (often falling back to the default window). This must never be silent.
+    //
+    // Centralised here so all callers + all code paths share identical warning behaviour.
+    const warnIfQueryIntentDropped = (queryPayloadToCheck: any) => {
+      try {
+        const intentDSL = `${currentDSL ?? ''}${targetSlice ? ` | targetSlice=${targetSlice}` : ''}`;
+        const hasWindowToken = intentDSL.includes('window(');
+        const hasCohortToken = intentDSL.includes('cohort(');
+
+        if (hasWindowToken && (!queryPayloadToCheck?.start || !queryPayloadToCheck?.end)) {
+          sessionLogService.addChild(
+            logOpId,
+            'warning',
+            'WINDOW_INTENT_DROPPED',
+            'DSL contained window() but resolved query payload did not include an explicit window range',
+            intentDSL,
+            { start: queryPayloadToCheck?.start, end: queryPayloadToCheck?.end }
+          );
+        }
+
+        if (hasCohortToken && (!queryPayloadToCheck?.cohort?.start || !queryPayloadToCheck?.cohort?.end)) {
+          sessionLogService.addChild(
+            logOpId,
+            'warning',
+            'COHORT_INTENT_DROPPED',
+            'DSL contained cohort() but resolved query payload did not include an explicit cohort range',
+            intentDSL,
+            { cohort: queryPayloadToCheck?.cohort }
+          );
+        }
+      } catch (e) {
+        console.warn('[DataOps] Failed to run intent integrity guardrails:', e);
+      }
+    };
     
     try {
       let connectionName: string | undefined;
@@ -3463,7 +3504,61 @@ class DataOperationsService {
             const requiresEventIds = connection.requires_event_ids !== false; // Default to true if not specified
             if (!requiresEventIds) {
               console.log(`[DataOperationsService] Skipping DSL build for ${connectionName} (requires_event_ids=false)`);
-              queryPayload = {};  // Empty DSL is fine for connections that don't need event_ids
+              // Even when we don't need event-id mapping, we must preserve window()/cohort()
+              // constraints for correct fetch windows. Otherwise we silently fall back to the
+              // default window, which is unacceptable.
+              queryPayload = {};
+              eventDefinitions = {};
+
+              try {
+                const { parseConstraints } = await import('../lib/queryDSL');
+                const effectiveDSL = currentDSL || '';
+                const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
+                const edgeConstraints = effectiveQuery ? parseConstraints(effectiveQuery) : null;
+                const constraints = {
+                  context: [...(graphConstraints?.context || []), ...(edgeConstraints?.context || [])],
+                  contextAny: [...(graphConstraints?.contextAny || []), ...(edgeConstraints?.contextAny || [])],
+                  window: edgeConstraints?.window || graphConstraints?.window || null,
+                  cohort: edgeConstraints?.cohort || graphConstraints?.cohort || null,
+                  visited: edgeConstraints?.visited || [],
+                  visitedAny: edgeConstraints?.visitedAny || [],
+                };
+
+                // Normalise open-ended ranges (e.g. window(-60d:)) to an explicit end = today.
+                const todayUK = formatDateUK(new Date());
+                if (constraints.window?.start && !constraints.window.end) {
+                  constraints.window = { ...constraints.window, end: todayUK };
+                }
+                if (constraints.cohort?.start && !constraints.cohort.end) {
+                  constraints.cohort = { ...constraints.cohort, end: todayUK };
+                }
+
+                if (constraints.window?.start || constraints.window?.end) {
+                  const startUK = constraints.window?.start ? resolveRelativeDate(constraints.window.start) : undefined;
+                  const endUK = constraints.window?.end
+                    ? resolveRelativeDate(constraints.window.end)
+                    : todayUK;
+                  if (startUK) queryPayload.start = parseUKDate(startUK).toISOString();
+                  if (endUK) queryPayload.end = parseUKDate(endUK).toISOString();
+                }
+
+                if (constraints.cohort?.start || constraints.cohort?.end) {
+                  const startUK = constraints.cohort?.start ? resolveRelativeDate(constraints.cohort.start) : undefined;
+                  const endUK = constraints.cohort?.end
+                    ? resolveRelativeDate(constraints.cohort.end)
+                    : todayUK;
+                  queryPayload.cohort = {
+                    start: startUK ? parseUKDate(startUK).toISOString() : undefined,
+                    end: endUK ? parseUKDate(endUK).toISOString() : undefined,
+                    anchor_event_id: constraints.cohort?.anchor,
+                  };
+                }
+              } catch (e) {
+                console.warn('[DataOps] Failed to preserve window/cohort constraints for requires_event_ids=false connection:', e);
+              }
+
+              // Guardrail: if the DSL had intent but we didn't resolve it, warn loudly.
+              warnIfQueryIntentDropped(queryPayload);
             } else {
               // Event loader that reads from IDB
               const eventLoader = async (eventId: string) => {
@@ -3509,6 +3604,17 @@ class DataOperationsService {
                   visited: edgeConstraints?.visited || [],
                   visitedAny: edgeConstraints?.visitedAny || []
                 };
+
+                // Open-ended slice windows are valid in DagNet (e.g. window(-60d:), cohort(-60d:)).
+                // Normalise here so downstream DSL building (buildDslFromEdge) doesn't silently fall back to
+                // the default 7-day window when end is missing.
+                const todayUK = formatDateUK(new Date());
+                if (constraints.window?.start && !constraints.window.end) {
+                  constraints.window = { ...constraints.window, end: todayUK };
+                }
+                if (constraints.cohort?.start && !constraints.cohort.end) {
+                  constraints.cohort = { ...constraints.cohort, end: todayUK };
+                }
                 
                 console.log('[DataOps] Merged constraints:', {
                   currentDSL,
@@ -3520,6 +3626,13 @@ class DataOperationsService {
                 });
               } catch (error) {
                 console.warn('[DataOps] Failed to parse constraints:', error);
+                sessionLogService.addChild(
+                  logOpId,
+                  'warning',
+                  'CONSTRAINTS_PARSE_FAILED',
+                  'Failed to parse window/context constraints; proceeding without parsed constraints (may trigger fallbacks)',
+                  currentDSL ?? undefined
+                );
               }
               
               // Clear context registry cache to ensure fresh data from filesystem
@@ -3572,6 +3685,9 @@ class DataOperationsService {
               console.log('[DataOps] Window dates:', queryPayload.start, queryPayload.end);
               console.log('[DataOps] Cohort info:', queryPayload.cohort);
               console.log('[DataOps] Edge anchor_node_id:', edgeForDsl.p?.latency?.anchor_node_id);
+
+              // Guardrail: if the DSL had intent but we didn't resolve it, warn loudly.
+              warnIfQueryIntentDropped(queryPayload);
               
               // Log query details for user
               const queryDesc = effectiveQuery || 'no query';
@@ -3633,6 +3749,16 @@ class DataOperationsService {
                   visited: edgeConstraints?.visited || [],
                   visitedAny: edgeConstraints?.visitedAny || []
                 };
+
+                // Open-ended slice windows are valid in DagNet (e.g. window(-60d:), cohort(-60d:)).
+                // Normalise here so downstream DSL building doesn't silently fall back to the default window.
+                const todayUK = formatDateUK(new Date());
+                if (constraints.window?.start && !constraints.window.end) {
+                  constraints.window = { ...constraints.window, end: todayUK };
+                }
+                if (constraints.cohort?.start && !constraints.cohort.end) {
+                  constraints.cohort = { ...constraints.cohort, end: todayUK };
+                }
                 
                 console.log('[DataOps] Merged constraints (fallback):', {
                   currentDSL,
@@ -3642,6 +3768,13 @@ class DataOperationsService {
                 });
               } catch (error) {
                 console.warn('[DataOps] Failed to parse constraints (fallback):', error);
+                sessionLogService.addChild(
+                  logOpId,
+                  'warning',
+                  'CONSTRAINTS_PARSE_FAILED',
+                  'Failed to parse window/context constraints (fallback path); proceeding without parsed constraints (may trigger fallbacks)',
+                  currentDSL ?? undefined
+                );
               }
               
               const paramFileForCfg =
@@ -3677,6 +3810,9 @@ class DataOperationsService {
               );
               queryPayload = fallbackResult.queryPayload;
               eventDefinitions = fallbackResult.eventDefinitions;
+
+              // Guardrail: if the DSL had intent but we didn't resolve it, warn loudly.
+              warnIfQueryIntentDropped(queryPayload);
             } catch (error) {
               console.error('Error building DSL from edge:', error);
               toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -4079,6 +4215,18 @@ class DataOperationsService {
           end: nowDate.toISOString()
         };
         console.log('[DataOps] No window in DSL, using default last 7 days:', requestedWindow);
+        // Never allow this to be silent: surface a session log warning that a default window was applied.
+        // This is especially important for bulk "Retrieve all slices" runs where the user expects the
+        // per-slice DSL to drive the window. If we ever land here unexpectedly, the log must make it obvious.
+        sessionLogService.addChild(
+          logOpId,
+          'warning',
+          'DEFAULT_WINDOW_APPLIED',
+          'No explicit window/cohort range could be resolved from DSL; using default last 7 days',
+          `Default window: ${normalizeDate(requestedWindow.start)} to ${normalizeDate(requestedWindow.end)}\n` +
+            `If this is unexpected, check for open-ended window/cohort (e.g. window(-60d:)) not being normalised.`,
+          { requestedWindow }
+        );
       }
       
       let actualFetchWindows: DateRange[] = [requestedWindow];
@@ -5343,8 +5491,8 @@ class DataOperationsService {
           });
           
           // Capture DAS execution history for session logs (request/response details)
-          // Only include verbose data when DIAGNOSTIC_LOG is enabled to avoid bloating logs
-          if (DIAGNOSTIC_LOG) {
+          // Only include verbose data when diagnostic logging is enabled to avoid bloating logs.
+          if (sessionLogService.getDiagnosticLoggingEnabled()) {
             const dasHistory = runner.getExecutionHistory();
             for (const entry of dasHistory) {
               // Add each DAS execution step as a child log entry
@@ -5424,8 +5572,9 @@ class DataOperationsService {
           // Log API response for user
           const responseDesc: string[] = [];
           const rawData = result.raw as any;
-          if (rawData?.time_series && Array.isArray(rawData.time_series) && rawData.time_series.length > 0) {
-            responseDesc.push(`${rawData.time_series.length} days of daily data`);
+          const timeSeriesPoints = Array.isArray(rawData?.time_series) ? rawData.time_series.length : 0;
+          if (timeSeriesPoints > 0) {
+            responseDesc.push(`${timeSeriesPoints} daily points`);
           }
           if (rawData?.n !== undefined) responseDesc.push(`n=${rawData.n}`);
           if (rawData?.k !== undefined) responseDesc.push(`k=${rawData.k}`);
@@ -5436,12 +5585,33 @@ class DataOperationsService {
           const finalDesc = responseDesc.length > 0 
             ? responseDesc.join(', ')
             : 'aggregate data (no daily breakdown)';
+
+          const expectedDaysInFetchWindow = (() => {
+            try {
+              const startD = parseDate(normalizeDate(fetchWindow.start));
+              const endD = parseDate(normalizeDate(fetchWindow.end));
+              if (Number.isNaN(startD.getTime()) || Number.isNaN(endD.getTime())) return undefined;
+              const ms = endD.getTime() - startD.getTime();
+              const days = Math.floor(ms / (24 * 60 * 60 * 1000)) + 1; // inclusive
+              return days > 0 ? days : undefined;
+            } catch {
+              return undefined;
+            }
+          })();
           
           sessionLogService.addChild(logOpId, 'success', 'API_RESPONSE',
             `Received: ${finalDesc}`,
-            `Window: ${normalizeDate(fetchWindow.start)} to ${normalizeDate(fetchWindow.end)}`,
+            `Fetched window: ${normalizeDate(fetchWindow.start)} to ${normalizeDate(fetchWindow.end)}${expectedDaysInFetchWindow ? ` (${expectedDaysInFetchWindow}d)` : ''}`,
             { 
-              rowCount: rawData?.time_series?.length || result.updates?.length || 1,
+              rowCount: timeSeriesPoints || result.updates?.length || 1,
+              fetched: {
+                window: {
+                  start: normalizeDate(fetchWindow.start),
+                  end: normalizeDate(fetchWindow.end),
+                  expectedDays: expectedDaysInFetchWindow,
+                },
+                timeSeriesPoints,
+              },
               aggregates: {
                 n: rawData?.n,
                 k: rawData?.k,
@@ -5843,11 +6013,45 @@ class DataOperationsService {
             
             await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);
             
+            // Log merged coverage for this slice (distinct from "new days fetched").
+            // This helps explain cache-cutting runs where we fetch only gaps but the merged slice covers a larger window.
+            let mergedCoverage: { uniqueDays: number; from?: string; to?: string } | undefined;
+            try {
+              const normalizedSlice = sliceDSL ? normalizeConstraintString(sliceDSL) : '';
+              if (normalizedSlice) {
+                const matching = existingValues.filter(v => {
+                  if (!v.sliceDSL) return false;
+                  return normalizeConstraintString(v.sliceDSL) === normalizedSlice;
+                });
+                const dateSet = new Set<string>();
+                for (const v of matching) {
+                  if (Array.isArray((v as any).dates)) {
+                    for (const d of (v as any).dates) {
+                      if (d) dateSet.add(normalizeDate(resolveRelativeDate(d)));
+                    }
+                  }
+                }
+                const sorted = [...dateSet].sort();
+                mergedCoverage = {
+                  uniqueDays: dateSet.size,
+                  from: sorted[0],
+                  to: sorted[sorted.length - 1],
+                };
+              }
+            } catch {
+              // Best-effort logging only.
+            }
+            
             // Log file update
             sessionLogService.addChild(logOpId, 'success', 'FILE_UPDATED',
               `Updated parameter file: ${objectId}`,
-              `Added ${allTimeSeriesData.length > 0 ? allTimeSeriesData.length + ' days of data' : '"no data" marker'}`,
-              { fileId: `parameter-${objectId}`, rowCount: allTimeSeriesData.length });
+              `Added ${allTimeSeriesData.length > 0 ? allTimeSeriesData.length + ' new day' + (allTimeSeriesData.length !== 1 ? 's' : '') : '"no data" marker'}${mergedCoverage ? `; merged slice now covers ${mergedCoverage.uniqueDays}d${mergedCoverage.from && mergedCoverage.to ? ` (${normalizeDate(mergedCoverage.from)} to ${normalizeDate(mergedCoverage.to)})` : ''}` : ''}`,
+              { 
+                fileId: `parameter-${objectId}`,
+                rowCount: allTimeSeriesData.length,
+                fetchedDays: allTimeSeriesData.length,
+                mergedCoverage,
+              });
           } else {
             console.warn('[DataOperationsService] Parameter file not found, skipping time-series storage');
           }

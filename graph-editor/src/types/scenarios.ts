@@ -28,6 +28,10 @@ export interface ProbabilityParam {
   evidence?: {
     mean?: number;
     stdev?: number;
+    /** Observed trials for evidence rate (binomial n). */
+    n?: number;
+    /** Observed converters for evidence rate (binomial k). */
+    k?: number;
   };
   
   // === LAG latency bead display fields (right-aligned bead) ===

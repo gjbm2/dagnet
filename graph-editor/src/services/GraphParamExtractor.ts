@@ -150,12 +150,12 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
  * PARAM PACK FIELDS (scenario-visible, user-overridable):
  * - p.mean, p.stdev
  * - p.forecast.mean, p.forecast.stdev
- * - p.evidence.mean, p.evidence.stdev
+ * - p.evidence.mean, p.evidence.stdev, p.evidence.n, p.evidence.k
  * - p.latency.completeness, p.latency.t95, p.latency.median_lag_days
  * 
  * NOT IN PARAM PACK (internal/config):
  * - distribution, min, max, alpha, beta
- * - evidence.n, evidence.k, evidence.window_from/to, evidence.retrieved_at, evidence.source
+ * - evidence.window_from/to, evidence.retrieved_at, evidence.source
  * - latency.latency_parameter, latency.anchor_node_id, latency.mean_lag_days
  */
 function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
@@ -170,11 +170,13 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     // NOTE: distribution, min, max, alpha, beta are NOT in param packs
     
     // === EVIDENCE: Only mean and stdev (scenario-overridable) ===
-    // NOTE: n, k, window_from/to, retrieved_at, source are NOT in param packs
+    // NOTE: window_from/to, retrieved_at, source are NOT in param packs
     if (pAny.evidence) {
       const evidence: any = {};
       if (pAny.evidence.mean !== undefined) evidence.mean = pAny.evidence.mean;
       if (pAny.evidence.stdev !== undefined) evidence.stdev = pAny.evidence.stdev;
+      if (pAny.evidence.n !== undefined) evidence.n = pAny.evidence.n;
+      if (pAny.evidence.k !== undefined) evidence.k = pAny.evidence.k;
       if (Object.keys(evidence).length > 0) p.evidence = evidence;
     }
     
@@ -217,6 +219,8 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
         const evidence: any = {};
         if (condPAny.evidence.mean !== undefined) evidence.mean = condPAny.evidence.mean;
         if (condPAny.evidence.stdev !== undefined) evidence.stdev = condPAny.evidence.stdev;
+        if (condPAny.evidence.n !== undefined) evidence.n = condPAny.evidence.n;
+        if (condPAny.evidence.k !== undefined) evidence.k = condPAny.evidence.k;
         if (Object.keys(evidence).length > 0) condP.evidence = evidence;
       }
       
