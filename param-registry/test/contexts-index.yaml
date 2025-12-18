@@ -8,6 +8,13 @@ contexts:
     type: categorical
     status: active
     category: marketing
+
+  # Local real-Amplitude cohort MECE fixtures
+  - id: channel-mece-local
+    file_path: contexts/channel-mece-local.yaml
+    type: categorical
+    status: active
+    category: marketing
     
   - id: customer
     file_path: contexts/customer.yaml

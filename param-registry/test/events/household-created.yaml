@@ -1,0 +1,15 @@
+id: household-created
+name: Household Created
+description: |
+  Household has created an account in the system. Dirtying
+category: conversion
+tags: []
+provider_event_names:
+  amplitude: Household Created
+amplitude_filters: []
+metadata:
+  created_at: '2025-11-10T00:00:00Z'
+  updated_at: '2025-11-25T11:23:34.704Z'
+  status: active
+
+

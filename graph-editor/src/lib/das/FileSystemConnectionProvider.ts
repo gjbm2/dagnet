@@ -2,7 +2,10 @@ import type { ConnectionProvider } from './ConnectionProvider';
 import type { ConnectionDefinition, ConnectionFile } from './types';
 
 export class FileSystemConnectionProvider implements ConnectionProvider {
-  constructor(private readonly connectionsPath: string = './config/connections.yaml') {}
+  // When running in Node (tests / local tooling), `process.cwd()` is typically `graph-editor/`.
+  // Defaulting to the shipped connections file makes Node execution work out of the box,
+  // without needing test-time mocks.
+  constructor(private readonly connectionsPath: string = `${process.cwd()}/public/defaults/connections.yaml`) {}
 
   private async readConnectionFile(): Promise<ConnectionFile> {
     const fs = await import('fs/promises');

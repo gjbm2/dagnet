@@ -9,9 +9,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { explodeDSL } from '../../lib/dslExplosion';
-import { dataOperationsService, setBatchMode } from '../../services/dataOperationsService';
-import { sessionLogService } from '../../services/sessionLogService';
+import { dataOperationsService } from '../../services/dataOperationsService';
 import { LogFileService } from '../../services/logFileService';
+import { retrieveAllSlicesService } from '../../services/retrieveAllSlicesService';
 import { useTabContext } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
@@ -155,196 +155,55 @@ export function AllSlicesModal({
     setIsProcessing(true);
     const totalSlices = selectedSlices.length;
     setProgress({ currentSlice: 0, totalSlices, currentItem: 0, totalItems: 0 });
-    
-    // Enable batch mode to suppress individual toasts
-    setBatchMode(true);
-    
-    // Initialize log content with header (legacy "Create log file" path removed)
-    const startTime = new Date();
-    logContentRef.current = '';
 
-    // Start session log operation
-    const logOpId = sessionLogService.startOperation(
-      'info',
-      'data-fetch',
-      'BATCH_ALL_SLICES',
-      `Retrieve All Slices: ${totalSlices} slice(s)`,
-      {
-        filesAffected: selectedSlices.map(s => s.dsl)
-      }
-    );
-
-    // Show progress toast
     const progressToastId = toast.loading(
       `Processing slice 0/${totalSlices}...`,
       { duration: Infinity }
     );
 
-    let totalSuccess = 0;
-    let totalErrors = 0;
-    
-    // Reset abort flag at start
     abortRef.current = false;
-    
-    // CRITICAL: Wrap setGraph to also update graphRef
-    // This ensures rebalancing works correctly across iterations
+
     const setGraphWithRef = (newGraph: GraphData | null) => {
       graphRef.current = newGraph;
       setGraph(newGraph);
     };
 
     try {
-      for (let sliceIdx = 0; sliceIdx < selectedSlices.length; sliceIdx++) {
-        // Check for abort request
-        if (abortRef.current) {
-          toast.dismiss(progressToastId);
-          toast('Operation cancelled', { icon: '⏹️' });
-          break;
-        }
-        
-        const slice = selectedSlices[sliceIdx];
-        setProgress(prev => ({ ...prev, currentSlice: sliceIdx + 1 }));
-        setCurrentSliceName(slice.dsl);
-
-        toast.loading(
-          `Processing slice ${sliceIdx + 1}/${totalSlices}: ${slice.dsl}`,
-          { id: progressToastId, duration: Infinity }
-        );
-
-        try {
-          // CRITICAL: Use graphRef.current for latest state (not stale closure)
-          const currentGraph = graphRef.current;
-          if (!currentGraph) continue;
-          
-          // Collect batch items for this slice (similar to BatchOperationsModal)
-          const batchItems = collectBatchItems(currentGraph);
-          setProgress(prev => ({ ...prev, currentItem: 0, totalItems: batchItems.length }));
-
-          let sliceSuccess = 0;
-          let sliceErrors = 0;
-          
-          // NOTE: Rate limiting is now handled centrally by rateLimiter service in dataOperationsService
-          // No need for throttling here - the service layer handles it
-
-          // Process each parameter/case for this slice
-          for (let itemIdx = 0; itemIdx < batchItems.length; itemIdx++) {
-            // Check for abort request
-            if (abortRef.current) break;
-            
-            const item = batchItems[itemIdx];
-            setProgress(prev => ({ ...prev, currentItem: itemIdx + 1 }));
-
-            try {
-              // Run get-from-sources (versioned) with the specific slice DSL
-              // CRITICAL: Pass graphRef.current (latest) and setGraphWithRef (updates ref)
-              if (item.type === 'parameter') {
-                await dataOperationsService.getFromSource({
-                  objectType: 'parameter',
-                  objectId: item.objectId,
-                  targetId: item.targetId,
-                  graph: graphRef.current,
-                  setGraph: setGraphWithRef,
-                  paramSlot: item.paramSlot,
-                  bustCache, // Pass through bust cache setting
-                  currentDSL: slice.dsl, // Use the slice's DSL for window/context
-                  targetSlice: slice.dsl
-                });
-                
-                sliceSuccess++;
-              } else if (item.type === 'case') {
-                await dataOperationsService.getFromSource({
-                  objectType: 'case',
-                  objectId: item.objectId,
-                  targetId: item.targetId,
-                  graph: graphRef.current,
-                  setGraph: setGraphWithRef,
-                  bustCache, // Pass through bust cache setting
-                  currentDSL: slice.dsl, // Use the slice's DSL for window/context
-                });
-                
-                sliceSuccess++;
-              }
-              // NOTE: Rate limiting is handled by rateLimiter service in dataOperationsService
-            } catch (err) {
-              const errorMessage = err instanceof Error ? err.message : String(err);
-              sessionLogService.addChild(
-                logOpId,
-                'error',
-                'ITEM_ERROR',
-                `[${slice.dsl}] ${item.name} failed`,
-                errorMessage
-              );
-              sliceErrors++;
-              // NOTE: Rate limit backoff is handled by rateLimiter service in dataOperationsService
-            }
-          }
-
-          totalSuccess += sliceSuccess;
-          totalErrors += sliceErrors;
-
-          // Log slice completion
-          sessionLogService.addChild(
-            logOpId,
-            sliceErrors > 0 ? 'warning' : 'success',
-            'SLICE_COMPLETE',
-            `Slice "${slice.dsl}": ${sliceSuccess} succeeded, ${sliceErrors} failed`,
-            undefined,
-            {
-              added: sliceSuccess,
-              errors: sliceErrors
-            }
+      const result = await retrieveAllSlicesService.execute({
+        getGraph: () => graphRef.current as GraphData | null,
+        setGraph: setGraphWithRef,
+        slices: selectedSlices.map(s => s.dsl),
+        bustCache,
+        shouldAbort: () => abortRef.current,
+        onProgress: (p) => {
+          setProgress({
+            currentSlice: p.currentSlice,
+            totalSlices: p.totalSlices,
+            currentItem: p.currentItem,
+            totalItems: p.totalItems,
+          });
+          setCurrentSliceName(p.currentSliceDSL || '');
+          toast.loading(
+            `Processing slice ${p.currentSlice}/${p.totalSlices}: ${p.currentSliceDSL || ''}`,
+            { id: progressToastId, duration: Infinity }
           );
+        },
+      });
 
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          sessionLogService.addChild(
-            logOpId,
-            'error',
-            'SLICE_ERROR',
-            `Slice "${slice.dsl}" failed: ${errorMessage}`,
-            undefined,
-            { errors: 1 }
-          );
-          totalErrors++;
-        }
-      }
-
-      // End main operation log
-      sessionLogService.endOperation(
-        logOpId,
-        totalErrors > 0 ? 'warning' : 'success',
-        `All Slices complete: ${totalSuccess} operations succeeded, ${totalErrors} failed across ${totalSlices} slices`,
-        {
-          added: totalSuccess,
-          errors: totalErrors
-        }
-      );
-
-      // Dismiss progress toast and show summary with appropriate icon
       toast.dismiss(progressToastId);
-      if (totalErrors > 0 && totalSuccess === 0) {
-        toast.error(`All ${totalErrors} operations failed`);
-      } else if (totalErrors > 0) {
-        toast(`Completed: ${totalSuccess} succeeded, ${totalErrors} failed`, { icon: '⚠️', duration: 4000 });
+      if (result.aborted) {
+        toast('Operation cancelled', { icon: '⏹️' });
+      } else if (result.totalErrors > 0 && result.totalSuccess === 0) {
+        toast.error(`All ${result.totalErrors} operations failed`);
+      } else if (result.totalErrors > 0) {
+        toast(`Completed: ${result.totalSuccess} succeeded, ${result.totalErrors} failed`, { icon: '⚠️', duration: 4000 });
       } else {
-        toast.success(`All ${totalSuccess} operations completed successfully`);
+        toast.success(`All ${result.totalSuccess} operations completed successfully`);
       }
-      
-      // Legacy "Create log file" path removed in favour of simulation report.
-
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      sessionLogService.endOperation(
-        logOpId,
-        'error',
-        `All Slices failed: ${errorMessage}`,
-        { errors: totalErrors + 1 }
-      );
       toast.dismiss(progressToastId);
-      toast.error(`Error: ${errorMessage}`);
+      toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      // Reset batch mode to re-enable toasts
-      setBatchMode(false);
       setIsProcessing(false);
       onClose();
     }
@@ -552,83 +411,5 @@ export function AllSlicesModal({
   );
 
   return createPortal(modalContent, document.body);
-}
-
-/**
- * Collect batch items from graph (parameters and cases)
- * Similar to BatchOperationsModal but simplified
- */
-function collectBatchItems(graph: GraphData): Array<{
-  type: 'parameter' | 'case';
-  objectId: string;
-  targetId: string;
-  name: string;
-  paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
-}> {
-  const items: Array<{
-    type: 'parameter' | 'case';
-    objectId: string;
-    targetId: string;
-    name: string;
-    paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
-  }> = [];
-
-  // Collect parameters from edges
-  if (graph.edges) {
-    for (const edge of graph.edges) {
-      const edgeId = edge.uuid || edge.id || '';
-
-      // Probability parameter
-      if (edge.p?.id && typeof edge.p.id === 'string') {
-        items.push({
-          type: 'parameter',
-          objectId: edge.p.id,
-          targetId: edgeId,
-          name: `p: ${edge.p.id}`,
-          paramSlot: 'p'
-        });
-      }
-
-      // Cost GBP parameter
-      if (edge.cost_gbp?.id && typeof edge.cost_gbp.id === 'string') {
-        items.push({
-          type: 'parameter',
-          objectId: edge.cost_gbp.id,
-          targetId: edgeId,
-          name: `cost_gbp: ${edge.cost_gbp.id}`,
-          paramSlot: 'cost_gbp'
-        });
-      }
-
-      // Cost Time parameter
-      if (edge.labour_cost?.id && typeof edge.labour_cost.id === 'string') {
-        items.push({
-          type: 'parameter',
-          objectId: edge.labour_cost.id,
-          targetId: edgeId,
-          name: `labour_cost: ${edge.labour_cost.id}`,
-          paramSlot: 'labour_cost'
-        });
-      }
-    }
-  }
-
-  // Collect cases from nodes
-  if (graph.nodes) {
-    for (const node of graph.nodes as any[]) {
-      const nodeId = node.uuid || node.id || '';
-
-      if (node.case?.id && typeof node.case.id === 'string') {
-        items.push({
-          type: 'case',
-          objectId: node.case.id,
-          targetId: nodeId,
-          name: `case: ${node.case.id}`
-        });
-      }
-    }
-  }
-
-  return items;
 }
 

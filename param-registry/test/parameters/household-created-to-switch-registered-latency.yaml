@@ -1,0 +1,30 @@
+# Household Created → Switch Registered (Latency-enabled)
+#
+# Support edge A→X so Reach Probability(to(Y)) can report n at graph start (A)
+# using evidence on outgoing edges from A.
+#
+# This is used only by local-only real Amplitude E2E tests.
+
+id: household-created-to-switch-registered-latency
+name: Household Created to Switch Registered (Latency)
+type: probability
+connection: amplitude-prod
+query: "from(A).to(X)"
+query_overridden: false
+
+latency:
+  latency_parameter: true
+  anchor_node_id: A
+  path_t95: 30
+
+values: []
+
+metadata:
+  description: Local-only real-Amplitude cohort test parameter (fixtures only)
+  created_at: '2025-12-18T00:00:00Z'
+  updated_at: '2025-12-18T00:00:00Z'
+  status: active
+  author: Dagnet Team
+  version: '1.0.0'
+
+

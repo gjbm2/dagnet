@@ -1,0 +1,32 @@
+# Switch Registered → Switch Success (Latency-enabled)
+#
+# Used by local-only real Amplitude E2E test that compares:
+# - Sum of MECE context slices (channel) for a cohort window
+# vs
+# - Uncontexted baseline for the same cohort window
+
+id: switch-registered-to-switch-success-latency
+name: Switch Registered to Switch Success (Latency)
+type: probability
+connection: amplitude-prod
+query: "from(X).to(Y)"
+query_overridden: false
+
+latency:
+  latency_parameter: true
+  anchor_node_id: A
+  # Provide a deterministic conversion window for cohort-mode funnels (days).
+  # The real-Amplitude local test will mirror this for the direct HTTP "curl".
+  path_t95: 30
+
+values: []
+
+metadata:
+  description: Local-only real-Amplitude cohort test parameter (fixtures only)
+  created_at: '2025-12-18T00:00:00Z'
+  updated_at: '2025-12-18T00:00:00Z'
+  status: active
+  author: Dagnet Team
+  version: '1.0.0'
+
+
