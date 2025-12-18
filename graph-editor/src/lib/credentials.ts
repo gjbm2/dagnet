@@ -80,6 +80,48 @@ export class CredentialsManager {
         }
       }
 
+      // 3.5. Local E2E: allow explicit provider credentials from env in non-browser contexts.
+      //
+      // Rationale:
+      // - Our Vitest "node" environment cannot load IndexedDB credentials.
+      // - For local-only real API tests (no mocking), we still need to authenticate against providers.
+      // - This is strictly opt-in and will NOT run in CI unless explicitly enabled.
+      //
+      // Enable by setting:
+      //   DAGNET_LOCAL_E2E_CREDENTIALS=1
+      // and providing:
+      //   AMPLITUDE_API_KEY / AMPLITUDE_SECRET_KEY
+      //
+      // This is intentionally narrow to minimise surface area and avoid accidental prod usage.
+      if (!this.isBrowserEnvironment() && typeof process !== 'undefined' && process.env) {
+        const enabled = process.env.DAGNET_LOCAL_E2E_CREDENTIALS === '1';
+        const ampKey = process.env.AMPLITUDE_API_KEY;
+        const ampSecret = process.env.AMPLITUDE_SECRET_KEY;
+        if (enabled && ampKey && ampSecret) {
+          const credentials: CredentialsData = {
+            version: 'local-e2e',
+            git: [
+              {
+                name: 'local-e2e',
+                owner: 'local-e2e',
+                token: 'local-e2e',
+              },
+            ],
+            providers: {
+              amplitude: {
+                api_key: ampKey,
+                secret_key: ampSecret,
+              },
+            },
+          };
+
+          this.currentCredentials = credentials;
+          this.currentSource = 'system';
+          console.log('CredentialsManager: Loaded provider credentials from env (local e2e)');
+          return { success: true, credentials, source: 'system' };
+        }
+      }
+
       // 4. No credentials available (public access)
       console.log('CredentialsManager: No credentials available, using public access');
       return {

@@ -1,0 +1,53 @@
+id: channel
+name: Marketing Channel
+description: Primary acquisition channel based on utm_medium
+type: categorical
+otherPolicy: computed
+values:
+  - id: paid-search
+    label: Paid Search (Google Ads/CPC)
+    description: Google cost-per-click campaigns
+    aliases: []
+    sources:
+      amplitude:
+        field: utm_medium
+        filter: "utm_medium == 'cpc'"
+  - id: influencer
+    label: Influencer Marketing
+    description: Influencer campaigns
+    aliases: []
+    sources:
+      amplitude:
+        field: utm_medium
+        filter: "utm_medium == 'Influencers'"
+  - id: paid-social
+    label: Paid Social
+    description: Paid social media campaigns
+    aliases: []
+    sources:
+      amplitude:
+        field: utm_medium
+        pattern: "^(Paid Social|paidsocial)$"
+        patternFlags: "i"
+  - id: other
+    label: Other Channels
+    description: All other utm_medium values
+    aliases: []
+metadata:
+  category: marketing
+  data_source: utm_parameters
+  created_at: '2025-11-24T00:00:00Z'
+  version: 1.0.0
+  status: active
+  author: Dagnet Team
+  notes: |
+    This context uses utm_medium field from Amplitude.
+    The 'paid-social' value uses regex pattern matching to handle both
+    'Paid Social' and 'paidsocial' variants (case-insensitive).
+
+    For Amplitude segmentation, create an 'All Users' segment with:
+    - Filter: utm_medium is set
+    - This ensures we're only analyzing users with tracking data
+  updated_at: '2025-11-25T01:32:37.136Z'
+
+

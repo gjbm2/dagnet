@@ -1,0 +1,19 @@
+id: switch-registered
+name: switch-registered
+category: conversion
+tags: []
+provider_event_names:
+  amplitude: Blueprint CheckpointReached
+amplitude_filters:
+  - property: checkpoint
+    operator: is
+    values:
+      - SwitchRegistered
+metadata:
+  created_at: '2025-11-24T16:24:33.143Z'
+  updated_at: '2025-11-25T11:23:34.704Z'
+  status: active
+  author: user
+  version: 1.0.0
+
+

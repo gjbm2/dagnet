@@ -15,6 +15,7 @@ import { RemoveOverridesMenubarItem } from '../RemoveOverridesMenuItem';
 import { useClearDataFile } from '../../hooks/useClearDataFile';
 import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
 import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
+import { useRetrieveAllSlicesRequestListener } from '../../hooks/useRetrieveAllSlicesRequestListener';
 import { PinnedQueryModal } from '../modals/PinnedQueryModal';
 import { db } from '../../db/appDatabase';
 
@@ -264,6 +265,9 @@ export function DataMenu() {
     graph: graph as GraphData | null,
     setGraph: handleSetGraph,
   });
+
+  // Allow non-menu callers (e.g. safety nudges) to open the existing flow without duplicating UI logic.
+  useRetrieveAllSlicesRequestListener(initiateRetrieveAllSlices);
   
   // Batch operations handlers
   const handleGetAllFromFiles = () => {
