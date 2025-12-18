@@ -19,6 +19,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fetchItem } from '../fetchDataService';
 import { fileRegistry } from '../../contexts/TabContext';
 import type { Graph } from '../../types';
+import { parseDate } from '../windowAggregationService';
+import { RECENCY_HALF_LIFE_DAYS } from '../../constants/latency';
 
 vi.mock('../../components/ProgressToast', () => ({
   showProgressToast: vi.fn(),
@@ -144,7 +146,26 @@ describe('cohort() mode: simple edges fetch/aggregate as window()', () => {
 
     // Forecast baseline should be attached from window slice's forecast scalar
     expect(edge.p.forecast).toBeDefined();
-    expect(edge.p.forecast.mean).toBeCloseTo(0.25, 6);
+    // Forecast is recomputed at query time from daily arrays (true half-life recency; as-of = max(window date)).
+    const asOf = parseDate('7-Nov-25');
+    const dates = ['1-Nov-25', '2-Nov-25', '3-Nov-25', '4-Nov-25', '5-Nov-25', '6-Nov-25', '7-Nov-25'];
+    const nDaily = [14, 14, 14, 14, 14, 15, 15];
+    const kDaily = [3, 3, 3, 3, 3, 2, 3];
+    let weightedN = 0;
+    let weightedK = 0;
+    for (let i = 0; i < dates.length; i++) {
+      const d = parseDate(dates[i]);
+      const ageDays = Math.max(0, (asOf.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+      const w = Math.exp(-Math.LN2 * ageDays / RECENCY_HALF_LIFE_DAYS);
+      const n = nDaily[i];
+      const k = kDaily[i];
+      if (n <= 0) continue;
+      weightedN += w * n;
+      weightedK += w * k;
+    }
+    const expectedForecast = weightedN > 0 ? (weightedK / weightedN) : undefined;
+    expect(expectedForecast).toBeDefined();
+    expect(edge.p.forecast.mean).toBeCloseTo(expectedForecast as number, 6);
 
     // No latency block for a simple edge
     expect(edge.p.latency).toBeUndefined();

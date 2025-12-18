@@ -294,7 +294,7 @@ values:
 **Notes (window slices):**
 
 - `window_from` / `window_to` are described in §3.3; they are **not new** but are required to make `sliceDSL` canonical.
-- `values[].forecast` is the **new field** added for window slices: it stores the mature baseline probability \(p_\infty\) computed at retrieval time (recency‑weighted if configured).
+- `values[].forecast` is the **window-slice cached forecast scalar**. It may be written during retrieval/merge, but it is **not the source of truth**: the app recomputes `p.forecast.mean` at query time from context-matching `window()` daily arrays (and uses MECE aggregation for implicit uncontexted queries when only contexted data exists).
 - `values[].latency.median_lag_days` / `mean_lag_days` are **window-level summaries**: they mirror the cohort summaries but are fitted from window() lag stats, so the UI can still show a median/mean lag even if only window() data was fetched.
 - `values[].latency.t95` is the **new latency scalar** for window slices: it stores the fitted 95th percentile lag for this edge under the pinned window, so a graph can be fully reconstructed (baseline + latency) even if only window() data was fetched.
 - Window slices **reuse the existing `dates`, `n_daily`, `k_daily` arrays**; they do **not** add per‑cohort latency arrays (`median_lag_days[]`, `mean_lag_days[]`) because those are cohort‑specific.
@@ -921,7 +921,7 @@ function shouldRefetch(slice: ParamSlice, edge: Edge, graph: Graph): RefetchDeci
 
 | Value | When Computed | Why |
 |-------|---------------|-----|
-| `p.forecast` | **Retrieval time** | Stable baseline from mature data; doesn't depend on query window |
+| `p.forecast` | **Query time** | Recomputed from the latest context-matching `window()` daily arrays (mature-only for latency edges); avoids stale or mismatched cached scalars |
 | `p.evidence` | **Query time** | Depends on which dates/cohorts fall in query window |
 | `p.mean` (blended) | **Query time** | Depends on completeness and forecast population at query time; computed via the canonical completeness-weighted blend (no Formula A) |
 
@@ -931,12 +931,12 @@ Any fetch from source (manual or overnight batch "fetch all slices") triggers st
 
 | Stat | Source | Stored On |
 |------|--------|-----------|
-| `p.forecast` | Mature cohorts in **window() slice only** | Slice in param file |
+| `values[].forecast` (optional cache) | Mature days in **window() slices** | Slice in param file |
 | `median_lag_days` | `dayMedianTransTimes` from Amplitude response | Slice in param file |
 | `completeness` | Computed from cohort ages vs legacy maturity field | Slice in param file |
 | `evidence.n`, `evidence.k` | Raw funnel counts | Slice in param file |
 
-**Critical: `p.forecast` requires window() data.** The forecast baseline is computed from mature cohorts in window() slices (X-anchored, recent events). Cohort() slices (A-anchored) provide per-cohort tracking but NOT `p.forecast`.
+**Critical: `p.forecast` requires window() data.** The forecast baseline is computed from mature days in `window()` slices (X-anchored, recent events). Cohort() slices (A-anchored) provide per-cohort tracking but are not used as the forecast basis.
 
 **Extension:** If only cohort() data exists, `p.forecast` can be derived by convolving cohort data with the lag distribution (see Appendix C.2). If this fallback is not implemented, show `p.forecast` as unavailable when no window() slice exists.
 
@@ -957,6 +957,13 @@ Aggregate:
 Render using scenario visibility mode (E/F/F+E)
 ```
 
+**Observability (18-Dec-25):** When `p.forecast.mean` is recomputed at query time, the session log emits a `FORECAST_BASIS` entry per edge describing:
+
+- The requested slice (DSL)
+- The window-slice basis actually used (context-matching `window()` dailies, including MECE aggregation when applicable)
+- As-of date (max window date), maturity exclusion policy, and recency half-life
+- Weighted \(N\) and \(K\) used to derive `p.forecast.mean`
+
 **Why p.mean must be query-time:**
 1. **Query window varies**: User might query last 21 days, last 7 days, specific range
 2. **Cohort ages change daily**: A cohort from 1-Dec has age=3 on 4-Dec, age=4 on 5-Dec
@@ -966,14 +973,14 @@ Render using scenario visibility mode (E/F/F+E)
 
 | Query | Slice Used | p.evidence | p.forecast | p.mean |
 |-------|-----------|------------|------------|--------|
-| `window()` mature | window_data | QT: Σk/Σn | RT: p.forecast | = evidence |
-| `window()` immature | window_data | QT: Σk/Σn | RT: p.forecast | QT: canonical blend (completeness-weighted) |
-| `cohort()` mature | cohort_data | QT: Σk/Σn | RT: p.forecast | = evidence |
-| `cohort()` immature | cohort_data | QT: Σk/Σn | RT: p.forecast | QT: canonical blend (completeness-weighted) |
+| `window()` mature | window_data | QT: Σk/Σn | QT: recompute from window dailies | = evidence |
+| `window()` immature | window_data | QT: Σk/Σn | QT: recompute from window dailies | QT: canonical blend (completeness-weighted) |
+| `cohort()` mature | cohort_data | QT: Σk/Σn | QT: recompute from window dailies | = evidence |
+| `cohort()` immature | cohort_data | QT: Σk/Σn | QT: recompute from window dailies | QT: canonical blend (completeness-weighted) |
 | No usable window baseline (API returns no data even for implicit baseline window) | — | Available | **Not available** | — |
 | Non-latency edge | either | QT: Σk/Σn | = evidence | = evidence |
 
-**QT** = Query Time, **RT** = Retrieval Time
+**QT** = Query Time
 
 #### 5.2.1 Default baseline window when no window() is specified
 
@@ -1306,7 +1313,7 @@ These values are computed from the current query window but then written back to
 
 | Field on Graph | Param File | Notes |
 |----------------|-----------|-------|
-| `edge.p.mean` | `values[].mean` | Blended probability (Formula A) for pinned DSL |
+| `edge.p.mean` | `values[].mean` | Blended probability for pinned DSL (canonical completeness-weighted blend; no Formula A) |
 | `edge.p.evidence.completeness` | `values[].completeness` | Completeness for pinned DSL (display only) |
 
 At runtime they are still recomputed when the interactive DSL changes; the persisted values are cache/convenience, not a separate source of truth.
@@ -1800,8 +1807,8 @@ interface EdgeLatencyDisplay {
 | Field | Meaning | When Computed | Stored? |
 |-------|---------|---------------|---------|
 | `p.evidence` | Observed k/n from query window | Query time | No |
-| `p.forecast` | Forecast absent evidence (mature baseline) | Retrieval time | Yes, on slice |
-| `p.mean` | Evidence + forecasted tail (Formula A, §5.3) | Query time | No |
+| `p.forecast` | Forecast absent evidence (mature baseline; computed from mature window() days) | Query time | No (may be cached on window slices as `values[].forecast`) |
+| `p.mean` | Canonical completeness-weighted blend of evidence and forecast (no Formula A) | Query time | No |
 
 **Rendering by visibility mode:**
 

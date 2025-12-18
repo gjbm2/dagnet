@@ -602,8 +602,8 @@ async function buildContextFilters(
         field = filterObj.field;
         
         if (filterObj.pattern) {
-          allPatterns.push(filterObj.pattern);
-          patternFlags = filterObj.patternFlags;
+          // Amplitude segments don't support regex; treat patterns as enumerated literals where possible.
+          allValues.push(...extractLiteralAlternativesFromPattern(filterObj.pattern));
         } else {
           allValues.push(...filterObj.values);
         }
@@ -675,33 +675,10 @@ async function buildContextFilters(
         }
       }
       
-      // Build combined filter object for explicit values only (no "other")
-      if (allPatterns.length > 0 && allValues.length > 0) {
-        // Mix of patterns and values - combine into regex
-        const combinedPattern = [...allPatterns, ...allValues.map(v => escapeRegex(v))].join('|');
-        filters.push({
-          field,
-          op: 'is',
-          values: [],
-          pattern: combinedPattern,
-          patternFlags: patternFlags || 'i'
-        });
-      } else if (allPatterns.length > 0) {
-        // All patterns - combine into single regex
-        filters.push({
-          field,
-          op: 'is',
-          values: [],
-          pattern: allPatterns.join('|'),
-          patternFlags: patternFlags || 'i'
-        });
-      } else {
-        // All values - use "is" with array
-        filters.push({
-          field,
-          op: 'is',
-          values: allValues
-        });
+      // Build combined filter object for explicit values only (no "other").
+      // Keep it plain values to avoid emitting composite regex that the Amplitude adapter can't parse safely.
+      if (allValues.length > 0) {
+        filters.push({ field, op: 'is', values: allValues });
       }
     }
   }
@@ -714,6 +691,46 @@ async function buildContextFilters(
  */
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Extract literal alternatives from a regex-like pattern string for Amplitude segments.
+ *
+ * Amplitude segment filters do NOT support regex. The adapter pre_request script approximates
+ * regex patterns by extracting literal `|` alternatives from simple patterns like:
+ *   "^(Paid Social|paidsocial)$"  → ["Paid Social", "paidsocial"]
+ *
+ * IMPORTANT: This is intentionally conservative:
+ * - It is only safe for patterns that are effectively an alternation of literal strings.
+ * - For complex patterns (character classes, wildcards, nested groups), the best we can do
+ *   is return a rough set of tokens, or an empty list.
+ */
+function extractLiteralAlternativesFromPattern(pattern: string | undefined): string[] {
+  if (!pattern) return [];
+  let s = String(pattern);
+  // Remove a single leading ^ and trailing $ (common in our context registry patterns)
+  s = s.replace(/^\^/, '').replace(/\$$/, '');
+  // Remove one outer (...) wrapper if present
+  if (s.startsWith('(') && s.endsWith(')')) {
+    s = s.slice(1, -1);
+  }
+  // Split by | and trim
+  const parts = s
+    .split('|')
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+
+  // Filter obviously-non-literal tokens (still imperfect, but avoids garbage)
+  const literalish = parts.filter((p) => !/[\\[\]().*+?^${}]/.test(p));
+  // Dedupe while preserving order
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of literalish) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
 }
 
 /**
@@ -864,17 +881,19 @@ async function buildComputedOtherFilterObject(
   const explicitValues = contextDef.values.filter((v: any) => v.id !== 'other');
   
   const allValues: string[] = [];
-  const allPatterns: string[] = [];
   let field: string = key;
-  let patternFlags: string | undefined;
   
   for (const v of explicitValues) {
     const mapping = await contextRegistry.getSourceMapping(key, v.id, source);
     
     if (mapping?.pattern) {
-      allPatterns.push(mapping.pattern);
       field = mapping.field || key;
-      patternFlags = mapping.patternFlags;
+      // IMPORTANT: For computed "other", do NOT propagate regex patterns into a combined pattern string.
+      // The Amplitude adapter approximates patterns by extracting literal alternatives; combining patterns
+      // like "^(a|b)$|cpc" breaks that logic and produces incorrect segmentation.
+      //
+      // Therefore we extract literal alternatives here and treat them as plain values.
+      allValues.push(...extractLiteralAlternativesFromPattern(mapping.pattern));
     } else if (mapping?.filter) {
       // Parse filter to extract value
       const eqMatch = mapping.filter.match(/(\S+)\s*==?\s*'([^']+)'/);
@@ -885,34 +904,23 @@ async function buildComputedOtherFilterObject(
     }
   }
   
-  // Build "is not" filter with all values/patterns
-  if (allPatterns.length > 0 && allValues.length > 0) {
-    // Mix of patterns and values - combine into regex
-    const combinedPattern = [...allPatterns, ...allValues.map(v => escapeRegex(v))].join('|');
-    return {
-      field,
-      op: 'is not',
-      values: [],
-      pattern: combinedPattern,
-      patternFlags: patternFlags || 'i'
-    };
-  } else if (allPatterns.length > 0) {
-    // All patterns - combine into single regex
-    return {
-      field,
-      op: 'is not',
-      values: [],
-      pattern: allPatterns.join('|'),
-      patternFlags: patternFlags || 'i'
-    };
-  } else {
-    // All values - use "is not" with array
-    return {
-      field,
-      op: 'is not',
-      values: allValues
-    };
+  // Dedupe values (preserve order) to avoid bloating segment payloads.
+  const seen = new Set<string>();
+  const dedupedValues: string[] = [];
+  for (const v of allValues) {
+    const s = String(v);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    dedupedValues.push(s);
   }
+  
+  // Build "is not" filter using plain values only.
+  // (Regex patterns are approximated into literal alternatives above.)
+  return {
+    field,
+    op: 'is not',
+    values: dedupedValues,
+  };
 }
 
 /**

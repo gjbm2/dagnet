@@ -37,6 +37,7 @@ import {
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
 import { roundToDecimalPlaces } from '../utils/rounding';
+import { isUKDate, parseUKDate } from '../lib/dateFormat';
 import type { LagDistributionFit } from './lagDistributionUtils';
 import {
   erf,
@@ -642,7 +643,7 @@ function weightedQuantile(
 /**
  * Compute recency weight for a cohort.
  * 
- * w = exp(-age / H)
+ * w = exp(-ln(2) * age / H)
  * 
  * where H is the half-life in days (RECENCY_HALF_LIFE_DAYS).
  * A cohort H days old has half the weight of a brand-new cohort.
@@ -651,7 +652,8 @@ function weightedQuantile(
  * @returns Weight in (0, 1]
  */
 function computeRecencyWeight(age: number): number {
-  return Math.exp(-age / RECENCY_HALF_LIFE_DAYS);
+  // NOTE: Use true half-life semantics. Without ln(2), H would be a time constant (w(H)=e^-1).
+  return Math.exp(-Math.LN2 * age / RECENCY_HALF_LIFE_DAYS);
 }
 
 /**
@@ -2453,9 +2455,45 @@ export function enhanceGraphLatencies(
       let windowDerivedForecastMean: number | undefined;
       if (baseForecastMean === undefined) {
         try {
+          // Forecast recency datum MUST be max(window date), not wall-clock "now".
+          // We approximate this by using the max window_to (or last dates[] entry) across window() slices
+          // as the as-of date for age/recency calculations.
+          const forecastAsOfDate = (() => {
+            try {
+              const windowCandidates = (paramValues as any[]).filter((v) => {
+                const dsl = v?.sliceDSL;
+                if (typeof dsl !== 'string') return false;
+                return dsl.includes('window(') && !dsl.includes('cohort(');
+              });
+              let best: Date | undefined;
+              for (const v of windowCandidates) {
+                const dates: string[] | undefined = v?.dates;
+                if (Array.isArray(dates) && dates.length > 0) {
+                  const last = dates[dates.length - 1];
+                  if (typeof last === 'string') {
+                    const d = isUKDate(last) ? parseUKDate(last) : new Date(last);
+                    if (!Number.isNaN(d.getTime())) {
+                      if (!best || d.getTime() > best.getTime()) best = d;
+                    }
+                  }
+                }
+                const windowTo = v?.window_to;
+                if (typeof windowTo === 'string' && windowTo.trim()) {
+                  const d = isUKDate(windowTo) ? parseUKDate(windowTo) : new Date(windowTo);
+                  if (!Number.isNaN(d.getTime())) {
+                    if (!best || d.getTime() > best.getTime()) best = d;
+                  }
+                }
+              }
+              return best ?? queryDate;
+            } catch {
+              return queryDate;
+            }
+          })();
+
           // Use the already-normalised window aggregate function (aggregateWindowData if available,
           // otherwise fall back to cohort aggregation) to avoid calling an optional helper.
-          const windowCohortsForForecast = windowAggregateFn(paramValues, queryDate, cohortWindow);
+          const windowCohortsForForecast = windowAggregateFn(paramValues, forecastAsOfDate, cohortWindow);
           windowDerivedForecastMean = estimatePInfinity(windowCohortsForForecast, effectiveHorizonDays);
         } catch (e) {
           // Non-fatal: fall back to cohort-derived p_infinity if window aggregation fails

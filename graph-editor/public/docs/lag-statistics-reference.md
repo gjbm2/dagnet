@@ -225,17 +225,17 @@ This document is the canonical reference for LAG statistics and convolution logi
 │   └─────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                     │
 │   ┌─────────────────────────────────────────────────────────────────────────────┐   │
-│   │  WINDOW SLICE  (baseline window)   ── FORECAST + LAG-PRIOR BASELINE         │   │
+│   │  WINDOW SLICE  (baseline window)   ── FORECAST BASIS + LAG-PRIOR INPUT      │   │
 │   ├─────────────────────────────────────────────────────────────────────────────┤   │
-│   │   n, k, mean (from mature periods)  ──▶  p.forecast.mean                    │   │
+│   │   n_daily/k_daily (mature days)      ──▶  p.forecast.mean (recomputed at query time) │   │
 │   └─────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-NOTE (14-Dec-25): We distinguish two “window” concepts:
+NOTE (18-Dec-25): We distinguish two “window” concepts:
 
-- **Baseline window**: the pinned/merged whole-window slice (typically ~90 days) stored in the param file, used for `p.forecast` and lag-shape priors.
+- **Baseline window**: the pinned/merged whole-window slice (typically ~60–90 days) stored in the param file. It stores daily arrays and lag summaries, and is the **data basis** for `p.forecast` (which is recomputed at query time).
 - **Query window** (`window(start:end)` in the DSL): the user-selected X-entry cohorts whose evidence/completeness are computed by aggregating within the available window-slice daily arrays (it is not necessarily stored as its own slice).
 
 NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
@@ -721,7 +721,9 @@ This change reduces the systematic “mid-window tug” where evidence is incomp
 
 ### 7.1 Recency Weighting in Forecast Baseline
 
-When deriving `p.forecast.mean` from cohort data (either from window() slices or from LAG's `p_infinity` fallback), **recent mature cohorts are weighted more heavily** than older ones. This ensures the forecast reflects current conversion behaviour rather than stale historical patterns.
+When deriving `p.forecast.mean`, **recent mature days are weighted more heavily** than older ones. The implementation recomputes `p.forecast.mean` at query time from context-matching `window()` daily arrays (or MECE-aggregated `window()` slices for implicit uncontexted queries). This ensures the forecast reflects current conversion behaviour rather than stale historical patterns.
+
+**Observability (18-Dec-25):** Each query-time recompute of `p.forecast.mean` emits a `FORECAST_BASIS` entry in the Session Log that records the requested slice, the window-slice basis used, as-of date (max window date), maturity exclusion, and the weighted \(N/K\) used in the estimate.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
@@ -736,7 +738,7 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │         Σ (w[d] × n[d])                                                             │
 │                                                                                     │
 │   WHERE:                                                                            │
-│     w[d] = exp(-age[d] / H)                                                         │
+│     w[d] = exp(-ln(2) * age[d] / H)                                                 │
 │     H = RECENCY_HALF_LIFE_DAYS (default: 30 days)                                   │
 │                                                                                     │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
@@ -759,7 +761,7 @@ When deriving `p.forecast.mean` from cohort data (either from window() slices or
 │                                                                                     │
 │   RECENCY_HALF_LIFE_DAYS = 30                                                       │
 │                                                                                     │
-│   Defined in: constants/statisticalConstants.ts                                     │
+│   Defined in: src/constants/latency.ts                                              │
 │   (Not currently user-configurable; future enhancement)                             │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
@@ -1248,7 +1250,7 @@ When a node has **case allocations** (e.g., A/B test with 50/50 split), this aff
 
 ## 12. Constants Reference
 
-Key constants used in LAG calculations (defined in `constants/statisticalConstants.ts` and `constants/latency.ts`):
+Key constants used in LAG calculations (defined in `src/constants/latency.ts`):
 
 | Constant | Value | Purpose |
 |----------|-------|---------|

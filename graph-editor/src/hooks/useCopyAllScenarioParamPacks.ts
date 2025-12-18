@@ -23,7 +23,8 @@ export function useCopyAllScenarioParamPacks(tabId?: string) {
     const fileId = tab?.fileId;
     const scenarioState = operations.getScenarioState(tabId);
     const visibleLayerIds = scenarioState?.visibleScenarioIds ?? [];
-    const currentDSL = graphStore?.getState?.()?.currentDSL || tab?.fileData?.currentQueryDSL || '';
+    // CRITICAL: Prefer graphStore.currentDSL (authoritative) and do NOT depend on TabState carrying file data.
+    const currentDSL = graphStore?.getState?.()?.currentDSL || '';
 
     // Export ALL visible layers (including 'base'/'current' if visible), in the tab's visible order.
     const layers = visibleLayerIds

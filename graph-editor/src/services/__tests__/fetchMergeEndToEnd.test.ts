@@ -544,8 +544,9 @@ describe('Scenario 4: Dual-Slice Interaction', () => {
     const windowVal = values.find(v => !isCohortModeValue(v))!;
     const cohortVal = values.find(v => isCohortModeValue(v))!;
     
-    // Window persists a forecast scalar at merge time (baseline for dual-slice retrieval).
-    expect((windowVal as any).forecast).toBeDefined();
+    // Forecast is now recomputed at query time (from daily arrays), rather than relying on
+    // persisted scalar fields on stored values. The merge should keep slices distinct, but
+    // does not need to persist `forecast` onto the stored window slice.
     
     // Cohort does not have forecast (would be added during query processing)
     // Note: mergeTimeSeriesIntoParameter doesn't add forecast to cohort

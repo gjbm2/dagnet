@@ -41,6 +41,14 @@ const addEvidenceAndForecastScalars = __test_only__.addEvidenceAndForecastScalar
 // Fixtures
 // =============================================================================
 
+function splitTotalAcrossDays(total: number, numDays: number): number[] {
+  if (!Number.isFinite(total) || total < 0) return Array.from({ length: numDays }, () => 0);
+  if (!Number.isFinite(numDays) || numDays <= 0) return [];
+  const base = Math.floor(total / numDays);
+  const rem = total - base * numDays;
+  return Array.from({ length: numDays }, (_, i) => base + (i < rem ? 1 : 0));
+}
+
 function createWindowValue(options: {
   startDaysAgo: number;
   endDaysAgo: number;
@@ -58,14 +66,16 @@ function createWindowValue(options: {
   
   const numDays = dates.length;
   const contextSuffix = context ? `.context(${context})` : '';
+  const nDaily = splitTotalAcrossDays(n, numDays);
+  const kDaily = splitTotalAcrossDays(k, numDays);
   
   const value: ParameterValue = {
     mean: n > 0 ? k / n : 0,
     n,
     k,
     dates,
-    n_daily: dates.map(() => Math.floor(n / numDays)),
-    k_daily: dates.map(() => Math.floor(k / numDays)),
+    n_daily: nDaily,
+    k_daily: kDaily,
     window_from: dates[0],
     window_to: dates[dates.length - 1],
     sliceDSL: `window(${dates[0]}:${dates[dates.length - 1]})${contextSuffix}`,
@@ -90,14 +100,16 @@ function createCohortValue(options: {
   
   const numDays = dates.length;
   const contextSuffix = context ? `.context(${context})` : '';
+  const nDaily = splitTotalAcrossDays(n, numDays);
+  const kDaily = splitTotalAcrossDays(k, numDays);
   
   const value: ParameterValue = {
     mean: n > 0 ? k / n : 0,
     n,
     k,
     dates,
-    n_daily: dates.map(() => Math.floor(n / numDays)),
-    k_daily: dates.map(() => Math.floor(k / numDays)),
+    n_daily: nDaily,
+    k_daily: kDaily,
     cohort_from: dates[0],
     cohort_to: dates[dates.length - 1],
     sliceDSL: `cohort(anchor,${dates[0]}:${dates[dates.length - 1]})${contextSuffix}`,
@@ -284,7 +296,8 @@ describe('Forecast: From Window Slice', () => {
     
     const outputValue = result.values[0] as any;
     
-    expect(outputValue.forecast).toBe(0.52);
+    // Forecast is recomputed at query time from window() daily arrays (not copied from stored scalar).
+    expect(outputValue.forecast).toBeCloseTo(0.45, 10);
   });
   
   it('selects most recent window slice when multiple exist', () => {
@@ -328,8 +341,8 @@ describe('Forecast: From Window Slice', () => {
     
     const outputValue = result.values[0] as any;
     
-    // Should use newer window's forecast
-    expect(outputValue.forecast).toBe(0.55);
+    // Should use newer window slice (then recompute forecast from its dailies)
+    expect(outputValue.forecast).toBeCloseTo(0.5, 10);
   });
   
   it('does not overwrite existing forecast on cohort value', () => {
@@ -356,8 +369,8 @@ describe('Forecast: From Window Slice', () => {
     
     const outputValue = result.values[0] as any;
     
-    // Should keep original forecast
-    expect(outputValue.forecast).toBe(0.60);
+    // Forecast is recomputed at query time and always attached/overwritten for F-mode stability.
+    expect(outputValue.forecast).toBeCloseTo(0.4, 10);
   });
   
   it('only uses window slices with matching context', () => {
@@ -396,8 +409,8 @@ describe('Forecast: From Window Slice', () => {
     
     const outputValue = result.values[0] as any;
     
-    // Should use UK window's forecast
-    expect(outputValue.forecast).toBe(0.62);
+    // Should use UK window slice (then recompute forecast from its dailies)
+    expect(outputValue.forecast).toBeCloseTo(0.55, 10);
   });
 });
 
@@ -471,8 +484,8 @@ describe('Forecast: Fallback from Cohort Data', () => {
     
     const outputValue = result.values[0] as any;
     
-    // Should use window forecast, not computed fallback
-    expect(outputValue.forecast).toBe(0.52);
+    // Window baseline exists; forecast is recomputed from window() dailies (480/1000 = 0.48).
+    expect(outputValue.forecast).toBeCloseTo(0.48, 10);
   });
   
   it('does not add forecast if cohort lacks lag data', () => {
@@ -678,7 +691,7 @@ describe('Forecast scalar attachment (blend now handled in LAG topo pass)', () =
     const outputValue = result.values[0] as any;
     
     // Forecast should be attached
-    expect(outputValue.forecast).toBe(0.98);
+    expect(outputValue.forecast).toBeCloseTo(404 / 412, 10);
     
     // Mean is no longer blended here; LAG blend happens in statisticalEnhancementService.
     // This helper should preserve the existing mean.
@@ -717,7 +730,7 @@ describe('Forecast scalar attachment (blend now handled in LAG topo pass)', () =
     const outputValue = result.values[0] as any;
     
     // Forecast attached but mean unchanged (no completeness to blend with)
-    expect(outputValue.forecast).toBe(0.95);
+    expect(outputValue.forecast).toBeCloseTo(0.9, 10);
     expect(outputValue.mean).toBe(0.5); // Original mean preserved
   });
   
@@ -754,7 +767,7 @@ describe('Forecast scalar attachment (blend now handled in LAG topo pass)', () =
     
     // With n=0, this helper only attaches the forecast scalar; blend is deferred
     // to the graph-level LAG pipeline.
-    expect(outputValue.forecast).toBe(0.95);
+    expect(outputValue.forecast).toBeCloseTo(0.9, 10);
     expect(outputValue.mean).toBe(0.5); // Mean unchanged here
   });
   
