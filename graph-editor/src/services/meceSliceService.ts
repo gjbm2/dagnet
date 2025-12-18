@@ -41,6 +41,21 @@ function hasUncontextedSlice(values: ParameterValue[]): boolean {
   return values.some((v) => extractSliceDimensions(v.sliceDSL ?? '') === '');
 }
 
+export type MECEResolutionOptions = {
+  /**
+   * If true, prefer a complete MECE partition over an explicit uncontexted slice when both exist.
+   *
+   * Rationale: explicit uncontexted slices can be stale or computed under different query signatures,
+   * and mixing them with contexted slices across scenarios can produce inconsistent totals.
+   */
+  preferMECEWhenAvailable?: boolean;
+  /**
+   * If true, only return a MECE partition when it is complete and aggregatable.
+   * (This is the safe default for "treat as total population".)
+   */
+  requireComplete?: boolean;
+};
+
 function isEligibleContextOnlySlice(value: ParameterValue): { key: string; value: string } | null {
   const dsl = value.sliceDSL ?? '';
   const dims = extractSliceDimensions(dsl);
@@ -61,12 +76,12 @@ function isEligibleContextOnlySlice(value: ParameterValue): { key: string; value
  * @returns Resolution describing whether to use explicit uncontexted, a MECE partition, or neither.
  */
 export function resolveMECEPartitionForImplicitUncontextedSync(
-  candidateValues: ParameterValue[]
+  candidateValues: ParameterValue[],
+  options?: MECEResolutionOptions
 ): MECEResolution {
-  // Prefer explicit uncontexted when present.
-  if (hasUncontextedSlice(candidateValues)) {
-    return { kind: 'explicit_uncontexted_present' };
-  }
+  const preferMECEWhenAvailable = options?.preferMECEWhenAvailable === true;
+  const requireComplete = options?.requireComplete !== false;
+  const hasExplicitUncontexted = hasUncontextedSlice(candidateValues);
 
   // Extract eligible (single-key) context slices.
   const eligible: Array<{ pv: ParameterValue; key: string; value: string }> = [];
@@ -150,12 +165,13 @@ export function resolveMECEPartitionForImplicitUncontextedSync(
   }
 
   if (!best) {
+    // If we have an explicit uncontexted slice and we're not preferring MECE (or none found),
+    // prefer the explicit uncontexted data.
+    if (hasExplicitUncontexted) return { kind: 'explicit_uncontexted_present' };
     return {
       kind: 'not_resolvable',
       reason: `No MECE-eligible context key found among: ${keysPresent.join(', ')}`,
-      warnings: [
-        'Ensure the context definition declares MECE via otherPolicy (null/computed/explicit)',
-      ],
+      warnings: ['Ensure the context definition declares MECE via otherPolicy (null/computed/explicit)'],
     };
   }
 
@@ -169,7 +185,7 @@ export function resolveMECEPartitionForImplicitUncontextedSync(
     warnings.push(`Incomplete MECE partition for '${best.key}': missing ${best.mece.missingValues.join(', ')}`);
   }
 
-  return {
+  const result: MECEResolution = {
     kind: 'mece_partition',
     key: best.key,
     isComplete: best.mece.isComplete,
@@ -178,12 +194,37 @@ export function resolveMECEPartitionForImplicitUncontextedSync(
     values: best.pvs,
     warnings,
   };
+
+  const isUsableCompletePartition = result.kind === 'mece_partition' && result.canAggregate && (!requireComplete || result.isComplete);
+
+  // Preference rule: if an explicit uncontexted slice exists AND a complete MECE partition exists,
+  // use MECE to avoid mixing datasets across scenarios.
+  if (preferMECEWhenAvailable && hasExplicitUncontexted && isUsableCompletePartition) {
+    return result;
+  }
+
+  // Default rule: if an explicit uncontexted slice exists, use it.
+  if (hasExplicitUncontexted) {
+    return { kind: 'explicit_uncontexted_present' };
+  }
+
+  // Otherwise return the best MECE partition (even if incomplete, unless requireComplete=true and it's incomplete).
+  if (requireComplete && result.kind === 'mece_partition' && !result.isComplete) {
+    return {
+      kind: 'not_resolvable',
+      reason: `Incomplete MECE partition for '${result.key}'`,
+      warnings: result.warnings,
+    };
+  }
+
+  return result;
 }
 
 export async function resolveMECEPartitionForImplicitUncontexted(
-  candidateValues: ParameterValue[]
+  candidateValues: ParameterValue[],
+  options?: MECEResolutionOptions
 ): Promise<MECEResolution> {
-  return resolveMECEPartitionForImplicitUncontextedSync(candidateValues);
+  return resolveMECEPartitionForImplicitUncontextedSync(candidateValues, options);
 }
 
 

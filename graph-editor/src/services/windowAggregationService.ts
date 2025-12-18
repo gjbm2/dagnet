@@ -281,6 +281,22 @@ export function parseDate(dateStr: string): Date {
   if (isUKDate(datePart)) {
     return parseUKDate(datePart);
   }
+
+  // Handle UK-ish slash format: dd/mm/yyyy (common spreadsheet export)
+  // NOTE: This is intentionally interpreted as day/month/year (UK), NOT US month/day/year.
+  const slash = datePart.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const day = Number(slash[1]);
+    const month = Number(slash[2]);
+    const year = Number(slash[3]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      // Normalise via an ISO string to avoid locale-dependent parsing.
+      const mm = String(month).padStart(2, '0');
+      const dd = String(day).padStart(2, '0');
+      const d = new Date(`${year}-${mm}-${dd}T00:00:00Z`);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
   
   // Handle ISO 8601 (with time) or YYYY-MM-DD
   const date = new Date(dateStr);
@@ -1524,8 +1540,9 @@ export function mergeTimeSeriesIntoParameter(
         ? mergeOptions.latencyConfig.t95
         : DEFAULT_T95_DAYS;
     const maturityDays = Math.ceil(t95Raw) + 1;
-    const now = new Date();
-    const cutoffMs = now.getTime() - maturityDays * 24 * 60 * 60 * 1000;
+    // Recency datum for forecast MUST be max(window date), not wall-clock "now".
+    const asOf = parseDate(mergedDates[mergedDates.length - 1]);
+    const cutoffMs = asOf.getTime() - maturityDays * 24 * 60 * 60 * 1000;
 
     let weightedN = 0;
     let weightedK = 0;
@@ -1537,9 +1554,9 @@ export function mergeTimeSeriesIntoParameter(
       // Exclude immature tail
       if (d.getTime() > cutoffMs) continue;
 
-      // Recency weighting: mirror statisticalEnhancementService (w = exp(-age/H))
-      const ageDays = Math.max(0, (now.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
-      const w = Math.exp(-ageDays / RECENCY_HALF_LIFE_DAYS);
+      // Recency weighting: mirror statisticalEnhancementService (true half-life semantics).
+      const ageDays = Math.max(0, (asOf.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+      const w = Math.exp(-Math.LN2 * ageDays / RECENCY_HALF_LIFE_DAYS);
 
       const n = typeof mergedN[i] === 'number' ? mergedN[i] : 0;
       const k = typeof mergedK[i] === 'number' ? mergedK[i] : 0;
