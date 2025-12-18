@@ -17,11 +17,13 @@ export class ConflictResolutionService {
    * 
    * @param conflicts - Array of conflicts that were resolved
    * @param resolutions - Map of fileId to resolution choice
+   * @param options - Optional behaviour flags (e.g. silent/headless runs)
    * @returns Number of conflicts resolved
    */
   async applyResolutions(
     conflicts: MergeConflict[],
-    resolutions: Map<string, 'local' | 'remote' | 'manual'>
+    resolutions: Map<string, 'local' | 'remote' | 'manual'>,
+    options?: { silent?: boolean }
   ): Promise<number> {
     console.log('🔀 ConflictResolutionService: Applying resolutions:', resolutions);
     sessionLogService.info('merge', 'MERGE_RESOLVE', `Resolving ${conflicts.length} merge conflict(s)`,
@@ -69,13 +71,13 @@ export class ConflictResolutionService {
           resolvedCount++;
         } catch (error) {
           console.error(`❌ ConflictResolutionService: Failed to apply remote version for ${conflict.fileId}:`, error);
-          toast.error(`Failed to apply remote version for ${conflict.fileName}`);
+          if (!options?.silent) toast.error(`Failed to apply remote version for ${conflict.fileName}`);
         }
         
       } else if (resolution === 'manual') {
         // Manual merge - file will be edited by user
         console.log(`✏️ ConflictResolutionService: Manual merge required for ${conflict.fileId}`);
-        toast(`Please manually edit ${conflict.fileName} to resolve conflicts`, { icon: 'ℹ️' });
+        if (!options?.silent) toast(`Please manually edit ${conflict.fileName} to resolve conflicts`, { icon: 'ℹ️' });
         currentFile.isDirty = true;
         (fileRegistry as any).notifyListeners(conflict.fileId, currentFile);
         resolvedCount++;

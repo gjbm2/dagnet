@@ -22,6 +22,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useCommitHandler } from './hooks/useCommitHandler';
 import { CopyPasteProvider } from './hooks/useCopyPaste';
 import { useStalenessNudges } from './hooks/useStalenessNudges';
+import { AutomationBanner } from './components/AutomationBanner';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
@@ -1822,9 +1823,19 @@ function MainAppShellContent() {
 function AppShellContent() {
   const { isDashboardMode } = useDashboardMode();
   if (isDashboardMode) {
-    return <DashboardShell />;
+    return (
+      <>
+        <AutomationBanner />
+        <DashboardShell />
+      </>
+    );
   }
-  return <MainAppShellContent />;
+  return (
+    <>
+      <AutomationBanner />
+      <MainAppShellContent />
+    </>
+  );
 }
 
 /**

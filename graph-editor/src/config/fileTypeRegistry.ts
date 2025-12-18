@@ -7,7 +7,7 @@
 
 export interface FileTypeConfig {
   /** The type identifier (matches ObjectType) */
-  type: 'graph' | 'parameter' | 'context' | 'case' | 'node' | 'event' | 'credentials' | 'connections' | 'settings' | 'markdown';
+  type: 'graph' | 'chart' | 'parameter' | 'context' | 'case' | 'node' | 'event' | 'credentials' | 'connections' | 'settings' | 'markdown';
   
   /** Display name (singular) */
   displayName: string;
@@ -37,7 +37,7 @@ export interface FileTypeConfig {
   icon: string;
   
   /** Editor component to use for interactive editing */
-  interactiveEditor: 'graph' | 'form';
+  interactiveEditor: 'graph' | 'form' | 'chart';
   
   /** Whether this file type supports interactive editing */
   supportsInteractiveEdit: boolean;
@@ -61,6 +61,19 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     interactiveEditor: 'graph',
     supportsInteractiveEdit: true,
     supportsRawEdit: true
+  },
+
+  chart: {
+    type: 'chart',
+    displayName: 'Chart',
+    displayNamePlural: 'Charts',
+    schemaFile: '', // Chart files are internal; we render them via ChartViewer
+    directory: 'charts',
+    extensions: ['.json'],
+    icon: '📈',
+    interactiveEditor: 'chart',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true,
   },
   
   parameter: {

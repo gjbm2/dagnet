@@ -5,6 +5,7 @@ import { RawView } from './RawView';
 import { MarkdownViewer } from './MarkdownViewer';
 import { SessionLogViewer } from './SessionLogViewer';
 import { GraphIssuesViewer } from './GraphIssuesViewer';
+import { ChartViewer } from './ChartViewer';
 import { getFileTypeConfig } from '../../config/fileTypeRegistry';
 
 /**
@@ -21,6 +22,7 @@ const EDITOR_COMPONENTS = {
   markdown: MarkdownViewer,
   sessionLog: SessionLogViewer,
   graphIssues: GraphIssuesViewer,
+  chart: ChartViewer,
 };
 
 /**

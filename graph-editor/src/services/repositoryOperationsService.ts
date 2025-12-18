@@ -12,6 +12,7 @@ import { credentialsManager } from '../lib/credentials';
 import { db } from '../db/appDatabase';
 import { FileState } from '../types';
 import { sessionLogService } from './sessionLogService';
+import { conflictResolutionService } from './conflictResolutionService';
 
 export interface RepositoryStatus {
   repository: string;
@@ -138,6 +139,48 @@ class RepositoryOperationsService {
       sessionLogService.error('git', 'GIT_PULL_ERROR', `Pull failed: ${message}`);
       throw error;
     }
+  }
+
+  /**
+   * Pull latest changes, but auto-resolve any merge conflicts by accepting REMOTE versions.
+   *
+   * Intended for headless automation runs where "remote wins" is the safest default.
+   * Still logs conflicts to session log for morning inspection.
+   */
+  async pullLatestRemoteWins(
+    repository: string,
+    branch: string
+  ): Promise<{ success: boolean; conflictsResolved: number; conflicts?: any[] }> {
+    const result = await this.pullLatest(repository, branch);
+    const conflicts = result.conflicts || [];
+    if (conflicts.length === 0) {
+      return { success: true, conflictsResolved: 0 };
+    }
+
+    sessionLogService.warning(
+      'git',
+      'GIT_PULL_CONFLICTS_REMOTE_WINS',
+      `Pull completed with ${conflicts.length} conflict(s) - applying remote versions`,
+      undefined,
+      { repository, branch, conflicts: conflicts.map((c: any) => c.fileName || c.fileId) }
+    );
+
+    const resolutions = new Map<string, 'remote'>();
+    for (const c of conflicts) {
+      if (c?.fileId) resolutions.set(c.fileId, 'remote');
+    }
+
+    const conflictsResolved = await conflictResolutionService.applyResolutions(conflicts as any, resolutions as any, { silent: true });
+
+    // Refresh navigator again so resolved state is reflected.
+    if (this.navigatorOps) {
+      await this.navigatorOps.refreshItems();
+    }
+
+    // Invalidate cache since file states may have changed.
+    this.invalidateCommittableFilesCache();
+
+    return { success: true, conflictsResolved, conflicts };
   }
 
   /**

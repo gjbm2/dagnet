@@ -6,6 +6,7 @@ import { requestRetrieveAllSlices } from './useRetrieveAllSlicesRequestListener'
 import { usePullAll } from './usePullAll';
 import { StalenessUpdateModal, type StalenessUpdateActionKey } from '../components/modals/StalenessUpdateModal';
 import { retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
+import { sessionLogService } from '../services/sessionLogService';
 
 export interface UseStalenessNudgesResult {
   /** Must be rendered somewhere (for pull conflict resolution UI). */
@@ -57,6 +58,13 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
   const closeModal = useCallback(() => setIsModalOpen(false), []);
 
+  const shouldRunRetrieveAfterPull = useCallback((graphFileId: string, nowMs: number): boolean => {
+    const graphFile = fileRegistry.getFile(graphFileId) as any;
+    if (!graphFile?.data || graphFile?.type !== 'graph') return false;
+    const staleness = stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graphFile.data, nowMs);
+    return staleness.isStale;
+  }, [fileRegistry]);
+
   const toggleAction = useCallback((key: StalenessUpdateActionKey) => {
     setModalActions(prev => prev.map(a => (a.key === key ? { ...a, checked: !a.checked } : a)));
   }, []);
@@ -84,6 +92,24 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
     if (plan.retrieveAllSlices) {
       if (!plan.graphFileId) return false;
+
+      // If we also pulled, re-check staleness after pull to avoid redundant fetches.
+      if (plan.pullAllLatest) {
+        const now = Date.now();
+        const stillStale = shouldRunRetrieveAfterPull(plan.graphFileId, now);
+        if (!stillStale) {
+          sessionLogService.info(
+            'data-fetch',
+            'RETRIEVE_ALL_SKIPPED_AFTER_PULL',
+            'Retrieve All skipped: pull refreshed data (no longer stale)',
+            undefined,
+            { fileId: plan.graphFileId, repository: repo, branch }
+          );
+          stalenessNudgeService.clearPendingPlan(window.localStorage);
+          return true;
+        }
+      }
+
       const graphFile = fileRegistry.getFile(plan.graphFileId) as any;
       if (!graphFile?.data || graphFile?.type !== 'graph') return false;
       if (!tabOperations?.updateTabData) return false;
@@ -96,7 +122,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
     stalenessNudgeService.clearPendingPlan(window.localStorage);
     return true;
-  }, [navState.selectedRepo, navState.selectedBranch, pullAll, fileRegistry, tabOperations]);
+  }, [navState.selectedRepo, navState.selectedBranch, pullAll, fileRegistry, tabOperations, shouldRunRetrieveAfterPull]);
 
   const runSelectedKeys = useCallback(async (
     selected: Set<StalenessUpdateActionKey>,
@@ -134,7 +160,30 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     }
 
     if (wantsRetrieve) {
-      if (opts?.headlessRetrieve) {
+      // If the user selected Pull + Retrieve, re-check staleness after pull and skip retrieve if not needed.
+      if (wantsPull && activeFileId) {
+        const stillStale = shouldRunRetrieveAfterPull(activeFileId, Date.now());
+        if (!stillStale) {
+          sessionLogService.info(
+            'data-fetch',
+            'RETRIEVE_ALL_SKIPPED_AFTER_PULL',
+            'Retrieve All skipped: pull refreshed data (no longer stale)',
+            undefined,
+            { fileId: activeFileId, repository: repo, branch }
+          );
+        } else if (opts?.headlessRetrieve) {
+          const graphFile = fileRegistry.getFile(activeFileId) as any;
+          if (!graphFile?.data || graphFile?.type !== 'graph') return;
+          if (!tabOperations?.updateTabData) return;
+
+          await retrieveAllSlicesService.execute({
+            getGraph: () => (fileRegistry.getFile(activeFileId) as any)?.data || null,
+            setGraph: (g) => tabOperations.updateTabData(activeFileId, g),
+          });
+        } else {
+          requestRetrieveAllSlices();
+        }
+      } else if (opts?.headlessRetrieve) {
         if (!activeFileId) return;
         const graphFile = fileRegistry.getFile(activeFileId) as any;
         if (!graphFile?.data || graphFile?.type !== 'graph') return;
@@ -158,8 +207,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     const selected = new Set(modalActions.filter(a => a.checked && !a.disabled).map(a => a.key));
 
     closeModal();
-    await runSelectedKeys(selected);
-  }, [modalActions, closeModal, runSelectedKeys]);
+    await runSelectedKeys(selected, { headlessRetrieve: automaticMode });
+  }, [modalActions, closeModal, runSelectedKeys, automaticMode]);
 
   const onSnoozeAll = useCallback(() => {
     const now = Date.now();
