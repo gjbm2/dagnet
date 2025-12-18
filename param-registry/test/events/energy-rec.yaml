@@ -1,0 +1,23 @@
+id: energy-rec
+name: energy-rec
+category: conversion
+tags: []
+provider_event_names:
+  amplitude: Blueprint CheckpointReached
+amplitude_filters:
+  - property: checkpoint
+    operator: is
+    values:
+      - RecommendationOffered
+  - property: category
+    operator: is
+    values:
+      - Energy
+metadata:
+  created_at: '2025-11-28T22:22:34.766Z'
+  updated_at: '2025-11-28T22:22:34.766Z'
+  status: active
+  author: user
+  version: 1.0.0
+
+

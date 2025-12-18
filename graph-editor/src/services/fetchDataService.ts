@@ -47,6 +47,7 @@ import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/wh
 import { UpdateManager } from './UpdateManager';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
+import { forecastingSettingsService } from './forecastingSettingsService';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -1454,12 +1455,16 @@ export async function fetchItems(
             } : 'none (using all cohorts)',
           });
           
+          const forecasting = await forecastingSettingsService.getForecastingModelSettings();
+
           // Pre-compute path_t95 for all edges ONCE (single code path)
           // This is used by enhanceGraphLatencies to classify edges
           const activeEdgesForLAG = getActiveEdges(finalGraph as GraphForPath);
           const pathT95MapForLAG = computePathT95(
             finalGraph as GraphForPath,
-            activeEdgesForLAG
+            activeEdgesForLAG,
+            undefined,
+            forecasting.DEFAULT_T95_DAYS
           );
           
           const lagResult = enhanceGraphLatencies(
@@ -1470,7 +1475,8 @@ export async function fetchItems(
             lagCohortWindow,
             undefined, // whatIfDSL
             pathT95MapForLAG,
-            lagSliceSource
+            lagSliceSource,
+            forecasting
           );
           
           console.log('[fetchDataService] LAG enhancement result:', {

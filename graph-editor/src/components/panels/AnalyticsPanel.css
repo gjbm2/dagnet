@@ -724,6 +724,7 @@
   font-size: 12px;
   border-bottom: 1px solid #f3f4f6;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .analytics-item:last-child {
@@ -750,6 +751,19 @@
   color: #374151;
   font-family: 'SF Mono', Monaco, monospace;
   flex-shrink: 0;
+}
+
+/* Funnel stage cards: per-scenario metric grid */
+.analytics-item-metrics {
+  width: 100%;
+  margin-left: 16px; /* indent under scenario label/dot */
+  display: grid;
+  gap: 6px;
+}
+
+.analytics-item-metric {
+  padding: 0;
+  border-bottom: none;
 }
 
 /* Single card: no container styling, inline content */

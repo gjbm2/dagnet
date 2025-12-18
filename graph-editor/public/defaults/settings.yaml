@@ -1,0 +1,25 @@
+version: "1.0.0"
+
+forecasting:
+  # Recency weighting half-life (days). Higher = more stable; lower = more responsive.
+  RECENCY_HALF_LIFE_DAYS: 30
+
+  # Minimum effective sample size for recency-weighted baselines (stability guardrail).
+  LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE: 150
+
+  # Default maturity horizon (days) when no reliable edge-specific t95 is available.
+  DEFAULT_T95_DAYS: 30
+
+  # Forecast prior strength (λ) for blending forecast vs evidence in immature data.
+  FORECAST_BLEND_LAMBDA: 0.15
+
+  # Completeness conservatism power (η) used when computing the blend weight.
+  LATENCY_BLEND_COMPLETENESS_POWER: 2.25
+
+  # Credibility threshold (conversions) for trusting observed anchor-delay evidence (cohort completeness on downstream edges).
+  ANCHOR_DELAY_BLEND_K_CONVERSIONS: 50
+
+development:
+  debugGitOperations: false
+
+

@@ -316,6 +316,10 @@ export function DataMenu() {
     await operations.openTab(credentialsItem, 'interactive');
   };
 
+  const handleForecastingSettings = async () => {
+    await dataOperationsService.openForecastingSettings();
+  };
+
   // Section-based handlers for data operations
   const handleSectionGetFromFile = (section: DataOperationSection) => {
     if (!graph) return;
@@ -817,6 +821,14 @@ export function DataMenu() {
             onSelect={handleConnections}
           >
             Connections...
+          </Menubar.Item>
+
+          {/* Forecasting settings */}
+          <Menubar.Item
+            className="menubar-item"
+            onSelect={handleForecastingSettings}
+          >
+            Forecasting settings...
           </Menubar.Item>
           
           <Menubar.Separator className="menubar-separator" />

@@ -1,71 +1,91 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Application Settings",
-  "description": "Configuration settings for the DagNet Graph Editor",
+  "title": "DagNet Shared Settings",
+  "description": "Shared (repo-committed) settings that affect analytics and forecasting behaviour across clients. These settings are intended to be version-controlled and pulled from git so results are consistent across machines.\n\nImportant: changing these values changes computed results. Treat changes like code changes: coordinate, commit, and communicate.",
   "type": "object",
   "properties": {
-    "ui": {
+    "version": {
+      "type": "string",
+      "title": "Schema Version",
+      "description": "Settings file schema version. Normally you should not change this.",
+      "default": "1.0.0"
+    },
+    "forecasting": {
       "type": "object",
-      "title": "User Interface Settings",
-      "description": "UI preferences and display options",
+      "title": "Forecasting Settings",
+      "description": "Knobs controlling DagNet’s forecasting and latency-aware blending.\n\nThese affect all fetches and analyses, so treat changes like code changes: commit them and communicate them.\n\nFor full explanations and worked examples, see Help → Forecasting settings.",
       "properties": {
-        "theme": {
-          "type": "string",
-          "title": "Theme",
-          "description": "Application theme",
-          "enum": ["light", "dark", "auto"],
-          "enumNames": ["Light", "Dark", "Auto"],
-          "default": "auto"
-        },
-        "defaultViewMode": {
-          "type": "string",
-          "title": "Default View Mode",
-          "description": "Default view mode for new tabs",
-          "enum": ["interactive", "raw-json", "raw-yaml"],
-          "enumNames": ["Interactive", "Raw JSON", "Raw YAML"],
-          "default": "interactive"
-        },
-        "autoSave": {
-          "type": "boolean",
-          "title": "Auto Save",
-          "description": "Automatically save changes",
-          "default": true
-        },
-        "showLineNumbers": {
-          "type": "boolean",
-          "title": "Show Line Numbers",
-          "description": "Show line numbers in raw view",
-          "default": true
-        },
-        "fontSize": {
+        "RECENCY_HALF_LIFE_DAYS": {
           "type": "number",
-          "title": "Font Size",
-          "description": "Editor font size in pixels",
-          "minimum": 10,
-          "maximum": 24,
-          "default": 14
+          "title": "Recency Half-Life (days)",
+          "description": "Controls how strongly *recent* (mature) cohorts are weighted when estimating the baseline forecast probability.\n\nDefinition: a mature cohort that is H days older has half the weight of a brand-new mature cohort (exponential half-life).\n\nEffects:\n- Higher values = more stable / slower-moving baseline (older mature data still matters).\n- Lower values = more responsive baseline (recent mature data dominates).\n\nIndicative values:\n- 7–14: very responsive (use when conversion genuinely shifts week-to-week)\n- 30: balanced (default)\n- 60–90: conservative (use when rates are stable and you want less noise)\n- Very large (e.g. 10^7): effectively ‘no recency’ (mature-day k/n dominates without age weighting).",
+          "minimum": 1,
+          "maximum": 3650,
+          "default": 30
+        },
+        "LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE": {
+          "type": "number",
+          "title": "Minimum Effective Sample Size",
+          "description": "A stability guardrail for recency-weighted baselines.\n\nWhen recency weighting is applied, the *effective* sample size (N_eff) can be much smaller than the raw count because older cohorts contribute less weight. If N_eff drops below this threshold, the system uses a more conservative strategy to avoid unstable baselines.\n\nIndicative values:\n- 50–150: allows more responsiveness, but can be noisy on thin data\n- 150–500: typical range (default 150)\n- 500+: very conservative; expect slower reaction to real change.",
+          "minimum": 1,
+          "maximum": 1000000,
+          "default": 150
+        },
+        "DEFAULT_T95_DAYS": {
+          "type": "number",
+          "title": "Default t95 (days)",
+          "description": "Fallback maturity horizon (in days) when an edge has no reliable latency estimate.\n\nThis determines how much of the most recent data is treated as potentially incomplete (‘immature’) for lagged conversions.\n\nIndicative values:\n- 0–2: only appropriate if latency is genuinely near-instant and you have high confidence\n- 7–21: typical for many behavioural funnels\n- 30: conservative default\n- 60–90: very conservative; reduces risk of counting immature conversions as missing, but increases lag in responsiveness.",
+          "minimum": 0,
+          "maximum": 365,
+          "default": 30
+        },
+        "FORECAST_BLEND_LAMBDA": {
+          "type": "number",
+          "title": "Forecast Blend λ (lambda)",
+          "description": "Controls how strongly the forecast baseline acts as a prior when blending forecast and evidence in immature data.\n\nHigher values keep p.mean closer to the forecast for longer (more ‘prior strength’). Lower values let evidence dominate sooner.\n\nIndicative values:\n- 0.05–0.20: typical range (default 0.15)\n- 0.20–0.50: more conservative (forecast dominates longer)\n- 0: disables the prior entirely (not recommended unless you really want raw evidence).",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 0.15
+        },
+        "LATENCY_BLEND_COMPLETENESS_POWER": {
+          "type": "number",
+          "title": "Completeness Power η (eta)",
+          "description": "Controls how aggressively completeness is down-weighted when computing the blend weight.\n\nValues > 1 make the system more conservative (less willing to trust evidence when completeness is below 1). Values = 1 preserve the canonical formula.\n\nIndicative values:\n- 1.0: canonical behaviour (no extra conservatism)\n- 1.5–3.0: typical ‘safety’ range (default 2.25)\n- 3.0–5.0: very conservative; expect p.mean to cling to forecast longer for immature cohorts.",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 2.25
+        },
+        "ANCHOR_DELAY_BLEND_K_CONVERSIONS": {
+          "type": "number",
+          "title": "Anchor Delay Blend K (conversions)",
+          "description": "Controls how quickly *observed* anchor-delay evidence overrides the *prior* anchor delay when computing cohort-mode completeness on downstream edges.\n\nThis is a credibility / sample-size knob: the blend weight grows roughly like (1 - exp(-x/K)), where x is the effective number of forecast conversions supporting the observed anchor delay.\n\nLower values make the system trust observed anchor lag sooner; higher values keep the upstream-derived prior anchor delay longer.\n\nIndicative values:\n- 20–50: more responsive (trust observed anchor lag quickly)\n- 50–150: typical range (default 50)\n- 150–300: more conservative (prior dominates longer; reduces instability when anchor lag is sparse).",
+          "minimum": 1,
+          "maximum": 1000000,
+          "default": 50
         }
-      }
+      },
+      "required": [
+        "RECENCY_HALF_LIFE_DAYS",
+        "LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE",
+        "DEFAULT_T95_DAYS",
+        "FORECAST_BLEND_LAMBDA",
+        "LATENCY_BLEND_COMPLETENESS_POWER",
+        "ANCHOR_DELAY_BLEND_K_CONVERSIONS"
+      ]
     },
     "development": {
       "type": "object",
-      "title": "Development Settings",
-      "description": "Settings for development and debugging",
+      "title": "Development Settings (Local)",
+      "description": "Local-only development toggles. These should generally not be committed into a shared settings file.",
       "properties": {
-        "devMode": {
-          "type": "boolean",
-          "title": "Development Mode",
-          "description": "Enable development features and debugging",
-          "default": true
-        },
         "debugGitOperations": {
-          "type": "boolean", 
+          "type": "boolean",
           "title": "Debug Git Operations",
-          "description": "Enable detailed logging for Git operations",
+          "description": "Enable detailed logging for Git operations.",
           "default": false
         }
       }
     }
   },
-  "required": ["ui", "development"]
+  "required": ["version", "forecasting"]
 }

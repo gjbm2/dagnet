@@ -48,6 +48,7 @@ import {
   logNormalSurvival,
   fitLagDistribution,
 } from './lagDistributionUtils';
+import type { ForecastingModelSettings } from './forecastingSettingsService';
 
 export type { LagDistributionFit } from './lagDistributionUtils';
 export {
@@ -98,7 +99,10 @@ export interface BlendInputs {
  * 
  * @returns Blended mean, or undefined if blend cannot be computed
  */
-export function computeBlendedMean(inputs: BlendInputs): number | undefined {
+export function computeBlendedMean(
+  inputs: BlendInputs,
+  model?: Pick<ForecastingModelSettings, 'FORECAST_BLEND_LAMBDA' | 'LATENCY_BLEND_COMPLETENESS_POWER'>
+): number | undefined {
   const { evidenceMean, forecastMean, completeness, nQuery, nBaseline } = inputs;
   
   // Guard: need valid forecast baseline
@@ -117,12 +121,20 @@ export function computeBlendedMean(inputs: BlendInputs): number | undefined {
   // dragging p.mean down too aggressively when early-time completeness is biased high.
   //
   // η = 1.0 → preserves current behaviour exactly.
+  const completenessPower =
+    typeof model?.LATENCY_BLEND_COMPLETENESS_POWER === 'number' && Number.isFinite(model.LATENCY_BLEND_COMPLETENESS_POWER)
+      ? model.LATENCY_BLEND_COMPLETENESS_POWER
+      : LATENCY_BLEND_COMPLETENESS_POWER;
   const completenessForBlendWeight =
     Number.isFinite(completeness) && completeness > 0
-      ? Math.min(1, Math.max(0, Math.pow(completeness, LATENCY_BLEND_COMPLETENESS_POWER)))
+      ? Math.min(1, Math.max(0, Math.pow(completeness, completenessPower)))
       : 0;
   const nEff = completenessForBlendWeight * nQuery;
-  const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
+  const lambda =
+    typeof model?.FORECAST_BLEND_LAMBDA === 'number' && Number.isFinite(model.FORECAST_BLEND_LAMBDA)
+      ? model.FORECAST_BLEND_LAMBDA
+      : FORECAST_BLEND_LAMBDA;
+  const m0 = lambda * nBaseline;
   const wEvidence = nEff / (m0 + nEff);
   
   return wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
@@ -651,9 +663,10 @@ function weightedQuantile(
  * @param age - Cohort age in days
  * @returns Weight in (0, 1]
  */
-function computeRecencyWeight(age: number): number {
+function computeRecencyWeight(age: number, recencyHalfLifeDays: number): number {
   // NOTE: Use true half-life semantics. Without ln(2), H would be a time constant (w(H)=e^-1).
-  return Math.exp(-Math.LN2 * age / RECENCY_HALF_LIFE_DAYS);
+  const halfLife = (Number.isFinite(recencyHalfLifeDays) && recencyHalfLifeDays > 0) ? recencyHalfLifeDays : RECENCY_HALF_LIFE_DAYS;
+  return Math.exp(-Math.LN2 * age / halfLife);
 }
 
 /**
@@ -673,7 +686,11 @@ function computeRecencyWeight(age: number): number {
  * @param t95 - Maturity threshold (cohorts older than this are "mature")
  * @returns Asymptotic probability, or undefined if no mature cohorts
  */
-export function estimatePInfinity(cohorts: CohortData[], t95: number): number | undefined {
+export function estimatePInfinity(
+  cohorts: CohortData[],
+  t95: number,
+  recencyHalfLifeDays: number = RECENCY_HALF_LIFE_DAYS
+): number | undefined {
   // Filter to mature cohorts (age >= t95)
   const matureCohorts = cohorts.filter(c => c.age >= t95);
   
@@ -686,7 +703,7 @@ export function estimatePInfinity(cohorts: CohortData[], t95: number): number | 
   let weightedK = 0;
   
   for (const c of matureCohorts) {
-    const w = computeRecencyWeight(c.age);
+    const w = computeRecencyWeight(c.age, recencyHalfLifeDays);
     weightedN += w * c.n;
     weightedK += w * c.k;
   }
@@ -958,7 +975,8 @@ export function computeEdgeLatencyStats(
   anchorMedianLag: number = 0,
   fitTotalKOverride?: number,
   pInfinityCohortsOverride?: CohortData[],
-  edgeT95?: number
+  edgeT95?: number,
+  recencyHalfLifeDays: number = RECENCY_HALF_LIFE_DAYS
 ): EdgeLatencyStats {
   // Calculate total k for quality gate
   const totalK = cohorts.reduce((sum, c) => sum + c.k, 0);
@@ -1041,7 +1059,7 @@ export function computeEdgeLatencyStats(
   const authoritativeT95Days =
     (typeof edgeT95 === 'number' && Number.isFinite(edgeT95) && edgeT95 > 0)
       ? edgeT95
-      : (Number.isFinite(t95FromFit) && t95FromFit > 0 ? t95FromFit : DEFAULT_T95_DAYS);
+      : (Number.isFinite(t95FromFit) && t95FromFit > 0 ? t95FromFit : defaultT95Days);
 
   // Step 4: Improve fit using authoritative t95 constraint
   // If authoritative t95 > moment-fit t95, adjust sigma to match authoritative t95.
@@ -1104,7 +1122,7 @@ export function computeEdgeLatencyStats(
 
   // Step 3: Estimate p_infinity from mature cohorts
   // NOTE: Use ORIGINAL cohorts for p_infinity estimation (raw age determines maturity)
-  const pInfinityEstimate = estimatePInfinity(pInfinityCohortsOverride ?? cohorts, t95);
+  const pInfinityEstimate = estimatePInfinity(pInfinityCohortsOverride ?? cohorts, t95, recencyHalfLifeDays);
 
   // Evidence probability (observed k/n)
   const pEvidence = totalN > 0 ? totalK / totalN : 0;
@@ -1441,7 +1459,8 @@ function findStartNodes(
 export function computePathT95(
   graph: GraphForPath,
   activeEdges: Set<string>,
-  anchorNodeId?: string
+  anchorNodeId?: string,
+  defaultT95Days: number = DEFAULT_T95_DAYS
 ): Map<string, number> {
   const pathT95 = new Map<string, number>();
   const nodeT95 = new Map<string, number>(); // Max path_t95 to reach each node
@@ -1485,7 +1504,7 @@ export function computePathT95(
       const edgeId = getEdgeId(edge);
       // Phase 2: edge t95 is either computed or default-injected when latency is enabled.
       const edgeT95 = edge.p?.latency?.latency_parameter === true
-        ? (edge.p?.latency?.t95 ?? DEFAULT_T95_DAYS)
+        ? (edge.p?.latency?.t95 ?? defaultT95Days)
         : 0;
 
       // path_t95 for this edge = path to source node + edge's own t95
@@ -1733,8 +1752,17 @@ export function enhanceGraphLatencies(
   cohortWindow?: { start: Date; end: Date },
   whatIfDSL?: string,
   pathT95Map?: Map<string, number>,
-  lagSliceSource: 'cohort' | 'window' | 'none' = 'cohort'
+  lagSliceSource: 'cohort' | 'window' | 'none' = 'cohort',
+  forecasting?: ForecastingModelSettings
 ): GraphLatencyEnhancementResult {
+  const MODEL: ForecastingModelSettings = {
+    RECENCY_HALF_LIFE_DAYS: forecasting?.RECENCY_HALF_LIFE_DAYS ?? RECENCY_HALF_LIFE_DAYS,
+    LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE: forecasting?.LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE ?? LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE,
+    DEFAULT_T95_DAYS: forecasting?.DEFAULT_T95_DAYS ?? DEFAULT_T95_DAYS,
+    FORECAST_BLEND_LAMBDA: forecasting?.FORECAST_BLEND_LAMBDA ?? FORECAST_BLEND_LAMBDA,
+    LATENCY_BLEND_COMPLETENESS_POWER: forecasting?.LATENCY_BLEND_COMPLETENESS_POWER ?? LATENCY_BLEND_COMPLETENESS_POWER,
+    ANCHOR_DELAY_BLEND_K_CONVERSIONS: forecasting?.ANCHOR_DELAY_BLEND_K_CONVERSIONS ?? ANCHOR_DELAY_BLEND_K_CONVERSIONS,
+  };
   const result: GraphLatencyEnhancementResult = {
     edgesProcessed: 0,
     edgesWithLAG: 0,
@@ -1803,7 +1831,8 @@ export function enhanceGraphLatencies(
   const precomputedPathT95 = pathT95Map ?? computePathT95(
     graph as GraphForPath,
     activeEdges,
-    startNodes[0] // Use first start node as anchor
+    startNodes[0], // Use first start node as anchor
+    MODEL.DEFAULT_T95_DAYS
   );
   
   console.log('[LAG_TOPO_005b] precomputedPathT95:', {
@@ -1951,7 +1980,7 @@ export function enhanceGraphLatencies(
       const edgeT95 = hasLocalLatency && typeof edge.p?.latency?.t95 === 'number' && Number.isFinite(edge.p.latency.t95) && edge.p.latency.t95 > 0
         ? edge.p.latency.t95
         : undefined;
-      const effectiveHorizonDays = hasLocalLatency ? (edgeT95 ?? DEFAULT_T95_DAYS) : edgePrecomputedPathT95;
+      const effectiveHorizonDays = hasLocalLatency ? (edgeT95 ?? MODEL.DEFAULT_T95_DAYS) : edgePrecomputedPathT95;
 
       // Get parameter values for this edge
       const paramValues = paramLookup.get(edgeId);
@@ -2100,7 +2129,7 @@ export function enhanceGraphLatencies(
         (edge.p?.forecast?.mean !== undefined ? edge.p.forecast.mean : (edge.p?.mean ?? 0));
       const forecastConversions = startersAtX * rateForCredibility;
       const effectiveForecastConversions = anchorLagCoverage * forecastConversions;
-      const blendWeight = 1 - Math.exp(-effectiveForecastConversions / ANCHOR_DELAY_BLEND_K_CONVERSIONS);
+      const blendWeight = 1 - Math.exp(-effectiveForecastConversions / MODEL.ANCHOR_DELAY_BLEND_K_CONVERSIONS);
       
       // 5. Blend to get effective anchor median delay
       const effectiveAnchorMedianDays = blendWeight * observedAnchorMedianDays + (1 - blendWeight) * priorAnchorDelayDays;
@@ -2128,7 +2157,7 @@ export function enhanceGraphLatencies(
         cohortsScoped,
         aggregateMedianLag,
         aggregateMeanLag,
-        DEFAULT_T95_DAYS,  // Default t95 if fit is invalid
+        MODEL.DEFAULT_T95_DAYS,  // Default t95 if fit is invalid
         anchorMedianLag,  // Use observed anchor lag, NOT path_t95
         totalKForFit,     // Fit quality gate should consider full-history converters when available
         cohortsAll.length > 0 ? cohortsAll : cohortsScoped, // p∞ estimation should use full-history mature cohorts
@@ -2494,7 +2523,7 @@ export function enhanceGraphLatencies(
           // Use the already-normalised window aggregate function (aggregateWindowData if available,
           // otherwise fall back to cohort aggregation) to avoid calling an optional helper.
           const windowCohortsForForecast = windowAggregateFn(paramValues, forecastAsOfDate, cohortWindow);
-          windowDerivedForecastMean = estimatePInfinity(windowCohortsForForecast, effectiveHorizonDays);
+          windowDerivedForecastMean = estimatePInfinity(windowCohortsForForecast, effectiveHorizonDays, MODEL.RECENCY_HALF_LIFE_DAYS);
         } catch (e) {
           // Non-fatal: fall back to cohort-derived p_infinity if window aggregation fails
           console.warn('[enhanceGraphLatencies] Failed to derive forecast from window slices:', e);
@@ -2579,7 +2608,7 @@ export function enhanceGraphLatencies(
         // Make the prior dominate harder as completeness → 0:
         // scale pseudo-sample strength as s' = s / c so that extremely immature cohorts
         // shrink more strongly to the stable baseline p0.
-        const s = LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE / cRaw;
+        const s = MODEL.LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE / cRaw;
         const alpha = p0 * s;
         const beta = (1 - p0) * s;
 
@@ -2718,7 +2747,7 @@ export function enhanceGraphLatencies(
         completeness,
         nQuery: nQueryForBlend,
         nBaseline: nBaseline > 0 ? nBaseline : nQueryForBlend,
-      });
+      }, MODEL);
 
       // Capture blend diagnostics for session logging
       if (edgeLAGValues.debug) {
@@ -2728,12 +2757,20 @@ export function enhanceGraphLatencies(
         }
 
         // Mirror computeBlendedMean weighting so logs can explain low forecasts
+        const completenessPower =
+          typeof MODEL.LATENCY_BLEND_COMPLETENESS_POWER === 'number' && Number.isFinite(MODEL.LATENCY_BLEND_COMPLETENESS_POWER)
+            ? MODEL.LATENCY_BLEND_COMPLETENESS_POWER
+            : LATENCY_BLEND_COMPLETENESS_POWER;
         const completenessForBlendWeight =
           Number.isFinite(completeness as number) && (completeness as number) > 0
-            ? Math.min(1, Math.max(0, Math.pow(completeness as number, LATENCY_BLEND_COMPLETENESS_POWER)))
+            ? Math.min(1, Math.max(0, Math.pow(completeness as number, completenessPower)))
             : 0;
         const nEff = completenessForBlendWeight * (nQueryForBlend ?? 0);
-        const m0 = FORECAST_BLEND_LAMBDA * (nBaselineUsed ?? 0);
+        const lambda =
+          typeof MODEL.FORECAST_BLEND_LAMBDA === 'number' && Number.isFinite(MODEL.FORECAST_BLEND_LAMBDA)
+            ? MODEL.FORECAST_BLEND_LAMBDA
+            : FORECAST_BLEND_LAMBDA;
+        const m0 = lambda * (nBaselineUsed ?? 0);
         const wEvidence = (m0 + nEff) > 0 ? (nEff / (m0 + nEff)) : 0;
 
         edgeLAGValues.debug.nQuery = nQueryForBlend;
