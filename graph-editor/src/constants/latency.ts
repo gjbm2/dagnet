@@ -171,7 +171,7 @@ export const LATENCY_HORIZON_DECIMAL_PLACES = 2;
  * Future: This could be exposed as a user-configurable setting if needed.
  * See TODO.md "Analytics / Model Fitting (Future)" for tracking.
  */
-export const FORECAST_BLEND_LAMBDA = 0.2;
+export const FORECAST_BLEND_LAMBDA = 0.15;
 
 /**
  * LATENCY_BLEND_COMPLETENESS_POWER (η)
@@ -200,7 +200,7 @@ export const FORECAST_BLEND_LAMBDA = 0.2;
  * This is intentionally a *tuning knob* while we pursue more principled fixes
  * (e.g. start-delay / shifted lognormal using histogram mass; see histogram-fitting.md).
  */
-export const LATENCY_BLEND_COMPLETENESS_POWER = 2.5;
+export const LATENCY_BLEND_COMPLETENESS_POWER = 2.25;
 
 /**
  * RECENCY_HALF_LIFE_DAYS (H)
@@ -212,7 +212,7 @@ export const LATENCY_BLEND_COMPLETENESS_POWER = 2.5;
  *   p∞ = (Σ w_i * k_i) / (Σ w_i * n_i)
  * 
  * where:
- *   w_i = exp(-age_i / H)
+ *   w_i = exp(-ln(2) * age_i / H)
  * 
  *   age_i = age of cohort i in days
  *   H     = this constant (half-life in days)
@@ -387,7 +387,7 @@ export const LATENCY_REFETCH_COOLDOWN_MINUTES = 720;
  * 
  * See design.md §5.6.
  */
-export const LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE = 350;
+export const LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE = 150;
 
 
 

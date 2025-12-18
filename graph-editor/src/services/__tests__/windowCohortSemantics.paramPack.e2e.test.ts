@@ -300,7 +300,8 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       expect(edge.p.latency).toBeUndefined();
       expect(edge.p.evidence.mean).toBeCloseTo(0.1, 10);
       expect(edge.p.mean).toBeCloseTo(0.1, 10);
-      expect(edge.p.forecast.mean).toBeCloseTo(0.4, 10);
+      // Forecast is recomputed at query time from window() daily arrays (not copied from stored scalar baseline).
+      expect(edge.p.forecast.mean).toBeCloseTo(0.1, 10);
     });
   });
 
@@ -336,12 +337,14 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
       expect(edge?.p?.latency?.completeness).toBeDefined();
 
       expect(edge.p.evidence.mean).toBeCloseTo(0.2, 10);
-      expect(edge.p.forecast.mean).toBeCloseTo(0.3, 10);
+      // Forecast is recomputed at query time from window() daily arrays.
+      // Fixture baseline: window daily totals are k=60, n=1000 => 0.06
+      expect(edge.p.forecast.mean).toBeCloseTo(0.06, 10);
 
       const c = edge.p.latency.completeness;
       const expected = computeExpectedBlendMean({
         evidenceMean: 0.2,
-        forecastMean: 0.3,
+        forecastMean: 0.06,
         completeness: c,
         // Match enhanceGraphLatencies: prefer forecast population (p.n) when available, else evidence.n
         nQuery: edge.p.n ?? edge.p.evidence.n,
@@ -622,7 +625,8 @@ describe('Window/Cohort LAG semantics (param-pack integration)', () => {
 
         const edgeXY = (currentGraph as any).edges.find((e: any) => e.id === 'edge-X-Y');
         expect(edgeXY?.p?.latency?.completeness).toBeDefined();
-        expect(edgeXY?.p?.forecast?.mean).toBeCloseTo(0.4, 10);
+        // Forecast is recomputed at query time from window() daily arrays for this fixture.
+        expect(edgeXY?.p?.forecast?.mean).toBeCloseTo(0.5, 10);
         return edgeXY.p.latency.completeness as number;
       }
 

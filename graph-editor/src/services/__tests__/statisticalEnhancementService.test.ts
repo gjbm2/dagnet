@@ -45,6 +45,7 @@ import {
   LATENCY_MIN_FIT_CONVERTERS,
   LATENCY_DEFAULT_SIGMA,
   LATENCY_T95_PERCENTILE,
+  RECENCY_HALF_LIFE_DAYS,
 } from '../../constants/latency';
 
 describe('StatisticalEnhancementService', () => {
@@ -589,15 +590,18 @@ describe('LAG P-Infinity Estimation (§5.6, Appendix C.1)', () => {
       const pInf = estimatePInfinity(cohorts, t95);
 
       // Should use only first 3 cohorts (age >= 30) with recency weighting
-      // With H=30 (half-life):
-      //   age 60: w = exp(-60/30) ≈ 0.135, k=60, n=100
-      //   age 45: w = exp(-45/30) ≈ 0.223, k=55, n=100
-      //   age 30: w = exp(-30/30) ≈ 0.368, k=40, n=100
-      // weighted k ≈ 8.1 + 12.3 + 14.7 = 35.1
-      // weighted n ≈ 13.5 + 22.3 + 36.8 = 72.6
-      // p_∞ ≈ 35.1 / 72.6 ≈ 0.483
+      // DagNet uses true half-life semantics: w = exp(-ln(2) * age / H) = 2^(-age/H)
+      //
+      // IMPORTANT: RECENCY_HALF_LIFE_DAYS is a global constant; some test suites may mock it.
+      // Compute the expected value from the runtime constant to make this test robust.
+      const w = (age: number) => Math.exp(-Math.LN2 * age / RECENCY_HALF_LIFE_DAYS);
+      const mature = cohorts.filter(c => c.age >= t95);
+      const wk = mature.reduce((acc, c) => acc + (w(c.age) * c.k), 0);
+      const wn = mature.reduce((acc, c) => acc + (w(c.age) * c.n), 0);
+      const expected = wn > 0 ? (wk / wn) : undefined;
       // (Recency weighting favours the younger cohort with lower conversion)
-      expect(pInf).toBeCloseTo(0.483, 2);
+      expect(expected).toBeDefined();
+      expect(pInf).toBeCloseTo(expected as number, 6);
     });
 
     it('should return undefined if no mature cohorts', () => {

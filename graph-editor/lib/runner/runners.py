@@ -150,7 +150,7 @@ def run_path_to_end(
     
     LAG support: includes visibility_mode per scenario for UI adaptors.
     """
-    from .graph_builder import build_networkx_graph
+    from .graph_builder import build_networkx_graph, resolve_node_id
     
     node_label = G.nodes[node_id].get('label') or node_id if node_id in G else node_id
     
@@ -195,12 +195,59 @@ def run_path_to_end(
             cost_per_success_gbp = result.expected_cost_gbp / result.probability
             cost_per_success_labour = result.expected_labour_cost / result.probability
 
+        # n/k context for Reach Probability
+        # - n: starters at the start of the graph (entry population)
+        # - k: arrivals at the reached node (incoming edge converters)
+        #
+        # This is intentionally "n at start; k at reached node".
+        n_start = None
+        try:
+            entry_nodes = find_entry_nodes(scenario_G)
+        except Exception:
+            entry_nodes = []
+
+        if entry_nodes:
+            n_total = 0
+            has_any_n = False
+            for entry in entry_nodes:
+                # Outgoing edges should share the same underlying n (PMF split),
+                # so use MAX to avoid double-counting when multiple outgoing edges exist.
+                max_n_for_entry = None
+                for succ in scenario_G.successors(entry):
+                    edge_evidence = (scenario_G.edges[entry, succ].get('evidence') or {})
+                    edge_n = edge_evidence.get('n')
+                    if edge_n is None:
+                        continue
+                    max_n_for_entry = edge_n if max_n_for_entry is None else max(max_n_for_entry, edge_n)
+                if max_n_for_entry is not None:
+                    has_any_n = True
+                    n_total += max_n_for_entry
+            if has_any_n:
+                n_start = n_total
+
+        k_reached = None
+        resolved_node = resolve_node_id(scenario_G, node_id)
+        if resolved_node and resolved_node in scenario_G:
+            k_total = 0
+            has_any_k = False
+            for pred in scenario_G.predecessors(resolved_node):
+                edge_evidence = (scenario_G.edges[pred, resolved_node].get('evidence') or {})
+                edge_k = edge_evidence.get('k')
+                if edge_k is None:
+                    continue
+                has_any_k = True
+                k_total += edge_k
+            if has_any_k:
+                k_reached = k_total
+
         data_rows.append({
             'scenario_id': scenario_id,
             'scenario_name': scenario_name,
             'visibility_mode': visibility_mode,
             'probability_label': p_label,
             'probability': result.probability,
+            'n': n_start,
+            'k': k_reached,
             'expected_cost_gbp': result.expected_cost_gbp,
             'expected_labour_cost': result.expected_labour_cost,
             'expected_cost_gbp_given_success': result.expected_cost_gbp_given_success,
@@ -225,6 +272,8 @@ def run_path_to_end(
             ],
             'metrics': [
                 {'id': 'probability', 'name': metric_name, 'type': 'probability', 'format': 'percent', 'role': 'primary'},
+                {'id': 'n', 'name': 'n (start)', 'type': 'count', 'format': 'number'},
+                {'id': 'k', 'name': 'k (reached)', 'type': 'count', 'format': 'number'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
                 {'id': 'expected_cost_gbp_given_success', 'name': 'Cost (£) Given success', 'type': 'currency', 'format': 'currency_gbp'},
@@ -244,7 +293,9 @@ def run_path_to_end(
     }
 
     # If a metric is all-zero / all-null across all scenarios, omit it to reduce UI noise.
-    cost_metric_ids = [
+    optional_metric_ids = [
+        'n',
+        'k',
         'expected_cost_gbp',
         'expected_labour_cost',
         'expected_cost_gbp_given_success',
@@ -255,7 +306,7 @@ def run_path_to_end(
     filtered_metrics = []
     for m in result_obj['semantics']['metrics']:
         mid = m.get('id')
-        if mid in cost_metric_ids:
+        if mid in optional_metric_ids:
             vals = [(row.get(mid)) for row in data_rows]
             if all(v is None or v == 0 for v in vals):
                 continue

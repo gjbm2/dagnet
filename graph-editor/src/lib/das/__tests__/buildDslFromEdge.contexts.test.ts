@@ -138,6 +138,52 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       }));
     });
 
+    it('should handle otherPolicy: computed when explicit values include a regex pattern (emit plain values, not composite regex)', async () => {
+      const channelContext: ContextDefinition = {
+        id: 'channel',
+        name: 'Channel',
+        description: 'Marketing channel',
+        type: 'categorical',
+        otherPolicy: 'computed',
+        values: [
+          { id: 'paid-search', label: 'Paid Search', sources: { amplitude: { field: 'utm_medium', filter: "utm_medium == 'cpc'" } } },
+          {
+            id: 'paid-social',
+            label: 'Paid Social',
+            sources: { amplitude: { field: 'utm_medium', pattern: '^(Paid Social|paidsocial)$', patternFlags: 'i' } },
+          },
+          { id: 'other', label: 'Other' },
+        ],
+        metadata: { created_at: '2025-01-01T00:00:00Z', version: '1.0.0', status: 'active' },
+      };
+
+      vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(channelContext);
+
+      const edge = { id: 'test-edge', from: 'a', to: 'b', p: { mean: 0.5 }, query: 'from(a).to(b)' };
+      const graph = {
+        nodes: [
+          { id: 'a', label: 'A', event_id: 'event_a' },
+          { id: 'b', label: 'B', event_id: 'event_b' },
+        ],
+        edges: [edge],
+      };
+
+      const constraints = parseConstraints('context(channel:other)');
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+
+      expect(result.context_filters).toBeDefined();
+      expect(result.context_filters![0]).toEqual(
+        expect.objectContaining({
+          field: 'utm_medium',
+          op: 'is not',
+          // Extracted literals from the pattern + extracted literal from the filter
+          values: expect.arrayContaining(['cpc', 'Paid Social', 'paidsocial']),
+        })
+      );
+      // Critically: computed "other" should NOT emit a pattern string that combines regex + literals.
+      expect((result.context_filters![0] as any).pattern).toBeUndefined();
+    });
+
     it('should handle otherPolicy: explicit (use provided filter)', async () => {
       const channelContext: ContextDefinition = {
         id: 'channel',

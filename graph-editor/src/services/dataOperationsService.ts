@@ -63,7 +63,7 @@ import type { ParameterValue } from './paramRegistryService';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
-import { resolveMECEPartitionForImplicitUncontexted } from './meceSliceService';
+import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
@@ -894,12 +894,20 @@ class DataOperationsService {
               return dims === '';
             });
             
-            if (isUncontextedQuery && hasContextedData && !hasUncontextedData) {
+            if (isUncontextedQuery && hasContextedData) {
               // Implicit uncontexted via MECE partition selection (single context key only).
-              const mece = await resolveMECEPartitionForImplicitUncontexted(candidateValues);
+              //
+              // Preference rule (critical for scenario consistency):
+              // If a complete MECE partition exists, prefer it over an explicit uncontexted slice,
+              // to avoid mixing datasets where the uncontexted baseline is stale/differently signed.
+              const mece = await resolveMECEPartitionForImplicitUncontexted(candidateValues, {
+                preferMECEWhenAvailable: true,
+                requireComplete: true,
+              });
+
               if (mece.kind === 'mece_partition' && mece.canAggregate) {
                 sliceFilteredValues = mece.values;
-                console.log('[DataOperationsService] MECE aggregation path: selected MECE partition for implicit uncontexted', {
+                console.log('[DataOperationsService] MECE aggregation path: selected MECE partition for implicit uncontexted (preferred)', {
                   targetSlice,
                   key: mece.key,
                   isComplete: mece.isComplete,
@@ -920,12 +928,8 @@ class DataOperationsService {
                 sessionLogService.endOperation(logOpId, 'warning', `Cannot compute implicit uncontexted total: ${mece.reason}`);
                 return { success: false, warning: `Cannot compute implicit uncontexted total: ${mece.reason}` };
               } else {
-                // Explicit uncontexted present shouldn't happen here due to hasUncontextedData check.
-                // If canAggregate=false, degrade gracefully by summing what we have, with warning.
-                sliceFilteredValues = candidateValues;
-                console.warn('[DataOperationsService] MECE partition not aggregatable; summing available context slices as subset', {
-                  targetSlice,
-                });
+                // Fall back to standard slice isolation (explicit uncontexted, specific contexts, or contextAny).
+                sliceFilteredValues = isolateSlice(candidateValues, targetSlice);
               }
             } else {
               // Standard path: use isolateSlice (handles contextAny and specific context queries)
@@ -1765,8 +1769,38 @@ class DataOperationsService {
 
             const mece = await resolveMECEPartitionForImplicitUncontexted(allWindowValues);
             if (mece.kind === 'mece_partition' && mece.canAggregate) {
-              const now = new Date();
-              const cohorts = aggregateWindowData(mece.values, now);
+              // Use max(window date) as the reference date for window aggregation (not wall-clock now).
+              const asOfDate = (() => {
+                const maxDateFromValue = (v: any): Date | undefined => {
+                  const dates: string[] | undefined = v?.dates;
+                  if (Array.isArray(dates) && dates.length > 0) {
+                    try {
+                      const d = parseDate(dates[dates.length - 1]);
+                      if (!Number.isNaN(d.getTime())) return d;
+                    } catch {
+                      // ignore
+                    }
+                  }
+                  const windowTo = v?.window_to;
+                  if (typeof windowTo === 'string' && windowTo.trim()) {
+                    try {
+                      const d = parseDate(windowTo);
+                      if (!Number.isNaN(d.getTime())) return d;
+                    } catch {
+                      // ignore
+                    }
+                  }
+                  return undefined;
+                };
+                const best =
+                  mece.values
+                    .map((v) => maxDateFromValue(v))
+                    .filter((d): d is Date => !!d)
+                    .sort((a, b) => b.getTime() - a.getTime())[0];
+                return best ?? new Date();
+              })();
+
+              const cohorts = aggregateWindowData(mece.values, asOfDate);
               const dates = cohorts.map((c) => c.date);
               const nDaily = cohorts.map((c) => c.n);
               const kDaily = cohorts.map((c) => c.k);
@@ -1797,7 +1831,24 @@ class DataOperationsService {
         console.warn('[DataOperationsService] Failed to prepare synthetic MECE window baseline for scalars:', e);
       }
 
-      aggregatedData = this.addEvidenceAndForecastScalars(aggregatedData, paramDataForScalars, targetSlice);
+      // Feed authoritative t95 into query-time forecast recomputation.
+      // This prevents silent fallback to DEFAULT_T95_DAYS when the graph already has a real t95.
+      const t95FromEdge =
+        typeof (targetEdge as any)?.p?.latency?.t95 === 'number' && Number.isFinite((targetEdge as any).p.latency.t95) && (targetEdge as any).p.latency.t95 > 0
+          ? (targetEdge as any).p.latency.t95
+          : undefined;
+      const t95FromFile =
+        typeof (paramFile as any)?.data?.latency?.t95 === 'number' && Number.isFinite((paramFile as any).data.latency.t95) && (paramFile as any).data.latency.t95 > 0
+          ? (paramFile as any).data.latency.t95
+          : undefined;
+      const isLatencyEdge = Boolean((targetEdge as any)?.p?.latency?.latency_parameter);
+      const t95Days = isLatencyEdge ? (t95FromEdge ?? t95FromFile) : 0;
+      const t95Source: 'edge' | 'file_latency' | 'none' | 'unknown' =
+        isLatencyEdge
+          ? (t95FromEdge !== undefined ? 'edge' : (t95FromFile !== undefined ? 'file_latency' : 'unknown'))
+          : 'none';
+
+      aggregatedData = this.addEvidenceAndForecastScalars(aggregatedData, paramDataForScalars, targetSlice, { logOpId, t95Days, t95Source });
       
       // Log forecast data if present
       const latestValue = aggregatedData?.values?.[aggregatedData.values.length - 1];
@@ -7523,7 +7574,8 @@ class DataOperationsService {
   private addEvidenceAndForecastScalars(
     aggregatedData: any,
     originalParamData: any,
-    targetSlice: string | undefined
+    targetSlice: string | undefined,
+    options?: { logOpId?: string; t95Days?: number; t95Source?: 'edge' | 'file_latency' | 'none' | 'unknown' }
   ): any {
     if (!aggregatedData || !Array.isArray(aggregatedData.values)) {
       return aggregatedData;
@@ -7753,50 +7805,75 @@ class DataOperationsService {
       bestWindow: any;
       // Use a conservative maturity threshold (days) when we can infer it; otherwise fall back
       t95Days?: number;
-      referenceDate: Date;
-    }): number | undefined => {
-      const { bestWindow, t95Days, referenceDate } = args;
+      /** As-of date for maturity + recency weighting. Must be max(window date) when available. */
+      asOfDate: Date;
+    }): { mean?: number; weightedN: number; weightedK: number; maturityDays: number; usedAllDaysFallback: boolean } => {
+      const { bestWindow, t95Days, asOfDate } = args;
       const dates: string[] | undefined = bestWindow?.dates;
       const nDaily: number[] | undefined = bestWindow?.n_daily;
       const kDaily: number[] | undefined = bestWindow?.k_daily;
-      if (!Array.isArray(dates) || !Array.isArray(nDaily) || !Array.isArray(kDaily)) return undefined;
-      if (dates.length === 0 || nDaily.length !== dates.length || kDaily.length !== dates.length) return undefined;
+      if (!Array.isArray(dates) || !Array.isArray(nDaily) || !Array.isArray(kDaily)) {
+        return { mean: undefined, weightedN: 0, weightedK: 0, maturityDays: 0, usedAllDaysFallback: false };
+      }
+      if (dates.length === 0 || nDaily.length !== dates.length || kDaily.length !== dates.length) {
+        return { mean: undefined, weightedN: 0, weightedK: 0, maturityDays: 0, usedAllDaysFallback: false };
+      }
 
       // Mature cutoff: exclude the most recent (ceil(t95)+1) days, which are systematically under-counted for lagged conversions.
       // If we don't have t95, fall back to DEFAULT_T95_DAYS for safety.
+      // Special case: non-latency edges should NOT apply any maturity censoring.
+      // We represent that by passing t95Days=0.
+      const hasExplicitNoCensor = t95Days === 0;
       const effectiveT95 =
-        (t95Days !== undefined && Number.isFinite(t95Days) && t95Days > 0) ? t95Days : DEFAULT_T95_DAYS;
-      const maturityDays = Math.ceil(effectiveT95) + 1;
-      const cutoffMs = referenceDate.getTime() - maturityDays * 24 * 60 * 60 * 1000;
+        hasExplicitNoCensor
+          ? 0
+          : ((t95Days !== undefined && Number.isFinite(t95Days) && t95Days > 0) ? t95Days : DEFAULT_T95_DAYS);
+      const maturityDays = hasExplicitNoCensor ? 0 : (Math.ceil(effectiveT95) + 1);
+      const cutoffMs = hasExplicitNoCensor
+        ? Number.POSITIVE_INFINITY
+        : (asOfDate.getTime() - maturityDays * 24 * 60 * 60 * 1000);
 
       let weightedN = 0;
       let weightedK = 0;
+      let totalNAll = 0;
+      let totalKAll = 0;
 
       for (let i = 0; i < dates.length; i++) {
         const d = parseDate(dates[i]);
         if (Number.isNaN(d.getTime())) continue;
+        const n = typeof nDaily[i] === 'number' ? nDaily[i] : 0;
+        const k = typeof kDaily[i] === 'number' ? kDaily[i] : 0;
+        if (n <= 0) continue;
+
+        totalNAll += n;
+        totalKAll += k;
+
         if (d.getTime() > cutoffMs) {
           // Immature day → exclude from baseline forecast
           continue;
         }
 
-        const ageDays = Math.max(0, (referenceDate.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
-        // Mirror statisticalEnhancementService (w = exp(-age/H))
-        const w = Math.exp(-ageDays / RECENCY_HALF_LIFE_DAYS);
-
-        const n = typeof nDaily[i] === 'number' ? nDaily[i] : 0;
-        const k = typeof kDaily[i] === 'number' ? kDaily[i] : 0;
-        if (n <= 0) continue;
+        const ageDays = Math.max(0, (asOfDate.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+        // Mirror statisticalEnhancementService: true half-life semantics.
+        const w = Math.exp(-Math.LN2 * ageDays / RECENCY_HALF_LIFE_DAYS);
 
         weightedN += w * n;
         weightedK += w * k;
       }
 
-      if (weightedN <= 0) return undefined;
-      return weightedK / weightedN;
+      if (weightedN > 0) {
+        return { mean: weightedK / weightedN, weightedN, weightedK, maturityDays, usedAllDaysFallback: false };
+      }
+
+      // Fallback: censoring left no mature days; use full-window mean if available.
+      if (totalNAll > 0) {
+        return { mean: totalKAll / totalNAll, weightedN: totalNAll, weightedK: totalKAll, maturityDays, usedAllDaysFallback: true };
+      }
+
+      return { mean: undefined, weightedN: 0, weightedK: 0, maturityDays, usedAllDaysFallback: false };
     };
     
-    // === 2) Forecast scalars (copy from matching window() slice) ===
+    // === 2) Forecast scalars (query-time recompute from matching window() slice daily arrays) ===
     // This applies to BOTH cohort() and window() queries:
     // - For cohort() queries: find the window baseline slice (dual-slice retrieval, design.md §4.6)
     // - For window() queries: the aggregated slice itself may have forecast, or find a matching window slice
@@ -7807,13 +7884,14 @@ class DataOperationsService {
       const targetDims = extractSliceDimensions(targetSlice);
       const originalValues = originalParamData.values as ParameterValue[];
       
+      const allWindowValues = originalValues.filter((v) => {
+        if (!v.sliceDSL) return false;
+        const parsed = parseConstraints(v.sliceDSL);
+        return !!parsed.window && !parsed.cohort;
+      });
+
       // Find window() slices in the same param file with matching context/case dimensions.
-      //
-      // IMPORTANT:
-      // - If the window slice already has a stored scalar `forecast`, we can use (or improve) it.
-      // - If the window slice has daily arrays but *no* `forecast` scalar (common in older files / migrations),
-      //   we can compute a mature, lightly-recency-weighted forecast from those arrays.
-      const windowCandidates = originalValues.filter((v) => {
+      const windowCandidates = allWindowValues.filter((v) => {
         if (!v.sliceDSL) return false;
         const parsed = parseConstraints(v.sliceDSL);
         const hasWindow = !!parsed.window;
@@ -7835,69 +7913,203 @@ class DataOperationsService {
         return hasDailyArrays;
       });
 
-      if (windowCandidates.length > 0) {
-        // Prefer most recent window slice by retrieved_at / window_to (same strategy as aggregation)
-        const bestWindow = [...windowCandidates].sort((a, b) => {
-          const aDate = a.data_source?.retrieved_at || a.window_to || '';
-          const bDate = b.data_source?.retrieved_at || b.window_to || '';
-          return bDate.localeCompare(aDate);
-        })[0] as any;
-        
-        const rawForecastValue = bestWindow.forecast;
+      // If this is an implicit-uncontexted query (targetDims === '') and there is no explicit uncontexted window slice,
+      // attempt a MECE partition across all window slices to build a baseline forecast at query time.
+      let meceKey: string | undefined;
+      let meceWarnings: string[] | undefined;
+      let effectiveWindowCandidates: ParameterValue[] = windowCandidates;
+      if (targetDims === '' && allWindowValues.length > 0) {
+        // Preference rule: if a complete MECE partition exists, prefer it over an explicit uncontexted window slice
+        // to avoid mixing datasets across scenarios.
+        const mece = resolveMECEPartitionForImplicitUncontextedSync(allWindowValues, {
+          preferMECEWhenAvailable: true,
+          requireComplete: true,
+        });
+        if (mece.kind === 'mece_partition' && mece.canAggregate) {
+          meceKey = mece.key;
+          meceWarnings = mece.warnings;
+          effectiveWindowCandidates = mece.values;
+        }
+      }
 
-        // If the stored forecast looks "naive" (forecast ≈ mean), OR if it is missing,
-        // recompute it from daily data using maturity exclusion + light recency bias.
-        //
-        // This avoids systematic underestimation when window() includes immature recent days,
-        // and allows older files (missing `forecast`) to still drive F-mode correctly.
-        const storedLooksNaive =
-          typeof rawForecastValue === 'number' &&
-          typeof bestWindow.mean === 'number' &&
-          Math.abs(rawForecastValue - bestWindow.mean) < 1e-9;
+      if (effectiveWindowCandidates.length > 0) {
+        // Choose "best" per slice-dim family to avoid double-counting overlaps across multiple retrieved windows.
+        const byDims = new Map<string, ParameterValue[]>();
+        for (const v of effectiveWindowCandidates) {
+          const dims = extractSliceDimensions(v.sliceDSL ?? '');
+          const arr = byDims.get(dims) ?? [];
+          arr.push(v);
+          byDims.set(dims, arr);
+        }
 
-        // Prefer t95 from the requested (cohort/window) value latency summary; fall back to window slice latency.t95.
+        const chosen: any[] = [];
+        for (const arr of byDims.values()) {
+          const best = [...arr].sort((a, b) => {
+            const aDate = (a as any).data_source?.retrieved_at || (a as any).window_to || '';
+            const bDate = (b as any).data_source?.retrieved_at || (b as any).window_to || '';
+            return String(bDate).localeCompare(String(aDate));
+          })[0] as any;
+          chosen.push(best);
+        }
+
+        // As-of date for recency weighting: max(window date) across chosen window slice(s).
+        const maxDateFromSlice = (w: any): Date | undefined => {
+          const dates: string[] | undefined = w?.dates;
+          if (Array.isArray(dates) && dates.length > 0) {
+            let best: Date | undefined;
+            for (const ds of dates) {
+              try {
+                const d = parseDate(ds);
+                if (!Number.isNaN(d.getTime())) {
+                  if (!best || d.getTime() > best.getTime()) best = d;
+                }
+              } catch {
+                // ignore
+              }
+            }
+            if (best) return best;
+          }
+          const windowTo = w?.window_to;
+          if (typeof windowTo === 'string' && windowTo.trim()) {
+            try {
+              const d = parseDate(windowTo);
+              if (!Number.isNaN(d.getTime())) return d;
+            } catch {
+              // ignore
+            }
+          }
+          return undefined;
+        };
+
+        const asOfDate =
+          chosen
+            .map((w) => maxDateFromSlice(w))
+            .filter((d): d is Date => !!d)
+            .sort((a, b) => b.getTime() - a.getTime())[0]
+          ?? new Date();
+
+        // Prefer t95 from the caller (edge-authoritative); then the aggregated latency; then window slice latency.
         const latestAggregatedValue: any = (nextAggregated.values as any[])?.[(nextAggregated.values as any[]).length - 1];
         const inferredT95Days =
-          typeof latestAggregatedValue?.latency?.t95 === 'number'
-            ? latestAggregatedValue.latency.t95
-            : (typeof bestWindow?.latency?.t95 === 'number' ? bestWindow.latency.t95 : undefined);
+          // Explicit "no censor" sentinel: non-latency edges should pass t95Days=0.
+          (options?.t95Days === 0)
+            ? 0
+            : ((typeof options?.t95Days === 'number' && Number.isFinite(options.t95Days) && options.t95Days > 0)
+                ? options.t95Days
+                : (typeof latestAggregatedValue?.latency?.t95 === 'number'
+                    ? latestAggregatedValue.latency.t95
+                    : (typeof chosen?.[0]?.latency?.t95 === 'number' ? chosen[0].latency.t95 : undefined)));
 
-        const shouldRecomputeForecast = rawForecastValue === undefined || storedLooksNaive;
-        const recomputedForecast =
-          shouldRecomputeForecast
-            ? computeRecencyWeightedMatureForecast({
-                bestWindow,
-                t95Days: inferredT95Days,
-                referenceDate: new Date(),
-              })
-            : undefined;
+        let weightedNTotal = 0;
+        let weightedKTotal = 0;
+        let maturityDaysUsed =
+          inferredT95Days === 0
+            ? 0
+            : (Math.ceil((Number.isFinite(inferredT95Days as number) && (inferredT95Days as number) > 0 ? (inferredT95Days as number) : DEFAULT_T95_DAYS)) + 1);
+        let usedAllDaysFallback = false;
+        const sliceSummaries: Array<{ sliceDSL?: string; used: 'daily' | 'scalar'; n?: number; k?: number; forecast?: number }> = [];
 
-        const forecastValueToUse =
-          recomputedForecast !== undefined ? recomputedForecast : rawForecastValue;
+        for (const w of chosen) {
+          const dailyResult = computeRecencyWeightedMatureForecast({
+            bestWindow: w,
+            t95Days: inferredT95Days,
+            asOfDate,
+          });
+          if (dailyResult.mean !== undefined && dailyResult.weightedN > 0) {
+            weightedNTotal += dailyResult.weightedN;
+            weightedKTotal += dailyResult.weightedK;
+            maturityDaysUsed = dailyResult.maturityDays || maturityDaysUsed;
+            usedAllDaysFallback = usedAllDaysFallback || dailyResult.usedAllDaysFallback;
+            sliceSummaries.push({ sliceDSL: w?.sliceDSL, used: 'daily' });
+            continue;
+          }
 
-        if (forecastValueToUse !== undefined) {
+          // Fallback: no usable daily arrays → use stored slice scalar forecast (weighted by header n).
+          const n = typeof w?.n === 'number' && Number.isFinite(w.n) && w.n > 0 ? w.n : 0;
+          const f = typeof w?.forecast === 'number' && Number.isFinite(w.forecast) ? w.forecast : undefined;
+          if (n > 0 && f !== undefined) {
+            weightedNTotal += n;
+            weightedKTotal += n * f;
+          }
+          sliceSummaries.push({ sliceDSL: w?.sliceDSL, used: 'scalar', n: w?.n, k: w?.k, forecast: w?.forecast });
+        }
+
+        // If we have a proper weighted population, compute the weighted mean.
+        // Otherwise, if there is exactly one chosen slice with a scalar forecast, use it directly
+        // (we still want F-mode to work even if header n is missing in some legacy fixtures).
+        let forecastMeanComputed: number | undefined =
+          weightedNTotal > 0 ? (weightedKTotal / weightedNTotal) : undefined;
+        if (forecastMeanComputed === undefined && chosen.length === 1) {
+          const lone = chosen[0] as any;
+          if (typeof lone?.forecast === 'number' && Number.isFinite(lone.forecast)) {
+            forecastMeanComputed = lone.forecast;
+          }
+        }
+        if (forecastMeanComputed !== undefined) {
+          // Attach forecast scalar (query-time) – always overwrite so F-mode is explainable and consistent.
           nextAggregated = {
             ...nextAggregated,
-            values: (nextAggregated.values as ParameterValue[]).map((v: any) => {
-              // Overwrite an existing forecast ONLY if it looks naive (forecast≈mean) and we have a better recomputation.
-              if (v.forecast !== undefined) {
-                const existingLooksNaive =
-                  typeof v.forecast === 'number' &&
-                  typeof v.mean === 'number' &&
-                  Math.abs(v.forecast - v.mean) < 1e-9;
-                if (existingLooksNaive && recomputedForecast !== undefined) {
-                  return { ...v, forecast: forecastValueToUse };
-                }
-                return v;
-              }
-              
-              // Attach forecast scalar only; LAG blending is handled in enhanceGraphLatencies.
-              return {
-                ...v,
-                forecast: forecastValueToUse,
-              };
-            }),
+            values: (nextAggregated.values as ParameterValue[]).map((v: any) => ({
+              ...v,
+              forecast: forecastMeanComputed,
+            })),
           };
+
+          if (options?.logOpId) {
+            const basisLabel =
+              meceKey
+                ? `MECE(${meceKey})`
+                : 'context-matching';
+            const effectiveT95ForLog =
+              (typeof inferredT95Days === 'number' && Number.isFinite(inferredT95Days) && inferredT95Days > 0)
+                ? inferredT95Days
+                : (inferredT95Days === 0 ? 0 : DEFAULT_T95_DAYS);
+            const detailLines: string[] = [];
+            detailLines.push(`basis: ${basisLabel}`);
+            detailLines.push(`as_of: ${normalizeDate(asOfDate.toISOString())} (max window date)`);
+            detailLines.push(
+              inferredT95Days === 0
+                ? `maturity_exclusion: none (non-latency)`
+                : `maturity_exclusion: last ${maturityDaysUsed} days (t95≈${effectiveT95ForLog})`
+            );
+            if (options.t95Source) {
+              detailLines.push(`t95_source: ${options.t95Source}`);
+            }
+            detailLines.push(`recency_weight: w=exp(-ln2*age/${RECENCY_HALF_LIFE_DAYS}d)`);
+            detailLines.push(`weighted: N=${Math.round(weightedNTotal)}, K=${Math.round(weightedKTotal)} → forecast=${(forecastMeanComputed * 100).toFixed(2)}%`);
+            if (usedAllDaysFallback) {
+              detailLines.push(`fallback: censoring left no mature days; used full-window mean for at least one slice`);
+            }
+            if (Array.isArray(meceWarnings) && meceWarnings.length > 0) {
+              detailLines.push(`mece_warnings: ${meceWarnings.join(' | ')}`);
+            }
+            const sliceList = sliceSummaries
+              .map((s) => `${s.used}: ${s.sliceDSL ?? '<missing sliceDSL>'}`)
+              .join('\n');
+            sessionLogService.addChild(
+              options.logOpId,
+              'info',
+              'FORECAST_BASIS',
+              `Forecast recomputed at query time (${basisLabel})`,
+              `${detailLines.join('\n')}\n\nSlices:\n${sliceList}`,
+              {
+                // Note: targetSlice is the slice we attach the scalar to, which may be cohort().
+                // The forecast basis is ALWAYS window() slices (listed below), even for cohort queries.
+                requestedSlice: targetSlice,
+                forecastWindowSlices: chosen.map((w: any) => w?.sliceDSL).filter(Boolean),
+                targetDims,
+                meceKey,
+                asOf: asOfDate.toISOString(),
+                maturityDays: maturityDaysUsed,
+                halfLifeDays: RECENCY_HALF_LIFE_DAYS,
+                weightedN: weightedNTotal,
+                weightedK: weightedKTotal,
+                forecastMean: forecastMeanComputed,
+                t95Days: effectiveT95ForLog,
+                t95Source: options.t95Source,
+              }
+            );
+          }
         }
       }
       // NOTE: LAG computation (t95, completeness, forecast blend) is handled by
@@ -7934,7 +8146,8 @@ export const __test_only__ = {
   ) => (dataOperationsService as any).addEvidenceAndForecastScalars(
     aggregatedData,
     originalParamData,
-    targetSlice
+    targetSlice,
+    undefined
   ),
 };
 
