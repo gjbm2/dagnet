@@ -11,6 +11,9 @@
 import { ScenarioParams, EdgeParamDiff, NodeParamDiff, Scenario } from '../types/scenarios';
 import { Graph, GraphEdge, GraphNode } from '../types';
 import { computeEffectiveEdgeProbability, parseWhatIfDSL } from '../lib/whatIf';
+import { computeEFBasisForLayer } from './efBasisResolver';
+
+export type ProbabilityVisibilityMode = 'f+e' | 'f' | 'e';
 
 /**
  * Minimal scenario interface for composition (avoids full Scenario dependency)
@@ -18,6 +21,61 @@ import { computeEffectiveEdgeProbability, parseWhatIfDSL } from '../lib/whatIf';
 interface ScenarioLike {
   id: string;
   params: ScenarioParams;
+}
+
+function isCaseRoutingEdge(edge: any): boolean {
+  // Case routing edges represent variant routing weights, not observed conversion probabilities.
+  // They should not be forced into evidence/forecast modes.
+  return Boolean(edge?.case_id && edge?.case_variant);
+}
+
+/**
+ * Enforce probability basis for analysis graphs.
+ *
+ * IMPORTANT: "No fallback" semantics (but DO allow evidence/forecast residual allocation).
+ *
+ * - mode === 'e' → uses explicit evidence when present; if at least one sibling has evidence,
+ *                 missing siblings receive residual allocation (still evidence-derived).
+ *                 If a sibling group has no evidence anywhere, we do NOT fabricate.
+ * - mode === 'f' → analogous for forecast.
+ * - mode === 'f+e' → leaves p.mean as-is.
+ */
+export function applyProbabilityVisibilityModeToGraph(
+  graph: Graph,
+  mode: ProbabilityVisibilityMode,
+  layerParams?: any | null
+): Graph {
+  if (mode === 'f+e') return graph;
+
+  const out: Graph = JSON.parse(JSON.stringify(graph));
+  const basis = computeEFBasisForLayer(out, layerParams);
+
+  for (const edge of out.edges || []) {
+    if (isCaseRoutingEdge(edge)) continue;
+    const edgeKey = getEdgeKey(edge);
+    if (!edgeKey) continue;
+
+    if (mode === 'e') {
+      const b = basis.evidence.get(edgeKey);
+      if (b?.groupHasAnyExplicit) {
+        edge.p = { ...(edge.p || {}), mean: b.value };
+      }
+      continue;
+    }
+
+    if (mode === 'f') {
+      const b = basis.forecast.get(edgeKey);
+      if (b?.groupHasAnyExplicit) {
+        edge.p = { ...(edge.p || {}), mean: b.value };
+      }
+    }
+  }
+
+  return out;
+}
+
+function getEdgeKey(edge: any): string | undefined {
+  return edge?.id || edge?.uuid || (edge?.from && edge?.to ? `${edge.from}->${edge.to}` : undefined);
 }
 
 /**
@@ -226,7 +284,7 @@ export function applyWhatIfToGraph(
       
       // Bake the effective probability into the edge
       edge.p = {
-        ...edge.p,
+        ...(edge.p || {}),
         mean: effectiveProb
       };
     }
@@ -316,7 +374,8 @@ export function buildGraphForAnalysisLayer(
   baseParams: ScenarioParams,
   currentParams: ScenarioParams,
   scenarios: ScenarioLike[],
-  whatIfDSL?: string | null
+  whatIfDSL?: string | null,
+  visibilityMode?: ProbabilityVisibilityMode
 ): Graph {
   // Force non-cumulative composition for scenario layers.
   const composedParams = getComposedParamsForLayer(
@@ -328,6 +387,11 @@ export function buildGraphForAnalysisLayer(
   );
 
   let result = applyComposedParamsToGraph(graph, composedParams);
+
+  // Enforce probability basis (Evidence/Forecast are strict; no fallbacks).
+  if (visibilityMode) {
+    result = applyProbabilityVisibilityModeToGraph(result, visibilityMode, composedParams);
+  }
 
   if (layerId === 'current' && whatIfDSL) {
     result = applyWhatIfToGraph(result, whatIfDSL);
