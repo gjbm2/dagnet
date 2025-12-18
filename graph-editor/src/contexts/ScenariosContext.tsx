@@ -37,6 +37,8 @@ import {
   computeInheritedDSL,
   computeEffectiveFetchDSL,
   isLiveScenario,
+  deriveBaseDSLForRebase,
+  LIVE_EMPTY_DIFF_DSL,
   generateSmartLabel
 } from '../services/scenarioRegenerationService';
 import { 
@@ -532,8 +534,9 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     if (!baseDSL && graphStore) {
       const currentGraphDSL = graphStore.getState().currentDSL || '';
       if (currentGraphDSL) {
-        console.log(`createLiveScenario: Setting baseDSL to "${currentGraphDSL}" (was empty)`);
-        setBaseDSL(currentGraphDSL);
+        const derivedBase = deriveBaseDSLForRebase(currentGraphDSL);
+        console.log(`createLiveScenario: Setting baseDSL to "${derivedBase}" (was empty)`);
+        setBaseDSL(derivedBase);
       }
     }
     
@@ -550,7 +553,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     
     const scenario: Scenario = {
       id: generateId(),
-      name: name || generateSmartLabel(queryDSL), // Default name is smart label from DSL
+      name: name || generateSmartLabel(queryDSL) || 'Live scenario', // Default name is smart label from DSL
       colour: assignedColour,
       createdAt: now,
       version: 1,
@@ -561,7 +564,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       // This keeps scenario layering deterministic: Base + scenario.params = initial Current.
       params: computeDiff(currentParams, baseParams, 'differences', 1e-6),
       meta: {
-        queryDSL,
+        queryDSL: (queryDSL && queryDSL.trim().length > 0) ? queryDSL : LIVE_EMPTY_DIFF_DSL,
         isLive: true,
         createdInTabId: tabId,
         note: `Live scenario created on ${new Date(now).toLocaleString()}`,
@@ -592,8 +595,8 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   const regenerateScenario = useCallback(async (id: string, scenarioOverride?: Scenario, baseDSLOverride?: string, allScenariosOverride?: Scenario[], visibleOrder?: string[]): Promise<void> => {
     // Use provided scenario or look up from state
     const scenario = scenarioOverride || scenarios.find(s => s.id === id);
-    if (!scenario?.meta?.queryDSL) {
-      console.warn(`Scenario ${id} is not a live scenario (no queryDSL)`);
+    if (!scenario?.meta?.isLive) {
+      console.warn(`Scenario ${id} is not a live scenario (meta.isLive=false)`);
       return;
     }
     
@@ -639,18 +642,19 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     // Compute inherited DSL from base + VISIBLE scenarios BELOW this one
     const inheritedDSL = computeInheritedDSL(scenarioIndex, orderedVisibleScenarios, effectiveBaseDSL);
     
+    const scenarioQueryDSL = scenario.meta.queryDSL || '';
     // Split scenario's DSL into fetch and what-if parts
-    const { fetchParts, whatIfParts } = splitDSLParts(scenario.meta.queryDSL);
+    const { fetchParts, whatIfParts } = splitDSLParts(scenarioQueryDSL);
     
     // Build the effective fetch DSL (inherited + this scenario's fetch parts)
     const scenarioFetchDSL = buildFetchDSL(fetchParts);
-    const effectiveFetchDSL = computeEffectiveFetchDSL(inheritedDSL, scenario.meta.queryDSL);
+    const effectiveFetchDSL = computeEffectiveFetchDSL(inheritedDSL, scenarioQueryDSL);
     
     // Build the what-if DSL for this scenario
     const scenarioWhatIfDSL = buildWhatIfDSL(whatIfParts);
     
     console.log(`Regenerating scenario ${id}:`, {
-      queryDSL: scenario.meta.queryDSL,
+      queryDSL: scenarioQueryDSL,
       inheritedDSL,
       effectiveFetchDSL,
       whatIfDSL: scenarioWhatIfDSL
@@ -862,7 +866,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       ...existingScenario,
       meta: {
         ...existingScenario.meta,
-        queryDSL,
+        queryDSL: queryDSL ?? '',
         isLive: Boolean(queryDSL && queryDSL.trim()),
       },
       updatedAt: new Date().toISOString(),
@@ -905,16 +909,17 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   const putToBase = useCallback(async (visibleOrder?: string[]): Promise<void> => {
     // Get current DSL from graphStore
     const currentDSL = graphStore?.getState().currentDSL || '';
+    const derivedBaseDSL = deriveBaseDSLForRebase(currentDSL);
     
-    console.log(`putToBase: Setting baseDSL to "${currentDSL}"`);
+    console.log(`putToBase: Setting baseDSL to "${derivedBaseDSL}" (derived from currentDSL)`);
     
     // Update baseDSL state
-    setBaseDSL(currentDSL);
+    setBaseDSL(derivedBaseDSL);
     
     // Regenerate all live scenarios with the new base DSL
     // IMPORTANT: Pass currentDSL directly to avoid stale closure - setBaseDSL is async
     // Pass visibleOrder so only visible scenarios contribute to inheritance
-    await regenerateAllLive(currentDSL, visibleOrder);
+    await regenerateAllLive(derivedBaseDSL, visibleOrder);
   }, [graphStore, setBaseDSL, regenerateAllLive]);
 
   /**

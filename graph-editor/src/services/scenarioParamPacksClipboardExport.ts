@@ -7,11 +7,18 @@ export type ScenarioParamPacksClipboardExport = {
   fileId?: string;
   tabId?: string;
   baseDSL?: string;
+  currentDSL?: string;
   layers: Array<{
     id: string;
     name: string;
     colour: string;
     kind: 'base' | 'current' | 'scenario';
+    // Optional: record the *requested* and *effective* DSL for this layer (if known).
+    // - For 'current': requested=currentDSL, effective=currentDSL
+    // - For 'base': requested=baseDSL, effective=baseDSL
+    // - For scenarios: requested=meta.queryDSL, effective=meta.lastEffectiveDSL (if present)
+    queryDSL?: string;
+    effectiveDSL?: string;
     // Fully materialised param pack for this layer (nested JSON).
     // This is intentionally not flattened; it is more economical and more "JSON-y".
     params: ScenarioParams;
@@ -21,6 +28,7 @@ export type ScenarioParamPacksClipboardExport = {
 export function formatScenarioParamPacksForClipboard(args: {
   layers: ScenarioParamPacksClipboardExport['layers'];
   baseDSL?: string;
+  currentDSL?: string;
   fileId?: string;
   tabId?: string;
 }): { text: string; byteLength: number; scenarioCount: number } {
@@ -32,6 +40,7 @@ export function formatScenarioParamPacksForClipboard(args: {
     fileId: args.fileId,
     tabId: args.tabId,
     baseDSL: args.baseDSL,
+    currentDSL: args.currentDSL,
     layers: args.layers,
   };
 

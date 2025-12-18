@@ -20,7 +20,8 @@ import { useScenariosContextOptional, SCENARIO_PALETTE } from '../contexts/Scena
 import { Scenario } from '../types/scenarios';
 import { useTabContext } from '../contexts/TabContext';
 import { contextRegistry } from '../services/contextRegistry';
-import { generateSmartLabel } from '../services/scenarioRegenerationService';
+import { deriveBaseDSLForRebase, generateSmartLabel } from '../services/scenarioRegenerationService';
+import { useGraphStore } from '../contexts/GraphStoreContext';
 
 interface ContextValue {
   id: string;
@@ -45,6 +46,7 @@ interface UseBulkScenarioCreationReturn {
 export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
   const scenariosContext = useScenariosContextOptional();
   const { activeTabId, operations } = useTabContext();
+  const graphStore = useGraphStore();
   const [bulkCreateModal, setBulkCreateModal] = useState<BulkCreateModalState | null>(null);
   
   const closeBulkCreateModal = useCallback(() => {
@@ -108,6 +110,15 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
       toast.error('Scenarios not available');
       return 0;
     }
+
+    // DEFAULT for bulk context scenario creation:
+    // "Differences & re-base" — put Current's window/cohort to Base FIRST, then create scenarios
+    // with *only* the context(value) clause (no date ranges), preserving "build from base".
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    const newBaseDSL = deriveBaseDSLForRebase(currentDSL);
+    if (newBaseDSL) {
+      scenariosContext.setBaseDSL(newBaseDSL);
+    }
     
     const toastId = toast.loading(`Creating scenarios (0/${valueIds.length})...`);
     const createdScenarios: Scenario[] = [];
@@ -155,7 +166,7 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
         await scenariosContext.regenerateScenario(
           scenario.id, 
           scenario, 
-          undefined, 
+          newBaseDSL || undefined,
           allScenarios,
           visibleOrder
         );
@@ -190,6 +201,15 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
     if (!scenariosContext || !activeTabId) {
       toast.error('Scenarios not available');
       return 0;
+    }
+
+    // DEFAULT for bulk window scenario creation:
+    // "Differences & re-base" — set Base to the current window/cohort first so the scenario set
+    // reads as "changes from Base" and doesn't surprise users with unrelated inherited ranges.
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    const newBaseDSL = deriveBaseDSLForRebase(currentDSL);
+    if (newBaseDSL) {
+      scenariosContext.setBaseDSL(newBaseDSL);
     }
     
     const toastId = toast.loading(`Creating scenarios (0/${windowDSLs.length})...`);
@@ -233,7 +253,7 @@ export function useBulkScenarioCreation(): UseBulkScenarioCreationReturn {
         await scenariosContext.regenerateScenario(
           scenario.id, 
           scenario, 
-          undefined, 
+          newBaseDSL || undefined,
           allScenarios,
           visibleOrder
         );

@@ -31,12 +31,12 @@ import {
 } from './fetchDataService';
 import { shouldRefetch, type LatencyConfig } from './fetchRefetchPolicy';
 import { extractSliceDimensions, isolateSlice } from './sliceIsolation';
+import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
 import { hasFullSliceCoverageByHeader, isCohortModeValue, parseDate, normalizeDate } from './windowAggregationService';
 import { computePathT95, getActiveEdges, type GraphForPath } from './statisticalEnhancementService';
 import { computeCohortRetrievalHorizon, type CohortHorizonResult } from './cohortRetrievalHorizon';
 import type { ParameterValue } from './paramRegistryService';
 import { sessionLogService } from './sessionLogService';
-import { DIAGNOSTIC_LOG } from '../constants/latency';
 import type { Graph, DateRange } from '../types';
 
 // =============================================================================
@@ -57,6 +57,14 @@ export interface PlannerItem {
   targetId: string;                     // Edge UUID or node UUID
   paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
   conditionalIndex?: number;
+  /**
+   * Optional per-item DSL override (currently used to treat cohort() queries as window()
+   * for "simple" edges with no latency and no lagged upstream path).
+   *
+   * NOTE: This is purely diagnostic/UI metadata; execution already uses the same
+   * single code path via fetchDataService.
+   */
+  targetSliceOverride?: string;
   
   /** Item classification */
   classification: 
@@ -318,8 +326,20 @@ class WindowFetchPlannerService {
       );
       
       // DIAGNOSTIC: Detailed per-item coverage analysis
-      if (DIAGNOSTIC_LOG && items.length > 0) {
-        this.logDetailedCoverageAnalysis(logOpId, items, window, dsl, graph);
+      if (sessionLogService.getDiagnosticLoggingEnabled() && items.length > 0) {
+        try {
+          this.logDetailedCoverageAnalysis(logOpId, items, window, dsl, graph);
+        } catch (e) {
+          // Diagnostics must never fail the planner. If anything goes wrong, degrade gracefully.
+          const msg = e instanceof Error ? e.message : String(e);
+          sessionLogService.addChild(
+            logOpId,
+            'warning',
+            'PLANNER_DIAGNOSTIC_ERROR',
+            'Planner diagnostic analysis failed (non-fatal)',
+            msg
+          );
+        }
       }
       
       sessionLogService.endOperation(logOpId, 'success', `Outcome: ${outcome}`, { outcome, durationMs });
@@ -651,11 +671,18 @@ class WindowFetchPlannerService {
     graph: Graph
   ): void {
     const windowDesc = `${normalizeToUK(window.start)} → ${normalizeToUK(window.end)}`;
-    const isCohortQuery = dsl.includes('cohort(');
-    const queryType = isCohortQuery ? 'cohort' : 'window';
     
     for (const item of items) {
       if (item.type !== 'parameter') continue;
+
+      const requestedIsCohort = dsl.includes('cohort(');
+      const requestedQueryType = requestedIsCohort ? 'cohort' : 'window';
+
+      // The effective DSL for this item may differ from the UI DSL (e.g. cohort-mode overridden to window-mode
+      // for non-latency edges). Use the effective DSL for diagnostics so logs reflect reality.
+      const effectiveDSL = item.targetSliceOverride ?? dsl;
+      const isCohortQuery = effectiveDSL.includes('cohort(');
+      const queryType = isCohortQuery ? 'cohort' : 'window';
       
       const fileId = `parameter-${item.objectId}`;
       const file = fileRegistry.getFile(fileId);
@@ -682,8 +709,35 @@ class WindowFetchPlannerService {
           details.push(`CONNECTION: ${file.data.connection?.id || param?.connection || 'edge-defined'}`);
         }
         
-        // Analyse slice coverage
-        const sliceValues = isolateSlice(values, dsl);
+        // Analyse slice coverage.
+        //
+        // IMPORTANT: Uncontexted queries are allowed to be satisfied from a MECE partition of contexted slices.
+        // isolateSlice is intentionally conservative and can throw in that case; treat that as an advisory
+        // condition and fall back to MECE resolution for diagnostics rather than failing the entire planner run.
+        let sliceValues: ParameterValue[] = [];
+        try {
+          sliceValues = isolateSlice(values, effectiveDSL) as any;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes('Slice isolation error') && msg.includes('MECE aggregation')) {
+            const modeFilteredValues = values.filter(v => {
+              if (isCohortQuery) return isCohortModeValue(v);
+              return !isCohortModeValue(v);
+            });
+            const mece = resolveMECEPartitionForImplicitUncontextedSync(modeFilteredValues as any);
+            if (mece.kind === 'mece_partition' && mece.canAggregate) {
+              sliceValues = mece.values;
+              details.push(
+                `IMPLICIT_UNCONTEXTED: using MECE partition (key=${mece.key}, complete=${mece.isComplete})`
+              );
+            } else {
+              details.push('UNCONTEXTED_WITH_CONTEXTED_DATA: no explicit uncontexted slice and MECE partition not resolvable');
+            }
+          } else {
+            // Unexpected isolation failure: surface the message but keep planner analysis running.
+            details.push(`SLICE_MATCH_ERROR: ${msg}`);
+          }
+        }
         details.push(`SLICE_MATCH: ${sliceValues.length}/${values.length} entries match DSL context`);
         
         if (sliceValues.length === 0) {
@@ -766,7 +820,9 @@ class WindowFetchPlannerService {
         item.classification === 'needs_fetch' ? 'warning' : 'info',
         'COVERAGE_DETAIL',
         `${item.objectId}: ${classificationReason}`,
-        `Query: ${queryType}(${windowDesc})\n${details.join('\n')}`,
+        `Requested DSL: ${requestedQueryType}(${windowDesc})\n` +
+          `Effective DSL: ${queryType}(${windowDesc})${item.targetSliceOverride ? ` (override=${item.targetSliceOverride})` : ''}\n` +
+          `${details.join('\n')}`,
         {
           itemId: item.objectId,
           classification: item.classification,
@@ -1049,6 +1105,7 @@ class WindowFetchPlannerService {
       targetId: item.targetId,
       paramSlot: item.paramSlot,
       conditionalIndex: item.conditionalIndex,
+      targetSliceOverride: item.targetSliceOverride,
     };
   }
   

@@ -291,7 +291,9 @@ export const COHORT_HORIZON_DEFAULT_DAYS = DEFAULT_T95_DAYS;
  * Set to false for normal operation to avoid bloating session log exports.
  * Set to true temporarily when debugging query execution issues.
  */
-export const DIAGNOSTIC_LOG = true;
+// Default should be conservative to avoid bloating session logs in normal operation.
+// Runtime toggling is controlled via Session Log UI (SessionLogService).
+export const DIAGNOSTIC_LOG = false;
 
 /**
  * PRECISION_DECIMAL_PLACES
