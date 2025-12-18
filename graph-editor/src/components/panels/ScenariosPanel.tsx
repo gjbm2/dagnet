@@ -25,7 +25,7 @@ import { ContextMenu, ContextMenuItem } from '../ContextMenu';
 import { ColourSelector } from '../ColourSelector';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import { parseConstraints } from '@/lib/queryDSL';
-import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/scenarioRegenerationService';
+import { computeInheritedDSL, computeEffectiveFetchDSL, LIVE_EMPTY_DIFF_DSL, diffQueryDSLFromBase } from '../../services/scenarioRegenerationService';
 import { fetchDataService } from '../../services/fetchDataService';
 import { useCopyAllScenarioParamPacks } from '../../hooks/useCopyAllScenarioParamPacks';
 import { 
@@ -531,9 +531,12 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, [tabId, createSnapshot, tabs, operations]);
 
   /**
-   * Create a live scenario from the current query DSL
+   * Create a live scenario in one of three modes:
+   * 1) Everything: store currentDSL as scenario queryDSL
+   * 2) Differences: store diff(currentDSL vs baseDSL) as scenario queryDSL
+   * 3) Differences & re-base: set baseDSL from currentDSL first, then store diff (often empty)
    */
-  const handleCreateFromCurrentQuery = useCallback(async () => {
+  const handleCreateLiveScenario = useCallback(async (mode: 'everything' | 'differences') => {
     if (!tabId) {
       toast.error('No active tab');
       return;
@@ -548,7 +551,14 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     }
     
     try {
-      const newScenario = await createLiveScenario(currentDSL, undefined, tabId);
+      const effectiveBaseDSL = baseDSL || graph?.baseDSL || '';
+      let scenarioQueryDSL = currentDSL;
+      
+      if (mode === 'differences') {
+        scenarioQueryDSL = diffQueryDSLFromBase(effectiveBaseDSL, currentDSL);
+      }
+      
+      const newScenario = await createLiveScenario(scenarioQueryDSL || LIVE_EMPTY_DIFF_DSL, undefined, tabId);
       
       // Make the new scenario visible by default
       await operations.toggleScenarioVisibility(tabId, newScenario.id);
@@ -560,7 +570,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       const errorMessage = error instanceof Error ? error.message : 'Failed to create live scenario';
       toast.error(errorMessage);
     }
-  }, [tabId, graphStore, createLiveScenario, operations]);
+  }, [tabId, graphStore, createLiveScenario, operations, baseDSL, graph]);
   
   // Listen for new scenario event from legend
   useEffect(() => {
@@ -570,8 +580,8 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       if (!tabId || eventTabId !== tabId) {
         return;
       }
-      // Default: create live scenario from current query (more powerful than dry snapshot)
-      handleCreateFromCurrentQuery();
+      // Default: create "Live scenario (everything)" from current query.
+      handleCreateLiveScenario('everything');
     };
     
     const handleScenarioContextMenu = (e: CustomEvent) => {
@@ -586,7 +596,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       window.removeEventListener('dagnet:newScenario', handleNewScenarioEvent as EventListener);
       window.removeEventListener('dagnet:scenarioContextMenu', handleScenarioContextMenu as EventListener);
     };
-  }, [handleCreateFromCurrentQuery]);
+  }, [handleCreateLiveScenario]);
   
   /**
    * Create blank scenario with timestamp as default name
@@ -1677,7 +1687,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     {/* Query Edit Modal for Live Scenarios */}
     {queryEditModalScenarioId && (() => {
       const scenario = scenarios.find(s => s.id === queryEditModalScenarioId);
-      if (!scenario?.meta?.queryDSL) return null;
+      if (!scenario?.meta?.isLive) return null;
       
       // Compute inherited DSL for this scenario's position in the stack
       const scenarioIndex = scenarios.findIndex(s => s.id === queryEditModalScenarioId);
@@ -1687,7 +1697,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         <ScenarioQueryEditModal
           isOpen={true}
           scenarioName={scenario.name}
-          currentDSL={scenario.meta.queryDSL}
+          currentDSL={(scenario.meta.queryDSL === LIVE_EMPTY_DIFF_DSL) ? '' : (scenario.meta.queryDSL || '')}
           inheritedDSL={inheritedDSL}
           onSave={handleSaveQueryDSL}
           onClose={handleCloseQueryEdit}
@@ -1725,9 +1735,9 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Live scenario (default, most useful) */}
+        {/* Live scenario creation modes */}
         <button
-          onClick={handleCreateFromCurrentQuery}
+          onClick={() => handleCreateLiveScenario('everything')}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1745,7 +1755,28 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
         >
-          Live scenario <Zap size={12} style={{ color: '#F59E0B', marginLeft: '4px' }} />
+          Live scenario (everything) <Zap size={12} style={{ color: '#F59E0B', marginLeft: '4px' }} />
+        </button>
+        <button
+          onClick={() => handleCreateLiveScenario('differences')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            width: '100%',
+            padding: '8px 12px',
+            background: 'transparent',
+            border: 'none',
+            color: '#374151',
+            fontSize: '13px',
+            textAlign: 'left',
+            cursor: 'pointer',
+            borderRadius: '2px'
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+        >
+          Live scenario (differences)
         </button>
         {/* Divider */}
         <div style={{ height: '1px', background: '#e5e7eb', margin: '4px 0' }} />

@@ -10,6 +10,7 @@ Design Reference: /docs/current/project-analysis/PHASE_1_DESIGN.md
 from typing import Any, Optional
 from dataclasses import dataclass, field
 import networkx as nx
+import re
 
 
 @dataclass
@@ -18,6 +19,10 @@ class PathResult:
     probability: float
     expected_cost_gbp: float
     expected_labour_cost: float
+    # Conditional costs: expected cost GIVEN that the end node is reached.
+    # These are None when probability == 0 (undefined).
+    expected_cost_gbp_given_success: Optional[float] = None
+    expected_labour_cost_given_success: Optional[float] = None
     path_exists: bool = True
     intermediate_nodes: list[str] = field(default_factory=list)
 
@@ -27,6 +32,195 @@ class PruningResult:
     """Result of graph pruning for visited constraints."""
     excluded_edges: set[tuple[str, str]]  # (source, target) tuples
     renorm_factors: dict[tuple[str, str], float]  # edge -> renorm factor
+
+
+_VISITED_RE = re.compile(r"visited\(\s*([^)]+?)\s*\)")
+
+
+def _extract_visited_human_ids(condition: str | None) -> list[str]:
+    """Extract visited(nodeId) references from a conditional_p condition string."""
+    if not condition or not isinstance(condition, str):
+        return []
+    return [m.group(1).strip() for m in _VISITED_RE.finditer(condition)]
+
+
+def _graph_has_conditional_probabilities(G: nx.DiGraph) -> bool:
+    for _, _, data in G.edges(data=True):
+        cps = data.get('conditional_p') or []
+        if cps:
+            return True
+    return False
+
+
+def _get_tracked_human_ids(G: nx.DiGraph) -> set[str]:
+    tracked: set[str] = set()
+    for _, _, data in G.edges(data=True):
+        for cp in (data.get('conditional_p') or []):
+            cond = cp.get('condition') if isinstance(cp, dict) else None
+            for hid in _extract_visited_human_ids(cond):
+                tracked.add(hid)
+    return tracked
+
+
+def _effective_edge_probability(
+    edge_data: dict[str, Any],
+    visited_human_ids: set[str],
+) -> float:
+    """
+    Pick edge probability accounting for conditional_p (visited(...) only for now).
+    If multiple conditions match, first match wins (mirrors TS runner behaviour).
+    """
+    cps = edge_data.get('conditional_p') or []
+    if cps:
+        for cp in cps:
+            if not isinstance(cp, dict):
+                continue
+            cond = cp.get('condition')
+            required = _extract_visited_human_ids(cond)
+            if required and all(r in visited_human_ids for r in required):
+                p = cp.get('p') or {}
+                if isinstance(p, dict):
+                    return float(p.get('mean') or 0.0)
+                if isinstance(p, (int, float)):
+                    return float(p)
+                return 0.0
+    return float(edge_data.get('p') or 0.0)
+
+
+def _is_terminal_for_target(G: nx.DiGraph, node_key: str, target_key: str) -> bool:
+    """Stop propagation once we hit the target, or any node with no outgoing edges."""
+    if node_key == target_key:
+        return True
+    if G.out_degree(node_key) == 0:
+        return True
+    return False
+
+
+def _calculate_path_probability_state_space(
+    G: nx.DiGraph,
+    start_key: str,
+    end_key: str,
+    pruning: Optional[PruningResult] = None,
+) -> PathResult:
+    """
+    State-space expansion for graphs with conditional_p.
+
+    State = (node_key, visited_tracked_human_ids_subset).
+    """
+    excluded = pruning.excluded_edges if pruning else set()
+    renorm = pruning.renorm_factors if pruning else {}
+
+    tracked = _get_tracked_human_ids(G)
+
+    # state key serialisation
+    def sk(node: str, visited: frozenset[str]) -> tuple[str, frozenset[str]]:
+        return (node, visited)
+
+    states: dict[tuple[str, frozenset[str]], float] = {}
+    costs: dict[tuple[str, frozenset[str]], tuple[float, float]] = {}
+
+    init = sk(start_key, frozenset())
+    states[init] = 1.0
+    costs[init] = (0.0, 0.0)
+
+    # Process in topological order of nodes (graph is assumed DAG-ish; cycles treated as terminal-ish).
+    try:
+        topo = list(nx.topological_sort(G))
+    except Exception:
+        topo = list(G.nodes)
+
+    # Expand node-by-node; for each node, repeatedly expand any states currently at that node.
+    for node_key in topo:
+        # Find all current states at this node (snapshot keys to avoid concurrent modification).
+        node_states = [k for k in list(states.keys()) if k[0] == node_key]
+
+        for state_key in node_states:
+            prob = states.get(state_key, 0.0) or 0.0
+            if prob == 0:
+                continue
+
+            visited = set(state_key[1])
+            cost_gbp, cost_lab = costs.get(state_key, (0.0, 0.0))
+
+            if _is_terminal_for_target(G, node_key, end_key):
+                continue
+
+            # When leaving this node, mark it as visited if it is tracked.
+            node_hid = G.nodes[node_key].get('id') or node_key
+            next_visited = set(visited)
+            if node_hid in tracked:
+                next_visited.add(node_hid)
+
+            for _, target, data in G.out_edges(node_key, data=True):
+                edge = (node_key, target)
+                if edge in excluded:
+                    continue
+
+                p = _effective_edge_probability(data, next_visited)
+                if edge in renorm:
+                    p *= renorm[edge]
+                if p == 0:
+                    continue
+
+                edge_gbp = float(data.get('cost_gbp') or 0.0)
+                edge_lab = float(data.get('labour_cost') or 0.0)
+
+                w = prob * p
+                next_key = sk(target, frozenset(next_visited))
+
+                prev_prob = states.get(next_key, 0.0) or 0.0
+                new_prob = prev_prob + w
+                states[next_key] = new_prob
+
+                # Expected cumulative cost at this state (weighted average by incoming probability mass).
+                next_cost = (cost_gbp + edge_gbp, cost_lab + edge_lab)
+                prev_cost = costs.get(next_key)
+                if prev_cost and prev_prob > 0 and new_prob > 0:
+                    prev_w = prev_prob / new_prob
+                    new_w = w / new_prob
+                    costs[next_key] = (
+                        prev_cost[0] * prev_w + next_cost[0] * new_w,
+                        prev_cost[1] * prev_w + next_cost[1] * new_w,
+                    )
+                else:
+                    costs[next_key] = next_cost
+
+    # Aggregate probability + costs at end (across visited states).
+    end_states = [k for k in states.keys() if k[0] == end_key]
+    p_end = sum(states[k] for k in end_states)
+
+    # Unconditional expected cost (per attempt) = expected cost of terminal states.
+    terminal_states = [k for k in states.keys() if _is_terminal_for_target(G, k[0], end_key)]
+    exp_cost = 0.0
+    exp_lab = 0.0
+    for k in terminal_states:
+        p = states.get(k, 0.0) or 0.0
+        c = costs.get(k, (0.0, 0.0))
+        exp_cost += p * c[0]
+        exp_lab += p * c[1]
+
+    # Cost given success = weighted average cost among end states.
+    exp_cost_given = None
+    exp_lab_given = None
+    if p_end > 0:
+        num_cost = 0.0
+        num_lab = 0.0
+        for k in end_states:
+            p = states.get(k, 0.0) or 0.0
+            c = costs.get(k, (0.0, 0.0))
+            num_cost += p * c[0]
+            num_lab += p * c[1]
+        exp_cost_given = num_cost / p_end
+        exp_lab_given = num_lab / p_end
+
+    return PathResult(
+        probability=p_end,
+        expected_cost_gbp=exp_cost,
+        expected_labour_cost=exp_lab,
+        expected_cost_gbp_given_success=exp_cost_given,
+        expected_labour_cost_given_success=exp_lab_given,
+        path_exists=p_end > 0,
+    )
 
 
 def compute_pruning(
@@ -202,7 +396,12 @@ def calculate_path_probability(
     excluded = pruning.excluded_edges if pruning else set()
     renorm = pruning.renorm_factors if pruning else {}
     
-    # DFS with memoization for probability
+    # If conditional probabilities exist, use state-space expansion (conditional_p depends on visited history).
+    if _graph_has_conditional_probabilities(G):
+        return _calculate_path_probability_state_space(G, start_id, end_id, pruning)
+
+    # Otherwise, use fast DFS with memoization.
+    # DFS with memoization for probability to reach end_id
     prob_cache: dict[str, float] = {}
     visiting: set[str] = set()  # For cycle detection
     
@@ -241,7 +440,8 @@ def calculate_path_probability(
         prob_cache[node_id] = total_prob
         return total_prob
     
-    # DFS with memoization for costs
+    # DFS with memoization for expected costs (UNCONDITIONAL / from the start):
+    # i.e. expected cost incurred while traversing the process, regardless of whether end_id is reached.
     cost_cache: dict[str, tuple[float, float]] = {}
     cost_visiting: set[str] = set()
     
@@ -285,14 +485,76 @@ def calculate_path_probability(
         cost_visiting.discard(node_id)
         cost_cache[node_id] = (total_gbp, total_time)
         return (total_gbp, total_time)
+
+    # DFS for CONDITIONAL cost numerator:
+    # numerator(node) = E[cost * I(reach end_id) | starting at node]
+    # Then: E[cost | reach end_id] = numerator(start) / P(reach end_id).
+    cond_num_cache: dict[str, tuple[float, float]] = {}
+    cond_visiting: set[str] = set()
+
+    def calc_conditional_numerator(node_id: str) -> tuple[float, float]:
+        """Returns (gbp_numerator, labour_numerator)."""
+        if node_id == end_id:
+            return (0.0, 0.0)
+
+        if node_id in cond_num_cache:
+            return cond_num_cache[node_id]
+
+        if node_id in cond_visiting:
+            return (0.0, 0.0)  # Cycle
+
+        cond_visiting.add(node_id)
+
+        total_num_gbp = 0.0
+        total_num_labour = 0.0
+
+        for _, target, data in G.out_edges(node_id, data=True):
+            edge = (node_id, target)
+
+            if edge in excluded:
+                continue
+
+            p = data.get('p', 0.0) or 0.0
+            if edge in renorm:
+                p *= renorm[edge]
+
+            if p == 0:
+                continue
+
+            edge_gbp = data.get('cost_gbp', 0.0) or 0.0
+            edge_labour = data.get('labour_cost', 0.0) or 0.0
+
+            target_prob = calc_prob(target)
+            if target_prob == 0:
+                # If the target can't reach end_id, this branch contributes nothing to the conditional numerator.
+                continue
+
+            target_num_gbp, target_num_labour = calc_conditional_numerator(target)
+
+            # Edge cost only contributes if we eventually reach end_id from target.
+            total_num_gbp += p * (target_num_gbp + (target_prob * edge_gbp))
+            total_num_labour += p * (target_num_labour + (target_prob * edge_labour))
+
+        cond_visiting.discard(node_id)
+        cond_num_cache[node_id] = (total_num_gbp, total_num_labour)
+        return (total_num_gbp, total_num_labour)
     
     probability = calc_prob(start_id)
     exp_gbp, exp_time = calc_cost(start_id)
+
+    exp_gbp_given = None
+    exp_labour_given = None
+    if probability > 0:
+        num_gbp, num_labour = calc_conditional_numerator(start_id)
+        exp_gbp_given = num_gbp / probability
+        exp_labour_given = num_labour / probability
     
     return PathResult(
         probability=probability,
         expected_cost_gbp=exp_gbp,
         expected_labour_cost=exp_time,
+        expected_cost_gbp_given_success=exp_gbp_given,
+        expected_labour_cost_given_success=exp_labour_given,
         path_exists=probability > 0
     )
 
@@ -419,6 +681,8 @@ def calculate_path_to_absorbing(
     total_prob = 0.0
     total_gbp = 0.0
     total_time = 0.0
+    total_num_gbp = 0.0
+    total_num_labour = 0.0
     
     for entry in entry_nodes:
         result = calculate_path_probability(G, entry, absorbing_id, pruning)
@@ -427,11 +691,25 @@ def calculate_path_to_absorbing(
         total_prob += entry_weight * result.probability
         total_gbp += entry_weight * result.expected_cost_gbp
         total_time += entry_weight * result.expected_labour_cost
+
+        # Numerator aggregation for conditional-on-success costs.
+        if result.expected_cost_gbp_given_success is not None and result.probability > 0:
+            total_num_gbp += entry_weight * result.probability * result.expected_cost_gbp_given_success
+        if result.expected_labour_cost_given_success is not None and result.probability > 0:
+            total_num_labour += entry_weight * result.probability * result.expected_labour_cost_given_success
+
+    exp_gbp_given = None
+    exp_labour_given = None
+    if total_prob > 0:
+        exp_gbp_given = total_num_gbp / total_prob
+        exp_labour_given = total_num_labour / total_prob
     
     return PathResult(
         probability=total_prob,
         expected_cost_gbp=total_gbp,
         expected_labour_cost=total_time,
+        expected_cost_gbp_given_success=exp_gbp_given,
+        expected_labour_cost_given_success=exp_labour_given,
         path_exists=total_prob > 0
     )
 

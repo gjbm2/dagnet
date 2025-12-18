@@ -91,6 +91,17 @@ class TestPathToEnd:
         current_row = [r for r in result['data'] if r['scenario_id'] == 'current'][0]
         assert current_row['probability'] == pytest.approx(0.8)
 
+    def test_cost_per_success_is_expected_cost_divided_by_probability(self):
+        """Cost per success apportions total expected costs across successful arrivals."""
+        G = build_test_graph()
+        result = run_path_to_end(G, 'end1')
+
+        current_row = [r for r in result['data'] if r['scenario_id'] == 'current'][0]
+        # In build_test_graph, all branch edges have cost 10 and are always traversed from 'a',
+        # so expected cost per starter is 10. With P(end1)=0.8, per-success cost is 12.5.
+        assert current_row['expected_cost_gbp'] == pytest.approx(10.0)
+        assert current_row['cost_per_success_gbp'] == pytest.approx(12.5)
+
     def test_metric_label_respects_visibility_mode(self):
         """Metric label should reflect probability basis when modes are uniform."""
         G = build_test_graph()

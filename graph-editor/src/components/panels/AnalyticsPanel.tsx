@@ -91,6 +91,18 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   // Otherwise we can hit the temporal dead zone (Cannot access before initialization).
   const visibleScenariosKey = orderedVisibleScenarios.join(',');
 
+  // Triggers re-analysis when scenario DATA changes (not just visible IDs).
+  // Scenario regeneration updates params + increments scenario.version, but keeps IDs stable.
+  const visibleScenarioDataKey = useMemo(() => {
+    const versionById = new Map((scenariosContext?.scenarios || []).map(s => [s.id, s.version]));
+    return orderedVisibleScenarios
+      .map(id => {
+        if (id === 'base' || id === 'current') return id;
+        return `${id}@${versionById.get(id) ?? 0}`;
+      })
+      .join(',');
+  }, [orderedVisibleScenarios, scenariosContext?.scenarios]);
+
   // Triggers re-analysis when any scenario's F/E/F+E mode changes.
   const visibilityModesKey = useMemo(() => {
     const key = orderedVisibleScenarios
@@ -470,6 +482,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const prevQueryDSLRef = useRef(queryDSL);
   const prevSelectedNodesRef = useRef(selectedNodeIds);
   const prevScenariosKeyRef = useRef(visibleScenariosKey);
+  const prevScenarioDataKeyRef = useRef(visibleScenarioDataKey);
   const prevWhatIfDSLRef = useRef(whatIfDSL);
   const prevVisibilityModesRef = useRef(visibilityModesKey);
   
@@ -483,6 +496,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     const queryChanged = prevQueryDSLRef.current !== queryDSL;
     const selectionChanged = prevSelectedNodesRef.current !== selectedNodeIds;
     const scenariosChanged = prevScenariosKeyRef.current !== visibleScenariosKey;
+    const scenarioDataChanged = prevScenarioDataKeyRef.current !== visibleScenarioDataKey;
     const whatIfChanged = prevWhatIfDSLRef.current !== whatIfDSL;
     const visibilityModesChanged = prevVisibilityModesRef.current !== visibilityModesKey;
     
@@ -499,6 +513,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     prevQueryDSLRef.current = queryDSL;
     prevSelectedNodesRef.current = selectedNodeIds;
     prevScenariosKeyRef.current = visibleScenariosKey;
+    prevScenarioDataKeyRef.current = visibleScenarioDataKey;
     prevWhatIfDSLRef.current = whatIfDSL;
     prevVisibilityModesRef.current = visibilityModesKey;
     
@@ -511,13 +526,13 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     // For other changes, debounce
     // What-If changes should also trigger re-analysis since they affect probabilities
     // Visibility mode changes (F/E/F+E) change the probability basis used
-    if (graphChanged || queryChanged || selectionChanged || scenariosChanged || whatIfChanged || visibilityModesChanged) {
+    if (graphChanged || queryChanged || selectionChanged || scenariosChanged || scenarioDataChanged || whatIfChanged || visibilityModesChanged) {
       const timeoutId = setTimeout(() => {
         runAnalysisRef.current();
       }, 300);
       return () => clearTimeout(timeoutId);
     }
-  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey, whatIfDSL, visibilityModesKey]);
+  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey, visibleScenarioDataKey, whatIfDSL, visibilityModesKey]);
   
   // Cleanup spinner timeout on unmount
   useEffect(() => {
@@ -533,6 +548,68 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     if (!results?.result) return null;
     return JSON.stringify(results.result, null, 2);
   }, [results]);
+
+  // For live scenarios, show the effective (composited) query DSL that produced the scenario.
+  // This is display-only metadata (computed/stored by the scenarios system).
+  const scenarioDslSubtitleById = useMemo(() => {
+    const map = new Map<string, string>();
+    // Special layers
+    const currentDsl = graph?.currentQueryDSL;
+    if (typeof currentDsl === 'string' && currentDsl.trim()) {
+      map.set('current', currentDsl);
+    }
+
+    const baseDsl = scenariosContext?.baseDSL || graph?.baseDSL;
+    if (typeof baseDsl === 'string' && baseDsl.trim()) {
+      map.set('base', baseDsl);
+    }
+
+    if (!scenariosContext?.scenarios) return map;
+
+    for (const s of scenariosContext.scenarios) {
+      const meta: any = s?.meta;
+      if (!meta?.isLive) continue;
+      const dsl = meta.lastEffectiveDSL || meta.queryDSL;
+      if (typeof dsl === 'string' && dsl.trim()) {
+        map.set(s.id, dsl);
+      }
+    }
+
+    return map;
+  }, [graph?.currentQueryDSL, graph?.baseDSL, scenariosContext?.baseDSL, scenariosContext?.scenarios]);
+
+  // Add a context suffix to the analysis name when the backend provides metadata,
+  // e.g. "Reach Probability — Switch success".
+  const analysisTitleSuffix = useMemo((): string => {
+    const meta: any = results?.result?.metadata;
+    const nodeLabel = meta?.node_label;
+    if (typeof nodeLabel === 'string' && nodeLabel.trim()) {
+      return ` — ${nodeLabel}`;
+    }
+    return '';
+  }, [results]);
+
+  const renderDslSubtitle = useCallback((dsl: string) => {
+    // Prefer line wrapping at clause separators ('.') so long DSLs break sensibly.
+    // Also avoid ugly wrapping inside UK-style dates (e.g. 17-Nov-25) by using non-breaking hyphens.
+    const normalised = dsl.replace(
+      /(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/g,
+      (_m, d, mon, y) => `${d}\u2011${mon}\u2011${y}` // U+2011 = non-breaking hyphen
+    );
+
+    const parts = normalised.split('.');
+    if (parts.length <= 1) return dsl;
+    return parts.map((part, i) => (
+      <React.Fragment key={`${i}-${part}`}>
+        {part}
+        {i < parts.length - 1 ? (
+          <>
+            .<wbr />
+          </>
+        ) : null}
+      </React.Fragment>
+    ));
+  }, []);
   
   // Build rendered cards from semantics
   const renderedCards = useMemo(() => {
@@ -598,13 +675,15 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     
     // If primary is scenario, render one card per scenario
     if (primaryDim.type === 'scenario') {
-      return primaryValues.map(pv => {
+      const cards = primaryValues.map(pv => {
         const rows = result.data.filter((row: any) => row[primaryDim.id] === pv);
         const colour = getColour(primaryDim.id, pv);
+        const subtitle = scenarioDslSubtitleById.get(String(pv));
         
         return {
           id: String(pv),
           title: formatScenarioTitleWithBasis(pv),
+          subtitle,
           colour,
           metrics: metrics.map(m => ({
             id: m.id,
@@ -617,6 +696,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           }))
         };
       });
+
+      return cards;
     }
     
     // If primary is stage (funnel), render ONE card per STAGE
@@ -878,7 +959,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
               <div className="analytics-section-header">
                 <span className="analytics-section-label">Results</span>
                 {results.result?.analysis_name && (
-                  <span className="analytics-section-subtitle">{results.result.analysis_name}</span>
+                  <span className="analytics-section-subtitle">{results.result.analysis_name}{analysisTitleSuffix}</span>
                 )}
               </div>
               <div className={`analytics-cards-container ${renderedCards.length === 1 ? 'single-card' : ''}`}>
@@ -901,7 +982,12 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                       {card.stageNumber && (
                         <span className="analytics-card-stage-number">{card.stageNumber}</span>
                       )}
-                      <span className="analytics-card-title">{card.title}</span>
+                      <span className="analytics-card-title-block">
+                        <span className="analytics-card-title">{card.title}</span>
+                        {card.subtitle && (
+                          <span className="analytics-card-subtitle">{renderDslSubtitle(card.subtitle)}</span>
+                        )}
+                      </span>
                     </div>
                     <div className="analytics-card-content">
                       {/* Metrics display (scenario-primary layout) */}
@@ -939,7 +1025,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                 <div className="analytics-card">
                   <div className="analytics-card-header">
                     <span className="analytics-card-title">
-                      {results.result.analysis_name || 'Analysis Results'}
+                      {(results.result.analysis_name || 'Analysis Results')}{analysisTitleSuffix}
                     </span>
                   </div>
                   <div className="analytics-card-content">

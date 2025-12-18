@@ -61,6 +61,40 @@ def build_branching_graph():
     return G
 
 
+def build_branching_cost_mismatch_graph():
+    """
+    Graph where unconditional expected cost differs from conditional cost given reaching end1.
+
+        START -> A (p=1.0)
+        A -> SUCCESS (p=0.5, cost=10)
+        A -> FAIL (p=0.5, cost=10)
+        FAIL -> END2 (p=1.0, extra cost=1000)
+        SUCCESS -> END1 (p=1.0)
+
+    For end1:
+      - P(end1) = 0.5
+      - Expected cost (unconditional) includes the expensive failure branch:
+          0.5*(10) + 0.5*(10+1000) = 510
+      - Cost given success should exclude failure-only costs:
+          10
+    """
+    G = nx.DiGraph()
+    G.add_node('start', is_entry=True, absorbing=False)
+    G.add_node('a', is_entry=False, absorbing=False)
+    G.add_node('success', is_entry=False, absorbing=False)
+    G.add_node('fail', is_entry=False, absorbing=False)
+    G.add_node('end1', is_entry=False, absorbing=True)
+    G.add_node('end2', is_entry=False, absorbing=True)
+
+    G.add_edge('start', 'a', p=1.0, cost_gbp=0.0, labour_cost=0.0)
+    G.add_edge('a', 'success', p=0.5, cost_gbp=10.0, labour_cost=1.0)
+    G.add_edge('a', 'fail', p=0.5, cost_gbp=10.0, labour_cost=1.0)
+    G.add_edge('fail', 'end2', p=1.0, cost_gbp=1000.0, labour_cost=100.0)
+    G.add_edge('success', 'end1', p=1.0, cost_gbp=0.0, labour_cost=0.0)
+
+    return G
+
+
 class TestCalculatePathProbability:
     """Test basic path probability calculation."""
     
@@ -106,6 +140,20 @@ class TestCalculatePathProbability:
         
         # P(END2) = P(B3) = 0.2
         assert result.probability == pytest.approx(0.2)
+
+    def test_cost_given_success_differs_from_expected(self):
+        """Conditional cost given reaching end differs from unconditional expected cost."""
+        G = build_branching_cost_mismatch_graph()
+        result = calculate_path_probability(G, 'start', 'end1')
+
+        assert result.probability == pytest.approx(0.5)
+        # Unconditional expected cost includes failure-only costs
+        assert result.expected_cost_gbp == pytest.approx(510.0)
+        assert result.expected_labour_cost == pytest.approx(51.0)
+
+        # Conditional-on-success costs exclude failure-only costs
+        assert result.expected_cost_gbp_given_success == pytest.approx(10.0)
+        assert result.expected_labour_cost_given_success == pytest.approx(1.0)
     
     def test_invalid_start(self):
         """Invalid start node returns no path."""

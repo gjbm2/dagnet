@@ -21,6 +21,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [tailMode, setTailMode] = useState(true);
   const [showContext, setShowContext] = useState(true);
+  const [diagnosticEnabled, setDiagnosticEnabled] = useState(sessionLogService.getDiagnosticLoggingEnabled());
   const containerRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   
@@ -32,11 +33,18 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
     const unsubscribe = sessionLogService.subscribe((newEntries) => {
       setEntries([...newEntries]);
     });
+
+    const unsubscribeSettings = sessionLogService.subscribeSettings(() => {
+      setDiagnosticEnabled(sessionLogService.getDiagnosticLoggingEnabled());
+    });
     
     // Initialize with current entries
     setEntries(sessionLogService.getEntries());
     
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      unsubscribeSettings();
+    };
   }, []);
 
   // Auto-scroll when in tail mode
@@ -182,6 +190,15 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
               onChange={(e) => setShowContext(e.target.checked)}
             />
             Context
+          </label>
+
+          <label className="log-checkbox" title="Include verbose diagnostic details in session logs (may increase log size)">
+            <input
+              type="checkbox"
+              checked={diagnosticEnabled}
+              onChange={(e) => sessionLogService.setDiagnosticLoggingEnabled(e.target.checked)}
+            />
+            Diagnostic
           </label>
           
           <label className="log-checkbox" title="Auto-scroll to latest entries">
