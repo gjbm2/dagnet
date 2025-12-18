@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.10b
+**Released:** December 18, 2025
+
+Basic charting, auto-retrieval
+
+---
+
 ## Version 1.1.9b
 **Released:** December 18, 2025
 
