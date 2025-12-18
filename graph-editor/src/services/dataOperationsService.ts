@@ -65,6 +65,7 @@ import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService'
 import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
+import { forecastingSettingsService } from './forecastingSettingsService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
 import { rateLimiter } from './rateLimiter';
@@ -1848,7 +1849,13 @@ class DataOperationsService {
           ? (t95FromEdge !== undefined ? 'edge' : (t95FromFile !== undefined ? 'file_latency' : 'unknown'))
           : 'none';
 
-      aggregatedData = this.addEvidenceAndForecastScalars(aggregatedData, paramDataForScalars, targetSlice, { logOpId, t95Days, t95Source });
+      const forecasting = await forecastingSettingsService.getForecastingModelSettings();
+      aggregatedData = this.addEvidenceAndForecastScalars(
+        aggregatedData,
+        paramDataForScalars,
+        targetSlice,
+        { logOpId, t95Days, t95Source, forecasting }
+      );
       
       // Log forecast data if present
       const latestValue = aggregatedData?.values?.[aggregatedData.values.length - 1];
@@ -4968,6 +4975,7 @@ class DataOperationsService {
           });
 
           if (gapTimeSeries.length > 0) {
+            const forecasting = await forecastingSettingsService.getForecastingModelSettings();
             existingValuesForGapWrites = mergeTimeSeriesIntoParameter(
               existingValuesForGapWrites,
               gapTimeSeries,
@@ -4986,6 +4994,10 @@ class DataOperationsService {
                     t95: latencyConfigForGapWrites?.t95,
                   },
                   recomputeForecast: true,
+                  forecastingConfig: {
+                    RECENCY_HALF_LIFE_DAYS: forecasting.RECENCY_HALF_LIFE_DAYS,
+                    DEFAULT_T95_DAYS: forecasting.DEFAULT_T95_DAYS,
+                  },
                 }),
               }
             );
@@ -5920,6 +5932,7 @@ class DataOperationsService {
                 });
                 
                 if (gapTimeSeries.length > 0) {
+                  const forecasting = await forecastingSettingsService.getForecastingModelSettings();
                   // DEBUG: Log time series BEFORE merge to check lag data
                   console.log(`[LAG_DEBUG] BEFORE_MERGE gap ${gapIndex + 1}:`, {
                     timeSeriesCount: gapTimeSeries.length,
@@ -5951,6 +5964,10 @@ class DataOperationsService {
                           t95: latencyConfigForMerge?.t95,
                         },
                         recomputeForecast: true,
+                        forecastingConfig: {
+                          RECENCY_HALF_LIFE_DAYS: forecasting.RECENCY_HALF_LIFE_DAYS,
+                          DEFAULT_T95_DAYS: forecasting.DEFAULT_T95_DAYS,
+                        },
                       }),
                     }
                   );
@@ -6627,6 +6644,26 @@ class DataOperationsService {
     await fileOperationsService.openFile(connectionsItem, {
       viewMode: 'interactive',
       switchIfExists: true
+    });
+  }
+
+  /**
+   * Open forecasting settings (shared settings/settings.yaml)
+   *
+   * NOTE: This is a shared, repo-committed file. Changes affect analytics results across clients.
+   */
+  async openForecastingSettings(): Promise<void> {
+    const { fileOperationsService } = await import('./fileOperationsService');
+    const settingsItem = {
+      id: 'settings',
+      type: 'settings' as const,
+      name: 'Forecasting settings',
+      path: 'settings/settings.yaml',
+    };
+
+    await fileOperationsService.openFile(settingsItem, {
+      viewMode: 'interactive',
+      switchIfExists: true,
     });
   }
   
@@ -7575,7 +7612,12 @@ class DataOperationsService {
     aggregatedData: any,
     originalParamData: any,
     targetSlice: string | undefined,
-    options?: { logOpId?: string; t95Days?: number; t95Source?: 'edge' | 'file_latency' | 'none' | 'unknown' }
+    options?: {
+      logOpId?: string;
+      t95Days?: number;
+      t95Source?: 'edge' | 'file_latency' | 'none' | 'unknown';
+      forecasting?: import('./forecastingSettingsService').ForecastingModelSettings;
+    }
   ): any {
     if (!aggregatedData || !Array.isArray(aggregatedData.values)) {
       return aggregatedData;
@@ -7824,10 +7866,21 @@ class DataOperationsService {
       // Special case: non-latency edges should NOT apply any maturity censoring.
       // We represent that by passing t95Days=0.
       const hasExplicitNoCensor = t95Days === 0;
+      const defaultT95 =
+        typeof options?.forecasting?.DEFAULT_T95_DAYS === 'number' && Number.isFinite(options.forecasting.DEFAULT_T95_DAYS)
+          ? options.forecasting.DEFAULT_T95_DAYS
+          : DEFAULT_T95_DAYS;
+      const halfLife =
+        typeof options?.forecasting?.RECENCY_HALF_LIFE_DAYS === 'number' &&
+        Number.isFinite(options.forecasting.RECENCY_HALF_LIFE_DAYS) &&
+        options.forecasting.RECENCY_HALF_LIFE_DAYS > 0
+          ? options.forecasting.RECENCY_HALF_LIFE_DAYS
+          : RECENCY_HALF_LIFE_DAYS;
+
       const effectiveT95 =
         hasExplicitNoCensor
           ? 0
-          : ((t95Days !== undefined && Number.isFinite(t95Days) && t95Days > 0) ? t95Days : DEFAULT_T95_DAYS);
+          : ((t95Days !== undefined && Number.isFinite(t95Days) && t95Days > 0) ? t95Days : defaultT95);
       const maturityDays = hasExplicitNoCensor ? 0 : (Math.ceil(effectiveT95) + 1);
       const cutoffMs = hasExplicitNoCensor
         ? Number.POSITIVE_INFINITY
@@ -7855,7 +7908,7 @@ class DataOperationsService {
 
         const ageDays = Math.max(0, (asOfDate.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
         // Mirror statisticalEnhancementService: true half-life semantics.
-        const w = Math.exp(-Math.LN2 * ageDays / RECENCY_HALF_LIFE_DAYS);
+        const w = Math.exp(-Math.LN2 * ageDays / halfLife);
 
         weightedN += w * n;
         weightedK += w * k;

@@ -1,0 +1,28 @@
+# Energy Recommendation Offered (Energy) → Switch Registered (Latency-enabled)
+#
+# Fixture parameter for local-only real Amplitude E2E tests.
+#
+id: energy-rec-to-switch-registered-latency
+name: Energy Recommendation to Switch Registered (Latency)
+type: probability
+connection: amplitude-prod
+query: "from(X).to(Y)"
+query_overridden: false
+
+latency:
+  latency_parameter: true
+  anchor_node_id: A
+  # Deterministic conversion window for cohort-mode funnels (days).
+  path_t95: 30
+
+values: []
+
+metadata:
+  description: Local-only real-Amplitude cohort/window fixture parameter (energy-rec→switch-registered)
+  created_at: '2025-12-18T00:00:00Z'
+  updated_at: '2025-12-18T00:00:00Z'
+  status: active
+  author: Dagnet Team
+  version: '1.0.0'
+
+

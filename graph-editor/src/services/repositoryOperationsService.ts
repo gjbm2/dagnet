@@ -627,7 +627,6 @@ class RepositoryOperationsService {
       
       // Skip non-committable file types
       if (file.type === 'credentials') continue;
-      if (file.type === 'settings') continue;
       if (file.type === 'image') continue; // Images handled separately via commitPendingImages()
       if (file.source?.repository === 'temporary') continue;
       

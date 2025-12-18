@@ -186,7 +186,7 @@ describe('SHA-Based Change Detection', () => {
       expect(committableFiles).toHaveLength(0);
     });
 
-    it('should exclude settings files', async () => {
+    it('should include settings files (shared, repo-committed)', async () => {
       mockFiles.push({
         fileId: 'settings-settings',
         type: 'settings',
@@ -196,7 +196,8 @@ describe('SHA-Based Change Detection', () => {
 
       const committableFiles = await repositoryOperationsService.getCommittableFiles();
       
-      expect(committableFiles).toHaveLength(0);
+      expect(committableFiles).toHaveLength(1);
+      expect(committableFiles[0].fileId).toBe('settings-settings');
     });
 
     it('should exclude temporary repository files', async () => {

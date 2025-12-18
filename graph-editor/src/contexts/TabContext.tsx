@@ -909,6 +909,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       await loadTabsFromDB();
       await initializeCredentials();
       await initializeConnections();
+      await initializeSettings();
       await loadFromURLData();
     };
     initializeApp();
@@ -1004,6 +1005,15 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   const initializeConnections = async () => {
     const { seedConnectionsFile } = await import('../init/seedConnections');
     await seedConnectionsFile();
+  };
+
+  /**
+   * Initialize shared settings file - seeds from git or creates from defaults
+   * This runs during TabProvider initialization so forecasting knobs are available early.
+   */
+  const initializeSettings = async () => {
+    const { seedSettingsFile } = await import('../init/seedSettings');
+    await seedSettingsFile();
   };
 
   /**
