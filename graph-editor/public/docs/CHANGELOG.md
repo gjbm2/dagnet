@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.7b
+**Released:** December 18, 2025
+
+Fixed auto-scenario creation
+
+---
+
 ## Version 1.1.6b
 **Released:** December 18, 2025
 
