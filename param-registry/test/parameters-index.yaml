@@ -117,6 +117,19 @@ parameters:
     status: active
     tags: [delivery, fulfilment, latency, long-lag]
 
+  # Local real-Amplitude cohort MECE fixtures
+  - id: household-created-to-switch-registered-latency
+    file_path: parameters/household-created-to-switch-registered-latency.yaml
+    type: probability
+    status: active
+    tags: [fixture, amplitude, cohort, latency]
+
+  - id: switch-registered-to-switch-success-latency
+    file_path: parameters/switch-registered-to-switch-success-latency.yaml
+    type: probability
+    status: active
+    tags: [fixture, amplitude, cohort, latency]
+
   # LAG semantics fixtures (Phase 1/2 integration)
   - id: ab-smooth-lag
     file_path: parameters/ab-smooth-lag.yaml

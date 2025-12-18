@@ -21,6 +21,7 @@ import { getEditorComponent } from './components/editors';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useCommitHandler } from './hooks/useCommitHandler';
 import { CopyPasteProvider } from './hooks/useCopyPaste';
+import { useStalenessNudges } from './hooks/useStalenessNudges';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
@@ -44,6 +45,7 @@ function MainAppShellContent() {
   const { state: navState, operations: navOperations } = useNavigatorContext();
   const dialogOps = useDialog();
   const { updateFromLayout } = useVisibleTabs();
+  const { modals: stalenessNudgeModals } = useStalenessNudges();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
   const isProgrammaticSwitchRef = useRef(false); // Track when WE trigger rc-dock updates
@@ -1647,6 +1649,9 @@ function MainAppShellContent() {
             preselectedFiles={commitModalState.preselectedFiles}
           />
         )}
+
+        {/* Safety nudge modals (currently: pull conflict resolution UI) */}
+        {stalenessNudgeModals}
 
         {/* Init Credentials Modal */}
         {showInitCredsModal && (

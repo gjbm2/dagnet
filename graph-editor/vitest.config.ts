@@ -34,7 +34,16 @@ export default defineConfig({
       'tests/**/*.{test,spec}.{ts,tsx}'                     // New pattern (tests/)
     ],
     
-    exclude: ['node_modules', 'dist', '.next', '.vercel', '**/api/**'],
+    exclude: [
+      'node_modules',
+      'dist',
+      '.next',
+      '.vercel',
+      '**/api/**',
+      // Local-only tests that require developer env files / real external HTTP.
+      // CI must not attempt to run them.
+      ...(process.env.CI ? ['**/*.local.*'] : []),
+    ],
     
     // Ignore unhandled errors from webidl-conversions (all tests pass, this is a dependency issue)
     onConsoleLog: (log, type) => {
