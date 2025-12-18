@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.8b
+**Released:** December 18, 2025
+
+E mode sceanrio fix for Reach Proabability
+
+---
+
 ## Version 1.1.7b
 **Released:** December 18, 2025
 
