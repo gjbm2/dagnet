@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.5b
+**Released:** December 18, 2025
+
+Extensive context() fixes and forecasting logic repairs
+
+---
+
 ## Version 1.1.4b
 **Released:** December 17, 2025
 
