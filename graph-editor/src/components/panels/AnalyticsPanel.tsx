@@ -19,11 +19,13 @@ import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { graphComputeClient, AnalysisResponse, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { constructQueryDSL } from '../../lib/dslConstruction';
 import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
+import { FunnelChartPreview } from '../charts/FunnelChartPreview';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code } from 'lucide-react';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
 import CollapsibleSection from '../CollapsibleSection';
+import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import './AnalyticsPanel.css';
 
 interface AnalyticsPanelProps {
@@ -84,6 +86,14 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     
     return ordered;
   }, [visibleScenarioIds, scenarioOrder]);
+
+  // Chart rendering: pick a single scenario for v1 funnel charts (multi-scenario can come later).
+  const chartScenarioId = useMemo(() => {
+    if (!tabId) return orderedVisibleScenarios[0] || 'current';
+    const selected = operations.getScenarioState(tabId)?.selectedScenarioId;
+    if (selected && orderedVisibleScenarios.includes(selected)) return selected;
+    return orderedVisibleScenarios[0] || 'current';
+  }, [tabId, operations, orderedVisibleScenarios]);
 
   // Serialize visible scenarios + per-scenario visibility modes.
   //
@@ -591,256 +601,11 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     return '';
   }, [results]);
 
-  const renderDslSubtitle = useCallback((dsl: string) => {
-    // Prefer line wrapping at clause separators ('.') so long DSLs break sensibly.
-    // Also avoid ugly wrapping inside UK-style dates (e.g. 17-Nov-25) by using non-breaking hyphens.
-    const normalised = dsl.replace(
-      /(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/g,
-      (_m, d, mon, y) => `${d}\u2011${mon}\u2011${y}` // U+2011 = non-breaking hyphen
-    );
-
-    const parts = normalised.split('.');
-    if (parts.length <= 1) return dsl;
-    return parts.map((part, i) => (
-      <React.Fragment key={`${i}-${part}`}>
-        {part}
-        {i < parts.length - 1 ? (
-          <>
-            .<wbr />
-          </>
-        ) : null}
-      </React.Fragment>
-    ));
-  }, []);
-  
-  // Build rendered cards from semantics
-  const renderedCards = useMemo(() => {
-    const result = results?.result;
-    if (!result?.semantics?.dimensions || !result?.data) {
-      return null;
-    }
-    
-    const { dimensions, metrics } = result.semantics;
-    const primaryDim = dimensions.find((d: any) => d.role === 'primary');
-    const secondaryDim = dimensions.find((d: any) => d.role === 'secondary');
-    
-    if (!primaryDim) {
-      console.log('[AnalyticsPanel] No primary dimension found in:', dimensions);
-      return null;
-    }
-    
-    // Get unique primary dimension values
-    const primaryValues = [...new Set(result.data.map((row: any) => row[primaryDim.id]))];
-    
-    // Format a metric value
-    const formatValue = (value: number | null | undefined, format?: string): string => {
-      if (value === null || value === undefined) return '—';
-      switch (format) {
-        case 'percent': return `${(value * 100).toFixed(1)}%`;
-        case 'currency_gbp': return `£${value.toFixed(2)}`;
-        default: return value.toLocaleString();
-      }
-    };
-    
-    // Get label for a dimension value
-    const getLabel = (dimId: string, valueId: string | number): string => {
-      const meta = result.dimension_values?.[dimId]?.[String(valueId)];
-      return meta?.name ?? String(valueId);
-    };
-
-    const getScenarioProbabilityLabel = (scenarioId: string | number, row?: any): string | undefined => {
-      // Prefer per-row label if present (explicit basis used for this calculation)
-      const rowLabel = row?.probability_label;
-      if (typeof rowLabel === 'string' && rowLabel.trim()) return rowLabel;
-
-      // Fall back to scenario dimension metadata (per-scenario basis)
-      const meta: any = result.dimension_values?.scenario_id?.[String(scenarioId)];
-      const metaLabel = meta?.probability_label;
-      if (typeof metaLabel === 'string' && metaLabel.trim()) return metaLabel;
-
-      return undefined;
-    };
-
-    const formatScenarioTitleWithBasis = (scenarioId: string | number): string => {
-      const title = getLabel('scenario_id', scenarioId);
-      const basis = getScenarioProbabilityLabel(scenarioId);
-      // Avoid noise for default blended basis
-      if (!basis || basis === 'Probability') return title;
-      // e.g. "Current (Evidence Probability)"
-      return `${title} (${basis})`;
-    };
-    
-    // Get colour for a dimension value
-    const getColour = (dimId: string, valueId: string | number): string | undefined => {
-      return result.dimension_values?.[dimId]?.[String(valueId)]?.colour;
-    };
-    
-    // If primary is scenario, render one card per scenario
-    if (primaryDim.type === 'scenario') {
-      const cards = primaryValues.map(pv => {
-        const rows = result.data.filter((row: any) => row[primaryDim.id] === pv);
-        const colour = getColour(primaryDim.id, pv);
-        const subtitle = scenarioDslSubtitleById.get(String(pv));
-        
-        return {
-          id: String(pv),
-          title: formatScenarioTitleWithBasis(pv),
-          subtitle,
-          colour,
-          metrics: metrics.map(m => ({
-            id: m.id,
-            // Probability basis can vary by scenario, so label per scenario.
-            label: m.id === 'probability'
-              ? (getScenarioProbabilityLabel(pv, rows[0]) || m.name)
-              : m.name,
-            value: formatValue(rows[0]?.[m.id], m.format),
-            role: m.role || 'secondary'
-          }))
-        };
-      });
-
-      return cards;
-    }
-    
-    // If primary is stage (funnel), render ONE card per STAGE
-    // Each stage card shows all scenarios with their values
-    if (primaryDim.type === 'stage' && secondaryDim?.type === 'scenario') {
-      const scenarioValues = [...new Set(result.data.map((row: any) => row[secondaryDim.id]))];
-      
-      // Build one card per stage with scenarios as items
-      const sortedStages = primaryValues.sort((a, b) => {
-        const orderA = result.dimension_values?.stage?.[String(a)]?.order ?? 0;
-        const orderB = result.dimension_values?.stage?.[String(b)]?.order ?? 0;
-        return orderA - orderB;
-      });
-      
-      return sortedStages.map((stageId, index) => {
-        const stageLabel = getLabel(primaryDim.id, stageId);
-        const scenarioItems = scenarioValues.map(sv => {
-          const row = result.data.find((r: any) => r[primaryDim.id] === stageId && r[secondaryDim.id] === sv);
-
-          // For funnels, show a focused set of metrics per scenario (readability).
-          // This is display logic only: we do NOT change analysis behaviour, just which emitted fields we surface.
-          const funnelMetricPriority = [
-            'probability',
-            'step_probability',
-            'dropoff',
-            'n',
-            'evidence_mean',
-            'forecast_mean',
-            'p_mean',
-            'completeness',
-            'median_lag_days',
-            'mean_lag_days',
-          ];
-
-          const metricsById = new Map((metrics || []).map(m => [m.id, m]));
-          const funnelMetrics = funnelMetricPriority
-            .map(id => metricsById.get(id))
-            .filter(Boolean) as any[];
-
-          const metricsToRender = funnelMetrics.length > 0 ? funnelMetrics : (metrics || []);
-
-          const itemMetrics = metricsToRender
-            .map(m => ({
-              id: m.id,
-              // For funnel rows, the "probability" metric is already cumulative-by-stage.
-              // Keep the label stable ("Cum. probability") and carry basis in the scenario title.
-              label: m.id === 'probability'
-                ? (() => {
-                  const basis = getScenarioProbabilityLabel(sv, row);
-                  if (!basis || basis === 'Probability') return m.name;
-                  return `${m.name} (${basis})`;
-                })()
-                : m.name,
-              value: formatValue(row?.[m.id], m.format),
-              rawValue: row?.[m.id],
-              role: m.role || 'secondary',
-            }))
-            // Keep the stage cards readable: drop all-null metrics for this row
-            .filter(m => m.rawValue !== null && m.rawValue !== undefined);
-
-          return {
-            label: formatScenarioTitleWithBasis(sv),
-            colour: getColour(secondaryDim.id, sv),
-            metrics: itemMetrics,
-          };
-        });
-        
-        return {
-          id: String(stageId),
-          title: stageLabel,
-          stageNumber: index + 1,  // 1-based stage number
-          items: scenarioItems,
-          isStageCard: true
-        };
-      });
-    }
-    
-    // Generic fallback: if secondary is scenario, render one card per scenario
-    // This handles node-first, outcome-first, branch-first layouts
-    if (secondaryDim?.type === 'scenario') {
-      const scenarioValues = [...new Set(result.data.map((row: any) => row[secondaryDim.id]))];
-      const sortHint = result.semantics.chart?.hints?.sort;
-      const primaryMetric = metrics.find(m => m.role === 'primary') || metrics[0];
-      
-      return scenarioValues.map(sv => {
-        const colour = getColour(secondaryDim.id, sv);
-        const rows = result.data.filter((r: any) => r[secondaryDim.id] === sv);
-        
-        // Sort by hint (e.g., probability desc) or by dimension order
-        const sortedValues = [...primaryValues].sort((a, b) => {
-          if (sortHint?.by) {
-            // Sort by metric value
-            const rowA = rows.find((r: any) => r[primaryDim.id] === a);
-            const rowB = rows.find((r: any) => r[primaryDim.id] === b);
-            const valA = rowA?.[sortHint.by] ?? 0;
-            const valB = rowB?.[sortHint.by] ?? 0;
-            return sortHint.order === 'desc' ? valB - valA : valA - valB;
-          }
-          // Default: sort by dimension order
-          const orderA = result.dimension_values?.[primaryDim.id]?.[String(a)]?.order ?? 0;
-          const orderB = result.dimension_values?.[primaryDim.id]?.[String(b)]?.order ?? 0;
-          return orderA - orderB;
-        });
-        
-        // Build items
-        const itemData = sortedValues.map(pv => {
-          const row = rows.find((r: any) => r[primaryDim.id] === pv);
-          return {
-            label: getLabel(primaryDim.id, pv),
-            value: formatValue(row?.[primaryMetric.id], primaryMetric.format),
-            rawValue: row?.[primaryMetric.id]
-          };
-        });
-        
-        return {
-          id: String(sv),
-          title: formatScenarioTitleWithBasis(sv),
-          colour,
-          items: itemData,
-          primaryDimName: primaryDim.name
-        };
-      });
-    }
-    
-    // No secondary dimension - single view with all data
-    // Render one card per primary value with all metrics
-    return primaryValues.map(pv => {
-      const rows = result.data.filter((row: any) => row[primaryDim.id] === pv);
-      
-      return {
-        id: String(pv),
-        title: getLabel(primaryDim.id, pv),
-        metrics: metrics.map(m => ({
-          id: m.id,
-          label: m.name,
-          value: formatValue(rows[0]?.[m.id], m.format),
-          role: m.role || 'secondary'
-        }))
-      };
-    });
-  }, [results]);
+  const scenarioDslSubtitleByIdObject = useMemo(() => {
+    const obj: Record<string, string> = {};
+    for (const [k, v] of scenarioDslSubtitleById.entries()) obj[k] = v;
+    return obj;
+  }, [scenarioDslSubtitleById]);
   
   return (
     <div className="analytics-panel">
@@ -996,8 +761,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
             </div>
           )}
           
-          {/* Rendered Cards - wrapped in Results section for visual consistency */}
-          {results && results.success && renderedCards && renderedCards.length > 0 && (
+          {/* Results */}
+          {results && results.success && results.result?.data && (
             <div className="analytics-section analytics-results">
               <div className="analytics-section-header">
                 <span className="analytics-section-label">Results</span>
@@ -1005,76 +770,28 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                   <span className="analytics-section-subtitle">{results.result.analysis_name}{analysisTitleSuffix}</span>
                 )}
               </div>
-              <div className={`analytics-cards-container ${renderedCards.length === 1 ? 'single-card' : ''}`}>
-                {renderedCards.map((card: any) => (
-                  <div 
-                    key={card.id} 
-                    className={`analytics-card ${renderedCards.length === 1 ? 'full-width' : ''}`}
-                    style={card.colour ? { borderLeftColor: card.colour } : undefined}
-                  >
-                    <div 
-                      className="analytics-card-header"
-                      style={card.colour ? { borderLeftColor: card.colour } : undefined}
-                    >
-                      {card.colour && (
-                        <span 
-                          className="analytics-card-dot"
-                          style={{ backgroundColor: card.colour }}
-                        />
-                      )}
-                      {card.stageNumber && (
-                        <span className="analytics-card-stage-number">{card.stageNumber}</span>
-                      )}
-                      <span className="analytics-card-title-block">
-                        <span className="analytics-card-title">{card.title}</span>
-                        {card.subtitle && (
-                          <span className="analytics-card-subtitle">{renderDslSubtitle(card.subtitle)}</span>
-                        )}
-                      </span>
-                    </div>
-                    <div className="analytics-card-content">
-                      {/* Metrics display (scenario-primary layout) */}
-                      {card.metrics && card.metrics.map((m: any) => (
-                        <div key={m.id} className={`analytics-metric ${m.role === 'primary' ? 'analytics-metric-primary' : ''}`}>
-                          <span className="analytics-metric-label">{m.label}</span>
-                          <span className="analytics-metric-value">{m.value}</span>
-                        </div>
-                      ))}
-                      {/* Items breakdown - for stage cards, show coloured dots */}
-                      {card.items && card.items.map((item: any, i: number) => (
-                        <div key={i} className="analytics-item">
-                          {item.colour && (
-                            <span 
-                              className="analytics-item-dot"
-                              style={{ backgroundColor: item.colour }}
-                            />
-                          )}
-                          <span className="analytics-item-label">{item.label}</span>
-                          {item.value && <span className="analytics-item-value">{item.value}</span>}
-                          {item.metrics && (
-                            <div className="analytics-item-metrics">
-                              {item.metrics.map((m: any) => (
-                                <div
-                                  key={m.id}
-                                  className={`analytics-metric analytics-item-metric ${m.role === 'primary' ? 'analytics-metric-primary' : ''}`}
-                                >
-                                  <span className="analytics-metric-label">{m.label}</span>
-                                  <span className="analytics-metric-value">{m.value}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {results.result?.semantics?.chart?.recommended === 'funnel' && (
+                <div style={{ padding: '8px 8px 0 8px' }}>
+                  <FunnelChartPreview
+                    result={results.result}
+                    visibleScenarioIds={orderedVisibleScenarios}
+                    height={440}
+                    source={{
+                      parent_tab_id: tabId,
+                      parent_file_id: currentTab?.fileId,
+                      query_dsl: results.query_dsl,
+                      analysis_type: results.result.analysis_type,
+                    }}
+                    scenarioDslSubtitleById={scenarioDslSubtitleByIdObject}
+                  />
+                </div>
+              )}
+              <AnalysisResultCards result={results.result} scenarioDslSubtitleById={scenarioDslSubtitleByIdObject} />
             </div>
           )}
           
           {/* Fallback: show raw data if we have results but couldn't render cards */}
-          {results && results.success && results.result?.data && (!renderedCards || renderedCards.length === 0) && (
+          {results && results.success && results.result?.data && !results.result?.semantics?.dimensions && (
             <div className="analytics-section analytics-results">
               <div className="analytics-section-label">Results (Raw)</div>
               <div className="analytics-cards-container">

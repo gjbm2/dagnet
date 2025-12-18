@@ -7,6 +7,7 @@ import type { Scenario } from './scenarios';
  */
 export type ObjectType = 
   | 'graph' 
+  | 'chart'
   | 'parameter' 
   | 'context' 
   | 'case'

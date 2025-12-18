@@ -1,6 +1,6 @@
 # TODO
 
-- context fixes: /home/reg/dev/dagnet/docs/current/project-lag/context-fix.md
+- continue to add more graphs, analysis modes & lots and lots of polihsing...
 - use Amplitude latency histograms to translate lognormals
 - grouping / ungrouping nodes (zoom in to complexity)
 - show current (dates range) in dashboard mode
@@ -37,9 +37,7 @@
 
 
 ## Major components
-- Tabulated & graphing analytics output
 - Bayesian modelling
-- Asynch / api updates
 - Cyclic graphs...
 
 ---

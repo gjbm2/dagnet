@@ -37,6 +37,31 @@ https://dagnet.vercel.app/?data=%7B%22nodes%22%3A%5B%7B%22id%22%3A%22a%22%2C%22d
 
 Opens a specific graph from the default repository by name.
 
+### `?retrieveall=<graph_name>` / `?graph=<graph_name>&retrieveall`
+
+Runs a **headless daily automation** workflow for a specific graph:
+
+- Pull latest from git (**remote wins** for any merge conflicts)
+- Retrieve All Slices (headless; no Retrieve All modal)
+- Commit all committable changes back to the repo
+
+This is intended for simple local schedulers (e.g. Windows Task Scheduler) on a machine left running.
+
+**Examples:**
+```
+https://dagnet.vercel.app/?retrieveall=conversion-funnel
+https://dagnet.vercel.app/?graph=conversion-funnel&retrieveall
+https://dagnet.vercel.app/?retrieveall=conversion-funnel&pullalllatest
+```
+
+**How it works:**
+- The app opens the graph tab (same as `?graph=`).
+- After the graph loads, it runs the workflow via service-layer code (no UI prompts).
+- Merge conflicts during pull are automatically resolved by accepting the **remote** version.
+- A commit is made only if there are committable file changes.
+- The commit message includes a UK date (`d-MMM-yy`), e.g. `Daily data refresh (conversion-funnel) - 18-Dec-25`.
+- URL parameters are cleaned up after the automation starts (so refresh won’t repeatedly run it).
+
 ### `?pullalllatest`
 
 Pulls the latest repository changes **before** processing any other URL parameters (e.g. `graph`, `parameter`, `context`, `case`, `node`, `data`).
