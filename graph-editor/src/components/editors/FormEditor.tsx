@@ -318,6 +318,27 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
         </div>
       );
     }
+    if (objectType === 'settings') {
+      return (
+        <div
+          style={{
+            padding: '10px 16px',
+            borderBottom: '1px solid #e5e7eb',
+            background: '#EEF2FF',
+            color: '#1E3A8A',
+            position: 'sticky',
+            top: 0,
+            zIndex: 1,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 700 }}>Repository-wide settings</div>
+          <div style={{ fontSize: 12, marginTop: 2, opacity: 0.9 }}>
+            These values affect forecasting behaviour for this repo/branch. Commit changes to share them; pulling will update
+            other clients.
+          </div>
+        </div>
+      );
+    }
     return null;
   };
 

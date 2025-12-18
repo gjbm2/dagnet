@@ -25,6 +25,75 @@ from .graph_builder import (
 )
 
 
+def _prepare_scenarios(
+    G: nx.DiGraph,
+    all_scenarios: Optional[list],
+) -> list[dict[str, Any]]:
+    """
+    Centralised scenario preparation for ALL analysis runners.
+
+    Goal: avoid duplicating the same "build NX graph + apply visibility_mode + label" logic
+    in each runner implementation.
+
+    Returns a list of dicts with:
+    - scenario_id, scenario_name, scenario_colour
+    - visibility_mode, probability_label
+    - scenario_G (NetworkX graph with visibility mode already applied)
+
+    NOTE:
+    - Uses a copy of the base graph for the implicit "current" scenario to avoid mutating
+      the shared G across multiple scenario computations.
+    """
+    from .graph_builder import build_networkx_graph
+
+    prepared: list[dict[str, Any]] = []
+    scenarios_to_process = all_scenarios if all_scenarios else [None]
+
+    for scenario in scenarios_to_process:
+        if scenario:
+            scenario_G = build_networkx_graph(scenario.graph)
+            scenario_id = scenario.scenario_id
+            scenario_name = scenario.name or scenario.scenario_id
+            scenario_colour = scenario.colour or '#3b82f6'
+            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
+        else:
+            scenario_G = G.copy()
+            scenario_id = 'current'
+            scenario_name = 'Current'
+            scenario_colour = '#3b82f6'
+            visibility_mode = 'f+e'
+
+        apply_visibility_mode(scenario_G, visibility_mode)
+        prepared.append({
+            'scenario_id': scenario_id,
+            'scenario_name': scenario_name,
+            'scenario_colour': scenario_colour,
+            'visibility_mode': visibility_mode,
+            'probability_label': get_probability_label(visibility_mode),
+            'scenario_G': scenario_G,
+        })
+
+    return prepared
+
+
+def _filter_optional_metrics(result_obj: dict[str, Any], data_rows: list[dict[str, Any]], optional_metric_ids: list[str]) -> None:
+    """
+    Remove optional metrics that are all-null / all-zero across rows to reduce UI noise.
+    """
+    semantics = result_obj.get('semantics') or {}
+    metrics = semantics.get('metrics') or []
+    filtered_metrics = []
+    for m in metrics:
+        mid = m.get('id')
+        if mid in optional_metric_ids:
+            vals = [(row.get(mid)) for row in data_rows]
+            if all(v is None or v == 0 for v in vals):
+                continue
+        filtered_metrics.append(m)
+    semantics['metrics'] = filtered_metrics
+    result_obj['semantics'] = semantics
+
+
 def run_single_node_entry(
     G: nx.DiGraph,
     node_id: str,
@@ -46,28 +115,16 @@ def run_single_node_entry(
     
     node_label = G.nodes[node_id].get('label') or node_id
     
-    # Build scenario dimension values
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
-    scenario_dimension_values = {}
-    
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour or '#3b82f6'
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-        else:
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-        
-        scenario_dimension_values[scenario_id] = {
-            'name': scenario_name,
-            'colour': scenario_colour,
-            'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
+    scenario_dimension_values = {
+        s['scenario_id']: {
+            'name': s['scenario_name'],
+            'colour': s['scenario_colour'],
+            'visibility_mode': s['visibility_mode'],
+            'probability_label': s['probability_label'],
         }
+        for s in prepared_scenarios
+    }
     
     # Get outcome dimension values (absorbing nodes)
     absorbing_nodes = find_absorbing_nodes(G)
@@ -81,24 +138,19 @@ def run_single_node_entry(
     
     # Build flat data rows (scenario × outcome)
     data_rows = []
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_G = build_networkx_graph(scenario.graph)
-            scenario_id = scenario.scenario_id
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-            apply_visibility_mode(scenario_G, visibility_mode)
-        else:
-            scenario_G = G
-            scenario_id = 'current'
-            visibility_mode = 'f+e'
-        
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        visibility_mode = s['visibility_mode']
+        p_label = s['probability_label']
+        scenario_name = s['scenario_name']
         for absorbing in absorbing_nodes:
             result = calculate_path_probability(scenario_G, node_id, absorbing, pruning)
             data_rows.append({
                 'scenario_id': scenario_id,
                 'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
+                'probability_label': p_label,
                 'outcome': absorbing,
                 'probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
@@ -155,37 +207,25 @@ def run_path_to_end(
     node_label = G.nodes[node_id].get('label') or node_id if node_id in G else node_id
     
     # Build scenario dimension values and data rows
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
     scenario_dimension_values = {}
     data_rows = []
-    
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_G = build_networkx_graph(scenario.graph)
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour or '#3b82f6'
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
 
-            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-            apply_visibility_mode(scenario_G, visibility_mode)
-        else:
-            scenario_G = G
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-            apply_visibility_mode(scenario_G, visibility_mode)
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        scenario_name = s['scenario_name']
+        scenario_colour = s['scenario_colour']
+        visibility_mode = s['visibility_mode']
+        p_label = s['probability_label']
 
-        p_label = get_probability_label(visibility_mode)
-        
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
             'probability_label': p_label,
         }
-        
+
         result = calculate_path_to_absorbing(scenario_G, node_id, pruning)
         cost_per_success_gbp = None
         cost_per_success_labour = None
@@ -240,7 +280,15 @@ def run_path_to_end(
             if has_any_k:
                 k_reached = k_total
 
-        data_rows.append({
+        # Completeness is only well-defined here when there is a single inbound edge to the reached node.
+        completeness = None
+        if resolved_node and resolved_node in scenario_G:
+            preds = list(scenario_G.predecessors(resolved_node))
+            if len(preds) == 1:
+                latency = (scenario_G.edges[preds[0], resolved_node].get('latency') or {})
+                completeness = latency.get('completeness')
+
+        row = {
             'scenario_id': scenario_id,
             'scenario_name': scenario_name,
             'visibility_mode': visibility_mode,
@@ -248,13 +296,15 @@ def run_path_to_end(
             'probability': result.probability,
             'n': n_start,
             'k': k_reached,
+            'completeness': completeness,
             'expected_cost_gbp': result.expected_cost_gbp,
             'expected_labour_cost': result.expected_labour_cost,
             'expected_cost_gbp_given_success': result.expected_cost_gbp_given_success,
             'expected_labour_cost_given_success': result.expected_labour_cost_given_success,
             'cost_per_success_gbp': cost_per_success_gbp,
             'cost_per_success_labour': cost_per_success_labour,
-        })
+        }
+        data_rows.append(row)
     
     # IMPORTANT: probability basis is per-scenario (visibility_mode may differ),
     # so the shared metric label stays generic. Use per-row/per-scenario `probability_label`
@@ -274,6 +324,7 @@ def run_path_to_end(
                 {'id': 'probability', 'name': metric_name, 'type': 'probability', 'format': 'percent', 'role': 'primary'},
                 {'id': 'n', 'name': 'n (start)', 'type': 'count', 'format': 'number'},
                 {'id': 'k', 'name': 'k (reached)', 'type': 'count', 'format': 'number'},
+                {'id': 'completeness', 'name': 'Completeness', 'type': 'ratio', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
                 {'id': 'expected_cost_gbp_given_success', 'name': 'Cost (£) Given success', 'type': 'currency', 'format': 'currency_gbp'},
@@ -303,15 +354,7 @@ def run_path_to_end(
         'cost_per_success_gbp',
         'cost_per_success_labour',
     ]
-    filtered_metrics = []
-    for m in result_obj['semantics']['metrics']:
-        mid = m.get('id')
-        if mid in optional_metric_ids:
-            vals = [(row.get(mid)) for row in data_rows]
-            if all(v is None or v == 0 for v in vals):
-                continue
-        filtered_metrics.append(m)
-    result_obj['semantics']['metrics'] = filtered_metrics
+    _filter_optional_metrics(result_obj, data_rows, optional_metric_ids)
 
     return result_obj
 
@@ -332,39 +375,31 @@ def run_path_through(
     
     node_label = G.nodes[node_id].get('label') or node_id if node_id in G else node_id
     
-    # Build scenario dimension values and data rows
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
     scenario_dimension_values = {}
     data_rows = []
-    
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_G = build_networkx_graph(scenario.graph)
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour or '#3b82f6'
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-            apply_visibility_mode(scenario_G, visibility_mode)
-        else:
-            scenario_G = G
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-        
+
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        scenario_name = s['scenario_name']
+        scenario_colour = s['scenario_colour']
+        visibility_mode = s['visibility_mode']
+        p_label = s['probability_label']
+
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+            'probability_label': p_label,
         }
-        
+
         result = calculate_path_through_node(scenario_G, node_id, pruning)
         data_rows.append({
             'scenario_id': scenario_id,
             'scenario_name': scenario_name,
             'visibility_mode': visibility_mode,
+            'probability_label': p_label,
             'probability': result.probability,
             'expected_cost_gbp': result.expected_cost_gbp,
             'expected_labour_cost': result.expected_labour_cost,
@@ -408,8 +443,6 @@ def run_end_comparison(
     
     LAG support: includes visibility_mode per scenario for UI adaptors.
     """
-    from .graph_builder import build_networkx_graph
-    
     # Build node dimension values
     node_dimension_values = {}
     for i, node_id in enumerate(node_ids):
@@ -419,34 +452,24 @@ def run_end_comparison(
             'order': i
         }
     
-    # Build scenario dimension values and data rows
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
     scenario_dimension_values = {}
     data_rows = []
-    
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_G = build_networkx_graph(scenario.graph)
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour or '#3b82f6'
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-            apply_visibility_mode(scenario_G, visibility_mode)
-        else:
-            scenario_G = G
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-        
+
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        scenario_name = s['scenario_name']
+        scenario_colour = s['scenario_colour']
+        visibility_mode = s['visibility_mode']
+
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+            'probability_label': s['probability_label'],
         }
-        
+
         for node_id in node_ids:
             result = calculate_path_to_absorbing(scenario_G, node_id, pruning)
             data_rows.append({
@@ -501,8 +524,6 @@ def run_branch_comparison(
     
     LAG support: includes visibility_mode and forecast/evidence data per scenario.
     """
-    from .graph_builder import build_networkx_graph
-    
     # Build branch dimension values
     branch_dimension_values = {}
     for i, node_id in enumerate(node_ids):
@@ -512,34 +533,24 @@ def run_branch_comparison(
             'order': i
         }
     
-    # Build scenario dimension values and data rows
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
     scenario_dimension_values = {}
     data_rows = []
-    
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_G = build_networkx_graph(scenario.graph)
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour or '#3b82f6'
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-            apply_visibility_mode(scenario_G, visibility_mode)
-        else:
-            scenario_G = G
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-        
+
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        scenario_name = s['scenario_name']
+        scenario_colour = s['scenario_colour']
+        visibility_mode = s['visibility_mode']
+
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
             'colour': scenario_colour,
             'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+            'probability_label': s['probability_label'],
         }
-        
+
         for node_id in node_ids:
             result = calculate_path_through_node(scenario_G, node_id, pruning)
             # Get edge probability and LAG data from parent
@@ -566,6 +577,7 @@ def run_branch_comparison(
                 'scenario_id': scenario_id,
                 'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
+                'probability_label': s['probability_label'],
                 'edge_probability': edge_prob,
                 'path_through_probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
@@ -635,6 +647,87 @@ def _sort_nodes_topologically(G: nx.DiGraph, start_id: str, nodes: list[str]) ->
     return sorted(nodes, key=get_distance)
 
 
+def _expected_additive_latency_between_nodes(
+    G: nx.DiGraph,
+    start_id: str,
+    end_id: str,
+    pruning: Optional[PruningResult] = None,
+) -> tuple[Optional[float], Optional[float]]:
+    """
+    Estimate the (probability-weighted) mean and "median" lag between two nodes.
+
+    Notes:
+    - We treat edge-level `latency.mean_lag_days` and `latency.median_lag_days` as additive along a path.
+      This yields a useful, interpretable estimate for "how long does it take to get from A to B".
+    - For median we apply the same additive expectation to `median_lag_days` (approximation).
+    - Respects pruning (excluded edges + renormalisation factors) because pruning defines the allowed flows.
+    """
+    if start_id not in G or end_id not in G:
+        return (None, None)
+
+    excluded = pruning.excluded_edges if pruning else set()
+    renorm = pruning.renorm_factors if pruning else {}
+
+    # Restrict to nodes that are on some path start -> ... -> end (for speed + correctness).
+    try:
+        reachable_from_start = {start_id} | nx.descendants(G, start_id)
+        can_reach_end = {end_id} | nx.ancestors(G, end_id)
+        nodes_in_play = reachable_from_start & can_reach_end
+        H = G.subgraph(nodes_in_play).copy()
+    except Exception:
+        H = G
+
+    # Topological order (DagNet graphs are expected DAG-ish).
+    try:
+        topo = list(nx.topological_sort(H))
+    except Exception:
+        topo = list(H.nodes)
+
+    # Probability mass reaching each node.
+    P: dict[str, float] = {n: 0.0 for n in topo}
+    P[start_id] = 1.0
+
+    # Weighted cumulative lag sums: Sum_over_paths (path_prob * path_lag).
+    T_mean: dict[str, float] = {n: 0.0 for n in topo}
+    T_median: dict[str, float] = {n: 0.0 for n in topo}
+
+    for u in topo:
+        p_u = P.get(u, 0.0) or 0.0
+        if p_u == 0.0:
+            continue
+        if u == end_id:
+            continue
+
+        for _, v, data in H.out_edges(u, data=True):
+            edge = (u, v)
+            if edge in excluded:
+                continue
+
+            p_edge = float((data or {}).get('p') or 0.0)
+            if edge in renorm:
+                p_edge *= renorm[edge]
+            if p_edge == 0.0:
+                continue
+
+            w = p_u * p_edge
+
+            latency = (data or {}).get('latency') or {}
+            edge_mean = latency.get('mean_lag_days') or 0.0
+            edge_median = latency.get('median_lag_days') or 0.0
+
+            P[v] = (P.get(v, 0.0) or 0.0) + w
+            T_mean[v] = (T_mean.get(v, 0.0) or 0.0) + (T_mean.get(u, 0.0) or 0.0) * p_edge + w * float(edge_mean)
+            T_median[v] = (T_median.get(v, 0.0) or 0.0) + (T_median.get(u, 0.0) or 0.0) * p_edge + w * float(edge_median)
+
+    p_end = P.get(end_id, 0.0) or 0.0
+    if p_end == 0.0:
+        return (None, None)
+
+    mean_lag = (T_mean.get(end_id, 0.0) or 0.0) / p_end
+    median_lag = (T_median.get(end_id, 0.0) or 0.0) / p_end
+    return (median_lag, mean_lag)
+
+
 def run_path(
     G: nx.DiGraph,
     start_id: str,
@@ -652,8 +745,6 @@ def run_path(
     LAG support: includes forecast_mean, evidence_mean, and completeness fields
     when available on edges, conditional upon scenario visibility_mode.
     """
-    from .graph_builder import build_networkx_graph
-    
     intermediate_nodes = intermediate_nodes or []
     
     # Get labels from primary graph
@@ -666,8 +757,8 @@ def run_path(
     # Build stages: start -> sorted intermediates -> end
     stage_ids = [start_id] + sorted_intermediates + [end_id]
     
-    # Build scenario list (always use array for consistency)
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
+    scenario_count = len(prepared_scenarios)
     
     # Build dimension_values for stages and scenarios
     stage_dimension_values = {}
@@ -680,141 +771,225 @@ def run_path(
             'order': i
         }
     
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-        else:
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-        
-        # Ensure we have a colour - default to blue if not provided
-        if not scenario_colour:
-            scenario_colour = '#3b82f6'
-        
-        scenario_dimension_values[scenario_id] = {
-            'name': scenario_name,
-            'colour': scenario_colour,
-            'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+    for s in prepared_scenarios:
+        scenario_dimension_values[s['scenario_id']] = {
+            'name': s['scenario_name'],
+            'colour': s['scenario_colour'],
+            'visibility_mode': s['visibility_mode'],
+            'probability_label': s['probability_label'],
         }
+
+    # Start population N per scenario (used for stage-0 n and cumulative evidence probability).
+    start_n_by_scenario_id: dict[str, int] = {}
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        max_n_for_start = None
+        if start_id in scenario_G:
+            for succ in scenario_G.successors(start_id):
+                edge_evidence = (scenario_G.edges[start_id, succ].get('evidence') or {})
+                edge_n = edge_evidence.get('n')
+                if edge_n is None:
+                    continue
+                max_n_for_start = edge_n if max_n_for_start is None else max(max_n_for_start, edge_n)
+        if max_n_for_start is not None:
+            start_n_by_scenario_id[scenario_id] = max_n_for_start
     
     # Build flat data rows (stage × scenario)
     data_rows = []
     for i, stage_id in enumerate(stage_ids):
-        for scenario in scenarios_to_process:
-            if scenario:
-                scenario_G = build_networkx_graph(scenario.graph)
-                scenario_id = scenario.scenario_id
-                visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-                # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-                apply_visibility_mode(scenario_G, visibility_mode)
-            else:
-                scenario_G = G
-                scenario_id = 'current'
-                visibility_mode = 'f+e'
+        for s in prepared_scenarios:
+            scenario_G = s['scenario_G']
+            scenario_id = s['scenario_id']
+            scenario_name = s['scenario_name']
+            visibility_mode = s['visibility_mode']
+            p_label = s['probability_label']
             
             # Calculate probability to reach this stage from start
             if i == 0:
                 prob = 1.0
                 cost_gbp = 0.0
                 labour_cost = 0.0
-                stdev = None
-                distribution = None
-                n_total = None
-                k_success = None
-                forecast_mean = None
-                evidence_mean = None
-                completeness = None
-                p_n = None
-                forecast_k = None
+                median_lag_days = 0.0
+                mean_lag_days = 0.0
+                step_probability = None
             else:
                 result = calculate_path_probability(scenario_G, start_id, stage_id, pruning)
                 prob = result.probability
                 cost_gbp = result.expected_cost_gbp
                 labour_cost = result.expected_labour_cost
             
-                # Get statistics from incoming edge to this stage
-                prev_stage = stage_ids[i - 1]
-                stdev = None
-                distribution = None
-                n_total = None
-                k_success = None
-                forecast_mean = None
-                evidence_mean = None
-                completeness = None
-                p_n = None
-                forecast_k = None
-                
-                if scenario_G.has_edge(prev_stage, stage_id):
-                    edge_data = scenario_G.edges[prev_stage, stage_id]
-                    stdev = edge_data.get('p_stdev')
-                    distribution = edge_data.get('p_distribution')
-                    
-                    # Evidence data (observed rate and counts)
+                median_lag_days = None
+                mean_lag_days = None
+
+                # Stage-level evidence and latency summary:
+                # Funnel stages are NOT necessarily connected by a direct edge (e.g. A -> B may be a multi-step journey),
+                # so we must not assume `prev_stage -> stage` exists. Instead, show "arrivals at stage" as total inbound k.
+                inbound_edges = []
+                if stage_id in scenario_G:
+                    inbound_edges = [(pred, stage_id) for pred in scenario_G.predecessors(stage_id)]
+
+                total_inbound_k = 0
+                has_any_inbound_k = False
+
+                completeness_weighted_sum = 0.0
+                completeness_weight_total = 0.0
+                completeness_min = None
+
+                median_lag_weighted_sum = 0.0
+                median_lag_weight_total = 0.0
+
+                mean_lag_weighted_sum = 0.0
+                mean_lag_weight_total = 0.0
+
+                for (pred, node) in inbound_edges:
+                    edge_data = scenario_G.edges.get((pred, node), {}) or {}
                     evidence = edge_data.get('evidence') or {}
-                    n_total = evidence.get('n')
-                    k_success = evidence.get('k')
-                    evidence_mean = evidence.get('mean')
-                    
-                    # Forecast data (LAG projected probability)
-                    forecast = edge_data.get('forecast') or {}
-                    forecast_mean = forecast.get('mean')
-                    forecast_k = forecast.get('k')
-                    
-                    # Latency/maturity data (LAG completeness)
                     latency = edge_data.get('latency') or {}
-                    completeness = latency.get('completeness')
-                    
-                    # Inbound-n (forecast population)
-                    p_n = edge_data.get('p_n')
+
+                    k = evidence.get('k')
+                    if k is not None:
+                        has_any_inbound_k = True
+                        total_inbound_k += k
+
+                    comp = latency.get('completeness')
+                    if comp is not None:
+                        completeness_min = comp if completeness_min is None else min(completeness_min, comp)
+                        if k is not None and k > 0:
+                            completeness_weighted_sum += comp * k
+                            completeness_weight_total += k
+
+                    med = latency.get('median_lag_days')
+                    if med is not None and k is not None and k > 0:
+                        median_lag_weighted_sum += med * k
+                        median_lag_weight_total += k
+
+                    mean = latency.get('mean_lag_days')
+                    if mean is not None and k is not None and k > 0:
+                        mean_lag_weighted_sum += mean * k
+                        mean_lag_weight_total += k
+
+                arrivals_n = total_inbound_k if has_any_inbound_k else None
+
+                # Prefer weighted lag averages by realised arrivals (k). If no arrivals, leave blank.
+                if median_lag_weight_total > 0:
+                    median_lag_days = median_lag_weighted_sum / median_lag_weight_total
+                if mean_lag_weight_total > 0:
+                    mean_lag_days = mean_lag_weighted_sum / mean_lag_weight_total
+
+                # Completeness is only shown when we show evidence (E or F+E).
+                # Use weighted-by-k when possible; otherwise fall back to min across inbound edges.
+                completeness = None
+                if visibility_mode in ('e', 'f+e'):
+                    if completeness_weight_total > 0:
+                        completeness = completeness_weighted_sum / completeness_weight_total
+                    else:
+                        completeness = completeness_min
+
+                # Cumulative evidence probability is derived from arrivals / start-N (see below),
+                # not from any single inbound edge's evidence.mean.
+                evidence_mean = None
+                forecast_mean = None
+                p_mean = None
+
+                # Gap metrics between the selected stages (prev_stage -> stage_id), not just the last inbound edge.
+                prev_stage = stage_ids[i - 1]
+                seg_median, seg_mean = _expected_additive_latency_between_nodes(scenario_G, prev_stage, stage_id, pruning)
+                if seg_median is not None:
+                    median_lag_days = seg_median
+                if seg_mean is not None:
+                    mean_lag_days = seg_mean
             
             # Calculate dropoff from previous stage
             dropoff = None
-            if i > 0 and len(data_rows) >= len(scenarios_to_process):
+            if i > 0 and scenario_count > 0 and len(data_rows) >= scenario_count:
                 # Find the previous stage row for this scenario
-                prev_idx = len(data_rows) - len(scenarios_to_process)
+                prev_idx = len(data_rows) - scenario_count
                 prev_row = data_rows[prev_idx]
                 if prev_row['scenario_id'] == scenario_id and prev_row['probability'] > 0:
                     dropoff = prev_row['probability'] - prob
+                    step_probability = prob / prev_row['probability']
             
             row = {
                 'stage': stage_id,
                 'scenario_id': scenario_id,
                 'scenario_name': scenario_name,
                 'visibility_mode': visibility_mode,
+                'probability_label': p_label,
                 'probability': prob,
                 'expected_cost_gbp': cost_gbp,
                 'expected_labour_cost': labour_cost,
             }
-            
-            # Include optional fields only if present
-            if stdev is not None:
-                row['stdev'] = stdev
-            if distribution is not None:
-                row['distribution'] = distribution
-            if n_total is not None:
-                row['n'] = n_total
-            if k_success is not None:
-                row['k'] = k_success
+
+            # First stage conventions: 100% and show start population N as "n".
+            if i == 0:
+                start_n = start_n_by_scenario_id.get(scenario_id)
+                if start_n is not None:
+                    row['n'] = start_n
+
+                if visibility_mode in ('e', 'f+e'):
+                    row['evidence_mean'] = 1.0
+                    row['completeness'] = 1.0
+                if visibility_mode == 'f':
+                    row['forecast_mean'] = 1.0
+                if visibility_mode == 'f+e':
+                    row['p_mean'] = 1.0
+
+                row['median_lag_days'] = 0.0
+                row['mean_lag_days'] = 0.0
+            else:
+                # Subsequent stages: include arrivals n and evidence-only context where applicable.
+                if visibility_mode in ('e', 'f+e') and arrivals_n is not None:
+                    row['n'] = arrivals_n
+
+                # Evidence probability is cumulative: arrivals / start-N.
+                if visibility_mode in ('e', 'f+e'):
+                    start_n = start_n_by_scenario_id.get(scenario_id)
+                    if isinstance(start_n, (int, float)) and start_n and arrivals_n is not None:
+                        row['evidence_mean'] = arrivals_n / float(start_n)
+
+                # LAG field invariants:
+                # - forecast_mean must always mean the EDGE forecast baseline (p.forecast.mean) when available
+                #   and must NOT change meaning based on visibility_mode.
+                # - evidence_mean (for stage rows) is the cumulative arrival probability (arrivals/start-N),
+                #   which for single-path funnels matches the edge evidence mean and is the quantity the UI
+                #   wants for a funnel stage.
+                #
+                # If the selected stages are directly connected (prev_stage → stage_id), surface the
+                # edge-local forecast.mean regardless of visibility_mode so semantics remain invariant.
+                prev_stage = stage_ids[i - 1]
+                if prev_stage in scenario_G and stage_id in scenario_G and scenario_G.has_edge(prev_stage, stage_id):
+                    edge_data_direct = scenario_G.edges.get((prev_stage, stage_id), {}) or {}
+                    direct_forecast = edge_data_direct.get('forecast') or {}
+                    direct_forecast_mean = direct_forecast.get('mean')
+                    if direct_forecast_mean is not None:
+                        row['forecast_mean'] = direct_forecast_mean
+                    # Surface edge evidence.mean as evidence_mean fallback when we cannot derive
+                    # cumulative arrivals/start-N (e.g. when only evidence.mean is present).
+                    # This keeps evidence_mean semantics stable across visibility modes for
+                    # directly-connected stages.
+                    if 'evidence_mean' not in row:
+                        direct_evidence = edge_data_direct.get('evidence') or {}
+                        direct_evidence_mean = direct_evidence.get('mean')
+                        if direct_evidence_mean is not None:
+                            row['evidence_mean'] = direct_evidence_mean
+
+                # Blended probability is the scenario's cumulative probability when in blended mode.
+                if visibility_mode == 'f+e':
+                    row['p_mean'] = prob
+
+                if completeness is not None:
+                    row['completeness'] = completeness
+
+                if median_lag_days is not None:
+                    row['median_lag_days'] = median_lag_days
+                if mean_lag_days is not None:
+                    row['mean_lag_days'] = mean_lag_days
+
             if dropoff is not None:
                 row['dropoff'] = dropoff
-            
-            # LAG fields: always include if available (invariant semantics)
-            if forecast_mean is not None:
-                row['forecast_mean'] = forecast_mean
-            if evidence_mean is not None:
-                row['evidence_mean'] = evidence_mean
-            if completeness is not None:
-                row['completeness'] = completeness
-            if p_n is not None:
-                row['p_n'] = p_n
-            if forecast_k is not None:
-                row['forecast_k'] = forecast_k
+            if step_probability is not None:
+                row['step_probability'] = step_probability
             
             data_rows.append(row)
     
@@ -832,16 +1007,15 @@ def run_path(
                 {'id': 'scenario_id', 'name': 'Scenario', 'type': 'scenario', 'role': 'secondary'},
             ],
             'metrics': [
-                {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
-                {'id': 'forecast_mean', 'name': 'Forecast', 'type': 'probability', 'format': 'percent'},
-                {'id': 'evidence_mean', 'name': 'Evidence', 'type': 'probability', 'format': 'percent'},
+                {'id': 'probability', 'name': 'Cum. probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
+                {'id': 'n', 'name': 'n', 'type': 'count', 'format': 'number'},
+                {'id': 'evidence_mean', 'name': 'Evidence probability', 'type': 'probability', 'format': 'percent'},
+                {'id': 'forecast_mean', 'name': 'Forecast probability', 'type': 'probability', 'format': 'percent'},
+                {'id': 'p_mean', 'name': 'Blended probability', 'type': 'probability', 'format': 'percent'},
                 {'id': 'completeness', 'name': 'Completeness', 'type': 'ratio', 'format': 'percent'},
-                {'id': 'stdev', 'name': 'Std Dev', 'type': 'probability', 'format': 'percent'},
-                {'id': 'distribution', 'name': 'Distribution', 'type': 'category', 'format': 'string'},
-                {'id': 'n', 'name': 'Sample Size', 'type': 'count', 'format': 'integer'},
-                {'id': 'k', 'name': 'Conversions', 'type': 'count', 'format': 'integer'},
-                {'id': 'p_n', 'name': 'Forecast Population', 'type': 'count', 'format': 'integer'},
-                {'id': 'forecast_k', 'name': 'Expected Conversions', 'type': 'count', 'format': 'integer'},
+                {'id': 'median_lag_days', 'name': 'Median lag (days)', 'type': 'number', 'format': 'number'},
+                {'id': 'mean_lag_days', 'name': 'Mean lag (days)', 'type': 'number', 'format': 'number'},
+                {'id': 'step_probability', 'name': 'Step probability', 'type': 'probability', 'format': 'percent'},
                 {'id': 'dropoff', 'name': 'Dropoff', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
@@ -898,8 +1072,6 @@ def run_partial_path(
     
     LAG support: includes visibility_mode per scenario for UI adaptors.
     """
-    from .graph_builder import build_networkx_graph
-    
     from_label = G.nodes[start_id].get('label') or start_id if start_id in G else start_id
     
     # Get absorbing nodes for outcome dimension
@@ -912,34 +1084,23 @@ def run_partial_path(
             'order': i
         }
     
-    # Build scenario dimension values and data rows
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
     scenario_dimension_values = {}
     data_rows = []
-    
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_G = build_networkx_graph(scenario.graph)
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour or '#3b82f6'
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-            apply_visibility_mode(scenario_G, visibility_mode)
-        else:
-            scenario_G = G
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-        
+
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        scenario_name = s['scenario_name']
+        visibility_mode = s['visibility_mode']
+
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour,
+            'colour': s['scenario_colour'],
             'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+            'probability_label': s['probability_label'],
         }
-        
+
         for absorbing in absorbing_nodes:
             result = calculate_path_probability(scenario_G, start_id, absorbing, pruning)
             if result.probability > 0:
@@ -997,8 +1158,6 @@ def run_general_stats(
     Args:
         node_keys: Graph keys (UUIDs), already resolved by dispatcher
     """
-    from .graph_builder import build_networkx_graph
-    
     # Build node dimension values (using human IDs for output)
     node_dimension_values = {}
     for i, graph_key in enumerate(node_keys):
@@ -1022,34 +1181,23 @@ def run_general_stats(
             'order': i
         }
     
-    # Build scenario dimension values and data rows
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
     scenario_dimension_values = {}
     data_rows = []
-    
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_G = build_networkx_graph(scenario.graph)
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour or '#3b82f6'
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-            apply_visibility_mode(scenario_G, visibility_mode)
-        else:
-            scenario_G = G
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-        
+
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        scenario_name = s['scenario_name']
+        visibility_mode = s['visibility_mode']
+
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour,
+            'colour': s['scenario_colour'],
             'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+            'probability_label': s['probability_label'],
         }
-        
+
         for graph_key in node_keys:
             if graph_key not in scenario_G:
                 continue
@@ -1106,8 +1254,6 @@ def run_graph_overview(
     
     LAG support: includes visibility_mode per scenario for UI adaptors.
     """
-    from .graph_builder import build_networkx_graph
-    
     # Get outcome dimension values (absorbing nodes)
     absorbing_nodes = find_absorbing_nodes(G)
     outcome_dimension_values = {}
@@ -1118,48 +1264,37 @@ def run_graph_overview(
             'order': i
         }
     
-    # Build scenario dimension values and data rows
-    scenarios_to_process = all_scenarios if all_scenarios else [None]
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
     scenario_dimension_values = {}
     data_rows = []
-    
-    for scenario in scenarios_to_process:
-        if scenario:
-            scenario_G = build_networkx_graph(scenario.graph)
-            scenario_id = scenario.scenario_id
-            scenario_name = scenario.name or scenario.scenario_id
-            scenario_colour = scenario.colour or '#3b82f6'
-            visibility_mode = getattr(scenario, 'visibility_mode', 'f+e') or 'f+e'
-            # Apply visibility mode to use correct probability source (mean/forecast/evidence)
-            apply_visibility_mode(scenario_G, visibility_mode)
-        else:
-            scenario_G = G
-            scenario_id = 'current'
-            scenario_name = 'Current'
-            scenario_colour = '#3b82f6'
-            visibility_mode = 'f+e'
-        
+
+    for s in prepared_scenarios:
+        scenario_G = s['scenario_G']
+        scenario_id = s['scenario_id']
+        scenario_name = s['scenario_name']
+        visibility_mode = s['visibility_mode']
+
         scenario_dimension_values[scenario_id] = {
             'name': scenario_name,
-            'colour': scenario_colour,
+            'colour': s['scenario_colour'],
             'visibility_mode': visibility_mode,
-            'probability_label': get_probability_label(visibility_mode),
+            'probability_label': s['probability_label'],
         }
-        
+
         entry_nodes = find_entry_nodes(scenario_G)
-        
+
         for absorbing in absorbing_nodes:
             total_prob = 0.0
             total_cost_gbp = 0.0
             total_labour_cost = 0.0
-            
+
             for entry in entry_nodes:
                 entry_weight = scenario_G.nodes[entry].get('entry_weight', 1.0 / len(entry_nodes)) if entry_nodes else 0
                 result = calculate_path_probability(scenario_G, entry, absorbing, pruning)
                 total_prob += entry_weight * result.probability
                 total_cost_gbp += entry_weight * result.expected_cost_gbp
                 total_labour_cost += entry_weight * result.expected_labour_cost
-            
+
             data_rows.append({
                 'outcome': absorbing,
                 'scenario_id': scenario_id,

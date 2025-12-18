@@ -706,7 +706,6 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     // Each stage card shows all scenarios with their values
     if (primaryDim.type === 'stage' && secondaryDim?.type === 'scenario') {
       const scenarioValues = [...new Set(result.data.map((row: any) => row[secondaryDim.id]))];
-      const primaryMetric = metrics.find(m => m.role === 'primary') || metrics[0];
       
       // Build one card per stage with scenarios as items
       const sortedStages = primaryValues.sort((a, b) => {
@@ -719,10 +718,52 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         const stageLabel = getLabel(primaryDim.id, stageId);
         const scenarioItems = scenarioValues.map(sv => {
           const row = result.data.find((r: any) => r[primaryDim.id] === stageId && r[secondaryDim.id] === sv);
+
+          // For funnels, show a focused set of metrics per scenario (readability).
+          // This is display logic only: we do NOT change analysis behaviour, just which emitted fields we surface.
+          const funnelMetricPriority = [
+            'probability',
+            'step_probability',
+            'dropoff',
+            'n',
+            'evidence_mean',
+            'forecast_mean',
+            'p_mean',
+            'completeness',
+            'median_lag_days',
+            'mean_lag_days',
+          ];
+
+          const metricsById = new Map((metrics || []).map(m => [m.id, m]));
+          const funnelMetrics = funnelMetricPriority
+            .map(id => metricsById.get(id))
+            .filter(Boolean) as any[];
+
+          const metricsToRender = funnelMetrics.length > 0 ? funnelMetrics : (metrics || []);
+
+          const itemMetrics = metricsToRender
+            .map(m => ({
+              id: m.id,
+              // For funnel rows, the "probability" metric is already cumulative-by-stage.
+              // Keep the label stable ("Cum. probability") and carry basis in the scenario title.
+              label: m.id === 'probability'
+                ? (() => {
+                  const basis = getScenarioProbabilityLabel(sv, row);
+                  if (!basis || basis === 'Probability') return m.name;
+                  return `${m.name} (${basis})`;
+                })()
+                : m.name,
+              value: formatValue(row?.[m.id], m.format),
+              rawValue: row?.[m.id],
+              role: m.role || 'secondary',
+            }))
+            // Keep the stage cards readable: drop all-null metrics for this row
+            .filter(m => m.rawValue !== null && m.rawValue !== undefined);
+
           return {
             label: formatScenarioTitleWithBasis(sv),
-            value: formatValue(row?.[primaryMetric.id], primaryMetric.format),
-            colour: getColour(secondaryDim.id, sv)
+            colour: getColour(secondaryDim.id, sv),
+            metrics: itemMetrics,
           };
         });
         
@@ -1009,7 +1050,20 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                             />
                           )}
                           <span className="analytics-item-label">{item.label}</span>
-                          <span className="analytics-item-value">{item.value}</span>
+                          {item.value && <span className="analytics-item-value">{item.value}</span>}
+                          {item.metrics && (
+                            <div className="analytics-item-metrics">
+                              {item.metrics.map((m: any) => (
+                                <div
+                                  key={m.id}
+                                  className={`analytics-metric analytics-item-metric ${m.role === 'primary' ? 'analytics-metric-primary' : ''}`}
+                                >
+                                  <span className="analytics-metric-label">{m.label}</span>
+                                  <span className="analytics-metric-value">{m.value}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Settings UI Schema",
+  "description": "UI schema for settings/settings.yaml form editor",
+
+  "ui:order": ["version", "forecasting", "development"],
+
+  "version": {
+    "ui:widget": "hidden"
+  },
+
+  "forecasting": {
+    "ui:title": "📈 Forecasting settings",
+    "ui:description": "These knobs affect how DagNet estimates baseline conversion rates and how it blends forecast vs evidence when data is immature.\n\nBecause they change results, they should be committed and pulled like other shared configuration.\n\nSee Help → Forecasting settings for the full explanation and examples.",
+    "ui:order": [
+      "RECENCY_HALF_LIFE_DAYS",
+      "LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE",
+      "DEFAULT_T95_DAYS",
+      "FORECAST_BLEND_LAMBDA",
+      "LATENCY_BLEND_COMPLETENESS_POWER",
+      "ANCHOR_DELAY_BLEND_K_CONVERSIONS"
+    ],
+    "RECENCY_HALF_LIFE_DAYS": {
+      "ui:help": "Recency half-life for *mature* data contributing to the baseline forecast.\n\nIndicative values: 7–14 (responsive), 30 (balanced), 60–90 (conservative), very large = effectively no recency weighting.\n\nSee Help → Forecasting settings."
+    },
+    "LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE": {
+      "ui:help": "Stability guardrail for recency weighting.\n\nIndicative values: 50–150 (responsive but noisier), 150–500 (typical), 500+ (very conservative).\n\nSee Help → Forecasting settings."
+    },
+    "DEFAULT_T95_DAYS": {
+      "ui:help": "Fallback maturity horizon when no edge-specific latency is available.\n\nIndicative values: 7–21 (typical), 30 (conservative default), 60–90 (very conservative).\n\nSee Help → Forecasting settings."
+    },
+    "FORECAST_BLEND_LAMBDA": {
+      "ui:help": "Forecast prior strength used when blending forecast vs evidence for immature data.\n\nIndicative values: 0.05–0.20 (typical; default 0.15), 0.20–0.50 (more conservative), 0 (disables prior).\n\nSee Help → Forecasting settings."
+    },
+    "LATENCY_BLEND_COMPLETENESS_POWER": {
+      "ui:help": "Extra conservatism for how completeness influences blend weight.\n\nIndicative values: 1.0 (canonical), 1.5–3.0 (typical; default 2.25), 3.0–5.0 (very conservative).\n\nSee Help → Forecasting settings."
+    },
+    "ANCHOR_DELAY_BLEND_K_CONVERSIONS": {
+      "ui:help": "Credibility threshold for trusting observed anchor-delay evidence (cohort-mode completeness on downstream edges).\n\nIndicative values: 20–50 (responsive), 50–150 (typical; default 50), 150–300 (conservative).\n\nSee Help → Forecasting settings."
+    }
+  },
+
+  "development": {
+    "ui:title": "🛠️ Development (local)",
+    "ui:description": "These are intended for local debugging. Avoid committing changes here unless you truly want them shared.",
+    "ui:options": { "accordion": true }
+  }
+}
+
+

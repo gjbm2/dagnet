@@ -165,6 +165,20 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     supportsRawEdit: true
   },
 
+  settings: {
+    type: 'settings',
+    displayName: 'Settings',
+    displayNamePlural: 'Settings',
+    schemaFile: '/schemas/settings-schema.json',
+    uiSchemaFile: '/ui-schemas/settings-ui-schema.json',
+    directory: 'settings',
+    extensions: ['.yaml', '.yml', '.json'],
+    icon: '⚙️',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: true,
+    supportsRawEdit: true
+  },
+
   markdown: {
     type: 'markdown',
     displayName: 'Markdown',

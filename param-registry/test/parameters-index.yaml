@@ -124,6 +124,18 @@ parameters:
     status: active
     tags: [fixture, amplitude, cohort, latency]
 
+  - id: household-created-to-energy-rec-latency
+    file_path: parameters/household-created-to-energy-rec-latency.yaml
+    type: probability
+    status: active
+    tags: [fixture, amplitude, cohort, latency]
+
+  - id: energy-rec-to-switch-registered-latency
+    file_path: parameters/energy-rec-to-switch-registered-latency.yaml
+    type: probability
+    status: active
+    tags: [fixture, amplitude, cohort, latency]
+
   - id: switch-registered-to-switch-success-latency
     file_path: parameters/switch-registered-to-switch-success-latency.yaml
     type: probability

@@ -1,0 +1,60 @@
+{
+  "nodes": [
+    {
+      "uuid": "A",
+      "id": "A",
+      "label": "Household Created",
+      "event_id": "household-created",
+      "entry": { "is_start": true, "entry_weight": 1.0 }
+    },
+    {
+      "uuid": "X",
+      "id": "X",
+      "label": "Energy Recommendation Offered",
+      "event_id": "energy-rec"
+    },
+    {
+      "uuid": "Y",
+      "id": "Y",
+      "label": "Switch Registered",
+      "event_id": "switch-registered"
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "A-X",
+      "id": "A-X",
+      "from": "A",
+      "to": "X",
+      "query": "from(A).to(X)",
+      "p": {
+        "id": "household-created-to-energy-rec-latency",
+        "connection": "amplitude-prod",
+        "latency": {
+          "latency_parameter": true,
+          "anchor_node_id": "A",
+          "path_t95": 30
+        }
+      }
+    },
+    {
+      "uuid": "X-Y",
+      "id": "X-Y",
+      "from": "X",
+      "to": "Y",
+      "query": "from(X).to(Y)",
+      "p": {
+        "id": "energy-rec-to-switch-registered-latency",
+        "connection": "amplitude-prod",
+        "latency": {
+          "latency_parameter": true,
+          "anchor_node_id": "A",
+          "path_t95": 30
+        }
+      }
+    }
+  ],
+  "currentQueryDSL": "cohort(A,-20d:-18d).context(channel)"
+}
+
+

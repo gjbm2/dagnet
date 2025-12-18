@@ -1234,6 +1234,15 @@ export interface MergeOptions {
    * to avoid breaking the public API and may be removed in a future cleanup.
    */
   recomputeForecast?: boolean;
+
+  /**
+   * Forecasting knobs (shared settings) to use when recomputing forecast scalars.
+   * If omitted, defaults to compiled constants.
+   */
+  forecastingConfig?: {
+    RECENCY_HALF_LIFE_DAYS?: number;
+    DEFAULT_T95_DAYS?: number;
+  };
 }
 
 /**
@@ -1535,10 +1544,14 @@ export function mergeTimeSeriesIntoParameter(
     if (!Array.isArray(mergedDates) || !Array.isArray(mergedN) || !Array.isArray(mergedK)) return undefined;
     if (mergedDates.length === 0) return undefined;
 
+    const defaultT95 =
+      (typeof mergeOptions?.forecastingConfig?.DEFAULT_T95_DAYS === 'number' && Number.isFinite(mergeOptions.forecastingConfig.DEFAULT_T95_DAYS))
+        ? mergeOptions.forecastingConfig.DEFAULT_T95_DAYS
+        : DEFAULT_T95_DAYS;
     const t95Raw =
       typeof mergeOptions?.latencyConfig?.t95 === 'number' && Number.isFinite(mergeOptions.latencyConfig.t95) && mergeOptions.latencyConfig.t95 > 0
         ? mergeOptions.latencyConfig.t95
-        : DEFAULT_T95_DAYS;
+        : defaultT95;
     const maturityDays = Math.ceil(t95Raw) + 1;
     // Recency datum for forecast MUST be max(window date), not wall-clock "now".
     const asOf = parseDate(mergedDates[mergedDates.length - 1]);
@@ -1556,7 +1569,11 @@ export function mergeTimeSeriesIntoParameter(
 
       // Recency weighting: mirror statisticalEnhancementService (true half-life semantics).
       const ageDays = Math.max(0, (asOf.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
-      const w = Math.exp(-Math.LN2 * ageDays / RECENCY_HALF_LIFE_DAYS);
+      const halfLife =
+        (typeof mergeOptions?.forecastingConfig?.RECENCY_HALF_LIFE_DAYS === 'number' && Number.isFinite(mergeOptions.forecastingConfig.RECENCY_HALF_LIFE_DAYS) && mergeOptions.forecastingConfig.RECENCY_HALF_LIFE_DAYS > 0)
+          ? mergeOptions.forecastingConfig.RECENCY_HALF_LIFE_DAYS
+          : RECENCY_HALF_LIFE_DAYS;
+      const w = Math.exp(-Math.LN2 * ageDays / halfLife);
 
       const n = typeof mergedN[i] === 'number' ? mergedN[i] : 0;
       const k = typeof mergedK[i] === 'number' ? mergedK[i] : 0;
