@@ -38,6 +38,12 @@ export type BridgeChartOptionArgs = {
     axisLabelRotateDeg?: number;
     barWidthMinPx?: number;
     barWidthMaxPx?: number;
+    /**
+     * Fraction of category width to use as the target bar width before clamping.
+     * This is the primary control for "chunkiness" once you have enough width;
+     * barWidthMaxPx only matters if the raw width exceeds it.
+     */
+    barWidthFraction?: number;
     showRunningTotalLine?: boolean;
     /**
      * Render orientation for bridge charts.
@@ -578,6 +584,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const axisLabelRotateDeg = args.ui?.axisLabelRotateDeg;
   const barWidthMinPx = args.ui?.barWidthMinPx ?? 12;
   const barWidthMaxPx = args.ui?.barWidthMaxPx ?? 48;
+  const barWidthFraction = args.ui?.barWidthFraction;
   const showRunningTotalLine = args.ui?.showRunningTotalLine ?? false;
   const orientation = args.ui?.orientation ?? 'vertical';
 
@@ -667,10 +674,16 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const fmtTotalPct = (v: number | null) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—');
   const fmtDeltaPct = (v: number | null) => (typeof v === 'number' ? `${(v * 100).toFixed(deltaDecimals)}%` : '—');
 
+  // Typography: in tab view we pass a larger axisLabelFontSizePx; keep value labels aligned with that.
+  const valueAxisLabelFontSizePx = Math.max(10, Math.min(12, Math.round(axisLabelFontSizePx * 0.92)));
+  const valueLabelFontSizePx = Math.max(10, Math.min(13, Math.round(axisLabelFontSizePx * 0.95)));
+
   const plotWidth = Math.max(240, widthPx - 40);
   const n = Math.max(1, labels.length);
   const perCategory = plotWidth / n;
-  const barWidthPx = Math.round(Math.max(barWidthMinPx, Math.min(barWidthMaxPx, perCategory * (n <= 8 ? 0.56 : 0.44))));
+  const defaultFraction = n <= 8 ? 0.56 : 0.44;
+  const fraction = typeof barWidthFraction === 'number' && Number.isFinite(barWidthFraction) ? barWidthFraction : defaultFraction;
+  const barWidthPx = Math.round(Math.max(barWidthMinPx, Math.min(barWidthMaxPx, perCategory * fraction)));
 
   const clampLabelIntoView = (p: any) => {
     const lr = p?.labelRect;
@@ -844,7 +857,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
           min: minV,
           max: maxV,
           splitNumber: 4,
-          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 10, margin: 10 },
+          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: valueAxisLabelFontSizePx, margin: 10 },
         }
       : {
           type: 'category',
@@ -881,7 +894,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
           min: minV,
           max: maxV,
           splitNumber: 4,
-          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 10, margin: 10 },
+          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: valueAxisLabelFontSizePx, margin: 10 },
         },
     series: [
       {
@@ -920,7 +933,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? `+${fmtDeltaPct(v)}` : '';
           },
-          fontSize: 10,
+          fontSize: valueLabelFontSizePx,
           color: '#374151',
         },
         labelLayout: (p: any) => clampLabelIntoView(p),
@@ -940,7 +953,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? `-${fmtDeltaPct(v)}` : '';
           },
-          fontSize: 10,
+          fontSize: valueLabelFontSizePx,
           color: '#374151',
         },
         labelLayout: (p: any) => clampLabelIntoView(p),
@@ -960,7 +973,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? fmtTotalPct(v) : '';
           },
-          fontSize: 10,
+          fontSize: valueLabelFontSizePx,
           color: '#374151',
         },
         labelLayout: (p: any) => clampLabelIntoView(p),
