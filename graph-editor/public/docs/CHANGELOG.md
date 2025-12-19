@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.13b
+**Released:** December 19, 2025
+
+Various fetch fixes
+
+---
+
 ## Version 1.1.11b
 **Released:** December 19, 2025
 
