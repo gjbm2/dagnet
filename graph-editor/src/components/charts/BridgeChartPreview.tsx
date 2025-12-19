@@ -14,6 +14,7 @@ export function BridgeChartPreview(props: {
   fillHeight?: boolean;
   compactControls?: boolean;
   showToolbox?: boolean;
+  orientation?: 'vertical' | 'horizontal';
   source?: {
     parent_file_id?: string;
     parent_tab_id?: string;
@@ -22,7 +23,7 @@ export function BridgeChartPreview(props: {
   };
   hideOpenAsTab?: boolean;
 }): JSX.Element | null {
-  const { result, height = 360, fillHeight = false, compactControls = false, showToolbox = true, source, hideOpenAsTab = false } = props;
+  const { result, height = 360, fillHeight = false, compactControls = false, showToolbox = true, orientation = 'vertical', source, hideOpenAsTab = false } = props;
 
   const { ref: containerRef, height: containerHeight } = useElementSize<HTMLDivElement>();
   const { ref: controlsRef, height: controlsHeight } = useElementSize<HTMLDivElement>();
@@ -106,8 +107,30 @@ export function BridgeChartPreview(props: {
         showToolbox={showToolbox}
         ui={
           compactControls
-            ? { axisLabelFontSizePx: 10, axisLabelMaxLines: 2, axisLabelMaxCharsPerLine: 10 }
-            : { axisLabelFontSizePx: 11, axisLabelMaxLines: 2, axisLabelMaxCharsPerLine: 14 }
+            ? {
+                axisLabelFontSizePx: 9,
+                axisLabelMaxLines: 2,
+                axisLabelMaxCharsPerLine: 10,
+                orientation,
+                // Vertical waterfall in a narrow panel needs rotation to remain legible.
+                ...(orientation === 'vertical' ? { axisLabelRotateDeg: 60 } : null),
+                // Panel: keep bars slimmer (both vertical & horizontal modes).
+                barWidthMinPx: 10,
+                barWidthMaxPx: 24,
+                showRunningTotalLine: true,
+              }
+            : {
+                axisLabelFontSizePx: 11,
+                axisLabelMaxLines: 2,
+                axisLabelMaxCharsPerLine: 16,
+                orientation,
+                // In tabs we have more width; keep rotation modest if needed.
+                ...(orientation === 'vertical' ? { axisLabelRotateDeg: 45 } : null),
+                // Tab: moderate bar thickness.
+                barWidthMinPx: 12,
+                barWidthMaxPx: 36,
+                showRunningTotalLine: true,
+              }
         }
       />
     </div>

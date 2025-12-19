@@ -26,6 +26,7 @@ const hoisted = vi.hoisted(() => ({
   getPendingPlan: vi.fn(),
   setPendingPlan: vi.fn(),
   clearPendingPlan: vi.fn(),
+  clearVolatileFlags: vi.fn(),
   getAutomaticMode: vi.fn(),
   setAutomaticMode: vi.fn(),
 }));
@@ -85,6 +86,7 @@ vi.mock('../../services/stalenessNudgeService', () => ({
     getPendingPlan: hoisted.getPendingPlan,
     setPendingPlan: hoisted.setPendingPlan,
     clearPendingPlan: hoisted.clearPendingPlan,
+    clearVolatileFlags: hoisted.clearVolatileFlags,
     getAutomaticMode: hoisted.getAutomaticMode,
     setAutomaticMode: hoisted.setAutomaticMode,
   },
@@ -169,38 +171,15 @@ describe('useStalenessNudges', () => {
 
     screen.getByText('Run selected').click();
 
-    expect(hoisted.setPendingPlan).toHaveBeenCalledTimes(1);
+    // No pending plan persistence (must never survive refresh). Pull runs now (explicit user intent), then reload.
+    await waitFor(() => {
+      expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
+    });
     expect(reloadSpy).toHaveBeenCalledTimes(1);
     reloadSpy.mockRestore();
   });
 
-  it('should run pending plan after reload when ready (pullAllLatest)', async () => {
-    hoisted.getPendingPlan.mockReturnValue({
-      createdAtMs: Date.now(),
-      repository: 'repo-1',
-      branch: 'main',
-      pullAllLatest: true,
-      retrieveAllSlices: false,
-    });
-
-    render(<Harness />);
-
-    await waitFor(() => {
-      expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
-      expect(hoisted.clearPendingPlan).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it('should auto-run due actions without showing the modal when automatic mode is enabled', async () => {
-    hoisted.getAutomaticMode.mockReturnValue(true);
-    // In production, canPrompt/markPrompted persist to storage and prevent tight loops.
-    // In this unit test, we model that by allowing a single prompt per kind.
-    const seen = new Set<string>();
-    hoisted.canPrompt.mockImplementation((kind: string) => {
-      if (seen.has(kind)) return false;
-      seen.add(kind);
-      return true;
-    });
+  it('should NOT auto-run due actions without user confirmation (no silent retrieve)', async () => {
     hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckGitPull.mockResolvedValue(false);
     hoisted.getRetrieveAllSlicesStalenessStatus.mockReturnValue({
@@ -211,12 +190,10 @@ describe('useStalenessNudges', () => {
 
     render(<Harness />);
 
-    await waitFor(() => {
-      expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(1);
-    });
-
-    // Should NOT show the modal
-    expect(screen.queryByText('Updates recommended')).toBeNull();
+    // Modal should be shown; nothing should auto-execute.
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+    expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
+    expect(hoisted.pullAll).toHaveBeenCalledTimes(0);
   });
 
   it('should skip retrieve-all after pull when post-pull staleness is no longer due', async () => {

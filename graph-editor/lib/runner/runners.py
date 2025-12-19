@@ -582,7 +582,7 @@ def run_bridge_view(
             ],
             'chart': {
                 'recommended': 'bridge',
-                'alternatives': ['table'],
+                'alternatives': ['bridge_horizontal', 'table'],
                 'hints': {
                     'other_threshold_pct': other_threshold_pct,
                 }

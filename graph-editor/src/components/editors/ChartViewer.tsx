@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 
 import type { EditorProps } from '../../types';
 import { useFileState } from '../../contexts/TabContext';
-import { BridgeChartPreview } from '../charts/BridgeChartPreview';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { useElementSize } from '../../hooks/useElementSize';
@@ -135,26 +134,15 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
         >
           {showChart && (
             <div style={{ minHeight: 0, height: '100%' }}>
-              {chart.chart_kind === 'analysis_funnel' ? (
-                <AnalysisChartContainer
-                  result={analysisResult}
-                  visibleScenarioIds={scenarioIds}
-                  height={420}
-                  fillHeight={true}
-                  compactControls={false}
-                  source={chart.source}
-                  scenarioDslSubtitleById={scenarioDslSubtitleById}
-                />
-              ) : (
-                <BridgeChartPreview
-                  result={analysisResult}
-                  height={420}
-                  showToolbox={true}
-                  compactControls={false}
-                  hideOpenAsTab={true}
-                  source={chart.source}
-                />
-              )}
+              <AnalysisChartContainer
+                result={analysisResult}
+                visibleScenarioIds={scenarioIds}
+                height={420}
+                fillHeight={true}
+                compactControls={false}
+                source={chart.source}
+                scenarioDslSubtitleById={scenarioDslSubtitleById}
+              />
             </div>
           )}
 
