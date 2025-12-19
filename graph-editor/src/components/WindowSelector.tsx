@@ -567,8 +567,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     // Use getLatestGraph() to avoid stale closure
     const currentGraph = getLatestGraph();
     
-    // Build context part from current graph (context is still stored on graph)
-    const parsed = parseConstraints(currentGraph?.currentQueryDSL || '');
+    // Build context part from AUTHORITATIVE DSL (NOT graph.currentQueryDSL, which is historic only).
+    // This ensures changing the window preserves the same slice/context dimensions that Retrieve All and the planner use.
+    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
+    const parsed = parseConstraints(authoritativeDSL || '');
     
     const contextParts: string[] = [];
     for (const ctx of parsed.context) {

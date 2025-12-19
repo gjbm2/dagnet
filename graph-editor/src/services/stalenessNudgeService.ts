@@ -13,7 +13,7 @@ import { credentialsManager } from '../lib/credentials';
 import { gitService } from './gitService';
 import type { GraphData } from '../types';
 import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerService';
-import { useFileRegistry } from '../contexts/TabContext';
+import { fileRegistry } from '../contexts/TabContext';
 
 type NudgeKind = 'reload' | 'git-pull' | 'retrieve-all-slices';
 
@@ -99,6 +99,11 @@ export interface RetrieveAllSlicesStalenessStatus {
   staleParameterCount: number;
   /** Most recent retrieved_at timestamp seen across connected parameters (ms). */
   mostRecentRetrievedAtMs?: number;
+}
+
+export interface WorkspaceScope {
+  repository: string;
+  branch: string;
 }
 
 export interface PendingStalenessPlan {
@@ -246,9 +251,16 @@ class StalenessNudgeService {
   /**
    * Simple staleness: for each connected parameter, look at most recent values[*].data_source.retrieved_at.
    * If any are older than STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS, we consider the graph stale.
+   *
+   * IMPORTANT:
+   * - IndexedDB is the source of truth for pulled files.
+   * - FileRegistry is an in-memory cache and may not contain all parameter files immediately after pull.
    */
-  getRetrieveAllSlicesStalenessStatus(graph: GraphData, nowMs: number = safeNow()): RetrieveAllSlicesStalenessStatus {
-    const fileRegistry = useFileRegistry(); // singleton
+  async getRetrieveAllSlicesStalenessStatus(
+    graph: GraphData,
+    nowMs: number = safeNow(),
+    workspace?: WorkspaceScope
+  ): Promise<RetrieveAllSlicesStalenessStatus> {
     const targets = retrieveAllSlicesPlannerService.collectTargets(graph);
     const parameterTargets = targets.filter(t => t.type === 'parameter') as Array<Extract<typeof targets[number], { type: 'parameter' }>>;
 
@@ -256,8 +268,33 @@ class StalenessNudgeService {
     let staleCount = 0;
 
     for (const t of parameterTargets) {
-      const file = fileRegistry.getFile(`parameter-${t.objectId}`) as any;
-      const values = file?.data?.values;
+      const logicalFileId = `parameter-${t.objectId}`;
+
+      // Fast-path: in-memory cache (may be missing right after pull)
+      const frFile = fileRegistry.getFile(logicalFileId) as any;
+      let values = frFile?.data?.values;
+
+      // Source of truth: IndexedDB (workspace-scoped if provided)
+      if (!Array.isArray(values)) {
+        try {
+          let dbFile: any = await db.files.get(logicalFileId);
+
+          if (!dbFile && workspace?.repository && workspace?.branch) {
+            // Fall back to workspace-scoped search (supports prefixed IDs if present)
+            dbFile = await db.files
+              .where('source.repository')
+              .equals(workspace.repository)
+              .and(f => f.source?.branch === workspace.branch && (f.fileId === logicalFileId || f.fileId.endsWith(`-${logicalFileId}`)))
+              .first();
+          }
+
+          values = dbFile?.data?.values;
+        } catch {
+          // Ignore IDB failures here; fall back to treating as stale below
+          values = undefined;
+        }
+      }
+
       if (!Array.isArray(values) || values.length === 0) {
         // No values: treat as stale (Retrieve all slices will fill it).
         staleCount++;

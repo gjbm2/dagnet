@@ -1,6 +1,7 @@
 import { db } from '../db/appDatabase';
 import { gitConfig } from '../config/gitConfig';
 import yaml from 'js-yaml';
+import { sessionLogService } from '../services/sessionLogService';
 
 /**
  * Loads default settings.yaml from public/defaults/
@@ -46,6 +47,11 @@ export async function seedSettingsFile(): Promise<void> {
         const gitCred = credResult.credentials.git[0];
         const basePath = gitCred.basePath || '';
         const fullPath = basePath ? `${basePath}/settings/settings.yaml` : 'settings/settings.yaml';
+        const notFoundKey = `dagnet:seed:git404:${gitCred.owner}/${gitCred.repo || gitCred.name}@${gitCred.branch || 'main'}:${fullPath}`;
+        const notFoundAt = window.localStorage.getItem(notFoundKey);
+        if (notFoundAt) {
+          console.log('[seedSettings] Skipping git fetch (previous 404 cached):', notFoundKey);
+        } else {
 
         const apiUrl = `${gitConfig.githubApiBase}/repos/${gitCred.owner}/${gitCred.repo || gitCred.name}/contents/${fullPath}?ref=${gitCred.branch || 'main'}`;
 
@@ -62,6 +68,7 @@ export async function seedSettingsFile(): Promise<void> {
           const data = await response.json();
           const content = atob(data.content.replace(/\n/g, ''));
           const parsedData = yaml.load(content);
+          window.localStorage.removeItem(notFoundKey);
 
           if (!existing || JSON.stringify(existing.data) !== JSON.stringify(parsedData)) {
             console.log('[seedSettings] Syncing settings.yaml from git');
@@ -84,8 +91,27 @@ export async function seedSettingsFile(): Promise<void> {
           }
           return;
         } else {
-          console.log(`[seedSettings] File not found in git (${response.status}), will seed from defaults`);
+          if (response.status === 404) {
+            window.localStorage.setItem(notFoundKey, String(Date.now()));
+            sessionLogService.warning(
+              'workspace',
+              'SEED_SETTINGS_GIT_NOT_FOUND',
+              'settings.yaml not found in repo; using defaults',
+              `${gitCred.owner}/${gitCred.repo || gitCred.name}@${gitCred.branch || 'main'}:${fullPath} returned 404`,
+              { owner: gitCred.owner, repo: gitCred.repo || gitCred.name, branch: gitCred.branch || 'main', path: fullPath }
+            );
+          } else {
+            sessionLogService.warning(
+              'workspace',
+              'SEED_SETTINGS_GIT_FAILED',
+              'Could not load settings.yaml from repo; using defaults',
+              `${gitCred.owner}/${gitCred.repo || gitCred.name}@${gitCred.branch || 'main'}:${fullPath} returned ${response.status}`,
+              { owner: gitCred.owner, repo: gitCred.repo || gitCred.name, branch: gitCred.branch || 'main', path: fullPath, status: response.status }
+            );
+          }
+          console.log(`[seedSettings] File not loaded from git (${response.status}), will seed from defaults`);
         }
+        } // end notFound cached guard
       } else {
         console.log('[seedSettings] No git credentials configured, skipping git sync');
       }

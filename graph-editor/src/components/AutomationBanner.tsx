@@ -10,6 +10,8 @@ export function AutomationBanner(): React.ReactElement | null {
   const label =
     state.phase === 'waiting'
       ? 'Automation running (waiting for app to initialise)'
+      : state.phase === 'countdown'
+        ? `Automation starting in ${state.countdownSecondsRemaining ?? 0}s…`
       : state.phase === 'stopping'
         ? 'Automation stopping…'
         : 'Automation running';

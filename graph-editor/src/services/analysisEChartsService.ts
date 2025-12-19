@@ -25,6 +25,7 @@ export type FunnelBarMetric = 'cumulative_probability' | 'step_probability';
 export type BridgeChartOptionArgs = {
   layout?: {
     widthPx?: number;
+    heightPx?: number;
   };
   ui?: {
     showToolbox?: boolean;
@@ -578,6 +579,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
 
   const showToolbox = args.ui?.showToolbox ?? false;
   const widthPx = args.layout?.widthPx && Number.isFinite(args.layout.widthPx) ? args.layout.widthPx : 640;
+  const heightPx = args.layout?.heightPx && Number.isFinite(args.layout.heightPx) ? args.layout.heightPx : 360;
   const axisLabelFontSizePx = args.ui?.axisLabelFontSizePx ?? 11;
   const axisLabelMaxLines = args.ui?.axisLabelMaxLines ?? 2;
   const axisLabelMaxCharsPerLine = args.ui?.axisLabelMaxCharsPerLine ?? 12;
@@ -679,8 +681,11 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const valueLabelFontSizePx = Math.max(10, Math.min(13, Math.round(axisLabelFontSizePx * 0.95)));
 
   const plotWidth = Math.max(240, widthPx - 40);
+  // Horizontal layout uses category axis on y, so bar thickness should be based on available height,
+  // not width. Otherwise wide tabs produce absurdly thick bars.
+  const plotHeight = Math.max(200, heightPx - (showToolbox ? 56 : 42));
   const n = Math.max(1, labels.length);
-  const perCategory = plotWidth / n;
+  const perCategory = (orientation === 'horizontal' ? plotHeight : plotWidth) / n;
   const defaultFraction = n <= 8 ? 0.56 : 0.44;
   const fraction = typeof barWidthFraction === 'number' && Number.isFinite(barWidthFraction) ? barWidthFraction : defaultFraction;
   const barWidthPx = Math.round(Math.max(barWidthMinPx, Math.min(barWidthMaxPx, perCategory * fraction)));

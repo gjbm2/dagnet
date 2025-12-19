@@ -27,7 +27,7 @@ import {
   type TimeSeriesPointWithLatency,
 } from '../windowAggregationService';
 import { extractSliceDimensions } from '../sliceIsolation';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 // =============================================================================
 // Test Infrastructure

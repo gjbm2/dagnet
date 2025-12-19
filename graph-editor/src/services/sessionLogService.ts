@@ -19,6 +19,7 @@
 import { fileRegistry } from '../contexts/TabContext';
 import type { TabState } from '../types';
 import { DIAGNOSTIC_LOG as DIAGNOSTIC_LOG_DEFAULT } from '../constants/latency';
+import { db } from '../db/appDatabase';
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 
@@ -602,6 +603,22 @@ class SessionLogService {
   async openLogTab(): Promise<string | null> {
     try {
       const timestamp = Date.now();
+
+      const reassertDockAndFocus = (tabId: string): void => {
+        // rc-dock listeners/layout can come up slightly after we dispatch the initial events
+        // (especially during cold boot or URL-driven automation). Reassert a few times.
+        const delaysMs = [0, 50, 200, 750, 2000, 5000];
+        for (const d of delaysMs) {
+          setTimeout(() => {
+            try {
+              window.dispatchEvent(new CustomEvent('dagnet:dockTabRightOfMain', { detail: { tabId } }));
+              window.dispatchEvent(new CustomEvent('dagnet:switchToTab', { detail: { tabId } }));
+            } catch {
+              // Best-effort only
+            }
+          }, d);
+        }
+      };
       
       // Create or update the log file in fileRegistry
       const existingFile = fileRegistry.getFile(this.fileId);
@@ -623,11 +640,24 @@ class SessionLogService {
       // Check if tab already exists
       const file = fileRegistry.getFile(this.fileId);
       if (file && file.viewTabs && file.viewTabs.length > 0) {
-        // Tab exists, dispatch event to switch to it
-        window.dispatchEvent(new CustomEvent('dagnet:switchToTab', { 
-          detail: { tabId: file.viewTabs[0] } 
-        }));
-        return file.viewTabs[0];
+        const existingTabId = file.viewTabs[0];
+
+        // Guard: viewTabs can be stale (tab closed, but file viewTabs not cleaned for some reason).
+        // If the tab no longer exists, clear the stale reference and fall through to create a new tab.
+        const tabStillExists = await db.tabs.get(existingTabId);
+        if (!tabStillExists) {
+          try {
+            file.viewTabs = [];
+            await db.files.put(file as any);
+          } catch {
+            // Best-effort only
+          }
+        } else {
+          // Tab exists, dispatch event to switch to it
+          // Right-dock it (without a permanent right-dock panel) by splitting main panel at open-time.
+          reassertDockAndFocus(existingTabId);
+          return existingTabId;
+        }
       }
 
       // Create tab
@@ -650,6 +680,9 @@ class SessionLogService {
       window.dispatchEvent(new CustomEvent('dagnet:openTemporaryTab', { 
         detail: { tab: newTab } 
       }));
+
+      // Right-dock it (without a permanent right-dock panel) by splitting main panel at open-time.
+      reassertDockAndFocus(tabId);
 
       return tabId;
     } catch (error) {

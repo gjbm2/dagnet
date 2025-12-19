@@ -6,7 +6,7 @@
  */
 
 import type { ParsedConstraints } from '../lib/queryDSL';
-import type { ParameterValue } from './paramRegistryService';
+import type { ParameterValue } from '../types/parameterData';
 import type { DateRange } from '../types';
 import { contextRegistry } from './contextRegistry';
 import { isolateSlice } from './sliceIsolation';

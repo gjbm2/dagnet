@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { DateRange } from '../../types';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 import { hasFullSliceCoverageByHeader } from '../windowAggregationService';
 
 function makeWindowSlice(
@@ -77,6 +77,23 @@ describe('hasFullSliceCoverageByHeader - window mode', () => {
 
     expect(result).toBe(false);
   });
+
+  it('returns true when the union of multiple adjacent slices covers the requested window', () => {
+    const paramFileData = {
+      values: [
+        makeWindowSlice('window(1-Nov-25:3-Nov-25)', '1-Nov-25', '3-Nov-25'),
+        makeWindowSlice('window(4-Nov-25:7-Nov-25)', '4-Nov-25', '7-Nov-25'),
+      ],
+    };
+
+    const result = hasFullSliceCoverageByHeader(
+      paramFileData,
+      requestedWindow,
+      'window(1-Nov-25:7-Nov-25)',
+    );
+
+    expect(result).toBe(true);
+  });
 });
 
 describe('hasFullSliceCoverageByHeader - context isolation', () => {
@@ -117,6 +134,31 @@ describe('hasFullSliceCoverageByHeader - context isolation', () => {
     expect(googleCovered).toBe(true);
     expect(organicCovered).toBe(true);
     expect(facebookCovered).toBe(false);
+  });
+
+  it('returns true when the union of multiple slices for the same context covers the requested window', () => {
+    const data = {
+      values: [
+        makeWindowSlice(
+          'window(1-Nov-25:3-Nov-25).context(channel:google)',
+          '1-Nov-25',
+          '3-Nov-25',
+        ),
+        makeWindowSlice(
+          'window(4-Nov-25:7-Nov-25).context(channel:google)',
+          '4-Nov-25',
+          '7-Nov-25',
+        ),
+      ],
+    };
+
+    expect(
+      hasFullSliceCoverageByHeader(
+        data,
+        requestedWindow,
+        'window(1-Nov-25:7-Nov-25).context(channel:google)',
+      ),
+    ).toBe(true);
   });
 });
 
@@ -168,6 +210,36 @@ describe('hasFullSliceCoverageByHeader - MECE uncontexted over contexted-only fi
     expect(fullResult).toBe(true);
     expect(partialResult).toBe(false);
   });
+
+  it('returns true when each MECE component is covered by the union of its slices', () => {
+    const data = {
+      values: [
+        makeWindowSlice(
+          'window(1-Nov-25:3-Nov-25).context(channel:google)',
+          '1-Nov-25',
+          '3-Nov-25',
+        ),
+        makeWindowSlice(
+          'window(4-Nov-25:7-Nov-25).context(channel:google)',
+          '4-Nov-25',
+          '7-Nov-25',
+        ),
+        makeWindowSlice(
+          'window(1-Nov-25:7-Nov-25).context(channel:organic)',
+          '1-Nov-25',
+          '7-Nov-25',
+        ),
+      ],
+    };
+
+    expect(
+      hasFullSliceCoverageByHeader(
+        data,
+        requestedWindow,
+        'window(1-Nov-25:7-Nov-25)', // uncontexted query → MECE
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('hasFullSliceCoverageByHeader - cohort mode', () => {
@@ -202,5 +274,26 @@ describe('hasFullSliceCoverageByHeader - cohort mode', () => {
     );
 
     expect(result).toBe(false);
+  });
+
+  it('uses cohort_from/cohort_to headers even when sliceDSL is open-ended/relative (e.g. cohort(-60d:))', () => {
+    const requested: DateRange = { start: '12-Dec-25', end: '18-Dec-25' };
+    const paramFileData2 = {
+      values: [
+        makeCohortSlice(
+          'cohort(-60d:).context(channel:google)', // not parseable by parseDate()
+          '17-Oct-25',
+          '19-Dec-25',
+        ),
+        makeCohortSlice(
+          'cohort(-60d:).context(channel:meta)',
+          '17-Oct-25',
+          '19-Dec-25',
+        ),
+      ],
+    };
+
+    // Uncontexted query → MECE over both channels.
+    expect(hasFullSliceCoverageByHeader(paramFileData2, requested, 'cohort(12-Dec-25:18-Dec-25)')).toBe(true);
   });
 });

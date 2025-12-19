@@ -16,7 +16,7 @@
 
 import type { DateRange } from '../types';
 import { parseDate, normalizeDate } from './windowAggregationService';
-import type { ParameterValue } from './paramRegistryService';
+import type { ParameterValue } from '../types/parameterData';
 import {
   COHORT_HORIZON_MIN_DAYS,
   COHORT_HORIZON_BUFFER_DAYS,

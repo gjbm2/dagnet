@@ -45,6 +45,8 @@ export function StalenessUpdateModal({
 
   const anyChecked = actions.some(a => a.checked && !a.disabled);
   const anyDue = actions.some(a => a.due);
+  const reloadChecked = actions.some(a => a.key === 'reload' && a.checked && !a.disabled);
+  const otherChecked = actions.some(a => a.key !== 'reload' && a.checked && !a.disabled);
 
   const modalContent = (
     <div className="modal-overlay" onClick={onClose}>
@@ -106,8 +108,16 @@ export function StalenessUpdateModal({
               </div>
 
               <div style={{ marginTop: 14, fontSize: 12, color: '#6b7280', lineHeight: 1.35 }}>
-                Note: if you choose <strong>Reload</strong> alongside other actions, DagNet will reload first, then run the
-                remaining selected actions after the page restarts.
+                {reloadChecked && otherChecked ? (
+                  <>
+                    Note: you selected <strong>Reload</strong> alongside other actions. DagNet will run the selected actions
+                    <strong> first</strong>, then reload. Nothing will run automatically after the refresh.
+                  </>
+                ) : (
+                  <>
+                    Note: no actions run automatically after a refresh (F5). If you want updates, use <strong>Run selected</strong>.
+                  </>
+                )}
               </div>
 
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #e5e7eb' }}>
@@ -123,8 +133,8 @@ export function StalenessUpdateModal({
                       Automatic mode
                     </div>
                     <div style={{ marginTop: 2, fontSize: 12, color: '#6b7280', lineHeight: 1.35 }}>
-                      If enabled, DagNet will run the due update actions automatically (no prompts), except when a pull conflict
-                      requires you to choose a resolution.
+                      If enabled, DagNet will run the selected actions in a headless way (no extra prompts/flows) for this run.
+                      This setting does not persist across refresh.
                     </div>
                   </div>
                 </label>

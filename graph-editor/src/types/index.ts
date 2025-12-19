@@ -182,10 +182,10 @@ export interface NavigatorState {
   
   // Registry indexes (lightweight metadata catalogs)
   registryIndexes?: {
-    parameters?: any;  // ParametersIndex from paramRegistryService
-    contexts?: any;    // ContextsIndex from paramRegistryService
-    cases?: any;       // CasesIndex from paramRegistryService
-    nodes?: any;       // NodesIndex from paramRegistryService
+    parameters?: any;  // parameters-index.yaml (workspace)
+    contexts?: any;    // contexts-index.yaml (workspace)
+    cases?: any;       // cases-index.yaml (workspace)
+    nodes?: any;       // nodes-index.yaml (workspace)
   };
 }
 

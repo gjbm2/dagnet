@@ -72,7 +72,10 @@ export function getDefaultLayout(): LayoutData {
               panelLock: {
                 panelStyle: 'main-tabs'
               }
-            }
+            },
+
+            // NOTE: We intentionally do NOT create a permanent right dock panel.
+            // Session Log is "right docked" by splitting the existing main panel at open-time.
           ]
         }
       ]

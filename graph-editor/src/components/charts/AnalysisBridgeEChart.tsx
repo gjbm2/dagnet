@@ -16,8 +16,8 @@ export function AnalysisBridgeEChart(props: {
   const { ref: containerRef, width: widthPx } = useElementSize<HTMLDivElement>();
 
   const option = useMemo(() => {
-    return buildBridgeEChartsOption(result, { layout: { widthPx }, ui: { showToolbox, ...(ui || {}) } });
-  }, [result, showToolbox, widthPx, ui]);
+    return buildBridgeEChartsOption(result, { layout: { widthPx, heightPx: height }, ui: { showToolbox, ...(ui || {}) } });
+  }, [result, showToolbox, widthPx, height, ui]);
 
   if (!option) return null;
 

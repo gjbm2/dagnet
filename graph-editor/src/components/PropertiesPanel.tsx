@@ -1110,50 +1110,6 @@ export default function PropertiesPanel({
                   onClear={() => {
                     // No need to save history - onChange already does it via updateNode
                   }}
-                  onPullFromRegistry={async () => {
-                    if (!localNodeData.id || !graph || !selectedNodeId) return;
-                    
-                    try {
-                      const { paramRegistryService } = await import('../services/paramRegistryService');
-                      const nodeData = await paramRegistryService.loadNode(localNodeData.id);
-                      
-                      if (nodeData) {
-                        const next = structuredClone(graph);
-                        const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                        
-                        if (nodeIndex >= 0) {
-                          const node = next.nodes[nodeIndex];
-                          
-                          // Pull all fields from registry
-                          if (nodeData.name) {
-                            node.label = nodeData.name;
-                            setLocalNodeData((prev: any) => ({...prev, label: nodeData.name}));
-                          }
-                          if (nodeData.description) {
-                            node.description = nodeData.description;
-                            setLocalNodeData((prev: any) => ({...prev, description: nodeData.description}));
-                          }
-                          if (nodeData.tags) {
-                            node.tags = nodeData.tags;
-                            setLocalNodeData((prev: any) => ({...prev, tags: nodeData.tags}));
-                          }
-                          
-                          if (next.metadata) {
-                            next.metadata.updated_at = new Date().toISOString();
-                          }
-                          
-                          setGraph(next);
-                          saveHistoryState(`Pull node data from registry`, selectedNodeId);
-                        }
-                      }
-                    } catch (error) {
-                      console.error('Failed to pull from registry:', error);
-                    }
-                  }}
-                  onPushToRegistry={async () => {
-                    // TODO: Implement push to registry
-                    console.log('Push to registry not yet implemented');
-                  }}
                   onOpenConnected={() => {
                     if (localNodeData.id) {
                       openFileById('node', localNodeData.id);
@@ -1737,51 +1693,6 @@ export default function PropertiesPanel({
                       onOpenItem={(itemId) => {
                         openFileById('case', itemId);
                         }}
-                        onPullFromRegistry={async () => {
-                        if (!caseData.id || !graph || !selectedNodeId) return;
-                          
-                          try {
-                          let caseRegistryData: any = null;
-                          const localFile = fileRegistry.getFile(`case-${caseData.id}`);
-                            if (localFile) {
-                            caseRegistryData = localFile.data;
-                            } else {
-                              const { paramRegistryService } = await import('../services/paramRegistryService');
-                            caseRegistryData = await paramRegistryService.loadCase(caseData.id);
-                          }
-                          
-                          if (caseRegistryData) {
-                            // Pull case configuration from registry
-                            const newCaseData = {
-                              id: caseData.id,
-                              status: caseRegistryData.status || caseData.status,
-                              connection: caseRegistryData.connection || caseData.connection,
-                              connection_string: caseRegistryData.connection_string || caseData.connection_string,
-                              variants: caseRegistryData.variants || caseData.variants
-                            };
-                            setCaseData(newCaseData);
-                            
-                            if (graph && selectedNodeId) {
-                              const next = structuredClone(graph);
-                              const nodeIndex = next.nodes.findIndex((n: any) => n.uuid === selectedNodeId || n.id === selectedNodeId);
-                              if (nodeIndex >= 0 && next.nodes[nodeIndex].case) {
-                                next.nodes[nodeIndex].case = newCaseData;
-                                if (next.metadata) {
-                                  next.metadata.updated_at = new Date().toISOString();
-                                }
-                                setGraph(next);
-                              }
-                            }
-                            console.log('Pulled case configuration from registry:', caseRegistryData);
-                          }
-                        } catch (error) {
-                          console.error('Failed to pull case from registry:', error);
-                        }
-                      }}
-                      onPushToRegistry={async () => {
-                        // TODO: Implement push to registry
-                        console.log('Push case to registry not yet implemented');
-                      }}
                       label="Case ID"
                       placeholder="Select or enter case ID..."
                     />

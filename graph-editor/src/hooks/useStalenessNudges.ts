@@ -58,13 +58,6 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
   const closeModal = useCallback(() => setIsModalOpen(false), []);
 
-  const shouldRunRetrieveAfterPull = useCallback((graphFileId: string, nowMs: number): boolean => {
-    const graphFile = fileRegistry.getFile(graphFileId) as any;
-    if (!graphFile?.data || graphFile?.type !== 'graph') return false;
-    const staleness = stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graphFile.data, nowMs);
-    return staleness.isStale;
-  }, [fileRegistry]);
-
   const toggleAction = useCallback((key: StalenessUpdateActionKey) => {
     setModalActions(prev => prev.map(a => (a.key === key ? { ...a, checked: !a.checked } : a)));
   }, []);
@@ -112,21 +105,41 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     }
 
     if (wantsRetrieve) {
-      // If the user selected Pull + Retrieve, re-check staleness after pull and skip retrieve if not needed.
+      const mustCompleteBeforeReload = wantsReload;
       if (wantsPull && activeFileId) {
-        const stillStale = shouldRunRetrieveAfterPull(activeFileId, Date.now());
-        if (!stillStale) {
+        // Intended behaviour for READ-ONLY users:
+        // After pull, decide based solely on repo-backed retrieved_at freshness (staleness/cooloff),
+        // not on any additional “planning” logic.
+        const graphAfterPull = (fileRegistry.getFile(activeFileId) as any)?.data || null;
+        if (!graphAfterPull) return;
+
+        const status = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(
+          graphAfterPull,
+          Date.now(),
+          repo ? { repository: repo, branch } : undefined
+        );
+        if (!status.isStale) {
           sessionLogService.info(
             'data-fetch',
             'RETRIEVE_ALL_SKIPPED_AFTER_PULL',
-            'Retrieve All skipped: pull refreshed data (no longer stale)',
+            'Retrieve All skipped: pull brought fresh retrieval state (within cooloff window)',
             undefined,
-            { fileId: activeFileId, repository: repo, branch }
+            {
+              fileId: activeFileId,
+              repository: repo,
+              branch,
+              mostRecentRetrievedAtMs: status.mostRecentRetrievedAtMs,
+              parameterCount: status.parameterCount,
+              staleParameterCount: status.staleParameterCount,
+            }
           );
-        } else if (automaticMode) {
+        } else if (automaticMode || mustCompleteBeforeReload) {
           const graphFile = fileRegistry.getFile(activeFileId) as any;
           if (!graphFile?.data || graphFile?.type !== 'graph') return;
           if (!tabOperations?.updateTabData) return;
+
+          // Headless/automatic retrieve: show Session Log as the primary UX for progress.
+          void sessionLogService.openLogTab();
 
           await retrieveAllSlicesService.execute({
             getGraph: () => (fileRegistry.getFile(activeFileId) as any)?.data || null,
@@ -135,11 +148,14 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         } else {
           requestRetrieveAllSlices();
         }
-      } else if (automaticMode) {
+      } else if (automaticMode || mustCompleteBeforeReload) {
         if (!activeFileId) return;
         const graphFile = fileRegistry.getFile(activeFileId) as any;
         if (!graphFile?.data || graphFile?.type !== 'graph') return;
         if (!tabOperations?.updateTabData) return;
+
+        // Headless/automatic retrieve: show Session Log as the primary UX for progress.
+        void sessionLogService.openLogTab();
 
         await retrieveAllSlicesService.execute({
           getGraph: () => (fileRegistry.getFile(activeFileId) as any)?.data || null,
@@ -153,7 +169,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     if (wantsReload) {
       window.location.reload();
     }
-  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, pullAll, fileRegistry, tabOperations, automaticMode, shouldRunRetrieveAfterPull]);
+  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, pullAll, fileRegistry, tabOperations, automaticMode]);
 
   const onRunSelected = useCallback(async () => {
     const selected = new Set(modalActions.filter(a => a.checked && !a.disabled).map(a => a.key));
@@ -228,7 +244,11 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       if (activeFileId && !stalenessNudgeService.isSnoozed('retrieve-all-slices', activeFileId, now, storage)) {
         const activeFile = fileRegistry.getFile(activeFileId) as any;
         if (activeFile?.type === 'graph' && activeFile?.data && stalenessNudgeService.canPrompt('retrieve-all-slices', now, storage)) {
-          const staleness = stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(activeFile.data, now);
+          const staleness = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(
+            activeFile.data,
+            now,
+            repository ? { repository, branch } : undefined
+          );
           retrieveDue = staleness.isStale;
         }
       }

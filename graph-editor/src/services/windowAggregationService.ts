@@ -11,7 +11,7 @@
  */
 
 import type { TimeSeriesPoint, DateRange } from '../types';
-import type { ParameterValue } from './paramRegistryService';
+import type { ParameterValue } from '../types/parameterData';
 import { isolateSlice, hasContextAny, expandContextAny, extractSliceDimensions } from './sliceIsolation';
 import { parseConstraints } from '../lib/queryDSL';
 import { normalizeToUK, isUKDate, parseUKDate } from '../lib/dateFormat';
@@ -165,31 +165,117 @@ export function hasFullSliceCoverageByHeader(
 
   /**
    * Check if a slice's sliceDSL covers the requested window.
-   * Uses sliceDSL as the canonical source of truth (not separate header fields).
+   * IMPORTANT: Prefer header fields (window_from/window_to or cohort_from/cohort_to) as the source of truth.
+   * sliceDSL may contain open-ended or relative ranges (e.g. cohort(-60d:)) which are not parseable here.
    */
   const coversWindow = (slice: ParameterValue): boolean => {
+    // Query mode must match slice mode (window data and cohort data are semantically different).
+    const sliceIsCohort = isCohortModeValue(slice);
+    if (wantsCohort && !sliceIsCohort) return false;
+    if (wantsWindow && sliceIsCohort) return false;
+
+    // Prefer explicit header ranges.
+    const headerRange = getValueDateRange(slice);
+    if (headerRange?.start && headerRange?.end) {
+      try {
+        const sliceStartDate = parseDate(normalizeDate(headerRange.start));
+        const sliceEndDate = parseDate(normalizeDate(headerRange.end));
+        return sliceStartDate <= queryStartDate && sliceEndDate >= queryEndDate;
+      } catch {
+        // Fall through to sliceDSL parsing
+      }
+    }
+
+    // Back-compat: if headers are missing, try to parse explicit ranges from sliceDSL.
     const sliceDSL = slice.sliceDSL ?? '';
     const parsed = parseDateRangeFromSliceDSL(sliceDSL);
-    
-    if (!parsed) {
-      // No parseable date range in sliceDSL
-      return false;
-    }
-    
-    // Query mode must match slice mode
-    // (window data and cohort data are semantically different)
+    if (!parsed) return false;
     if (wantsCohort && parsed.mode !== 'cohort') return false;
     if (wantsWindow && parsed.mode !== 'window') return false;
-    
+
     try {
       const sliceStartDate = parseDate(normalizeDate(parsed.start));
       const sliceEndDate = parseDate(normalizeDate(parsed.end));
-      
-      // Coverage: query window is entirely inside slice range
       return sliceStartDate <= queryStartDate && sliceEndDate >= queryEndDate;
     } catch {
       return false;
     }
+  };
+
+  /**
+   * Check if the UNION of multiple slices covers the requested window with no gaps,
+   * based on header ranges (preferred) or explicit sliceDSL ranges (fallback).
+   *
+   * This fixes a real-world pattern produced by Retrieve All / per-gap persistence:
+   * a large historical slice plus a 1-day "no data" marker slice. Those should jointly
+   * count as covered, even though no single slice spans the full window.
+   */
+  const unionCoversWindow = (slices: ParameterValue[]): boolean => {
+    type Range = { start: Date; end: Date };
+
+    const ranges: Range[] = [];
+
+    for (const s of slices) {
+      // Must be correct mode (window vs cohort)
+      const sliceIsCohort = isCohortModeValue(s);
+      if (wantsCohort && !sliceIsCohort) continue;
+      if (wantsWindow && sliceIsCohort) continue;
+
+      const headerRange = getValueDateRange(s);
+      if (headerRange?.start && headerRange?.end) {
+        try {
+          ranges.push({
+            start: parseDate(normalizeDate(headerRange.start)),
+            end: parseDate(normalizeDate(headerRange.end)),
+          });
+          continue;
+        } catch {
+          // fall through
+        }
+      }
+
+      const parsed = parseDateRangeFromSliceDSL(s.sliceDSL ?? '');
+      if (!parsed) continue;
+      if (wantsCohort && parsed.mode !== 'cohort') continue;
+      if (wantsWindow && parsed.mode !== 'window') continue;
+      try {
+        ranges.push({
+          start: parseDate(normalizeDate(parsed.start)),
+          end: parseDate(normalizeDate(parsed.end)),
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    if (ranges.length === 0) return false;
+
+    ranges.sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    // Merge overlapping/adjacent (adjacent = next.start <= prev.end + 1 day)
+    const merged: Range[] = [];
+    for (const r of ranges) {
+      const last = merged[merged.length - 1];
+      if (!last) {
+        merged.push({ ...r });
+        continue;
+      }
+      const lastEndPlusOneDay = last.end.getTime() + 24 * 60 * 60 * 1000;
+      if (r.start.getTime() <= lastEndPlusOneDay) {
+        if (r.end.getTime() > last.end.getTime()) last.end = r.end;
+      } else {
+        merged.push({ ...r });
+      }
+    }
+
+    // Covered iff there exists a merged interval that fully contains the query window.
+    // (Given the merge above, checking the interval that starts before queryStart is enough.)
+    for (const m of merged) {
+      if (m.start.getTime() <= queryStartDate.getTime() && m.end.getTime() >= queryEndDate.getTime()) {
+        return true;
+      }
+    }
+    return false;
   };
 
   // Detect MECE scenario: uncontexted query, file has only contexted data
@@ -203,15 +289,18 @@ export function hasFullSliceCoverageByHeader(
     return id === '';
   });
 
-  if (normalizedTarget === '' && hasContextedData && !hasUncontextedData) {
-    // MECE aggregation: uncontexted query over contexted-only file.
+  const tryMECEShouldCover = (): boolean => {
+    // MECE aggregation: uncontexted query over contexted file (contexted-only OR mixed).
     // Correct behaviour: accept coverage if ANY ONE complete MECE partition exists for a key.
     const modeFiltered = values.filter((v) => {
       if (wantsCohort) return isCohortModeValue(v);
       if (wantsWindow) return !isCohortModeValue(v);
       return true;
     });
-    const mece = resolveMECEPartitionForImplicitUncontextedSync(modeFiltered);
+    // Prefer a complete MECE partition over an explicit uncontexted slice when both exist.
+    // Rationale: explicit uncontexted slices can be stale/incomplete; MECE is the intended "total"
+    // when the user pins a MECE context dimension (e.g. context(channel)).
+    const mece = resolveMECEPartitionForImplicitUncontextedSync(modeFiltered, { preferMECEWhenAvailable: true });
     if (mece.kind !== 'mece_partition' || !mece.canAggregate || !mece.isComplete) {
       return false;
     }
@@ -225,10 +314,28 @@ export function hasFullSliceCoverageByHeader(
 
     for (const sliceId of uniqueSlices) {
       const sliceValues = values.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === sliceId);
-      const anyCovering = sliceValues.some(coversWindow);
-      if (!anyCovering) return false;
+      if (!unionCoversWindow(sliceValues)) return false;
     }
     return true;
+  };
+
+  // IMPORTANT: Uncontexted query against contexted data.
+  //
+  // `isolateSlice(values, targetSlice)` intentionally throws for this case (safety: prevents accidental
+  // cross-slice aggregation). Coverage checks must not throw; they must apply MECE rules.
+  //
+  // Behaviour:
+  // - If the file has *any* uncontexted slices and they fully cover the window → covered.
+  // - Otherwise, fall back to MECE coverage if a complete partition exists and covers the window.
+  if (normalizedTarget === '' && hasContextedData) {
+    // 1) Prefer explicit uncontexted cache if it exists and is complete.
+    if (hasUncontextedData) {
+      const uncontextedValues = values.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
+      if (unionCoversWindow(uncontextedValues)) return true;
+    }
+
+    // 2) Fall back to MECE coverage (contexted-only or mixed).
+    return tryMECEShouldCover();
   }
 
   // Standard slice family coverage:
@@ -240,9 +347,8 @@ export function hasFullSliceCoverageByHeader(
     return false;
   }
 
-  // Coverage if ANY slice in the family fully contains the requested window
-  // (parsed from sliceDSL, with matching query mode)
-  return sliceValues.some(coversWindow);
+  // Coverage if the UNION of slices in the family covers the requested window.
+  return unionCoversWindow(sliceValues);
 }
 
 /**
