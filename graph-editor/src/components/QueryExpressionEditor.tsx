@@ -159,6 +159,7 @@ export function QueryExpressionEditor({
   const [caseRegistry, setCaseRegistry] = useState<any[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const isEditingRef = useRef(false); // Ref for keyboard commands to check current editing state
+  const valueBeforeEditRef = useRef<string>(''); // Ref for blur-commit comparison (avoid stale closure)
 
   const allowedFunctionList = allowedFunctions ?? QUERY_FUNCTIONS;
   
@@ -1099,6 +1100,7 @@ export function QueryExpressionEditor({
       const currentValue = editor.getValue();
       console.log('[QueryExpressionEditor] Focus gained, storing value for ESC:', currentValue);
       setValueBeforeEdit(currentValue);
+      valueBeforeEditRef.current = currentValue;
       updateIsEditing(true);
       // Trigger autocomplete immediately on focus
       setTimeout(() => {
@@ -1163,7 +1165,6 @@ export function QueryExpressionEditor({
         const cleanedText = currentText.trim().replace(/^\.+|\.+$/g, '');
         if (cleanedText !== currentText.trim()) {
           console.log('[QueryExpressionEditor] Stripping leading/trailing dots:', { from: currentText, to: cleanedText });
-          onChange(cleanedText);
           currentText = cleanedText;
         }
       }
@@ -1178,12 +1179,19 @@ export function QueryExpressionEditor({
             // If the dot is truly trailing (not part of a chain like .visited.), remove it
             if (!beforeDot.match(/\([^)]*$/)) {  // Not in the middle of a term
               console.log('[QueryExpressionEditor] Removing injected trailing dot:', { from: text, to: beforeDot });
-              onChange(beforeDot);
               currentText = beforeDot;
             }
           }
         }
         injectedDot = false;
+      }
+
+      // Commit the edited value on blur.
+      // This is the primary contract for QueryExpressionEditor: callers rely on `onChange`
+      // to update state and trigger downstream recomputation (fetch / analysis / scenarios).
+      // We intentionally do NOT call `onChange` on every keystroke, only on commit.
+      if (currentText !== valueBeforeEditRef.current) {
+        onChange(currentText);
       }
       
       if (onBlur) {

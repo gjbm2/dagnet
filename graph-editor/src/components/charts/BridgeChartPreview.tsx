@@ -126,9 +126,9 @@ export function BridgeChartPreview(props: {
                 orientation,
                 // In tabs we have more width; keep rotation modest if needed.
                 ...(orientation === 'vertical' ? { axisLabelRotateDeg: 45 } : null),
-                // Tab: moderate bar thickness.
-                barWidthMinPx: 12,
-                barWidthMaxPx: 36,
+                // Tab: allow chunkier bars (previous max=36 was too restrictive for wide layouts).
+                barWidthMinPx: 14,
+                barWidthMaxPx: 128,
                 showRunningTotalLine: true,
               }
         }

@@ -2,18 +2,14 @@ import React, { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 
 import type { AnalysisResult } from '../../lib/graphComputeClient';
-import { buildBridgeEChartsOption } from '../../services/analysisEChartsService';
+import { buildBridgeEChartsOption, type BridgeChartOptionArgs } from '../../services/analysisEChartsService';
 import { useElementSize } from '../../hooks/useElementSize';
 
 export function AnalysisBridgeEChart(props: {
   result: AnalysisResult;
   height?: number;
   showToolbox?: boolean;
-  ui?: {
-    axisLabelFontSizePx?: number;
-    axisLabelMaxLines?: number;
-    axisLabelMaxCharsPerLine?: number;
-  };
+  ui?: BridgeChartOptionArgs['ui'];
 }): JSX.Element | null {
   const { result, height = 320, showToolbox = false, ui } = props;
 

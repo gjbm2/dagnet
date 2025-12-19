@@ -117,26 +117,34 @@ export class GraphComputeClient {
   }
   
   /**
+   * Fast, stable hash to keep cache keys short (FNV-1a 32-bit).
+   */
+  private hashString(s: string): string {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      // h *= 16777619 (with 32-bit overflow)
+      h = (h + (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
+    }
+    return h.toString(16);
+  }
+
+  /**
    * Generate a stable cache key from analysis inputs
    * Uses node/edge IDs AND probability values to ensure What-If changes invalidate cache
    */
-  private generateCacheKey(
-    graph: any,
-    queryDsl?: string,
-    analysisType?: string,
-    scenarioIds?: string[]
-  ): string {
+  private graphSignature(graph: any): string {
     // Extract stable identifiers from graph
     const nodeIds = (graph?.nodes || []).map((n: any) => n.id || n.uuid).sort().join(',');
     const edgeIds = (graph?.edges || []).map((e: any) => e.id || e.uuid).sort().join(',');
-    
+
     // IMPORTANT: Include edge probabilities so What-If changes invalidate cache
     // This ensures that when What-If modifies probabilities, we don't return stale results
     const edgeProbs = (graph?.edges || [])
       .map((e: any) => `${e.id || e.uuid}:${(e.p?.mean ?? 0).toFixed(6)}`)
       .sort()
       .join(',');
-    
+
     // Also include case variant weights for case nodes
     const caseWeights = (graph?.nodes || [])
       .filter((n: any) => n.type === 'case' && n.case?.variants)
@@ -148,18 +156,23 @@ export class GraphComputeClient {
       })
       .sort()
       .join(',');
-    
-    // Create cache key from stable components
+
+    return `nodes:${nodeIds}|edges:${edgeIds}|probs:${edgeProbs}|cases:${caseWeights}`;
+  }
+
+  private generateCacheKey(
+    graph: any,
+    queryDsl?: string,
+    analysisType?: string,
+    scenarioIds?: string[]
+  ): string {
+    const graphKey = this.hashString(this.graphSignature(graph));
     const parts = [
-      `nodes:${nodeIds}`,
-      `edges:${edgeIds}`,
-      `probs:${edgeProbs}`,
-      `cases:${caseWeights}`,
+      `graph:${graphKey}`,
       `dsl:${queryDsl || ''}`,
       `type:${analysisType || ''}`,
-      `scenarios:${(scenarioIds || []).sort().join(',')}`
+      `scenarios:${(scenarioIds || []).sort().join(',')}`,
     ];
-    
     return parts.join('|');
   }
   
@@ -427,10 +440,16 @@ export class GraphComputeClient {
     const scenarioIds = scenarios.map(s => s.scenario_id);
     const visibilityModes = scenarios.map(s => `${s.scenario_id}:${s.visibility_mode || 'f+e'}`).join(',');
     
-    // Cache key should be based on the prepared graphs (which already have the selected
-    // basis baked into `edge.p.mean` where applicable) plus visibility mode metadata.
+    // CRITICAL:
+    // Cache key must incorporate ALL scenario graphs (not just scenarios[0]),
+    // otherwise DSL/window changes that only affect non-first scenarios can
+    // incorrectly produce cache hits and prevent chart recomputation.
+    const scenarioGraphKey = scenarios
+      .map(s => `${s.scenario_id}:${this.hashString(this.graphSignature(s.graph))}`)
+      .join(',');
+
     const cacheKey =
-      this.generateCacheKey(scenarios[0]?.graph, queryDsl, analysisType, scenarioIds)
+      `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`;
     
     // Check cache first
