@@ -1684,7 +1684,7 @@ class DataOperationsService {
               // (when suppressMissingDataToast=true, user already fetched from source - they know data may be incomplete)
               if (!suppressMissingDataToast) {
                 message += `. Try getting from source to fetch missing data.`;
-                toast(message, {
+                batchableToast(message, {
                   icon: '⚠️',
                   duration: 5000,
                 });
@@ -6150,7 +6150,9 @@ class DataOperationsService {
           window: requestedWindow, // Aggregate across the full requested window
           targetSlice: currentDSL || '', // Pass the DSL to ensure correct constraints
           suppressSignatureWarning: bustCache, // Don't warn about signature mismatch when busting cache
-          suppressMissingDataToast: bustCache, // Don't show missing data toast when user explicitly fetched from source
+          // Don't show missing data toast during batch operations (e.g. retrieveall), and also suppress
+          // when user explicitly busts cache (they already expect churn/incompleteness).
+          suppressMissingDataToast: isBatchMode() || bustCache,
           conditionalIndex, // Pass through for conditional_p handling
         });
       }

@@ -41,6 +41,17 @@ analyses:
       has_to: false
     runner: from_node_runner
 
+  # to(B) with exactly two scenarios - bridge decomposition (Reach(A) → Reach(B))
+  - id: bridge_view
+    name: "Bridge View"
+    description: "Decompose the Reach Probability difference between two scenarios"
+    when:
+      node_count: 1
+      has_from: false
+      has_to: true
+      scenario_count: 2
+    runner: bridge_view_runner
+
   # to(B) - reach probability
   - id: to_node_reach
     name: "Reach Probability"

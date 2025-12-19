@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 
 import type { EditorProps } from '../../types';
 import { useFileState } from '../../contexts/TabContext';
-import { FunnelChartPreview } from '../charts/FunnelChartPreview';
+import { BridgeChartPreview } from '../charts/BridgeChartPreview';
+import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { useElementSize } from '../../hooks/useElementSize';
 import { analysisResultToCsv } from '../../services/analysisExportService';
@@ -11,7 +12,7 @@ import { Download, Eye, EyeOff, Table } from 'lucide-react';
 
 type ChartFileDataV1 = {
   version: '1.0.0';
-  chart_kind: 'analysis_funnel';
+  chart_kind: 'analysis_funnel' | 'analysis_bridge';
   title: string;
   created_at_uk: string;
   created_at_ms: number;
@@ -65,12 +66,12 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
       }}
     >
       <div style={{ padding: 12, paddingBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>{chart.title}</div>
           <div style={{ fontSize: 12, color: '#6b7280' }}>{chart.created_at_uk}</div>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {chart.source?.query_dsl ? (
-              <div style={{ fontSize: 12, color: '#6b7280', maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={chart.source.query_dsl}>
+              <div style={{ fontSize: 12, color: '#6b7280', maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 120, flex: '1 1 320px' }} title={chart.source.query_dsl}>
                 {chart.source.query_dsl}
               </div>
             ) : null}
@@ -133,14 +134,27 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
           }}
         >
           {showChart && (
-            <div style={{ minHeight: 0 }}>
-              <FunnelChartPreview
-                result={analysisResult}
-                visibleScenarioIds={scenarioIds}
-                fillHeight={true}
-                source={chart.source}
-                scenarioDslSubtitleById={scenarioDslSubtitleById}
-              />
+            <div style={{ minHeight: 0, height: '100%' }}>
+              {chart.chart_kind === 'analysis_funnel' ? (
+                <AnalysisChartContainer
+                  result={analysisResult}
+                  visibleScenarioIds={scenarioIds}
+                  height={420}
+                  fillHeight={true}
+                  compactControls={false}
+                  source={chart.source}
+                  scenarioDslSubtitleById={scenarioDslSubtitleById}
+                />
+              ) : (
+                <BridgeChartPreview
+                  result={analysisResult}
+                  height={420}
+                  showToolbox={true}
+                  compactControls={false}
+                  hideOpenAsTab={true}
+                  source={chart.source}
+                />
+              )}
             </div>
           )}
 

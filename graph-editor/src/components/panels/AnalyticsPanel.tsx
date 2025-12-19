@@ -19,7 +19,7 @@ import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { graphComputeClient, AnalysisResponse, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { constructQueryDSL } from '../../lib/dslConstruction';
 import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
-import { FunnelChartPreview } from '../charts/FunnelChartPreview';
+import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code } from 'lucide-react';
@@ -770,22 +770,22 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                   <span className="analytics-section-subtitle">{results.result.analysis_name}{analysisTitleSuffix}</span>
                 )}
               </div>
-              {results.result?.semantics?.chart?.recommended === 'funnel' && (
-                <div style={{ padding: '8px 8px 0 8px' }}>
-                  <FunnelChartPreview
-                    result={results.result}
-                    visibleScenarioIds={orderedVisibleScenarios}
-                    height={440}
-                    source={{
-                      parent_tab_id: tabId,
-                      parent_file_id: currentTab?.fileId,
-                      query_dsl: results.query_dsl,
-                      analysis_type: results.result.analysis_type,
-                    }}
-                    scenarioDslSubtitleById={scenarioDslSubtitleByIdObject}
-                  />
-                </div>
-              )}
+              <div style={{ padding: '8px 8px 0 8px' }}>
+                <AnalysisChartContainer
+                  result={results.result}
+                  visibleScenarioIds={orderedVisibleScenarios}
+                  // Panel view is height constrained; keep charts compact to avoid dead space.
+                  height={results.result?.semantics?.chart?.recommended === 'bridge' ? 280 : 420}
+                  compactControls={true}
+                  scenarioDslSubtitleById={scenarioDslSubtitleByIdObject}
+                  source={{
+                    parent_tab_id: tabId,
+                    parent_file_id: currentTab?.fileId,
+                    query_dsl: results.query_dsl,
+                    analysis_type: results.result.analysis_type,
+                  }}
+                />
+              </div>
               <AnalysisResultCards result={results.result} scenarioDslSubtitleById={scenarioDslSubtitleByIdObject} />
             </div>
           )}

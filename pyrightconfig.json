@@ -1,0 +1,13 @@
+{
+  "venvPath": "graph-editor",
+  "venv": "venv",
+  "executionEnvironments": [
+    {
+      "root": "graph-editor",
+      "venvPath": "graph-editor",
+      "venv": "venv"
+    }
+  ]
+}
+
+

@@ -11,12 +11,20 @@ export function AnalysisFunnelBarEChart(props: {
   height?: number;
   widthPx?: number;
   scenarioDslSubtitleById?: Record<string, string>;
+  showToolbox?: boolean;
+  yAxisLabelFontSizePx?: number;
 }): JSX.Element | null {
-  const { result, scenarioIds, metric, height = 260, widthPx, scenarioDslSubtitleById } = props;
+  const { result, scenarioIds, metric, height = 260, widthPx, scenarioDslSubtitleById, showToolbox = true, yAxisLabelFontSizePx } = props;
 
   const option = useMemo(() => {
-    return buildFunnelBarEChartsOption(result, { scenarioIds, metric, layout: { widthPx }, legend: { scenarioDslSubtitleById } });
-  }, [result, scenarioIds, metric, widthPx, scenarioDslSubtitleById]);
+    return buildFunnelBarEChartsOption(result, {
+      scenarioIds,
+      metric,
+      layout: { widthPx },
+      legend: { scenarioDslSubtitleById },
+      ui: { showToolbox, yAxisLabelFontSizePx },
+    });
+  }, [result, scenarioIds, metric, widthPx, scenarioDslSubtitleById, showToolbox, yAxisLabelFontSizePx]);
 
   if (!option) return null;
 
