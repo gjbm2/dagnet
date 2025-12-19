@@ -14,12 +14,14 @@ type LayoutMode = 'combined' | 'separate';
 function ToggleButton(props: {
   active: boolean;
   onClick: () => void;
+  title?: string;
   children: React.ReactNode;
 }): JSX.Element {
   return (
     <button
       type="button"
       onClick={props.onClick}
+      title={props.title}
       style={{
         border: '1px solid #e5e7eb',
         background: props.active ? '#f3f4f6' : '#ffffff',
@@ -28,6 +30,7 @@ function ToggleButton(props: {
         padding: '4px 8px',
         fontSize: 11,
         cursor: 'pointer',
+        whiteSpace: 'nowrap',
       }}
     >
       {props.children}
@@ -40,6 +43,9 @@ export function FunnelChartPreview(props: {
   visibleScenarioIds: string[];
   height?: number;
   fillHeight?: boolean;
+  showToolbox?: boolean;
+  compactControls?: boolean;
+  yAxisLabelFontSizePx?: number;
   source?: {
     parent_file_id?: string;
     parent_tab_id?: string;
@@ -48,13 +54,26 @@ export function FunnelChartPreview(props: {
   };
   scenarioDslSubtitleById?: Record<string, string>;
 }): JSX.Element | null {
-  const { result, visibleScenarioIds, height = 420, fillHeight = false, source, scenarioDslSubtitleById } = props;
+  const {
+    result,
+    visibleScenarioIds,
+    height = 420,
+    fillHeight = false,
+    showToolbox = true,
+    compactControls = false,
+    yAxisLabelFontSizePx,
+    source,
+    scenarioDslSubtitleById,
+  } = props;
 
   const { ref: containerRef, width: containerWidth, height: containerHeight } = useElementSize<HTMLDivElement>();
   const { ref: controlsRef, height: controlsHeight } = useElementSize<HTMLDivElement>();
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('combined');
   const [metric, setMetric] = useState<FunnelBarMetric>('cumulative_probability');
+
+  const isConversionFunnel = result.analysis_type === 'conversion_funnel' || result.analysis_name === 'Conversion Funnel';
+  const stepMetricLabel = isConversionFunnel ? 'Change since last step' : 'Step probability';
 
   const scenarioIds = useMemo(() => {
     // Only scenarios that exist in the result's dimension_values (defensive).
@@ -94,80 +113,114 @@ export function FunnelChartPreview(props: {
         minHeight: 0,
       }}
     >
-      <div ref={controlsRef} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ fontSize: 11, color: '#6b7280' }}>Chart</span>
-        <ToggleButton active={metric === 'cumulative_probability'} onClick={() => setMetric('cumulative_probability')}>
-          Cum. probability
-        </ToggleButton>
-        <ToggleButton active={metric === 'step_probability'} onClick={() => setMetric('step_probability')}>
-          Step probability
-        </ToggleButton>
-
-        <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 6 }}>Layout</span>
-        <ToggleButton active={layoutMode === 'combined'} onClick={() => setLayoutMode('combined')}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <Columns2 size={14} />
-            Combined
-          </span>
-        </ToggleButton>
-        <ToggleButton active={layoutMode === 'separate'} onClick={() => setLayoutMode('separate')}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <LayoutGrid size={14} />
-            Separate
-          </span>
-        </ToggleButton>
-
-        <button
-          type="button"
-          onClick={() => {
-            void chartOperationsService.openFunnelChartTabFromAnalysis({
-              analysisResult: result,
-              scenarioIds,
-              title: result.analysis_name ? `Chart — ${result.analysis_name}` : 'Chart',
-              source,
-              scenarioDslSubtitleById,
-            });
-          }}
+      <div
+        ref={controlsRef}
+        style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          flexWrap: compactControls ? 'nowrap' : 'wrap',
+          minWidth: 0,
+        }}
+      >
+        <div
           style={{
-            marginLeft: 'auto',
-            border: '1px solid #e5e7eb',
-            background: '#ffffff',
-            color: '#374151',
-            borderRadius: 6,
-            padding: '4px 8px',
-            fontSize: 11,
-            cursor: 'pointer',
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            flex: 1,
+            minWidth: 0,
+            overflowX: compactControls ? 'auto' : undefined,
           }}
-          title="Open as tab"
         >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <ExternalLink size={14} />
-            Open as tab
-          </span>
-        </button>
+          {!compactControls ? <span style={{ fontSize: 11, color: '#6b7280' }}>Chart</span> : null}
+          <ToggleButton
+            active={metric === 'cumulative_probability'}
+            onClick={() => setMetric('cumulative_probability')}
+            title="Cumulative probability"
+          >
+            {compactControls ? 'Cum.' : 'Cum. probability'}
+          </ToggleButton>
+          <ToggleButton
+            active={metric === 'step_probability'}
+            onClick={() => setMetric('step_probability')}
+            title={stepMetricLabel}
+          >
+            {compactControls ? (isConversionFunnel ? 'Δ step' : 'Step') : stepMetricLabel}
+          </ToggleButton>
 
-        <button
-          type="button"
-          onClick={() => {
-            const { filename, csv } = analysisResultToCsv(result);
-            downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
-          }}
-          style={{
-            border: '1px solid #e5e7eb',
-            background: '#ffffff',
-            color: '#374151',
-            borderRadius: 6,
-            padding: '4px 8px',
-            fontSize: 11,
-            cursor: 'pointer',
-          }}
-          title="Download CSV"
-        >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <Download size={14} />
-            Download CSV
-          </span>
-        </button>
+          {!compactControls ? <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 6 }}>Layout</span> : null}
+          <ToggleButton active={layoutMode === 'combined'} onClick={() => setLayoutMode('combined')} title="Combined">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Columns2 size={14} />
+              {compactControls ? null : 'Combined'}
+            </span>
+          </ToggleButton>
+          <ToggleButton active={layoutMode === 'separate'} onClick={() => setLayoutMode('separate')} title="Separate">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <LayoutGrid size={14} />
+              {compactControls ? null : 'Separate'}
+            </span>
+          </ToggleButton>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => {
+              void chartOperationsService.openAnalysisChartTabFromAnalysis({
+                chartKind: 'analysis_funnel',
+                analysisResult: result,
+                scenarioIds,
+                title: result.analysis_name ? `Chart — ${result.analysis_name}` : 'Chart',
+                source,
+                scenarioDslSubtitleById,
+              });
+            }}
+            style={{
+              border: '1px solid #e5e7eb',
+              background: '#ffffff',
+              color: '#374151',
+              borderRadius: 6,
+              padding: '4px 8px',
+              fontSize: 11,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+            title="Open as tab"
+            aria-label="Open as tab"
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <ExternalLink size={14} />
+              {compactControls ? null : 'Open as tab'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const { filename, csv } = analysisResultToCsv(result);
+              downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+            }}
+            style={{
+              border: '1px solid #e5e7eb',
+              background: '#ffffff',
+              color: '#374151',
+              borderRadius: 6,
+              padding: '4px 8px',
+              fontSize: 11,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+            title="Download CSV"
+            aria-label="Download CSV"
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Download size={14} />
+              {compactControls ? null : 'Download CSV'}
+            </span>
+          </button>
+        </div>
       </div>
 
       {layoutMode === 'combined' ? (
@@ -178,6 +231,8 @@ export function FunnelChartPreview(props: {
           height={computedChartHeight}
           widthPx={containerWidth}
           scenarioDslSubtitleById={scenarioDslSubtitleById}
+          showToolbox={showToolbox}
+          yAxisLabelFontSizePx={yAxisLabelFontSizePx}
         />
       ) : (
         <div
@@ -223,6 +278,8 @@ export function FunnelChartPreview(props: {
                     height={separateChartHeight}
                     widthPx={containerWidth}
                     scenarioDslSubtitleById={scenarioDslSubtitleById}
+                    showToolbox={showToolbox}
+                    yAxisLabelFontSizePx={yAxisLabelFontSizePx}
                   />
                 </div>
               </div>

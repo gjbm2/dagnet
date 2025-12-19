@@ -24,6 +24,9 @@ from .graph_builder import (
     get_probability_label,
 )
 
+def _is_close(a: float, b: float, tol: float = 1e-12) -> bool:
+    return abs(a - b) <= tol
+
 
 def _prepare_scenarios(
     G: nx.DiGraph,
@@ -357,6 +360,239 @@ def run_path_to_end(
     _filter_optional_metrics(result_obj, data_rows, optional_metric_ids)
 
     return result_obj
+
+
+def run_bridge_view(
+    G: nx.DiGraph,
+    node_id: str,
+    pruning: Optional[PruningResult] = None,
+    all_scenarios: Optional[list] = None,
+    other_threshold_pct: float = 0.025,
+) -> dict[str, Any]:
+    """
+    Bridge View (two-scenario only): decompose Reach Probability difference between A and B.
+
+    Spec:
+    - Requires exactly 2 visible scenarios.
+    - Start bar is Reach(A), end bar is Reach(B).
+    - Intermediate steps are an additive factor decomposition of the difference, derived
+      from a stable sequential-replacement attribution:
+        - Start from scenario A probabilities.
+        - Topologically iterate the induced subgraph of nodes on any path from entry → target.
+        - For each node, swap that node's outgoing edge probabilities from A to B (basis already applied
+          per scenario visibility_mode), recompute Reach(target), and record the incremental delta.
+        - The sum of deltas equals Reach(B) - Reach(A) (within floating tolerance).
+    - Bucket long tails: steps with |delta| < other_threshold_pct * |total_delta| are grouped into "Other".
+    """
+    from .graph_builder import get_human_id
+
+    node_label = G.nodes[node_id].get('label') or node_id if node_id in G else node_id
+
+    prepared_scenarios = _prepare_scenarios(G, all_scenarios)
+    if len(prepared_scenarios) != 2:
+        return {'error': 'Bridge View requires exactly 2 scenarios'}
+
+    sA = prepared_scenarios[0]
+    sB = prepared_scenarios[1]
+    GA: nx.DiGraph = sA['scenario_G']
+    GB: nx.DiGraph = sB['scenario_G']
+
+    # Induced subgraph: nodes that are both
+    # - descendants of (any) entry nodes
+    # - ancestors of the target node (including the target)
+    try:
+        entry_nodes = find_entry_nodes(GA)
+    except Exception:
+        entry_nodes = []
+
+    if not entry_nodes:
+        return {'error': 'No entry nodes found for Bridge View'}
+
+    if node_id not in GA:
+        return {'error': f'Node not found: {node_id}'}
+
+    ancestors = set(nx.ancestors(GA, node_id))
+    ancestors.add(node_id)
+    reachable_from_entries = set()
+    for e in entry_nodes:
+        reachable_from_entries.add(e)
+        reachable_from_entries.update(nx.descendants(GA, e))
+
+    induced_nodes = ancestors.intersection(reachable_from_entries)
+    inducedA = GA.subgraph(induced_nodes).copy()
+    inducedB = GB.subgraph(induced_nodes).copy()
+
+    # Totals
+    reachA = calculate_path_to_absorbing(inducedA, node_id, pruning).probability
+    reachB = calculate_path_to_absorbing(inducedB, node_id, pruning).probability
+    total_delta = reachB - reachA
+
+    # Sequential replacement attribution over nodes in induced topo order.
+    hybrid = inducedA.copy()
+    try:
+        topo_nodes = list(nx.topological_sort(hybrid))
+    except Exception:
+        # Fallback: deterministic ordering
+        topo_nodes = sorted(list(hybrid.nodes()))
+
+    deltas: list[dict[str, Any]] = []
+    prev = reachA
+
+    # Swap outgoing edge probabilities per node (skip target; swapping it can't affect reaching it).
+    for u in topo_nodes:
+        if u == node_id:
+            continue
+        if u not in hybrid:
+            continue
+        # Copy relevant edge fields from B for outgoing edges within the induced subgraph.
+        for v in list(hybrid.successors(u)):
+            if not inducedB.has_edge(u, v):
+                continue
+            src = inducedB.edges[u, v]
+            dst = hybrid.edges[u, v]
+            # Probability basis already applied to src['p'] via visibility_mode.
+            for key in ('p', 'conditional_p', 'evidence', 'forecast', 'latency', 'p_n'):
+                if key in src:
+                    dst[key] = src.get(key)
+
+        new = calculate_path_to_absorbing(hybrid, node_id, pruning).probability
+        d = new - prev
+        if abs(d) > 1e-12:
+            deltas.append({
+                'node_id': u,
+                'node_label': (hybrid.nodes[u].get('label') if u in hybrid.nodes else None) or u,
+                'delta': d,
+                'reach_before': prev,
+                'reach_after': new,
+            })
+        prev = new
+
+    # Enforce balancing sum as a safety net.
+    # (The attribution should sum exactly; floating noise can accumulate.)
+    sum_d = sum(x['delta'] for x in deltas)
+    if not _is_close(sum_d, total_delta, tol=1e-9):
+        # Add a small balancing adjustment into a special bucket so the chart closes.
+        deltas.append({
+            'node_id': '__balance__',
+            'node_label': 'Other',
+            'delta': total_delta - sum_d,
+            'reach_before': None,
+            'reach_after': None,
+        })
+
+    # Bucketing for long tails.
+    bucketed: list[dict[str, Any]] = []
+    other_sum = 0.0
+    if abs(total_delta) > 1e-12 and other_threshold_pct > 0:
+        threshold = abs(total_delta) * other_threshold_pct
+        for d in deltas:
+            if d['node_id'] == '__balance__':
+                other_sum += float(d['delta'])
+                continue
+            if abs(float(d['delta'])) < threshold:
+                other_sum += float(d['delta'])
+            else:
+                bucketed.append(d)
+
+        # Make "Other" the balancing remainder for stability.
+        major_sum = sum(float(d['delta']) for d in bucketed)
+        other_sum = total_delta - major_sum
+    else:
+        bucketed = deltas
+        other_sum = 0.0
+
+    # Build bridge steps (human-readable IDs for UI consistency).
+    steps: list[dict[str, Any]] = []
+    step_meta: dict[str, Any] = {}
+
+    def _add_step(step_id: str, name: str, order: int, kind: str, total: Optional[float], delta: Optional[float], colour: Optional[str] = None) -> None:
+        step_meta[step_id] = {'name': name, 'order': order, 'colour': colour}
+        steps.append({
+            'bridge_step': step_id,
+            'kind': kind,
+            'total': total,
+            'delta': delta,
+        })
+
+    order = 0
+    _add_step('start', f"Start ({sA['scenario_name']})", order, 'start', reachA, None, sA.get('scenario_colour'))
+    order += 1
+
+    # Recompute a stable before/after sequence for the displayed steps post-bucketing.
+    running_before = reachA
+    for d in bucketed:
+        nid = d['node_id']
+        if nid == '__balance__':
+            continue
+        human = get_human_id(G, nid) if isinstance(nid, str) else str(nid)
+        label = d.get('node_label') or human
+        delta_val = float(d['delta'])
+        running_after = running_before + delta_val
+        _add_step(human, str(label), order, 'step', None, delta_val)
+        steps[-1]['reach_before'] = running_before
+        steps[-1]['reach_after'] = running_after
+        running_before = running_after
+        order += 1
+
+    if abs(other_sum) > 1e-12:
+        delta_val = float(other_sum)
+        running_after = running_before + delta_val
+        _add_step('other', 'Other', order, 'other', None, delta_val)
+        steps[-1]['reach_before'] = running_before
+        steps[-1]['reach_after'] = running_after
+        running_before = running_after
+        order += 1
+
+    _add_step('end', f"End ({sB['scenario_name']})", order, 'end', reachB, None, sB.get('scenario_colour'))
+    steps[-1]['reach_before'] = None
+    steps[-1]['reach_after'] = reachB
+
+    return {
+        'metadata': {
+            'to_node': get_human_id(G, node_id),
+            'to_label': node_label,
+            'scenario_a': {
+                'scenario_id': sA['scenario_id'],
+                'name': sA['scenario_name'],
+                'colour': sA.get('scenario_colour'),
+                'visibility_mode': sA['visibility_mode'],
+                'probability_label': sA['probability_label'],
+            },
+            'scenario_b': {
+                'scenario_id': sB['scenario_id'],
+                'name': sB['scenario_name'],
+                'colour': sB.get('scenario_colour'),
+                'visibility_mode': sB['visibility_mode'],
+                'probability_label': sB['probability_label'],
+            },
+            'reach_a': reachA,
+            'reach_b': reachB,
+            'delta': total_delta,
+            'other_threshold_pct': other_threshold_pct,
+        },
+        'semantics': {
+            'dimensions': [
+                {'id': 'bridge_step', 'name': 'Step', 'type': 'stage', 'role': 'primary'},
+            ],
+            'metrics': [
+                {'id': 'total', 'name': 'Reach', 'type': 'probability', 'format': 'percent', 'role': 'secondary'},
+                {'id': 'delta', 'name': 'Change', 'type': 'delta', 'format': 'percent', 'role': 'primary'},
+                {'id': 'reach_before', 'name': f"Reach before ({sA['scenario_name']}→{sB['scenario_name']})", 'type': 'probability', 'format': 'percent', 'role': 'secondary'},
+                {'id': 'reach_after', 'name': f"Reach after ({sA['scenario_name']}→{sB['scenario_name']})", 'type': 'probability', 'format': 'percent', 'role': 'secondary'},
+            ],
+            'chart': {
+                'recommended': 'bridge',
+                'alternatives': ['table'],
+                'hints': {
+                    'other_threshold_pct': other_threshold_pct,
+                }
+            }
+        },
+        'dimension_values': {
+            'bridge_step': step_meta,
+        },
+        'data': steps,
+    }
 
 
 def run_path_through(
@@ -1022,7 +1258,8 @@ def run_path(
             ],
             'chart': {
                 'recommended': 'funnel',
-                'alternatives': ['bar_grouped', 'table'],
+                # Bridge is a useful "step delta" view (waterfall) for funnels.
+                'alternatives': ['bridge', 'bar_grouped', 'table'],
                 'hints': {'show_dropoff': True}
             }
         },

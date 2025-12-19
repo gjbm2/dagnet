@@ -149,6 +149,14 @@ class TestGetAvailableAnalyses:
         graph_data = build_test_graph_data()
         available = get_available_analyses(graph_data=graph_data, query_dsl='to(end1)')
         assert available[0]['id'] == 'to_node_reach'
+
+    def test_to_only_reach_with_two_scenarios_includes_bridge_view(self):
+        """to(B) with scenario_count=2 should include bridge_view as an available option."""
+        graph_data = build_test_graph_data()
+        available = get_available_analyses(graph_data=graph_data, query_dsl='to(end1)', scenario_count=2)
+        ids = [a['id'] for a in available]
+        assert 'to_node_reach' in ids
+        assert 'bridge_view' in ids
     
     def test_visited_only_path_through(self):
         """visited(A) -> path_through."""

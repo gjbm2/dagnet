@@ -241,6 +241,12 @@ def dispatch_runner(
         if resolved_to:
             return run_path_to_end(G, resolved_to, pruning, all_scenarios)
         return {'error': f'to() node not found: {to_node}'}
+
+    elif runner_name == 'bridge_view_runner':
+        if resolved_to:
+            from .runners import run_bridge_view
+            return run_bridge_view(G, resolved_to, pruning, all_scenarios)
+        return {'error': f'to() node not found: {to_node}'}
     
     elif runner_name == 'path_through_runner':
         # Single visited() node
