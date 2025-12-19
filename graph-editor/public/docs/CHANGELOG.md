@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.11b
+**Released:** December 19, 2025
+
+Bridge charts
+
+---
+
 ## Version 1.1.10b
 **Released:** December 18, 2025
 
