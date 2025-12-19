@@ -115,6 +115,10 @@ export function useURLDailyRetrieveAll(graphLoaded: boolean, fileId: string | un
       const runId = `retrieveall:${fileId}:${waitStartedAt}`;
 
       try {
+        // In retrieveall mode, the session log is the primary UX for progress/diagnostics.
+        // Fire-and-forget: failures should never block the automation run.
+        void sessionLogService.openLogTab();
+
         setAutomationTitle('starting');
         automationRunService.start({ runId, graphFileId: fileId, graphName: inferGraphNameFromFileId(fileId) });
 

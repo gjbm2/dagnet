@@ -13,6 +13,7 @@ from lib.runner.runners import (
     run_path,
     run_partial_path,
     run_general_stats,
+    run_bridge_view,
     get_runner,
 )
 
@@ -140,6 +141,66 @@ class TestPathToEnd:
         
         current_row = [r for r in result['data'] if r['scenario_id'] == 'current'][0]
         assert current_row['probability'] == pytest.approx(0.2)
+
+
+class TestBridgeView:
+    """Test Bridge View runner (two-scenario reach decomposition)."""
+
+    class Scenario:
+        def __init__(self, scenario_id: str, name: str, visibility_mode: str, graph: dict):
+            self.scenario_id = scenario_id
+            self.name = name
+            self.colour = '#3b82f6'
+            self.visibility_mode = visibility_mode
+            self.graph = graph
+
+    def test_bridge_view_sums_to_total_delta(self):
+        """
+        Bridge steps (including Other if present) should sum to Reach(B) - Reach(A).
+        """
+        # Graph payload in DagNet format (UUIDs == IDs for simplicity)
+        graph_payload = {
+            'nodes': [
+                {'id': 'start', 'uuid': 'start', 'entry': {'is_start': True}},
+                {'id': 'a', 'uuid': 'a'},
+                {'id': 'b', 'uuid': 'b'},
+                {'id': 'end', 'uuid': 'end', 'absorbing': True},
+            ],
+            'edges': [
+                {'from': 'start', 'to': 'a', 'uuid': 'e1', 'p': {'mean': 1.0}},
+                {'from': 'a', 'to': 'b', 'uuid': 'e2', 'p': {'mean': 0.5}},
+                {'from': 'b', 'to': 'end', 'uuid': 'e3', 'p': {'mean': 0.5}},
+            ],
+        }
+
+        # Scenario A: reach(end) = 0.25
+        scenario_a = self.Scenario('A', 'A', 'f+e', graph_payload)
+
+        # Scenario B: bump b->end to 0.9 => reach(end) = 0.45
+        graph_payload_b = {
+            **graph_payload,
+            'edges': [
+                {'from': 'start', 'to': 'a', 'uuid': 'e1', 'p': {'mean': 1.0}},
+                {'from': 'a', 'to': 'b', 'uuid': 'e2', 'p': {'mean': 0.5}},
+                {'from': 'b', 'to': 'end', 'uuid': 'e3', 'p': {'mean': 0.9}},
+            ],
+        }
+        scenario_b = self.Scenario('B', 'B', 'f+e', graph_payload_b)
+
+        # Base NX graph is only used for node labels; scenario graphs drive the maths via _prepare_scenarios.
+        G = build_test_graph()
+        result = run_bridge_view(G, 'end', all_scenarios=[scenario_a, scenario_b], other_threshold_pct=0.0)
+
+        assert 'semantics' in result
+        assert result['semantics']['chart']['recommended'] == 'bridge'
+
+        reach_a = result['metadata']['reach_a']
+        reach_b = result['metadata']['reach_b']
+        assert reach_a == pytest.approx(0.25)
+        assert reach_b == pytest.approx(0.45)
+
+        deltas = [r.get('delta') for r in result['data'] if r.get('delta') is not None]
+        assert sum(deltas) == pytest.approx(reach_b - reach_a)
 
 
 class TestPathThrough:

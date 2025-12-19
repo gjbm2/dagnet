@@ -4,9 +4,11 @@ import type { TabState } from '../types';
 import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
 
+export type ChartKind = 'analysis_funnel' | 'analysis_bridge';
+
 type ChartFileDataV1 = {
   version: '1.0.0';
-  chart_kind: 'analysis_funnel';
+  chart_kind: ChartKind;
   title: string;
   created_at_uk: string;
   created_at_ms: number;
@@ -24,7 +26,8 @@ type ChartFileDataV1 = {
 };
 
 class ChartOperationsService {
-  async openFunnelChartTabFromAnalysis(args: {
+  async openAnalysisChartTabFromAnalysis(args: {
+    chartKind: ChartKind;
     analysisResult: AnalysisResult;
     scenarioIds: string[];
     title?: string;
@@ -43,12 +46,12 @@ class ChartOperationsService {
         'CHART_OPEN',
         `Opening chart tab: ${title}`,
         undefined,
-        { fileId, tabId }
+        { fileId, tabId, chartKind: args.chartKind }
       );
 
       const chartData: ChartFileDataV1 = {
         version: '1.0.0',
-        chart_kind: 'analysis_funnel',
+        chart_kind: args.chartKind,
         title,
         created_at_uk: formatDateUK(new Date(timestamp)),
         created_at_ms: timestamp,
@@ -94,7 +97,7 @@ class ChartOperationsService {
         'CHART_OPEN_SUCCESS',
         `Opened chart tab: ${title}`,
         undefined,
-        { fileId, tabId }
+        { fileId, tabId, chartKind: args.chartKind }
       );
 
       return { fileId, tabId };

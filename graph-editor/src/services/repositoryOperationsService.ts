@@ -835,10 +835,14 @@ class RepositoryOperationsService {
       encoding?: 'utf-8' | 'base64';
       sha?: string;
       delete?: boolean;
-    }> = files.map(file => {
-      // Get the file from registry
-      const fileState = fileRegistry.getFile(file.fileId);
-      let content = file.content;
+    }> = files.map((file: any) => {
+      const fileId: string | undefined = file?.fileId;
+
+      // Prefer FileRegistry (live state). Fall back to the passed object if it looks like a FileState.
+      const registryState = fileId ? fileRegistry.getFile(fileId) : undefined;
+      const fileState: any = registryState || (file?.data ? file : undefined);
+
+      let content: string | undefined = file?.content;
       
       // Only update metadata timestamps for graphs (they have a standard metadata structure)
       // Don't mutate fileState.data directly - create a copy for serialization
@@ -862,16 +866,25 @@ class RepositoryOperationsService {
       
       const basePath = gitCreds.basePath || '';
       // Ensure correct file extension: graphs should always be .json
-      let filePath = file.path;
+      const rawPath =
+        (typeof file?.path === 'string' && file.path.trim() !== '' ? file.path.trim() : undefined) ||
+        (typeof fileState?.source?.path === 'string' && fileState.source.path.trim() !== '' ? fileState.source.path.trim() : undefined);
+
+      if (!rawPath) {
+        const idHint = fileId || fileState?.fileId || '(unknown fileId)';
+        throw new Error(`Cannot commit "${idHint}": missing file path (no file.path and no source.path)`);
+      }
+
+      let filePath = rawPath;
       if (fileState?.type === 'graph' && filePath.endsWith('.yaml')) {
         filePath = filePath.replace(/\.yaml$/, '.json');
-        console.log(`[RepositoryOperationsService] Corrected graph path: ${file.path} → ${filePath}`);
+        console.log(`[RepositoryOperationsService] Corrected graph path: ${rawPath} → ${filePath}`);
       }
       const fullPath = basePath ? `${basePath}/${filePath}` : filePath;
       return {
         path: fullPath,
         content,
-        sha: file.sha
+        sha: file?.sha ?? fileState?.sha
       };
     });
 

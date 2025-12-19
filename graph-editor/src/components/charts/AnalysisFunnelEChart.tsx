@@ -8,12 +8,13 @@ export function AnalysisFunnelEChart(props: {
   result: AnalysisResult;
   scenarioId: string;
   height?: number;
+  showToolbox?: boolean;
 }): JSX.Element | null {
-  const { result, scenarioId, height = 260 } = props;
+  const { result, scenarioId, height = 260, showToolbox = true } = props;
 
   const option = useMemo(() => {
-    return buildFunnelEChartsOption(result, { scenarioId });
-  }, [result, scenarioId]);
+    return buildFunnelEChartsOption(result, { scenarioId, ui: { showToolbox } });
+  }, [result, scenarioId, showToolbox]);
 
   if (!option) return null;
 

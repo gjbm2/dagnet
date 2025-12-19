@@ -12,6 +12,7 @@ import {
   Route,
   ArrowRight,
   ArrowDown,
+  ArrowLeftRight,
   Split,
   Combine,
   GitMerge,
@@ -57,6 +58,13 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Probability of reaching this node',
     selectionHint: 'Select a single end/absorbing node with to()',
     icon: Target,
+  },
+  {
+    id: 'bridge_view',
+    name: 'Bridge View',
+    shortDescription: 'Explain Reach Probability change between two scenarios',
+    selectionHint: 'Requires exactly 2 visible scenarios. Select a single end node with to()',
+    icon: ArrowLeftRight,
   },
   {
     id: 'path_through',
