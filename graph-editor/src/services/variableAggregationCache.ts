@@ -5,7 +5,7 @@
  * Provides O(1) lookup after initial O(n) build.
  */
 
-import type { ParameterValue } from './paramRegistryService';
+import type { ParameterValue } from '../types/parameterData';
 import { parseConstraints } from '../lib/queryDSL';
 import type { ContextCombination } from './contextAggregationService';
 

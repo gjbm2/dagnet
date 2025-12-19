@@ -30,7 +30,7 @@ import {
   analyzeSliceCoverage,
 } from '../fetchRefetchPolicy';
 import { computeEdgeLatencyStats } from '../statisticalEnhancementService';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 // =============================================================================
 // Simulation Infrastructure

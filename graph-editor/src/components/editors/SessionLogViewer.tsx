@@ -19,11 +19,16 @@ interface SessionLogViewerProps {
 export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  // Preference: whether we auto-tail when already at the bottom. This should NOT flip off just because the user scrolls.
   const [tailMode, setTailMode] = useState(true);
   const [showContext, setShowContext] = useState(true);
   const [diagnosticEnabled, setDiagnosticEnabled] = useState(sessionLogService.getDiagnosticLoggingEnabled());
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
+  const tailModeRef = useRef(true);
+  const suppressScrollHandlingRef = useRef(false);
+  const prevDeepCountRef = useRef(0);
   
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: LogEntry } | null>(null);
@@ -47,29 +52,64 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
     };
   }, []);
 
-  // Auto-scroll when in tail mode
   useEffect(() => {
-    if (tailMode && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    tailModeRef.current = tailMode;
+  }, [tailMode]);
+
+  function countEntriesDeep(list: LogEntry[]): number {
+    let count = 0;
+    const stack: LogEntry[] = [...list];
+    while (stack.length) {
+      const e = stack.pop()!;
+      count++;
+      if (e.children?.length) {
+        for (const c of e.children) stack.push(c);
+      }
     }
-  }, [entries, tailMode]);
+    return count;
+  }
+
+  const scrollToBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    // Prevent programmatic scroll updates from disabling tail mode via handleScroll.
+    suppressScrollHandlingRef.current = true;
+
+    // Defer so scrollHeight reflects freshly-rendered entries.
+    requestAnimationFrame(() => {
+      const el2 = containerRef.current;
+      if (!el2) return;
+      el2.scrollTop = el2.scrollHeight;
+      wasAtBottomRef.current = true;
+      suppressScrollHandlingRef.current = false;
+    });
+  }, []);
+
+  // Auto-scroll when in tail mode, but ONLY when new entries are added.
+  useEffect(() => {
+    const nextCount = countEntriesDeep(entries);
+    const prevCount = prevDeepCountRef.current;
+    prevDeepCountRef.current = nextCount;
+
+    if (!tailModeRef.current) return;
+    // Preference semantics: only auto-scroll if the user is currently at bottom.
+    // If they've scrolled up, keep position and let them use "Jump to Latest".
+    if (!wasAtBottomRef.current) return;
+    if (nextCount <= prevCount) return;
+    scrollToBottom();
+  }, [entries, scrollToBottom]);
 
   // Track scroll position to disable tail mode on manual scroll
   const handleScroll = useCallback(() => {
+    if (suppressScrollHandlingRef.current) return;
     if (!containerRef.current) return;
     
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
     const atBottom = scrollHeight - scrollTop - clientHeight < 50;
     
-    if (wasAtBottomRef.current && !atBottom) {
-      // User scrolled up - disable tail mode
-      setTailMode(false);
-    } else if (!wasAtBottomRef.current && atBottom) {
-      // User scrolled back to bottom - enable tail mode
-      setTailMode(true);
-    }
-    
     wasAtBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
   }, []);
 
   const filteredEntries = searchTerm 
@@ -90,8 +130,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
 
   const jumpToBottom = () => {
     if (containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      setTailMode(true);
+      scrollToBottom();
     }
   };
 
@@ -205,14 +244,18 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
             <input
               type="checkbox"
               checked={tailMode}
-              onChange={(e) => setTailMode(e.target.checked)}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setTailMode(next);
+                if (next && wasAtBottomRef.current) scrollToBottom();
+              }}
             />
             Tail
           </label>
           
-          {!tailMode && (
+          {tailMode && !isAtBottom && (
             <button onClick={jumpToBottom} className="log-btn log-btn-primary">
-              ↓ Jump to Latest
+              ↓{'\u00A0'}Latest
             </button>
           )}
         </div>

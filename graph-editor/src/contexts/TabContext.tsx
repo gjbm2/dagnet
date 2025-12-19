@@ -902,6 +902,12 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const { showConfirm } = useDialog();
+  const tabsRef = React.useRef<TabState[]>([]);
+
+  // Keep a ref to latest tabs for event handlers registered once at mount.
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
 
   // Load tabs from IndexedDB on mount, initialize credentials and connections
   useEffect(() => {
@@ -911,6 +917,20 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       await initializeConnections();
       await initializeSettings();
       await loadFromURLData();
+
+      // Signal that TabContext initialisation (including URL-driven tab opening) is complete.
+      // This is used by headless/URL automations so they don't fight the tab focus churn during boot.
+      try {
+        const w = (typeof window !== 'undefined') ? (window as any) : null;
+        if (w) {
+          w.__dagnetTabContextInitDone = true;
+          if (typeof CustomEvent !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('dagnet:tabContextInitDone'));
+          }
+        }
+      } catch {
+        // Best-effort only
+      }
     };
     initializeApp();
     
@@ -928,6 +948,18 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     const handleSwitchToTab = async (event: CustomEvent<{ tabId: string }>) => {
       const { tabId } = event.detail;
       console.log(`[TabContext] dagnet:switchToTab event received for ${tabId}`);
+      // Defensive: ignore stale/ghost tabIds (e.g., a file's viewTabs referencing a tab that was closed).
+      const existsInState = tabsRef.current.some(t => t.id === tabId);
+      if (!existsInState) {
+        // If it's not in React state, it may still exist in IndexedDB (e.g. restored tabs, or a tab created before state was ready).
+        const saved = await db.tabs.get(tabId);
+        if (!saved) {
+          console.warn(`[TabContext] dagnet:switchToTab ignored: tabId not found in tabs array (${tabId})`);
+          return;
+        }
+
+        setTabs(prev => (prev.some(t => t.id === tabId) ? prev : [...prev, saved]));
+      }
       setActiveTabId(tabId);
       await db.saveAppState({ activeTabId: tabId });
     };
@@ -1378,59 +1410,19 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
           console.log(`TabContext: File ${fileId} is temporary, using existing data`);
           data = existingFile.data;
         } else {
-          // File doesn't exist or is not temporary - load from Git
-          const { paramRegistryService } = await import('../services/paramRegistryService');
-          
-          // Get the currently selected repository from NavigatorContext by reading from IndexedDB
-          const appState = await db.appState.get('app-state');
-          const selectedRepo = appState?.navigatorState?.selectedRepo;
-          const selectedBranch = appState?.navigatorState?.selectedBranch || 'main';
-          
-          console.log(`TabContext: Loading ${item.type} from repo: ${selectedRepo}, branch: ${selectedBranch}`);
-          
-          // Load credentials to configure the service
-          const { credentialsManager } = await import('../lib/credentials');
-          const credentialsResult = await credentialsManager.loadCredentials();
-          
-          if (credentialsResult.success && credentialsResult.credentials && selectedRepo) {
-            const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === selectedRepo);
-            if (gitCreds) {
-              console.log(`TabContext: Configuring paramRegistryService with credentials for ${gitCreds.name}`);
-              paramRegistryService.setConfig({
-                source: 'git',
-                gitBasePath: gitCreds.basePath || '',
-                gitBranch: selectedBranch,
-                gitRepoOwner: gitCreds.owner,
-                gitRepoName: gitCreds.repo || gitCreds.name,
-                gitToken: gitCreds.token
-              });
-            } else {
-              console.warn(`TabContext: No git credentials found for repo: ${selectedRepo}`);
-            }
+          // Workspace-only policy:
+          // These objects must be present in IndexedDB/FileRegistry as part of the selected repo/branch workspace.
+          // We do NOT support an alternate “registry” loader path in production.
+          const fromDb = await db.files.get(fileId);
+          if (fromDb?.data) {
+            data = fromDb.data;
+          } else if (existingFile?.data) {
+            data = existingFile.data;
           } else {
-            console.warn('TabContext: No credentials or selected repo available for paramRegistryService');
-          }
-          
-          // Load based on type
-          try {
-            if (item.type === 'parameter') {
-              data = await paramRegistryService.loadParameter(item.id);
-            } else if (item.type === 'context') {
-              data = await paramRegistryService.loadContext(item.id);
-            } else if (item.type === 'case') {
-              data = await paramRegistryService.loadCase(item.id);
-            } else if (item.type === 'node') {
-              data = await paramRegistryService.loadNode(item.id);
-            }
-            console.log(`TabContext: Loaded ${item.type} data:`, data);
-          } catch (loadError) {
-            console.error(`TabContext: Failed to load ${item.type}:`, loadError);
-            // For now, use empty object with error flag
-            data = { 
-              _loadError: true,
-              _errorMessage: String(loadError),
-              _fileId: item.id
-            };
+            throw new Error(
+              `${fileId} not found in workspace cache. ` +
+              `Try switching repo/branch again (workspace load), then retry.`
+            );
           }
         }
       } else if (item.type === 'credentials' || item.type === 'connections') {

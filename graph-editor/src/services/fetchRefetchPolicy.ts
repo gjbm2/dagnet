@@ -12,7 +12,7 @@
 import { parseDate, normalizeDate } from './windowAggregationService';
 import { LATENCY_REFETCH_COOLDOWN_MINUTES } from '../constants/latency';
 import type { DateRange } from '../types';
-import type { ParameterValue } from './paramRegistryService';
+import type { ParameterValue } from '../types/parameterData';
 
 // =============================================================================
 // Types

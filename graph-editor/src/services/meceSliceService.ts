@@ -8,7 +8,7 @@
  * - We only support implicit-uncontexted aggregation when slices vary by exactly ONE context key.
  * - If multiple context keys appear (or case dims are present), we refuse to synthesise an uncontexted total.
  */
-import type { ParameterValue } from './paramRegistryService';
+import type { ParameterValue } from '../types/parameterData';
 import { contextRegistry } from './contextRegistry';
 import { parseConstraints } from '../lib/queryDSL';
 import { extractSliceDimensions } from './sliceIsolation';

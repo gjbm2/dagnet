@@ -11,14 +11,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { db } from '../../db/appDatabase';
 
-// Mock param registry so the service must fall back to IndexedDB
-vi.mock('../paramRegistryService', () => ({
-  paramRegistryService: {
-    loadContextsIndex: vi.fn().mockRejectedValue(new Error('no param registry in tests')),
-    loadContext: vi.fn().mockRejectedValue(new Error('no param registry in tests')),
-  },
-}));
-
 // Mock FileRegistry to be empty (represents "user hasn't opened any context tabs yet")
 vi.mock('../../contexts/TabContext', () => ({
   fileRegistry: {

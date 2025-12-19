@@ -24,11 +24,14 @@
   background: #f5f5f5;
   border-bottom: 1px solid #e0e0e0;
   flex-shrink: 0;
+  /* On narrow docks, avoid "disappearing" controls by allowing wrapping instead of overflow clipping. */
+  flex-wrap: wrap;
 }
 
 .log-search {
-  flex: 1;
-  min-width: 200px;
+  /* Allow the search box to take a full row when space is tight. */
+  flex: 1 1 180px;
+  min-width: 80px;
   padding: 6px 10px;
   background: #ffffff;
   border: 1px solid #ccc;
@@ -51,6 +54,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+  max-width: 100%;
 }
 
 .log-btn {

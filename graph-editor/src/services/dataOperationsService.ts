@@ -59,7 +59,7 @@ import {
   statisticalEnhancementService,
 } from './statisticalEnhancementService';
 import { approximateLogNormalSumPercentileDays, fitLagDistribution } from './statisticalEnhancementService';
-import type { ParameterValue } from './paramRegistryService';
+import type { ParameterValue } from '../types/parameterData';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
@@ -3540,7 +3540,6 @@ class DataOperationsService {
           
           // Load buildDslFromEdge and event loader
           const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
-          const { paramRegistryService } = await import('./paramRegistryService');
           
           // Get connection to extract provider and check if it requires event_ids
           const { createDASRunner } = await import('../lib/das');
@@ -4568,6 +4567,11 @@ class DataOperationsService {
           // Filter parameter file values to latest signature before calculating incremental fetch
           // Isolate to target slice, then check signatures
           let filteredParamData = paramFile.data;
+          // Signature to use for cache coverage / incremental fetch checks.
+          // MUST be defined regardless of whether we find any values in cache.
+          // Default to the expected signature for this run; may be overridden to the latest
+          // signature observed in the file to avoid false cache-misses after query-def changes.
+          let signatureToUse: string | undefined = querySignature;
           if (paramFile.data.values && Array.isArray(paramFile.data.values)) {
             // First: collect all values with daily data
             const allValuesWithDaily = (paramFile.data.values as ParameterValue[])
@@ -4601,8 +4605,11 @@ class DataOperationsService {
                 }
               }
               
-              // Use latest signature if found, otherwise use expected signature
-              const signatureToUse = latestQuerySignature || querySignature;
+              // Use latest signature if found, otherwise use expected signature.
+              // IMPORTANT: this must be the signature we use for cache coverage checks too,
+              // otherwise we can incorrectly report "missing" days even when the latest cached
+              // values exist (often showing up as "yesterday missing").
+              signatureToUse = latestQuerySignature || querySignature;
               
               // Check signature staleness (but use slice-isolated data)
               if (signatureToUse) {
@@ -4629,7 +4636,7 @@ class DataOperationsService {
           const incrementalResult = calculateIncrementalFetch(
             filteredParamData,
             requestedWindow,
-            querySignature,
+            signatureToUse,
             bustCache || false,
             currentDSL || targetSlice || ''  // Filter by context slice
           );
@@ -5002,34 +5009,45 @@ class DataOperationsService {
               }
             );
           } else {
-            // Cache a "no data" marker for this gap only so subsequent runs can skip it.
+            // Cache a "no data" marker for this gap so subsequent runs can skip it.
+            //
+            // CRITICAL: still route through mergeTimeSeriesIntoParameter so we canonicalise
+            // the slice family (prevents value fragmentation like "big slice + 1-day slice").
             const startD = parseDate(normalizeDate(fetchWindow.start));
             const endD = parseDate(normalizeDate(fetchWindow.end));
-            const dates: string[] = [];
+            const gapZeros: Array<{ date: string; n: number; k: number; p: number }> = [];
             const currentD = new Date(startD);
             while (currentD <= endD) {
-              dates.push(normalizeDate(currentD.toISOString()));
+              gapZeros.push({ date: currentD.toISOString(), n: 0, k: 0, p: 0 });
               currentD.setDate(currentD.getDate() + 1);
             }
 
-            const noDataEntry: ParameterValue = {
-              mean: 0,
-              n: 0,
-              k: 0,
-              dates: dates.map((d) => normalizeToUK(d)),
-              n_daily: dates.map(() => 0),
-              k_daily: dates.map(() => 0),
-              window_from: normalizeToUK(fetchWindow.start),
-              window_to: normalizeToUK(fetchWindow.end),
-              sliceDSL: sliceDSLForGapWrites,
-              data_source: {
-                type: 'amplitude',
-                retrieved_at: new Date().toISOString(),
-                full_query: fullQueryForStorage,
-              },
-              query_signature: querySignature,
-            };
-            existingValuesForGapWrites.push(noDataEntry);
+            const forecasting = await forecastingSettingsService.getForecastingModelSettings();
+            existingValuesForGapWrites = mergeTimeSeriesIntoParameter(
+              existingValuesForGapWrites,
+              gapZeros as any,
+              fetchWindow,
+              querySignature,
+              queryParamsForStorage,
+              fullQueryForStorage,
+              dataSourceType,
+              sliceDSLForGapWrites,
+              {
+                isCohortMode: isCohortQuery,
+                ...(shouldRecomputeForecastForGapWrites && {
+                  latencyConfig: {
+                    latency_parameter: latencyConfigForGapWrites?.latency_parameter,
+                    anchor_node_id: latencyConfigForGapWrites?.anchor_node_id,
+                    t95: latencyConfigForGapWrites?.t95,
+                  },
+                  recomputeForecast: true,
+                  forecastingConfig: {
+                    RECENCY_HALF_LIFE_DAYS: forecasting.RECENCY_HALF_LIFE_DAYS,
+                    DEFAULT_T95_DAYS: forecasting.DEFAULT_T95_DAYS,
+                  },
+                }),
+              }
+            );
           }
 
           const updatedFileData = structuredClone(paramFileForGapWrites.data);
@@ -5996,41 +6014,50 @@ class DataOperationsService {
               // API returned NO DATA - write a "no data" marker so we can cache this result
               // Without this, switching to this slice later would show fetch button again
               for (const fetchWindow of actualFetchWindows) {
-                // Generate all dates in the window
+                // No-data marker, but still run through mergeTimeSeriesIntoParameter so we:
+                // - coalesce with any existing slice family
+                // - canonicalise sliceDSL + headers for coverage checks
                 const startD = parseDate(normalizeDate(fetchWindow.start));
                 const endD = parseDate(normalizeDate(fetchWindow.end));
-                const dates: string[] = [];
+                const gapZeros: Array<{ date: string; n: number; k: number; p: number }> = [];
                 const currentD = new Date(startD);
                 while (currentD <= endD) {
-                  dates.push(normalizeDate(currentD.toISOString()));
+                  gapZeros.push({ date: currentD.toISOString(), n: 0, k: 0, p: 0 });
                   currentD.setDate(currentD.getDate() + 1);
                 }
-                
-                // Create "no data" entry with zero values for each date
-                const noDataEntry: ParameterValue = {
-                  mean: 0,
-                  n: 0,
-                  k: 0,
-                  dates: dates.map(d => normalizeToUK(d)),
-                  n_daily: dates.map(() => 0),
-                  k_daily: dates.map(() => 0),
-                  window_from: normalizeToUK(fetchWindow.start),
-                  window_to: normalizeToUK(fetchWindow.end),
-                  sliceDSL, // CRITICAL: Tag with context so isolateSlice finds it
-                  data_source: {
-                    type: 'amplitude',
-                    retrieved_at: new Date().toISOString(),
-                    full_query: fullQueryForStorage,
-                  },
-                  query_signature: querySignature,
-                };
-                existingValues.push(noDataEntry);
+
+                const forecasting = await forecastingSettingsService.getForecastingModelSettings();
+                existingValues = mergeTimeSeriesIntoParameter(
+                  existingValues,
+                  gapZeros as any,
+                  fetchWindow,
+                  querySignature,
+                  queryParamsForStorage,
+                  fullQueryForStorage,
+                  dataSourceType,
+                  sliceDSL, // CRITICAL: Pass slice family identifier for isolateSlice matching
+                  {
+                    isCohortMode: isCohortQuery,
+                    ...(shouldRecomputeForecast && {
+                      latencyConfig: {
+                        latency_parameter: latencyConfigForMerge?.latency_parameter,
+                        anchor_node_id: latencyConfigForMerge?.anchor_node_id,
+                        t95: latencyConfigForMerge?.t95,
+                      },
+                      recomputeForecast: true,
+                      forecastingConfig: {
+                        RECENCY_HALF_LIFE_DAYS: forecasting.RECENCY_HALF_LIFE_DAYS,
+                        DEFAULT_T95_DAYS: forecasting.DEFAULT_T95_DAYS,
+                      },
+                    }),
+                  }
+                );
                 
                 console.log(`[DataOperationsService] Cached "no data" marker for slice:`, {
                   paramId: objectId,
                   sliceDSL,
                   fetchWindow,
-                  dates,
+                  days: gapZeros.length,
                 });
               }
               

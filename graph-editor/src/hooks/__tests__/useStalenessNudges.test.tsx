@@ -109,7 +109,7 @@ describe('useStalenessNudges', () => {
     hoisted.canPrompt.mockReturnValue(true);
     hoisted.shouldCheckGitPull.mockResolvedValue(false);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: false });
-    hoisted.getRetrieveAllSlicesStalenessStatus.mockReturnValue({
+    hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
       isStale: false,
       parameterCount: 0,
       staleParameterCount: 0,
@@ -134,14 +134,14 @@ describe('useStalenessNudges', () => {
     expect(screen.getByText('Reload page')).toBeTruthy();
     expect(screen.getByText('Automatic mode')).toBeTruthy();
 
-    screen.getByText('Run selected').click();
+    screen.getByRole('button', { name: 'Run selected' }).click();
     expect(reloadSpy).toHaveBeenCalledTimes(1);
     reloadSpy.mockRestore();
   });
 
   it('should request retrieve-all-slices when Retrieve is due + selected', async () => {
     hoisted.shouldPromptReload.mockReturnValue(false);
-    hoisted.getRetrieveAllSlicesStalenessStatus.mockReturnValue({
+    hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
       isStale: true,
       parameterCount: 2,
       staleParameterCount: 1,
@@ -153,8 +153,34 @@ describe('useStalenessNudges', () => {
     expect(await screen.findByText('Updates recommended')).toBeTruthy();
     expect(screen.getByText('Retrieve all slices (active graph)')).toBeTruthy();
 
-    screen.getByText('Run selected').click();
+    screen.getByRole('button', { name: 'Run selected' }).click();
     expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(1);
+  });
+
+  it('should run retrieve-all headlessly before reloading when Reload + Retrieve are selected', async () => {
+    hoisted.shouldPromptReload.mockReturnValue(true);
+    hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
+      isStale: true,
+      parameterCount: 1,
+      staleParameterCount: 1,
+    });
+
+    const reloadSpy = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
+
+    render(<Harness />);
+
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+    expect(screen.getByText('Reload page')).toBeTruthy();
+    expect(screen.getByText('Retrieve all slices (active graph)')).toBeTruthy();
+
+    screen.getByText('Run selected').click();
+
+    await waitFor(() => {
+      expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(1);
+    });
+    expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    reloadSpy.mockRestore();
   });
 
   it('should persist pending plan when Reload + Pull are selected', async () => {
@@ -196,7 +222,7 @@ describe('useStalenessNudges', () => {
     expect(hoisted.pullAll).toHaveBeenCalledTimes(0);
   });
 
-  it('should skip retrieve-all after pull when post-pull staleness is no longer due', async () => {
+  it('should skip retrieve-all after pull when pull brings fresh retrieval state (not stale)', async () => {
     hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckGitPull.mockResolvedValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
@@ -204,8 +230,8 @@ describe('useStalenessNudges', () => {
     // First call (modal due computation): stale → shows Retrieve action as due/checked.
     // Second call (post-pull re-check): not stale → should skip retrieve.
     hoisted.getRetrieveAllSlicesStalenessStatus
-      .mockReturnValueOnce({ isStale: true, parameterCount: 1, staleParameterCount: 1 })
-      .mockReturnValueOnce({ isStale: false, parameterCount: 1, staleParameterCount: 0 });
+      .mockResolvedValueOnce({ isStale: true, parameterCount: 1, staleParameterCount: 1 })
+      .mockResolvedValueOnce({ isStale: false, parameterCount: 1, staleParameterCount: 0, mostRecentRetrievedAtMs: Date.now() });
 
     render(<Harness />);
 
@@ -213,7 +239,7 @@ describe('useStalenessNudges', () => {
     expect(screen.getByText('Pull latest from git')).toBeTruthy();
     expect(screen.getByText('Retrieve all slices (active graph)')).toBeTruthy();
 
-    screen.getByText('Run selected').click();
+    screen.getByRole('button', { name: 'Run selected' }).click();
 
     await waitFor(() => {
       expect(hoisted.pullAll).toHaveBeenCalledTimes(1);

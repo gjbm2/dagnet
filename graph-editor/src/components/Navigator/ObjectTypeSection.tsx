@@ -77,7 +77,9 @@ export function EntriesRegistryProvider({
     if (entry) {
       onEntryClick(entry);
     } else {
-      console.error(`[EntriesRegistry] No entry found for fileId: ${fileId}`);
+      // This can happen transiently during initial loads / navigator refresh.
+      // Avoid spamming console.error (it looks like a crash when it isn't).
+      console.warn(`[EntriesRegistry] No entry found for fileId: ${fileId}`);
     }
   }, [onEntryClick]);
   
@@ -121,6 +123,7 @@ interface NavigatorItemProps {
 
 // Cache for where-used tooltips to avoid repeated fetches
 const tooltipCache = new Map<string, string>();
+const missingEntryWarned = new Set<string>();
 
 function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
   const { getEntry, onItemClick, onItemContextMenu } = useEntriesRegistry();
@@ -236,7 +239,12 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
   
   // Early return AFTER all hooks
   if (!entry) {
-    console.error(`[NavigatorItem] No entry found for fileId: ${fileId}`);
+    if (!missingEntryWarned.has(fileId)) {
+      missingEntryWarned.add(fileId);
+      // This can happen transiently during initial loads / navigator refresh.
+      // Avoid spamming console.error (it looks like a crash when it isn't).
+      console.warn(`[NavigatorItem] No entry found for fileId: ${fileId}`);
+    }
     return null;
   }
   

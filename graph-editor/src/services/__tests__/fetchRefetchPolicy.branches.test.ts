@@ -18,7 +18,7 @@ import {
   computeFetchWindow,
   type RefetchDecision,
 } from '../fetchRefetchPolicy';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 import { DEFAULT_T95_DAYS } from '../../constants/latency';
 
 // =============================================================================

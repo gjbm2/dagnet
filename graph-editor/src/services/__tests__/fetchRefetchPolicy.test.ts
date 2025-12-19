@@ -14,7 +14,7 @@ import {
   computeFetchWindow,
   type RefetchDecision,
 } from '../fetchRefetchPolicy';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 // Helper to create dates in UK format
 function ukDate(daysAgo: number, reference: Date = new Date()): string {
