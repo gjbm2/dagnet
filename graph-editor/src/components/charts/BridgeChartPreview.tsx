@@ -115,8 +115,8 @@ export function BridgeChartPreview(props: {
                 // Vertical waterfall in a narrow panel needs rotation to remain legible.
                 ...(orientation === 'vertical' ? { axisLabelRotateDeg: 60 } : null),
                 // Panel: keep bars slimmer (both vertical & horizontal modes).
-                barWidthMinPx: 10,
-                barWidthMaxPx: 24,
+                  barWidthMinPx: 8,
+                  barWidthMaxPx: 18,
                 showRunningTotalLine: true,
               }
             : {

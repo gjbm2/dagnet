@@ -742,6 +742,39 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
     ? (computedRotate ? 'middle' : 'top')
     : 'middle';
 
+  const connectorSegments = (() => {
+    if (!showRunningTotalLine) return undefined;
+    let running = startTotal;
+    const afterByIndex: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const kind = rows[i]?.kind;
+      const t = totals[i];
+      const d = deltas[i];
+      if (kind === 'start' && typeof t === 'number') running = t;
+      else if (typeof d === 'number') running += d;
+      else if (kind === 'end' && typeof t === 'number') running = t;
+      afterByIndex.push(running);
+    }
+
+    const segs: any[] = [];
+    for (let i = 0; i < rows.length - 1; i++) {
+      const level = afterByIndex[i];
+      if (!Number.isFinite(level)) continue;
+      if (orientation === 'horizontal') {
+        segs.push([
+          { coord: [level, labels[i]] },
+          { coord: [level, labels[i + 1]] },
+        ]);
+      } else {
+        segs.push([
+          { coord: [labels[i], level] },
+          { coord: [labels[i + 1], level] },
+        ]);
+      }
+    }
+    return segs;
+  })();
+
   return {
     animation: false,
     backgroundColor: 'transparent',
@@ -760,7 +793,8 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
       // Do NOT guess label extents (it creates systematic dead space). Instead keep a small
       // margin and let `containLabel` reserve what’s actually needed.
       left: 10,
-      right: 16,
+      // Horizontal mode needs extra right padding for % labels placed to the right of bars.
+      right: orientation === 'horizontal' ? 44 : 16,
       top: showToolbox ? 34 : 16,
       bottom: 10,
       containLabel: true,
@@ -820,7 +854,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             interval: 0,
             rotate: computedRotate,
             formatter: (v: string) => wrapLabel(v),
-            margin: 8,
+            margin: computedRotate ? 14 : 8,
             fontSize: axisLabelFontSizePx,
             lineHeight,
             hideOverlap: false,
@@ -861,6 +895,15 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         barCategoryGap: n <= 8 ? '18%' : n <= 14 ? '26%' : '34%',
         // For horizontal waterfall, ECharts expects category axis on y and bars extend on x.
         // No extra config needed; series is shared.
+        markLine: connectorSegments
+          ? {
+              silent: true,
+              symbol: ['none', 'none'],
+              label: { show: false },
+              lineStyle: { color: '#9ca3af', width: 1 },
+              data: connectorSegments,
+            }
+          : undefined,
         data: assist,
       },
       {
@@ -923,40 +966,6 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         labelLayout: (p: any) => clampLabelIntoView(p),
         data: totalBars,
       },
-      ...(showRunningTotalLine
-        ? [
-            // Connector line showing the running total after each step.
-            // This makes the (otherwise implicit) baseline offsets obvious at a glance.
-            {
-              name: 'Running total',
-              type: 'line',
-              silent: true,
-              showSymbol: true,
-              symbol: 'circle',
-              symbolSize: 4,
-              z: 5,
-              lineStyle: { width: 2, color: '#9ca3af' },
-              itemStyle: { color: '#9ca3af' },
-              tooltip: { show: false },
-              data: (() => {
-                let running = startTotal;
-                const out: any[] = [];
-                for (let i = 0; i < rows.length; i++) {
-                  const kind = rows[i]?.kind;
-                  const t = totals[i];
-                  const d = deltas[i];
-                  if (kind === 'start' && typeof t === 'number') running = t;
-                  else if (typeof d === 'number') running += d;
-                  else if (kind === 'end' && typeof t === 'number') running = t;
-
-                  out.push(orientation === 'horizontal' ? [running, labels[i]] : [labels[i], running]);
-                }
-                return out;
-              })(),
-              encode: { x: 0, y: 1 },
-            },
-          ]
-        : []),
     ],
   };
 }
