@@ -31,6 +31,20 @@ export type BridgeChartOptionArgs = {
     axisLabelFontSizePx?: number;
     axisLabelMaxLines?: number;
     axisLabelMaxCharsPerLine?: number;
+    /**
+     * Optional override for x-axis label rotation (degrees).
+     * Use 0 in tight panel views to avoid tall reserved label band.
+     */
+    axisLabelRotateDeg?: number;
+    barWidthMinPx?: number;
+    barWidthMaxPx?: number;
+    showRunningTotalLine?: boolean;
+    /**
+     * Render orientation for bridge charts.
+     * - 'vertical': categories on x-axis (legacy)
+     * - 'horizontal': categories on y-axis (recommended for readability)
+     */
+    orientation?: 'vertical' | 'horizontal';
   };
 };
 
@@ -170,13 +184,13 @@ export function buildFunnelEChartsOption(result: AnalysisResult, args: FunnelCha
     },
     toolbox: showToolbox
       ? {
-          show: true,
-          right: 8,
-          top: 8,
-          feature: {
-            saveAsImage: { show: true },
-            restore: { show: true },
-          },
+      show: true,
+      right: 8,
+      top: 8,
+      feature: {
+        saveAsImage: { show: true },
+        restore: { show: true },
+      },
         }
       : { show: false },
     series: [
@@ -415,26 +429,26 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     backgroundColor: 'transparent',
     toolbox: showToolbox
       ? {
-          show: true,
-          right: 8,
-          // Keep toolbox out of the legend area (legend lives at the very top).
-          // Two-line legend entries make the top band taller, so shift toolbox down.
-          top: scenarioIds.length > 1 ? 34 : 0,
-          feature: {
-            // Switch chart type / stacking, like the official ECharts examples.
-            // Ref: https://echarts.apache.org/examples/en/editor.html?c=bar-label-rotation
-            magicType: { show: true, type: ['line', 'bar', 'stack'] },
-            dataZoom: { show: stageCount > 10 },
-            dataView: { show: true, readOnly: true },
-            restore: { show: true },
-            saveAsImage: { show: true },
-          },
+      show: true,
+      right: 8,
+      // Keep toolbox out of the legend area (legend lives at the very top).
+      // Two-line legend entries make the top band taller, so shift toolbox down.
+      top: scenarioIds.length > 1 ? 34 : 0,
+      feature: {
+        // Switch chart type / stacking, like the official ECharts examples.
+        // Ref: https://echarts.apache.org/examples/en/editor.html?c=bar-label-rotation
+        magicType: { show: true, type: ['line', 'bar', 'stack'] },
+        dataZoom: { show: stageCount > 10 },
+        dataView: { show: true, readOnly: true },
+        restore: { show: true },
+        saveAsImage: { show: true },
+      },
         }
       : { show: false },
     brush: showToolbox
       ? {
-          toolbox: ['rect', 'polygon', 'clear'],
-          xAxisIndex: 0,
+      toolbox: ['rect', 'polygon', 'clear'],
+      xAxisIndex: 0,
         }
       : undefined,
     // Leave ample space for legend/toolbox above the chart so the key doesn't overlap the plot.
@@ -547,7 +561,9 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
 export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeChartOptionArgs = {}): any | null {
   const dims = result.semantics?.dimensions || [];
   const metrics = result.semantics?.metrics || [];
-  const primary = dims.find(d => d.role === 'primary');
+  // Be defensive: some runner outputs may omit `role` (or set it to null).
+  // For bridge charts we key off the dimension ID, not the role.
+  const primary = dims.find(d => d.id === 'bridge_step') || dims.find(d => d.role === 'primary');
   if (!primary || primary.id !== 'bridge_step') return null;
 
   const deltaMetric = metrics.find(m => m.id === 'delta');
@@ -559,6 +575,11 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const axisLabelFontSizePx = args.ui?.axisLabelFontSizePx ?? 11;
   const axisLabelMaxLines = args.ui?.axisLabelMaxLines ?? 2;
   const axisLabelMaxCharsPerLine = args.ui?.axisLabelMaxCharsPerLine ?? 12;
+  const axisLabelRotateDeg = args.ui?.axisLabelRotateDeg;
+  const barWidthMinPx = args.ui?.barWidthMinPx ?? 12;
+  const barWidthMaxPx = args.ui?.barWidthMaxPx ?? 48;
+  const showRunningTotalLine = args.ui?.showRunningTotalLine ?? false;
+  const orientation = args.ui?.orientation ?? 'vertical';
 
   const stepMeta = result.dimension_values?.bridge_step || {};
   const rows = [...(result.data || [])];
@@ -568,11 +589,15 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
     return oa - ob;
   });
 
-  const labels = rows.map((r: any) => (stepMeta[String(r.bridge_step)] as any)?.name ?? String(r.bridge_step));
-  const totals = rows.map((r: any) => (typeof r.total === 'number' ? r.total : null));
-  const deltas = rows.map((r: any) => (typeof r.delta === 'number' ? r.delta : null));
+  const labelsRaw = rows.map((r: any) => (stepMeta[String(r.bridge_step)] as any)?.name ?? String(r.bridge_step));
+  const totalsRaw = rows.map((r: any) => (typeof r.total === 'number' ? r.total : null));
+  const deltasRaw = rows.map((r: any) => (typeof r.delta === 'number' ? r.delta : null));
 
   // Find start/end totals (if present) and build cumulative offsets for waterfall bars.
+  const labels = labelsRaw;
+  const totals = totalsRaw;
+  const deltas = deltasRaw;
+
   const startIdx = rows.findIndex((r: any) => r.kind === 'start');
   const endIdx = rows.findIndex((r: any) => r.kind === 'end');
   const startTotal = startIdx >= 0 ? (totals[startIdx] ?? 0) : 0;
@@ -645,18 +670,30 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const plotWidth = Math.max(240, widthPx - 40);
   const n = Math.max(1, labels.length);
   const perCategory = plotWidth / n;
-  const barWidthPx = Math.round(Math.max(18, Math.min(72, perCategory * (n <= 8 ? 0.62 : 0.48))));
+  const barWidthPx = Math.round(Math.max(barWidthMinPx, Math.min(barWidthMaxPx, perCategory * (n <= 8 ? 0.56 : 0.44))));
 
-  const shorten = (s: string, max: number) => {
-    const t = (s || '').trim();
-    if (t.length <= max) return t;
-    return `${t.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+  const clampLabelIntoView = (p: any) => {
+    const lr = p?.labelRect;
+    const vr = p?.chartViewRect;
+    if (!lr || !vr) return;
+    let dx = 0;
+    let dy = 0;
+    const rightOverflow = (lr.x + lr.width) - (vr.x + vr.width);
+    if (rightOverflow > 0) dx -= (rightOverflow + 4);
+    const leftOverflow = vr.x - lr.x;
+    if (leftOverflow > 0) dx += (leftOverflow + 4);
+    const bottomOverflow = (lr.y + lr.height) - (vr.y + vr.height);
+    if (bottomOverflow > 0) dy -= (bottomOverflow + 4);
+    const topOverflow = vr.y - lr.y;
+    if (topOverflow > 0) dy += (topOverflow + 4);
+    return dx || dy ? ({ dx, dy } as any) : undefined;
   };
 
   const wrapLabel = (raw: string): string => {
     const s = String(raw ?? '').trim();
     if (!s) return '';
-    const parts = s.split(/[\s/|]+/g).filter(Boolean);
+    // Split aggressively so IDs like "household-delegated" wrap instead of being truncated.
+    const parts = s.split(/[\s/|._:\-–—]+/g).filter(Boolean);
     const lines: string[] = [];
     let current = '';
     const push = () => {
@@ -664,26 +701,46 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
       current = '';
     };
     for (const p of parts) {
-      // Hard-break very long tokens (e.g. IDs) so we still wrap.
-      const token = p.length > axisLabelMaxCharsPerLine ? shorten(p, axisLabelMaxCharsPerLine) : p;
-      const next = current ? `${current} ${token}` : token;
-      if (next.length > axisLabelMaxCharsPerLine) {
-        push();
-        current = token;
+      // Hard-break very long tokens so we never clip with ellipsis.
+      const chunks: string[] = [];
+      if (p.length > axisLabelMaxCharsPerLine) {
+        for (let i = 0; i < p.length; i += axisLabelMaxCharsPerLine) {
+          chunks.push(p.slice(i, i + axisLabelMaxCharsPerLine));
+        }
       } else {
-        current = next;
+        chunks.push(p);
+      }
+
+      for (const token of chunks) {
+        const next = current ? `${current} ${token}` : token;
+        if (next.length > axisLabelMaxCharsPerLine) {
+          push();
+          current = token;
+        } else {
+          current = next;
+        }
+        if (lines.length >= axisLabelMaxLines) break;
       }
       if (lines.length >= axisLabelMaxLines) break;
     }
     push();
     const out = lines.slice(0, axisLabelMaxLines).join('\n');
-    return out || shorten(s, axisLabelMaxCharsPerLine);
+    return out || s;
   };
 
-  // Bottom padding driven by line count/font size rather than raw label length.
-  // Keep this tight to avoid wasting space under the chart (especially in tab view).
   const lineHeight = axisLabelFontSizePx + 2;
-  const bottomPx = Math.min(92, Math.max(56, 16 + axisLabelMaxLines * lineHeight + 14));
+  const perCategoryPx = widthPx / Math.max(1, labels.length);
+  const computedRotate =
+    typeof axisLabelRotateDeg === 'number'
+      ? axisLabelRotateDeg
+      : (orientation === 'vertical' && perCategoryPx < 52 ? 45 : 0);
+
+  const axisLabelAlign = orientation === 'vertical'
+    ? (computedRotate ? 'right' : 'center')
+    : 'right';
+  const axisLabelVerticalAlign = orientation === 'vertical'
+    ? (computedRotate ? 'middle' : 'top')
+    : 'middle';
 
   return {
     animation: false,
@@ -700,15 +757,28 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         }
       : { show: false },
     grid: {
-      left: 8,
+      // Do NOT guess label extents (it creates systematic dead space). Instead keep a small
+      // margin and let `containLabel` reserve what’s actually needed.
+      left: 10,
       right: 16,
       top: showToolbox ? 34 : 16,
-      bottom: bottomPx,
+      bottom: 10,
       containLabel: true,
     },
     tooltip: {
       trigger: 'axis',
+      confine: true,
       axisPointer: { type: 'shadow' },
+      position: (point: number[], _params: any, _dom: any, _rect: any, size: any) => {
+        const [x, y] = point;
+        const viewW = size.viewSize[0];
+        const viewH = size.viewSize[1];
+        const boxW = size.contentSize[0];
+        const boxH = size.contentSize[1];
+        const nx = Math.max(0, Math.min(x, viewW - boxW));
+        const ny = Math.max(0, Math.min(y, viewH - boxH));
+        return [nx, ny];
+      },
       formatter: (params: any) => {
         const ps = Array.isArray(params) ? params : [params];
         const label = ps[0]?.axisValueLabel ?? '';
@@ -734,33 +804,51 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         return lines.join('');
       },
     },
-    xAxis: {
-      type: 'category',
-      data: labels,
-      axisLabel: {
-        // Bridge charts must not skip labels: each step matters.
-        interval: 0,
-        // Prefer wrap over rotation; rotate more as density increases.
-        rotate:
-          (widthPx / Math.max(1, labels.length)) < 56 ? 60
-          : (widthPx / Math.max(1, labels.length)) < 76 ? 45
-          : 0,
-        formatter: (v: string) => wrapLabel(v),
-        margin: 10,
-        fontSize: axisLabelFontSizePx,
-        lineHeight,
-        // Do NOT hide overlapping labels for bridge charts; it makes the chart useless.
-        hideOverlap: false,
-        align: 'right',
-      },
-    },
-    yAxis: {
-      type: 'value',
-      min: minV,
-      max: maxV,
-      splitNumber: 4,
-      axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 10, margin: 10 },
-    },
+    xAxis: orientation === 'horizontal'
+      ? {
+          type: 'value',
+          min: minV,
+          max: maxV,
+          splitNumber: 4,
+          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 10, margin: 10 },
+        }
+      : {
+          type: 'category',
+          data: labels,
+          axisTick: { alignWithLabel: true },
+          axisLabel: {
+            interval: 0,
+            rotate: computedRotate,
+            formatter: (v: string) => wrapLabel(v),
+            margin: 8,
+            fontSize: axisLabelFontSizePx,
+            lineHeight,
+            hideOverlap: false,
+            align: axisLabelAlign as any,
+            verticalAlign: axisLabelVerticalAlign as any,
+          },
+        },
+    yAxis: orientation === 'horizontal'
+      ? {
+          type: 'category',
+          data: labels,
+          inverse: true,
+          axisLabel: {
+            interval: 0,
+            formatter: (v: string) => wrapLabel(v),
+            fontSize: axisLabelFontSizePx,
+            lineHeight,
+            margin: 10,
+            hideOverlap: false,
+          },
+        }
+      : {
+          type: 'value',
+          min: minV,
+          max: maxV,
+          splitNumber: 4,
+          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 10, margin: 10 },
+        },
     series: [
       {
         name: 'Assist',
@@ -771,6 +859,8 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         emphasis: { disabled: true },
         barWidth: barWidthPx,
         barCategoryGap: n <= 8 ? '18%' : n <= 14 ? '26%' : '34%',
+        // For horizontal waterfall, ECharts expects category axis on y and bars extend on x.
+        // No extra config needed; series is shared.
         data: assist,
       },
       {
@@ -781,7 +871,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         barWidth: barWidthPx,
         label: {
           show: true,
-          position: 'top',
+          position: orientation === 'horizontal' ? 'right' : 'top',
           distance: 6,
           formatter: (p: any) => {
             const v = typeof p?.value === 'number' ? p.value : null;
@@ -790,7 +880,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
           fontSize: 10,
           color: '#374151',
         },
-        labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
+        labelLayout: (p: any) => clampLabelIntoView(p),
         data: inc,
       },
       {
@@ -801,7 +891,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         barWidth: barWidthPx,
         label: {
           show: true,
-          position: 'bottom',
+          position: orientation === 'horizontal' ? 'right' : 'bottom',
           distance: 6,
           formatter: (p: any) => {
             const v = typeof p?.value === 'number' ? p.value : null;
@@ -810,7 +900,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
           fontSize: 10,
           color: '#374151',
         },
-        labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
+        labelLayout: (p: any) => clampLabelIntoView(p),
         data: dec,
       },
       {
@@ -821,7 +911,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         barGap: '-100%',
         label: {
           show: true,
-          position: 'top',
+          position: orientation === 'horizontal' ? 'right' : 'top',
           distance: 6,
           formatter: (p: any) => {
             const v = typeof p?.value === 'number' ? p.value : null;
@@ -830,9 +920,43 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
           fontSize: 10,
           color: '#374151',
         },
-        labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
+        labelLayout: (p: any) => clampLabelIntoView(p),
         data: totalBars,
       },
+      ...(showRunningTotalLine
+        ? [
+            // Connector line showing the running total after each step.
+            // This makes the (otherwise implicit) baseline offsets obvious at a glance.
+            {
+              name: 'Running total',
+              type: 'line',
+              silent: true,
+              showSymbol: true,
+              symbol: 'circle',
+              symbolSize: 4,
+              z: 5,
+              lineStyle: { width: 2, color: '#9ca3af' },
+              itemStyle: { color: '#9ca3af' },
+              tooltip: { show: false },
+              data: (() => {
+                let running = startTotal;
+                const out: any[] = [];
+                for (let i = 0; i < rows.length; i++) {
+                  const kind = rows[i]?.kind;
+                  const t = totals[i];
+                  const d = deltas[i];
+                  if (kind === 'start' && typeof t === 'number') running = t;
+                  else if (typeof d === 'number') running += d;
+                  else if (kind === 'end' && typeof t === 'number') running = t;
+
+                  out.push(orientation === 'horizontal' ? [running, labels[i]] : [labels[i], running]);
+                }
+                return out;
+              })(),
+              encode: { x: 0, y: 1 },
+            },
+          ]
+        : []),
     ],
   };
 }

@@ -165,3 +165,4 @@ Suggested order of implementation:
 - Whether cohort-day slices with `k = 0` should be excluded from the dispersion estimate (likely yes, to avoid noise dominating the estimate).
 
 
+

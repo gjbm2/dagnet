@@ -44,9 +44,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   const inFlightRef = useRef(false);
   const lastGraphTriggerKeyRef = useRef<string>('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [automaticMode, setAutomaticMode] = useState<boolean>(() =>
-    stalenessNudgeService.getAutomaticMode(window.localStorage)
-  );
+  // Safety: "automatic mode" must NEVER persist across refresh. It only applies to a workflow
+  // the user explicitly initiates via the staleness nudge modal.
+  const [automaticMode, setAutomaticMode] = useState<boolean>(false);
   const [modalActions, setModalActions] = useState<Array<{
     key: StalenessUpdateActionKey;
     due: boolean;
@@ -71,58 +71,12 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
   const toggleAutomaticMode = useCallback((enabled: boolean) => {
     setAutomaticMode(enabled);
-    stalenessNudgeService.setAutomaticMode(enabled, window.localStorage);
   }, []);
 
-  const runPendingPlanIfReady = useCallback(async () => {
-    const plan = stalenessNudgeService.getPendingPlan(window.localStorage);
-    if (!plan) return false;
-
-    const repo = navState.selectedRepo;
-    const branch = navState.selectedBranch || 'main';
-
-    // Only run if we appear to be in the same repo/branch context as when scheduled.
-    if (plan.repository && repo && plan.repository !== repo) return false;
-    if (plan.branch && branch && plan.branch !== branch) return false;
-
-    if (plan.pullAllLatest) {
-      if (!repo) return false;
-      await pullAll();
-    }
-
-    if (plan.retrieveAllSlices) {
-      if (!plan.graphFileId) return false;
-
-      // If we also pulled, re-check staleness after pull to avoid redundant fetches.
-      if (plan.pullAllLatest) {
-        const now = Date.now();
-        const stillStale = shouldRunRetrieveAfterPull(plan.graphFileId, now);
-        if (!stillStale) {
-          sessionLogService.info(
-            'data-fetch',
-            'RETRIEVE_ALL_SKIPPED_AFTER_PULL',
-            'Retrieve All skipped: pull refreshed data (no longer stale)',
-            undefined,
-            { fileId: plan.graphFileId, repository: repo, branch }
-          );
-          stalenessNudgeService.clearPendingPlan(window.localStorage);
-          return true;
-        }
-      }
-
-      const graphFile = fileRegistry.getFile(plan.graphFileId) as any;
-      if (!graphFile?.data || graphFile?.type !== 'graph') return false;
-      if (!tabOperations?.updateTabData) return false;
-
-      await retrieveAllSlicesService.execute({
-        getGraph: () => (fileRegistry.getFile(plan.graphFileId as string) as any)?.data || null,
-        setGraph: (g) => tabOperations.updateTabData(plan.graphFileId, g),
-      });
-    }
-
-    stalenessNudgeService.clearPendingPlan(window.localStorage);
-    return true;
-  }, [navState.selectedRepo, navState.selectedBranch, pullAll, fileRegistry, tabOperations, shouldRunRetrieveAfterPull]);
+  // Clear any persisted nudge state on mount so it can never survive a refresh (F5).
+  useEffect(() => {
+    stalenessNudgeService.clearVolatileFlags(window.localStorage);
+  }, []);
 
   const runSelectedKeys = useCallback(async (
     selected: Set<StalenessUpdateActionKey>,
@@ -139,20 +93,18 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     const wantsPull = selected.has('git-pull');
     const wantsRetrieve = selected.has('retrieve-all-slices');
 
+    // SAFETY POLICY:
+    // - We do NOT persist pending plans across refresh.
+    // - If the user selects "Reload" alongside other actions, we run those actions NOW (explicit user intent),
+    //   then reload at the end. Nothing is carried across refresh.
     if (wantsReload && (wantsPull || wantsRetrieve)) {
-      stalenessNudgeService.setPendingPlan(
-        {
-          createdAtMs: now,
-          repository: repo,
-          branch,
-          graphFileId,
-          pullAllLatest: wantsPull,
-          retrieveAllSlices: wantsRetrieve,
-        },
-        storage
+      sessionLogService.info(
+        'session',
+        'STALENESS_RUN_THEN_RELOAD',
+        'Reload selected alongside other actions; running selected actions now, then reloading (nothing will run automatically after refresh)',
+        undefined,
+        { repository: repo, branch, fileId: graphFileId, wantsPull, wantsRetrieve }
       );
-      window.location.reload();
-      return;
     }
 
     if (wantsPull) {
@@ -171,7 +123,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
             undefined,
             { fileId: activeFileId, repository: repo, branch }
           );
-        } else if (opts?.headlessRetrieve) {
+        } else if (automaticMode) {
           const graphFile = fileRegistry.getFile(activeFileId) as any;
           if (!graphFile?.data || graphFile?.type !== 'graph') return;
           if (!tabOperations?.updateTabData) return;
@@ -183,7 +135,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         } else {
           requestRetrieveAllSlices();
         }
-      } else if (opts?.headlessRetrieve) {
+      } else if (automaticMode) {
         if (!activeFileId) return;
         const graphFile = fileRegistry.getFile(activeFileId) as any;
         if (!graphFile?.data || graphFile?.type !== 'graph') return;
@@ -201,14 +153,16 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     if (wantsReload) {
       window.location.reload();
     }
-  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, pullAll, fileRegistry, tabOperations]);
+  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, pullAll, fileRegistry, tabOperations, automaticMode, shouldRunRetrieveAfterPull]);
 
   const onRunSelected = useCallback(async () => {
     const selected = new Set(modalActions.filter(a => a.checked && !a.disabled).map(a => a.key));
 
     closeModal();
-    await runSelectedKeys(selected, { headlessRetrieve: automaticMode });
-  }, [modalActions, closeModal, runSelectedKeys, automaticMode]);
+    await runSelectedKeys(selected);
+    // "Automatic mode" only applies to the workflow the user just initiated.
+    setAutomaticMode(false);
+  }, [modalActions, closeModal, runSelectedKeys]);
 
   const onSnoozeAll = useCallback(() => {
     const now = Date.now();
@@ -248,10 +202,6 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       if (!storage.getItem('dagnet:staleness:lastPageLoadAtMs')) {
         stalenessNudgeService.recordPageLoad(now, storage);
       }
-
-      // First: if we have a pending plan (from "reload first"), try to run it.
-      const ranPending = await runPendingPlanIfReady();
-      if (ranPending) return;
 
       // Compute which actions are due (and not snoozed).
       const reloadDue =
@@ -325,18 +275,11 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
       setModalActions(actions);
 
-      if (automaticMode) {
-        const selected = new Set<StalenessUpdateActionKey>(actions.filter(a => a.due && !a.disabled).map(a => a.key));
-        // Auto: run due actions without prompting. Conflicts (if any) will show via conflictModal.
-        await runSelectedKeys(selected, { headlessRetrieve: true });
-        return;
-      }
-
       setIsModalOpen(true);
     } finally {
       inFlightRef.current = false;
     }
-  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen, runPendingPlanIfReady, automaticMode, runSelectedKeys]);
+  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen, runSelectedKeys]);
 
   // Record the page load baseline once on mount.
   useEffect(() => {
