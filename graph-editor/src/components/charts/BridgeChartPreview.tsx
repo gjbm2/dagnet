@@ -120,15 +120,18 @@ export function BridgeChartPreview(props: {
                 showRunningTotalLine: true,
               }
             : {
-                axisLabelFontSizePx: 11,
+                // Tab view: labels should be comfortably legible.
+                axisLabelFontSizePx: 12,
                 axisLabelMaxLines: 2,
-                axisLabelMaxCharsPerLine: 16,
+                axisLabelMaxCharsPerLine: 18,
                 orientation,
                 // In tabs we have more width; keep rotation modest if needed.
                 ...(orientation === 'vertical' ? { axisLabelRotateDeg: 45 } : null),
                 // Tab: allow chunkier bars (previous max=36 was too restrictive for wide layouts).
                 barWidthMinPx: 14,
                 barWidthMaxPx: 128,
+                // Make bars noticeably chunkier in wide tab layouts.
+                barWidthFraction: 0.72,
                 showRunningTotalLine: true,
               }
         }
