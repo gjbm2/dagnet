@@ -13,7 +13,7 @@ import {
   mergeTimeSeriesIntoParameter,
   calculateIncrementalFetch,
 } from '../windowAggregationService';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 const windowAggregationService = new WindowAggregationService();
 import type { TimeSeriesPoint, DateRange } from '../../types';

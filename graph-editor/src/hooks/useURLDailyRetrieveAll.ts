@@ -31,6 +31,35 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getURLDailyRetrieveAllStartDelayMs(): number {
+  // Vitest should not spend 30 seconds waiting (and the "settling" problem is a real-app concern).
+  if ((import.meta as any).env?.MODE === 'test') return 0;
+  return 30_000;
+}
+
+function isTabContextInitDone(): boolean {
+  // Unit tests don’t mount the full TabContext initialisation pipeline.
+  if ((import.meta as any).env?.MODE === 'test') return true;
+  try {
+    const w = (typeof window !== 'undefined') ? (window as any) : null;
+    return !!w?.__dagnetTabContextInitDone;
+  } catch {
+    return false;
+  }
+}
+
+function reassertTabFocus(tabId: string, delaysMs: number[]): void {
+  // Best-effort: rc-dock/layout initialisation sometimes steals focus after we open/switch tabs.
+  // Reassert focus a few times to keep the Session Log visible during automation.
+  void (async () => {
+    for (const delay of delaysMs) {
+      if (delay > 0) await sleep(delay);
+      if (typeof window === 'undefined' || typeof CustomEvent === 'undefined') return;
+      window.dispatchEvent(new CustomEvent('dagnet:switchToTab', { detail: { tabId } }));
+    }
+  })();
+}
+
 function parseURLDailyRetrieveAllParams(): URLDailyRetrieveAllParams {
   const searchParams = new URLSearchParams(window.location.search);
   return {
@@ -69,10 +98,28 @@ export function useURLDailyRetrieveAll(graphLoaded: boolean, fileId: string | un
 
   const processedRef = useRef(false);
   const paramsRef = useRef<URLDailyRetrieveAllParams | null>(null);
+  const tabContextInitDoneRef = useRef(false);
 
   // Parse params on mount (before TabContext cleans them).
   useEffect(() => {
     if (!paramsRef.current) paramsRef.current = parseURLDailyRetrieveAllParams();
+  }, []);
+
+  // Track TabContext initialisation completion (URL opening, tab restore, seeds).
+  useEffect(() => {
+    if (tabContextInitDoneRef.current) return;
+    if (isTabContextInitDone()) {
+      tabContextInitDoneRef.current = true;
+      return;
+    }
+
+    const handler = () => {
+      tabContextInitDoneRef.current = true;
+    };
+    window.addEventListener('dagnet:tabContextInitDone' as any, handler as any);
+    return () => {
+      window.removeEventListener('dagnet:tabContextInitDone' as any, handler as any);
+    };
   }, []);
 
   useEffect(() => {
@@ -115,10 +162,6 @@ export function useURLDailyRetrieveAll(graphLoaded: boolean, fileId: string | un
       const runId = `retrieveall:${fileId}:${waitStartedAt}`;
 
       try {
-        // In retrieveall mode, the session log is the primary UX for progress/diagnostics.
-        // Fire-and-forget: failures should never block the automation run.
-        void sessionLogService.openLogTab();
-
         setAutomationTitle('starting');
         automationRunService.start({ runId, graphFileId: fileId, graphName: inferGraphNameFromFileId(fileId) });
 
@@ -132,8 +175,9 @@ export function useURLDailyRetrieveAll(graphLoaded: boolean, fileId: string | un
           const hasTabOps = !!tabOps?.updateTabData;
           const graphFile = fileRegistry.getFile(fileId) as any;
           const hasGraphData = !!(graphFile?.data && graphFile?.type === 'graph');
+          const tabCtxReady = tabContextInitDoneRef.current || isTabContextInitDone();
 
-          if (repository && hasTabOps && hasGraphData) break;
+          if (repository && hasTabOps && hasGraphData && tabCtxReady) break;
 
           const elapsed = Date.now() - waitStartedAt;
           if (elapsed > maxWaitMs) {
@@ -142,7 +186,7 @@ export function useURLDailyRetrieveAll(graphLoaded: boolean, fileId: string | un
               'DAILY_RETRIEVE_ALL_SKIPPED',
               'Daily automation skipped: app did not become ready in time',
               undefined,
-              { fileId, waitedMs: elapsed, hasRepository: !!repository, hasTabOps, hasGraphData }
+              { fileId, waitedMs: elapsed, hasRepository: !!repository, hasTabOps, hasGraphData, tabCtxReady }
             );
             return;
           }
@@ -162,6 +206,49 @@ export function useURLDailyRetrieveAll(graphLoaded: boolean, fileId: string | un
         }
 
         const repository: string = navState.selectedRepo as string;
+        
+        // Open Session Log as soon as the app is settled (before countdown) so users see *something* immediately,
+        // and so the log is visible for the whole automation run.
+        // Fire-and-forget: failures should never block the automation run.
+        try {
+          const logTabIdEarly = await sessionLogService.openLogTab();
+          if (logTabIdEarly) {
+            reassertTabFocus(logTabIdEarly, [0, 50, 200, 750]);
+          }
+        } catch {
+          // Best-effort only
+        }
+
+        const startDelayMs = getURLDailyRetrieveAllStartDelayMs();
+        if (startDelayMs > 0) {
+          setAutomationTitle('countdown');
+          const totalSeconds = Math.ceil(startDelayMs / 1000);
+          for (let remaining = totalSeconds; remaining > 0; remaining--) {
+            if (automationRunService.shouldStop(runId)) {
+              sessionLogService.warning(
+                'session',
+                'DAILY_RETRIEVE_ALL_ABORTED',
+                'Daily automation aborted by user (countdown phase)',
+                undefined,
+                { fileId, remainingSeconds: remaining }
+              );
+              return;
+            }
+            automationRunService.setCountdown(runId, remaining);
+            await sleep(1000);
+          }
+        }
+
+        // In retrieveall mode, the session log is the primary UX for progress/diagnostics.
+        // Open it *after* the app is settled (and after countdown) so it doesn't get immediately hidden by tab/layout initialisation.
+        // Fire-and-forget: failures should never block the automation run.
+        const logTabId = await sessionLogService.openLogTab();
+        if (logTabId) {
+          // Reassert focus because rc-dock can emit a layout change shortly after we open/switch tabs
+          // (which can flip focus back to the graph tab).
+          reassertTabFocus(logTabId, [0, 50, 200, 750]);
+        }
+
         setAutomationTitle('running');
         automationRunService.setPhase(runId, 'running');
 

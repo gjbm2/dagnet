@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { VariableAggregationCache } from '../variableAggregationCache';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 describe('VariableAggregationCache', () => {
   let cache: VariableAggregationCache;

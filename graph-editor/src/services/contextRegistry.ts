@@ -2,10 +2,9 @@
  * Context Registry
  * 
  * Wrapper service for context-specific operations.
- * Wraps paramRegistryService with context-aware logic (otherPolicy, source mappings).
+ * Workspace-only context loading with context-aware logic (otherPolicy, source mappings).
  */
 
-import { paramRegistryService } from './paramRegistryService';
 import { fileRegistry } from '../contexts/TabContext';
 import { db } from '../db/appDatabase';
 import { parseConstraints } from '../lib/queryDSL';
@@ -55,7 +54,6 @@ export interface ContextSection {
 
 export class ContextRegistry {
   private cache: Map<string, ContextDefinition> = new Map();
-  private readonly isVitest = typeof process !== 'undefined' && !!process.env.VITEST;
   
   private cacheKey(id: string, workspace?: { repository: string; branch: string }): string {
     if (!workspace) return id;
@@ -72,7 +70,11 @@ export class ContextRegistry {
   
   /**
    * Get context definition (loads and caches).
-   * Tries param registry (filesystem) first for fresh data, then falls back to workspace.
+   * Loads from workspace sources (FileRegistry → IndexedDB).
+   *
+   * IMPORTANT:
+   * Contexts are part of the current workspace/repo. Production must never consult
+   * any external "param registry" source of truth.
    */
   async getContext(
     id: string,
@@ -84,23 +86,7 @@ export class ContextRegistry {
     }
     
     try {
-      // Try param registry FIRST (loads from filesystem / HTTP boundary depending on config).
-      // In vitest, avoid hitting the HTTP boundary (often resolves to http://localhost:3000 and is not running).
-      if (!this.isVitest) {
-        try {
-          console.log(`[ContextRegistry] Loading ${id} from param registry (filesystem)...`);
-          const context = await paramRegistryService.loadContext(id) as ContextDefinition;
-          if (context) {
-            console.log(`[ContextRegistry] Loaded ${id} from filesystem`);
-            this.cache.set(key, context);
-            return context;
-          }
-        } catch (fsError) {
-          console.log(`[ContextRegistry] Could not load ${id} from filesystem:`, fsError);
-        }
-      }
-      
-      // Fall back to workspace (IndexedDB) if filesystem load failed
+      // Prefer workspace (in-memory) first
       const allFiles = Array.from((fileRegistry as any).files?.values() || []) as any[];
       for (const file of allFiles) {
         if (file.type === 'context' && file.data?.id === id) {
@@ -265,18 +251,6 @@ export class ContextRegistry {
    * Tries param registry (filesystem) first, then falls back to workspace.
    */
   async getAllContextKeys(options?: { workspace?: { repository: string; branch: string } }): Promise<Array<{ id: string; type: string; status: string; fileId?: string }>> {
-    // Try param registry FIRST (loads from filesystem - always fresh)
-    try {
-      console.log('[ContextRegistry] Loading contexts index from param registry (filesystem)...');
-      const index = await paramRegistryService.loadContextsIndex();
-      if (index.contexts && index.contexts.length > 0) {
-        console.log('[ContextRegistry] Found contexts from filesystem:', index.contexts.map((c: any) => c.id));
-        return index.contexts;
-      }
-    } catch (fsError) {
-      console.log('[ContextRegistry] Could not load contexts index from filesystem:', fsError);
-    }
-    
     // Fall back to workspace sources.
     // Prefer IndexedDB (source of truth for files) because FileRegistry only contains a subset (open tabs).
     const contextKeys: Array<{ id: string; type: string; status: string; fileId?: string }> = [];

@@ -1558,7 +1558,7 @@ export function applyPathT95ToGraph(
 
 /**
  * Parameter value structure (subset of fields needed for LAG).
- * Matches the structure from paramRegistryService.ParameterValue.
+ * Matches the structure from `types/parameterData.ParameterValue`.
  */
 export interface ParameterValueForLAG {
   mean: number;  // Required by ParameterValue, but not used in LAG

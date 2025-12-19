@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 import { calculateIncrementalFetch } from '../windowAggregationService';
 
 describe('Cohort + context cache cutting (contextAny + MECE)', () => {

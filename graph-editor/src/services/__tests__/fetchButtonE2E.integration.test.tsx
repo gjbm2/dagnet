@@ -17,7 +17,7 @@ import { dataOperationsService } from '../dataOperationsService';
 import { mergeTimeSeriesIntoParameter } from '../windowAggregationService';
 import { isolateSlice, extractSliceDimensions } from '../sliceIsolation';
 import { fileRegistry } from '../../contexts/TabContext';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 // Mock toast
 vi.mock('react-hot-toast', () => ({

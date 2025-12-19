@@ -1,6 +1,7 @@
 import { db } from '../db/appDatabase';
 import { gitConfig } from '../config/gitConfig';
 import yaml from 'js-yaml';
+import { sessionLogService } from '../services/sessionLogService';
 
 /**
  * Loads default connections.yaml from public/defaults/
@@ -32,7 +33,7 @@ export async function seedConnectionsFile(): Promise<void> {
     const fileId = 'connections-connections';
     const existing = await db.files.get(fileId);
     
-    // Try to load from git first (similar to how paramRegistryService loads files)
+    // Try to load from git first (same strategy as workspace-sourced files)
     try {
       console.log('[seedConnections] Attempting to load connections.yaml from git...');
       
@@ -45,6 +46,11 @@ export async function seedConnectionsFile(): Promise<void> {
         const gitCred = credResult.credentials.git[0];
         const basePath = gitCred.basePath || '';
         const fullPath = basePath ? `${basePath}/connections/connections.yaml` : 'connections/connections.yaml';
+        const notFoundKey = `dagnet:seed:git404:${gitCred.owner}/${gitCred.repo || gitCred.name}@${gitCred.branch || 'main'}:${fullPath}`;
+        const notFoundAt = window.localStorage.getItem(notFoundKey);
+        if (notFoundAt) {
+          console.log('[seedConnections] Skipping git fetch (previous 404 cached):', notFoundKey);
+        } else {
         
         const apiUrl = `${gitConfig.githubApiBase}/repos/${gitCred.owner}/${gitCred.repo || gitCred.name}/contents/${fullPath}?ref=${gitCred.branch || 'main'}`;
         
@@ -64,6 +70,7 @@ export async function seedConnectionsFile(): Promise<void> {
           const data = await response.json();
           const content = atob(data.content.replace(/\n/g, ''));
           const parsedData = yaml.load(content);
+          window.localStorage.removeItem(notFoundKey);
           
           // Check if we need to update or create
           if (!existing || JSON.stringify(existing.data) !== JSON.stringify(parsedData)) {
@@ -87,8 +94,27 @@ export async function seedConnectionsFile(): Promise<void> {
           }
           return;
         } else {
-          console.log(`[seedConnections] File not found in git (${response.status}), will create empty locally`);
+          if (response.status === 404) {
+            window.localStorage.setItem(notFoundKey, String(Date.now()));
+            sessionLogService.warning(
+              'workspace',
+              'SEED_CONNECTIONS_GIT_NOT_FOUND',
+              'connections.yaml not found in repo; using defaults',
+              `${gitCred.owner}/${gitCred.repo || gitCred.name}@${gitCred.branch || 'main'}:${fullPath} returned 404`,
+              { owner: gitCred.owner, repo: gitCred.repo || gitCred.name, branch: gitCred.branch || 'main', path: fullPath }
+            );
+          } else {
+            sessionLogService.warning(
+              'workspace',
+              'SEED_CONNECTIONS_GIT_FAILED',
+              'Could not load connections.yaml from repo; using defaults',
+              `${gitCred.owner}/${gitCred.repo || gitCred.name}@${gitCred.branch || 'main'}:${fullPath} returned ${response.status}`,
+              { owner: gitCred.owner, repo: gitCred.repo || gitCred.name, branch: gitCred.branch || 'main', path: fullPath, status: response.status }
+            );
+          }
+          console.log(`[seedConnections] File not loaded from git (${response.status}), will seed from defaults`);
         }
+        } // end notFound cached guard
       } else {
         console.log('[seedConnections] No git credentials configured, skipping git sync');
       }

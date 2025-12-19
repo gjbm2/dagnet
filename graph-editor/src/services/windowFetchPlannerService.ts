@@ -35,7 +35,7 @@ import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceServi
 import { hasFullSliceCoverageByHeader, isCohortModeValue, parseDate, normalizeDate } from './windowAggregationService';
 import { computePathT95, getActiveEdges, type GraphForPath } from './statisticalEnhancementService';
 import { computeCohortRetrievalHorizon, type CohortHorizonResult } from './cohortRetrievalHorizon';
-import type { ParameterValue } from './paramRegistryService';
+import type { ParameterValue } from '../types/parameterData';
 import { sessionLogService } from './sessionLogService';
 import type { Graph, DateRange } from '../types';
 
@@ -324,6 +324,44 @@ class WindowFetchPlannerService {
         undefined,
         { itemCount: items.length, covered: autoAggregationItems.length - staleCandidates.length, needsFetch: fetchPlanItems.length, stale: staleCandidates.length, unfetchable: unfetchableGaps.length }
       );
+
+      // Always log the specific items that need action (concise, capped), so the Session Log is actionable
+      // even when diagnostic logging is disabled.
+      if (fetchPlanItems.length > 0) {
+        const { message, context } = this.summariseItemsForLog(fetchPlanItems, 10);
+        sessionLogService.addChild(
+          logOpId,
+          'warning',
+          'PLANNER_NEEDS_FETCH_ITEMS',
+          `Needs fetch (${fetchPlanItems.length}): ${message}`,
+          undefined,
+          { ...context, trigger, dsl }
+        );
+      }
+
+      if (staleCandidates.length > 0) {
+        const { message, context } = this.summariseItemsForLog(staleCandidates, 10);
+        sessionLogService.addChild(
+          logOpId,
+          'info',
+          'PLANNER_STALE_ITEMS',
+          `Stale (${staleCandidates.length}): ${message}`,
+          undefined,
+          { ...context, trigger, dsl }
+        );
+      }
+
+      if (unfetchableGaps.length > 0) {
+        const { message, context } = this.summariseItemsForLog(unfetchableGaps, 10);
+        sessionLogService.addChild(
+          logOpId,
+          'warning',
+          'PLANNER_FILE_ONLY_GAPS',
+          `File-only gaps (${unfetchableGaps.length}): ${message}`,
+          undefined,
+          { ...context, trigger, dsl }
+        );
+      }
       
       // DIAGNOSTIC: Detailed per-item coverage analysis
       if (sessionLogService.getDiagnosticLoggingEnabled() && items.length > 0) {
@@ -1217,6 +1255,70 @@ class WindowFetchPlannerService {
     const edgeIds = (graph.edges || []).map(e => e.uuid || e.id).sort().join(',');
     const nodeIds = (graph.nodes || []).map(n => n.uuid || n.id).sort().join(',');
     return `${edgeIds}|${nodeIds}`;
+  }
+
+  private summariseItemsForLog(
+    items: PlannerItem[],
+    limit: number
+  ): {
+    message: string;
+    context: {
+      total: number;
+      shown: number;
+      truncated: boolean;
+      items: Array<{
+        type: PlannerItem['type'];
+        objectId: string;
+        fileId: string;
+        path?: string;
+        name?: string;
+        targetId: string;
+        paramSlot?: PlannerItem['paramSlot'];
+        classification: PlannerItem['classification'];
+        missingDates?: number;
+        stalenessReason?: string;
+        retrievedAt?: string;
+      }>;
+    };
+  } {
+    const shownItems = items.slice(0, Math.max(0, limit));
+    const enriched = shownItems.map(i => {
+      const fileId = i.type === 'parameter' ? `parameter-${i.objectId}` : `case-${i.objectId}`;
+      const file = fileRegistry.getFile(fileId);
+      return {
+        type: i.type,
+        objectId: i.objectId,
+        fileId,
+        path: file?.path,
+        name: file?.name,
+        targetId: i.targetId,
+        paramSlot: i.paramSlot,
+        classification: i.classification,
+        missingDates: i.missingDates,
+        stalenessReason: i.stalenessReason,
+        retrievedAt: i.retrievedAt,
+      };
+    });
+
+    // Human-friendly, compact label list (prefer repo path; fall back to fileId).
+    const labels = enriched.map(e => {
+      const where = e.path || e.name || e.fileId;
+      const slot = e.paramSlot ? `:${e.paramSlot}` : '';
+      return `${where} [${e.type}${slot} ${e.objectId}]`;
+    });
+
+    const truncated = items.length > enriched.length;
+    const message = truncated ? `${labels.join(', ')} … (+${items.length - enriched.length} more)` : labels.join(', ');
+
+    return {
+      message,
+      context: {
+        total: items.length,
+        shown: enriched.length,
+        truncated,
+        items: enriched,
+      },
+    };
   }
 }
 

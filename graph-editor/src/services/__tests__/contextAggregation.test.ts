@@ -8,7 +8,7 @@ import {
 } from '../contextAggregationService';
 import { contextRegistry } from '../contextRegistry';
 import type { ContextDefinition } from '../contextRegistry';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 describe('Context Aggregation Service', () => {
   

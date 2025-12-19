@@ -35,6 +35,9 @@ import './styles/dock-theme.css'; // Safe customizations
 import './styles/active-tab-highlight.css'; // Active tab highlighting
 import './styles/file-state-indicators.css'; // File state visual indicators
 
+// NOTE: We intentionally do NOT create a permanent right-dock panel.
+// Session Log is "right docked" by splitting the existing main panel at open-time.
+
 /**
  * App Shell Content
  * 
@@ -711,6 +714,8 @@ function MainAppShellContent() {
         };
 
         // Determine target panel: use currently active tab's panel, or default to 'main-tabs'
+        // Special case: Session Log is right-docked by splitting the main panel at open-time.
+        const isSessionLog = objectType === 'session-log' || tab.fileId === 'session-log';
         let targetPanel = 'main-tabs';
         if (activeTabId) {
           const activeTabData = dockLayoutRef.find(activeTabId);
@@ -721,7 +726,7 @@ function MainAppShellContent() {
           }
         }
 
-        dockLayoutRef.dockMove(dockTab, targetPanel, 'middle');
+        dockLayoutRef.dockMove(dockTab, targetPanel, isSessionLog ? 'right' : 'middle');
         setAddedTabs(prev => new Set([...prev, tab.id]));
         
         // Check and update dirty state immediately after adding tab
@@ -820,11 +825,29 @@ function MainAppShellContent() {
       }
     };
 
+    // Session Log right-docking: split the main panel to the right at open-time.
+    const handleDockTabRightOfMain = (e: CustomEvent) => {
+      const { tabId } = e.detail as any;
+      if (!dockLayoutRef || !tabId) return;
+
+      const delays = [0, 50, 200, 750];
+      for (const d of delays) {
+        setTimeout(() => {
+          const tabData = dockLayoutRef.find(tabId);
+          if (tabData && ('title' in tabData && 'content' in tabData)) {
+            dockLayoutRef.dockMove(tabData, 'main-tabs', 'right');
+          }
+        }, d);
+      }
+    };
+
     window.addEventListener('dagnet:openInSamePanel' as any, handleOpenInSamePanel);
     window.addEventListener('dagnet:openInFocusedPanel' as any, handleOpenInFocusedPanel);
+    window.addEventListener('dagnet:dockTabRightOfMain' as any, handleDockTabRightOfMain as any);
     return () => {
       window.removeEventListener('dagnet:openInSamePanel' as any, handleOpenInSamePanel);
       window.removeEventListener('dagnet:openInFocusedPanel' as any, handleOpenInFocusedPanel);
+      window.removeEventListener('dagnet:dockTabRightOfMain' as any, handleDockTabRightOfMain as any);
     };
   }, [dockLayoutRef, activeTabId, tabs]);
 
@@ -895,6 +918,7 @@ function MainAppShellContent() {
           console.log(`AppShell: addedTabs: ${prev.size} -> ${next.size}`);
           return next;
         });
+
       }
       
       // Clear from removing set
@@ -984,7 +1008,7 @@ function MainAppShellContent() {
           group: 'main-content',
           tabs: [],
           panelLock: {}
-        }
+        },
       ]
     },
     floatbox: {

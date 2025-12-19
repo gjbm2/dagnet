@@ -30,7 +30,7 @@ import {
   calculateIncrementalFetch,
 } from '../windowAggregationService';
 import { isolateSlice, extractSliceDimensions } from '../sliceIsolation';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 describe('Context Roundtrip Integration Tests', () => {
   beforeEach(() => {

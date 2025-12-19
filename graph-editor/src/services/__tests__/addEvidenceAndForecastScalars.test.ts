@@ -18,7 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { __test_only__ } from '../dataOperationsService';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 // =============================================================================
 // Test Infrastructure

@@ -1,4 +1,4 @@
-export type AutomationPhase = 'idle' | 'waiting' | 'running' | 'stopping';
+export type AutomationPhase = 'idle' | 'waiting' | 'countdown' | 'running' | 'stopping';
 
 export interface AutomationRunState {
   phase: AutomationPhase;
@@ -7,6 +7,7 @@ export interface AutomationRunState {
   graphName?: string;
   startedAtMs?: number;
   stopRequested?: boolean;
+  countdownSecondsRemaining?: number;
 }
 
 class AutomationRunService {
@@ -35,13 +36,21 @@ class AutomationRunService {
       graphName: run.graphName,
       startedAtMs: Date.now(),
       stopRequested: false,
+      countdownSecondsRemaining: undefined,
     };
     this.emit();
   }
 
   setPhase(runId: string, phase: Exclude<AutomationPhase, 'idle'>): void {
     if (this.state.runId !== runId) return;
-    this.state = { ...this.state, phase };
+    this.state = { ...this.state, phase, countdownSecondsRemaining: undefined };
+    this.emit();
+  }
+
+  setCountdown(runId: string, secondsRemaining: number): void {
+    if (this.state.runId !== runId) return;
+    const next = Math.max(0, Math.floor(secondsRemaining));
+    this.state = { ...this.state, phase: 'countdown', countdownSecondsRemaining: next };
     this.emit();
   }
 

@@ -10,8 +10,8 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock('../../contexts/TabContext', () => ({
-  // NOTE: stalenessNudgeService imports useFileRegistry() (a simple accessor in runtime).
-  useFileRegistry: () => ({ getFile: hoisted.mockGetFile }),
+  // NOTE: stalenessNudgeService reads from fileRegistry as a fast-path, then falls back to IndexedDB.
+  fileRegistry: { getFile: hoisted.mockGetFile },
 }));
 
 vi.mock('../../db/appDatabase', () => ({
@@ -94,7 +94,7 @@ describe('stalenessNudgeService', () => {
     expect(stalenessNudgeService.isSnoozed('reload', undefined, now + 1, storage)).toBe(true);
   });
 
-  it('should compute retrieve-all-slices staleness from connected parameter retrieved_at', () => {
+  it('should compute retrieve-all-slices staleness from connected parameter retrieved_at', async () => {
     const now = 2_000_000_000;
 
     hoisted.mockGetFile.mockImplementation((fileId: string) => {
@@ -117,15 +117,15 @@ describe('stalenessNudgeService', () => {
       nodes: [],
     } as any;
 
-    const res = stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graph, now);
+    const res = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graph, now);
     expect(res.parameterCount).toBe(1);
     expect(res.staleParameterCount).toBe(1);
     expect(res.isStale).toBe(true);
   });
 
-  it('should NOT consider retrieve-all-slices stale when graph has no connected parameters', () => {
+  it('should NOT consider retrieve-all-slices stale when graph has no connected parameters', async () => {
     const graph = { edges: [], nodes: [] } as any;
-    const res = stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graph, 123);
+    const res = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graph, 123);
     expect(res.parameterCount).toBe(0);
     expect(res.isStale).toBe(false);
   });

@@ -18,7 +18,7 @@ import addFormats from 'ajv-formats';
 
 // Import TypeScript types
 import type { ConversionGraph, GraphNode, GraphEdge, Metadata, Policies } from '../../types';
-import type { Parameter, ParameterValue, Context, Case, Node } from '../paramRegistryService';
+import type { Parameter, ParameterValue } from '../../types/parameterData';
 import type { ConnectionFile, ConnectionDefinition } from '../../lib/das/types';
 import type { CredentialsData, GitRepositoryCredential } from '../../types/credentials';
 

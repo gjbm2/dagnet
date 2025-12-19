@@ -25,7 +25,7 @@ import {
   type RefetchDecision,
 } from '../fetchRefetchPolicy';
 import { isolateSlice, extractSliceDimensions } from '../sliceIsolation';
-import type { ParameterValue } from '../paramRegistryService';
+import type { ParameterValue } from '../../types/parameterData';
 
 // =============================================================================
 // Test Infrastructure
