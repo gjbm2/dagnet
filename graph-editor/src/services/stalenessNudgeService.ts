@@ -168,6 +168,15 @@ class StalenessNudgeService {
     safeRemove(storage, LS.pendingPlan);
   }
 
+  /**
+   * Safety: clear any state that should NEVER persist across a hard refresh (F5).
+   * This prevents surprising background actions after reloads.
+   */
+  clearVolatileFlags(storage: StorageLike = defaultStorage()): void {
+    safeRemove(storage, LS.pendingPlan);
+    safeRemove(storage, LS.automaticMode);
+  }
+
   getAutomaticMode(storage: StorageLike = defaultStorage()): boolean {
     const v = safeGetNumber(storage, LS.automaticMode);
     if (v === undefined) return STALENESS_AUTOMATIC_MODE_DEFAULT;

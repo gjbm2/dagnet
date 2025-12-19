@@ -5,17 +5,20 @@ import { FunnelChartPreview } from './FunnelChartPreview';
 import { BridgeChartPreview } from './BridgeChartPreview';
 import { FunnelBridgeChartPreview } from './FunnelBridgeChartPreview';
 
-type ChartKind = 'funnel' | 'bridge';
+type ChartKind = 'funnel' | 'bridge' | 'bridge_horizontal';
 
 function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (!kind) return null;
   if (kind === 'funnel') return 'funnel';
   if (kind === 'bridge') return 'bridge';
+  if (kind === 'bridge_horizontal') return 'bridge_horizontal';
   return null;
 }
 
 function labelForChartKind(kind: ChartKind): string {
-  return kind === 'funnel' ? 'Funnel' : 'Bridge';
+  if (kind === 'funnel') return 'Funnel';
+  if (kind === 'bridge') return 'Bridge';
+  return 'Bridge (Horizontal)';
 }
 
 export function AnalysisChartContainer(props: {
@@ -138,6 +141,7 @@ export function AnalysisChartContainer(props: {
           showToolbox={false}
           compactControls={compactControls}
           source={source}
+          orientation={kind === 'bridge_horizontal' ? 'horizontal' : 'vertical'}
         />
       )}
     </div>
