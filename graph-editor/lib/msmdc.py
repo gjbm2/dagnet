@@ -840,10 +840,12 @@ class ParameterQuery:
     """A parameter requiring data retrieval with its generated query."""
     param_type: str  # "edge_base_p", "edge_conditional_p", "edge_cost_gbp", etc.
     param_id: str    # Unique identifier for this parameter
+    edge_uuid: Optional[str]  # Edge UUID for edge-derived parameters (None for non-edge params)
     edge_key: str    # "{from}->{to}"
     condition: Optional[str]  # Original condition string if applicable
     query: str       # Generated MSMDC query
     stats: Dict[str, Any]  # Generation statistics
+    n_query: Optional[str] = None  # Optional base-denominator query (arrivals at from-node)
 
 
 def generate_all_parameter_queries(
@@ -880,6 +882,9 @@ def generate_all_parameter_queries(
     - Downstream filter: Only affected edges (incremental updates)
     """
     parameters = []
+    
+    # Anchor map (edge UUID → anchor node.id) for cohort semantics and n_query generation
+    anchor_map = compute_all_anchor_nodes(graph)
     
     # Build UUID->ID mapping for query generation
     id_by_uuid = {node.uuid: node.id for node in graph.nodes}
@@ -926,12 +931,22 @@ def generate_all_parameter_queries(
             # Use real param_id if exists, otherwise generate synthetic ID
             param_id = getattr(edge.p, 'id', None) or f"synthetic:{edge.uuid}:p"
             result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
+            
+            # Auto-generate n_query for MECE split mechanics (exclude/minus/plus),
+            # unless anchor == from (A=X case) where a base n_query is not meaningful.
+            n_query: Optional[str] = None
+            if ('.exclude(' in result.query_string) or ('.minus(' in result.query_string) or ('.plus(' in result.query_string):
+                anchor_id = anchor_map.get(edge.uuid)
+                if anchor_id and anchor_id != from_id:
+                    n_query = f"from({anchor_id}).to({from_id})"
             parameters.append(ParameterQuery(
                 param_type="edge_base_p",
                 param_id=param_id,
+                edge_uuid=edge.uuid,
                 edge_key=edge_key,
                 condition=None,
                 query=result.query_string,
+                n_query=n_query,
                 stats=result.coverage_stats
             ))
         
@@ -949,6 +964,7 @@ def generate_all_parameter_queries(
                 parameters.append(ParameterQuery(
                     param_type="edge_conditional_p",
                     param_id=param_id,
+                    edge_uuid=edge.uuid,
                     edge_key=edge_key,
                     condition=condition_str,
                     query=result.query_string,
@@ -966,6 +982,7 @@ def generate_all_parameter_queries(
             parameters.append(ParameterQuery(
                 param_type="edge_cost_gbp",
                 param_id=param_id,
+                edge_uuid=edge.uuid,
                 edge_key=edge_key,
                 condition=None,
                 query=result.query_string,
@@ -979,6 +996,7 @@ def generate_all_parameter_queries(
             parameters.append(ParameterQuery(
                 param_type="edge_labour_cost",
                 param_id=param_id,
+                edge_uuid=edge.uuid,
                 edge_key=edge_key,
                 condition=None,
                 query=result.query_string,
@@ -1008,6 +1026,7 @@ def generate_all_parameter_queries(
                     parameters.append(ParameterQuery(
                         param_type="case_variant_edge",
                         param_id=case_id,  # Real case file ID or synthetic
+                        edge_uuid=None,
                         edge_key=edge_key,
                         condition=condition_str,
                         query=result.query_string,

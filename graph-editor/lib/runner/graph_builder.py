@@ -563,7 +563,11 @@ def apply_visibility_mode(G: nx.DiGraph, mode: str) -> None:
     - 'f': Replace p with forecast.mean if available (forecast only)
     - 'e': Replace p with evidence.mean if available (evidence only)
     
-    If the requested source is unavailable for an edge, falls back to p.mean.
+    If the requested source is unavailable for an edge:
+    - In 'f' mode, falls back to p.mean (no forecast data).
+    - In 'e' mode, does NOT fall back to p.mean. Evidence mode must not silently
+      substitute blended probabilities. Instead, evidence mode constructs an
+      evidence-only transition layer (including complement handling where possible).
     
     Args:
         G: NetworkX DiGraph to mutate
@@ -573,6 +577,81 @@ def apply_visibility_mode(G: nx.DiGraph, mode: str) -> None:
         # Keep p (mean) as-is - no changes needed
         return
     
+    if mode == 'e':
+        # Evidence mode semantics:
+        # - Never use p.mean as a substitute for missing evidence.
+        # - If a node has one or more evidence-backed outgoing edges, and it has a clear
+        #   absorbing failure/other child edge without evidence, assign the complement
+        #   probability to that edge so outgoing probabilities are coherent for path maths.
+        #
+        # This intentionally mirrors the UI's "rebalance evidence" semantics, but at the
+        # runner layer so analyses cannot silently become blended.
+
+        # Step 1: set per-edge p to evidence mean where present, else 0.
+        for u, v, data in G.edges(data=True):
+            evidence = data.get('evidence') or {}
+            evidence_mean = evidence.get('mean')
+            if evidence_mean is not None:
+                data['p'] = float(evidence_mean)
+            else:
+                data['p'] = 0.0
+
+        # Step 2: complement fill for nodes with evidence splits.
+        for parent in G.nodes:
+            outgoing = list(G.successors(parent))
+            if not outgoing:
+                continue
+
+            # Sum evidence-backed probabilities and track which edges had evidence.
+            sum_evidence = 0.0
+            evidence_edges = []
+            non_evidence_edges = []
+            for child in outgoing:
+                ed = G.edges[parent, child]
+                ev = ed.get('evidence') or {}
+                if ev.get('mean') is not None:
+                    evidence_edges.append((parent, child))
+                    sum_evidence += float(ed.get('p') or 0.0)
+                else:
+                    non_evidence_edges.append((parent, child))
+
+            # Only apply complement logic when there is at least one evidence-backed edge.
+            if not evidence_edges:
+                continue
+
+            # Find candidate "failure/other" edges: child node is absorbing and outcome_type == failure (if present).
+            failure_candidates = []
+            for child in outgoing:
+                child_attrs = G.nodes[child]
+                if not child_attrs.get('absorbing', False):
+                    continue
+                outcome = child_attrs.get('outcome_type')
+                if outcome is None or outcome == 'failure':
+                    # Only consider if this edge itself did not have evidence.
+                    ev = (G.edges[parent, child].get('evidence') or {})
+                    if ev.get('mean') is None:
+                        failure_candidates.append((parent, child))
+
+            # If we can't unambiguously identify a single complement edge, warn and skip.
+            if len(failure_candidates) != 1:
+                if len(failure_candidates) == 0:
+                    # No suitable complement edge.
+                    # Leave row incomplete (missing mass becomes stop in downstream maths).
+                    continue
+                # Multiple candidates: ambiguous.
+                continue
+
+            comp_edge = failure_candidates[0]
+            residual = 1.0 - sum_evidence
+            if residual < 0:
+                residual = 0.0
+            if residual > 1:
+                residual = 1.0
+
+            G.edges[comp_edge[0], comp_edge[1]]['p'] = residual
+
+        return
+
     for u, v, data in G.edges(data=True):
         if mode == 'f':
             forecast = data.get('forecast') or {}
@@ -580,12 +659,7 @@ def apply_visibility_mode(G: nx.DiGraph, mode: str) -> None:
             if forecast_mean is not None:
                 data['p'] = forecast_mean
             # else: keep p.mean as fallback (no forecast data)
-        elif mode == 'e':
-            evidence = data.get('evidence') or {}
-            evidence_mean = evidence.get('mean')
-            if evidence_mean is not None:
-                data['p'] = evidence_mean
-            # else: keep p.mean as fallback (no evidence data)
+        # mode == 'e' is handled above
 
 
 def get_probability_label(mode: str) -> str:

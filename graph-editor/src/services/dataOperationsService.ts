@@ -1978,6 +1978,10 @@ class DataOperationsService {
           const stdevChange = result.changes.find((c: { field: string }) => c.field === 'p.stdev');
           const nChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.n');
           const kChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.k');
+          const windowFromChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.window_from');
+          const windowToChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.window_to');
+          const retrievedAtChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.retrieved_at');
+          const sourceChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.source');
           
           console.log('[DataOperationsService] Applying file changes to conditional_p via UpdateManager:', {
             conditionalIndex,
@@ -1997,7 +2001,11 @@ class DataOperationsService {
               stdev: stdevChange?.newValue,
               evidence: (nChange || kChange) ? {
                 n: nChange?.newValue,
-                k: kChange?.newValue
+                k: kChange?.newValue,
+                window_from: windowFromChange?.newValue,
+                window_to: windowToChange?.newValue,
+                retrieved_at: retrievedAtChange?.newValue,
+                source: sourceChange?.newValue,
               } : undefined
             },
             { respectOverrides: true }
@@ -3299,7 +3307,14 @@ class DataOperationsService {
     // Centralised here so all callers + all code paths share identical warning behaviour.
     const warnIfQueryIntentDropped = (queryPayloadToCheck: any) => {
       try {
-        const intentDSL = `${currentDSL ?? ''}${targetSlice ? ` | targetSlice=${targetSlice}` : ''}`;
+        // IMPORTANT:
+        // - currentDSL is the graph-level view (often cohort-view).
+        // - targetSlice is an optional per-item override (e.g. fetch a simple edge via window()
+        //   even while the overall view is cohort()).
+        //
+        // The guardrail should validate the DSL that actually drove query construction for THIS item,
+        // otherwise we'll emit false-positive "intent dropped" warnings.
+        const intentDSL = targetSlice || currentDSL || '';
         const hasWindowToken = intentDSL.includes('window(');
         const hasCohortToken = intentDSL.includes('cohort(');
 
@@ -3569,7 +3584,11 @@ class DataOperationsService {
 
               try {
                 const { parseConstraints } = await import('../lib/queryDSL');
-                const effectiveDSL = currentDSL || '';
+                // IMPORTANT: In cohort-view we sometimes override per-item retrieval mode
+                // via targetSliceOverride (e.g. fetch simple edges via window() even while
+                // the overall view is cohort()).
+                // targetSlice is the per-item source of truth when provided.
+                const effectiveDSL = targetSlice || currentDSL || '';
                 const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
                 const edgeConstraints = effectiveQuery ? parseConstraints(effectiveQuery) : null;
                 const constraints = {
@@ -3644,7 +3663,7 @@ class DataOperationsService {
                 const { parseConstraints } = await import('../lib/queryDSL');
                 
                 // currentDSL is AUTHORITATIVE - from graphStore.currentDSL
-                const effectiveDSL = currentDSL || '';
+                const effectiveDSL = targetSlice || currentDSL || '';
                 
                 // Parse graph-level constraints (from WindowSelector or scenario)
                 const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
@@ -3791,7 +3810,7 @@ class DataOperationsService {
                 const { parseConstraints } = await import('../lib/queryDSL');
                 
                 // currentDSL is AUTHORITATIVE - from graphStore.currentDSL
-                const effectiveDSL = currentDSL || '';
+                const effectiveDSL = targetSlice || currentDSL || '';
                 const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
                 
                 // Parse edge-specific constraints
@@ -4070,7 +4089,7 @@ class DataOperationsService {
           try {
             const { parseConstraints } = await import('../lib/queryDSL');
             // currentDSL is AUTHORITATIVE - from graphStore.currentDSL
-            const effectiveDSL = currentDSL || '';
+            const effectiveDSL = targetSlice || currentDSL || '';
             const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
             const nQueryEdgeConstraints = parseConstraints(explicitNQuery);
             
@@ -5159,7 +5178,8 @@ class DataOperationsService {
                 break;
               }
               sessionLogService.endOperation(logOpId, 'error', `n_query composite query failed: ${error}`);
-              return;
+              // IMPORTANT: propagate failure so batch operations record a real failure (not a silent success).
+              throw new Error(`n_query composite query failed: ${errorMsg}`);
             }
             // Report success to reset rate limiter backoff
             if (connectionName) {
@@ -5196,7 +5216,8 @@ class DataOperationsService {
                 break;
               }
               sessionLogService.endOperation(logOpId, 'error', `Base query failed: ${baseResult.error}`);
-              return;
+              // IMPORTANT: propagate failure so batch operations record a real failure (not a silent success).
+              throw new Error(`Base query failed: ${baseResult.error}`);
             }
             // Report success to reset rate limiter backoff
             if (connectionName) {
@@ -5410,7 +5431,8 @@ class DataOperationsService {
               break;
             }
             sessionLogService.endOperation(logOpId, 'error', `Composite query failed: ${errorMsg}`);
-            return;
+            // IMPORTANT: propagate failure so batch operations record a real failure (not a silent success).
+            throw new Error(`Composite query failed: ${errorMsg}`);
           }
           // Report success to reset rate limiter backoff
           if (connectionName) {
@@ -5450,7 +5472,8 @@ class DataOperationsService {
               break;
             }
             sessionLogService.endOperation(logOpId, 'error', `Conditioned query failed: ${condResult.error}`);
-            return;
+            // IMPORTANT: propagate failure so batch operations record a real failure (not a silent success).
+            throw new Error(`Conditioned query failed: ${condResult.error}`);
           }
           // Report success to reset rate limiter backoff
           if (connectionName) {
@@ -5616,7 +5639,8 @@ class DataOperationsService {
               break;
             }
             sessionLogService.endOperation(logOpId, 'error', `API call failed: ${userMessage}`);
-            return;
+            // IMPORTANT: propagate failure so batch operations record a real failure (not a silent success).
+            throw new Error(`API call failed: ${userMessage}`);
           }
           
           // Report success to reset rate limiter backoff
@@ -5871,6 +5895,51 @@ class DataOperationsService {
       
       // Add data_source metadata for direct external connections (graph-level provenance)
       if (!writeToFile) {
+        // Summarise the effective fetch window across gaps for evidence provenance.
+        // (The per-gap `fetchWindow` variable is scoped to the loop above.)
+        const toDateSafe = (v: any): Date | undefined => {
+          if (!v) return undefined;
+          if (v instanceof Date) return v;
+          if (typeof v === 'string') {
+            // Prefer ISO timestamps
+            if (v.includes('T')) {
+              const d = new Date(v);
+              return Number.isNaN(d.getTime()) ? undefined : d;
+            }
+            // DagNet uses UK date strings (d-MMM-yy) and relative dates; parse those.
+            try {
+              const uk = resolveRelativeDate(v);
+              return parseUKDate(uk);
+            } catch {
+              const d = new Date(v);
+              return Number.isNaN(d.getTime()) ? undefined : d;
+            }
+          }
+          return undefined;
+        };
+
+        const starts = actualFetchWindows.map((w) => toDateSafe((w as any).start)).filter(Boolean) as Date[];
+        const ends = actualFetchWindows.map((w) => toDateSafe((w as any).end)).filter(Boolean) as Date[];
+        const evidenceWindow =
+          starts.length > 0 && ends.length > 0
+            ? {
+                start: new Date(Math.min(...starts.map((d) => d.getTime()))),
+                end: new Date(Math.max(...ends.map((d) => d.getTime()))),
+              }
+            : undefined;
+
+        // Also store evidence-level provenance fields (used by UI + runner evidence mode).
+        // These MUST reflect the actual fetched window, otherwise logs and E-mode computations
+        // can remain stale even when n/k changed.
+        updateData.window_from = evidenceWindow?.start ? evidenceWindow.start.toISOString() : undefined;
+        updateData.window_to = evidenceWindow?.end ? evidenceWindow.end.toISOString() : undefined;
+        updateData.retrieved_at = new Date().toISOString();
+        updateData.source = connectionName?.includes('amplitude')
+          ? 'amplitude'
+          : connectionName?.includes('statsig')
+          ? 'statsig'
+          : 'api';
+
         updateData.data_source = {
           type: connectionName?.includes('amplitude')
             ? 'amplitude'
@@ -6345,7 +6414,14 @@ class DataOperationsService {
               mean: updateData.mean,
               stdev: updateData.stdev,
               evidence: (updateData.n !== undefined || updateData.k !== undefined) 
-                ? { n: updateData.n, k: updateData.k }
+                ? {
+                    n: updateData.n,
+                    k: updateData.k,
+                    window_from: updateData.window_from,
+                    window_to: updateData.window_to,
+                    retrieved_at: updateData.retrieved_at,
+                    source: updateData.source,
+                  }
                 : undefined,
               data_source: updateData.data_source
             },
@@ -6653,6 +6729,9 @@ class DataOperationsService {
       toast.error(`Error: ${message}`);
       console.error('getFromSourceDirect error:', error);
       sessionLogService.endOperation(logOpId, 'error', `Data fetch failed: ${message}`);
+      // CRITICAL: propagate failure so callers (e.g. batch operations) can record failures correctly.
+      // Without this, fetch errors can be logged but still counted as success.
+      throw (error instanceof Error ? error : new Error(message));
     }
   }
   

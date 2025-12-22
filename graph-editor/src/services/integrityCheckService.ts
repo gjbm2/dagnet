@@ -37,6 +37,7 @@ type IssueCategory =
   | 'connection'       // Data connection issues
   | 'credentials'      // Missing or invalid credentials
   | 'value'            // Invalid numeric values
+  | 'semantic'         // Semantic data issues (non-conservation, non-MECE overlaps, denominator mismatches)
   | 'orphan'           // Unreferenced files
   | 'duplicate'        // Duplicate IDs/UUIDs
   | 'naming'           // Naming inconsistencies
@@ -482,6 +483,7 @@ export class IntegrityCheckService {
         'connection': 0,
         'credentials': 0,
         'value': 0,
+        'semantic': 0,
         'orphan': 0,
         'duplicate': 0,
         'naming': 0,
@@ -1685,6 +1687,22 @@ export class IntegrityCheckService {
         });
       }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Semantic Data Integrity (evidence non-conservation / overlap / denominator incoherence)
+    // These checks are intentionally heuristic: they use only persisted graph evidence (n/k)
+    // and graph topology. They are meant to surface “something is off” so the user can
+    // investigate manually (e.g. by replaying stored full_query payloads).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    this.validateGraphSemanticEvidence({
+      graphFileId,
+      nodes,
+      edges,
+      issues,
+      nodeUuids,
+      nodeHumanIds,
+    });
     
     // ─────────────────────────────────────────────────────────────────────────
     // Orphan Node Detection (within graph)
@@ -1705,6 +1723,218 @@ export class IntegrityCheckService {
             message: `Node "${node.id || 'unnamed'}" is disconnected (no edges)`
           });
         }
+      }
+    }
+  }
+
+  private static validateGraphSemanticEvidence(args: {
+    graphFileId: string;
+    nodes: any[];
+    edges: any[];
+    issues: IntegrityIssue[];
+    nodeUuids: Set<string>;
+    nodeHumanIds: Set<string>;
+  }): void {
+    const { graphFileId, nodes, edges, issues, nodeUuids, nodeHumanIds } = args;
+
+    // Build node lookup maps
+    const nodeByUuid = new Map<string, any>();
+    const nodeById = new Map<string, any>();
+    for (const n of nodes) {
+      if (typeof n?.uuid === 'string') nodeByUuid.set(n.uuid, n);
+      if (typeof n?.id === 'string') nodeById.set(n.id, n);
+    }
+
+    const resolveNodeUuid = (ref: any): string | null => {
+      if (!ref || typeof ref !== 'string') return null;
+      if (nodeUuids.has(ref)) return ref; // already UUID
+      if (nodeHumanIds.has(ref)) return nodeById.get(ref)?.uuid ?? null; // legacy human id
+      return null;
+    };
+
+    const toNum = (v: any): number | null => {
+      if (v === undefined || v === null) return null;
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    type EdgeRow = {
+      edge: any;
+      edgeUuid?: string;
+      fromUuid: string;
+      toUuid: string;
+      n: number | null;
+      k: number | null;
+      mean: number | null;
+      evidenceQuery?: string;
+      dataSourceQuery?: string;
+    };
+
+    const outByNode = new Map<string, EdgeRow[]>();
+    const inByNode = new Map<string, EdgeRow[]>();
+
+    for (const e of edges) {
+      const fromUuid = resolveNodeUuid(e?.from ?? e?.source);
+      const toUuid = resolveNodeUuid(e?.to ?? e?.target);
+      if (!fromUuid || !toUuid) continue;
+
+      const ev = e?.p?.evidence;
+      const n = toNum(ev?.n);
+      const k = toNum(ev?.k);
+      // evidence mean can be stored as mean or as p (legacy); prefer mean if present
+      const mean = toNum(ev?.mean ?? ev?.p);
+
+      const evidenceQuery = typeof ev?.full_query === 'string' ? ev.full_query : undefined;
+      const dataSourceQuery = typeof e?.p?.data_source?.full_query === 'string' ? e.p.data_source.full_query : undefined;
+
+      const row: EdgeRow = { edge: e, edgeUuid: e?.uuid, fromUuid, toUuid, n, k, mean, evidenceQuery, dataSourceQuery };
+
+      if (!outByNode.has(fromUuid)) outByNode.set(fromUuid, []);
+      outByNode.get(fromUuid)!.push(row);
+
+      if (!inByNode.has(toUuid)) inByNode.set(toUuid, []);
+      inByNode.get(toUuid)!.push(row);
+    }
+
+    const describeEdgeRow = (r: EdgeRow): string => {
+      const fromId = nodeByUuid.get(r.fromUuid)?.id ?? r.fromUuid.slice(0, 8);
+      const toId = nodeByUuid.get(r.toUuid)?.id ?? r.toUuid.slice(0, 8);
+      const nStr = r.n == null ? '?' : String(Math.round(r.n));
+      const kStr = r.k == null ? '?' : String(Math.round(r.k));
+      const q = r.evidenceQuery || r.edge?.query || '';
+      return `- ${fromId} → ${toId}: n=${nStr}, k=${kStr}${q ? `, query=${q}` : ''}`;
+    };
+
+    // Semantic thresholds:
+    // - “No invisibles”: ANY non-zero delta produces AT LEAST an info issue.
+    // - Promotion: deltas are upgraded to warning/error once thresholds are exceeded.
+    //
+    // Tuning:
+    // - To make this MORE sensitive, reduce thresholds (down to 0).
+    // - To suppress tiny jitter entirely, raise MIN_* above 0.
+    const MIN_ABS_DELTA_TO_FLAG = 0;  // 0 = show any non-zero delta (no invisibles)
+    const MIN_REL_DELTA_TO_FLAG = 0;  // 0 = show any non-zero delta (no invisibles)
+    const REL_DELTA_WARN = 0.02;      // 5%+
+    const REL_DELTA_ERROR = 0.10;     // 20%+
+    const ABS_DELTA_WARN = 10;
+    const ABS_DELTA_ERROR = 50;
+
+    const safeRel = (absDelta: number, denom: number): number => {
+      if (!Number.isFinite(absDelta) || !Number.isFinite(denom) || denom <= 0) return 0;
+      return absDelta / denom;
+    };
+
+    const shouldFlag = (absDelta: number, denom: number): boolean => {
+      // Never emit a semantic issue if there is no delta at all.
+      if (!(absDelta > 0)) return false;
+      const rel = safeRel(absDelta, denom);
+      // Flag if:
+      // - absolute delta is non-trivial, OR
+      // - relative delta is meaningfully large (even if absolute delta is small on tiny denominators).
+      return absDelta >= MIN_ABS_DELTA_TO_FLAG || rel >= MIN_REL_DELTA_TO_FLAG;
+    };
+
+    const severityForDelta = (absDelta: number, denom: number): IssueSeverity => {
+      const rel = safeRel(absDelta, denom);
+      if (absDelta >= ABS_DELTA_ERROR || rel >= REL_DELTA_ERROR) return 'error';
+      if (absDelta >= ABS_DELTA_WARN || rel >= REL_DELTA_WARN) return 'warning';
+      return 'info';
+    };
+
+    // 1) Outgoing denominator incoherence (same node, different evidence.n across its outgoing evidence edges)
+    for (const [nodeUuid, outs] of outByNode.entries()) {
+      const ns = outs.map(o => o.n).filter((v): v is number => typeof v === 'number');
+      if (ns.length < 2) continue;
+      const mn = Math.min(...ns);
+      const mx = Math.max(...ns);
+      const absDelta = Math.abs(mx - mn);
+      const denom = Math.max(1, mx);
+      if (shouldFlag(absDelta, denom)) {
+        const node = nodeByUuid.get(nodeUuid);
+        const nodeName = node?.id ?? nodeUuid.slice(0, 8);
+        const details = outs
+          .filter(o => o.n != null)
+          .map(describeEdgeRow)
+          .join('\n');
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: severityForDelta(absDelta, denom),
+          category: 'semantic',
+          field: `node: ${nodeName}`,
+          message: `Evidence denominators disagree for outgoing edges from "${nodeName}" (evidence.n ranges ${Math.round(mn)}..${Math.round(mx)}).`,
+          suggestion: 'This often indicates inconsistent n_query / window semantics across edges, or mixed cohort conversion windows.',
+          details,
+          nodeUuid,
+        });
+      }
+    }
+
+    // 2) Incoming-vs-outgoing conservation diagnostic (node-level arrivals proxy)
+    for (const [nodeUuid, ins] of inByNode.entries()) {
+      const outs = outByNode.get(nodeUuid) || [];
+      const incomingKs = ins.map(r => r.k).filter((v): v is number => typeof v === 'number');
+      const outgoingNs = outs.map(r => r.n).filter((v): v is number => typeof v === 'number');
+      if (incomingKs.length === 0 || outgoingNs.length === 0) continue;
+
+      const sumIncomingK = incomingKs.reduce((a, b) => a + b, 0);
+      const maxOutgoingN = Math.max(...outgoingNs);
+      const delta = sumIncomingK - maxOutgoingN;
+      const absDelta = Math.abs(delta);
+      const denom = Math.max(1, maxOutgoingN);
+      if (shouldFlag(absDelta, denom)) {
+        const node = nodeByUuid.get(nodeUuid);
+        const nodeName = node?.id ?? nodeUuid.slice(0, 8);
+
+        const incomingDetails = ins
+          .filter(r => r.k != null)
+          .map(describeEdgeRow)
+          .join('\n');
+        const outgoingDetails = outs
+          .filter(r => r.n != null)
+          .map(describeEdgeRow)
+          .join('\n');
+
+        const direction = delta > 0
+          ? 'Inbound evidence.k sum exceeds outbound evidence.n'
+          : 'Inbound evidence.k sum is lower than outbound evidence.n';
+        const hint = delta > 0
+          ? 'This usually indicates non-MECE overlap at the user level (users counted on multiple inbound edges) or mixed denominators.'
+          : 'This usually indicates missing inbound paths (graph incompleteness), missing evidence on some inbound edges, or mixed denominators.';
+
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: severityForDelta(absDelta, denom),
+          category: 'semantic',
+          field: `node: ${nodeName}`,
+          message: `${direction} for "${nodeName}" (Σk_in=${Math.round(sumIncomingK)} vs n_out=${Math.round(maxOutgoingN)}, Δ=${Math.round(delta)}).`,
+          suggestion: hint,
+          details: `Incoming:\n${incomingDetails}\n\nOutgoing:\n${outgoingDetails}`,
+          nodeUuid,
+        });
+      }
+    }
+
+    // 3) Edge-level sanity: k should never exceed n for a single evidence record
+    for (const e of edges) {
+      const ev = e?.p?.evidence;
+      const n = toNum(ev?.n);
+      const k = toNum(ev?.k);
+      if (n == null || k == null) continue;
+      if (k > n + 1e-9) {
+        const q = typeof ev?.full_query === 'string' ? ev.full_query : (typeof e?.query === 'string' ? e.query : '');
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'error',
+          category: 'semantic',
+          field: e?.id ? `edge: ${e.id}` : 'edge',
+          message: `Evidence has k > n (k=${Math.round(k)} > n=${Math.round(n)}). This is impossible under standard funnel semantics.`,
+          suggestion: 'Check query construction, step indices, and whether evidence.n is being overridden incorrectly.',
+          details: q ? `query=${q}` : undefined,
+          edgeUuid: e?.uuid,
+        });
       }
     }
   }
@@ -2766,6 +2996,7 @@ export class IntegrityCheckService {
       'connection': '🔌',
       'credentials': '🔐',
       'value': '🔢',
+      'semantic': '🧠',
       'orphan': '👻',
       'duplicate': '♊',
       'naming': '🏷️',

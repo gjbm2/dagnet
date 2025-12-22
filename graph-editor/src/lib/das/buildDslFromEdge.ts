@@ -18,6 +18,7 @@ import { contextRegistry } from '../../services/contextRegistry';
 import { querySignatureService } from '../../services/querySignatureService';
 import { parseUKDate, formatDateUK } from '../dateFormat';
 import { computePathT95, getActiveEdges, type GraphForPath } from '../../services/statisticalEnhancementService';
+import { COHORT_CONVERSION_WINDOW_MAX_DAYS, DEFAULT_T95_DAYS } from '../../constants/latency';
 
 export interface EventFilter {
   property: string;
@@ -441,14 +442,28 @@ export async function buildDslFromEdge(
       }
       
       // Get conversion window for cohort query
-      // CRITICAL: Use path_t95 (cumulative latency from anchor) for the Amplitude conversion window,
-      // path_t95 tells us how long to wait for conversions from the anchor event.
-      // 
-      // Data sufficiency fallback chain:
-      // 1. path_t95 from edge (if already computed from previous fetch)
-      // 2. Compute path_t95 on-the-fly from graph (uses t95/default per edge)
-      // 3. edge-local t95 (if only this edge has data)
-      // 4. Default 30 days
+      // CRITICAL: Use a graph-level cohort conversion window (Amplitude cs) so that
+      // "arrived at node X" is coherent across all edges in the same cohort slice.
+      //
+      // Policy: cs_days = ceil(max(path_t95|t95 across edges)) with a 90d clamp.
+      //
+      // Fallback chain if graph-level max cannot be computed:
+      // - edge path_t95
+      // - edge t95
+      // - default (30d)
+      let graphMaxT95: number | undefined = undefined;
+      try {
+        for (const e of (graph?.edges || [])) {
+          const lat = (e as any)?.p?.latency;
+          const v = (lat?.path_t95 ?? lat?.t95);
+          if (v !== undefined && v !== null && Number(v) > 0) {
+            graphMaxT95 = graphMaxT95 === undefined ? Number(v) : Math.max(graphMaxT95, Number(v));
+          }
+        }
+      } catch {
+        // ignore and fall back
+      }
+      
       let pathT95 = edge.p?.latency?.path_t95;
       
       // If path_t95 not stored, compute it on-the-fly from the graph
@@ -498,10 +513,12 @@ export async function buildDslFromEdge(
       
       const edgeT95 = edge.p?.latency?.t95;
       
-      // Prefer path_t95 > t95 > default 30
-      const conversionWindowDays = Math.ceil(pathT95 ?? edgeT95 ?? 30);
+      // Prefer graph max > path_t95 > t95 > default
+      const effectiveDays = graphMaxT95 ?? pathT95 ?? edgeT95 ?? DEFAULT_T95_DAYS;
+      const conversionWindowDays = Math.min(Math.ceil(effectiveDays), COHORT_CONVERSION_WINDOW_MAX_DAYS);
       
       console.log('[buildQueryPayload] Cohort conversion window:', {
+        graphMaxT95,
         pathT95,
         edgeT95,
         conversionWindowDays

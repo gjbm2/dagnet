@@ -18,6 +18,24 @@ import './GraphIssuesViewer.css';
 type IssueSeverity = 'error' | 'warning' | 'info';
 type IssueCategory = GraphIssue['category'];
 
+const ISSUE_CATEGORY_ORDER: IssueCategory[] = [
+  'schema',
+  'id-format',
+  'reference',
+  'graph-structure',
+  'registry',
+  'connection',
+  'credentials',
+  'value',
+  'semantic',
+  'sync',
+  'duplicate',
+  'orphan',
+  'naming',
+  'metadata',
+  'image',
+];
+
 /**
  * Extract clean display name from fileId, stripping workspace prefix if present.
  * Examples:
@@ -53,6 +71,8 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
   const [graphFilter, setGraphFilter] = useState<string>('');
   const [includeReferencedFiles, setIncludeReferencedFiles] = useState(true);
   const [severityFilter, setSeverityFilter] = useState<Set<IssueSeverity>>(new Set(['error', 'warning', 'info']));
+  const [categoryFilter, setCategoryFilter] = useState<Set<IssueCategory>>(new Set(ISSUE_CATEGORY_ORDER));
+  const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [autoExpandErrors, setAutoExpandErrors] = useState(true);
   
@@ -79,9 +99,10 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
       searchTerm: searchTerm || undefined,
       graphFilter: graphFilter || undefined,
       includeReferencedFiles: graphFilter ? includeReferencedFiles : undefined,
-      severities: Array.from(severityFilter)
+      severities: Array.from(severityFilter),
+      categories: Array.from(categoryFilter)
     });
-  }, [state.issues, searchTerm, graphFilter, includeReferencedFiles, severityFilter]);
+  }, [state.issues, searchTerm, graphFilter, includeReferencedFiles, severityFilter, categoryFilter]);
   
   // Group issues by display name (deduplicates workspace-prefixed and non-prefixed fileIds)
   const issuesByFile = useMemo(() => {
@@ -135,6 +156,26 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
       return next;
     });
   }, []);
+
+  const toggleCategory = useCallback((category: IssueCategory) => {
+    setCategoryFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  }, []);
+
+  // Close category menu on click outside
+  useEffect(() => {
+    if (!showCategoryMenu) return;
+    const onDocClick = () => setShowCategoryMenu(false);
+    document.addEventListener('click', onDocClick);
+    return () => document.removeEventListener('click', onDocClick);
+  }, [showCategoryMenu]);
   
   // Toggle file expansion
   const toggleFile = useCallback((fileId: string) => {
@@ -202,6 +243,7 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
           graphFilter,
           includeReferencedFiles,
           severities: Array.from(severityFilter),
+          categories: Array.from(categoryFilter),
         },
       });
       await navigator.clipboard.writeText(text);
@@ -210,7 +252,7 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
       console.error('Failed to copy issues:', error);
       toast.error('Failed to copy issues');
     }
-  }, [filteredIssues, searchTerm, graphFilter, includeReferencedFiles, severityFilter]);
+  }, [filteredIssues, searchTerm, graphFilter, includeReferencedFiles, severityFilter, categoryFilter]);
   
   // Summary counts
   const errorCount = useMemo(() => 
@@ -219,6 +261,14 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
     filteredIssues.filter(i => i.severity === 'warning').length, [filteredIssues]);
   const infoCount = useMemo(() => 
     filteredIssues.filter(i => i.severity === 'info').length, [filteredIssues]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const i of filteredIssues) {
+      counts[i.category] = (counts[i.category] || 0) + 1;
+    }
+    return counts;
+  }, [filteredIssues]);
   
   return (
     <div className="graph-issues-viewer">
@@ -276,6 +326,51 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
           >
             ℹ️ {infoCount}
           </button>
+        </div>
+
+        <div className="issues-category-filter">
+          <button
+            className="issues-btn"
+            onClick={(e) => { e.stopPropagation(); setShowCategoryMenu(v => !v); }}
+            title="Filter by issue category"
+          >
+            Categories ({categoryFilter.size}/{ISSUE_CATEGORY_ORDER.length})
+          </button>
+          {showCategoryMenu && (
+            <div className="issues-category-menu" onClick={(e) => e.stopPropagation()}>
+              <div className="issues-category-menu-actions">
+                <button
+                  className="issues-category-action"
+                  onClick={() => setCategoryFilter(new Set(ISSUE_CATEGORY_ORDER))}
+                >
+                  All
+                </button>
+                <button
+                  className="issues-category-action"
+                  onClick={() => setCategoryFilter(new Set())}
+                >
+                  None
+                </button>
+              </div>
+              <div className="issues-category-menu-items">
+                {ISSUE_CATEGORY_ORDER.map((cat) => (
+                  <label key={cat} className="issues-category-item">
+                    <input
+                      type="checkbox"
+                      checked={categoryFilter.has(cat)}
+                      onChange={() => toggleCategory(cat)}
+                    />
+                    <span className="issues-category-label">
+                      {getCategoryIcon(cat)} {cat}
+                    </span>
+                    <span className="issues-category-count">
+                      {categoryCounts[cat] ?? 0}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         
         <div className="issues-toolbar-actions">
@@ -513,6 +608,7 @@ function getCategoryIcon(category: IssueCategory): string {
     'connection': '🔌',
     'credentials': '🔐',
     'value': '🔢',
+    'semantic': '🧠',
     'orphan': '👻',
     'duplicate': '♊',
     'naming': '🏷️',
