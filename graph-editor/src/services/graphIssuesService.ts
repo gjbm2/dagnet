@@ -23,6 +23,7 @@ type IssueCategory =
   | 'connection'
   | 'credentials'
   | 'value'
+  | 'semantic'
   | 'orphan'
   | 'duplicate'
   | 'naming'
@@ -224,6 +225,7 @@ class GraphIssuesService {
       graphFilter?: string;
       includeReferencedFiles?: boolean;
       severities?: IssueSeverity[];
+      categories?: IssueCategory[];
     };
   }): string {
     return formatIssuesForClipboard({
@@ -292,7 +294,9 @@ class GraphIssuesService {
     }
     
     // Filter by category
-    if (options.categories && options.categories.length > 0) {
+    if (options.categories) {
+      // IMPORTANT: Explicit empty selection means "show none" (not "no filter").
+      if (options.categories.length === 0) return [];
       filtered = filtered.filter(issue => options.categories!.includes(issue.category));
     }
     
@@ -513,5 +517,7 @@ class GraphIssuesService {
 export const graphIssuesService = new GraphIssuesService();
 
 // Debug exposure for console access
-(window as any).graphIssuesService = graphIssuesService;
+if (typeof window !== 'undefined') {
+  (window as any).graphIssuesService = graphIssuesService;
+}
 

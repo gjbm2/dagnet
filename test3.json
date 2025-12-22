@@ -65,8 +65,8 @@ nodes:
     label: Switch success
     absorbing: true
     layout:
-      x: 717
-      'y': -234
+      x: 691
+      'y': -233
     event_id: switch-success
     event_id_overridden: false
     label_overridden: false
@@ -107,7 +107,7 @@ nodes:
       x: -544
       'y': 4
     event_id: non-energy-rec
-    event_id_overridden: false
+    event_id_overridden: true
   - uuid: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
     id: energy-rec
     label: Energy rec
@@ -125,7 +125,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.2107
+      mean: 0.247
       latency:
         anchor_node_id: household-created
     query: from(switch-registered).to(post-registration-failure)
@@ -137,25 +137,25 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.408
+      mean: 0.4742
       stdev: 0.0159
       id: coffee-to-bds
       connection: amplitude-prod
       evidence:
-        'n': 984
-        k: 467
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:03.896Z'
+        'n': 989
+        k: 469
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:24.707Z'
         source: amplitude
         full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
-        mean: 0.47459349593495936
-        stdev: 0.015918827042905648
+        mean: 0.4742
+        stdev: 0.009329432950101042
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:08.214Z'
+        retrieved_at: '2025-12-22T15:58:24.707Z'
         full_query: >-
-          {"from":"viewed-coffee-screen","to":"gave-bds-in-onboarding","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":5},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=432000","from_step_index":1}
+          {"from":"viewed-coffee-screen","to":"gave-bds-in-onboarding","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":34},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2937600","from_step_index":1}
       latency:
         anchor_node_id: household-created
         median_lag_days: 0.0008546016607074589
@@ -166,12 +166,13 @@ edges:
         latency_parameter: false
         latency_parameter_overridden: false
       forecast:
-        mean: 0.3728279399947471
+        mean: 0.3697866796706855
     query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
     description: ''
     cost_gbp:
       mean: 5
       mean_overridden: true
+      query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
   - uuid: 82ed2719-a8a5-4e28-84a6-21d476334a28
     id: household-created-to-abandonned-before-delegation
     from: 86469c9f-2f83-49ca-a154-589231be5511
@@ -191,38 +192,38 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.7893
-      stdev: 0.0262
+      mean: 0.753
+      stdev: 0.0267
       id: registration-to-success
       evidence:
-        window_from: 1-Nov-25
+        window_from: '2025-11-01T00:00:00.000Z'
         source: amplitude
-        'n': 281
-        k: 208
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:04.275Z'
+        'n': 278
+        k: 202
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:25.687Z'
         full_query: from(switch-registered).to(switch-success)
-        mean: 0.7446808510638298
-        stdev: 0.025965831416387482
+        mean: 0.7266
+        stdev: 0.02411924958851217
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:09.346Z'
+        retrieved_at: '2025-12-22T15:58:25.687Z'
         full_query: >-
-          {"from":"switch-registered","to":"switch-success","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":40},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20SwitchSuccess%22%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=3456000","from_step_index":1}
+          {"from":"switch-registered","to":"switch-success","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":34},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20SwitchSuccess%22%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2937600","from_step_index":1}
       connection: amplitude-prod
       latency:
         anchor_node_id: household-created
-        median_lag_days: 6.397812283446865
-        completeness: 0.9631825094113723
+        median_lag_days: 6.536363240787897
+        completeness: 0.9995447876947826
         t95: 13.12
-        path_t95: 24.81
-        mean_lag_days: 6.809086584597634
+        path_t95: 26.23
+        mean_lag_days: 7.002692355754514
         latency_parameter: true
         latency_parameter_overridden: false
         path_t95_overridden: false
         t95_overridden: false
       forecast:
-        mean: 0.8029544527546632
+        mean: 0.8013556636978229
     query: from(switch-registered).to(switch-success)
     description: ''
   - uuid: 3d0a0757-8224-4cf0-a841-4ad17cd48d91
@@ -239,23 +240,23 @@ edges:
       evidence:
         'n': 4559
         k: 2478
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:03.652Z'
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:26.876Z'
         source: amplitude
         full_query: from(household-created).to(household-delegated)
-        mean: 0.5435402500548366
-        stdev: 0.007377042794478613
+        mean: 0.5435
+        stdev: 0.004516576924596428
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:10.955Z'
+        retrieved_at: '2025-12-22T15:58:26.876Z'
         full_query: >-
-          {"from":"household-created","to":"household-delegated","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":30},"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2592000","from_step_index":0,"to_step_index":1}
+          {"from":"household-created","to":"household-delegated","context":[],"case":[],"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2592000","from_step_index":0,"to_step_index":1}
       latency:
         anchor_node_id: household-created
       mean_overridden: false
       forecast:
-        mean: 0.5308279289086446
+        mean: 0.5277148442854639
     query: from(household-created).to(household-delegated)
     description: ''
   - uuid: 9d2ebbef-d009-4043-80b1-b4ec43b728d0
@@ -265,7 +266,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1867
+      mean: 0.169
       latency:
         anchor_node_id: household-created
     description: ''
@@ -277,7 +278,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.9452
+      mean: 0.9443
       latency:
         anchor_node_id: household-created
     description: ''
@@ -289,39 +290,37 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1548
+      mean: 0.253
       id: delegated-to-non-energy-rec
-      stdev: 0.0069
+      stdev: 0.0087
       connection: amplitude-prod
       evidence:
-        'n': 2463
-        k: 332
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:04.186Z'
+        'n': 2482
+        k: 628
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:30.120Z'
         source: amplitude
         full_query: from(household-delegated).to(mobile-or-broadband-first-rec)
-        mean: 0.13398294762484775
-        stdev: 0.006863660282151206
+        mean: 0.253
+        stdev: 0.004108178370696535
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:12.964Z'
+        retrieved_at: '2025-12-22T15:58:30.120Z'
         full_query: >-
-          {"from":"household-delegated","to":"non-energy-rec","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":9},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=777600","from_step_index":1}
+          {"from":"household-delegated","to":"non-energy-rec","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":34},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2937600","from_step_index":1}
       latency:
         anchor_node_id: household-created
-        median_lag_days: 4.47
-        completeness: 0.9999952768837156
-        t95: 10.17
-        path_t95: 10.17
+        median_lag_days: 7.495
+        completeness: 0.999676807617978
+        t95: 17.06
+        path_t95: 17.06
         latency_parameter: true
         latency_parameter_overridden: false
       forecast:
-        mean: 0.2075878039865327
+        mean: 0.23100560387152558
     query: from(household-delegated).to(mobile-or-broadband-first-rec)
     description: ''
-    n_query: from(household-created).to(household-delegated)
-    n_query_overridden: true
   - uuid: 259da2be-8149-40f2-ad9e-e2bea18bb1fb
     id: household-delegated-to-no-recommendation-sent
     from: 16974652-b532-41ee-b4d5-a3ef5381591d
@@ -329,11 +328,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.0388
+      mean: 0.1034
       latency:
         anchor_node_id: household-created
     query: from(household-delegated).to(no-recommendation-sent).minus(viewed-coffee-screen)
     description: ''
+    n_query: from(household-created).to(household-delegated)
   - uuid: 77d0a69e-3c75-4722-932b-7f54d317d0ce
     id: gave-bds-in-onboarding-to-energy-rec
     from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
@@ -341,36 +341,36 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.8133
+      mean: 0.831
       id: bds-to-energy-rec
       connection: amplitude-prod
-      stdev: 0.017
+      stdev: 0.0169
       evidence:
-        'n': 490
-        k: 406
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:03.942Z'
+        'n': 491
+        k: 408
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:31.296Z'
         source: amplitude
         full_query: from(gave-bds-in-onboarding).to(energy-rec)
-        mean: 0.8285714285714286
-        stdev: 0.017025839685399353
+        mean: 0.831
+        stdev: 0.012396490354611028
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:14.349Z'
+        retrieved_at: '2025-12-22T15:58:31.296Z'
         full_query: >-
-          {"from":"gave-bds-in-onboarding","to":"energy-rec","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":5},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=432000","from_step_index":1}
+          {"from":"gave-bds-in-onboarding","to":"energy-rec","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":34},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2937600","from_step_index":1}
       latency:
         anchor_node_id: household-created
-        median_lag_days: 2.003003653908269
-        completeness: 0.9999999823081872
+        median_lag_days: 2.003889944856854
+        completeness: 0.9793669067929196
         t95: 4.92
-        mean_lag_days: 2.178375916283107
+        mean_lag_days: 2.2091492587354327
         path_t95: 4.92
         latency_parameter: true
         latency_parameter_overridden: false
       forecast:
-        mean: 0.7917367766349676
+        mean: 0.7860538648624444
     query: from(gave-bds-in-onboarding).to(energy-rec)
     description: ''
   - uuid: 64f4529c-62b8-4e7e-8479-c5289d925e58
@@ -380,29 +380,29 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.3685
+      mean: 0.4027
       id: delegated-to-coffee
-      stdev: 0.0098
+      stdev: 0.0099
       connection: amplitude-prod
       evidence:
         'n': 2478
-        k: 989
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:03.726Z'
+        k: 998
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:34.465Z'
         source: amplitude
         full_query: from(household-delegated).to(viewed-coffee-screen)
-        mean: 0.40274414850686036
-        stdev: 0.009852448541968262
+        mean: 0.4027
+        stdev: 0.006217868635942375
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:16.632Z'
+        retrieved_at: '2025-12-22T15:58:34.465Z'
         full_query: >-
-          {"from":"household-delegated","to":"viewed-coffee-screen","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":30},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2592000","from_step_index":1}
+          {"from":"household-delegated","to":"viewed-coffee-screen","context":[],"case":[],"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2592000","from_step_index":0,"to_step_index":1}
       latency:
         anchor_node_id: household-created
       forecast:
-        mean: 0.3621096072859417
+        mean: 0.4146112043158971
     query: from(household-delegated).to(viewed-coffee-screen)
     description: ''
     n_query: from(household-created).to(household-delegated)
@@ -414,35 +414,35 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.5523
+      mean: 0.4803
       id: no-bdos-to-rec
       connection: amplitude-prod
       stdev: 0.0159
       evidence:
-        'n': 987
-        k: 473
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:03.992Z'
+        'n': 989
+        k: 475
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:36.957Z'
         source: amplitude
         full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
-        mean: 0.47821681864235055
-        stdev: 0.015900064454443596
+        mean: 0.4803
+        stdev: 0.009512979997258053
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:19.438Z'
+        retrieved_at: '2025-12-22T15:58:36.957Z'
         full_query: >-
-          {"from":"viewed-coffee-screen","to":"energy-rec","exclude":[],"context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":9},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%2C%7B%22type%22%3A%22event%22%2C%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%2C%22op%22%3A%22%3D%22%2C%22value%22%3A0%2C%22time_type%22%3A%22rolling%22%2C%22time_value%22%3A366%7D%5D&cs=777600","from_step_index":1}
+          {"from":"viewed-coffee-screen","to":"energy-rec","exclude":[],"context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":34},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%2C%7B%22type%22%3A%22event%22%2C%22event_type%22%3A%22BankAccount%20DetailsEntryConfirmed%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22context%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ONBOARDING%22%5D%7D%5D%2C%22op%22%3A%22%3D%22%2C%22value%22%3A0%2C%22time_type%22%3A%22rolling%22%2C%22time_value%22%3A366%7D%5D&cs=2937600","from_step_index":1}
       latency:
         anchor_node_id: household-created
-        median_lag_days: 4.47
-        completeness: 0.9999952441195827
-        t95: 10.17
-        path_t95: 10.17
+        median_lag_days: 2.5
+        completeness: 0.8912722507104481
+        t95: 8.94
+        path_t95: 8.94
         latency_parameter: true
         latency_parameter_overridden: false
       forecast:
-        mean: 0.6561472177067756
+        mean: 0.6691502904817447
     query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
     description: ''
     query_overridden: true
@@ -455,11 +455,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.0397
+      mean: 0.0455
       latency:
         anchor_node_id: household-created
     query: from(viewed-coffee-screen).to(no-recommendation-sent).minus(gave-bds-in-onboarding)
     description: ''
+    n_query: from(household-created).to(viewed-coffee-screen)
   - uuid: d45debd8-939b-4abb-b0d0-c5ef62412add
     id: energy-rec-to-switch-registered
     from: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
@@ -467,38 +468,38 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1782
+      mean: 0.1822
       id: rec-with-bdos-to-registration
       connection: amplitude-prod
-      stdev: 0.0099
+      stdev: 0.0101
       evidence:
-        'n': 1467
-        k: 254
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:04.085Z'
+        'n': 1471
+        k: 268
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:38.437Z'
         source: amplitude
         full_query: from(energy-rec).to(switch-registered)
-        mean: 0.169052488070893
-        stdev: 0.009785488760654213
+        mean: 0.1822
+        stdev: 0.0050871707514764984
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:21.083Z'
+        retrieved_at: '2025-12-22T15:58:38.437Z'
         full_query: >-
-          {"from":"energy-rec","to":"switch-registered","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":24},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2073600","from_step_index":1}
+          {"from":"energy-rec","to":"switch-registered","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":34},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2937600","from_step_index":1}
       latency:
         anchor_node_id: household-created
         median_lag_days: 8.304757248066533
-        completeness: 0.9977872901244637
+        completeness: 0.5558320531755739
         t95: 18.21
         mean_lag_days: 8.43778733145331
-        path_t95: 20.7
+        path_t95: 23.34
         latency_parameter: true
         latency_parameter_overridden: false
         t95_overridden: true
       stdev_overridden: false
       forecast:
-        mean: 0.18276041005166294
+        mean: 0.17752632443729166
     description: ''
     query: from(energy-rec).to(switch-registered)
     query_overridden: false
@@ -540,38 +541,38 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.4379
+      mean: 0.2409
       id: delegation-straight-to-energy-rec
-      stdev: 0.0127
+      stdev: 0.0086
       connection: amplitude-prod
       evidence:
-        'n': 1475
-        k: 577
-        retrieved_at: '2025-12-22T12:00:04.052Z'
+        'n': 2482
+        k: 598
+        retrieved_at: '2025-12-22T15:58:40.568Z'
         source: amplitude
         full_query: from(household-delegated).to(energy-rec).exclude(viewed-coffee-screen)
-        mean: 0.3911864406779661
-        stdev: 0.012706854130881696
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
+        mean: 0.2409
+        stdev: 0.008033263651839984
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:22.635Z'
+        retrieved_at: '2025-12-22T15:58:40.568Z'
         full_query: >-
-          {"from":"household-delegated","to":"energy-rec","exclude":[],"context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":8},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%2C%7B%22type%22%3A%22event%22%2C%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%2C%22filters%22%3A%5B%5D%2C%22op%22%3A%22%3D%22%2C%22value%22%3A0%2C%22time_type%22%3A%22rolling%22%2C%22time_value%22%3A366%7D%5D&cs=691200","from_step_index":1}
+          {"from":"household-delegated","to":"energy-rec","exclude":[],"context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":34},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Household%20DelegationStatusChanged%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22newDelegationStatus%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22ON%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%2C%7B%22type%22%3A%22event%22%2C%22event_type%22%3A%22Viewed%20Coffee%20Promotion%20Page%20%2Fonboarding%2Fcoffee%20Page%22%2C%22filters%22%3A%5B%5D%2C%22op%22%3A%22%3D%22%2C%22value%22%3A0%2C%22time_type%22%3A%22rolling%22%2C%22time_value%22%3A366%7D%5D&cs=2937600","from_step_index":1}
       latency:
         anchor_node_id: household-created
-        median_lag_days: 1.9895381350765042
-        completeness: 0.9998581879554991
+        median_lag_days: 2.5
+        completeness: 0.9622468772556474
         t95: 7.9
         path_t95: 7.9
         latency_parameter: true
-        mean_lag_days: 1.816401121850825
       forecast:
-        mean: 0.4735997668113565
+        mean: 0.46200696747319
     query: from(household-delegated).to(energy-rec).exclude(viewed-coffee-screen)
     description: ''
     query_overridden: true
+    n_query: from(household-created).to(household-delegated)
   - uuid: 9624cce1-21f3-4085-9388-c155b5b657fd
     id: mobile-or-broadband-first-rec-to-switch-registered
     from: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
@@ -579,37 +580,37 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.0548
+      mean: 0.0557
       id: non-energy-rec-to-reg
-      stdev: 0.0091
+      stdev: 0.0092
       connection: amplitude-prod
       evidence:
-        'n': 620
-        k: 34
-        window_from: 1-Nov-25
-        window_to: 14-Nov-25
-        retrieved_at: '2025-12-22T12:00:04.249Z'
+        'n': 628
+        k: 35
+        window_from: '2025-11-01T00:00:00.000Z'
+        window_to: '2025-11-14T00:00:00.000Z'
+        retrieved_at: '2025-12-22T15:58:42.131Z'
         source: amplitude
         full_query: from(mobile-or-broadband-first-rec).to(switch-registered)
-        mean: 0.054838709677419356
-        stdev: 0.009143252897393888
+        mean: 0.0557
+        stdev: 0.005442499099228168
       data_source:
         type: amplitude
-        retrieved_at: '2025-12-22T12:02:24.403Z'
+        retrieved_at: '2025-12-22T15:58:42.131Z'
         full_query: >-
-          {"from":"non-energy-rec","to":"switch-registered","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":32},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2764800","from_step_index":1}
+          {"from":"non-energy-rec","to":"switch-registered","context":[],"case":[],"cohort":{"start":"2025-11-01T00:00:00.000Z","end":"2025-11-14T00:00:00.000Z","anchor_event_id":"household-created","conversion_window_days":34},"to_step_index":2,"query_params":"e=%7B%22event_type%22%3A%22Household%20Created%22%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%20not%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251101&end=20251114&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D&cs=2937600","from_step_index":1}
       latency:
         anchor_node_id: household-created
-        median_lag_days: 7.109118964174457
-        completeness: 0.9879058666237996
+        median_lag_days: 7.499368151790451
+        completeness: 0.9806872238918294
         t95: 17.25
-        mean_lag_days: 7.818133111478886
-        path_t95: 31.05
+        mean_lag_days: 8.203709243868202
+        path_t95: 33.6
         latency_parameter: true
         latency_parameter_overridden: false
         path_t95_overridden: false
       forecast:
-        mean: 0.07858406137575372
+        mean: 0.0804296455138116
     description: ''
     query: from(mobile-or-broadband-first-rec).to(switch-registered)
   - uuid: b00b2e14-f795-46e6-96c5-f46bfedf458d
@@ -619,7 +620,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.8218
+      mean: 0.8178
       latency:
         anchor_node_id: household-created
     query: from(energy-rec).to(post-recommendation-failure)
@@ -648,8 +649,8 @@ metadata:
   name: conversion-flow-v0-ezra
   description: ''
   created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2025-12-22T12:02:24.403Z'
+  updated_at: '2025-12-22T15:58:42.176Z'
   version: 1.0.0
 currentQueryDSL: cohort(1-Nov-25:14-Nov-25)
 dataInterestsDSL: (window(-60d:);cohort(-60d:)).context(channel)
-baseDSL: cohort(18-Nov-25:17-Dec-25)
+baseDSL: cohort(18-Nov-25:6-Dec-25)

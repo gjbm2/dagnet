@@ -172,15 +172,22 @@ export function getDefaultDSL(): string {
 export function extractParamDetails(param: any): string {
   if (!param) return '';
   
+  const formatUK = (v: string) => {
+    const d = new Date(v);
+    const day = d.getDate();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[d.getMonth()];
+    const year = String(d.getFullYear()).slice(-2);
+    return `${day}-${month}-${year}`;
+  };
+
   const parts: string[] = [];
   const evidence = param.evidence;
   
   if (evidence?.n !== undefined) parts.push(`n=${evidence.n}`);
   if (evidence?.k !== undefined) parts.push(`k=${evidence.k}`);
   if (evidence?.window_from && evidence?.window_to) {
-    const from = new Date(evidence.window_from).toISOString().split('T')[0];
-    const to = new Date(evidence.window_to).toISOString().split('T')[0];
-    parts.push(`window=${from}→${to}`);
+    parts.push(`window=${formatUK(evidence.window_from)}→${formatUK(evidence.window_to)}`);
   }
   if (evidence?.source) parts.push(`source=${evidence.source}`);
   if (param.mean !== undefined) parts.push(`p=${(param.mean * 100).toFixed(2)}%`);

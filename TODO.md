@@ -1,7 +1,9 @@
 # TODO
 
-- continue to add more graphs, analysis modes & lots and lots of polihsing...
-- use Amplitude latency histograms to translate lognormals
+- For result cards in analytics: add a 'expand / contract' toggle to right of each card which shows all stats vs. key stats [and we may need to feed that through from analysis to flag which are key are which are ancillary)
+- context fixes: /home/reg/dev/dagnet/docs/current/project-lag/context-fix.md
+- Refactor: /home/reg/dev/dagnet/docs/current/src-slimdown.md
+- use Amplitude latency histograms to translate lognormals: /home/reg/dev/dagnet/docs/current/project-lag/histogram-fitting.md
 - grouping / ungrouping nodes (zoom in to complexity)
 - show current (dates range) in dashboard mode
 - are we overfitting to lognormal when most latency edges NEVER start immediately? COULD we use histogram data to shift the start point & fit a better distro? What improvements on lognormal might we consider in general, if that's causing us lots of issues (and we acutally have: histo data, t95 clamps, median && mean, which should be enough for a much better analytic shape...)

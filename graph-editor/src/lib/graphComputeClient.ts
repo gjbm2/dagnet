@@ -583,9 +583,11 @@ export class GraphComputeClient {
 export interface ParameterQuery {
   paramType: string;
   paramId: string;
+  edgeUuid?: string | null;
   edgeKey: string;
   condition?: string;
   query: string;
+  nQuery?: string | null;
   stats: { checks: number; literals: number };
 }
 

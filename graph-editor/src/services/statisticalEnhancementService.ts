@@ -134,8 +134,17 @@ export function computeBlendedMean(
     typeof model?.FORECAST_BLEND_LAMBDA === 'number' && Number.isFinite(model.FORECAST_BLEND_LAMBDA)
       ? model.FORECAST_BLEND_LAMBDA
       : FORECAST_BLEND_LAMBDA;
+  // NEW BLEND WEIGHT (old behaviour removed, no feature flags):
+  // Forecast is meant to compensate for immaturity; as completeness → 1, forecast influence
+  // must smoothly vanish so mature cohorts are evidence-driven.
+  //
+  // We implement this by scaling forecast pseudo-sample strength by remaining immaturity.
+  // - At completenessForBlendWeight=0 → remaining=1 → behaves like the old weight.
+  // - At completenessForBlendWeight=1 → remaining=0 → forecast has zero weight.
+  const remaining = Math.max(0, 1 - completenessForBlendWeight);
   const m0 = lambda * nBaseline;
-  const wEvidence = nEff / (m0 + nEff);
+  const m0Eff = m0 * remaining;
+  const wEvidence = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
   
   return wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
 }
@@ -2771,7 +2780,9 @@ export function enhanceGraphLatencies(
             ? MODEL.FORECAST_BLEND_LAMBDA
             : FORECAST_BLEND_LAMBDA;
         const m0 = lambda * (nBaselineUsed ?? 0);
-        const wEvidence = (m0 + nEff) > 0 ? (nEff / (m0 + nEff)) : 0;
+        const remaining = Math.max(0, 1 - completenessForBlendWeight);
+        const m0Eff = m0 * remaining;
+        const wEvidence = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
 
         edgeLAGValues.debug.nQuery = nQueryForBlend;
         edgeLAGValues.debug.nBaseline = nBaselineUsed;

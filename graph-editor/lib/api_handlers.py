@@ -75,9 +75,11 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
         parameters.append({
             "paramType": param.param_type,
             "paramId": param.param_id,
+            "edgeUuid": getattr(param, "edge_uuid", None),
             "edgeKey": param.edge_key,
             "condition": param.condition,
             "query": param.query,
+            "nQuery": getattr(param, "n_query", None),
             "stats": param.stats
         })
         
