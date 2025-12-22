@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.14b
+**Released:** December 22, 2025
+
+Various fetch fixes, conservation fixes (MECE logic was faulty), n_query fixes (ditto); added semantic linting for mass conservation.
+
+---
+
 ## Version 1.1.13b
 **Released:** December 19, 2025
 
