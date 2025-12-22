@@ -273,6 +273,10 @@ export const COHORT_HORIZON_BUFFER_DAYS = 2;
  */
 export const DEFAULT_T95_DAYS = 30;
 
+// Cohort conversion window (Amplitude cs) policy
+// We clamp to prevent pathological slow queries if latency estimates are noisy.
+export const COHORT_CONVERSION_WINDOW_MAX_DAYS = 90;
+
 /**
  * COHORT_HORIZON_DEFAULT_DAYS
  * 

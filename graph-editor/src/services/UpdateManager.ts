@@ -564,7 +564,7 @@ export class UpdateManager {
     updates: {
       mean?: number;
       stdev?: number;
-      evidence?: { n?: number; k?: number; retrieved_at?: string; source?: string };
+      evidence?: { n?: number; k?: number; window_from?: string; window_to?: string; retrieved_at?: string; source?: string };
       data_source?: any;
     },
     options: {
@@ -643,6 +643,14 @@ export class UpdateManager {
       }
       if (updates.evidence.k !== undefined) {
         condEntry.p.evidence.k = updates.evidence.k;
+        changesApplied++;
+      }
+      if (updates.evidence.window_from !== undefined) {
+        condEntry.p.evidence.window_from = normalizeToUK(updates.evidence.window_from);
+        changesApplied++;
+      }
+      if (updates.evidence.window_to !== undefined) {
+        condEntry.p.evidence.window_to = normalizeToUK(updates.evidence.window_to);
         changesApplied++;
       }
       if (updates.evidence.retrieved_at !== undefined) {
@@ -1994,12 +2002,14 @@ export class UpdateManager {
       { 
         sourceField: 'values[latest].window_from', 
         targetField: 'p.evidence.window_from',
-        condition: isProbType
+        condition: isProbType,
+        transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
       },
       { 
         sourceField: 'values[latest].window_to', 
         targetField: 'p.evidence.window_to',
-        condition: isProbType
+        condition: isProbType,
+        transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
       },
       { 
         sourceField: 'values[latest].data_source', 
@@ -2117,12 +2127,14 @@ export class UpdateManager {
       { 
         sourceField: 'values[latest].window_from', 
         targetField: 'cost_gbp.evidence.window_from',
-        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp'
+        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp',
+        transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
       },
       { 
         sourceField: 'values[latest].window_to', 
         targetField: 'cost_gbp.evidence.window_to',
-        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp'
+        condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp',
+        transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
       },
       
       // Cost Time parameters → edge.labour_cost.*
@@ -2147,12 +2159,14 @@ export class UpdateManager {
       { 
         sourceField: 'values[latest].window_from', 
         targetField: 'labour_cost.evidence.window_from',
-        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost'
+        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost',
+        transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
       },
       { 
         sourceField: 'values[latest].window_to', 
         targetField: 'labour_cost.evidence.window_to',
-        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost'
+        condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost',
+        transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
       },
       { 
         sourceField: 'values[latest].data_source', 
@@ -2422,6 +2436,32 @@ export class UpdateManager {
       { 
         sourceField: 'k', 
         targetField: 'p.evidence.k'
+      },
+      {
+        // CRITICAL: Evidence mode uses p.evidence.mean (not p.mean).
+        // If this stays stale while n/k update, E-mode computations and logs will be wrong.
+        sourceField: 'mean',
+        targetField: 'p.evidence.mean',
+        transform: (mean, source) => {
+          if (mean !== undefined && mean !== null) {
+            return this.roundToDP(mean);
+          }
+          if (source.n > 0 && source.k !== undefined) {
+            const calculated = source.k / source.n;
+            return this.roundToDP(Math.max(0, Math.min(1, calculated)));
+          }
+          return undefined;
+        }
+      },
+      {
+        sourceField: 'window_from',
+        targetField: 'p.evidence.window_from',
+        transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
+      },
+      {
+        sourceField: 'window_to',
+        targetField: 'p.evidence.window_to',
+        transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
       },
       { 
         sourceField: 'retrieved_at', 

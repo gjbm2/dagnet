@@ -127,9 +127,12 @@ function computeExpectedBlendMean(args: {
   nBaseline: number;
 }): number {
   const { evidenceMean, forecastMean, completeness, nQuery, nBaseline } = args;
+  // Mirror the canonical blend semantics (see statisticalEnhancementService.computeBlendedMean).
   const nEff = completeness * nQuery;
   const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
-  const wEvidence = nEff / (m0 + nEff);
+  const remaining = Math.max(0, 1 - completeness);
+  const m0Eff = m0 * remaining;
+  const wEvidence = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
   return wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
 }
 

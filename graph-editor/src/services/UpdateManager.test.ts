@@ -131,7 +131,7 @@ describe('UpdateManager', () => {
       // Evidence SHOULD change (never overridden)
       expect(target.p.evidence.n).toBe(1000);
       expect(target.p.evidence.k).toBe(450);
-      expect(target.p.evidence.window_from).toBe('2025-01-01');
+      expect(target.p.evidence.window_from).toBe('1-Jan-25');
     });
   });
   
@@ -524,8 +524,8 @@ describe('UpdateManager', () => {
       expect(graphEdge.p.stdev).toBe(0.05);
       expect(graphEdge.p.evidence.n).toBe(1000);
       expect(graphEdge.p.evidence.k).toBe(450);
-      expect(graphEdge.p.evidence.window_from).toBe('2025-01-01');
-      expect(graphEdge.p.evidence.window_to).toBe('2025-01-31');
+      expect(graphEdge.p.evidence.window_from).toBe('1-Jan-25');
+      expect(graphEdge.p.evidence.window_to).toBe('31-Jan-25');
       
       // Verify changes reported
       expect(result.changes!.length).toBeGreaterThan(0);

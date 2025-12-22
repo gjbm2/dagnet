@@ -179,10 +179,89 @@ async function updateParameterFile(paramId: string, newQuery: string): Promise<b
   
   // Update query field in parameter file
   const updatedData = structuredClone(paramFile.data);
+  // Respect file-side override flag if present
+  if (updatedData.query_overridden === true) {
+    return false;
+  }
   updatedData.query = newQuery;
   
   await fileRegistry.updateFile(fileId, updatedData);
   return true;
+}
+
+/**
+ * Update parameter file with new n_query (only for real param_ids, not synthetic).
+ * Respects file-side n_query_overridden if present.
+ */
+async function updateParameterFileNQuery(paramId: string, newNQuery: string): Promise<boolean> {
+  // Skip synthetic IDs (no file exists)
+  if (paramId.startsWith('synthetic:')) {
+    return false;
+  }
+  
+  const fileId = `parameter-${paramId}`;
+  const paramFile = fileRegistry.getFile(fileId);
+  if (!paramFile) {
+    return false;
+  }
+  
+  const updatedData = structuredClone(paramFile.data);
+  if (updatedData.n_query_overridden === true) {
+    return false;
+  }
+  updatedData.n_query = newNQuery;
+  
+  await fileRegistry.updateFile(fileId, updatedData);
+  return true;
+}
+
+/**
+ * Apply regenerated n_query to graph (handles both real and synthetic IDs).
+ * n_query is edge-level metadata and is keyed by base probability parameter ID (edge.p.id).
+ */
+function applyNQueryToGraph(
+  graph: Graph,
+  paramId: string,
+  newNQuery: string
+): { applied: boolean; location: string } {
+  const synthetic = parseSyntheticId(paramId);
+  
+  if (synthetic) {
+    const { uuid, field } = synthetic;
+    const edge = graph.edges.find(e => e.uuid === uuid);
+    if (field === 'p' && edge) {
+      (edge as any).n_query = newNQuery;
+      return { applied: true, location: formatEdgeLocation(graph, edge, 'n_query') };
+    }
+    return { applied: false, location: 'not applicable (non-base param)' };
+  }
+  
+  // Real param_id: find base p edge
+  for (const edge of graph.edges) {
+    if (edge.p?.id === paramId) {
+      (edge as any).n_query = newNQuery;
+      return { applied: true, location: formatEdgeLocation(graph, edge, 'n_query') };
+    }
+  }
+  
+  return { applied: false, location: 'parameter not found in graph' };
+}
+
+/**
+ * Get current n_query string from graph by base param_id.
+ */
+function getCurrentNQuery(graph: Graph, paramId: string): string | null {
+  const synthetic = parseSyntheticId(paramId);
+  if (synthetic) {
+    const { uuid, field } = synthetic;
+    if (field !== 'p') return null;
+    const edge = graph.edges.find(e => e.uuid === uuid);
+    return (edge as any)?.n_query || null;
+  }
+  for (const edge of graph.edges) {
+    if (edge.p?.id === paramId) return (edge as any).n_query || null;
+  }
+  return null;
 }
 
 /**
@@ -403,6 +482,26 @@ export class QueryRegenerationService {
     }
     
     for (const param of parameters) {
+      // Apply n_query first (base probability params only), independently of query changes.
+      // n_query is edge-level metadata used by retrieval to protect denominators.
+      if (param.paramType === 'edge_base_p' && typeof param.nQuery === 'string' && param.nQuery.trim().length > 0) {
+        const nQueryOverridden = this.isNQueryOverridden(graph, param.paramId);
+        if (!nQueryOverridden) {
+          const currentNQuery = getCurrentNQuery(graph, param.paramId);
+          if (currentNQuery !== param.nQuery) {
+            const r = applyNQueryToGraph(graph, param.paramId, param.nQuery);
+            if (r.applied) {
+              graphUpdates++;
+            }
+            // Cascade to parameter file if present and not overridden
+            if (!param.paramId.startsWith('synthetic:')) {
+              const updated = await updateParameterFileNQuery(param.paramId, param.nQuery);
+              if (updated) fileUpdates++;
+            }
+          }
+        }
+      }
+      
       // Get current query from graph
       const currentQuery = this.getCurrentQuery(graph, param.paramId);
       
@@ -539,6 +638,24 @@ export class QueryRegenerationService {
       
       return false;
     }
+  }
+
+  /**
+   * Check if n_query is manually overridden (should not auto-update).
+   * This is edge-level metadata keyed by base probability param_id.
+   */
+  private isNQueryOverridden(graph: Graph, paramId: string): boolean {
+    const synthetic = parseSyntheticId(paramId);
+    if (synthetic) {
+      const { uuid, field } = synthetic;
+      if (field !== 'p') return false;
+      const edge = graph.edges.find(e => e.uuid === uuid);
+      return (edge as any)?.n_query_overridden || false;
+    }
+    for (const edge of graph.edges) {
+      if (edge.p?.id === paramId) return (edge as any).n_query_overridden || false;
+    }
+    return false;
   }
 }
 

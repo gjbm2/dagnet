@@ -1,6 +1,7 @@
 import type { GraphIssue } from './graphIssuesService';
 
 type IssueSeverity = 'error' | 'warning' | 'info';
+type IssueCategory = GraphIssue['category'];
 
 export function formatIssuesForClipboard(args: {
   issues: GraphIssue[];
@@ -9,6 +10,7 @@ export function formatIssuesForClipboard(args: {
     graphFilter?: string;
     includeReferencedFiles?: boolean;
     severities?: IssueSeverity[];
+    categories?: IssueCategory[];
     generatedAt?: string;
   };
 }): string {
@@ -28,6 +30,7 @@ export function formatIssuesForClipboard(args: {
       graphFilter: context?.graphFilter ?? '',
       includeReferencedFiles: context?.includeReferencedFiles,
       severities: context?.severities,
+      categories: context?.categories,
     },
     summary,
     issues: issues.map(i => ({
