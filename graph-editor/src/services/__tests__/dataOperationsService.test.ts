@@ -19,6 +19,18 @@ vi.mock('react-hot-toast', () => ({
   },
 }));
 
+// Mock FileOperationsService for create-on-missing flows (node/parameter/case creation).
+// Most tests don't hit this path; the mock exists to support the explicit "create file if missing" tests.
+vi.mock('../fileOperationsService', () => ({
+  fileOperationsService: {
+    createFile: vi.fn(async (name: string, type: any) => {
+      // Minimal default payload; UpdateManager mappings will fill in real fields.
+      await (fileRegistry as any).registerFile(`${type}-${name}`, { id: name, name });
+      return { fileId: `${type}-${name}`, item: { id: name, type, name, path: '' } };
+    })
+  }
+}));
+
 // Mock fileRegistry with in-memory storage
 vi.mock('../../contexts/TabContext', () => {
   const mockFiles = new Map<string, any>();
@@ -49,6 +61,7 @@ vi.mock('../../contexts/TabContext', () => {
 
 // Import after mocking
 const { fileRegistry } = await import('../../contexts/TabContext');
+const { fileOperationsService } = await import('../fileOperationsService');
 
 describe('DataOperationsService', () => {
   let mockGraph: Graph;
@@ -390,6 +403,44 @@ describe('DataOperationsService', () => {
       expect(fileRegistry.updateFile).toHaveBeenCalledTimes(1);
       const [fileId] = (fileRegistry.updateFile as any).mock.calls[0];
       expect(fileId).toBe('node-homepage');
+    });
+
+    it('should create node file if missing, then update it', async () => {
+      // Simulate missing node file on first lookup, but present after createFile is called.
+      let created = false;
+      (fileRegistry.getFile as any).mockImplementation((fileId: string): any => {
+        if (fileId === 'node-homepage') {
+          if (!created) return null;
+          return {
+            fileId,
+            data: { id: 'homepage', name: 'Homepage Node', description: '' },
+            originalData: {},
+            isDirty: false,
+            source: { repository: 'test', branch: 'main', path: 'nodes/homepage.yaml' },
+            viewTabs: [],
+          };
+        }
+        return null;
+      });
+
+      (fileOperationsService.createFile as any).mockImplementation(async (name: string, type: any) => {
+        created = true;
+        await (fileRegistry as any).registerFile(`${type}-${name}`, { id: name, name });
+        return { fileId: `${type}-${name}`, item: { id: name, type, name, path: '' } };
+      });
+
+      await dataOperationsService.putNodeToFile({
+        nodeId: 'homepage',
+        graph: mockGraph,
+        setGraph: mockSetGraph,
+      });
+
+      expect(fileOperationsService.createFile).toHaveBeenCalledTimes(1);
+      // When creating a missing node file, we initialise with CREATE mappings then apply UPDATE mappings.
+      // That results in 2 writes.
+      expect((fileRegistry.updateFile as any).mock.calls.length).toBeGreaterThanOrEqual(1);
+      const updatedIds = (fileRegistry.updateFile as any).mock.calls.map((c: any[]) => c[0]);
+      expect(updatedIds.every((id: string) => id === 'node-homepage')).toBe(true);
     });
   });
 

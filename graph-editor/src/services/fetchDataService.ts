@@ -99,6 +99,15 @@ export interface FetchOptions {
    * If provided, this supersedes `includePermissions`.
    */
   copyOptions?: GetFromFileCopyOptions;
+
+  /**
+   * When true, suppress the internal batch progress toast shown by fetchItems() for multi-item runs.
+   * Default behaviour is unchanged (toast is shown for multi-item fetches).
+   *
+   * Intended for callers that already own a higher-level progress UI (e.g. Retrieve All modal),
+   * but still need to reuse the exact fetchItems() pipeline (including logging and Stage-2 passes).
+   */
+  suppressBatchToast?: boolean;
 }
 
 export interface FetchResult {
@@ -1145,7 +1154,7 @@ export async function fetchItems(
   const { onProgress, ...itemOptions } = options || {};
   
   // For multiple items: use batch mode with visual progress toast
-  const shouldUseBatchMode = effectiveItems.length > 1;
+  const shouldUseBatchMode = effectiveItems.length > 1 && !itemOptions?.suppressBatchToast;
   const progressToastId = 'batch-fetch-progress';
   
   // SESSION LOG: Start batch fetch operation (only for batch mode)
@@ -1214,489 +1223,18 @@ export async function fetchItems(
       }, 300);
     }
     
-    // ═══════════════════════════════════════════════════════════════════════
-    // GRAPH-LEVEL LATENCY ENHANCEMENT (Topological Pass)
-    // 
-    // This is the single place where LAG statistics are computed. It runs
-    // in topological order so that upstream path_t95 is available when
-    // computing downstream completeness.
-    // 
-    // For each edge in topo order:
-    //   1. Build cohorts from the edge's parameter values
-    //   2. Fit lag distribution (median, mean, t95)
-    //   3. Compute completeness using path-adjusted cohort ages
-    //   4. Compute path_t95 = upstream path_t95 + edge t95
-    // 
-    // This replaces the old approach where LAG was computed per-edge in
-    // dataOperationsService, then path_t95 was computed separately here.
-    // ═══════════════════════════════════════════════════════════════════════
     if (successCount > 0) {
-      let finalGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
+      const finalGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
       if (finalGraph) {
-        // Check if any fetched items were parameters on latency edges
-        const latencyCheck = effectiveItems.map(item => {
-          if (item.type !== 'parameter') return { item: item.name, hasLatency: false, reason: 'not parameter' };
-          const edge = finalGraph.edges?.find((e: any) => 
-            e.uuid === item.targetId || e.id === item.targetId
-          );
-          if (!edge) return { item: item.name, hasLatency: false, reason: 'edge not found' };
-          const hasLatency = edge?.p?.latency?.latency_parameter === true;
-          return { 
-            item: item.name, 
-            hasLatency, 
-            latency_parameter: edge?.p?.latency?.latency_parameter,
-            t95: edge?.p?.latency?.t95,
-            edgeId: edge.uuid || edge.id,
-          };
-        });
-        const hasLatencyItems = latencyCheck.some(c => c.hasLatency);
-        
-        console.log('[fetchDataService] Latency items check:', { hasLatencyItems, details: latencyCheck });
-        
-        if (hasLatencyItems) {
-          // Build param lookup: edge ID -> parameter values
-          // CRITICAL: Filter to current DSL cohort window so LAG uses the right cohorts
-          const paramLookup = new Map<string, ParameterValueForLAG[]>();
-          
-          // Parse the cohort/window from the DSL
-          const parsedDSL = parseConstraints(dsl);
-          const targetDims = extractSliceDimensions(dsl);
-          
-          // Determine LAG slice window for completeness computation.
-          // 
-          // DESIGN PRINCIPLE (11-Dec-25):
-          //   - In window() mode: evidence is window-based, so completeness should
-          //     also be window-based (only cohorts whose dates fall in the window).
-          //   - In cohort() mode: completeness is cohort-anchored as always.
-          //   - This makes both modes internally consistent and intelligible.
-          //
-          // Two separate concerns:
-          //   1. paramLookup filter: Only applies to explicit cohort() DSL (filters
-          //      which cohort slices to include in LAG calculations)
-          //   2. lagCohortWindow: Passed to aggregateCohortData to filter the 
-          //      cohort dates used for completeness computation (applies to both
-          //      cohort() and window() modes)
-          //
-          let cohortStart: Date | null = null;
-          let cohortEnd: Date | null = null;
-          
-          // For paramLookup filtering: only use explicit cohort() DSL
-          if (parsedDSL.cohort?.start && parsedDSL.cohort?.end) {
-            cohortStart = parseDate(resolveRelativeDate(parsedDSL.cohort.start));
-            cohortEnd = parseDate(resolveRelativeDate(parsedDSL.cohort.end));
-          }
-          
-          // For LAG completeness: use either cohort() or window() dates
-          let lagSliceStart: Date | null = cohortStart;
-          let lagSliceEnd: Date | null = cohortEnd;
-          let lagSliceSource: 'cohort' | 'window' | 'none' = cohortStart ? 'cohort' : 'none';
-          
-          if (!lagSliceStart && parsedDSL.window?.start && parsedDSL.window?.end) {
-            // Window() mode: use window dates for LAG completeness scoping
-            lagSliceStart = parseDate(resolveRelativeDate(parsedDSL.window.start));
-            lagSliceEnd = parseDate(resolveRelativeDate(parsedDSL.window.end));
-            lagSliceSource = 'window';
-          }
-          
-          console.log('[fetchDataService] LAG filter setup:', {
-            dsl,
-            targetDims,
-            lagSliceSource,
-            cohortFilter: cohortStart ? `${cohortStart.toISOString().split('T')[0]} to ${cohortEnd?.toISOString().split('T')[0]}` : 'none',
-            lagWindow: lagSliceStart ? `${lagSliceStart.toISOString().split('T')[0]} to ${lagSliceEnd?.toISOString().split('T')[0]}` : 'none',
-          });
-          
-          for (const item of items) {
-            if (item.type !== 'parameter') continue;
-            
-            // Find the edge for this item (check both uuid and id)
-            const edge = finalGraph.edges?.find((e: any) => 
-              e.uuid === item.targetId || e.id === item.targetId
-            ) as any;
-            if (!edge) continue;
-            
-            const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
-            
-            // Try param file from registry first
-            let allValues: ParameterValueForLAG[] | undefined;
-            if (item.objectId) {
-              const paramFile = fileRegistry.getFile(`parameter-${item.objectId}`);
-              if (paramFile?.data?.values) {
-                allValues = paramFile.data.values as ParameterValueForLAG[];
-              }
-            }
-            
-            // Fall back to edge's direct data if no param file
-            if (!allValues && edge.p?.values) {
-              allValues = edge.p.values as ParameterValueForLAG[];
-            }
-            
-            if (allValues && allValues.length > 0) {
-              // Filter values to:
-              // 1. Same context/case dimensions (or implicit MECE partition when target is uncontexted)
-              // 2. COHORT slices with dates overlapping the query window (when explicit cohort() DSL)
-              // 3. WINDOW slices (for forecast baseline)
-
-              const hasAnyExplicitUncontexted = allValues.some((v: any) => extractSliceDimensions(v.sliceDSL ?? '') === '');
-
-              // Implicit uncontexted fallback:
-              // If the active DSL is uncontexted (targetDims='') but the param file has ONLY contexted slices,
-              // attempt to treat a MECE partition as the implicit uncontexted truth for LAG.
-              let filteredValues: ParameterValueForLAG[] | null = null;
-              if (targetDims === '' && !hasAnyExplicitUncontexted) {
-                const cohortVals = (allValues as any[]).filter((v) => (v.sliceDSL ?? '').includes('cohort('));
-                const windowVals = (allValues as any[]).filter((v) => (v.sliceDSL ?? '').includes('window(') && !(v.sliceDSL ?? '').includes('cohort('));
-
-                const out: ParameterValueForLAG[] = [];
-                try {
-                  const meceCohort = await resolveMECEPartitionForImplicitUncontexted(cohortVals as any);
-                  if (meceCohort.kind === 'mece_partition' && meceCohort.canAggregate) {
-                    out.push(...(meceCohort.values as any));
-                  }
-                } catch (e) {
-                  console.warn('[fetchDataService] Failed MECE cohort partition resolution for LAG:', e);
-                }
-                try {
-                  const meceWindow = await resolveMECEPartitionForImplicitUncontexted(windowVals as any);
-                  if (meceWindow.kind === 'mece_partition' && meceWindow.canAggregate) {
-                    out.push(...(meceWindow.values as any));
-                  }
-                } catch (e) {
-                  console.warn('[fetchDataService] Failed MECE window partition resolution for LAG:', e);
-                }
-
-                if (out.length > 0) {
-                  // De-dup identical object refs
-                  const uniq = Array.from(new Set(out));
-                  filteredValues = uniq;
-                } else {
-                  filteredValues = [];
-                }
-              }
-
-              // Default path: match exact dimensions
-              if (!filteredValues) {
-                filteredValues = allValues.filter((v: any) => {
-                  const valueDims = extractSliceDimensions(v.sliceDSL ?? '');
-                  if (valueDims !== targetDims) return false;
-                
-                const sliceDSL = v.sliceDSL ?? '';
-                const isCohortSlice = sliceDSL.includes('cohort(');
-                const isWindowSlice = sliceDSL.includes('window(') && !isCohortSlice;
-                
-                // Window slices: always include for forecast baseline
-                if (isWindowSlice) return true;
-                
-                // Cohort slices: filter by date overlap ONLY if explicit cohort() DSL
-                // (In window() mode, we don't filter cohort slices - we need all of them
-                // for LAG calculations; the completeness window is applied later)
-                if (isCohortSlice && cohortStart && cohortEnd && v.dates && v.dates.length > 0) {
-                  // Check if ANY of this value's dates fall within the cohort query window
-                  for (const dateStr of v.dates) {
-                    const d = parseDate(dateStr);
-                    if (d >= cohortStart && d <= cohortEnd) {
-                      return true; // At least one date overlaps
-                    }
-                  }
-                  return false; // No dates overlap
-                }
-                
-                // No cohort window in DSL, or value has no dates - include it
-                return true;
-                });
-              }
-              
-              console.log('[fetchDataService] Filtered param values for LAG:', {
-                edgeId,
-                targetDims,
-                lagSliceSource,
-                hasCohortFilter: !!(cohortStart && cohortEnd),
-                hasLAGWindow: !!(lagSliceStart && lagSliceEnd),
-                totalValues: allValues.length,
-                filteredValues: filteredValues.length,
-                sampleSliceDSLs: allValues.slice(0, 3).map((v: any) => v.sliceDSL),
-              });
-              
-              if (filteredValues.length > 0) {
-                paramLookup.set(edgeId, filteredValues);
-              }
-            }
-          }
-          
-          console.log('[LAG_TOPO_000] paramLookup:', {
-            edgeCount: paramLookup.size,
-            edgeIds: Array.from(paramLookup.keys()),
-          });
-          
-          // Run the unified topo pass: t95, path_t95, and path-adjusted completeness
-          // Cast helpers to LAGHelpers - ParameterValueForLAG is a subset of ParameterValue
-          const lagHelpers: LAGHelpers = {
-            aggregateCohortData: aggregateCohortData as LAGHelpers['aggregateCohortData'],
-            aggregateWindowData: aggregateWindowData as LAGHelpers['aggregateWindowData'],
-            aggregateLatencyStats,
-          };
-          
-          // Use the *analysis date* (now) for age calculations.
-          // Cohort dates come from Amplitude; as time passes, cohorts age and
-          // completeness should converge towards 1 for long-ago cohorts,
-          // independent of the cohort() window bounds.
-          const queryDateForLAG = new Date();
-          
-          // Pass LAG slice window so completeness is computed from cohorts in the
-          // same date range as the evidence (whether from cohort() or window() DSL).
-          // 
-          // In window() mode: this ensures completeness reflects "how mature are the
-          // cohorts whose dates fall in this window?" rather than mixing in all
-          // historical cohort data, making completeness consistent with evidence.
-          //
-          // In cohort() mode: this is the explicit cohort window (unchanged).
-          const lagCohortWindow = (lagSliceStart && lagSliceEnd) 
-            ? { start: lagSliceStart, end: lagSliceEnd }
-            : undefined;
-          
-          console.log('[fetchDataService] LAG cohort window:', {
-            lagSliceSource,
-            lagCohortWindow: lagCohortWindow ? {
-              start: lagCohortWindow.start.toISOString().split('T')[0],
-              end: lagCohortWindow.end.toISOString().split('T')[0],
-            } : 'none (using all cohorts)',
-          });
-          
-          const forecasting = await forecastingSettingsService.getForecastingModelSettings();
-
-          // Pre-compute path_t95 for all edges ONCE (single code path)
-          // This is used by enhanceGraphLatencies to classify edges
-          const activeEdgesForLAG = getActiveEdges(finalGraph as GraphForPath);
-          const pathT95MapForLAG = computePathT95(
-            finalGraph as GraphForPath,
-            activeEdgesForLAG,
-            undefined,
-            forecasting.DEFAULT_T95_DAYS
-          );
-          
-          const lagResult = enhanceGraphLatencies(
-            finalGraph as GraphForPath,
-            paramLookup,
-            queryDateForLAG,
-            lagHelpers,
-            lagCohortWindow,
-            undefined, // whatIfDSL
-            pathT95MapForLAG,
-            lagSliceSource,
-            forecasting
-          );
-          
-          console.log('[fetchDataService] LAG enhancement result:', {
-            edgesProcessed: lagResult.edgesProcessed,
-            edgesWithLAG: lagResult.edgesWithLAG,
-            edgeValuesCount: lagResult.edgeValues.length,
-            sampleEdgeValues: lagResult.edgeValues.slice(0, 2).map(v => ({
-              uuid: v.edgeUuid,
-              t95: v.latency.t95,
-              completeness: v.latency.completeness,
-              blendedMean: v.blendedMean,
-            })),
-          });
-          
-          // Apply ALL LAG values in ONE atomic operation via UpdateManager
-          // Single call: clone once, apply all latency + means, rebalance once
-          if (lagResult.edgeValues.length > 0 && finalGraph?.edges) {
-            const updateManager = new UpdateManager();
-
-            // In from-file mode, the parameter file already contains slice-level latency
-            // summaries (median/t95/completeness). The LAG topo pass is primarily needed
-            // for path_t95 and (in cohort mode) blended p.mean. Do not overwrite the
-            // file-provided latency summary fields.
-            const preserveLatencySummaryFromFile = itemOptions?.mode === 'from-file';
-
-            // Phase 2: apply blended p.mean for latency edges in BOTH window() and cohort() modes.
-            const edgeValuesToApply = lagResult.edgeValues;
-            
-            // DEBUG: Log p.mean values BEFORE LAG application
-            console.log('[fetchDataService] BEFORE applyBatchLAGValues:', {
-              edgeMeans: edgeValuesToApply.slice(0, 3).map(ev => {
-                const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                return {
-                  id: ev.edgeUuid,
-                  currentMean: edge?.p?.mean,
-                  targetBlendedMean: ev.blendedMean,
-                };
-              }),
-            });
-            
-            finalGraph = updateManager.applyBatchLAGValues(
-              finalGraph,
-              edgeValuesToApply.map(ev => ({
-                edgeId: ev.edgeUuid,
-                latency: preserveLatencySummaryFromFile
-                  ? (() => {
-                      const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                      const existing = edge?.p?.latency;
-                      return selectLatencyToApplyForTopoPass(ev.latency, existing, true);
-                    })()
-                  : ev.latency,
-                blendedMean: ev.blendedMean,
-                forecast: ev.forecast,
-                evidence: ev.evidence,
-              }))
-            );
-
-            // CRITICAL: Commit the post-LAG graph to state immediately.
-            //
-            // Otherwise, if inbound-n is a no-op (or setGraph is suppressed by a batching wrapper),
-            // the UI can display stale p.latency.* / p.mean until a subsequent fetch triggers
-            // another state update. This was showing up as "only updates when I fetch AGAIN".
-            trackingSetGraph(finalGraph);
-            
-            // DEBUG: Log p.mean values AFTER LAG application
-            console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
-              edgeMeans: edgeValuesToApply.slice(0, 3).map(ev => {
-                const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                return {
-                  id: ev.edgeUuid,
-                  newMean: edge?.p?.mean,
-                  expectedBlendedMean: ev.blendedMean,
-                  match: edge?.p?.mean === Math.round((ev.blendedMean ?? 0) * 1000) / 1000,
-                };
-              }),
-            });
-          }
-          
-          if (batchLogId) {
-            sessionLogService.addChild(batchLogId, 'info', 'LAG_ENHANCED',
-              `Enhanced ${lagResult.edgesWithLAG} edges with LAG stats (topo pass)`,
-              undefined,
-              { 
-                edgesProcessed: lagResult.edgesProcessed, 
-                edgesWithLAG: lagResult.edgesWithLAG,
-                queryDate: queryDateForLAG.toISOString().split('T')[0],
-                sample: lagResult.edgeValues.slice(0, 3).map(v => ({
-                  id: v.edgeUuid,
-                  t95: v.latency.t95.toFixed(1),
-                  pathT95: v.latency.path_t95.toFixed(1),
-                  completeness: (v.latency.completeness * 100).toFixed(1) + '%',
-                  forecastMean: v.forecast?.mean?.toFixed(3),
-                  evidenceMean: v.evidence?.mean?.toFixed(3),
-                  blendedMean: v.blendedMean?.toFixed(3),
-                })),
-              }
-            );
-            
-            // Add detailed debug entries for each edge (for debugging completeness calc)
-            for (const v of lagResult.edgeValues) {
-              if (v.debug) {
-                // Check for data quality issues
-                const hasKGreaterThanN = v.debug.sampleCohorts.some(c => c.k > c.n);
-                const dataQuality = hasKGreaterThanN ? '⚠️ k>n detected!' : '✓';
-                const windowInfo = v.debug.cohortWindow || 'all history';
-                
-                // Build anchor lag indicator for message
-                const anchorLagInfo = v.debug.anchorMedianLag > 0
-                  ? ` anchorLag=${v.debug.anchorMedianLag.toFixed(1)}d`
-                  : v.debug.cohortsWithAnchorLag === 0 ? ' (no anchor data)' : '';
-                
-                sessionLogService.addChild(batchLogId, 'info', 'LAG_CALC_DETAIL',
-                  `${v.edgeUuid.substring(0, 8)}...: completeness=${(v.latency.completeness * 100).toFixed(1)}%${anchorLagInfo} ${dataQuality}`,
-                  `Window: ${windowInfo} → ${v.debug.cohortCount} cohorts, n=${v.debug.totalN}, k=${v.debug.totalK}`,
-                  {
-                    edgeId: v.edgeUuid,
-                    queryDate: v.debug.queryDate,
-                    cohortWindow: v.debug.cohortWindow || 'all history (no filter)',
-                    inputSlices: {
-                      cohort: v.debug.inputCohortSlices,
-                      window: v.debug.inputWindowSlices,
-                    },
-                    cohortCount: v.debug.cohortCount,
-                    rawAgeRange: v.debug.rawAgeRange,
-                    adjustedAgeRange: v.debug.adjustedAgeRange,
-                    anchorMedianLag: v.debug.anchorMedianLag?.toFixed(2) ?? '0 (first edge)',
-                    cohortsWithAnchorLag: `${v.debug.cohortsWithAnchorLag ?? 0}/${v.debug.cohortCount}`,
-                    pathT95: v.latency.path_t95.toFixed(1),
-                    mu: v.debug.mu.toFixed(3),
-                    sigma: v.debug.sigma.toFixed(3),
-                    // Completeness semantics (cohort fix)
-                    completenessMode: v.debug.completenessMode,
-                    completenessAuthoritativeT95Days: v.debug.completenessAuthoritativeT95Days,
-                    completenessTailConstraintApplied: v.debug.completenessTailConstraintApplied,
-                    // Forecast/blend diagnostics (needed to debug “forecast too low”)
-                    baseForecastMean: v.debug.baseForecastMean,
-                    fallbackForecastMean: v.debug.fallbackForecastMean,
-                    forecastMeanUsed: v.debug.forecastMeanUsed,
-                    forecastMeanSource: v.debug.forecastMeanSource,
-                    evidenceMeanRaw: v.debug.evidenceMeanRaw,
-                    evidenceMeanUsedForBlend: v.debug.evidenceMeanUsedForBlend,
-                    evidenceMeanBayesAdjusted: v.debug.evidenceMeanBayesAdjusted,
-                    nQuery: v.debug.nQuery,
-                    nBaseline: v.debug.nBaseline,
-                    nBaselineSource: v.debug.nBaselineSource,
-                    baselineWindowSliceDSL: v.debug.baselineWindowSliceDSL,
-                    baselineWindowRetrievedAt: v.debug.baselineWindowRetrievedAt,
-                    baselineWindowN: v.debug.baselineWindowN,
-                    baselineWindowK: v.debug.baselineWindowK,
-                    baselineWindowForecast: v.debug.baselineWindowForecast,
-                    wEvidence: v.debug.wEvidence,
-                    totalN: v.debug.totalN,
-                    totalK: v.debug.totalK,
-                    dataQuality: hasKGreaterThanN ? 'ERROR: k > n in some cohorts' : 'OK',
-                    sampleCohorts: v.debug.sampleCohorts.map(c => ({
-                      date: c.date,
-                      rawAge: c.rawAge,
-                      adjAge: c.adjustedAge,
-                      anchorLag: c.anchorLag?.toFixed(1) ?? '-',
-                      n: c.n,
-                      k: c.k,
-                      kOk: c.k <= c.n ? '✓' : '⚠️',
-                      cdf: (c.cdf * 100).toFixed(1) + '%',
-                    })),
-                  }
-                );
-              }
-            }
-          }
-        }
-        
-        // ═══════════════════════════════════════════════════════════════════
-        // INBOUND-N COMPUTATION (forecast population propagation)
-        // 
-        // After LAG enhancement is complete (t95, path_t95, completeness all set),
-        // compute p.n for each edge via step-wise convolution of upstream p.mean.
-        // 
-        // p.n is transient (not persisted) - it's recomputed whenever
-        // the scenario, DSL, or graph changes.
-        // 
-        // IMPORTANT: Use finalGraph directly (not getUpdatedGraph) since we just
-        // modified it and haven't called setGraph yet. This avoids race conditions.
-        // ═══════════════════════════════════════════════════════════════════
-        // Debug: Check if LAG values actually landed on latency-labelled edges
-        const latencyEdges = (finalGraph?.edges || []).filter(
-          (e: any) => e.p?.latency && (e.p.latency.latency_parameter || e.p.latency.t95 || e.p.latency.completeness)
+        await runStage2EnhancementsAndInboundN(
+          items,
+          effectiveItems,
+          itemOptions,
+          finalGraph,
+          trackingSetGraph,
+          dsl,
+          batchLogId
         );
-        console.log('[fetchDataService] LAG_DEBUG finalGraph before inbound-n:', {
-          edgeCount: finalGraph?.edges?.length,
-          latencyEdgeCount: latencyEdges.length,
-          latencyEdges: latencyEdges.map((e: any) => ({
-            uuid: e.uuid,
-            id: e.id,
-            from: e.from,
-            to: e.to,
-            pMean: e.p?.mean,
-            latency_parameter: e.p?.latency?.latency_parameter,
-            t95: e.p?.latency?.t95,
-            completeness: e.p?.latency?.completeness,
-            path_t95: e.p?.latency?.path_t95,
-          })),
-        });
-        
-        console.log('[fetchDataService] About to compute inbound-n', { 
-          hasFinalGraph: !!finalGraph,
-          batchLogId 
-        });
-        if (finalGraph) {
-          // Apply inbound-n to the SAME graph we just applied LAG values to
-          computeAndApplyInboundN(finalGraph, setGraph, dsl, batchLogId);
-        } else {
-          console.log('[fetchDataService] No graph for inbound-n computation');
-        }
       }
     }
   } finally {
@@ -1778,6 +1316,509 @@ export async function fetchItems(
   }
   
   return results;
+}
+
+/**
+ * Stage-2 post-fetch graph derivations:
+ * - Graph-level LAG topo pass (t95, path_t95, completeness, blended mean)
+ * - Inbound-n propagation
+ *
+ * CRITICAL: This function is a mechanical extraction of the previous inline code,
+ * to allow callers like "Retrieve All Slices" to reuse the exact same behaviour
+ * and logging without maintaining a second code path.
+ */
+export async function runStage2EnhancementsAndInboundN(
+  items: FetchItem[],
+  effectiveItems: FetchItem[],
+  itemOptions: FetchOptions,
+  finalGraph: Graph,
+  setGraph: (g: Graph | null) => void,
+  dsl: string,
+  batchLogId?: string
+): Promise<void> {
+  // ═══════════════════════════════════════════════════════════════════════
+  // GRAPH-LEVEL LATENCY ENHANCEMENT (Topological Pass)
+  // 
+  // This is the single place where LAG statistics are computed. It runs
+  // in topological order so that upstream path_t95 is available when
+  // computing downstream completeness.
+  // 
+  // For each edge in topo order:
+  //   1. Build cohorts from the edge's parameter values
+  //   2. Fit lag distribution (median, mean, t95)
+  //   3. Compute completeness using path-adjusted cohort ages
+  //   4. Compute path_t95 = upstream path_t95 + edge t95
+  // 
+  // This replaces the old approach where LAG was computed per-edge in
+  // dataOperationsService, then path_t95 was computed separately here.
+  // ═══════════════════════════════════════════════════════════════════════
+  // Check if any fetched items were parameters on latency edges
+  const latencyCheck = effectiveItems.map(item => {
+    if (item.type !== 'parameter') return { item: item.name, hasLatency: false, reason: 'not parameter' };
+    const edge = finalGraph.edges?.find((e: any) =>
+      e.uuid === item.targetId || e.id === item.targetId
+    );
+    if (!edge) return { item: item.name, hasLatency: false, reason: 'edge not found' };
+    const hasLatency = edge?.p?.latency?.latency_parameter === true;
+    return {
+      item: item.name,
+      hasLatency,
+      latency_parameter: edge?.p?.latency?.latency_parameter,
+      t95: edge?.p?.latency?.t95,
+      edgeId: edge.uuid || edge.id,
+    };
+  });
+  const hasLatencyItems = latencyCheck.some(c => c.hasLatency);
+
+  console.log('[fetchDataService] Latency items check:', { hasLatencyItems, details: latencyCheck });
+
+  if (hasLatencyItems) {
+    // Build param lookup: edge ID -> parameter values
+    // CRITICAL: Filter to current DSL cohort window so LAG uses the right cohorts
+    const paramLookup = new Map<string, ParameterValueForLAG[]>();
+
+    // Parse the cohort/window from the DSL
+    const parsedDSL = parseConstraints(dsl);
+    const targetDims = extractSliceDimensions(dsl);
+
+    // Determine LAG slice window for completeness computation.
+    //
+    // DESIGN PRINCIPLE (11-Dec-25):
+    //   - In window() mode: evidence is window-based, so completeness should
+    //     also be window-based (only cohorts whose dates fall in the window).
+    //   - In cohort() mode: completeness is cohort-anchored as always.
+    //   - This makes both modes internally consistent and intelligible.
+    //
+    // Two separate concerns:
+    //   1. paramLookup filter: Only applies to explicit cohort() DSL (filters
+    //      which cohort slices to include in LAG calculations)
+    //   2. lagCohortWindow: Passed to aggregateCohortData to filter the
+    //      cohort dates used for completeness computation (applies to both
+    //      cohort() and window() modes)
+    //
+    let cohortStart: Date | null = null;
+    let cohortEnd: Date | null = null;
+
+    // For paramLookup filtering: only use explicit cohort() DSL
+    if (parsedDSL.cohort?.start && parsedDSL.cohort?.end) {
+      cohortStart = parseDate(resolveRelativeDate(parsedDSL.cohort.start));
+      cohortEnd = parseDate(resolveRelativeDate(parsedDSL.cohort.end));
+    }
+
+    // For LAG completeness: use either cohort() or window() dates
+    let lagSliceStart: Date | null = cohortStart;
+    let lagSliceEnd: Date | null = cohortEnd;
+    let lagSliceSource: 'cohort' | 'window' | 'none' = cohortStart ? 'cohort' : 'none';
+
+    if (!lagSliceStart && parsedDSL.window?.start && parsedDSL.window?.end) {
+      // Window() mode: use window dates for LAG completeness scoping
+      lagSliceStart = parseDate(resolveRelativeDate(parsedDSL.window.start));
+      lagSliceEnd = parseDate(resolveRelativeDate(parsedDSL.window.end));
+      lagSliceSource = 'window';
+    }
+
+    console.log('[fetchDataService] LAG filter setup:', {
+      dsl,
+      targetDims,
+      lagSliceSource,
+      cohortFilter: cohortStart ? `${cohortStart.toISOString().split('T')[0]} to ${cohortEnd?.toISOString().split('T')[0]}` : 'none',
+      lagWindow: lagSliceStart ? `${lagSliceStart.toISOString().split('T')[0]} to ${lagSliceEnd?.toISOString().split('T')[0]}` : 'none',
+    });
+
+    for (const item of items) {
+      if (item.type !== 'parameter') continue;
+
+      // Find the edge for this item (check both uuid and id)
+      const edge = finalGraph.edges?.find((e: any) =>
+        e.uuid === item.targetId || e.id === item.targetId
+      ) as any;
+      if (!edge) continue;
+
+      const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+
+      // Try param file from registry first
+      let allValues: ParameterValueForLAG[] | undefined;
+      if (item.objectId) {
+        const paramFile = fileRegistry.getFile(`parameter-${item.objectId}`);
+        if (paramFile?.data?.values) {
+          allValues = paramFile.data.values as ParameterValueForLAG[];
+        }
+      }
+
+      // Fall back to edge's direct data if no param file
+      if (!allValues && edge.p?.values) {
+        allValues = edge.p.values as ParameterValueForLAG[];
+      }
+
+      if (allValues && allValues.length > 0) {
+        // Filter values to:
+        // 1. Same context/case dimensions (or implicit MECE partition when target is uncontexted)
+        // 2. COHORT slices with dates overlapping the query window (when explicit cohort() DSL)
+        // 3. WINDOW slices (for forecast baseline)
+
+        const hasAnyExplicitUncontexted = allValues.some((v: any) => extractSliceDimensions(v.sliceDSL ?? '') === '');
+
+        // Implicit uncontexted fallback:
+        // If the active DSL is uncontexted (targetDims='') but the param file has ONLY contexted slices,
+        // attempt to treat a MECE partition as the implicit uncontexted truth for LAG.
+        let filteredValues: ParameterValueForLAG[] | null = null;
+        if (targetDims === '' && !hasAnyExplicitUncontexted) {
+          const cohortVals = (allValues as any[]).filter((v) => (v.sliceDSL ?? '').includes('cohort('));
+          const windowVals = (allValues as any[]).filter((v) => (v.sliceDSL ?? '').includes('window(') && !(v.sliceDSL ?? '').includes('cohort('));
+
+          const out: ParameterValueForLAG[] = [];
+          try {
+            const meceCohort = await resolveMECEPartitionForImplicitUncontexted(cohortVals as any);
+            if (meceCohort.kind === 'mece_partition' && meceCohort.canAggregate) {
+              out.push(...(meceCohort.values as any));
+            }
+          } catch (e) {
+            console.warn('[fetchDataService] Failed MECE cohort partition resolution for LAG:', e);
+          }
+          try {
+            const meceWindow = await resolveMECEPartitionForImplicitUncontexted(windowVals as any);
+            if (meceWindow.kind === 'mece_partition' && meceWindow.canAggregate) {
+              out.push(...(meceWindow.values as any));
+            }
+          } catch (e) {
+            console.warn('[fetchDataService] Failed MECE window partition resolution for LAG:', e);
+          }
+
+          if (out.length > 0) {
+            // De-dup identical object refs
+            const uniq = Array.from(new Set(out));
+            filteredValues = uniq;
+          } else {
+            filteredValues = [];
+          }
+        }
+
+        // Default path: match exact dimensions
+        if (!filteredValues) {
+          filteredValues = allValues.filter((v: any) => {
+            const valueDims = extractSliceDimensions(v.sliceDSL ?? '');
+            if (valueDims !== targetDims) return false;
+
+            const sliceDSL = v.sliceDSL ?? '';
+            const isCohortSlice = sliceDSL.includes('cohort(');
+            const isWindowSlice = sliceDSL.includes('window(') && !isCohortSlice;
+
+            // Window slices: always include for forecast baseline
+            if (isWindowSlice) return true;
+
+            // Cohort slices: filter by date overlap ONLY if explicit cohort() DSL
+            // (In window() mode, we don't filter cohort slices - we need all of them
+            // for LAG calculations; the completeness window is applied later)
+            if (isCohortSlice && cohortStart && cohortEnd && v.dates && v.dates.length > 0) {
+              // Check if ANY of this value's dates fall within the cohort query window
+              for (const dateStr of v.dates) {
+                const d = parseDate(dateStr);
+                if (d >= cohortStart && d <= cohortEnd) {
+                  return true; // At least one date overlaps
+                }
+              }
+              return false; // No dates overlap
+            }
+
+            // No cohort window in DSL, or value has no dates - include it
+            return true;
+          });
+        }
+
+        console.log('[fetchDataService] Filtered param values for LAG:', {
+          edgeId,
+          targetDims,
+          lagSliceSource,
+          hasCohortFilter: !!(cohortStart && cohortEnd),
+          hasLAGWindow: !!(lagSliceStart && lagSliceEnd),
+          totalValues: allValues.length,
+          filteredValues: filteredValues.length,
+          sampleSliceDSLs: allValues.slice(0, 3).map((v: any) => v.sliceDSL),
+        });
+
+        if (filteredValues.length > 0) {
+          paramLookup.set(edgeId, filteredValues);
+        }
+      }
+    }
+
+    console.log('[LAG_TOPO_000] paramLookup:', {
+      edgeCount: paramLookup.size,
+      edgeIds: Array.from(paramLookup.keys()),
+    });
+
+    // Run the unified topo pass: t95, path_t95, and path-adjusted completeness
+    // Cast helpers to LAGHelpers - ParameterValueForLAG is a subset of ParameterValue
+    const lagHelpers: LAGHelpers = {
+      aggregateCohortData: aggregateCohortData as LAGHelpers['aggregateCohortData'],
+      aggregateWindowData: aggregateWindowData as LAGHelpers['aggregateWindowData'],
+      aggregateLatencyStats,
+    };
+
+    // Use the *analysis date* (now) for age calculations.
+    // Cohort dates come from Amplitude; as time passes, cohorts age and
+    // completeness should converge towards 1 for long-ago cohorts,
+    // independent of the cohort() window bounds.
+    const queryDateForLAG = new Date();
+
+    // Pass LAG slice window so completeness is computed from cohorts in the
+    // same date range as the evidence (whether from cohort() or window() DSL).
+    //
+    // In window() mode: this ensures completeness reflects "how mature are the
+    // cohorts whose dates fall in this window?" rather than mixing in all
+    // historical cohort data, making completeness consistent with evidence.
+    //
+    // In cohort() mode: this is the explicit cohort window (unchanged).
+    const lagCohortWindow = (lagSliceStart && lagSliceEnd)
+      ? { start: lagSliceStart, end: lagSliceEnd }
+      : undefined;
+
+    console.log('[fetchDataService] LAG cohort window:', {
+      lagSliceSource,
+      lagCohortWindow: lagCohortWindow ? {
+        start: lagCohortWindow.start.toISOString().split('T')[0],
+        end: lagCohortWindow.end.toISOString().split('T')[0],
+      } : 'none (using all cohorts)',
+    });
+
+    const forecasting = await forecastingSettingsService.getForecastingModelSettings();
+
+    // Pre-compute path_t95 for all edges ONCE (single code path)
+    // This is used by enhanceGraphLatencies to classify edges
+    const activeEdgesForLAG = getActiveEdges(finalGraph as GraphForPath);
+    const pathT95MapForLAG = computePathT95(
+      finalGraph as GraphForPath,
+      activeEdgesForLAG,
+      undefined,
+      forecasting.DEFAULT_T95_DAYS
+    );
+
+    const lagResult = enhanceGraphLatencies(
+      finalGraph as GraphForPath,
+      paramLookup,
+      queryDateForLAG,
+      lagHelpers,
+      lagCohortWindow,
+      undefined, // whatIfDSL
+      pathT95MapForLAG,
+      lagSliceSource,
+      forecasting
+    );
+
+    console.log('[fetchDataService] LAG enhancement result:', {
+      edgesProcessed: lagResult.edgesProcessed,
+      edgesWithLAG: lagResult.edgesWithLAG,
+      edgeValuesCount: lagResult.edgeValues.length,
+      sampleEdgeValues: lagResult.edgeValues.slice(0, 2).map(v => ({
+        uuid: v.edgeUuid,
+        t95: v.latency.t95,
+        completeness: v.latency.completeness,
+        blendedMean: v.blendedMean,
+      })),
+    });
+
+    // Apply ALL LAG values in ONE atomic operation via UpdateManager
+    // Single call: clone once, apply all latency + means, rebalance once
+    if (lagResult.edgeValues.length > 0 && finalGraph?.edges) {
+      const updateManager = new UpdateManager();
+
+      // In from-file mode, the parameter file already contains slice-level latency
+      // summaries (median/t95/completeness). The LAG topo pass is primarily needed
+      // for path_t95 and (in cohort mode) blended p.mean. Do not overwrite the
+      // file-provided latency summary fields.
+      const preserveLatencySummaryFromFile = itemOptions?.mode === 'from-file';
+
+      // Phase 2: apply blended p.mean for latency edges in BOTH window() and cohort() modes.
+      const edgeValuesToApply = lagResult.edgeValues;
+
+      // DEBUG: Log p.mean values BEFORE LAG application
+      console.log('[fetchDataService] BEFORE applyBatchLAGValues:', {
+        edgeMeans: edgeValuesToApply.slice(0, 3).map(ev => {
+          const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+          return {
+            id: ev.edgeUuid,
+            currentMean: edge?.p?.mean,
+            targetBlendedMean: ev.blendedMean,
+          };
+        }),
+      });
+
+      const nextGraph = updateManager.applyBatchLAGValues(
+        finalGraph,
+        edgeValuesToApply.map(ev => ({
+          edgeId: ev.edgeUuid,
+          latency: preserveLatencySummaryFromFile
+            ? (() => {
+                const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+                const existing = edge?.p?.latency;
+                return selectLatencyToApplyForTopoPass(ev.latency, existing, true);
+              })()
+            : ev.latency,
+          blendedMean: ev.blendedMean,
+          forecast: ev.forecast,
+          evidence: ev.evidence,
+        }))
+      );
+
+      // CRITICAL: Commit the post-LAG graph to state immediately.
+      //
+      // Otherwise, if inbound-n is a no-op (or setGraph is suppressed by a batching wrapper),
+      // the UI can display stale p.latency.* / p.mean until a subsequent fetch triggers
+      // another state update. This was showing up as "only updates when I fetch AGAIN".
+      setGraph(nextGraph);
+
+      // Keep local reference for inbound-n debugging and computation
+      finalGraph = nextGraph;
+
+      // DEBUG: Log p.mean values AFTER LAG application
+      console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
+        edgeMeans: edgeValuesToApply.slice(0, 3).map(ev => {
+          const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+          return {
+            id: ev.edgeUuid,
+            newMean: edge?.p?.mean,
+            expectedBlendedMean: ev.blendedMean,
+            match: edge?.p?.mean === Math.round((ev.blendedMean ?? 0) * 1000) / 1000,
+          };
+        }),
+      });
+    }
+
+    if (batchLogId) {
+      sessionLogService.addChild(batchLogId, 'info', 'LAG_ENHANCED',
+        `Enhanced ${lagResult.edgesWithLAG} edges with LAG stats (topo pass)`,
+        undefined,
+        {
+          edgesProcessed: lagResult.edgesProcessed,
+          edgesWithLAG: lagResult.edgesWithLAG,
+          queryDate: queryDateForLAG.toISOString().split('T')[0],
+          sample: lagResult.edgeValues.slice(0, 3).map(v => ({
+            id: v.edgeUuid,
+            t95: v.latency.t95.toFixed(1),
+            pathT95: v.latency.path_t95.toFixed(1),
+            completeness: (v.latency.completeness * 100).toFixed(1) + '%',
+            forecastMean: v.forecast?.mean?.toFixed(3),
+            evidenceMean: v.evidence?.mean?.toFixed(3),
+            blendedMean: v.blendedMean?.toFixed(3),
+          })),
+        }
+      );
+
+      // Add detailed debug entries for each edge (for debugging completeness calc)
+      for (const v of lagResult.edgeValues) {
+        if (v.debug) {
+          // Check for data quality issues
+          const hasKGreaterThanN = v.debug.sampleCohorts.some(c => c.k > c.n);
+          const dataQuality = hasKGreaterThanN ? '⚠️ k>n detected!' : '✓';
+          const windowInfo = v.debug.cohortWindow || 'all history';
+
+          // Build anchor lag indicator for message
+          const anchorLagInfo = v.debug.anchorMedianLag > 0
+            ? ` anchorLag=${v.debug.anchorMedianLag.toFixed(1)}d`
+            : v.debug.cohortsWithAnchorLag === 0 ? ' (no anchor data)' : '';
+
+          sessionLogService.addChild(batchLogId, 'info', 'LAG_CALC_DETAIL',
+            `${v.edgeUuid.substring(0, 8)}...: completeness=${(v.latency.completeness * 100).toFixed(1)}%${anchorLagInfo} ${dataQuality}`,
+            `Window: ${windowInfo} → ${v.debug.cohortCount} cohorts, n=${v.debug.totalN}, k=${v.debug.totalK}`,
+            {
+              edgeId: v.edgeUuid,
+              queryDate: v.debug.queryDate,
+              cohortWindow: v.debug.cohortWindow || 'all history (no filter)',
+              inputSlices: {
+                cohort: v.debug.inputCohortSlices,
+                window: v.debug.inputWindowSlices,
+              },
+              cohortCount: v.debug.cohortCount,
+              rawAgeRange: v.debug.rawAgeRange,
+              adjustedAgeRange: v.debug.adjustedAgeRange,
+              anchorMedianLag: v.debug.anchorMedianLag?.toFixed(2) ?? '0 (first edge)',
+              cohortsWithAnchorLag: `${v.debug.cohortsWithAnchorLag ?? 0}/${v.debug.cohortCount}`,
+              pathT95: v.latency.path_t95.toFixed(1),
+              mu: v.debug.mu.toFixed(3),
+              sigma: v.debug.sigma.toFixed(3),
+              // Completeness semantics (cohort fix)
+              completenessMode: v.debug.completenessMode,
+              completenessAuthoritativeT95Days: v.debug.completenessAuthoritativeT95Days,
+              completenessTailConstraintApplied: v.debug.completenessTailConstraintApplied,
+              // Forecast/blend diagnostics (needed to debug “forecast too low”)
+              baseForecastMean: v.debug.baseForecastMean,
+              fallbackForecastMean: v.debug.fallbackForecastMean,
+              forecastMeanUsed: v.debug.forecastMeanUsed,
+              forecastMeanSource: v.debug.forecastMeanSource,
+              evidenceMeanRaw: v.debug.evidenceMeanRaw,
+              evidenceMeanUsedForBlend: v.debug.evidenceMeanUsedForBlend,
+              evidenceMeanBayesAdjusted: v.debug.evidenceMeanBayesAdjusted,
+              nQuery: v.debug.nQuery,
+              nBaseline: v.debug.nBaseline,
+              nBaselineSource: v.debug.nBaselineSource,
+              baselineWindowSliceDSL: v.debug.baselineWindowSliceDSL,
+              baselineWindowRetrievedAt: v.debug.baselineWindowRetrievedAt,
+              baselineWindowN: v.debug.baselineWindowN,
+              baselineWindowK: v.debug.baselineWindowK,
+              baselineWindowForecast: v.debug.baselineWindowForecast,
+              wEvidence: v.debug.wEvidence,
+              totalN: v.debug.totalN,
+              totalK: v.debug.totalK,
+              dataQuality: hasKGreaterThanN ? 'ERROR: k > n in some cohorts' : 'OK',
+              sampleCohorts: v.debug.sampleCohorts.map(c => ({
+                date: c.date,
+                rawAge: c.rawAge,
+                adjAge: c.adjustedAge,
+                anchorLag: c.anchorLag?.toFixed(1) ?? '-',
+                n: c.n,
+                k: c.k,
+                kOk: c.k <= c.n ? '✓' : '⚠️',
+                cdf: (c.cdf * 100).toFixed(1) + '%',
+              })),
+            }
+          );
+        }
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // INBOUND-N COMPUTATION (forecast population propagation)
+  //
+  // After LAG enhancement is complete (t95, path_t95, completeness all set),
+  // compute p.n for each edge via step-wise convolution of upstream p.mean.
+  //
+  // p.n is transient (not persisted) - it's recomputed whenever
+  // the scenario, DSL, or graph changes.
+  //
+  // IMPORTANT: Use finalGraph directly (not getUpdatedGraph) since we just
+  // modified it and haven't called setGraph yet. This avoids race conditions.
+  // ═══════════════════════════════════════════════════════════════════
+  // Debug: Check if LAG values actually landed on latency-labelled edges
+  const latencyEdges = (finalGraph?.edges || []).filter(
+    (e: any) => e.p?.latency && (e.p.latency.latency_parameter || e.p.latency.t95 || e.p.latency.completeness)
+  );
+  console.log('[fetchDataService] LAG_DEBUG finalGraph before inbound-n:', {
+    edgeCount: finalGraph?.edges?.length,
+    latencyEdgeCount: latencyEdges.length,
+    latencyEdges: latencyEdges.map((e: any) => ({
+      uuid: e.uuid,
+      id: e.id,
+      from: e.from,
+      to: e.to,
+      pMean: e.p?.mean,
+      latency_parameter: e.p?.latency?.latency_parameter,
+      t95: e.p?.latency?.t95,
+      completeness: e.p?.latency?.completeness,
+      path_t95: e.p?.latency?.path_t95,
+    })),
+  });
+
+  console.log('[fetchDataService] About to compute inbound-n', {
+    hasFinalGraph: !!finalGraph,
+    batchLogId
+  });
+  if (finalGraph) {
+    // Apply inbound-n to the SAME graph we just applied LAG values to
+    computeAndApplyInboundN(finalGraph, setGraph, dsl, batchLogId);
+  } else {
+    console.log('[fetchDataService] No graph for inbound-n computation');
+  }
 }
 
 /**

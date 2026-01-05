@@ -1,5 +1,7 @@
 # TODO
 
+- (MSMDC durability / drift fix) When MSMDC regen applies **graph-mastered** changes and a parameter file is connected, immediately PUT the updated graph-mastered fields back to file so files cannot drift and later dominate with stale state. Scope: `edge.query`, `edge.n_query`, and `edge.p.latency.anchor_node_id` (respect `*_overridden` flags). This should eliminate the “anchors disappear after Retrieve All” class of bugs by keeping graph↔file convergent after MSMDC.
+
 - For result cards in analytics: add a 'expand / contract' toggle to right of each card which shows all stats vs. key stats [and we may need to feed that through from analysis to flag which are key are which are ancillary)
 - context fixes: /home/reg/dev/dagnet/docs/current/project-lag/context-fix.md
 - Refactor: /home/reg/dev/dagnet/docs/current/src-slimdown.md
@@ -11,8 +13,9 @@
 - PgDn / up / home / end /arrows should work in md viewer, etc.
 - Store vars to arbitary precision; display to only 2/4dp
 - Check fetch logic properly -- some odd behaviour
+- (LAG optimisation follow-up) Before retrieving each slice, if cached data already exists for that exact slice DSL, derive a best-guess `t95`/`path_t95` (no network fetch) and use it to bound the subsequent “optimised” cohort/window cut for that slice.
 - on F5, we're trying to fetch before files have loaded and failing. Need a guard to hold back fetch until after files are available
-- Graph masters topo-derived fields (e.g. `latency.path_t95`) which can diverge from parameter files. Consider an explicit post-update “auto put back to files” pass for graph-mastered fields (path_t95, anchor/query-derived fields, etc.) so files converge automatically after graph recomputation.
+
 - we really have to re-factor the 3x god files (dataOperationsService, UpdateManager and GraphCanvas) -- cf. src-slimdown.md
 - Confidence band rendering in LAG view needs checking & improving (design and polish; semantics now centralised but visuals may lag)
 

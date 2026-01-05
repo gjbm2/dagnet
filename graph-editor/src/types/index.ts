@@ -321,6 +321,8 @@ export interface TabOperations {
   toggleScenarioVisibility: (tabId: string, scenarioId: string) => Promise<void>;
   cycleScenarioVisibilityMode: (tabId: string, scenarioId: string) => Promise<void>;
   getScenarioVisibilityMode: (tabId: string, scenarioId: string) => ScenarioVisibilityMode;
+  /** Set scenario visibility mode (render basis only: evidence/forecast/both) */
+  setScenarioVisibilityMode: (tabId: string, scenarioId: string, mode: ScenarioVisibilityMode) => Promise<void>;
   selectScenario: (tabId: string, scenarioId: string | undefined) => Promise<void>;
   reorderScenarios: (tabId: string, newOrder: string[]) => Promise<void>;
 }
