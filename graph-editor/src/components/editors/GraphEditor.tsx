@@ -90,12 +90,12 @@ function URLDailyRetrieveAllProcessor({ fileId }: { fileId: string }) {
  * PutToBaseRequestProcessor - handles tab-scoped "Put to Base" requests.
  * Must be inside ScenariosProvider so it can call ScenariosContext.putToBase().
  */
-function PutToBaseRequestProcessor({ tabId }: { tabId: string }) {
+function PutToBaseRequestProcessor({ tabId }: { tabId?: string }) {
   const scenariosContext = useScenariosContextOptional();
   const { tabs } = useTabContext();
 
-  usePutToBaseRequestListener(tabId, () => {
-    if (!scenariosContext?.putToBase) return;
+  usePutToBaseRequestListener(tabId ?? '', () => {
+    if (!tabId || !scenariosContext?.putToBase) return;
     const currentTab = tabs.find(t => t.id === tabId);
     const visible = currentTab?.editorState?.scenarioState?.visibleScenarioIds || [];
     void scenariosContext.putToBase(visible);
