@@ -1650,18 +1650,26 @@ export function mergeTimeSeriesIntoParameter(
     if (!Array.isArray(mergedDates) || !Array.isArray(mergedN) || !Array.isArray(mergedK)) return undefined;
     if (mergedDates.length === 0) return undefined;
 
+    // Non-latency edges: no maturity exclusion (include all days).
+    // An edge is non-latency if latencyConfig is undefined or latency_parameter is false/undefined.
+    const isNonLatencyEdge = !mergeOptions?.latencyConfig?.latency_parameter;
+
     const defaultT95 =
       (typeof mergeOptions?.forecastingConfig?.DEFAULT_T95_DAYS === 'number' && Number.isFinite(mergeOptions.forecastingConfig.DEFAULT_T95_DAYS))
         ? mergeOptions.forecastingConfig.DEFAULT_T95_DAYS
         : DEFAULT_T95_DAYS;
     const t95Raw =
-      typeof mergeOptions?.latencyConfig?.t95 === 'number' && Number.isFinite(mergeOptions.latencyConfig.t95) && mergeOptions.latencyConfig.t95 > 0
-        ? mergeOptions.latencyConfig.t95
-        : defaultT95;
-    const maturityDays = Math.ceil(t95Raw) + 1;
+      isNonLatencyEdge
+        ? 0 // Non-latency: no maturity exclusion
+        : (typeof mergeOptions?.latencyConfig?.t95 === 'number' && Number.isFinite(mergeOptions.latencyConfig.t95) && mergeOptions.latencyConfig.t95 > 0
+            ? mergeOptions.latencyConfig.t95
+            : defaultT95);
+    const maturityDays = isNonLatencyEdge ? 0 : (Math.ceil(t95Raw) + 1);
     // Recency datum for forecast MUST be max(window date), not wall-clock "now".
     const asOf = parseDate(mergedDates[mergedDates.length - 1]);
-    const cutoffMs = asOf.getTime() - maturityDays * 24 * 60 * 60 * 1000;
+    const cutoffMs = isNonLatencyEdge
+      ? Number.POSITIVE_INFINITY // Non-latency: include all days
+      : (asOf.getTime() - maturityDays * 24 * 60 * 60 * 1000);
 
     let weightedN = 0;
     let weightedK = 0;

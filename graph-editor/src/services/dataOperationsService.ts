@@ -5006,7 +5006,9 @@ class DataOperationsService {
               ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId)
               : undefined;
           latencyConfigForGapWrites = targetEdgeForMerge?.p?.latency;
-          shouldRecomputeForecastForGapWrites = latencyConfigForGapWrites?.latency_parameter === true;
+          // Always recompute forecast for probability parameters (both latency and non-latency edges).
+          // Non-latency edges have latency_parameter: false/undefined and will skip maturity exclusion.
+          shouldRecomputeForecastForGapWrites = true;
         }
       }
 
@@ -6032,7 +6034,9 @@ class DataOperationsService {
               ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) 
               : undefined;
             const latencyConfigForMerge = targetEdgeForMerge?.p?.latency;
-            const shouldRecomputeForecast = latencyConfigForMerge?.latency_parameter === true;
+            // Always recompute forecast for probability parameters (both latency and non-latency edges).
+            // Non-latency edges have latency_parameter: false/undefined and will skip maturity exclusion.
+            const shouldRecomputeForecast = true;
             
             if (allTimeSeriesData.length > 0) {
               // API returned data - store each gap as a separate value entry
@@ -8252,6 +8256,13 @@ class DataOperationsService {
               (typeof inferredT95Days === 'number' && Number.isFinite(inferredT95Days) && inferredT95Days > 0)
                 ? inferredT95Days
                 : (inferredT95Days === 0 ? 0 : DEFAULT_T95_DAYS);
+            // Compute effective halfLife for logging (mirrors computeWindowForecastFromDaily logic)
+            const effectiveHalfLifeForLog =
+              typeof options?.forecasting?.RECENCY_HALF_LIFE_DAYS === 'number' &&
+              Number.isFinite(options.forecasting.RECENCY_HALF_LIFE_DAYS) &&
+              options.forecasting.RECENCY_HALF_LIFE_DAYS > 0
+                ? options.forecasting.RECENCY_HALF_LIFE_DAYS
+                : RECENCY_HALF_LIFE_DAYS;
             const detailLines: string[] = [];
             detailLines.push(`basis: ${basisLabel}`);
             detailLines.push(`as_of: ${normalizeDate(asOfDate.toISOString())} (max window date)`);
@@ -8263,7 +8274,7 @@ class DataOperationsService {
             if (options.t95Source) {
               detailLines.push(`t95_source: ${options.t95Source}`);
             }
-            detailLines.push(`recency_weight: w=exp(-ln2*age/${RECENCY_HALF_LIFE_DAYS}d)`);
+            detailLines.push(`recency_weight: w=exp(-ln2*age/${effectiveHalfLifeForLog}d)`);
             detailLines.push(`weighted: N=${Math.round(weightedNTotal)}, K=${Math.round(weightedKTotal)} → forecast=${(forecastMeanComputed * 100).toFixed(2)}%`);
             if (usedAllDaysFallback) {
               detailLines.push(`fallback: censoring left no mature days; used full-window mean for at least one slice`);
@@ -8289,7 +8300,7 @@ class DataOperationsService {
                 meceKey,
                 asOf: asOfDate.toISOString(),
                 maturityDays: maturityDaysUsed,
-                halfLifeDays: RECENCY_HALF_LIFE_DAYS,
+                halfLifeDays: effectiveHalfLifeForLog,
                 weightedN: weightedNTotal,
                 weightedK: weightedKTotal,
                 forecastMean: forecastMeanComputed,
