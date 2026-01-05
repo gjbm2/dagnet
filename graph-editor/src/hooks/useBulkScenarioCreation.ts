@@ -21,7 +21,7 @@ import { Scenario } from '../types/scenarios';
 import { useTabContext } from '../contexts/TabContext';
 import { contextRegistry } from '../services/contextRegistry';
 import { deriveBaseDSLForRebase, inferDateModeFromDSL, normaliseScenarioDateRangeDSL } from '../services/scenarioRegenerationService';
-import { useGraphStore } from '../contexts/GraphStoreContext';
+import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
 
 interface ContextValue {
   id: string;
@@ -53,7 +53,7 @@ interface UseBulkScenarioCreationReturn {
 export function useBulkScenarioCreation(tabIdOverride?: string): UseBulkScenarioCreationReturn {
   const scenariosContext = useScenariosContextOptional();
   const { activeTabId, operations } = useTabContext();
-  const graphStore = useGraphStore();
+  const graphStore = useGraphStoreOptional();
   const [bulkCreateModal, setBulkCreateModal] = useState<BulkCreateModalState | null>(null);
   const effectiveTabId = tabIdOverride || activeTabId;
   

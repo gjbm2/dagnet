@@ -2124,6 +2124,38 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   }, [tabs]);
 
   /**
+   * Set a scenario's visibility mode (render basis only: forecast/evidence/both).
+   * This does NOT affect visibility (visibleScenarioIds) — it only affects how
+   * probabilities are interpreted for rendering/analysis.
+   */
+  const setScenarioVisibilityMode = useCallback(
+    async (tabId: string, scenarioId: string, mode: 'f+e' | 'f' | 'e'): Promise<void> => {
+      const tab = tabs.find(t => t.id === tabId);
+      if (!tab) return;
+
+      const currentState = tab.editorState?.scenarioState || {
+        scenarioOrder: [],
+        visibleScenarioIds: [],
+        visibleColourOrderIds: [],
+        visibilityMode: {},
+      };
+
+      const newVisibilityMode = {
+        ...(currentState.visibilityMode || {}),
+        [scenarioId]: mode,
+      };
+
+      await updateTabState(tabId, {
+        scenarioState: {
+          ...currentState,
+          visibilityMode: newVisibilityMode,
+        },
+      });
+    },
+    [tabs, updateTabState]
+  );
+
+  /**
    * Select a scenario for a tab
    */
   const selectScenario = useCallback(async (tabId: string, scenarioId: string | undefined): Promise<void> => {
@@ -2191,6 +2223,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     toggleScenarioVisibility,
     cycleScenarioVisibilityMode,
     getScenarioVisibilityMode,
+    setScenarioVisibilityMode,
     selectScenario,
     reorderScenarios
   };

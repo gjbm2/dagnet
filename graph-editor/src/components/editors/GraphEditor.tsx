@@ -22,6 +22,7 @@ import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/S
 import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useURLDailyRetrieveAll } from '../../hooks/useURLDailyRetrieveAll';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
+import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestListener';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
@@ -82,6 +83,24 @@ function URLScenariosProcessor({ fileId }: { fileId: string }) {
 function URLDailyRetrieveAllProcessor({ fileId }: { fileId: string }) {
   // The graph is loaded if we're rendering (GraphEditorInner gates on data)
   useURLDailyRetrieveAll(true, fileId);
+  return null;
+}
+
+/**
+ * PutToBaseRequestProcessor - handles tab-scoped "Put to Base" requests.
+ * Must be inside ScenariosProvider so it can call ScenariosContext.putToBase().
+ */
+function PutToBaseRequestProcessor({ tabId }: { tabId: string }) {
+  const scenariosContext = useScenariosContextOptional();
+  const { tabs } = useTabContext();
+
+  usePutToBaseRequestListener(tabId, () => {
+    if (!scenariosContext?.putToBase) return;
+    const currentTab = tabs.find(t => t.id === tabId);
+    const visible = currentTab?.editorState?.scenarioState?.visibleScenarioIds || [];
+    void scenariosContext.putToBase(visible);
+  });
+
   return null;
 }
 
@@ -1742,6 +1761,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         <ScenariosProvider fileId={fileId} tabId={tabId}>
           <URLScenariosProcessor fileId={fileId} />
           <URLDailyRetrieveAllProcessor fileId={fileId} />
+          <PutToBaseRequestProcessor tabId={tabId} />
           <ViewPreferencesProvider tabId={tabId}>
             <div
               className="graph-editor-dashboard"
@@ -1761,6 +1781,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       {/* Process URL scenario parameters after graph loads */}
       <URLScenariosProcessor fileId={fileId} />
       <URLDailyRetrieveAllProcessor fileId={fileId} />
+      <PutToBaseRequestProcessor tabId={tabId} />
       <ViewPreferencesProvider tabId={tabId}>
       <div 
         ref={containerRef}

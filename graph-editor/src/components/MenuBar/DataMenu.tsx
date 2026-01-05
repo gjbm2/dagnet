@@ -868,6 +868,7 @@ export function DataMenu() {
         onClose={closeAllSlicesModal}
         graph={graph || null}
         setGraph={handleSetGraph}
+        currentDSL={graphStore?.getState().currentDSL || ''}
       />
     )}
     

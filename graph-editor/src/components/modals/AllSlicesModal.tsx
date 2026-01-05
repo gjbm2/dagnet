@@ -15,6 +15,10 @@ import { retrieveAllSlicesService } from '../../services/retrieveAllSlicesServic
 import { useTabContext } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
+import { retrieveAllSlicesPlannerService } from '../../services/retrieveAllSlicesPlannerService';
+import { fetchDataService, type FetchItem } from '../../services/fetchDataService';
+import { sessionLogService } from '../../services/sessionLogService';
+import { requestPutToBase } from '../../hooks/usePutToBaseRequestListener';
 import './Modal.css';
 
 interface AllSlicesModalProps {
@@ -22,6 +26,8 @@ interface AllSlicesModalProps {
   onClose: () => void;
   graph: GraphData | null;
   setGraph: (graph: GraphData | null) => void;
+  /** AUTHORITATIVE DSL from graphStore - the single source of truth for derivations */
+  currentDSL: string;
 }
 
 interface SliceItem {
@@ -42,15 +48,17 @@ export function AllSlicesModal({
   isOpen,
   onClose,
   graph,
-  setGraph
+  setGraph,
+  currentDSL
 }: AllSlicesModalProps) {
-  const { operations: tabOperations } = useTabContext();
+  const { activeTabId, tabs, operations: tabOperations } = useTabContext();
   const [slices, setSlices] = useState<SliceItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ currentSlice: 0, totalSlices: 0, currentItem: 0, totalItems: 0 });
   const [bustCache, setBustCache] = useState(false);
   const [simulateToLog, setSimulateToLog] = useState(false);
+  const [putToBaseAfter, setPutToBaseAfter] = useState(true);
   
   // CRITICAL: Use ref for log content so it's synchronously available at end of batch
   // React state setters are async, so logContent state would be empty when we check it
@@ -168,7 +176,21 @@ export function AllSlicesModal({
       setGraph(newGraph);
     };
 
+    // Apply a temporary evidence-mode override for ALL tabs viewing this graph file.
+    const activeTab = activeTabId ? tabs.find(t => t.id === activeTabId) : undefined;
+    const targetFileId = activeTab?.fileId;
+    const affectedTabIds = targetFileId ? tabs.filter(t => t.fileId === targetFileId).map(t => t.id) : [];
+    const prevModes = new Map<string, 'f+e' | 'f' | 'e'>();
+    let shouldPutToBase = false;
+
     try {
+      // Force CURRENT layer only to evidence mode in all affected tabs (restore in finally).
+      for (const tabId of affectedTabIds) {
+        const prev = tabOperations.getScenarioVisibilityMode(tabId, 'current');
+        prevModes.set(tabId, prev);
+        await tabOperations.setScenarioVisibilityMode(tabId, 'current', 'e');
+      }
+
       const result = await retrieveAllSlicesService.execute({
         getGraph: () => graphRef.current as GraphData | null,
         setGraph: setGraphWithRef,
@@ -190,6 +212,55 @@ export function AllSlicesModal({
         },
       });
 
+      // Finalise: run a single graph-level topo/LAG derivation pass once, then optionally Put To Base.
+      // This is intentionally UI-modal-only behaviour.
+      if (!result.aborted && result.totalSuccess > 0 && graphRef.current && currentDSL?.trim()) {
+        const topoLogId = sessionLogService.startOperation(
+          'info',
+          'data-fetch',
+          'POST_RETRIEVE_TOPO_PASS',
+          'Post-retrieve topo pass (LAG derivations)',
+          { dsl: currentDSL }
+        );
+
+        try {
+          const finalGraph = graphRef.current as any;
+          const targets = retrieveAllSlicesPlannerService.collectTargets(finalGraph as any);
+          const topoItems: FetchItem[] = targets
+            .filter((t): t is Extract<typeof t, { type: 'parameter' }> => t.type === 'parameter')
+            .map((t) => ({
+              id: `param-${t.objectId}-${t.paramSlot ?? 'p'}-${t.targetId}`,
+              type: 'parameter',
+              name: t.name,
+              objectId: t.objectId,
+              targetId: t.targetId,
+              paramSlot: t.paramSlot,
+            }));
+
+          // Refresh the graph's scalar evidence/forecast fields for the CURRENT DSL from cache (no network),
+          // then reuse the normal Stage-2 passes (LAG + inbound-n) that are part of fetchItems().
+          //
+          // This fixes the "2-step funnel anchoring" mismatch where Retrieve All populates cache slices
+          // (e.g. cohort(-75d:)) but the graph's displayed scalars remain anchored to that slice rather
+          // than to the currentQueryDSL (e.g. cohort(1-Nov-25:30-Nov-25)).
+          await fetchDataService.fetchItems(
+            topoItems,
+            { mode: 'from-file', parentLogId: topoLogId, suppressBatchToast: true } as any,
+            finalGraph,
+            (g: any) => setGraphWithRef(g),
+            currentDSL,
+            () => graphRef.current as any
+          );
+
+          sessionLogService.endOperation(topoLogId, 'success', 'Post-retrieve topo pass complete');
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          sessionLogService.endOperation(topoLogId, 'error', `Post-retrieve topo pass failed: ${msg}`);
+        }
+
+        shouldPutToBase = putToBaseAfter && Boolean(activeTabId);
+      }
+
       toast.dismiss(progressToastId);
       if (result.aborted) {
         toast('Operation cancelled', { icon: '⏹️' });
@@ -204,6 +275,20 @@ export function AllSlicesModal({
       toast.dismiss(progressToastId);
       toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      // Restore CURRENT layer visibility modes.
+      for (const tabId of affectedTabIds) {
+        const prev = prevModes.get(tabId);
+        if (!prev) continue;
+        try {
+          await tabOperations.setScenarioVisibilityMode(tabId, 'current', prev);
+        } catch {
+          // Best-effort only.
+        }
+      }
+
+      if (shouldPutToBase && activeTabId) {
+        requestPutToBase(activeTabId);
+      }
       setIsProcessing(false);
       onClose();
     }
@@ -354,6 +439,17 @@ export function AllSlicesModal({
 
               {/* Options */}
               <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', cursor: simulateToLog ? 'not-allowed' : 'pointer', opacity: simulateToLog ? 0.6 : 1 }}>
+                  <input
+                    type="checkbox"
+                    checked={putToBaseAfter}
+                    onChange={(e) => setPutToBaseAfter(e.target.checked)}
+                    style={{ marginRight: '8px' }}
+                    disabled={simulateToLog}
+                  />
+                  <span style={{ fontSize: '14px' }}>Put to Base after retrieve (refresh live scenarios)</span>
+                </label>
+
                 <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
                   <input
                     type="checkbox"

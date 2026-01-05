@@ -685,3 +685,32 @@ export function useGraphStore<T = GraphStore>(
   return extendedState;
 }
 
+/**
+ * Optional Graph Store hook
+ *
+ * Some UI surfaces (e.g. global menu-driven modals rendered via portals) can be mounted
+ * outside a specific GraphStoreProvider instance. In those cases we want the UI to render
+ * (with features gracefully degraded) rather than crash the entire app.
+ */
+export function useGraphStoreOptional<T = GraphStore>(
+  selector?: (state: GraphStore) => T
+): (T & GraphStoreHook) | null {
+  const store = useContext(GraphStoreContext);
+  if (!store) {
+    return null;
+  }
+
+  if (selector) {
+    return store(selector) as any;
+  }
+
+  const state = store();
+  const extendedState = state as any;
+  extendedState.getState = store.getState;
+  extendedState.setState = store.setState;
+  extendedState.subscribe = store.subscribe;
+  extendedState.destroy = store.destroy;
+
+  return extendedState;
+}
+

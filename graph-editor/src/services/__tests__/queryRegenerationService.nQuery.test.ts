@@ -10,6 +10,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Graph } from '../../types';
 import { queryRegenerationService } from '../queryRegenerationService';
 
+// Mock the Python compute client so we can inspect the payload that would be sent to MSMDC.
+vi.mock('../../lib/graphComputeClient', () => ({
+  graphComputeClient: {
+    generateAllParameters: vi.fn(),
+  },
+}));
+
+const { graphComputeClient } = await import('../../lib/graphComputeClient');
+
 // Minimal fileRegistry mock (must match production import path)
 vi.mock('../../contexts/TabContext', () => {
   const mockFiles = new Map<string, any>();
@@ -116,6 +125,52 @@ describe('QueryRegenerationService n_query application', () => {
     await queryRegenerationService.applyRegeneratedQueries(graph, parameters as any);
 
     expect((graph.edges[0] as any).n_query).toBe('from(A).to(old)');
+  });
+});
+
+describe('QueryRegenerationService - backend payload sanitisation', () => {
+  beforeEach(() => {
+    vi.mocked(graphComputeClient.generateAllParameters).mockReset();
+    vi.mocked(graphComputeClient.generateAllParameters).mockResolvedValue({
+      parameters: [],
+      anchors: {},
+    } as any);
+  });
+
+  it('strips node images before sending graph to Python MSMDC API', async () => {
+    const graph: Graph = {
+      schema_version: '1.0.0',
+      id: 'g1',
+      name: 'Test',
+      description: '',
+      nodes: [
+        {
+          id: 'node-1',
+          uuid: 'uuid-1',
+          images: [
+            {
+              image_id: 'node-1-img',
+              caption: 'Image 1',
+              file_extension: 'png',
+              caption_overridden: false,
+            } as any,
+          ],
+          images_overridden: true,
+        } as any,
+      ],
+      edges: [],
+    };
+
+    await queryRegenerationService.regenerateQueries(graph, {
+      literalWeights: { visited: 10, exclude: 1 },
+      preserveCondition: true,
+    });
+
+    expect(graphComputeClient.generateAllParameters).toHaveBeenCalledTimes(1);
+
+    const [payloadGraph] = vi.mocked(graphComputeClient.generateAllParameters).mock.calls[0];
+    expect((payloadGraph as any).nodes[0].images).toBeUndefined();
+    expect((payloadGraph as any).nodes[0].images_overridden).toBeUndefined();
   });
 });
 
