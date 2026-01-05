@@ -72,28 +72,29 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.5453013852489704
+      mean: 0.5142061281337047
       id: gm-create-to-delegated
       connection: amplitude-prod
       connection_overridden: false
-      latency: {}
-      stdev: 0.006812841482104002
+      latency:
+        anchor_node_id: household-created
+      stdev: 0.011796755136683759
       evidence:
-        'n': 5342
-        k: 2913
-        window_from: 1-Nov-25
-        window_to: 15-Nov-25
-        retrieved_at: '2026-01-05T18:46:33.730Z'
+        'n': 1795
+        k: 923
+        window_from: 29-Dec-25
+        window_to: 4-Jan-26
+        retrieved_at: '2026-01-05T21:22:22.954Z'
         source: amplitude
         full_query: from(household-created).to(household-delegated)
-        mean: 0.5453013852489704
-        stdev: 0.006812839757852689
+        mean: 0.5142061281337047
+        stdev: 0.011796751026290865
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-05T18:46:33.730Z'
+        retrieved_at: '2026-01-05T21:22:22.954Z'
         full_query: from(household-created).to(household-delegated)
       forecast:
-        mean: 0.5278144627679727
+        mean: 0.5289154943714294
     description: ''
     query: from(household-created).to(household-delegated)
   - uuid: 2d5ca246-b4d2-478f-bed6-487b76989b4c
@@ -103,9 +104,10 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.4547
-      latency: {}
-    query: from(household-created).to(Abandonned)
+      mean: 0.4858
+      latency:
+        anchor_node_id: household-created
+    query: from(household-created).to(gm-abandonned-delegation)
     description: ''
   - uuid: 5f1aa0dd-613f-46e1-868e-69fc002fe45b
     id: household-delegated-to-gm-gm-abandonned-delegation-after-delegation
@@ -114,9 +116,10 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.8866
-      latency: {}
-    query: from(household-delegated).to(c4f82230-7da3-4b74-ab96-bc576cb08417)
+      mean: 0.9206
+      latency:
+        anchor_node_id: household-created
+    query: from(household-delegated).to(gm-abandonned-after-delegation)
     description: ''
   - uuid: a90c8a08-8437-4796-afd8-fa3c186ef316
     id: switch-registered-to-gm-abandoned-after-registration
@@ -125,9 +128,10 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1965
-      latency: {}
-    query: from(switch-registered).to(87e20915-cc26-417c-b0f0-4d6ea467e834)
+      mean: 0.2698
+      latency:
+        anchor_node_id: household-created
+    query: from(switch-registered).to(gm-abandoned-after-registration)
     description: ''
   - uuid: 97b11265-1242-4fa8-a097-359f2384665a
     id: switch-registered-to-switch-success
@@ -136,33 +140,34 @@ edges:
     fromHandle: right-out
     toHandle: left-out
     p:
-      mean: 0.8035087719298246
+      mean: 0.7302
       id: gm-registered-to-success
       connection: amplitude-prod
       latency:
         latency_parameter: true
         median_lag_days: 6.555877676365882
         mean_lag_days: 7.628800701296054
-        t95: 15.4
-        completeness: 0.9728737160600717
-        path_t95: 38.03
-      stdev: 0.023537036883668212
+        t95: 16.22
+        completeness: 0
+        path_t95: 31.16
+        anchor_node_id: household-created
+      stdev: 0
       evidence:
-        'n': 285
-        k: 229
-        window_from: 1-Nov-25
-        window_to: 15-Nov-25
-        retrieved_at: '2026-01-05T18:46:34.222Z'
+        'n': 0
+        k: 0
+        window_from: 29-Dec-25
+        window_to: 4-Jan-26
+        retrieved_at: '2026-01-05T21:22:23.009Z'
         source: amplitude
         full_query: from(switch-registered).to(switch-success)
-        mean: 0.8035087719298246
-        stdev: 0.023536639996430627
+        mean: 0
+        stdev: 0
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-05T18:46:34.222Z'
+        retrieved_at: '2026-01-05T21:22:23.009Z'
         full_query: from(switch-registered).to(switch-success)
       forecast:
-        mean: 0.7244043854308623
+        mean: 0.7301719258755363
     description: ''
     query: from(switch-registered).to(switch-success)
   - uuid: 7bb83fbf-3ac6-4152-a395-a8b64a12506a
@@ -172,33 +177,35 @@ edges:
     fromHandle: right-out
     toHandle: left-out
     p:
-      mean: 0.11337495892211633
+      mean: 0.0794
       id: gm-delegated-to-registered
       connection: amplitude-prod
       latency:
         latency_parameter: true
         median_lag_days: 9.991963333882843
         mean_lag_days: 10.797872242931911
-        t95: 15.13
-        completeness: 0.9991289978476979
-        path_t95: 27.56
-      stdev: 0.005748035141293117
+        t95: 19.94
+        completeness: 0.13908800169433028
+        path_t95: 19.94
+        anchor_node_id: household-created
+        anchor_node_id_overridden: false
+      stdev: 0
       evidence:
-        'n': 3043
-        k: 345
-        window_from: 1-Nov-25
-        window_to: 15-Nov-25
-        retrieved_at: '2026-01-05T18:46:34.744Z'
+        'n': 923
+        k: 0
+        window_from: 29-Dec-25
+        window_to: 4-Jan-26
+        retrieved_at: '2026-01-05T21:22:23.114Z'
         source: amplitude
         full_query: from(household-delegated).to(switch-registered)
-        mean: 0.11337495892211633
-        stdev: 0.005747481627461727
+        mean: 0
+        stdev: 0
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-05T18:46:34.744Z'
+        retrieved_at: '2026-01-05T21:22:23.114Z'
         full_query: from(household-delegated).to(switch-registered)
       forecast:
-        mean: 0.07063369390472407
+        mean: 0.07983025659033251
     description: ''
     query: from(household-delegated).to(switch-registered)
 policies:
@@ -207,7 +214,7 @@ metadata:
   name: gm-rebuild-jan-25
   description: ''
   created_at: '2026-01-05T12:49:08.196Z'
-  updated_at: '2026-01-05T18:46:35.043Z'
+  updated_at: '2026-01-05T21:22:23.248Z'
   version: 1.0.0
 dataInterestsDSL: window(-75d:);cohort(-75d:)
-currentQueryDSL: cohort(1-Nov-25:15-Nov-25)
+currentQueryDSL: cohort(29-Dec-25:4-Jan-26)
