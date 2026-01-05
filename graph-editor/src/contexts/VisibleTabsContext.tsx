@@ -79,6 +79,17 @@ function extractVisibleTabs(layout: LayoutData | null): Set<string> {
       traverse(floatPanel);
     });
   }
+
+  // Traverse maxbox (maximised panels)
+  // If we ignore this, maximised tabs will be treated as "invisible" on init.
+  if ((layout as any).maxbox) {
+    traverse((layout as any).maxbox);
+  }
+
+  // Traverse windowbox (pop-out windows)
+  if ((layout as any).windowbox) {
+    traverse((layout as any).windowbox);
+  }
   
   console.log(`[VisibleTabs] extractVisibleTabs: Found ${visible.size} visible tabs: [${Array.from(visible).join(', ')}]`);
   return visible;

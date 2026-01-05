@@ -194,11 +194,17 @@ class Layout(BaseModel):
 
 
 class NodeImage(BaseModel):
-    """Image reference for node display."""
-    url: str
-    alt: Optional[str] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
+    """
+    Node-attached image metadata (graph-level).
+    
+    NOTE: This matches the JSON schema `Node.images.items` shape:
+    - required: image_id, caption
+    - optional: caption_overridden, file_extension
+    """
+    image_id: str = Field(..., pattern=r"^[a-zA-Z0-9_-]+$")
+    caption: str = Field(..., max_length=256)
+    caption_overridden: bool = Field(False, description="If true, caption was manually edited at graph level")
+    file_extension: Optional[Literal["png", "jpg", "jpeg"]] = None
 
 
 class Node(BaseModel):

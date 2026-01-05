@@ -306,6 +306,12 @@ export class QueryRegenerationService {
         if (!node.id || (typeof node.id === 'string' && node.id.trim() === '')) {
           node.id = node.uuid as any;
         }
+
+        // Python compute schema does not need node images. Frontend stores images as {image_id,...}
+        // but Python schema's NodeImage expects {url,...} when present, causing validation failures.
+        // Strip images entirely to keep MSMDC and other compute endpoints schema-safe.
+        delete (node as any).images;
+        delete (node as any).images_overridden;
       }
     }
     

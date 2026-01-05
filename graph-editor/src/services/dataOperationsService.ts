@@ -2937,11 +2937,20 @@ class DataOperationsService {
         toast.error('No graph loaded');
         return;
       }
-      
-      const nodeFile = fileRegistry.getFile(`node-${nodeId}`);
+      // Mirror putParameterToFile behaviour: create file if missing.
+      let nodeFile = fileRegistry.getFile(`node-${nodeId}`);
+      let isNewFile = false;
       if (!nodeFile) {
-        toast.error(`Node file not found: ${nodeId}`);
-        return;
+        isNewFile = true;
+        console.log(`[putNodeToFile] File not found, creating: ${nodeId}`);
+        const { fileOperationsService } = await import('./fileOperationsService');
+        await fileOperationsService.createFile(nodeId, 'node', { openInTab: false });
+        nodeFile = fileRegistry.getFile(`node-${nodeId}`);
+        if (!nodeFile) {
+          toast.error(`Failed to create node file: ${nodeId}`);
+          return;
+        }
+        toast.success(`Created new node file: ${nodeId}`);
       }
       
       const sourceNode = graph.nodes?.find((n: any) => n.uuid === nodeId || n.id === nodeId || n.data?.id === nodeId);
@@ -2949,13 +2958,31 @@ class DataOperationsService {
         toast.error(`Node not found in graph`);
         return;
       }
-      
+
+      // For new files, run CREATE mappings first to initialise id/name/description/event_id.
+      if (isNewFile) {
+        const createResult = await updateManager.handleGraphToFile(
+          sourceNode,
+          nodeFile.data,
+          'CREATE',
+          'node',
+          { interactive: true, validateOnly: true }
+        );
+        if (createResult.success && createResult.changes?.length) {
+          const createdFileData = structuredClone(nodeFile.data);
+          applyChanges(createdFileData, createResult.changes);
+          await fileRegistry.updateFile(`node-${nodeId}`, createdFileData);
+          // Refresh local ref for subsequent UPDATE
+          nodeFile = fileRegistry.getFile(`node-${nodeId}`) || nodeFile;
+        }
+      }
+
       const result = await updateManager.handleGraphToFile(
         sourceNode,
         nodeFile.data,
         'UPDATE',
         'node',
-        { interactive: true }
+        { interactive: true, validateOnly: true }
       );
       
       if (!result.success || !result.changes) {

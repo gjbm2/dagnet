@@ -71,9 +71,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     const initialize = async () => {
       const savedState = await loadStateFromDB();
       const repoBranch = await loadCredentialsAndUpdateRepo(savedState);
-      // Proactively load items once repo/branch are known to avoid timing issues
+      // Policy: NO remote sync on init unless this is the first time the repo/branch is being initialised locally.
+      // We still populate the UI from IndexedDB immediately.
       if (repoBranch?.repo && repoBranch?.branch) {
-        await loadItems(repoBranch.repo, repoBranch.branch);
+        await loadItems(repoBranch.repo, repoBranch.branch, { syncMode: 'first-init' });
       }
       setIsInitialized(true);
     };
@@ -323,8 +324,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
       console.log(`🔄 NavigatorContext: Loading items for ${repo}/${selectedBranch} (loadItems will clear FileRegistry)`);
 
-      // Load items for this repository with the selected branch (loadItems will clear FileRegistry)
-      await loadItems(repo, selectedBranch);
+      // User repo change policy:
+      // - If workspace exists locally: pull latest
+      // - If workspace missing locally: clone
+      await loadItems(repo, selectedBranch, { syncMode: 'user-change' });
     }
   }, []);
 
@@ -347,8 +350,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
     console.log(`🔄 NavigatorContext: Loading items for ${currentRepo}/${branch}`);
 
-    // Reload items for new branch (loadItems will clear FileRegistry)
-    await loadItems(currentRepo, branch);
+    // User branch change policy: treat as repo change (sync allowed).
+    await loadItems(currentRepo, branch, { syncMode: 'user-change' });
   }, [state.selectedRepo]);
 
   /**
@@ -407,12 +410,19 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    * 3. Load from IDB (not Git API)
    * 4. Build Navigator items from FileStates
    */
-  const loadItems = useCallback(async (repo: string, branch: string) => {
+  type LoadItemsSyncMode = 'none' | 'first-init' | 'user-change';
+
+  const loadItems = useCallback(async (
+    repo: string,
+    branch: string,
+    opts?: { syncMode?: LoadItemsSyncMode }
+  ) => {
     console.log(`📦 WorkspaceService: loadItems called for ${repo}/${branch}`);
     if (!repo) {
       console.log('📦 WorkspaceService: No repo provided, skipping');
       return;
     }
+    const syncMode: LoadItemsSyncMode = opts?.syncMode ?? 'none';
 
     // Prevent concurrent loads (use ref for synchronous check)
     if (loadingRef.current) {
@@ -423,14 +433,25 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     loadingRef.current = true;
     setIsLoading(true);
 
-    // Clear FileRegistry before loading new workspace to prevent file ID collisions
-    // Files from different repos can have same IDs (e.g. parameter-checkout-duration)
-    console.log(`🧹 NavigatorContext: Clearing FileRegistry before loading ${repo}/${branch}`);
-    const registrySize = (fileRegistry as any).files.size;
-    const filesBefore = Array.from((fileRegistry as any).files.keys());
-    (fileRegistry as any).files.clear();
-    (fileRegistry as any).listeners.clear();
-    console.log(`🧹 NavigatorContext: Cleared ${registrySize} files from FileRegistry:`, filesBefore);
+    // IMPORTANT:
+    // - Clearing FileRegistry is disruptive: it will blank already-open tabs and leave them showing
+    //   "Loading graph..." (etc.) until the editor reload logic catches up.
+    // - We only clear when the user explicitly changes repo/branch (syncMode=user-change),
+    //   to avoid nuking restored tabs during startup.
+    //
+    // Note: we still rely on the single-workspace policy below to prevent IDB mixing.
+    if (syncMode === 'user-change') {
+      // Clear FileRegistry before loading new workspace to prevent file ID collisions
+      // Files from different repos can have same IDs (e.g. parameter-checkout-duration)
+      console.log(`🧹 NavigatorContext: Clearing FileRegistry before loading ${repo}/${branch} (syncMode=user-change)`);
+      const registrySize = (fileRegistry as any).files.size;
+      const filesBefore = Array.from((fileRegistry as any).files.keys());
+      (fileRegistry as any).files.clear();
+      (fileRegistry as any).listeners.clear();
+      console.log(`🧹 NavigatorContext: Cleared ${registrySize} files from FileRegistry:`, filesBefore);
+    } else {
+      console.log(`🧹 NavigatorContext: Preserving FileRegistry contents (syncMode=${syncMode})`);
+    }
 
     try {
       // SINGLE WORKSPACE POLICY: Ensure only ONE workspace exists in IDB
@@ -490,24 +511,34 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       console.log(`🔍 NavigatorContext: Workspace ${repo}/${branch} exists: ${workspaceExists}`);
 
       if (!workspaceExists) {
-        console.log(`🔄 NavigatorContext: Workspace ${repo}/${branch} doesn't exist, cloning from repository...`);
-        await workspaceService.cloneWorkspace(repo, branch, gitCreds);
-        console.log(`✅ NavigatorContext: Clone complete for ${repo}/${branch}`);
-      } else {
-        // CRITICAL: Pull latest changes AND load into FileRegistry
-        // This ensures index files and new files are fetched when switching repos
-        console.log(`📦 NavigatorContext: Workspace ${repo}/${branch} exists, pulling latest changes...`);
-        try {
-          await workspaceService.pullLatest(repo, branch, gitCreds);
-          console.log(`✅ NavigatorContext: Pull complete for ${repo}/${branch}`);
-          // CRITICAL: pullLatest updates IDB but doesn't populate FileRegistry when no changes
-          // Must load from IDB into FileRegistry after pull
-          console.log(`📦 NavigatorContext: Loading pulled files into FileRegistry...`);
-          await workspaceService.loadWorkspaceFromIDB(repo, branch);
-        } catch (pullError) {
-          console.warn(`⚠️ NavigatorContext: Pull failed, falling back to IDB cache:`, pullError);
-          await workspaceService.loadWorkspaceFromIDB(repo, branch);
+        // Allowed remote sync: first init (initial local clone) OR explicit user repo/branch change.
+        if (syncMode === 'first-init' || syncMode === 'user-change') {
+          console.log(`🔄 NavigatorContext: Workspace ${repo}/${branch} missing, cloning from repository...`);
+          await workspaceService.cloneWorkspace(repo, branch, gitCreds);
+          console.log(`✅ NavigatorContext: Clone complete for ${repo}/${branch}`);
+        } else {
+          // Policy: Never clone/pull implicitly. If there's no local workspace and we weren't
+          // invoked by an allowed sync trigger, just show empty state from IDB.
+          console.log(`📦 NavigatorContext: Workspace ${repo}/${branch} missing; skipping clone (syncMode=${syncMode})`);
         }
+      } else {
+        // Policy:
+        // - Pull ONLY on explicit user repo/branch change (or explicit pull via git menu/service).
+        // - Never pull on init hydration or passive loads.
+        if (syncMode === 'user-change') {
+          console.log(`📦 NavigatorContext: User changed repo/branch; pulling latest for ${repo}/${branch}...`);
+          try {
+            await workspaceService.pullLatest(repo, branch, gitCreds);
+            console.log(`✅ NavigatorContext: Pull complete for ${repo}/${branch}`);
+          } catch (pullError) {
+            console.warn(`⚠️ NavigatorContext: Pull failed, falling back to IDB cache:`, pullError);
+          }
+        } else {
+          console.log(`📦 NavigatorContext: Loading from IDB only for ${repo}/${branch} (syncMode=${syncMode})`);
+        }
+
+        // Always load into FileRegistry from IDB after any attempted sync (or no-op sync).
+        await workspaceService.loadWorkspaceFromIDB(repo, branch);
       }
 
       // Get all files from workspace (IDB)
@@ -516,11 +547,16 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
       // If workspace exists but has no files, force re-clone
       if (workspaceFiles.length === 0 && workspaceExists) {
-        console.log(`⚠️ WorkspaceService: Workspace exists but is empty! Force re-cloning...`);
-        await workspaceService.deleteWorkspace(repo, branch);
-        await workspaceService.cloneWorkspace(repo, branch, gitCreds);
-        workspaceFiles = await workspaceService.getWorkspaceFiles(repo, branch);
-        console.log(`📦 WorkspaceService: Re-cloned, now have ${workspaceFiles.length} files`);
+        // Treat empty workspace as missing. Only allowed to self-heal if invoked by an allowed sync trigger.
+        if (syncMode === 'first-init' || syncMode === 'user-change') {
+          console.log(`⚠️ WorkspaceService: Workspace exists but is empty! Re-cloning (syncMode=${syncMode})...`);
+          await workspaceService.deleteWorkspace(repo, branch);
+          await workspaceService.cloneWorkspace(repo, branch, gitCreds);
+          workspaceFiles = await workspaceService.getWorkspaceFiles(repo, branch);
+          console.log(`📦 WorkspaceService: Re-cloned, now have ${workspaceFiles.length} files`);
+        } else {
+          console.log(`⚠️ WorkspaceService: Workspace exists but is empty; skipping re-clone (syncMode=${syncMode})`);
+        }
       }
 
       // Build RepositoryItem list from FileStates
@@ -627,16 +663,6 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     }
   }, []); // Empty deps - uses params, not external state
 
-  // Load items when repo or branch changes
-  useEffect(() => {
-    if (state.selectedRepo && state.selectedBranch) {
-      console.log(`🔄 NavigatorContext: useEffect triggered - loading items for ${state.selectedRepo}/${state.selectedBranch}`);
-      loadItems(state.selectedRepo, state.selectedBranch);
-    } else {
-      console.log(`🔄 NavigatorContext: useEffect triggered but no repo/branch selected`);
-    }
-  }, [state.selectedRepo, state.selectedBranch, loadItems]);
-
   /**
    * Add local item (uncommitted)
    */
@@ -666,7 +692,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
    */
   const refreshItems = useCallback(async () => {
     if (state.selectedRepo && state.selectedBranch) {
-      await loadItems(state.selectedRepo, state.selectedBranch);
+      // Refresh is local-only: it should never implicitly pull.
+      await loadItems(state.selectedRepo, state.selectedBranch, { syncMode: 'none' });
     }
   }, [state.selectedRepo, state.selectedBranch]);
 

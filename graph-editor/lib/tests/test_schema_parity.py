@@ -27,7 +27,7 @@ from graph_types import (
     Graph, Node, Edge, Evidence, ProbabilityParam, CostParam,
     ConditionalProbability, Metadata, Policies, Layout,
     ResidualBehavior, DataSource, CaseDataSource,
-    LatencyConfig, ForecastParams
+    LatencyConfig, ForecastParams, NodeImage
 )
 
 
@@ -188,6 +188,41 @@ class TestNodeParity:
         python_props = get_pydantic_fields(Node)
         
         assert_bidirectional_parity(schema_props, python_props, 'Node')
+
+
+class TestNodeImageParity:
+    """
+    Node.images.items must match the NodeImage Python model.
+    
+    This specifically catches nested drift (e.g. Python expecting url while schema expects image_id/caption).
+    """
+    
+    def test_node_image_items_field_parity(self):
+        schema = load_schema()
+        node_def = schema['$defs']['Node']
+        images_items_def = node_def['properties']['images']['items']
+        
+        schema_props = get_schema_properties(images_items_def)
+        python_props = get_pydantic_fields(NodeImage)
+        
+        assert_bidirectional_parity(schema_props, python_props, 'Node.images.items (NodeImage)')
+    
+    def test_node_image_items_required_fields(self):
+        schema = load_schema()
+        node_def = schema['$defs']['Node']
+        images_items_def = node_def['properties']['images']['items']
+        schema_required = set(images_items_def.get('required', []))
+        
+        # Pydantic v2: field.is_required() is the canonical check.
+        python_required = {
+            name for name, field_info in NodeImage.model_fields.items()
+            if field_info.is_required()
+        }
+        
+        assert schema_required == python_required, (
+            f"NodeImage required fields mismatch. "
+            f"schema={sorted(schema_required)} python={sorted(python_required)}"
+        )
 
 
 class TestMetadataParity:

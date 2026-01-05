@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect, createContext, useContext } from 'react';
+import React, { useState, useCallback, useRef, useEffect, createContext, useContext, useMemo } from 'react';
 import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
@@ -57,23 +57,24 @@ export function EntriesRegistryProvider({
   onEntryContextMenu?: (entry: NavigatorEntry, event: React.MouseEvent) => void;
   children: React.ReactNode;
 }) {
-  // Build a stable Map from entries - rebuild when entries change
-  const entriesMap = useRef(new Map<string, NavigatorEntry>());
-  
-  // Update the map whenever entries change
-  useEffect(() => {
-    entriesMap.current.clear();
+  // IMPORTANT:
+  // Build the lookup map synchronously during render.
+  // Doing this in useEffect causes a transient render where NavigatorItem can't find any entries
+  // (it returns null), which manifests as "navigator empties then reappears" during init.
+  const entriesMap = useMemo(() => {
+    const m = new Map<string, NavigatorEntry>();
     for (const entry of entries) {
-      entriesMap.current.set(entry.fileId, entry);
+      m.set(entry.fileId, entry);
     }
+    return m;
   }, [entries]);
   
   const getEntry = useCallback((fileId: string): NavigatorEntry | undefined => {
-    return entriesMap.current.get(fileId);
-  }, []);
+    return entriesMap.get(fileId);
+  }, [entriesMap]);
   
   const handleItemClick = useCallback((fileId: string) => {
-    const entry = entriesMap.current.get(fileId);
+    const entry = entriesMap.get(fileId);
     if (entry) {
       onEntryClick(entry);
     } else {
@@ -81,14 +82,14 @@ export function EntriesRegistryProvider({
       // Avoid spamming console.error (it looks like a crash when it isn't).
       console.warn(`[EntriesRegistry] No entry found for fileId: ${fileId}`);
     }
-  }, [onEntryClick]);
+  }, [onEntryClick, entriesMap]);
   
   const handleItemContextMenu = useCallback((fileId: string, event: React.MouseEvent) => {
-    const entry = entriesMap.current.get(fileId);
+    const entry = entriesMap.get(fileId);
     if (entry && onEntryContextMenu) {
       onEntryContextMenu(entry, event);
     }
-  }, [onEntryContextMenu]);
+  }, [onEntryContextMenu, entriesMap]);
   
   const value: EntriesRegistryContextValue = {
     getEntry,

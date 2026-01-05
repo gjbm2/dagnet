@@ -509,8 +509,13 @@ function MainAppShellContent() {
       }
     };
     
+    // IMPORTANT: include ALL rc-dock containers.
+    // If we ignore maxbox/windowbox, we will treat maximised tabs as "not in layout",
+    // and the sync loop will re-add/re-dock them, effectively destroying the maximised state on F5.
     if (layout.dockbox) extractFromBox(layout.dockbox);
     if (layout.floatbox) extractFromBox(layout.floatbox);
+    if ((layout as any).windowbox) extractFromBox((layout as any).windowbox);
+    if ((layout as any).maxbox) extractFromBox((layout as any).maxbox);
     
     return Array.from(tabIdSet);
   }, []);
