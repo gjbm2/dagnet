@@ -18,6 +18,28 @@
 
 ## Core Principles
 
+### 0. SYSTEMATIC CAUTION UNTIL FULL CONTEXT IS UNDERSTOOD
+**CRITICAL**: Do not make behavioural or semantic changes (especially caching, query semantics, data shape, or persistence) until you have absorbed the *relevant* code context end-to-end.
+
+This repo is large and subtle; over-confidence causes regressions. The assistant must default to *cautious, systematic* work.
+
+**Before proposing or implementing a semantic change** (e.g. “X should be part of the cache signature”):
+- **TRIPLE-SEARCH** the repo for existing implementations and prior decisions (`grep` + `codebase_search`), including docs in `docs/current/`.
+- **Trace the full path** for the behaviour: UI entry points → hooks → services → storage/adapters → caches → persistence formats.
+- **Identify all call sites** and *all* related “signature/key” mechanisms (often there are multiple caches with different purposes).
+- **Read relevant project context docs first**: `docs/current/project-contexts/` and any referenced design docs.
+- **Write down the invariants** you believe the system relies on (e.g. what is expected to invalidate cache vs remain stable).
+
+**Uncertainty discipline**:
+- If you are not sure, **say so explicitly** and ask clarifying questions *before changing code*.
+- Avoid definitive language like “this is correct”, “done”, “fixed” until confirmed by code inspection and relevant tests.
+- Prefer: “I believe…”, “Based on the current implementation…”, “I haven’t yet confirmed X; next I will…”.
+
+**Change discipline**:
+- Make the **smallest** change that accomplishes the intent.
+- Re-check assumptions after reading each key module (e.g. where the query payload is constructed, where signatures are computed, where caches are consumed).
+- After changes, **run only the relevant tests** and do not claim success until they pass.
+
 ### 1. NO LOGIC IN UI/MENU FILES
 **CRITICAL**: Menu files, context menus, and UI components are ACCESS POINTS ONLY.
 

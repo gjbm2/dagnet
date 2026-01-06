@@ -1,0 +1,102 @@
+version: 1.0.0
+created_at: 2025-11-24T10:43:39.915Z
+nodes:
+  - id: abandonned-before-delegation
+    file_path: nodes/abandonned-before-delegation.yaml
+    status: active
+    created_at: 2025-11-19T23:52:59.177Z
+    name: abandonned-before-delegation
+    tags: []
+  - id: gave-bds-in-onboarding
+    file_path: nodes/gave-bds-in-onboarding.yaml
+    status: active
+    created_at: 2025-11-24T18:09:12.013Z
+    name: Gave bds in onboarding
+    tags: []
+    event_id: gave-bds
+  - id: gm-abandoned-after-registration
+    file_path: nodes/gm-abandoned-after-registration.yaml
+    status: active
+    created_at: 2026-01-05T18:15:23.707Z
+    updated_at: 2026-01-05T18:15:23.819Z
+    author: user
+    version: 1.0.0
+    name: Gm abandoned after registration
+  - id: gm-abandonned-after-delegation
+    file_path: nodes/gm-abandonned-after-delegation.yaml
+    status: active
+    created_at: 2026-01-05T18:15:22.887Z
+    updated_at: 2026-01-05T18:15:22.958Z
+    author: user
+    version: 1.0.0
+    name: Gm abandonned after delegation
+  - id: gm-abandonned-delegation
+    file_path: nodes/gm-abandonned-delegation.yaml
+    status: active
+    created_at: 2026-01-05T18:15:17.426Z
+    updated_at: 2026-01-05T18:15:17.460Z
+    author: user
+    version: 1.0.0
+    name: Gm abandonned delegation
+  - id: household-created
+    file_path: nodes/household-created.yaml
+    status: active
+    created_at: 2025-11-19T23:52:25.409Z
+    name: Household created
+    tags: []
+  - id: household-delegated
+    file_path: nodes/household-delegated.yaml
+    status: active
+    created_at: 2025-11-19T23:52:33.764Z
+    name: household-delegated
+    tags: []
+  - id: no-recommendation-sent
+    file_path: nodes/no-recommendation-sent.yaml
+    status: active
+    created_at: 2025-12-02T11:09:32.920Z
+    name: No recommendation sent
+    tags: []
+  - id: post-recommendation-failure
+    file_path: nodes/post-recommendation-failure.yaml
+    status: active
+    created_at: 2025-11-24T17:43:24.071Z
+    name: Post recommendation failure
+    tags: []
+  - id: post-registration-failure
+    file_path: nodes/post-registration-failure.yaml
+    status: active
+    created_at: 2025-11-24T17:43:58.567Z
+    name: Post registration failure
+    tags: []
+  - id: recommendation-offered
+    file_path: nodes/recommendation-offered.yaml
+    status: active
+    created_at: 2025-11-26T12:29:45.608Z
+    name: recommendation-offered
+  - id: switch-registered
+    file_path: nodes/switch-registered.yaml
+    status: active
+    created_at: 2025-11-24T14:44:24.484Z
+    name: Switch registered
+    tags: []
+    event_id: switch-registered
+  - id: switch-success
+    file_path: nodes/switch-success.yaml
+    status: active
+    created_at: 2025-11-24T16:38:17.008Z
+    name: Switch success
+    tags: []
+    event_id: switch-success
+  - id: viewed-coffee-screen
+    file_path: nodes/viewed-coffee-screen.yaml
+    status: active
+    created_at: 2025-11-24T10:43:39.950Z
+    name: Viewed coffee screen
+    description: Node definition not found
+    tags: []
+    event_id: viewed-coffee-screen
+updated_at: 2026-01-06T11:08:37.374Z
+metadata:
+  created_at: 2025-11-24T13:02:17.553Z
+  version: 1.0.0
+  updated_at: 2025-11-27T01:19:46.092Z

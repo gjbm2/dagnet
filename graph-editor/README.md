@@ -41,3 +41,12 @@ User-facing docs (including the changelog) live under:
 - `graph-editor/public/docs/`
 
 See the root [`README.md`](../README.md#documentation) for an index of public and technical documentation.
+
+## Utility scripts
+
+Developer-facing utilities live under:
+
+- `graph-editor/scripts/`
+
+In particular, `graph-editor/scripts/export-graph-bundle.js` can export one or more graphs (and their dependencies) into a
+new folder for debugging or for creating a smaller repo. See `graph-editor/scripts/README.md`.

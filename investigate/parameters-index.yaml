@@ -1,0 +1,102 @@
+version: 1.0.0
+created_at: 2025-11-24T10:43:39.958Z
+parameters:
+  - id: bds-to-energy-rec
+    file_path: parameters/bds-to-energy-rec.yaml
+    status: active
+    type: probability
+    created_at: 2025-12-03T11:34:28.463Z
+    updated_at: 2025-12-03T11:34:28.464Z
+    author: user
+    version: 1.0.0
+    name: bds-to-energy-rec
+  - id: coffee-to-bds
+    file_path: parameters/coffee-to-bds.yaml
+    status: active
+    type: probability
+    created_at: 2025-12-01T18:01:43.576Z
+    updated_at: 2025-12-01T18:01:43.586Z
+    author: user
+    version: 1.0.0
+    name: coffee-to-bds
+  - id: delegated-to-coffee
+    file_path: parameters/delegated-to-coffee.yaml
+    status: active
+    type: probability
+    created_at: 2025-12-02T14:58:01.494Z
+    updated_at: 2025-12-02T14:58:01.497Z
+    author: user
+    version: 1.0.0
+    name: delegated-to-coffee
+  - id: delegation-straight-to-energy-rec
+    file_path: parameters/delegation-straight-to-energy-rec.yaml
+    status: active
+    type: probability
+    created_at: 2025-12-05T13:30:37.334Z
+    updated_at: 2025-12-05T13:30:37.336Z
+    author: user
+    version: 1.0.0
+    name: delegation-straight-to-energy-rec
+  - id: gm-create-to-delegated
+    file_path: parameters/gm-create-to-delegated.yaml
+    status: active
+    type: probability
+    created_at: 2026-01-05T13:13:01.710Z
+    updated_at: 2026-01-05T13:13:01.722Z
+    author: user
+    version: 1.0.0
+    name: gm-create-to-delegated
+  - id: gm-delegated-to-registered
+    file_path: parameters/gm-delegated-to-registered.yaml
+    status: active
+    type: probability
+    created_at: 2026-01-05T13:32:30.148Z
+    updated_at: 2026-01-05T13:32:30.262Z
+    author: user
+    version: 1.0.0
+    name: gm-delegated-to-registered
+  - id: gm-registered-to-success
+    file_path: parameters/gm-registered-to-success.yaml
+    status: active
+    type: probability
+    created_at: 2026-01-05T13:32:49.266Z
+    updated_at: 2026-01-05T13:32:52.361Z
+    author: user
+    version: 1.0.0
+    name: gm-registered-to-success
+  - id: household-delegation-rate
+    file_path: parameters/household-delegation-rate.yaml
+    status: active
+    created_at: 2025-11-20T01:46:28.642Z
+    name: household-delegation-rate
+    type: probability
+  - id: no-bdos-to-rec
+    file_path: parameters/no-bdos-to-rec.yaml
+    status: active
+    type: probability
+    created_at: 2025-12-02T15:47:33.214Z
+    updated_at: 2025-12-02T15:47:33.223Z
+    author: user
+    version: 1.0.0
+    name: no-bdos-to-rec
+  - id: rec-with-bdos-to-registration
+    file_path: parameters/rec-with-bdos-to-registration.yaml
+    status: active
+    type: probability
+    tags: []
+    created_at: 2025-11-26T10:12:09.204Z
+    updated_at: 2025-12-05T12:16:17.444Z
+    author: user
+    version: 1.0.0
+    name: rec-with-bdos-to-registration
+  - id: registration-to-success
+    file_path: parameters/registration-to-success.yaml
+    status: active
+    created_at: 2025-11-26T10:12:50.331Z
+    name: registration-to-success
+    type: probability
+updated_at: 2026-01-06T11:08:37.922Z
+metadata:
+  created_at: 2025-11-25T18:25:43.801Z
+  version: 1.0.0
+  updated_at: 2025-11-27T01:19:46.092Z

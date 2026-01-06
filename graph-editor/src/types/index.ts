@@ -838,6 +838,7 @@ export interface ConversionGraph {
   policies: Policies;
   metadata: Metadata;
   postits?: PostIt[];
+  debugging?: boolean;
   
   // Contexts: Data interests specification for nightly runner
   dataInterestsDSL?: string; // Query template (e.g., "context(channel);context(browser-type).window(-90d:)")

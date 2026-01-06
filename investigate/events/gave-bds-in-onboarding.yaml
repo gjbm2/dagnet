@@ -1,0 +1,18 @@
+id: gave-bds-in-onboarding
+name: gave-bds-in-onboarding
+category: conversion
+tags: []
+provider_event_names:
+  amplitude: BankAccount DetailsEntryConfirmed
+amplitude_filters:
+  - property: context
+    operator: is
+    values:
+      - ONBOARDING
+metadata:
+  created_at: 2025-11-26T09:51:31.154Z
+  updated_at: 2025-11-26T12:41:07.669Z
+  status: active
+  author: user
+  version: 1.0.0
+updated_at: 2025-11-26T09:52:02.699Z

@@ -1,0 +1,288 @@
+{
+  "nodes": [
+    {
+      "uuid": "4bdf1510-0cb8-4b4e-a566-f8eb349b0b83",
+      "id": "household-created",
+      "label": "Household created",
+      "absorbing": false,
+      "layout": {
+        "x": -164,
+        "y": 440
+      },
+      "description": "",
+      "event_id": "household-created",
+      "images": [
+        {
+          "image_id": "household-created-img",
+          "caption": "Dagnet time",
+          "file_extension": "png",
+          "caption_overridden": false
+        }
+      ],
+      "entry": {
+        "is_start": true
+      }
+    },
+    {
+      "uuid": "9766ad2c-aca6-4537-b8d7-eb4d426515d6",
+      "id": "household-delegated",
+      "label": "household-delegated",
+      "absorbing": false,
+      "layout": {
+        "x": 21,
+        "y": 382
+      },
+      "description": "",
+      "event_id": "household-delegated",
+      "images": []
+    },
+    {
+      "uuid": "c57ab84f-91e2-43bb-be3b-6e504ef8b6f3",
+      "id": "switch-registered",
+      "label": "Switch registered",
+      "absorbing": false,
+      "layout": {
+        "x": 283,
+        "y": 314
+      },
+      "event_id": "switch-registered",
+      "images": []
+    },
+    {
+      "uuid": "04332060-3c28-4465-920e-17949934b7d4",
+      "id": "switch-success",
+      "label": "Switch success",
+      "absorbing": false,
+      "layout": {
+        "x": 544,
+        "y": 238
+      },
+      "event_id": "switch-success",
+      "images": []
+    },
+    {
+      "uuid": "5326970e-e45d-4666-953c-53905fac56ab",
+      "id": "gm-abandonned-delegation",
+      "label": "Gm abandonned delegation",
+      "absorbing": false,
+      "layout": {
+        "x": 37,
+        "y": 522
+      }
+    },
+    {
+      "uuid": "c4f82230-7da3-4b74-ab96-bc576cb08417",
+      "id": "gm-abandonned-after-delegation",
+      "label": "Gm abandonned after delegation",
+      "absorbing": false,
+      "layout": {
+        "x": 296,
+        "y": 483
+      }
+    },
+    {
+      "uuid": "87e20915-cc26-417c-b0f0-4d6ea467e834",
+      "id": "gm-abandoned-after-registration",
+      "label": "Gm abandoned after registration",
+      "absorbing": false,
+      "layout": {
+        "x": 517,
+        "y": 438
+      }
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "c64ddc4d-c369-4ae8-a44a-398a63a46ab1",
+      "id": "household-created-to-household-delegated",
+      "from": "4bdf1510-0cb8-4b4e-a566-f8eb349b0b83",
+      "to": "9766ad2c-aca6-4537-b8d7-eb4d426515d6",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.5894308943089431,
+        "id": "gm-create-to-delegated",
+        "connection": "amplitude-prod",
+        "connection_overridden": false,
+        "latency": {
+          "anchor_node_id": "household-created"
+        },
+        "stdev": 0.03136512225879158,
+        "evidence": {
+          "n": 246,
+          "k": 145,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:25.898Z",
+          "source": "amplitude",
+          "full_query": "from(household-created).to(household-delegated)",
+          "mean": 0.5894308943089431,
+          "stdev": 0.031364764235381516
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:25.898Z",
+          "full_query": "from(household-created).to(household-delegated)"
+        },
+        "forecast": {
+          "mean": 0.532920365735324
+        }
+      },
+      "description": "",
+      "query": "from(household-created).to(household-delegated)"
+    },
+    {
+      "uuid": "2d5ca246-b4d2-478f-bed6-487b76989b4c",
+      "id": "household-created-to-gm-abandonned-delegation",
+      "from": "4bdf1510-0cb8-4b4e-a566-f8eb349b0b83",
+      "to": "5326970e-e45d-4666-953c-53905fac56ab",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.4106,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(household-created).to(gm-abandonned-delegation)",
+      "description": ""
+    },
+    {
+      "uuid": "5f1aa0dd-613f-46e1-868e-69fc002fe45b",
+      "id": "household-delegated-to-gm-gm-abandonned-delegation-after-delegation",
+      "from": "9766ad2c-aca6-4537-b8d7-eb4d426515d6",
+      "to": "c4f82230-7da3-4b74-ab96-bc576cb08417",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.8414,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(household-delegated).to(gm-abandonned-after-delegation)",
+      "description": ""
+    },
+    {
+      "uuid": "a90c8a08-8437-4796-afd8-fa3c186ef316",
+      "id": "switch-registered-to-gm-abandoned-after-registration",
+      "from": "c57ab84f-91e2-43bb-be3b-6e504ef8b6f3",
+      "to": "87e20915-cc26-417c-b0f0-4d6ea467e834",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.205,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(switch-registered).to(gm-abandoned-after-registration)",
+      "description": ""
+    },
+    {
+      "uuid": "7bb83fbf-3ac6-4152-a395-a8b64a12506a",
+      "id": "household-delegated-to-switch-registered",
+      "from": "9766ad2c-aca6-4537-b8d7-eb4d426515d6",
+      "to": "c57ab84f-91e2-43bb-be3b-6e504ef8b6f3",
+      "fromHandle": "right-out",
+      "toHandle": "left-out",
+      "p": {
+        "mean": 0.15862068965517243,
+        "id": "gm-delegated-to-registered",
+        "connection": "amplitude-prod",
+        "latency": {
+          "latency_parameter": true,
+          "median_lag_days": 9.991963333882843,
+          "mean_lag_days": 10.797872242931911,
+          "t95": 15.13,
+          "completeness": 1,
+          "path_t95": 15.13,
+          "latency_parameter_overridden": false,
+          "anchor_node_id_overridden": false,
+          "anchor_node_id": "household-created"
+        },
+        "stdev": 0.030336735441398095,
+        "evidence": {
+          "n": 145,
+          "k": 23,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:26.675Z",
+          "source": "amplitude",
+          "full_query": "from(household-delegated).to(switch-registered)",
+          "mean": 0.15862068965517243,
+          "stdev": 0.030338341107614953
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:26.675Z",
+          "full_query": "from(household-delegated).to(switch-registered)"
+        },
+        "forecast": {
+          "mean": 0.09595897806080847
+        }
+      },
+      "description": "",
+      "query": "from(household-delegated).to(switch-registered)"
+    },
+    {
+      "uuid": "97b11265-1242-4fa8-a097-359f2384665a",
+      "id": "switch-registered-to-switch-success",
+      "from": "c57ab84f-91e2-43bb-be3b-6e504ef8b6f3",
+      "to": "04332060-3c28-4465-920e-17949934b7d4",
+      "fromHandle": "right-out",
+      "toHandle": "left-out",
+      "p": {
+        "mean": 0.795,
+        "id": "gm-registered-to-success",
+        "connection": "amplitude-prod",
+        "latency": {
+          "latency_parameter": true,
+          "median_lag_days": 6.555877676365882,
+          "mean_lag_days": 7.628800701296054,
+          "t95": 15.4,
+          "completeness": 0.9990544297892618,
+          "path_t95": 28.1,
+          "anchor_node_id_overridden": false,
+          "latency_parameter_overridden": false,
+          "anchor_node_id": "household-created"
+        },
+        "stdev": 0.09593963455350907,
+        "evidence": {
+          "n": 23,
+          "k": 16,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:26.804Z",
+          "source": "amplitude",
+          "full_query": "from(switch-registered).to(switch-success)",
+          "mean": 0.6956521739130435,
+          "stdev": 0.09594387554215139
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:26.804Z",
+          "full_query": "from(switch-registered).to(switch-success)"
+        },
+        "forecast": {
+          "mean": 0.8096378411131957
+        }
+      },
+      "description": "",
+      "query": "from(switch-registered).to(switch-success)"
+    }
+  ],
+  "policies": {
+    "default_outcome": "success"
+  },
+  "metadata": {
+    "name": "gm-rebuild-jan-25",
+    "description": "",
+    "created_at": "2026-01-05T12:49:08.196Z",
+    "updated_at": "2026-01-06T18:12:02.838Z",
+    "version": "1.0.0"
+  },
+  "dataInterestsDSL": "window(-90d:);cohort(-90d:)",
+  "currentQueryDSL": "cohort(1-Nov-25:1-Nov-25)",
+  "debugging": true
+}

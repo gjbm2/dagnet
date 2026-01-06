@@ -315,6 +315,7 @@ class Graph(BaseModel):
     baseDSL: Optional[str] = Field(None, description="Base DSL that is always applied (e.g. global context filters)")
     currentQueryDSL: Optional[str] = Field(None, description="Current user query DSL for UI persistence")
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")
+    debugging: Optional[bool] = Field(None, description="If true, run Graph Issues checks while this graph is open and show an Issues indicator overlay.")
     
     def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get node by ID or UUID."""

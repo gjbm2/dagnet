@@ -11,6 +11,7 @@ import { IntegrityCheckService } from './integrityCheckService';
 import { fileRegistry } from '../contexts/TabContext';
 import type { ObjectType, TabState } from '../types';
 import { formatIssuesForClipboard } from './graphIssuesClipboardExport';
+import { sessionLogService } from './sessionLogService';
 
 type IssueSeverity = 'error' | 'warning' | 'info';
 
@@ -66,6 +67,7 @@ type Subscriber = (state: GraphIssuesState) => void;
 
 const DEBOUNCE_MS = 2000;
 const FILE_ID = 'graph-issues';
+const SELECT_GRAPH_EVENT = 'dagnet:graphIssuesSelectGraph';
 
 class GraphIssuesService {
   private state: GraphIssuesState = {
@@ -86,6 +88,32 @@ class GraphIssuesService {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private isInitialised = false;
   private periodicCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private pendingGraphSelectionByTabId = new Map<string, { graphName: string; t0: number }>();
+
+  private findGraphFileByName(graphName: string): { fileId: string; data: any } | null {
+    const allFiles = fileRegistry.getAllFiles();
+
+    // Prefer loaded graph files with data.
+    for (const file of allFiles) {
+      if (!file?.fileId) continue;
+      if (!file.fileId.includes('graph-')) continue;
+      const name = this.extractGraphName(file.fileId);
+      if (name !== graphName) continue;
+      if (!file.data) continue;
+      return { fileId: file.fileId, data: file.data };
+    }
+
+    // If we can't find the file data, still return a matching fileId if present (toggle may be disabled upstream).
+    for (const file of allFiles) {
+      if (!file?.fileId) continue;
+      if (!file.fileId.includes('graph-')) continue;
+      const name = this.extractGraphName(file.fileId);
+      if (name !== graphName) continue;
+      return { fileId: file.fileId, data: file.data };
+    }
+
+    return null;
+  }
   
   /**
    * Initialise the service (called lazily on first subscription or tab open)
@@ -136,8 +164,10 @@ class GraphIssuesService {
     // Update loading state
     this.state = { ...this.state, isLoading: true, error: null };
     this.notifySubscribers();
-    
+
+    let opId: string | null = null;
     try {
+      opId = sessionLogService.startOperation('info', 'integrity', 'GRAPH_ISSUES_CHECK', 'Running graph integrity check');
       const startTime = performance.now();
       
       // Run integrity check with a mock tabOperations (we don't need tab opening here)
@@ -152,6 +182,7 @@ class GraphIssuesService {
       
       const elapsed = performance.now() - startTime;
       console.log(`[GraphIssuesService] Check completed in ${elapsed.toFixed(0)}ms: ${result.issues.length} issues`);
+      sessionLogService.endOperation(opId, 'success', `Integrity check complete (${result.issues.length} issues)`);
       
       // Convert to our issue format with unique IDs
       const issues: GraphIssue[] = result.issues.map((issue, idx) => ({
@@ -179,6 +210,18 @@ class GraphIssuesService {
       
     } catch (error) {
       console.error('[GraphIssuesService] Check failed:', error);
+      if (opId) {
+        try {
+          sessionLogService.endOperation(opId, 'error', 'Integrity check failed');
+        } catch {
+          // Ignore
+        }
+      }
+      try {
+        sessionLogService.error('integrity', 'GRAPH_ISSUES_CHECK_ERROR', `Integrity check failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      } catch {
+        // Never fail the check due to logging issues.
+      }
       this.state = {
         ...this.state,
         isLoading: false,
@@ -209,6 +252,109 @@ class GraphIssuesService {
     return () => {
       this.subscribers.delete(callback);
     };
+  }
+
+  /**
+   * Public helper: extract clean graph name from a (possibly workspace-prefixed) fileId.
+   */
+  getGraphNameFromFileId(fileId: string): string | null {
+    return this.extractGraphName(fileId);
+  }
+
+  /**
+   * Compute severity counts for a specific graph, optionally including referenced files.
+   */
+  getSeverityCountsForGraph(options: { graphName: string; includeReferencedFiles?: boolean }): { errors: number; warnings: number; info: number; total: number } {
+    const issues = this.getFilteredIssues({
+      graphFilter: options.graphName,
+      includeReferencedFiles: options.includeReferencedFiles !== false,
+      severities: ['error', 'warning', 'info'],
+    });
+
+    let errors = 0;
+    let warnings = 0;
+    let info = 0;
+    for (const issue of issues) {
+      if (issue.severity === 'error') errors++;
+      else if (issue.severity === 'warning') warnings++;
+      else info++;
+    }
+    return { errors, warnings, info, total: issues.length };
+  }
+
+  /**
+   * Get issues for a graph filtered by severity, optionally including referenced files.
+   */
+  getIssuesForGraphSeverity(options: { graphName: string; severity: IssueSeverity; includeReferencedFiles?: boolean }): GraphIssue[] {
+    return this.getFilteredIssues({
+      graphFilter: options.graphName,
+      includeReferencedFiles: options.includeReferencedFiles !== false,
+      severities: [options.severity],
+    });
+  }
+
+  /**
+   * Build tooltip text (multiline) listing issues for a graph + severity.
+   */
+  getSeverityTooltipText(options: {
+    graphName: string;
+    severity: IssueSeverity;
+    includeReferencedFiles?: boolean;
+    maxItems?: number;
+  }): string {
+    const maxItems = options.maxItems ?? 10;
+    const issues = this.getIssuesForGraphSeverity({
+      graphName: options.graphName,
+      severity: options.severity,
+      includeReferencedFiles: options.includeReferencedFiles,
+    });
+
+    const label = options.severity === 'error' ? 'Errors' : options.severity === 'warning' ? 'Warnings' : 'Info';
+    if (issues.length === 0) return `${label}: none`;
+
+    const lines: string[] = [];
+    lines.push(`${label} (${issues.length}):`);
+
+    const shown = issues.slice(0, Math.max(0, maxItems));
+    for (const issue of shown) {
+      // Keep it compact for native tooltips.
+      const where = issue.fileId;
+      lines.push(`- ${where}: ${issue.message}`);
+    }
+    if (issues.length > shown.length) {
+      lines.push(`… +${issues.length - shown.length} more`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Get the current `debugging` flag for a graph (best-effort; returns null if the graph file isn't loaded).
+   */
+  getGraphDebugging(graphName: string): boolean | null {
+    const match = this.findGraphFileByName(graphName);
+    if (!match?.data) return null;
+    return !!(match.data as any).debugging;
+  }
+
+  /**
+   * Set the `debugging` flag for a graph (requires the graph file to be loaded in FileRegistry).
+   */
+  async setGraphDebugging(graphName: string, enabled: boolean): Promise<{ success: boolean; reason?: string }> {
+    const match = this.findGraphFileByName(graphName);
+    if (!match) return { success: false, reason: `Graph "${graphName}" not found in workspace` };
+    if (!match.data) return { success: false, reason: `Graph "${graphName}" is not loaded (open it to edit)` };
+
+    const opId = sessionLogService.startOperation('info', 'file', 'GRAPH_SET_DEBUGGING', `Setting debugging=${enabled} for graph ${graphName}`);
+    try {
+      const next = { ...(match.data as any), debugging: enabled };
+      await fileRegistry.updateFile(match.fileId, next);
+      sessionLogService.endOperation(opId, 'success', `Updated graph ${graphName} debugging=${enabled}`);
+      return { success: true };
+    } catch (error) {
+      sessionLogService.endOperation(opId, 'error', `Failed to update graph ${graphName} debugging flag`);
+      return { success: false, reason: error instanceof Error ? error.message : 'Unknown error' };
+    }
   }
   
   /**
@@ -483,6 +629,32 @@ class GraphIssuesService {
       console.error('[GraphIssuesService] Failed to open issues tab:', error);
       return null;
     }
+  }
+
+  /**
+   * Open the issues tab and select a specific graph in the dropdown.
+   * This is the single, shared code path for "open issues for graph" UX affordances.
+   */
+  async openIssuesTabForGraph(graphName: string): Promise<string | null> {
+    const tabId = await this.openIssuesTab();
+    if (!tabId) return null;
+
+    this.pendingGraphSelectionByTabId.set(tabId, { graphName, t0: Date.now() });
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(SELECT_GRAPH_EVENT, { detail: { tabId, graphName } }));
+    }
+    return tabId;
+  }
+
+  /**
+   * If a graph selection was requested before the Issues tab mounted, the viewer can pull it on mount.
+   */
+  getPendingGraphSelection(tabId: string): string | null {
+    return this.pendingGraphSelectionByTabId.get(tabId)?.graphName ?? null;
+  }
+
+  clearPendingGraphSelection(tabId: string): void {
+    this.pendingGraphSelectionByTabId.delete(tabId);
   }
   
   /**

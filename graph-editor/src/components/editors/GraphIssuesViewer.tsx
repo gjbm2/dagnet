@@ -14,8 +14,8 @@ import { graphIssuesService, GraphIssue, GraphIssuesState } from '../../services
 import { useTabContext } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
 import './GraphIssuesViewer.css';
+import { getSeverityIcon, type IssueSeverity } from '../issues/issueIcons';
 
-type IssueSeverity = 'error' | 'warning' | 'info';
 type IssueCategory = GraphIssue['category'];
 
 const ISSUE_CATEGORY_ORDER: IssueCategory[] = [
@@ -61,9 +61,10 @@ function getDisplayName(fileId: string): string {
 
 interface GraphIssuesViewerProps {
   fileId?: string;
+  tabId?: string;
 }
 
-export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
+export function GraphIssuesViewer({ fileId, tabId }: GraphIssuesViewerProps) {
   const { operations } = useTabContext();
   
   const [state, setState] = useState<GraphIssuesState>(graphIssuesService.getState());
@@ -75,12 +76,62 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [autoExpandErrors, setAutoExpandErrors] = useState(true);
+  const [graphDebugging, setGraphDebugging] = useState<boolean | null>(null);
+  const [canEditGraphDebugging, setCanEditGraphDebugging] = useState(false);
   
   // Subscribe to service updates
   useEffect(() => {
     const unsubscribe = graphIssuesService.subscribe(setState);
     return unsubscribe;
   }, []);
+
+  // Apply any pending graph selection that was requested before this tab mounted.
+  useEffect(() => {
+    if (!tabId) return;
+    const pending = graphIssuesService.getPendingGraphSelection(tabId);
+    if (!pending) return;
+    setGraphFilter(pending);
+    setIncludeReferencedFiles(true);
+    graphIssuesService.clearPendingGraphSelection(tabId);
+  }, [tabId]);
+
+  // Listen for "select graph" requests (e.g. from GraphCanvas indicator click)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handler = (event: Event) => {
+      const e = event as CustomEvent<{ tabId?: string; graphName?: string }>;
+      const detail = e.detail;
+      if (!detail?.graphName) return;
+
+      // If we have a tabId, only respond to events targeted at this specific viewer tab.
+      if (tabId && detail.tabId && detail.tabId !== tabId) return;
+
+      setGraphFilter(detail.graphName);
+      setIncludeReferencedFiles(true);
+      if (tabId && detail.tabId && detail.tabId === tabId) {
+        graphIssuesService.clearPendingGraphSelection(tabId);
+      }
+    };
+
+    window.addEventListener('dagnet:graphIssuesSelectGraph' as any, handler);
+    return () => {
+      window.removeEventListener('dagnet:graphIssuesSelectGraph' as any, handler);
+    };
+  }, [tabId]);
+
+  // Best-effort: expose current graph debugging flag when a specific graph is selected.
+  useEffect(() => {
+    if (!graphFilter) {
+      setGraphDebugging(null);
+      setCanEditGraphDebugging(false);
+      return;
+    }
+
+    const v = graphIssuesService.getGraphDebugging(graphFilter);
+    setGraphDebugging(v);
+    setCanEditGraphDebugging(v !== null);
+  }, [graphFilter, state.totalFiles, state.lastUpdated?.getTime()]);
   
   // Get graph names for filter dropdown.
   // IMPORTANT: include graphs from the workspace even if there are currently only info issues
@@ -303,6 +354,34 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
             Include refs
           </label>
         )}
+
+        {graphFilter && (
+          <label
+            className="issues-include-refs"
+            title={
+              canEditGraphDebugging
+                ? 'If enabled, this graph will auto-run integrity checks while open and show an Issues indicator overlay'
+                : 'Open this graph to edit its debugging flag'
+            }
+            style={{ marginLeft: '8px' }}
+          >
+            <input
+              type="checkbox"
+              checked={!!graphDebugging}
+              disabled={!canEditGraphDebugging}
+              onChange={async (e) => {
+                const next = e.target.checked;
+                const result = await graphIssuesService.setGraphDebugging(graphFilter, next);
+                if (result.success) {
+                  setGraphDebugging(next);
+                } else {
+                  toast.error(result.reason || 'Failed to update debugging flag');
+                }
+              }}
+            />
+            Debugging
+          </label>
+        )}
         
         <div className="issues-severity-toggles">
           <button
@@ -310,21 +389,21 @@ export function GraphIssuesViewer({ fileId }: GraphIssuesViewerProps) {
             onClick={() => toggleSeverity('error')}
             title="Toggle errors"
           >
-            ❌ {errorCount}
+            {getSeverityIcon('error')} {errorCount}
           </button>
           <button
             className={`severity-toggle severity-warning ${severityFilter.has('warning') ? 'active' : ''}`}
             onClick={() => toggleSeverity('warning')}
             title="Toggle warnings"
           >
-            ⚠️ {warningCount}
+            {getSeverityIcon('warning')} {warningCount}
           </button>
           <button
             className={`severity-toggle severity-info ${severityFilter.has('info') ? 'active' : ''}`}
             onClick={() => toggleSeverity('info')}
             title="Toggle info"
           >
-            ℹ️ {infoCount}
+            {getSeverityIcon('info')} {infoCount}
           </button>
         </div>
 
@@ -574,14 +653,6 @@ function IssueRow({ issue, onNavigate }: IssueRowProps) {
       )}
     </>
   );
-}
-
-function getSeverityIcon(severity: IssueSeverity): string {
-  switch (severity) {
-    case 'error': return '❌';
-    case 'warning': return '⚠️';
-    case 'info': return 'ℹ️';
-  }
 }
 
 function getTypeIcon(type: string): string {

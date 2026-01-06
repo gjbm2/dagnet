@@ -33,7 +33,8 @@ export type OperationType =
   | 'data-update'
   | 'graph'
   | 'index'
-  | 'merge';
+  | 'merge'
+  | 'integrity';
 
 /**
  * Structured context for different operation types

@@ -30,6 +30,11 @@
     "baseDSL": {
       "type": "string",
       "description": "Base DSL used for live scenario inheritance (persistent). Composed with scenario meta.queryDSL via smart merge."
+    },
+    "debugging": {
+      "type": "boolean",
+      "default": false,
+      "description": "Optional. If true, the editor will automatically run Graph Issues checks while this graph is open and display an Issues indicator overlay."
     }
   },
   "$defs": {
