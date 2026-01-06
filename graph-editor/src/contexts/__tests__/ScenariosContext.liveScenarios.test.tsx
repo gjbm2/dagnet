@@ -574,6 +574,37 @@ describe('ScenariosContext - Live Scenarios', () => {
       // Only live scenario regenerated
       expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(1);
     });
+
+    it('should fall back to regenerating all live scenarios when visibleOrder yields no live matches', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      // Wait for DB load to complete first
+      await waitForReady(result);
+
+      let scenario: any;
+      await act(async () => {
+        scenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+      });
+
+      // Verify scenario was added to state
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBe(1);
+      });
+
+      vi.clearAllMocks();
+
+      // Intentionally pass a non-empty visibleOrder that contains no scenario IDs.
+      // This simulates stale tab visibility state (e.g. only special layer IDs),
+      // which previously caused regenerateAllLive to do nothing.
+      await act(async () => {
+        await result.current.putToBase(['base', 'current']);
+      });
+
+      // Live scenario should still be regenerated via fallback.
+      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ==========================================================================

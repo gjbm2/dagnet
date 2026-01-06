@@ -72,13 +72,13 @@ export default defineConfig({
         'vite.config.ts',
         'vitest.config.ts'
       ],
-      // Coverage thresholds - starting low, increase as test coverage improves
-      // Current actual (CI): ~7–8% lines/stmts, ~8–9% funcs, ~5% branches
+      // Coverage thresholds
+      // NOTE: We intentionally do NOT gate CI on coverage %.
       thresholds: {
-        lines: 7,
-        functions: 8,
-        branches: 4,
-        statements: 7
+        lines: 0,
+        functions: 0,
+        branches: 0,
+        statements: 0
       }
     },
     

@@ -9,6 +9,7 @@ import { getFileTypeConfig, getSchemaFile, getUiSchemaFile } from '../../config/
 import { GuardedOperationModal } from '../modals/GuardedOperationModal';
 import { MonacoWidget, TabbedArrayWidget, AccordionObjectFieldTemplate, ThreeColumnFieldTemplate } from '../widgets';
 import { FileCode } from 'lucide-react';
+import { CredsShareLinkModal } from '../modals/CredsShareLinkModal';
 
 // Threshold for "large" file warning (in characters when JSON stringified)
 const LARGE_FILE_WARNING_THRESHOLD = 15000;  // ~15KB
@@ -111,6 +112,8 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   
   // Base64 encoder modal state
   const [isBase64ModalOpen, setIsBase64ModalOpen] = useState(false);
+  // Share creds link modal state (credentials editor only)
+  const [isShareCredsModalOpen, setIsShareCredsModalOpen] = useState(false);
 
   // Determine object type from fileId
   // Handle index files specially (e.g., 'parameter-index' → 'parameter-index')
@@ -298,6 +301,22 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
             }}
           >
             Base64 Encoder
+          </button>
+          <button
+            onClick={() => setIsShareCredsModalOpen(true)}
+            style={{
+              background: '#dc2626',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              padding: '6px 12px',
+              fontSize: 13,
+              cursor: 'pointer',
+              marginLeft: 8
+            }}
+            title="Copy a share link that embeds this repo token in the URL (unsafe)"
+          >
+            Share creds link…
           </button>
           <button
             onClick={handleApplySettings}
@@ -796,6 +815,13 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
           </div>
         </div>
       )}
+
+      {/* Credentials share-link modal */}
+      <CredsShareLinkModal
+        isOpen={isShareCredsModalOpen}
+        onClose={() => setIsShareCredsModalOpen(false)}
+        credentials={formData}
+      />
     </>
   );
 }

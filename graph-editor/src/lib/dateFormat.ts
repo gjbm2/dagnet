@@ -31,6 +31,20 @@ export function formatDateUK(date: Date | string): string {
 }
 
 /**
+ * Normalise a Date (which typically represents a user's local "calendar day" selection)
+ * to a Date at UTC midnight for that same local calendar day.
+ *
+ * Why this exists:
+ * - UI date pickers commonly produce Date objects at *local* midnight.
+ * - If we then format using UTC getters, timezones ahead of UTC can appear as "previous day".
+ * - This helper preserves the user's intended day while keeping the rest of DagNet on UTC-midnight semantics.
+ */
+export function toUTCMidnightFromLocalDate(date: Date): Date {
+  // Interpret the Date's *local* calendar components, then re-create at UTC midnight.
+  return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+}
+
+/**
  * Parse d-MMM-yy date to Date object (in UTC)
  * 
  * IMPORTANT: Returns a UTC date to avoid timezone issues when converting to ISO string.
