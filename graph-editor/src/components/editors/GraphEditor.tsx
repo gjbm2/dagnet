@@ -29,6 +29,7 @@ import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
+import { useActiveGraphTracking } from '../../hooks/useActiveGraphTracking';
 
 // Context to share selection state with sidebar panels
 interface SelectionContextType {
@@ -227,6 +228,14 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   
   // Check if this tab is visible (Phase 1: Visibility optimization)
   const isVisible = tabId ? isTabVisible(tabId) : true; // Default to visible if no tabId (shouldn't happen)
+
+  // Dev-only: track currently active graph so mark events can snapshot it.
+  useActiveGraphTracking({
+    fileId,
+    tabId,
+    graph: data ?? null,
+    isActive: !!tabId && activeTabId === tabId && isVisible,
+  });
   
   // Debug: Log visibility status on every render
   console.log(`[GraphEditor ${fileId}] RENDER: tabId=${tabId}, isVisible=${isVisible}, visibleTabs=[${Array.from(visibleTabIdsRef.current).join(', ')}]`);
