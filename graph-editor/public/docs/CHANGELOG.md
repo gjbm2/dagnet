@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.18b
+**Released:** January 06, 2026
+
+Added debugging badges to graphs
+
+---
+
 ## Version 1.1.17b
 **Released:** January 06, 2026
 
