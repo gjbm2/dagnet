@@ -348,6 +348,90 @@ At this point we have a clear, evidence-backed explanation for *why a discrepanc
 
 - the “middle section” is not the same conditional definition between graphs, and the denominators (`n`) differ at the registration step for 1-Nov-25.
 
+### 6-Jan-26: MSMDC defect discovered and fixed (native `exclude()` incorrectly compiled to `minus()`)
+
+We confirmed a **real MSMDC defect**: MSMDC was **incorrectly generating `minus()`** queries even when the edge was configured with `connection: amplitude-prod` (which has `supports_native_exclude: true`).
+
+- **Observed behaviour (pre-fix)**: a direct edge that requires an exclusion (because an alternate path exists) would compile:
+  - expected: `from(a).to(c).exclude(b)`
+  - observed: `from(a).to(c).minus(b)`
+- **Root cause (code-level)**: `graph-editor/lib/msmdc.py`’s capability detection was reading non-existent fields on `graph_types.DataSource` (`connection_settings`, `source_type`), so it failed to identify the connection/provider and fell back to “no native exclude support”.
+- **Fix implemented**: MSMDC now reads capability inputs from the schema-correct fields:
+  - connection name from `ProbabilityParam.connection` / `CostParam.connection`
+  - provider type from `DataSource.type`
+  (while retaining legacy fallbacks for older shapes)
+- **Regression test added**: `graph-editor/tests/test_msmdc_native_exclude_amplitude_prod.py` asserts that for `amplitude-prod`, MSMDC emits `exclude(...)` and never emits `minus()`/`plus()` when excludes are required.
+
+This defect **may not explain the delegation-vs-registration discrepancy**, but it *does* matter for correctness/safety because any generated `minus()` queries can be unsupported and/or semantically wrong now that Amplitude uses native segment filters.
+
+### 6-Jan-26: `n_query` (denominator) semantics — why window() vs cohort() needs extra caution
+
+We started a focused audit of **`n_query` construction + maths**, because the `success-v2` “middle section” uses MECE-style split mechanics (excludes) and therefore relies on stable denominator definitions to remain mass-conserving.
+
+#### What `n_query` is for (design intent)
+
+From `docs/current/nqueryfixes.md` (22-Dec-25), `n_query` exists to address **denominator shrinkage** caused by MECE split mechanics:
+
+- For split edges, the query often contains `.exclude(...)` / `.minus(...)` / `.plus(...)`.
+- With Amplitude’s native segment filters, an `exclude(...)` can shrink the returned **from-step** population (`from_count`) even when the intended denominator is “all arrivals at the from-node”.
+- `n_query` is intended to provide an **unrestricted arrivals denominator** so the split probabilities can be treated as partitions of the same population.
+
+#### What MSMDC generates today
+
+MSMDC only auto-generates `n_query` for an edge when the generated edge query contains an exclusion/composite term (exclude/minus/plus). The current generation rule (in words):
+
+- If the edge query contains `.exclude(` or `.minus(` or `.plus(`, and the edge has a usable upstream anchor different from the from-node, then generate:
+  - `n_query = from(anchor_node_id).to(from_node_id)`
+
+This is the cohort-style “anchor → from” form described in `nqueryfixes.md`.
+
+#### What the fetch-time maths does today (critical)
+
+`graph-editor/src/services/dataOperationsService.ts` implements “dual query” behaviour whenever an explicit `n_query` exists.
+
+- **If explicit `n_query` is present**:
+  - It runs the `n_query` funnel and uses **the completion count** (`to_count`, i.e. `k`) as the base denominator: `baseN = baseRaw.k`.
+- **If no explicit `n_query`**:
+  - It uses the main query’s **from-step count** (`from_count`, i.e. `n`) as the denominator: `baseN = condRaw.n`.
+
+This distinction is deliberate in the current code, but it means:
+
+- Adding an explicit `n_query` can change the denominator even when the main query has no excludes.
+- Window() and cohort() can behave differently depending on how anchor/cohort/window constraints are merged into the n_query execution payload.
+
+#### Why this raises a specific concern for window() slices
+
+For cohort() slices, “anchor → from” has a clear interpretation: “users in the anchor cohort who reached from within the cohort conversion window (`cs`)”. That matches the document’s stated intent.
+
+For window() slices, “anchor → from” is *not obviously equivalent* to “arrivals at from within the window”, because:
+
+- Window mode is step-event-time bounded (X-event dates), not anchor-entry-time bounded.
+- Cohort mode introduces a conversion horizon (`cs`) that can differ from a window’s implicit horizon.
+- Therefore, an “anchor → from” denominator can mix semantics if it is used to stand in for “all arrivals at from in this window”.
+
+This is an **open risk**: if the system accidentally uses an anchor-style `n_query` as the denominator in window mode (or mixes constraints inconsistently), we can get systematic “middle section” drift even when the underlying event definitions are correct.
+
+#### Concrete local observations (1-Nov-25 window slices)
+
+For 1-Nov-25 (window-mode parameter slices we have cached):
+
+- `delegated-to-coffee` (query: delegated→coffee; explicit n_query anchor→delegated): `n_day=145`, `k_day=59`
+- `delegation-straight-to-energy-rec` (delegated→recommendation-offered.exclude(coffee); explicit n_query anchor→delegated): `n_day=145`, `k_day=113`
+- `rec-with-bdos-to-registration` (recommendation-offered→registered; no n_query): `n_day=123`, `k_day=11`
+- `gm-delegated-to-registered` (delegated→registered; no n_query): `n_day=146`, `k_day=23`
+
+This does **not** by itself prove an n_query maths defect, but it demonstrates the exact places where denominators can diverge (and therefore where drift can be introduced).
+
+#### What remains open / next checks
+
+To decide whether `n_query` maths (or construction) is a plausible root cause for the middle-section discrepancy, we still need to:
+
+- Verify, for each middle-section parameter fetch in window mode, whether `baseRaw.k` (from n_query) equals the “true arrivals at from” concept we intend for that slice.
+- Compare the effective provider request semantics for:
+  - the main query and the n_query (window bounds, cohort bounds if any, conversion window/cs if any, excluded cohorts, context filters),
+  - and confirm they are not “apples and pears”.
+- Check whether a graph using window() slices should ever apply an anchor-style `n_query` denominator at all, or whether window mode needs a distinct n_query construction rule.
+
 ### Pause point / open questions to resolve next
 
 The remaining discrepancies still “don’t make sense” under the naive mental model (“same events → same answers”) because the system is mixing:

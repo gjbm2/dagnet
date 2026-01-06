@@ -350,7 +350,8 @@ def generate_query_for_edge(
                 algorithms_path = Path(__file__).parent / 'algorithms'
                 sys.path.insert(0, str(algorithms_path))
                 
-                from optimized_inclusion_exclusion import compile_optimized_inclusion_exclusion
+                # Note: imported via runtime sys.path insertion; static analysers can't resolve this.
+                from optimized_inclusion_exclusion import compile_optimized_inclusion_exclusion  # pyright: ignore[reportMissingImports]
                 
                 # Call NEW algorithm
                 compiled_query, terms = compile_optimized_inclusion_exclusion(
@@ -771,13 +772,21 @@ def _extract_connection_info(edge: Edge) -> Tuple[Optional[str], Optional[str], 
     import json
     from connection_capabilities import supports_native_exclude as check_supports
     
-    all_data_sources = []
+    # Collect (connection_name, provider_type) pairs for all parameters on this edge.
+    #
+    # IMPORTANT: In the Python graph schema (`graph_types.py`), parameter provenance is:
+    # - connection name: ProbabilityParam.connection / CostParam.connection
+    # - provider type: DataSource.type (e.g. "amplitude")
+    #
+    # Older/alternate shapes may include DataSource.connection_settings + source_type,
+    # so we keep those as fallbacks for robustness.
+    param_sources: list[tuple[Optional[str], Optional[str], Optional[Any]]] = []
     
     # Collect all data sources on this edge
     if hasattr(edge, 'p') and edge.p:
         ds = getattr(edge.p, 'data_source', None)
         if ds:
-            all_data_sources.append(ds)
+            param_sources.append((getattr(edge.p, 'connection', None), getattr(ds, 'type', None), ds))
     
     # Conditional probabilities
     if hasattr(edge, 'conditional_p') and edge.conditional_p:
@@ -785,22 +794,22 @@ def _extract_connection_info(edge: Edge) -> Tuple[Optional[str], Optional[str], 
             if hasattr(cond_p, 'p') and cond_p.p:
                 ds = getattr(cond_p.p, 'data_source', None)
                 if ds:
-                    all_data_sources.append(ds)
+                    param_sources.append((getattr(cond_p.p, 'connection', None), getattr(ds, 'type', None), ds))
     
     # Cost parameters
     if hasattr(edge, 'cost_gbp') and edge.cost_gbp:
         ds = getattr(edge.cost_gbp, 'data_source', None)
         if ds:
-            all_data_sources.append(ds)
+            param_sources.append((getattr(edge.cost_gbp, 'connection', None), getattr(ds, 'type', None), ds))
     
     if hasattr(edge, 'labour_cost') and edge.labour_cost:
         ds = getattr(edge.labour_cost, 'data_source', None)
         if ds:
-            all_data_sources.append(ds)
+            param_sources.append((getattr(edge.labour_cost, 'connection', None), getattr(ds, 'type', None), ds))
     
     # If no data sources, default to supports_exclude=True (skip minus/plus compilation)
     # Changed 5-Dec-25: Was False (conservative), now True (all providers support native exclude)
-    if not all_data_sources:
+    if not param_sources:
         return None, None, True
     
     # Check each data source's capability
@@ -808,18 +817,17 @@ def _extract_connection_info(edge: Edge) -> Tuple[Optional[str], Optional[str], 
     first_connection_name = None
     first_provider = None
     
-    for ds in all_data_sources:
-        # Extract connection name
-        connection_name = None
-        if hasattr(ds, 'connection_settings') and ds.connection_settings:
+    for connection_name, provider, ds in param_sources:
+        # Fallbacks for older/non-standard DataSource shapes
+        if not connection_name and ds is not None and hasattr(ds, 'connection_settings') and getattr(ds, 'connection_settings', None):
             try:
                 settings = json.loads(ds.connection_settings)
                 connection_name = settings.get('connection_name')
-            except:
+            except Exception:
                 pass
-        
-        # Extract provider
-        provider = getattr(ds, 'source_type', None)
+
+        if not provider and ds is not None:
+            provider = getattr(ds, 'source_type', None)
         
         # Remember first non-None values for return
         if not first_connection_name and connection_name:
