@@ -13,7 +13,7 @@ import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
 import { FileText, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
 import { parseConstraints } from '../lib/queryDSL';
-import { formatDateUK, resolveRelativeDate } from '../lib/dateFormat';
+import { formatDateUK, resolveRelativeDate, normalizeToUK } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
 import { validatePinnedDataInterestsDSL } from '../services/slicePlanValidationService';
 import './WindowSelector.css';
@@ -562,7 +562,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // Helper: Update window state, currentQueryDSL (historic), AND authoritative DSL
   const updateWindowAndDSL = (start: string, end: string) => {
     console.log('[WindowSelector] updateWindowAndDSL called:', { start, end });
-    setWindow({ start, end });
+    // Treat these as date-only strings (UK or ISO). Normalise to UK without re-parsing
+    // UK dates through the JS Date parser (timezone-dependent).
+    const startUK = normalizeToUK(start);
+    const endUK = normalizeToUK(end);
+    setWindow({ start: startUK, end: endUK });
     
     // Use getLatestGraph() to avoid stale closure
     const currentGraph = getLatestGraph();
@@ -582,7 +586,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
     
     // Build window/cohort part with d-MMM-yy format (using current queryMode)
-    const dateRangePart = `${queryMode}(${formatDateUK(start)}:${formatDateUK(end)})`;
+    const dateRangePart = `${queryMode}(${startUK}:${endUK})`;
     
     // Combine
     const newDSL = contextParts.length > 0 
@@ -878,7 +882,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   } else if (oldParsed.cohort) {
                     dateRangePart = `${queryMode}(${oldParsed.cohort.start || ''}:${oldParsed.cohort.end || ''})`;
                   } else if (window) {
-                    dateRangePart = `${queryMode}(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
+                    dateRangePart = `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`;
                   }
                   
                   const fullDSL = [newContextParts.join('.'), dateRangePart].filter(p => p).join('.');
@@ -992,7 +996,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   if (existingWindow) {
                     dateRangePart = `${queryMode}(${existingWindow.start || ''}:${existingWindow.end || ''})`;
                   } else if (window) {
-                    dateRangePart = `${queryMode}(${formatDateUK(window.start)}:${formatDateUK(window.end)})`;
+                    dateRangePart = `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`;
                   }
                   
                   // Combine
@@ -1053,7 +1057,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 
                 // Add current window/cohort (using queryMode)
                 const dateRangePart = window 
-                  ? `${queryMode}(${formatDateUK(window.start)}:${formatDateUK(window.end)})` 
+                  ? `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})` 
                   : '';
                 
                 // Combine

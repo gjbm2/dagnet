@@ -25,7 +25,7 @@ import { ContextMenu, ContextMenuItem } from '../ContextMenu';
 import { ColourSelector } from '../ColourSelector';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import { parseConstraints } from '@/lib/queryDSL';
-import { computeInheritedDSL, computeEffectiveFetchDSL, LIVE_EMPTY_DIFF_DSL, diffQueryDSLFromBase } from '../../services/scenarioRegenerationService';
+import { computeInheritedDSL, computeEffectiveFetchDSL, deriveBaseDSLForRebase, LIVE_EMPTY_DIFF_DSL, diffQueryDSLFromBase } from '../../services/scenarioRegenerationService';
 import { fetchDataService } from '../../services/fetchDataService';
 import { useCopyAllScenarioParamPacks } from '../../hooks/useCopyAllScenarioParamPacks';
 import { 
@@ -743,7 +743,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       console.error('Failed to refresh all live scenarios:', error);
       toast.error('Failed to refresh all live scenarios');
     }
-  }, [regenerateAllLive]);
+  }, [regenerateAllLive, visibleScenarioIds]);
 
   const handleCopyAllScenarioParamPacks = useCallback(async () => {
     const res = await copyAllScenarioParamPacks();
@@ -768,6 +768,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   const handlePutToBase = useCallback(async () => {
     const graph = graphStore?.getState().graph;
     const currentDSL = graphStore?.getState().currentDSL || '';
+    const derivedBaseDSL = deriveBaseDSLForRebase(currentDSL);
     
     if (!graph) {
       toast.error('No graph loaded');
@@ -793,7 +794,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     const effectiveDSLs = liveScenarios.map((scenario, idx) => {
       // Calculate what the inherited DSL would be with the new base
       const scenarioIndex = scenarios.findIndex(s => s.id === scenario.id);
-      const inheritedDSL = computeInheritedDSL(scenarioIndex, scenarios, currentDSL);
+      const inheritedDSL = computeInheritedDSL(scenarioIndex, scenarios, derivedBaseDSL);
       return computeEffectiveFetchDSL(inheritedDSL, scenario.meta?.queryDSL || '');
     });
     
@@ -806,7 +807,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       setToBaseModalData({
         scenariosNeedingFetch,
         totalLiveScenarios: liveScenarios.length,
-        newBaseDSL: currentDSL,
+        newBaseDSL: derivedBaseDSL,
       });
       setToBaseModalOpen(true);
       return;
@@ -820,7 +821,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       console.error('Failed to put to base:', error);
       toast.error('Failed to put to base');
     }
-  }, [graphStore, scenarios, putToBase]);
+  }, [graphStore, scenarios, putToBase, visibleScenarioIds]);
   
   /**
    * Confirm "To Base" from modal - proceed with operation
@@ -837,7 +838,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       console.error('Failed to put to base:', error);
       toast.error('Failed to put to base');
     }
-  }, [putToBase]);
+  }, [putToBase, visibleScenarioIds]);
   
   /**
    * Cancel "To Base" from modal
