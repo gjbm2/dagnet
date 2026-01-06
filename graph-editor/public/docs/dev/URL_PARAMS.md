@@ -303,6 +303,9 @@ https://dagnet.vercel.app/?settings={"repositories":[{"name":"repo1","repoOwner"
 
 # Pre-configure and load graph
 https://dagnet.vercel.app/?secret=my-secret&graph=conversion-funnel
+
+# Suppress safety/staleness nudges (useful for read-only "explore" links)
+https://dagnet.vercel.app/?creds=<url_encoded_json>&nonudge
 ```
 
 ### `?settings=<json>`
@@ -397,6 +400,23 @@ https://dagnet.vercel.app/?creds=<url_encoded_json>
 ```
 
 **Security warning:** Only use this for temporary testing. Never share URLs with credentials in production.
+
+### `?nonudge`
+
+Suppresses the staleness/safety “Updates recommended” modal for the current session.
+
+**Use case:**
+- Read-only “explore” links (e.g. shared `?creds=` links) where freshness nudges are not relevant.
+
+**Usage:**
+```
+https://dagnet.vercel.app/?creds=<url_encoded_json>&nonudge
+https://dagnet.vercel.app/?creds=<url_encoded_json>&nonudge&graph=conversion-funnel
+```
+
+**How it works:**
+- If `nonudge` is present, DagNet suppresses staleness nudges for that browser session.
+- The parameter is removed from the URL after load (to avoid lingering in copied URLs/screenshots).
 
 ### `?sheet=<sheet_id>&tab=<tab_name>&row=<row_number>`
 

@@ -792,6 +792,17 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         .filter(id => id !== 'base' && id !== 'current')
         .map(id => scenarios.find(s => s.id === id))
         .filter((s): s is Scenario => s !== undefined && s.meta?.isLive === true);
+
+      // SAFETY: If a non-empty visibleOrder yields zero live scenarios, fall back to regenerating
+      // all live scenarios rather than silently doing nothing. This can happen if the caller's
+      // visibleOrder is stale (e.g. closure captured before scenario visibility state loaded).
+      if (scenariosToProcess.length === 0) {
+        console.warn('[ScenariosContext] regenerateAllLive: visibleOrder provided but no live scenarios matched; falling back to all live scenarios', {
+          visibleOrder,
+          totalScenarios: scenarios.length,
+        });
+        scenariosToProcess = scenarios.filter(s => s.meta?.isLive);
+      }
     } else {
       // Fallback: all live scenarios in array order
       scenariosToProcess = scenarios.filter(s => s.meta?.isLive);

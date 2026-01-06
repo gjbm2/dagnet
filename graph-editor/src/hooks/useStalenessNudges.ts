@@ -56,6 +56,27 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     label: string;
   }>>([]);
 
+  // Opt-out: suppress staleness nudges for this session when the URL contains ?nonudge
+  // (used by creds-share links for read-only explore flows).
+  const suppressStalenessNudges = useMemo(() => {
+    try {
+      const ss = window.sessionStorage;
+      if (ss.getItem('dagnet:nonudge') === '1') return true;
+
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('nonudge')) {
+        ss.setItem('dagnet:nonudge', '1');
+        // Remove the parameter to avoid it lingering in shared screenshots / copied URLs.
+        url.searchParams.delete('nonudge');
+        window.history.replaceState({}, document.title, url.toString());
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }, []);
+
   const closeModal = useCallback(() => setIsModalOpen(false), []);
 
   const toggleAction = useCallback((key: StalenessUpdateActionKey) => {
@@ -202,6 +223,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   }, [modalActions, navState.selectedRepo, navState.selectedBranch, activeFileId, closeModal]);
 
   const maybePrompt = useCallback(async () => {
+    if (suppressStalenessNudges) return;
     if (inFlightRef.current) return;
     if (!isVisible()) return;
     if (isModalOpen) return;
@@ -299,7 +321,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     } finally {
       inFlightRef.current = false;
     }
-  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen, runSelectedKeys]);
+  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen, runSelectedKeys]);
 
   // Record the page load baseline once on mount.
   useEffect(() => {
@@ -362,13 +384,14 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     onClose: closeModal,
   });
 
+  if (suppressStalenessNudges) {
+    return {
+      modals: React.createElement(React.Fragment, null, conflictModal as any),
+    };
+  }
+
   return {
-    modals: React.createElement(
-      React.Fragment,
-      null,
-      conflictModal as any,
-      modal
-    ),
+    modals: React.createElement(React.Fragment, null, conflictModal as any, modal),
   };
 }
 

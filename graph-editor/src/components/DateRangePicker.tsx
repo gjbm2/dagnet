@@ -11,7 +11,7 @@ import { Calendar } from 'lucide-react';
 import 'react-date-range/dist/styles.css';
 import 'react-date-range/dist/theme/default.css';
 import './DateRangePicker.css';
-import { isUKDate, parseUKDate, formatDateUK, isISODate } from '../lib/dateFormat';
+import { isUKDate, parseUKDate, formatDateUK, toUTCMidnightFromLocalDate } from '../lib/dateFormat';
 
 // Parse date string in either UK (d-MMM-yy) or ISO (YYYY-MM-DD) format
 function parseFlexibleDate(dateStr: string): Date {
@@ -81,10 +81,15 @@ export function DateRangePicker({
     setRange(selection);
     
     if (selection.startDate && selection.endDate) {
-      // Both dates selected - output in UK format (d-MMM-yy)
+      // Both dates selected - output in UK format (d-MMM-yy).
+      //
+      // IMPORTANT:
+      // react-date-range returns Date objects that represent the user's *local* midnight.
+      // DagNet's date-only semantics are UTC-midnight to avoid timezone drift, so we
+      // normalise the local calendar day to UTC midnight before formatting.
       onChange(
-        formatDateUK(selection.startDate),
-        formatDateUK(selection.endDate)
+        formatDateUK(toUTCMidnightFromLocalDate(selection.startDate)),
+        formatDateUK(toUTCMidnightFromLocalDate(selection.endDate))
       );
       setIsOpen(false);
     }

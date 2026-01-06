@@ -37,18 +37,6 @@ jobs:
       - name: Run tests
         working-directory: ./graph-editor
         run: npm run test:all
-      
-      - name: Generate coverage report
-        working-directory: ./graph-editor
-        run: npm run test:coverage
-      
-      - name: Upload coverage to Codecov (optional)
-        uses: codecov/codecov-action@v4
-        if: matrix.node-version == '20.x'
-        with:
-          files: ./graph-editor/coverage/lcov.info
-          flags: unittests
-          fail_ci_if_error: false
   
   python-test:
     name: Run Python Tests
@@ -80,20 +68,6 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: pytest graph-editor/tests/ -q --tb=short
-      
-      - name: Generate coverage report
-        working-directory: ./
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: pytest graph-editor/tests/ -q --tb=short --cov=lib --cov-report=xml --cov-report=term
-      
-      - name: Upload coverage to Codecov (optional)
-        uses: codecov/codecov-action@v4
-        if: matrix.python-version == '3.11'
-        with:
-          files: ./coverage.xml
-          flags: python-tests
-          fail_ci_if_error: false
   
   lint:
     name: Lint & Format Check
