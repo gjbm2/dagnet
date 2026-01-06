@@ -961,6 +961,70 @@ export default function PropertiesPanel({
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
+  // Helper: Regenerate n_query for this specific edge using MSMDC
+  const regenerateEdgeNQuery = useCallback(async () => {
+    if (!selectedEdgeId || !graph) return;
+    
+    const loadingToast = toast.loading('Regenerating n_query for this edge...');
+    
+    try {
+      const { graphComputeClient } = await import('../lib/graphComputeClient');
+      const { queryRegenerationService } = await import('../services/queryRegenerationService');
+      
+      // Transform graph to backend schema before sending
+      const transformedGraph = queryRegenerationService.transformGraphForBackend(graph);
+      
+      // Call MSMDC to generate query for just this edge (pass edge_id to filter)
+      const response = await graphComputeClient.generateAllParameters(
+        transformedGraph,
+        undefined,  // downstreamOf
+        undefined,  // literalWeights
+        undefined,  // preserveCondition
+        selectedEdgeId  // edgeId - tells backend to only generate for this edge
+      );
+      
+      const edgeBase = response.parameters.find((param: any) => 
+        param.paramType === 'edge_base_p'
+      );
+      
+      // Note: backend returns `nQuery` (camelCase). We accept a snake_case fallback defensively.
+      const nextNQuery: string | undefined =
+        (edgeBase?.nQuery ?? (edgeBase as any)?.n_query) || undefined;
+      
+      const next = structuredClone(graph);
+      const edgeIndex = next.edges.findIndex((e: any) => 
+        e.uuid === selectedEdgeId || e.id === selectedEdgeId
+      );
+      
+      if (edgeIndex < 0) {
+        toast.error('Edge not found', { id: loadingToast });
+        return;
+      }
+      
+      const trimmed = typeof nextNQuery === 'string' ? nextNQuery.trim() : '';
+      if (trimmed) {
+        (next.edges[edgeIndex] as any).n_query = trimmed;
+        (next.edges[edgeIndex] as any).n_query_overridden = false; // Mark as auto-generated
+        setLocalEdgeNQuery(trimmed);
+      } else {
+        delete (next.edges[edgeIndex] as any).n_query;
+        delete (next.edges[edgeIndex] as any).n_query_overridden;
+        setLocalEdgeNQuery('');
+      }
+      
+      if (next.metadata) {
+        next.metadata.updated_at = new Date().toISOString();
+      }
+      
+      setGraph(next);
+      saveHistoryState('Regenerate edge n_query', undefined, selectedEdgeId);
+      toast.success('n_query regenerated', { id: loadingToast });
+    } catch (error) {
+      console.error('Failed to regenerate n_query:', error);
+      toast.error(`Failed to regenerate n_query: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: loadingToast });
+    }
+  }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
+
   // IMPORTANT: Never early-return before all hooks. Graph can transiently be undefined
   // during shell transitions (e.g., exiting dashboard mode). At this point in the file,
   // all hooks have been declared, so it is safe to render a placeholder.
@@ -2535,9 +2599,30 @@ export default function PropertiesPanel({
                     <AutomatableField
                       label="N Query (optional)"
                       labelExtra={
-                        <span title="Explicit query for n (denominator) when it differs from the main query. Use when the 'from' node shares an event with other nodes and n can't be derived by stripping conditions.">
-                          <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span title="Explicit query for n (denominator) when it differs from the main query. Use when the 'from' node shares an event with other nodes and n can't be derived by stripping conditions.">
+                            <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
+                          </span>
+                          <button
+                            type="button"
+                            onClick={regenerateEdgeNQuery}
+                            title="Regenerate n_query for this edge using MSMDC"
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: '2px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              color: '#6B7280',
+                              transition: 'color 0.2s'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.color = '#3B82F6'}
+                            onMouseLeave={(e) => e.currentTarget.style.color = '#6B7280'}
+                          >
+                            <RefreshCcw size={14} />
+                          </button>
+                        </div>
                       }
                       layout="label-above"
                       value={localEdgeNQuery}
