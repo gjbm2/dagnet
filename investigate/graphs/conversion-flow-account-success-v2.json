@@ -1,0 +1,692 @@
+{
+  "nodes": [
+    {
+      "uuid": "86469c9f-2f83-49ca-a154-589231be5511",
+      "id": "household-created",
+      "label": "Household created",
+      "absorbing": false,
+      "entry": {
+        "is_start": true,
+        "entry_weight": 1
+      },
+      "layout": {
+        "x": -982,
+        "y": -84
+      },
+      "description": "",
+      "event_id": "household-created"
+    },
+    {
+      "uuid": "addb99b6-5773-482c-a437-4661c8433ff7",
+      "id": "abandonned-before-delegation",
+      "label": "abandonned-before-delegation",
+      "absorbing": true,
+      "layout": {
+        "x": -747,
+        "y": 57
+      },
+      "description": "",
+      "outcome_type": "failure",
+      "outcome_type_overridden": false
+    },
+    {
+      "uuid": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "id": "household-delegated",
+      "label": "household-delegated",
+      "absorbing": false,
+      "layout": {
+        "x": -799,
+        "y": -179
+      },
+      "description": "",
+      "tags": [],
+      "event_id": "household-delegated",
+      "event_id_overridden": false
+    },
+    {
+      "uuid": "a2ae8ea8-30a3-43db-b12c-43ad71bdaead",
+      "id": "gave-bds-in-onboarding",
+      "label": "Gave bds in onboarding",
+      "absorbing": false,
+      "layout": {
+        "x": -181,
+        "y": -217
+      },
+      "images": [],
+      "event_id": "gave-bds-in-onboarding",
+      "event_id_overridden": false
+    },
+    {
+      "uuid": "5788d308-a7a9-49ce-a755-07491315a603",
+      "id": "viewed-coffee-screen",
+      "label": "Viewed coffee screen",
+      "absorbing": false,
+      "layout": {
+        "x": -468,
+        "y": -195
+      },
+      "event_id": "viewed-coffee-screen",
+      "event_id_overridden": false
+    },
+    {
+      "uuid": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "id": "switch-registered",
+      "label": "Switch registered",
+      "absorbing": false,
+      "layout": {
+        "x": 390,
+        "y": -290
+      },
+      "event_id": "switch-registered",
+      "event_id_overridden": false
+    },
+    {
+      "uuid": "30aabc44-e448-4359-b0d0-338a231edb92",
+      "id": "switch-success",
+      "label": "Switch success",
+      "absorbing": true,
+      "layout": {
+        "x": 777,
+        "y": -450
+      },
+      "event_id": "switch-success",
+      "event_id_overridden": false,
+      "label_overridden": false,
+      "outcome_type": "success",
+      "outcome_type_overridden": false
+    },
+    {
+      "uuid": "940fd8cc-f7f6-4ec5-a973-fb4cc037fa64",
+      "id": "post-recommendation-failure",
+      "label": "Post recommendation failure",
+      "absorbing": true,
+      "layout": {
+        "x": 391,
+        "y": 36
+      },
+      "outcome_type": "failure",
+      "outcome_type_overridden": false
+    },
+    {
+      "uuid": "386e6cf6-ccc7-412a-81b3-ee730b8bf775",
+      "id": "post-registration-failure",
+      "label": "Post registration failure",
+      "absorbing": true,
+      "layout": {
+        "x": 666,
+        "y": -154
+      },
+      "outcome_type": "failure",
+      "outcome_type_overridden": false
+    },
+    {
+      "uuid": "7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f",
+      "id": "no-recommendation-sent",
+      "label": "No recommendation sent",
+      "absorbing": true,
+      "layout": {
+        "x": 47,
+        "y": -413
+      },
+      "outcome_type": "failure",
+      "outcome_type_overridden": false
+    },
+    {
+      "uuid": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "id": "recommendation-offered",
+      "label": "Recommendation offered",
+      "absorbing": false,
+      "layout": {
+        "x": 49,
+        "y": -48
+      },
+      "event_id": "recommendation-offered",
+      "event_id_overridden": false,
+      "images": []
+    }
+  ],
+  "edges": [
+    {
+      "uuid": "532a304a-c435-4ea5-aa6a-44714b40adab",
+      "id": "switch-registered-to-post-registration-failure",
+      "from": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "to": "386e6cf6-ccc7-412a-81b3-ee730b8bf775",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.253,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(switch-registered).to(post-registration-failure)",
+      "description": ""
+    },
+    {
+      "uuid": "76e0e0f8-133d-4065-9fab-56480063d9c9",
+      "id": "viewed-coffee-screen-to-gave-bds-in-onboarding",
+      "from": "5788d308-a7a9-49ce-a755-07491315a603",
+      "to": "a2ae8ea8-30a3-43db-b12c-43ad71bdaead",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.3620689655172414,
+        "stdev": 0.06310685929164256,
+        "id": "coffee-to-bds",
+        "connection": "amplitude-prod",
+        "evidence": {
+          "n": 58,
+          "k": 21,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:49.101Z",
+          "source": "amplitude",
+          "full_query": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)",
+          "mean": 0.3620689655172414,
+          "stdev": 0.0631056899077495
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:49.101Z",
+          "full_query": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)"
+        },
+        "latency": {
+          "anchor_node_id": "household-created",
+          "median_lag_days": 0.0008546016607074589,
+          "completeness": 1,
+          "t95": 5,
+          "mean_lag_days": 0.003773115267096179,
+          "path_t95": 5,
+          "latency_parameter": false,
+          "latency_parameter_overridden": false
+        },
+        "forecast": {
+          "mean": 0.37588601903213276
+        }
+      },
+      "query": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)",
+      "description": "",
+      "cost_gbp": {
+        "mean": 5,
+        "mean_overridden": true,
+        "query": "from(viewed-coffee-screen).to(gave-bds-in-onboarding)"
+      }
+    },
+    {
+      "uuid": "82ed2719-a8a5-4e28-84a6-21d476334a28",
+      "id": "household-created-to-abandonned-before-delegation",
+      "from": "86469c9f-2f83-49ca-a154-589231be5511",
+      "to": "addb99b6-5773-482c-a437-4661c8433ff7",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.4106,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(household-created).to(abandonned-before-delegation)",
+      "description": ""
+    },
+    {
+      "uuid": "370dce1d-3a36-4109-9711-204c301478c8",
+      "id": "switch-registered-to-switch-success",
+      "from": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "to": "30aabc44-e448-4359-b0d0-338a231edb92",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.747,
+        "stdev": 0.09930411508455866,
+        "id": "registration-to-success",
+        "evidence": {
+          "window_from": "1-Nov-25",
+          "source": "amplitude",
+          "n": 22,
+          "k": 15,
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:49.777Z",
+          "full_query": "from(switch-registered).to(switch-success)",
+          "mean": 0.6818181818181818,
+          "stdev": 0.09930260198923899
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:49.777Z",
+          "full_query": "from(switch-registered).to(switch-success)"
+        },
+        "connection": "amplitude-prod",
+        "latency": {
+          "anchor_node_id": "household-created",
+          "median_lag_days": 6.513715531438988,
+          "completeness": 0.9998097135052046,
+          "t95": 13.12,
+          "path_t95": 31.76,
+          "mean_lag_days": 7.389122342461608,
+          "latency_parameter": true,
+          "latency_parameter_overridden": false,
+          "path_t95_overridden": false,
+          "t95_overridden": false
+        },
+        "forecast": {
+          "mean": 0.7564843210129875
+        }
+      },
+      "query": "from(switch-registered).to(switch-success)",
+      "description": ""
+    },
+    {
+      "uuid": "3d0a0757-8224-4cf0-a841-4ad17cd48d91",
+      "id": "household-created-to-household-delegated",
+      "from": "86469c9f-2f83-49ca-a154-589231be5511",
+      "to": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.5894308943089431,
+        "id": "household-delegation-rate",
+        "connection": "amplitude-prod",
+        "stdev": 0.03136512225879158,
+        "evidence": {
+          "n": 246,
+          "k": 145,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:45.025Z",
+          "source": "amplitude",
+          "full_query": "from(household-created).to(household-delegated)",
+          "mean": 0.5894308943089431,
+          "stdev": 0.031364764235381516
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:45.025Z",
+          "full_query": "from(household-created).to(household-delegated)"
+        },
+        "latency": {
+          "anchor_node_id": "household-created"
+        },
+        "mean_overridden": false,
+        "forecast": {
+          "mean": 0.5326604904082468
+        }
+      },
+      "query": "from(household-created).to(household-delegated)",
+      "description": ""
+    },
+    {
+      "uuid": "9d2ebbef-d009-4043-80b1-b4ec43b728d0",
+      "id": "gave-bds-in-onboarding-to-no-recommendation-sent",
+      "from": "a2ae8ea8-30a3-43db-b12c-43ad71bdaead",
+      "to": "7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.0476,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "description": "",
+      "query": "from(gave-bds-in-onboarding).to(no-recommendation-sent)"
+    },
+    {
+      "uuid": "259da2be-8149-40f2-ad9e-e2bea18bb1fb",
+      "id": "household-delegated-to-no-recommendation-sent",
+      "from": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "to": "7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.1862,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(household-delegated).to(no-recommendation-sent).minus(viewed-coffee-screen)",
+      "description": "",
+      "n_query": "from(household-created).to(household-delegated)"
+    },
+    {
+      "uuid": "77d0a69e-3c75-4722-932b-7f54d317d0ce",
+      "id": "gave-bds-in-onboarding-to-recommendation-offered",
+      "from": "a2ae8ea8-30a3-43db-b12c-43ad71bdaead",
+      "to": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.9523809523809523,
+        "id": "bds-to-energy-rec",
+        "connection": "amplitude-prod",
+        "stdev": 0.04646260144818984,
+        "evidence": {
+          "n": 21,
+          "k": 20,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:49.236Z",
+          "source": "amplitude",
+          "full_query": "from(gave-bds-in-onboarding).to(recommendation-offered)",
+          "mean": 0.9523809523809523,
+          "stdev": 0.04647143204516827
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:49.236Z",
+          "full_query": "from(gave-bds-in-onboarding).to(recommendation-offered)"
+        },
+        "latency": {
+          "anchor_node_id": "household-created",
+          "median_lag_days": 1.9991807712730656,
+          "completeness": 0.9999999901625184,
+          "t95": 4.92,
+          "mean_lag_days": 2.0226064425278776,
+          "path_t95": 4.92,
+          "latency_parameter": true,
+          "latency_parameter_overridden": false
+        },
+        "forecast": {
+          "mean": 0.8236681864336701
+        }
+      },
+      "query": "from(gave-bds-in-onboarding).to(recommendation-offered)",
+      "description": ""
+    },
+    {
+      "uuid": "64f4529c-62b8-4e7e-8479-c5289d925e58",
+      "id": "household-delegated-to-viewed-coffee-screen",
+      "from": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "to": "5788d308-a7a9-49ce-a755-07491315a603",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.4069,
+        "id": "delegated-to-coffee",
+        "stdev": 0.040796584542640665,
+        "connection": "amplitude-prod",
+        "evidence": {
+          "n": 145,
+          "k": 59,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:48.926Z",
+          "source": "amplitude",
+          "full_query": "from(household-delegated).to(viewed-coffee-screen)",
+          "mean": 0.4068965517241379,
+          "stdev": 0.04079653027159286
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:48.926Z",
+          "full_query": "from(household-delegated).to(viewed-coffee-screen)"
+        },
+        "latency": {
+          "anchor_node_id": "household-created"
+        },
+        "forecast": {
+          "mean": 0.37037902049006555
+        }
+      },
+      "query": "from(household-delegated).to(viewed-coffee-screen)",
+      "description": "",
+      "n_query": "from(household-created).to(household-delegated)",
+      "n_query_overridden": true
+    },
+    {
+      "uuid": "13b5397f-9feb-453a-8e86-500c0693b4af",
+      "id": "viewed-coffee-screen-to-recommendation-offered",
+      "from": "5788d308-a7a9-49ce-a755-07491315a603",
+      "to": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.5862068965517241,
+        "id": "no-bdos-to-rec",
+        "connection": "amplitude-prod",
+        "stdev": 0.0646701924622422,
+        "evidence": {
+          "n": 58,
+          "k": 34,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:49.405Z",
+          "source": "amplitude",
+          "full_query": "from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)",
+          "mean": 0.5862068965517241,
+          "stdev": 0.06467003396379142
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:49.405Z",
+          "full_query": "from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)"
+        },
+        "latency": {
+          "anchor_node_id": "household-created",
+          "median_lag_days": 3.93,
+          "completeness": 0.9999990855257296,
+          "t95": 7.86,
+          "path_t95": 7.86,
+          "latency_parameter": true,
+          "latency_parameter_overridden": false
+        },
+        "forecast": {
+          "mean": 0.5779524496246631
+        }
+      },
+      "query": "from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)",
+      "description": "",
+      "query_overridden": true,
+      "n_query": "from(household-created).to(viewed-coffee-screen)",
+      "n_query_overridden": true
+    },
+    {
+      "uuid": "46ceb603-d6d1-421a-9658-083d4797b76a",
+      "id": "viewed-coffee-screen-to-no-recommendation-sent",
+      "from": "5788d308-a7a9-49ce-a755-07491315a603",
+      "to": "7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.0517,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(viewed-coffee-screen).to(no-recommendation-sent).minus(gave-bds-in-onboarding)",
+      "description": "",
+      "n_query": "from(household-created).to(viewed-coffee-screen)"
+    },
+    {
+      "uuid": "d45debd8-939b-4abb-b0d0-c5ef62412add",
+      "id": "recommendation-offered-to-switch-registered",
+      "from": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "to": "22ffa9c1-efaa-4fab-8c15-80ea2b397e0f",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.1534,
+        "id": "rec-with-bdos-to-registration",
+        "connection": "amplitude-prod",
+        "stdev": 0.037249684918783846,
+        "evidence": {
+          "n": 113,
+          "k": 22,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-06T18:05:49.652Z",
+          "source": "amplitude",
+          "full_query": "from(recommendation-offered).to(switch-registered)",
+          "mean": 0.19469026548672566,
+          "stdev": 0.03724897884345216
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:49.652Z",
+          "full_query": "from(recommendation-offered).to(switch-registered)"
+        },
+        "latency": {
+          "anchor_node_id": "household-created",
+          "median_lag_days": 4.6116118827160495,
+          "completeness": 0.9998931628141048,
+          "t95": 18.21,
+          "mean_lag_days": 4.603527001800412,
+          "path_t95": 23.32,
+          "latency_parameter": true,
+          "latency_parameter_overridden": false,
+          "t95_overridden": true
+        },
+        "stdev_overridden": false,
+        "forecast": {
+          "mean": 0.1224579456344655
+        }
+      },
+      "description": "",
+      "query": "from(recommendation-offered).to(switch-registered)",
+      "query_overridden": false,
+      "conditional_p": [
+        {
+          "condition": "visited(gave-bds-in-onboarding)",
+          "query": "from(recommendation-offered).to(switch-registered).visited(gave-bds-in-onboarding)",
+          "query_overridden": false,
+          "p": {
+            "mean": 0.36257309941520466,
+            "stdev": 0.03676333723816272,
+            "latency": {
+              "latency_parameter": true,
+              "latency_parameter_overridden": false
+            }
+          },
+          "colour": "#16a34a"
+        },
+        {
+          "condition": "exclude(gave-gave-bds-in-onboarding)",
+          "query": "from(recommendation-offered).to(switch-registered)",
+          "query_overridden": false,
+          "p": {
+            "mean": 0.1964573268921095,
+            "stdev": 0.015943834875444898,
+            "connection": "amplitude-prod",
+            "evidence": {
+              "n": 621,
+              "k": 122,
+              "retrieved_at": "2025-12-05T09:13:17.801Z",
+              "source": "amplitude"
+            },
+            "data_source": {
+              "type": "amplitude",
+              "retrieved_at": "2025-12-05T09:13:17.801Z",
+              "full_query": "{\"from\":\"energy-rec\",\"to\":\"switch-registered\",\"context\":[],\"case\":[],\"start\":\"2025-11-09T00:00:00.000Z\",\"end\":\"2025-11-15T00:00:00.000Z\",\"query_params\":\"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251109&end=20251115&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D\",\"from_step_index\":0,\"to_step_index\":1}"
+            },
+            "latency": {
+              "latency_parameter": true,
+              "latency_parameter_overridden": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "uuid": "8c23ea34-9c7e-40b3-ade3-291590774bfc",
+      "id": "household-delegated-to-recommendation-offered",
+      "from": "16974652-b532-41ee-b4d5-a3ef5381591d",
+      "to": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.4069,
+        "id": "delegation-straight-to-energy-rec",
+        "stdev": 0.040796584542640665,
+        "connection": "amplitude-prod",
+        "evidence": {
+          "n": 145,
+          "k": 59,
+          "retrieved_at": "2026-01-06T18:05:49.565Z",
+          "source": "amplitude",
+          "full_query": "from(household-delegated).to(recommendation-offered).exclude(viewed-coffee-screen)",
+          "mean": 0.4068965517241379,
+          "stdev": 0.04079653027159286,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25"
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-06T18:05:49.565Z",
+          "full_query": "from(household-delegated).to(recommendation-offered).exclude(viewed-coffee-screen)"
+        },
+        "latency": {
+          "anchor_node_id": "household-created",
+          "median_lag_days": 1.998536786273693,
+          "completeness": 0.9999999910627227,
+          "t95": 8.99,
+          "path_t95": 8.99,
+          "latency_parameter": true,
+          "mean_lag_days": 1.8402696158250058
+        },
+        "forecast": {
+          "mean": 0.4216838587739318
+        }
+      },
+      "query": "from(household-delegated).to(recommendation-offered).exclude(viewed-coffee-screen)",
+      "description": "",
+      "query_overridden": true,
+      "n_query": "from(household-created).to(household-delegated)"
+    },
+    {
+      "uuid": "b00b2e14-f795-46e6-96c5-f46bfedf458d",
+      "id": "recommendation-offered-to-post-recommendation-failure",
+      "from": "61415aa1-5a0c-472c-9626-51d0c0d38cdb",
+      "to": "940fd8cc-f7f6-4ec5-a973-fb4cc037fa64",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.8466,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(recommendation-offered).to(post-recommendation-failure)",
+      "conditional_p": [
+        {
+          "condition": "visited(gave-bds-in-onboarding)",
+          "query": "from(recommendation-offered).to(post-recommendation-failure).visited(gave-bds-in-onboarding)",
+          "query_overridden": false,
+          "p": {
+            "mean": 0.637,
+            "latency": {
+              "latency_parameter": true,
+              "latency_parameter_overridden": false
+            }
+          },
+          "colour": "#16a34a"
+        },
+        {
+          "condition": "exclude(gave-gave-bds-in-onboarding)",
+          "query": "from(recommendation-offered).to(post-recommendation-failure)",
+          "query_overridden": false,
+          "p": {
+            "mean": 0.804,
+            "latency": {
+              "latency_parameter": true,
+              "latency_parameter_overridden": false
+            }
+          }
+        }
+      ],
+      "description": ""
+    }
+  ],
+  "policies": {
+    "default_outcome": "success"
+  },
+  "metadata": {
+    "name": "conversion-flow-v0-ezra",
+    "description": "",
+    "created_at": "2025-11-20T16:28:04.980Z",
+    "updated_at": "2026-01-06T18:12:02.838Z",
+    "version": "1.0.0"
+  },
+  "currentQueryDSL": "cohort(1-Nov-25:1-Nov-25)",
+  "dataInterestsDSL": "(window(-90d:);cohort(-90d:)).context(channel)",
+  "baseDSL": "cohort(1-Nov-25:30-Nov-25)",
+  "debugging": true
+}

@@ -543,6 +543,15 @@ export async function computeQuerySignature(
         );
     })();
 
+    // Latency / cohort semantics:
+    // - Cohort mode (A-anchored) changes the external query shape.
+    // - Anchor identity changes the query semantics.
+    // - Conversion window days (derived from latency horizon / path) changes provider query parameters.
+    //
+    // IMPORTANT: We intentionally do NOT include cohort/window date bounds here.
+    // Those bounds are stored on each cached value entry (window_from/window_to or cohort_from/cohort_to),
+    // and including them in the signature would defeat incremental re-use for daily caches.
+    const edgeLatency = edge?.p?.latency;
     const canonical = JSON.stringify({
       connection: connectionName || '',
       // Provider-specific event names (from DSL)
@@ -559,6 +568,12 @@ export async function computeQuerySignature(
       context: (queryPayload.context || []).sort(),
       case: (queryPayload.case || []).sort(),
       context_filters: normalizedContextFilters,
+      // Cohort / latency semantics (exclude bounds, include shape + anchor + conversion window)
+      cohort_mode: !!queryPayload.cohort,
+      cohort_anchor_event_id: queryPayload?.cohort?.anchor_event_id || '',
+      // Edge latency primitives (include anchor node id and enablement as semantic inputs)
+      latency_parameter: edgeLatency?.latency_parameter === true,
+      anchor_node_id: edgeLatency?.anchor_node_id || '',
       // IMPORTANT: Include original query string to capture minus()/plus() terms
       // which are NOT preserved in the DSL object by buildDslFromEdge
       original_query: edge?.query || '',
@@ -3549,6 +3564,9 @@ class DataOperationsService {
       let eventDefinitions: Record<string, any> = {};  // Event file data for adapter
       let connectionProvider: string | undefined;
       let supportsDailyTimeSeries = false; // Capability from connections.yaml
+      // The exact edge-like object used to build the QueryPayload.
+      // We re-use it when computing query_signature so latency/anchor semantics match the payload.
+      let edgeForQuerySignature: any | undefined;
       
       if (objectType === 'case') {
         // Cases don't need DSL building
@@ -3771,6 +3789,7 @@ class DataOperationsService {
                     }
                   : targetEdge?.p,
               };
+              edgeForQuerySignature = edgeForDsl;
               
               const buildResult = await buildDslFromEdge(
                 edgeForDsl,
@@ -3903,6 +3922,7 @@ class DataOperationsService {
                     }
                   : targetEdge?.p,
               };
+              edgeForQuerySignature = targetEdgeWithPersisted;
 
               const fallbackResult = await buildDslFromEdge(
                 targetEdgeWithPersisted,
@@ -4340,7 +4360,7 @@ class DataOperationsService {
       // (we only write for parameter objects in versioned/source-via-file pathway)
       if (objectType === 'parameter' && writeToFile) {
         const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
-        querySignature = await computeQuerySignature(queryPayload, connectionName, graph, targetEdge);
+        querySignature = await computeQuerySignature(queryPayload, connectionName, graph, edgeForQuerySignature || targetEdge);
         console.log('[DataOperationsService] Computed query signature for storage:', {
           signature: querySignature?.substring(0, 16) + '...',
           writeToFile,
