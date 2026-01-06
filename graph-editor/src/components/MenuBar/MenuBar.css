@@ -11,6 +11,14 @@
   user-select: none;
 }
 
+/* Right-side controls container (pushes brand to the far right) */
+.dagnet-right-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* Dagnet Brand - positioned at right */
 .dagnet-brand {
   display: flex;
@@ -20,12 +28,69 @@
   font-size: 14px;
   color: #333;
   padding: 4px 12px;
-  margin-left: auto; /* Push to right */
   background: linear-gradient(135deg, #f0f0f0 0%, #e8e8e8 100%);
   border-radius: 4px;
   border: 1px solid #ddd;
   cursor: pointer;
   transition: all 0.15s ease;
+}
+
+.dagnet-dev-console-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.dagnet-dev-console-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #333;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dagnet-dev-console-toggle input {
+  cursor: pointer;
+}
+
+.dagnet-dev-console-mark-input {
+  width: 220px;
+  height: 24px;
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.dagnet-dev-console-mark-input:disabled {
+  background: #f3f3f3;
+  color: #999;
+}
+
+.dagnet-dev-console-mark-btn {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #f0f0f0;
+  cursor: pointer;
+}
+
+.dagnet-dev-console-mark-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.dagnet-dev-console-mark-btn:not(:disabled):hover {
+  background: #e8e8e8;
+  border-color: #ccc;
 }
 
 .dagnet-logo {
@@ -172,6 +237,37 @@
   .menu-bar {
     background-color: #2d2d2d;
     border-bottom-color: #404040;
+  }
+
+  .dagnet-dev-console-controls {
+    background: #2d2d2d;
+    border-color: #555;
+  }
+
+  .dagnet-dev-console-toggle {
+    color: #e0e0e0;
+  }
+
+  .dagnet-dev-console-mark-input {
+    background: #1f1f1f;
+    border-color: #555;
+    color: #e0e0e0;
+  }
+
+  .dagnet-dev-console-mark-input:disabled {
+    background: #262626;
+    color: #777;
+  }
+
+  .dagnet-dev-console-mark-btn {
+    background: #3d3d3d;
+    border-color: #555;
+    color: #e0e0e0;
+  }
+
+  .dagnet-dev-console-mark-btn:not(:disabled):hover {
+    background: #454545;
+    border-color: #666;
   }
 
   .dagnet-brand {

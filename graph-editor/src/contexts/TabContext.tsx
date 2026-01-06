@@ -76,6 +76,7 @@ class FileRegistry {
   private files = new Map<string, FileState>();
   private listeners = new Map<string, Set<(file: FileState) => void>>();
   private updatingFiles = new Set<string>(); // Guard against re-entrant updates
+  private pendingUpdates = new Map<string, any>(); // Latest queued update per fileId (prevents lost updates)
 
   /**
    * Get or create a file state
@@ -163,9 +164,12 @@ class FileRegistry {
    * Update file data
    */
   async updateFile(fileId: string, newData: any): Promise<void> {
-    // Guard against re-entrant updates (prevents stack overflow)
+    // Guard against re-entrant updates.
+    // IMPORTANT: Do NOT drop updates (that creates silent data loss and race conditions).
+    // Instead, queue the latest pending update and apply it after the current update completes.
     if (this.updatingFiles.has(fileId)) {
-      console.warn(`FileRegistry: Skipping re-entrant update for ${fileId}`);
+      this.pendingUpdates.set(fileId, newData);
+      console.warn(`FileRegistry: Queued re-entrant update for ${fileId}`);
       return;
     }
     
@@ -262,6 +266,14 @@ class FileRegistry {
     }
     } finally {
       this.updatingFiles.delete(fileId);
+      const pending = this.pendingUpdates.get(fileId);
+      if (pending !== undefined) {
+        this.pendingUpdates.delete(fileId);
+        // Defer to next tick to avoid deep recursion and allow current listeners to settle.
+        setTimeout(() => {
+          void this.updateFile(fileId, pending);
+        }, 0);
+      }
     }
   }
 

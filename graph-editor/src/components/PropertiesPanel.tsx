@@ -653,8 +653,9 @@ export default function PropertiesPanel({
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
 
   // Helper: Update edge parameter fields
-  const updateEdgeParam = useCallback((paramSlot: 'p' | 'cost_gbp' | 'labour_cost', changes: Record<string, any>) => {
+  const updateEdgeParam = useCallback(async (paramSlot: 'p' | 'cost_gbp' | 'labour_cost', changes: Record<string, any>) => {
     if (!graph || !selectedEdgeId) return;
+    const oldGraph = graph;
     const next = structuredClone(graph);
     const edgeIndex = next.edges.findIndex((e: any) => 
       e.uuid === selectedEdgeId || e.id === selectedEdgeId
@@ -671,7 +672,18 @@ export default function PropertiesPanel({
       if (next.metadata) {
         next.metadata.updated_at = new Date().toISOString();
       }
-      setGraph(next);
+      
+      // For drag interactions (sliders) we avoid graphMutationService and just update the graph in place.
+      // For committed updates, route through graphMutationService so topology-sensitive changes (e.g. enabling latency)
+      // can trigger MSMDC regeneration (anchors).
+      if (_noHistory) {
+        setGraph(next);
+      } else {
+        const { graphMutationService } = await import('../services/graphMutationService');
+        await graphMutationService.updateGraph(oldGraph, next, setGraph, {
+          source: `PropertiesPanel.updateEdgeParam(${paramSlot})`,
+        });
+      }
       
       // Only save history if _noHistory is not set (for slider dragging, we skip history)
       if (!_noHistory) {

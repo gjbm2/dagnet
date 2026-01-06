@@ -734,9 +734,26 @@ export class UpdateManager {
     options: UpdateOptions = {}
   ): Promise<UpdateResult> {
     console.log('[UpdateManager] update:start', { direction: 'graph_to_file', operation, subDest });
-    const sourceId = source?.id || source?.uuid || 'unknown';
-    sessionLogService.info('data-update', `GRAPH_TO_FILE_${operation}`, 
-      `${operation} ${subDest} file from graph`, `Source: ${sourceId}`, { fileId: sourceId, fileType: subDest });
+    const isValidateOnly = options.validateOnly === true;
+    const sourceId = source?.id || source?.uuid || source?.p?.id || source?.case?.id || 'graph';
+    const targetId = target?.id || target?.fileId || null;
+    const fallbackId =
+      subDest === 'parameter'
+        ? (source?.p?.id || source?.id || source?.uuid)
+        : (source?.id || source?.uuid);
+    const fileBaseId = targetId || fallbackId || null;
+    const fileId = fileBaseId ? `${subDest}-${fileBaseId}` : 'unknown';
+
+    // Session logs are user-facing. validateOnly calls are internal dry-runs and should not spam the log.
+    if (!isValidateOnly) {
+      sessionLogService.info(
+        'data-update',
+        `GRAPH_TO_FILE_${operation}`,
+        `${operation} ${subDest} file from graph`,
+        `Source: ${sourceId}`,
+        { fileId, fileType: subDest, sourceId }
+      );
+    }
     
     try {
       let result: UpdateResult;
@@ -754,19 +771,27 @@ export class UpdateManager {
           throw new Error(`Unsupported operation: ${operation}`);
       }
       
-      if (result.success) {
-        sessionLogService.success('data-update', `GRAPH_TO_FILE_${operation}_SUCCESS`, 
-          `${operation} ${subDest} file completed`, 
+      if (result.success && !isValidateOnly) {
+        sessionLogService.success(
+          'data-update',
+          `GRAPH_TO_FILE_${operation}_SUCCESS`,
+          `${operation} ${subDest} file completed`,
           result.changes?.length ? `${result.changes.length} field(s) updated` : undefined,
-          { fileId: sourceId, fileType: subDest });
+          { fileId, fileType: subDest, sourceId }
+        );
       }
       return result;
     } catch (error) {
       console.error('[UpdateManager] update:error', { direction: 'graph_to_file', operation, subDest, error });
-      sessionLogService.error('data-update', `GRAPH_TO_FILE_${operation}_ERROR`, 
-        `${operation} ${subDest} file failed`, 
-        error instanceof Error ? error.message : String(error),
-        { fileId: sourceId, fileType: subDest });
+      if (!isValidateOnly) {
+        sessionLogService.error(
+          'data-update',
+          `GRAPH_TO_FILE_${operation}_ERROR`,
+          `${operation} ${subDest} file failed`,
+          error instanceof Error ? error.message : String(error),
+          { fileId, fileType: subDest, sourceId }
+        );
+      }
       throw error;
     }
   }

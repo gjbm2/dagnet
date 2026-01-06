@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import * as yaml from 'js-yaml';
 import { EditorProps, ViewMode } from '../../types';
-import { useFileState } from '../../contexts/TabContext';
+import { useFileState, useTabContext } from '../../contexts/TabContext';
 import './RawView.css';
+import { canRawViewWriteBack } from './rawViewWritebackGuard';
 
 /**
  * Raw View Editor
@@ -11,8 +12,11 @@ import './RawView.css';
  * Monaco editor for viewing/editing raw JSON or YAML
  * Supports syntax highlighting, validation, and formatting
  */
-export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
+export function RawView({ fileId, viewMode, readonly = false, tabId }: EditorProps & { tabId?: string }) {
   const { data, isDirty, updateData, originalData } = useFileState(fileId);
+  const { activeTabId } = useTabContext();
+  const allowWritebackRef = useRef<boolean>(false);
+  allowWritebackRef.current = canRawViewWriteBack({ readonly, tabId, activeTabId });
   const [editorValue, setEditorValue] = useState('');
   const [parseError, setParseError] = useState<string | null>(null);
   const [lineWrap, setLineWrap] = useState(false);
@@ -129,6 +133,10 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
   const handleEditorChange = (value: string | undefined) => {
     console.log(`RawView[${fileId}]: Editor change detected, value:`, value?.substring(0, 100), 'length:', value?.length);
     if (value === undefined || readonly) return;
+    if (!allowWritebackRef.current) {
+      // Background raw tabs must never write back; treat as a no-op.
+      return;
+    }
     
     // Skip if this change was triggered by us updating the editor from external data
     if (isUpdatingEditorRef.current) {
@@ -342,6 +350,7 @@ export function RawView({ fileId, viewMode, readonly = false }: EditorProps) {
               // Listen for changes in the modified editor
               modifiedEditor.onDidChangeModelContent(() => {
                 if (readonly) return;
+                  if (!allowWritebackRef.current) return;
                 
                 // Skip if this change was triggered by us updating the editor from external data
                 if (isUpdatingEditorRef.current) {

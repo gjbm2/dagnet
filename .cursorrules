@@ -426,6 +426,46 @@ When asked to "run tests":
 - Truncating output hides errors and wastes the user's time
 - **VIOLATION OF THIS RULE IS UNACCEPTABLE**
 
+## Cursor Debugging Workflow (Mirrored Logs + Marks)
+
+For flaky sync issues (Graph ↔ FileRegistry ↔ store), **do not paste console output into chat**.
+Instead, use the dev-only mirroring workflow:
+
+- **Console stream file**: `debug/tmp.browser-console.jsonl`
+- **Session log stream file**: `debug/tmp.session-log.jsonl`
+- **Graph snapshots (per mark)**: `debug/graph-snapshots/*.json`
+
+Both streams support **MARK** boundaries:
+- Use the top-right dev UI (Console toggle + mark input), or run `window.dagnetMark('your label')` in DevTools.
+- Marks are written to **both** streams (console + session log).
+
+### How the agent should analyse logs
+
+The usual workflow is:
+
+1. **Find the latest mark** (in each file) and record its line number.
+2. **Tail/slice from that line onwards** and analyse only the relevant window.
+
+Example commands (logs only — this does NOT apply to test/build output):
+
+```bash
+# Find the latest mark line number in the console stream
+grep -n "\"kind\":\"mark\"" debug/tmp.browser-console.jsonl | tail -n 1
+
+# Print everything from that line onwards (replace N)
+sed -n 'N,$p' debug/tmp.browser-console.jsonl
+
+# Find the latest mark line number in the session stream
+grep -n "\"operation\":\"DEV_MARK\"" debug/tmp.session-log.jsonl | tail -n 1
+
+# Print everything from that line onwards (replace N)
+sed -n 'N,$p' debug/tmp.session-log.jsonl
+```
+
+If you need a narrower slice, find the previous mark too and restrict to `N,M`.
+
+Reference: `graph-editor/docs/CURSOR_CONSOLE_MIRRORING.md`
+
 ### Test Updates Are Mandatory
 - **ALWAYS** update tests when changing functionality
 - **NEVER** leave tests broken

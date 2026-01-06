@@ -1,6 +1,5 @@
 # TODO
 
-- (MSMDC durability / drift fix) When MSMDC regen applies **graph-mastered** changes and a parameter file is connected, immediately PUT the updated graph-mastered fields back to file so files cannot drift and later dominate with stale state. Scope: `edge.query`, `edge.n_query`, and `edge.p.latency.anchor_node_id` (respect `*_overridden` flags). This should eliminate the “anchors disappear after Retrieve All” class of bugs by keeping graph↔file convergent after MSMDC.
 
 - For result cards in analytics: add a 'expand / contract' toggle to right of each card which shows all stats vs. key stats [and we may need to feed that through from analysis to flag which are key are which are ancillary)
 - context fixes: /home/reg/dev/dagnet/docs/current/project-lag/context-fix.md
@@ -45,6 +44,7 @@
 ## Major components
 - Bayesian modelling
 - Cyclic graphs...
+- Port to server version (for simplicity)
 
 ---
 

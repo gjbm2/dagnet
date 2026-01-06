@@ -19,6 +19,50 @@ import { queryRegenerationService } from './queryRegenerationService';
 import { sessionLogService } from './sessionLogService';
 import type { Graph } from '../types';
 
+type GraphMasteredAnchorComparison = {
+  edgeUuid: string;
+  edgeLocation: string;
+  paramId?: string;
+  latencyParameter: boolean;
+  graphAnchor?: string;
+  msmdcAnchor?: string | null;
+  overridden: boolean;
+  willApply: boolean;
+  reason:
+    | 'will-apply'
+    | 'no-change'
+    | 'skipped: overridden'
+    | 'skipped: no-anchor-from-msmdc';
+};
+
+function computeDjb2Hash(input: string): string {
+  // Deterministic, lightweight hash for logging/fingerprinting only (not cryptographic).
+  let hash = 5381;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) + hash) ^ input.charCodeAt(i); // hash * 33 ^ c
+  }
+  // Unsigned 32-bit to hex
+  return `djb2:${(hash >>> 0).toString(16)}`;
+}
+
+function computeGraphMasteredFingerprint(graph: Graph): {
+  fingerprint: string;
+  itemCount: number;
+} {
+  const items = graph.edges
+    .map(e => {
+      const query = typeof e.query === 'string' ? e.query : '';
+      const nQuery = typeof (e as any).n_query === 'string' ? (e as any).n_query : '';
+      const anchor = typeof e.p?.latency?.anchor_node_id === 'string' ? e.p.latency.anchor_node_id : '';
+      const overridden = e.p?.latency?.anchor_node_id_overridden ? '1' : '0';
+      return `${e.uuid}|q:${query}|nq:${nQuery}|a:${anchor}|ao:${overridden}`;
+    })
+    .sort();
+
+  const joined = items.join('\n');
+  return { fingerprint: computeDjb2Hash(joined), itemCount: items.length };
+}
+
 /**
  * Detect if a graph change is topology-related (vs data-only)
  */
@@ -83,6 +127,20 @@ function detectTopologyChange(oldGraph: Graph | null, newGraph: Graph | null): {
       return { hasChange: true, changeType: 'edge-connectivity-changed' };
     }
   }
+
+  // Check latency enablement (semantic change that must trigger MSMDC for anchors)
+  for (const newEdge of newGraph.edges) {
+    const oldEdge = oldGraph.edges.find(e => e.uuid === newEdge.uuid);
+    if (!oldEdge) continue;
+
+    const oldLatencyEnabled = oldEdge.p?.latency?.latency_parameter === true;
+    const newLatencyEnabled = newEdge.p?.latency?.latency_parameter === true;
+
+    // Requirement: when latency_parameter transitions to true, we need MSMDC to generate anchors.
+    if (!oldLatencyEnabled && newLatencyEnabled) {
+      return { hasChange: true, changeType: 'latency-edge-enabled' };
+    }
+  }
   
   // Check conditional_p conditions (semantic changes)
   for (let i = 0; i < newGraph.edges.length; i++) {
@@ -124,6 +182,7 @@ class GraphMutationService {
       downstreamOf?: string;
       literalWeights?: { visited: number; exclude: number };
       setAutoUpdating?: (updating: boolean) => void;
+      source?: string;
     }
   ): Promise<void> {
     console.log('🔄 [GraphMutation] updateGraph called', {
@@ -133,7 +192,8 @@ class GraphMutationService {
       newNodeCount: newGraph?.nodes?.length,
       oldEdgeCount: oldGraph?.edges?.length,
       newEdgeCount: newGraph?.edges?.length,
-      skipRegen: options?.skipQueryRegeneration
+      skipRegen: options?.skipQueryRegeneration,
+      source: options?.source,
     });
     
     if (!newGraph) {
@@ -167,6 +227,7 @@ class GraphMutationService {
       'edge-added': 'Edge added to graph',
       'edge-removed': 'Edge removed from graph',
       'edge-connectivity-changed': 'Edge connection changed',
+      'latency-edge-enabled': 'Latency enabled on edge',
       'conditional-condition-changed': 'Conditional probability condition changed'
     };
     
@@ -219,6 +280,13 @@ class GraphMutationService {
       const node = graph.nodes.find(n => n.uuid === uuidOrId || n.id === uuidOrId);
       return node?.id || uuidOrId;
     };
+
+    const diag = sessionLogService.getDiagnosticLoggingEnabled();
+    const fingerprintBefore = computeGraphMasteredFingerprint(graph);
+    const graphAnchoredEdges = graph.edges.filter(e => typeof e.p?.latency?.anchor_node_id === 'string' && e.p.latency.anchor_node_id.trim().length > 0);
+    const latencyEdges = graph.edges.filter(e => !!e.p?.latency?.latency_parameter);
+    const latencyEdgesMissingAnchor = latencyEdges.filter(e => !(typeof e.p?.latency?.anchor_node_id === 'string' && e.p.latency.anchor_node_id.trim().length > 0));
+    const anchorOverriddenEdges = graph.edges.filter(e => !!e.p?.latency?.anchor_node_id_overridden);
     
     // Start hierarchical log operation for MSMDC
     const logOpId = sessionLogService.startOperation(
@@ -231,6 +299,24 @@ class GraphMutationService {
         edgesAffected: graph.edges.map(e => `${resolveNodeId(e.from)}→${resolveNodeId(e.to)}`)
       }
     );
+
+    if (diag) {
+      sessionLogService.addChild(
+        logOpId,
+        'info',
+        'MSMDC_INPUT_GRAPH_MASTERED_STATE',
+        'Input graph-mastered state fingerprint',
+        `fingerprint=${fingerprintBefore.fingerprint} (edges=${fingerprintBefore.itemCount})`,
+        {
+          fingerprint: fingerprintBefore.fingerprint,
+          edges: fingerprintBefore.itemCount,
+          anchoredEdges: graphAnchoredEdges.length,
+          latencyEdges: latencyEdges.length,
+          latencyEdgesMissingAnchor: latencyEdgesMissingAnchor.length,
+          anchorOverriddenEdges: anchorOverriddenEdges.length,
+        }
+      );
+    }
     
     try {
       // Step 1: Call Python MSMDC
@@ -263,9 +349,115 @@ class GraphMutationService {
         logOpId,
         'success',
         'MSMDC_API_RESPONSE',
-        `Python API returned ${result.parameters.length} parameter queries`,
+        `Python API returned ${result.parameters.length} parameter queries and ${Object.keys(result.anchors || {}).length} anchors`,
         `Duration: ${elapsed.toFixed(0)}ms`
       );
+
+      // Diagnostic: compare MSMDC anchors vs current graph anchor state BEFORE apply, even if it will be a no-op.
+      if (diag) {
+        const anchorsByEdgeUuid = result.anchors || {};
+
+        const comparisons: GraphMasteredAnchorComparison[] = [];
+        for (const edge of graph.edges) {
+          const msmdcAnchor = anchorsByEdgeUuid[edge.uuid]; // may be undefined if MSMDC did not return an anchor for this edge
+          const graphAnchor = edge.p?.latency?.anchor_node_id;
+          const overridden = !!edge.p?.latency?.anchor_node_id_overridden;
+          const latencyParameter = !!edge.p?.latency?.latency_parameter;
+
+          // Only log edges that are relevant to anchoring: latency edges, or edges with an anchor already set,
+          // or edges explicitly mentioned by MSMDC in its anchors map.
+          const shouldLog =
+            latencyParameter ||
+            typeof graphAnchor === 'string' ||
+            msmdcAnchor !== undefined;
+          if (!shouldLog) continue;
+
+          const fromId = resolveNodeId(edge.from);
+          const toId = resolveNodeId(edge.to);
+          const edgeLocation = `edge ${fromId}→${toId}`;
+          const paramId = typeof edge.p?.id === 'string' ? edge.p.id : undefined;
+
+          let willApply = false;
+          let reason: GraphMasteredAnchorComparison['reason'] = 'no-change';
+
+          if (overridden) {
+            reason = 'skipped: overridden';
+          } else if (msmdcAnchor === undefined) {
+            reason = 'skipped: no-anchor-from-msmdc';
+          } else {
+            const graphAnchorOrNull = typeof graphAnchor === 'string' && graphAnchor.trim().length > 0 ? graphAnchor : null;
+            if (graphAnchorOrNull === msmdcAnchor) {
+              reason = 'no-change';
+            } else {
+              willApply = true;
+              reason = 'will-apply';
+            }
+          }
+
+          comparisons.push({
+            edgeUuid: edge.uuid,
+            edgeLocation,
+            paramId,
+            latencyParameter,
+            graphAnchor: graphAnchor,
+            msmdcAnchor: msmdcAnchor,
+            overridden,
+            willApply,
+            reason,
+          });
+        }
+
+        const willApplyCount = comparisons.filter(c => c.willApply).length;
+        const overriddenCount = comparisons.filter(c => c.reason === 'skipped: overridden').length;
+        const missingFromMsmdcCount = comparisons.filter(c => c.reason === 'skipped: no-anchor-from-msmdc').length;
+        const noChangeCount = comparisons.filter(c => c.reason === 'no-change').length;
+
+        sessionLogService.addChild(
+          logOpId,
+          'info',
+          'MSMDC_ANCHOR_COMPARISON_SUMMARY',
+          'Anchor comparison (graph vs MSMDC output)',
+          `willApply=${willApplyCount}, noChange=${noChangeCount}, overridden=${overriddenCount}, missingFromMSMDC=${missingFromMsmdcCount}`,
+          {
+            willApply: willApplyCount,
+            noChange: noChangeCount,
+            overridden: overriddenCount,
+            missingFromMSMDC: missingFromMsmdcCount,
+            totalCompared: comparisons.length,
+          }
+        );
+
+        // Per-edge detail: keep bounded to avoid session log blowups on huge graphs.
+        const maxPerEdge = 200;
+        const shown = comparisons.slice(0, maxPerEdge);
+        for (const c of shown) {
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'MSMDC_ANCHOR_COMPARISON',
+            `${c.edgeLocation}: ${c.reason}`,
+            `graph=${c.graphAnchor ?? '(unset)'}; msmdc=${c.msmdcAnchor ?? (c.msmdcAnchor === null ? '(null)' : '(unset)')}`,
+            {
+              edgeUuid: c.edgeUuid,
+              paramId: c.paramId,
+              latencyParameter: c.latencyParameter,
+              overridden: c.overridden,
+              valuesBefore: { anchor_node_id: c.graphAnchor },
+              valuesAfter: { anchor_node_id: c.msmdcAnchor ?? undefined },
+              reason: c.reason,
+            }
+          );
+        }
+        if (comparisons.length > maxPerEdge) {
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'MSMDC_ANCHOR_COMPARISON_TRUNCATED',
+            'Anchor comparison truncated',
+            `Showing ${maxPerEdge}/${comparisons.length} edges`,
+          );
+        }
+      }
       
       // Step 2: Apply regenerated queries and anchors to graph
       const updatedGraph = structuredClone(graph);
@@ -280,21 +472,113 @@ class GraphMutationService {
         fileUpdates: applyResult.fileUpdates,
         skipped: applyResult.skipped
       });
-      
-      // Log each parameter that was changed
-      for (const param of applyResult.changedParameters || []) {
-        sessionLogService.addChild(
-          logOpId,
-          'info',
-          'PARAM_UPDATED',
-          `Updated: ${param.paramId}`,
-          `Location: ${param.location}`,
-          {
-            paramId: param.paramId,
-            valuesBefore: { query: param.oldQuery },
-            valuesAfter: { query: param.newQuery }
+
+      // Diagnostic children: log each change (queries, anchors, n_query)
+      if (diag) {
+        for (const param of applyResult.changedParameters || []) {
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'PARAM_UPDATED',
+            `Query updated: ${param.paramId}`,
+            `Location: ${param.location}`,
+            {
+              paramId: param.paramId,
+              valuesBefore: { query: param.oldQuery },
+              valuesAfter: { query: param.newQuery }
+            }
+          );
+        }
+
+        for (const a of applyResult.changedAnchors || []) {
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'ANCHOR_UPDATED',
+            `Anchor updated: ${a.edgeLocation}`,
+            `anchor_node_id: ${a.oldAnchor ?? '(unset)'} → ${a.newAnchor ?? '(unset)'}`,
+            {
+              edgeUuid: a.edgeUuid,
+              paramId: a.paramId ?? undefined,
+              valuesBefore: { anchor_node_id: a.oldAnchor },
+              valuesAfter: { anchor_node_id: a.newAnchor ?? undefined },
+            }
+          );
+        }
+
+        for (const nq of applyResult.changedNQueries || []) {
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'N_QUERY_UPDATED',
+            `n_query updated: ${nq.paramId}`,
+            `Location: ${nq.location}`,
+            {
+              paramId: nq.paramId,
+              valuesBefore: { n_query: nq.oldNQuery },
+              valuesAfter: { n_query: nq.newNQuery },
+            }
+          );
+        }
+
+        // File cascade decisions: WHY did we (not) write parameter/case files?
+        const decisions = (applyResult as any).fileCascadeDecisions as any[] | undefined;
+        if (Array.isArray(decisions) && decisions.length > 0) {
+          const summary = decisions.reduce(
+            (acc, d) => {
+              const key = `${d.field}:${d.decision}`;
+              acc[key] = (acc[key] || 0) + 1;
+              return acc;
+            },
+            {} as Record<string, number>
+          );
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'FILE_CASCADE_SUMMARY',
+            'Graph→file cascade decisions (diagnostic)',
+            undefined,
+            { summary, total: decisions.length }
+          );
+
+          const max = 200;
+          for (const d of decisions.slice(0, max)) {
+            sessionLogService.addChild(
+              logOpId,
+              d.decision === 'error' ? 'error' : 'info',
+              'FILE_CASCADE_DECISION',
+              `${d.fileId}: ${d.field} → ${d.decision}`,
+              d.reason,
+              {
+                fileId: d.fileId,
+                fileType: d.fileType,
+                field: d.field,
+                objectId: d.objectId,
+                decision: d.decision,
+                valuesBefore: d.valuesBefore,
+                valuesAfter: d.valuesAfter,
+                error: d.error,
+              }
+            );
           }
-        );
+          if (decisions.length > max) {
+            sessionLogService.addChild(
+              logOpId,
+              'info',
+              'FILE_CASCADE_TRUNCATED',
+              'File cascade decision list truncated',
+              `Showing ${max}/${decisions.length}`
+            );
+          }
+        } else {
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'FILE_CASCADE_SUMMARY',
+            'Graph→file cascade decisions (diagnostic)',
+            'No cascaded file updates were attempted'
+          );
+        }
       }
       
       // Step 3: Update graph store with regenerated queries
@@ -304,36 +588,75 @@ class GraphMutationService {
           created_at: new Date().toISOString()
         };
         updatedGraph.metadata.updated_at = new Date().toISOString();
-        
+
+        // CRITICAL: Suppress File→Store sync BEFORE updating the store.
+        // Otherwise, there is a race where stale `data` from FileRegistry can overwrite
+        // the freshly updated graph-mastered fields (anchors, queries, n_query) we’re about to set.
+        // The sync chain (GraphEditor ↔ GraphStoreContext ↔ FileRegistry) has race conditions.
+        window.dispatchEvent(new CustomEvent('dagnet:suppressFileToStoreSync', { detail: { duration: 1000 } }));
+
         setGraph(updatedGraph);
         
-        // CRITICAL: Dispatch event to suppress File→Store sync temporarily
-        // This prevents stale file data from overwriting the anchored graph in the store
-        // The sync chain (GraphEditor ↔ GraphStoreContext ↔ FileRegistry) has race conditions
-        window.dispatchEvent(new CustomEvent('dagnet:suppressFileToStoreSync', { detail: { duration: 1000 } }))
+        // Notify user (keep brief; details are in session log)
+        toast.success(`✓ MSMDC applied ${applyResult.graphUpdates} update(s)`, { duration: 3000 });
         
-        // Notify user
-          toast.success(`✓ Regenerated ${applyResult.graphUpdates} queries`, { duration: 3000 });
-        
+        const qCount = applyResult.changedParameters?.length ?? 0;
+        const aCount = applyResult.changedAnchors?.length ?? 0;
+        const nqCount = applyResult.changedNQueries?.length ?? 0;
+
         sessionLogService.endOperation(
           logOpId,
           'success',
-          `MSMDC completed: ${applyResult.graphUpdates} queries regenerated`,
+          `MSMDC completed: ${applyResult.graphUpdates} graph-mastered update(s) (queries=${qCount}, anchors=${aCount}, n_query=${nqCount})`,
           {
+            // Back-compat field (queries only)
             parametersGenerated: applyResult.changedParameters?.map(p => ({
               paramId: p.paramId,
               query: p.newQuery?.substring(0, 80) || '',
               location: p.location,
               changed: true
-            }))
+            })),
+            // New, explicit fields
+            anchorsUpdated: applyResult.changedAnchors?.map(a => ({
+              edgeUuid: a.edgeUuid,
+              location: a.edgeLocation,
+              paramId: a.paramId ?? undefined,
+              old: a.oldAnchor,
+              new: a.newAnchor ?? undefined,
+            })),
+            nQueriesUpdated: applyResult.changedNQueries?.map(nq => ({
+              paramId: nq.paramId,
+              location: nq.location,
+              old: nq.oldNQuery,
+              new: nq.newNQuery,
+            })),
+            updated: applyResult.graphUpdates,
+            fileUpdates: applyResult.fileUpdates,
           }
         );
       } else {
-        console.log('[GraphMutation] No query changes needed');
+        console.log('[GraphMutation] No graph-mastered changes needed');
+        const fingerprintAfter = computeGraphMasteredFingerprint(updatedGraph);
         sessionLogService.endOperation(
           logOpId,
           'info',
-          'MSMDC completed: No query changes needed'
+          'MSMDC completed: No graph-mastered changes needed',
+          diag
+            ? {
+                fingerprintBefore: fingerprintBefore.fingerprint,
+                fingerprintAfter: fingerprintAfter.fingerprint,
+                fingerprintChanged: fingerprintBefore.fingerprint !== fingerprintAfter.fingerprint,
+                updated: 0,
+                fileUpdates: 0,
+                graphNodes: graph.nodes.length,
+                graphEdges: graph.edges.length,
+                anchoredEdges: graphAnchoredEdges.length,
+                latencyEdges: latencyEdges.length,
+                latencyEdgesMissingAnchor: latencyEdgesMissingAnchor.length,
+                anchorOverriddenEdges: anchorOverriddenEdges.length,
+                anchorsReturned: Object.keys(result.anchors || {}).length,
+              }
+            : undefined
         );
       }
       

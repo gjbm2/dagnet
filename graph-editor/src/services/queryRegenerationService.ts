@@ -18,7 +18,29 @@
 import toast from 'react-hot-toast';
 import { graphComputeClient, type ParameterQuery } from '../lib/graphComputeClient';
 import { fileRegistry } from '../contexts/TabContext';
+import { updateManager } from './UpdateManager';
 import type { Graph, GraphEdge, GraphNode } from '../types';
+
+export type FileCascadeField = 'query' | 'n_query' | 'anchor_node_id';
+export type FileCascadeDecisionType =
+  | 'updated'
+  | 'skipped_no_file'
+  | 'skipped_synthetic'
+  | 'skipped_overridden'
+  | 'skipped_no_change'
+  | 'error';
+
+export type FileCascadeDecision = {
+  field: FileCascadeField;
+  fileType: 'parameter' | 'case';
+  fileId: string;
+  objectId: string; // paramId or caseId
+  decision: FileCascadeDecisionType;
+  reason: string;
+  valuesBefore?: Record<string, any>;
+  valuesAfter?: Record<string, any>;
+  error?: string;
+};
 
 /**
  * Parse synthetic ID into components
@@ -163,10 +185,17 @@ function applyQueryToGraph(
 /**
  * Update parameter file with new query (only for real param_ids, not synthetic)
  */
-async function updateParameterFile(paramId: string, newQuery: string): Promise<boolean> {
+async function updateParameterFile(paramId: string, newQuery: string): Promise<FileCascadeDecision> {
   // Skip synthetic IDs (no file exists)
   if (paramId.startsWith('synthetic:')) {
-    return false;
+    return {
+      field: 'query',
+      fileType: 'parameter',
+      fileId: `parameter-${paramId}`,
+      objectId: paramId,
+      decision: 'skipped_synthetic',
+      reason: 'Synthetic param id (no file exists)',
+    };
   }
   
   // Check if file exists
@@ -174,45 +203,309 @@ async function updateParameterFile(paramId: string, newQuery: string): Promise<b
   const paramFile = fileRegistry.getFile(fileId);
   
   if (!paramFile) {
-    return false;  // File doesn't exist yet
+    return {
+      field: 'query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_no_file',
+      reason: 'No parameter file in registry',
+    };
   }
   
   // Update query field in parameter file
+  const currentQuery = (paramFile.data as any)?.query;
   const updatedData = structuredClone(paramFile.data);
   // Respect file-side override flag if present
   if (updatedData.query_overridden === true) {
-    return false;
+    return {
+      field: 'query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_overridden',
+      reason: 'File query_overridden=true',
+      valuesBefore: { query: currentQuery },
+      valuesAfter: { query: newQuery },
+    };
+  }
+  if (currentQuery === newQuery) {
+    return {
+      field: 'query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_no_change',
+      reason: 'File already has same query',
+      valuesBefore: { query: currentQuery },
+      valuesAfter: { query: newQuery },
+    };
   }
   updatedData.query = newQuery;
   
-  await fileRegistry.updateFile(fileId, updatedData);
-  return true;
+  try {
+    await fileRegistry.updateFile(fileId, updatedData);
+    return {
+      field: 'query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'updated',
+      reason: 'Parameter file updated',
+      valuesBefore: { query: currentQuery },
+      valuesAfter: { query: newQuery },
+    };
+  } catch (e) {
+    return {
+      field: 'query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'error',
+      reason: 'fileRegistry.updateFile failed',
+      valuesBefore: { query: currentQuery },
+      valuesAfter: { query: newQuery },
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
 }
 
 /**
  * Update parameter file with new n_query (only for real param_ids, not synthetic).
  * Respects file-side n_query_overridden if present.
  */
-async function updateParameterFileNQuery(paramId: string, newNQuery: string): Promise<boolean> {
+async function updateParameterFileNQuery(paramId: string, newNQuery: string): Promise<FileCascadeDecision> {
   // Skip synthetic IDs (no file exists)
   if (paramId.startsWith('synthetic:')) {
-    return false;
+    return {
+      field: 'n_query',
+      fileType: 'parameter',
+      fileId: `parameter-${paramId}`,
+      objectId: paramId,
+      decision: 'skipped_synthetic',
+      reason: 'Synthetic param id (no file exists)',
+    };
   }
   
   const fileId = `parameter-${paramId}`;
   const paramFile = fileRegistry.getFile(fileId);
   if (!paramFile) {
-    return false;
+    return {
+      field: 'n_query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_no_file',
+      reason: 'No parameter file in registry',
+    };
   }
   
+  const currentNQuery = (paramFile.data as any)?.n_query;
   const updatedData = structuredClone(paramFile.data);
   if (updatedData.n_query_overridden === true) {
-    return false;
+    return {
+      field: 'n_query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_overridden',
+      reason: 'File n_query_overridden=true',
+      valuesBefore: { n_query: currentNQuery },
+      valuesAfter: { n_query: newNQuery },
+    };
+  }
+  if (currentNQuery === newNQuery) {
+    return {
+      field: 'n_query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_no_change',
+      reason: 'File already has same n_query',
+      valuesBefore: { n_query: currentNQuery },
+      valuesAfter: { n_query: newNQuery },
+    };
   }
   updatedData.n_query = newNQuery;
   
-  await fileRegistry.updateFile(fileId, updatedData);
-  return true;
+  try {
+    await fileRegistry.updateFile(fileId, updatedData);
+    return {
+      field: 'n_query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'updated',
+      reason: 'Parameter file updated',
+      valuesBefore: { n_query: currentNQuery },
+      valuesAfter: { n_query: newNQuery },
+    };
+  } catch (e) {
+    return {
+      field: 'n_query',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'error',
+      reason: 'fileRegistry.updateFile failed',
+      valuesBefore: { n_query: currentNQuery },
+      valuesAfter: { n_query: newNQuery },
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/**
+ * Update parameter file with new anchor_node_id (graph-mastered).
+ *
+ * Uses UpdateManager graph→file mappings so this does NOT create a new drift-prone code path.
+ * Respects file-side override flag: `latency.anchor_node_id_overridden`.
+ */
+async function updateParameterFileAnchorNodeId(paramId: string, anchorNodeId: string | null): Promise<FileCascadeDecision> {
+  // Skip synthetic IDs (no file exists)
+  if (paramId.startsWith('synthetic:')) {
+    return {
+      field: 'anchor_node_id',
+      fileType: 'parameter',
+      fileId: `parameter-${paramId}`,
+      objectId: paramId,
+      decision: 'skipped_synthetic',
+      reason: 'Synthetic param id (no file exists)',
+    };
+  }
+
+  const fileId = `parameter-${paramId}`;
+  const paramFile = fileRegistry.getFile(fileId);
+  if (!paramFile) {
+    return {
+      field: 'anchor_node_id',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_no_file',
+      reason: 'No parameter file in registry',
+    };
+  }
+
+  const fileLatency = (paramFile.data as any)?.latency;
+  const currentAnchor: string | undefined = fileLatency?.anchor_node_id;
+  const fileOverridden: boolean = fileLatency?.anchor_node_id_overridden === true;
+  const desiredAnchor: string | undefined = anchorNodeId || undefined;
+  if (fileOverridden) {
+    return {
+      field: 'anchor_node_id',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_overridden',
+      reason: 'File latency.anchor_node_id_overridden=true',
+      valuesBefore: { anchor_node_id: currentAnchor, anchor_node_id_overridden: true },
+      valuesAfter: { anchor_node_id: desiredAnchor },
+    };
+  }
+  if (currentAnchor === desiredAnchor) {
+    return {
+      field: 'anchor_node_id',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_no_change',
+      reason: 'File already has same latency.anchor_node_id',
+      valuesBefore: { anchor_node_id: currentAnchor },
+      valuesAfter: { anchor_node_id: desiredAnchor },
+    };
+  }
+
+  // Minimal graph-shaped payload for UpdateManager graph→file parameter UPDATE mappings.
+  // anchor_node_id mapping is conditioned on source.p.id.
+  const source: any = {
+    p: {
+      id: paramId,
+      latency: {
+        anchor_node_id: desiredAnchor,
+      },
+    },
+  };
+
+  // Validate-only first so we don't dirty/write files when nothing changes
+  const validate = await updateManager.handleGraphToFile(
+    source,
+    paramFile.data,
+    'UPDATE',
+    'parameter',
+    {
+      interactive: false,
+      validateOnly: true,
+      ignoreOverrideFlags: false,
+      allowPermissionFlagCopy: false,
+    }
+  );
+
+  if (!validate.success || !validate.changes || validate.changes.length === 0) {
+    return {
+      field: 'anchor_node_id',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'skipped_no_change',
+      reason: 'UpdateManager validateOnly produced no changes',
+      valuesBefore: { anchor_node_id: currentAnchor },
+      valuesAfter: { anchor_node_id: desiredAnchor },
+    };
+  }
+
+  const updatedData = structuredClone(paramFile.data);
+  const apply = await updateManager.handleGraphToFile(
+    source,
+    updatedData,
+    'UPDATE',
+    'parameter',
+    {
+      interactive: false,
+      validateOnly: false,
+      ignoreOverrideFlags: false,
+      allowPermissionFlagCopy: false,
+    }
+  );
+
+  if (!apply.success) {
+    return {
+      field: 'anchor_node_id',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'error',
+      reason: 'UpdateManager apply failed',
+      valuesBefore: { anchor_node_id: currentAnchor },
+      valuesAfter: { anchor_node_id: desiredAnchor },
+    };
+  }
+
+  try {
+    await fileRegistry.updateFile(fileId, updatedData);
+    return {
+      field: 'anchor_node_id',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'updated',
+      reason: 'Parameter file updated via UpdateManager mapping',
+      valuesBefore: { anchor_node_id: currentAnchor },
+      valuesAfter: { anchor_node_id: desiredAnchor },
+    };
+  } catch (e) {
+    return {
+      field: 'anchor_node_id',
+      fileType: 'parameter',
+      fileId,
+      objectId: paramId,
+      decision: 'error',
+      reason: 'fileRegistry.updateFile failed',
+      valuesBefore: { anchor_node_id: currentAnchor },
+      valuesAfter: { anchor_node_id: desiredAnchor },
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
 }
 
 /**
@@ -267,10 +560,17 @@ function getCurrentNQuery(graph: Graph, paramId: string): string | null {
 /**
  * Update case file with new query (only for real case_ids, not synthetic)
  */
-async function updateCaseFile(caseId: string, newQuery: string): Promise<boolean> {
+async function updateCaseFile(caseId: string, newQuery: string): Promise<FileCascadeDecision> {
   // Skip synthetic IDs (no file exists)
   if (caseId.startsWith('synthetic:')) {
-    return false;
+    return {
+      field: 'query',
+      fileType: 'case',
+      fileId: `case-${caseId}`,
+      objectId: caseId,
+      decision: 'skipped_synthetic',
+      reason: 'Synthetic case id (no file exists)',
+    };
   }
   
   // Check if file exists
@@ -278,7 +578,14 @@ async function updateCaseFile(caseId: string, newQuery: string): Promise<boolean
   const caseFile = fileRegistry.getFile(fileId);
   
   if (!caseFile) {
-    return false;  // File doesn't exist yet
+    return {
+      field: 'query',
+      fileType: 'case',
+      fileId,
+      objectId: caseId,
+      decision: 'skipped_no_file',
+      reason: 'No case file in registry',
+    };
   }
   
   // Update query field in case file (where is this stored?)
@@ -286,8 +593,27 @@ async function updateCaseFile(caseId: string, newQuery: string): Promise<boolean
   const updatedData = structuredClone(caseFile.data);
   // updatedData.query = newQuery;  // TBD based on schema
   
-  await fileRegistry.updateFile(fileId, updatedData);
-  return true;
+  try {
+    await fileRegistry.updateFile(fileId, updatedData);
+    return {
+      field: 'query',
+      fileType: 'case',
+      fileId,
+      objectId: caseId,
+      decision: 'updated',
+      reason: 'Case file updated (schema location TBD)',
+    };
+  } catch (e) {
+    return {
+      field: 'query',
+      fileType: 'case',
+      fileId,
+      objectId: caseId,
+      decision: 'error',
+      reason: 'fileRegistry.updateFile failed',
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
 }
 
 export class QueryRegenerationService {
@@ -439,22 +765,55 @@ export class QueryRegenerationService {
     graphUpdates: number;
     fileUpdates: number;
     skipped: number;
+    fileCascadeDecisions: FileCascadeDecision[];
     changedParameters: Array<{
       paramId: string;
       oldQuery: string;
       newQuery: string;
       location: string;
     }>;
+    changedAnchors: Array<{
+      edgeUuid: string;
+      edgeLocation: string;
+      paramId: string | null;
+      oldAnchor: string | undefined;
+      newAnchor: string | null;
+    }>;
+    changedNQueries: Array<{
+      paramId: string;
+      oldNQuery: string;
+      newNQuery: string;
+      location: string;
+    }>;
   }> {
     let graphUpdates = 0;
     let fileUpdates = 0;
     let skipped = 0;
+
+    const fileCascadeDecisions: FileCascadeDecision[] = [];
     
     // Track which queries actually changed
     const changedQueries: Array<{
       paramId: string;
       oldQuery: string;
       newQuery: string;
+      location: string;
+    }> = [];
+
+    // Track which anchors actually changed (graph-mastered)
+    const changedAnchors: Array<{
+      edgeUuid: string;
+      edgeLocation: string;
+      paramId: string | null;
+      oldAnchor: string | undefined;
+      newAnchor: string | null;
+    }> = [];
+
+    // Track which n_query values actually changed (graph-mastered)
+    const changedNQueries: Array<{
+      paramId: string;
+      oldNQuery: string;
+      newNQuery: string;
       location: string;
     }> = [];
     
@@ -482,6 +841,22 @@ export class QueryRegenerationService {
             edge.p.latency.anchor_node_id = anchorNodeId || undefined;
             graphUpdates++;
             console.log(`[QueryRegeneration] Applied anchor: ${edge.uuid} → ${anchorNodeId}`);
+            changedAnchors.push({
+              edgeUuid: edge.uuid,
+              edgeLocation: formatEdgeLocation(graph, edge),
+              paramId: typeof edge.p?.id === 'string' ? edge.p.id : null,
+              oldAnchor,
+              newAnchor: anchorNodeId,
+            });
+
+            // Cascade to connected parameter file (base probability param only).
+            // This prevents drift where stale file state later dominates after reload/refresh.
+            const baseParamId = edge.p?.id;
+            if (typeof baseParamId === 'string' && baseParamId.trim().length > 0 && !baseParamId.startsWith('synthetic:')) {
+              const decision = await updateParameterFileAnchorNodeId(baseParamId, anchorNodeId);
+              fileCascadeDecisions.push(decision);
+              if (decision.decision === 'updated') fileUpdates++;
+            }
           }
         }
       }
@@ -499,10 +874,17 @@ export class QueryRegenerationService {
             if (r.applied) {
               graphUpdates++;
             }
+            changedNQueries.push({
+              paramId: param.paramId,
+              oldNQuery: currentNQuery || '',
+              newNQuery: param.nQuery,
+              location: r.location,
+            });
             // Cascade to parameter file if present and not overridden
             if (!param.paramId.startsWith('synthetic:')) {
-              const updated = await updateParameterFileNQuery(param.paramId, param.nQuery);
-              if (updated) fileUpdates++;
+              const decision = await updateParameterFileNQuery(param.paramId, param.nQuery);
+              fileCascadeDecisions.push(decision);
+              if (decision.decision === 'updated') fileUpdates++;
             }
           }
         }
@@ -546,13 +928,15 @@ export class QueryRegenerationService {
         const isOverridden = this.isQueryOverridden(graph, param.paramId);
         if (!isOverridden) {
           // Try parameter file
-          const updated = await updateParameterFile(param.paramId, param.query);
-          if (updated) {
+          const decision = await updateParameterFile(param.paramId, param.query);
+          fileCascadeDecisions.push(decision);
+          if (decision.decision === 'updated') {
             fileUpdates++;
           } else {
             // Try case file
-            const caseUpdated = await updateCaseFile(param.paramId, param.query);
-            if (caseUpdated) {
+            const caseDecision = await updateCaseFile(param.paramId, param.query);
+            fileCascadeDecisions.push(caseDecision);
+            if (caseDecision.decision === 'updated') {
               fileUpdates++;
             }
           }
@@ -565,7 +949,15 @@ export class QueryRegenerationService {
       console.log('[QueryRegeneration] Queries changed:', changedQueries);
     }
     
-    return { graphUpdates, fileUpdates, skipped, changedParameters: changedQueries };
+    return {
+      graphUpdates,
+      fileUpdates,
+      skipped,
+      fileCascadeDecisions,
+      changedParameters: changedQueries,
+      changedAnchors,
+      changedNQueries,
+    };
   }
   
   /**

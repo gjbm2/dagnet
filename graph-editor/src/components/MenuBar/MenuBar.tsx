@@ -9,6 +9,7 @@ import { RepositoryMenu } from './RepositoryMenu';
 import { HelpMenu } from './HelpMenu';
 import { useTabContext } from '../../contexts/TabContext';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
+import { DevConsoleMirrorControls } from './DevConsoleMirrorControls';
 import packageJson from '../../../package.json';
 import './MenuBar.css';
 
@@ -39,13 +40,16 @@ export function MenuBarComponent() {
         <RepositoryMenu />
         <HelpMenu />
       </Menubar.Root>
-      <div 
-        className="dagnet-brand" 
-        onClick={handleBrandClick}
-        title={`Dagnet v${APP_VERSION}`}
-      >
-        <img src="/dagnet-icon.png" alt="" className="dagnet-logo" />
-        <span>Dagnet</span>
+      <div className="dagnet-right-controls">
+        <DevConsoleMirrorControls />
+        <div
+          className="dagnet-brand"
+          onClick={handleBrandClick}
+          title={`Dagnet v${APP_VERSION}`}
+        >
+          <img src="/dagnet-icon.png" alt="" className="dagnet-logo" />
+          <span>Dagnet</span>
+        </div>
       </div>
     </div>
   );

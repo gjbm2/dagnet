@@ -44,6 +44,96 @@ describe('QueryRegenerationService n_query application', () => {
     (fileRegistry as any)._mockFiles.clear();
   });
 
+  it('applies anchor_node_id to edge and parameter file when not overridden', async () => {
+    const graph: Graph = {
+      schema_version: '1.0.0',
+      id: 'g1',
+      name: 'Test',
+      description: '',
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', event_id: 'a', layout: { x: 0, y: 0 }, entry: { is_start: true } } as any,
+        { id: 'B', uuid: 'B', label: 'B', event_id: 'b', layout: { x: 0, y: 0 } } as any,
+      ],
+      edges: [
+        {
+          id: 'e1',
+          uuid: 'e1',
+          from: 'A',
+          to: 'B',
+          p: { id: 'p1', latency: {} } as any,
+          query: 'from(A).to(B)',
+          query_overridden: false,
+          n_query_overridden: false,
+        } as any,
+      ],
+    };
+
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      query_overridden: false,
+      n_query_overridden: false,
+      latency: {
+        anchor_node_id_overridden: false,
+      },
+    });
+
+    const parameters: any[] = [
+      { paramType: 'edge_base_p', paramId: 'p1', edgeKey: 'A->B', query: 'from(A).to(B)', nQuery: 'from(A).to(B)', stats: { checks: 0, literals: 0 } },
+    ];
+
+    await queryRegenerationService.applyRegeneratedQueries(graph, parameters as any, { e1: 'A' });
+
+    expect((graph.edges[0] as any).p.latency.anchor_node_id).toBe('A');
+    const file = (fileRegistry as any).getFile('parameter-p1');
+    expect(file.data.latency.anchor_node_id).toBe('A');
+  });
+
+  it('does not write anchor_node_id to parameter file when file override flag is true', async () => {
+    const graph: Graph = {
+      schema_version: '1.0.0',
+      id: 'g1',
+      name: 'Test',
+      description: '',
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', event_id: 'a', layout: { x: 0, y: 0 }, entry: { is_start: true } } as any,
+        { id: 'B', uuid: 'B', label: 'B', event_id: 'b', layout: { x: 0, y: 0 } } as any,
+      ],
+      edges: [
+        {
+          id: 'e1',
+          uuid: 'e1',
+          from: 'A',
+          to: 'B',
+          p: { id: 'p1', latency: {} } as any,
+          query: 'from(A).to(B)',
+          query_overridden: false,
+          n_query_overridden: false,
+        } as any,
+      ],
+    };
+
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      query_overridden: false,
+      n_query_overridden: false,
+      latency: {
+        anchor_node_id_overridden: true,
+        anchor_node_id: 'manual-anchor',
+      },
+    });
+
+    const parameters: any[] = [
+      { paramType: 'edge_base_p', paramId: 'p1', edgeKey: 'A->B', query: 'from(A).to(B)', nQuery: 'from(A).to(B)', stats: { checks: 0, literals: 0 } },
+    ];
+
+    await queryRegenerationService.applyRegeneratedQueries(graph, parameters as any, { e1: 'A' });
+
+    // Graph is allowed to update (file override only blocks file write)
+    expect((graph.edges[0] as any).p.latency.anchor_node_id).toBe('A');
+    const file = (fileRegistry as any).getFile('parameter-p1');
+    expect(file.data.latency.anchor_node_id).toBe('manual-anchor');
+  });
+
   it('applies nQuery to edge and parameter file when not overridden', async () => {
     const graph: Graph = {
       schema_version: '1.0.0',
