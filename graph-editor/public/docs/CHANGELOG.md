@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.17b
+**Released:** January 06, 2026
+
+Added creds sharing
+
+---
+
 ## Version 1.1.16b
 **Released:** January 06, 2026
 
