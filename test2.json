@@ -1,147 +1,227 @@
-{
-  "analysis_type": "graph_overview",
-  "analysis_name": "Graph Overview",
-  "analysis_description": "Overall outcomes from all entry points",
-  "metadata": {
-    "node_count": 7,
-    "edge_count": 6,
-    "entry_nodes": [
-      {
-        "id": "household-created",
-        "label": "Household created"
-      }
-    ]
-  },
-  "semantics": {
-    "dimensions": [
-      {
-        "id": "outcome",
-        "name": "Outcome",
-        "type": "node",
-        "role": "primary"
-      },
-      {
-        "id": "scenario_id",
-        "name": "Scenario",
-        "type": "scenario",
-        "role": "secondary"
-      }
-    ],
-    "metrics": [
-      {
-        "id": "probability",
-        "name": "Probability",
-        "type": "probability",
-        "format": "percent",
-        "role": "primary"
-      },
-      {
-        "id": "expected_cost_gbp",
-        "name": "Expected Cost (£)",
-        "type": "currency",
-        "format": "currency_gbp",
-        "role": null
-      },
-      {
-        "id": "expected_labour_cost",
-        "name": "Expected Cost (Labour)",
-        "type": "duration",
-        "format": "number",
-        "role": null
-      }
-    ],
-    "chart": {
-      "recommended": "bar_grouped",
-      "alternatives": [
-        "pie",
-        "table"
-      ],
-      "hints": {
-        "sort": {
-          "by": "probability",
-          "order": "desc"
-        }
-      }
-    }
-  },
-  "dimension_values": {
-    "outcome": {
-      "04332060-3c28-4465-920e-17949934b7d4": {
-        "name": "Switch success",
-        "colour": null,
-        "order": 0,
-        "visibility_mode": null,
-        "probability_label": null
-      },
-      "5326970e-e45d-4666-953c-53905fac56ab": {
-        "name": "Gm abandonned delegation",
-        "colour": null,
-        "order": 1,
-        "visibility_mode": null,
-        "probability_label": null
-      },
-      "c4f82230-7da3-4b74-ab96-bc576cb08417": {
-        "name": "Gm abandonned after delegation",
-        "colour": null,
-        "order": 2,
-        "visibility_mode": null,
-        "probability_label": null
-      },
-      "87e20915-cc26-417c-b0f0-4d6ea467e834": {
-        "name": "Gm abandoned after registration",
-        "colour": null,
-        "order": 3,
-        "visibility_mode": null,
-        "probability_label": null
-      }
-    },
-    "scenario_id": {
-      "current": {
-        "name": "Current",
-        "colour": "#3B82F6",
-        "order": null,
-        "visibility_mode": "e",
-        "probability_label": "Evidence Probability"
-      }
-    }
-  },
-  "data": [
-    {
-      "outcome": "04332060-3c28-4465-920e-17949934b7d4",
-      "scenario_id": "current",
-      "scenario_name": "Current",
-      "visibility_mode": "e",
-      "probability": 0.028416797829014444,
-      "expected_cost_gbp": 0,
-      "expected_labour_cost": 0
-    },
-    {
-      "outcome": "5326970e-e45d-4666-953c-53905fac56ab",
-      "scenario_id": "current",
-      "scenario_name": "Current",
-      "visibility_mode": "e",
-      "probability": 0,
-      "expected_cost_gbp": 0,
-      "expected_labour_cost": 0
-    },
-    {
-      "outcome": "c4f82230-7da3-4b74-ab96-bc576cb08417",
-      "scenario_id": "current",
-      "scenario_name": "Current",
-      "visibility_mode": "e",
-      "probability": 0,
-      "expected_cost_gbp": 0,
-      "expected_labour_cost": 0
-    },
-    {
-      "outcome": "87e20915-cc26-417c-b0f0-4d6ea467e834",
-      "scenario_id": "current",
-      "scenario_name": "Current",
-      "visibility_mode": "e",
-      "probability": 0,
-      "expected_cost_gbp": 0,
-      "expected_labour_cost": 0
-    }
-  ]
-}
-▶
+nodes:
+  - uuid: 4bdf1510-0cb8-4b4e-a566-f8eb349b0b83
+    id: household-created
+    label: Household created
+    absorbing: false
+    layout:
+      x: -164
+      'y': 440
+    description: ''
+    event_id: household-created
+    images:
+      - image_id: household-created-img
+        caption: Dagnet time
+        file_extension: png
+        caption_overridden: false
+    entry:
+      is_start: true
+  - uuid: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
+    id: household-delegated
+    label: household-delegated
+    absorbing: false
+    layout:
+      x: 21
+      'y': 382
+    description: ''
+    event_id: household-delegated
+    images: []
+  - uuid: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
+    id: switch-registered
+    label: Switch registered
+    absorbing: false
+    layout:
+      x: 283
+      'y': 314
+    event_id: switch-registered
+    images: []
+  - uuid: 04332060-3c28-4465-920e-17949934b7d4
+    id: switch-success
+    label: Switch success
+    absorbing: false
+    layout:
+      x: 544
+      'y': 238
+    event_id: switch-success
+    images: []
+  - uuid: 5326970e-e45d-4666-953c-53905fac56ab
+    id: gm-abandonned-delegation
+    label: Gm abandonned delegation
+    absorbing: false
+    layout:
+      x: 37
+      'y': 522
+  - uuid: c4f82230-7da3-4b74-ab96-bc576cb08417
+    id: gm-abandonned-after-delegation
+    label: Gm abandonned after delegation
+    absorbing: false
+    layout:
+      x: 296
+      'y': 483
+  - uuid: 87e20915-cc26-417c-b0f0-4d6ea467e834
+    id: gm-abandoned-after-registration
+    label: Gm abandoned after registration
+    absorbing: false
+    layout:
+      x: 517
+      'y': 438
+  - uuid: c138a576-32f8-46d6-9e13-d97869aa1441
+    id: ''
+    label: Node 8
+    absorbing: false
+    layout:
+      x: 135.54196387970754
+      'y': 168.6505551178761
+edges:
+  - uuid: c64ddc4d-c369-4ae8-a44a-398a63a46ab1
+    id: household-created-to-household-delegated
+    from: 4bdf1510-0cb8-4b4e-a566-f8eb349b0b83
+    to: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.532
+      id: gm-create-to-delegated
+      connection: amplitude-prod
+      connection_overridden: false
+      latency:
+        anchor_node_id: household-created
+      stdev: 0.0032173495587719202
+      evidence:
+        'n': 24071
+        k: 12813
+        window_from: 21-Oct-25
+        window_to: 5-Jan-26
+        retrieved_at: '2026-01-05T18:17:22.895Z'
+        source: amplitude
+        full_query: from(household-created).to(household-delegated)
+        mean: 0.5323002783432346
+        stdev: 0.003215991083081614
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-05T18:17:22.895Z'
+        full_query: from(household-created).to(household-delegated)
+      forecast:
+        mean: 0.5278144627679727
+    description: ''
+    query: from(household-created).to(household-delegated)
+  - uuid: 2d5ca246-b4d2-478f-bed6-487b76989b4c
+    id: household-created-to-gm-abandonned-delegation
+    from: 4bdf1510-0cb8-4b4e-a566-f8eb349b0b83
+    to: 5326970e-e45d-4666-953c-53905fac56ab
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.468
+      latency:
+        anchor_node_id: household-created
+    query: from(household-created).to(gm-abandonned-delegation)
+    description: ''
+  - uuid: 5f1aa0dd-613f-46e1-868e-69fc002fe45b
+    id: household-delegated-to-gm-gm-abandonned-delegation-after-delegation
+    from: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
+    to: c4f82230-7da3-4b74-ab96-bc576cb08417
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.9249
+      latency:
+        anchor_node_id: household-created
+    query: from(household-delegated).to(gm-abandonned-after-delegation)
+    description: ''
+  - uuid: a90c8a08-8437-4796-afd8-fa3c186ef316
+    id: switch-registered-to-gm-abandoned-after-registration
+    from: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
+    to: 87e20915-cc26-417c-b0f0-4d6ea467e834
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.2516
+      latency:
+        anchor_node_id: household-created
+    query: from(switch-registered).to(gm-abandoned-after-registration)
+    description: ''
+  - uuid: 97b11265-1242-4fa8-a097-359f2384665a
+    id: switch-registered-to-switch-success
+    from: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
+    to: 04332060-3c28-4465-920e-17949934b7d4
+    fromHandle: right-out
+    toHandle: left-out
+    p:
+      mean: 0.7484
+      id: gm-registered-to-success
+      connection: amplitude-prod
+      latency:
+        latency_parameter: true
+        median_lag_days: 6.555877676365882
+        mean_lag_days: 7.628800701296054
+        t95: 16.22
+        completeness: 0.9521015485624096
+        path_t95: 46.83
+        anchor_node_id_overridden: false
+      stdev: 0.011176834620068077
+      evidence:
+        'n': 1580
+        k: 1147
+        window_from: 21-Oct-25
+        window_to: 5-Jan-26
+        retrieved_at: '2026-01-05T18:17:24.395Z'
+        source: amplitude
+        full_query: from(switch-registered).to(switch-success)
+        mean: 0.7259493670886076
+        stdev: 0.01122121869755647
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-05T18:17:24.395Z'
+        full_query: from(switch-registered).to(switch-success)
+      forecast:
+        mean: 0.7244043854308623
+    description: ''
+    query: from(switch-registered).to(switch-success)
+  - uuid: 7bb83fbf-3ac6-4152-a395-a8b64a12506a
+    id: household-delegated-to-switch-registered
+    from: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
+    to: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
+    fromHandle: right-out
+    toHandle: left-out
+    p:
+      mean: 0.0751
+      id: gm-delegated-to-registered
+      connection: amplitude-prod
+      latency:
+        latency_parameter: true
+        median_lag_days: 9.991963333882843
+        mean_lag_days: 10.797872242931911
+        t95: 19.1
+        completeness: 0.9933641917156454
+        path_t95: 34.58
+        latency_parameter_overridden: false
+        anchor_node_id_overridden: false
+      stdev: 0.002229640069918795
+      evidence:
+        'n': 13505
+        k: 1011
+        window_from: 21-Oct-25
+        window_to: 5-Jan-26
+        retrieved_at: '2026-01-05T18:17:27.473Z'
+        source: amplitude
+        full_query: from(household-delegated).to(switch-registered)
+        mean: 0.07486116253239541
+        stdev: 0.0022645632011859145
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-05T18:17:27.473Z'
+        full_query: from(household-delegated).to(switch-registered)
+      forecast:
+        mean: 0.07063369390472407
+    description: ''
+    query: from(household-delegated).to(switch-registered)
+policies:
+  default_outcome: success
+metadata:
+  name: gm-rebuild-jan-25
+  description: ''
+  created_at: '2026-01-05T12:49:08.196Z'
+  updated_at: '2026-01-06T10:25:44.052Z'
+  version: 1.0.0
+dataInterestsDSL: window(-75d:);cohort(-75d:)
+currentQueryDSL: cohort(29-Dec-25:4-Jan-26)

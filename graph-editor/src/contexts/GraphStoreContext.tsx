@@ -541,51 +541,10 @@ export function GraphStoreProvider({
       }
     };
   }, [store, fileId, tabs, tabOps]);
-  
-  // Subscribe to graph changes and sync to FileRegistry (marks file dirty)
-  // This ensures ALL graph changes (node moves, edits, etc.) are tracked for commit
-  const lastSyncedGraphRef = useRef<string | null>(null);
-  const graphSyncDebounceRef = useRef<number | null>(null);
-  
-  useEffect(() => {
-    const unsubscribeGraph = store.subscribe((state) => {
-      const currentGraph = state.graph;
-      if (!currentGraph) return;
-      
-      const currentGraphStr = JSON.stringify(currentGraph);
-      
-      // Skip if unchanged
-      if (currentGraphStr === lastSyncedGraphRef.current) return;
-      
-      // Debounce to avoid excessive updates during rapid changes (e.g., dragging)
-      if (graphSyncDebounceRef.current) {
-        clearTimeout(graphSyncDebounceRef.current);
-      }
-      
-      graphSyncDebounceRef.current = window.setTimeout(async () => {
-        const finalGraph = store.getState().graph;
-        if (!finalGraph) return;
-        
-        const finalGraphStr = JSON.stringify(finalGraph);
-        if (finalGraphStr === lastSyncedGraphRef.current) return;
-        
-        lastSyncedGraphRef.current = finalGraphStr;
-        
-        // Update FileRegistry to mark file as dirty
-        await fileRegistry.updateFile(fileId, finalGraph);
-        console.log(`GraphStoreProvider: Synced graph changes to FileRegistry for ${fileId}`);
-        
-        graphSyncDebounceRef.current = null;
-      }, 100); // 100ms debounce for graph changes
-    });
-    
-    return () => {
-      unsubscribeGraph();
-      if (graphSyncDebounceRef.current) {
-        clearTimeout(graphSyncDebounceRef.current);
-      }
-    };
-  }, [store, fileId]);
+  // NOTE (6-Jan-26): GraphStoreProvider must NOT write graph store state back to FileRegistry.
+  // Store→File synchronisation is owned by GraphEditor for now.
+  // Reason: we previously had TWO competing Store→File writers (GraphEditor + GraphStoreProvider),
+  // which caused re-entrant FileRegistry.updateFile drops and nondeterministic persistence races.
   
   useEffect(() => {
     const prevCount = storeInstanceCounts.get(fileId) ?? 0;

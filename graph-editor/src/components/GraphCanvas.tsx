@@ -194,13 +194,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const copiedSubgraph = copiedItem?.type === 'dagnet-subgraph' ? copiedItem : null;
   
   // Wrapped setGraph that automatically triggers query regeneration on topology changes
-  const setGraph = useCallback(async (newGraph: any, oldGraph?: any) => {
+  const setGraph = useCallback(async (newGraph: any, oldGraph?: any, source?: string) => {
     // If oldGraph not provided, use current graph from closure
     const prevGraph = oldGraph !== undefined ? oldGraph : graph;
     try {
       const { graphMutationService } = await import('../services/graphMutationService');
       await graphMutationService.updateGraph(prevGraph, newGraph, setGraphDirect, {
-        setAutoUpdating
+        setAutoUpdating,
+        source,
       });
     } catch (error) {
       console.error('[GraphCanvas] setGraph wrapper error:', error);
@@ -3200,9 +3201,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       options
     );
     
-    // Use graphMutationService to trigger query regeneration
-    const { graphMutationService } = await import('../services/graphMutationService');
-    await graphMutationService.updateGraph(currentGraph, nextGraph, setGraph);
+    // Single path: route through GraphCanvas setGraph wrapper (avoids nested updateGraph calls)
+    await setGraph(nextGraph, currentGraph, 'add-edge');
     saveHistoryState('Add edge', undefined, edgeId);
     
     // Select the new edge after a brief delay to allow sync to complete
@@ -3259,9 +3259,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       }
     );
     
-    // Use graphMutationService to trigger query regeneration
-    const { graphMutationService } = await import('../services/graphMutationService');
-    await graphMutationService.updateGraph(currentGraph, nextGraph, setGraph);
+    // Single path: route through GraphCanvas setGraph wrapper (avoids nested updateGraph calls)
+    await setGraph(nextGraph, currentGraph, 'add-edge-variant');
     saveHistoryState('Add edge', undefined, edgeId);
     
     // Close modal and clear state

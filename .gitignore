@@ -46,6 +46,9 @@ build/
 # Generated documentation index
 graph-editor/public/docs/index.json
 
+# Debug streams & snapshots (dev-only)
+debug/
+
 # IDE files
 .vscode/
 .idea/

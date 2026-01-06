@@ -5,7 +5,8 @@
     {
       "root": "graph-editor",
       "venvPath": "graph-editor",
-      "venv": "venv"
+      "venv": "venv",
+      "extraPaths": ["graph-editor/lib"]
     }
   ]
 }

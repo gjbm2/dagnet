@@ -49,6 +49,128 @@ export default defineConfig(({ mode }) => {
           });
         },
       },
+      // Dev-only: browser console log sink for Cursor/agent debugging.
+      // Opt-in via localStorage flag in the browser (see consoleMirrorService) and/or env var.
+      // Writes JSONL to repo root by default so Cursor can read it.
+      ...(mode !== 'production'
+        ? [
+            {
+              name: 'dagnet-console-log-sink',
+              configureServer(server) {
+                const endpoint = '/__dagnet/console-log';
+                const repoConsoleDefault = path.resolve(__dirname, '..', 'debug', 'tmp.browser-console.jsonl');
+                const repoSessionDefault = path.resolve(__dirname, '..', 'debug', 'tmp.session-log.jsonl');
+                const consoleOutPath = process.env.DAGNET_CONSOLE_LOG_PATH
+                  ? path.resolve(process.env.DAGNET_CONSOLE_LOG_PATH)
+                  : repoConsoleDefault;
+                const sessionOutPath = process.env.DAGNET_SESSION_LOG_PATH
+                  ? path.resolve(process.env.DAGNET_SESSION_LOG_PATH)
+                  : repoSessionDefault;
+                const snapshotEndpoint = '/__dagnet/graph-snapshot';
+                const repoSnapshotDirDefault = path.resolve(__dirname, '..', 'debug', 'graph-snapshots');
+                const snapshotDir = process.env.DAGNET_GRAPH_SNAPSHOT_DIR
+                  ? path.resolve(process.env.DAGNET_GRAPH_SNAPSHOT_DIR)
+                  : repoSnapshotDirDefault;
+
+                server.middlewares.use(async (req, res, next) => {
+                  try {
+                    if (req.method !== 'POST') return next();
+
+                    // Graph snapshots (one JSON file per mark)
+                    if (req.url === snapshotEndpoint) {
+                      let body = '';
+                      req.setEncoding('utf8');
+                      req.on('data', (chunk) => {
+                        body += chunk;
+                        if (body.length > 20_000_000) {
+                          res.statusCode = 413;
+                          res.end('payload too large');
+                          req.destroy();
+                        }
+                      });
+                      req.on('end', () => {
+                        try {
+                          const parsed = JSON.parse(body || '{}');
+                          const ts = typeof parsed?.ts_ms === 'number' ? parsed.ts_ms : Date.now();
+                          const labelRaw = typeof parsed?.label === 'string' ? parsed.label : 'mark';
+                          const fileIdRaw = typeof parsed?.fileId === 'string' ? parsed.fileId : 'no-file';
+
+                          const sanitise = (s: string) =>
+                            s
+                              .toLowerCase()
+                              .replace(/[^a-z0-9]+/g, '-')
+                              .replace(/^-+|-+$/g, '')
+                              .slice(0, 80) || 'x';
+
+                          const label = sanitise(labelRaw);
+                          const fileId = sanitise(fileIdRaw);
+
+                          fs.mkdirSync(snapshotDir, { recursive: true });
+                          const outPath = path.join(snapshotDir, `${ts}_${label}_${fileId}.json`);
+
+                          fs.writeFileSync(outPath, JSON.stringify(parsed, null, 2), 'utf8');
+                          res.statusCode = 200;
+                          res.setHeader('content-type', 'application/json');
+                          res.end(JSON.stringify({ ok: true, path: outPath }));
+                        } catch (err: any) {
+                          res.statusCode = 400;
+                          res.end(`bad request: ${err?.message || String(err)}`);
+                        }
+                      });
+                      return;
+                    }
+
+                    // Console/session streams (JSONL)
+                    if (req.url !== endpoint) return next();
+
+                    let body = '';
+                    req.setEncoding('utf8');
+                    req.on('data', (chunk) => {
+                      body += chunk;
+                      // Hard cap to avoid runaway memory usage
+                      if (body.length > 2_000_000) {
+                        res.statusCode = 413;
+                        res.end('payload too large');
+                        req.destroy();
+                      }
+                    });
+                    req.on('end', () => {
+                      try {
+                        const parsed = JSON.parse(body || '{}');
+                        const stream = parsed?.stream === 'session' ? 'session' : 'console';
+                        const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+
+                        const outPath = stream === 'session' ? sessionOutPath : consoleOutPath;
+                        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+                        const fd = fs.openSync(outPath, 'a');
+                        try {
+                          for (const e of entries) {
+                            if (!e || typeof e !== 'object') continue;
+                            // Avoid ISO timestamps in persisted logs; use ms epoch.
+                            if (typeof e.ts_ms !== 'number') (e as any).ts_ms = Date.now();
+                            fs.writeSync(fd, `${JSON.stringify(e)}\n`, undefined, 'utf8');
+                          }
+                        } finally {
+                          fs.closeSync(fd);
+                        }
+
+                        res.statusCode = 200;
+                        res.setHeader('content-type', 'application/json');
+                        res.end(JSON.stringify({ ok: true, stream, written: entries.length, path: outPath }));
+                      } catch (err: any) {
+                        res.statusCode = 400;
+                        res.end(`bad request: ${err?.message || String(err)}`);
+                      }
+                    });
+                  } catch {
+                    // Best-effort; never break dev server
+                    next();
+                  }
+                });
+              },
+            },
+          ]
+        : []),
     ],
     define: {
       'import.meta.env.VITE_APP_VERSION': JSON.stringify(versionShort),
