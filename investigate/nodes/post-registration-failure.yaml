@@ -1,0 +1,12 @@
+id: post-registration-failure
+name: Post registration failure
+tags: []
+resources: []
+images: []
+metadata:
+  created_at: 2025-11-24T17:43:58.567Z
+  updated_at: 2025-11-26T12:41:07.669Z
+  author: user
+  version: 1.0.0
+  status: active
+updated_at: 2025-11-24T17:44:01.330Z

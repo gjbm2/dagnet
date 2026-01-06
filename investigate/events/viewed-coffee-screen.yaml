@@ -1,0 +1,14 @@
+id: viewed-coffee-screen
+name: viewed-coffee-screen
+description: dirtying
+category: conversion
+tags: []
+provider_event_names:
+  amplitude: Viewed Coffee Promotion Page /onboarding/coffee Page
+amplitude_filters: []
+metadata:
+  created_at: 2025-11-20T18:50:45.068Z
+  updated_at: 2025-11-25T11:23:34.704Z
+  status: active
+  author: user
+  version: 1.0.0

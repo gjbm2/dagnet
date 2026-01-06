@@ -1,0 +1,17 @@
+id: recommendation-offered
+name: recommendation-offered
+category: conversion
+tags: []
+provider_event_names:
+  amplitude: Blueprint CheckpointReached
+amplitude_filters:
+  - property: checkpoint
+    operator: is
+    values:
+      - RecommendationOffered
+metadata:
+  created_at: 2025-11-24T16:17:25.705Z
+  updated_at: 2025-11-25T11:23:34.704Z
+  status: active
+  author: user
+  version: 1.0.0

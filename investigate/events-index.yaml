@@ -1,0 +1,61 @@
+version: 1.0.0
+created_at: 2025-11-24T10:43:39.892Z
+events:
+  - id: gave-bds-in-onboarding
+    file_path: events/gave-bds-in-onboarding.yaml
+    status: active
+    created_at: 2025-11-26T09:51:31.154Z
+    updated_at: 2025-11-26T09:51:31.155Z
+    author: user
+    version: 1.0.0
+    name: gave-bds-in-onboarding
+  - id: household-created
+    file_path: events/household-created.yaml
+    status: active
+    created_at: 2025-11-10T00:00:00.000Z
+    name: Household Created
+    description: Household has created an account in the system
+    tags: []
+    category: conversion
+  - id: household-delegated
+    file_path: events/household-delegated.yaml
+    status: active
+    created_at: 2025-11-10T00:00:00.000Z
+    name: Delegation Completed
+    description: Household has completed delegation step
+    tags: []
+    category: conversion
+  - id: recommendation-offered
+    file_path: events/recommendation-offered.yaml
+    status: active
+    created_at: 2025-11-24T16:17:25.705Z
+    name: recommendation-offered
+    tags: []
+    category: conversion
+  - id: switch-registered
+    file_path: events/switch-registered.yaml
+    status: active
+    created_at: 2025-11-24T16:24:33.143Z
+    name: switch-registered
+    tags: []
+    category: conversion
+  - id: switch-success
+    file_path: events/switch-success.yaml
+    status: active
+    created_at: 2025-11-24T16:35:31.293Z
+    name: switch-success
+    tags: []
+    category: conversion
+  - id: viewed-coffee-screen
+    file_path: events/viewed-coffee-screen.yaml
+    status: active
+    created_at: 2025-11-20T18:50:45.068Z
+    name: viewed-coffee-screen
+    tags: []
+    category: conversion
+    description: dirtying
+updated_at: 2025-12-22T14:34:32.239Z
+metadata:
+  created_at: 2025-11-24T13:02:17.553Z
+  version: 1.0.0
+  updated_at: 2025-11-27T01:19:46.092Z
