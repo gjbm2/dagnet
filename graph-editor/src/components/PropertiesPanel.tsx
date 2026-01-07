@@ -2600,9 +2600,9 @@ export default function PropertiesPanel({
                       label="N Query (optional)"
                       labelExtra={
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span title="Explicit query for n (denominator) when it differs from the main query. Use when the 'from' node shares an event with other nodes and n can't be derived by stripping conditions.">
-                            <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
-                          </span>
+                        <span title="Explicit query for n (denominator) when it differs from the main query. Use when the 'from' node shares an event with other nodes and n can't be derived by stripping conditions.">
+                          <Info size={14} style={{ color: '#9CA3AF', cursor: 'help' }} />
+                        </span>
                           <button
                             type="button"
                             onClick={regenerateEdgeNQuery}

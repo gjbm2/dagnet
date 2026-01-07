@@ -13,6 +13,7 @@
  */
 
 import { dataOperationsService, setBatchMode } from './dataOperationsService';
+import { isBatchMode } from './dataOperationsService';
 import { 
   calculateIncrementalFetch, 
   hasFullSliceCoverageByHeader, 
@@ -1669,6 +1670,25 @@ export async function runStage2EnhancementsAndInboundN(
 
       // Keep local reference for inbound-n debugging and computation
       finalGraph = nextGraph;
+
+      // Option A (graph-mastered): Persist derived latency horizons back to parameter files so
+      // versioned fetch (file-backed) cannot diverge from direct fetch (graph-backed).
+      //
+      // IMPORTANT:
+      // - Uses the existing putParameterToFile() metadata-only write path (UpdateManager mappings).
+      // - Honours file-side override flags (latency.*_overridden) via UpdateManager override handling.
+      // - Suppresses toasts by forcing batchMode during the sync.
+      //
+      // CRITICAL: In `from-file` mode we must not write back to files as a side-effect of a read.
+      // This is both a behavioural invariant (reads should be read-only) and it prevents test hangs
+      // under fake timers (FileRegistry/Dexie may schedule internal work via timers).
+      if (itemOptions?.mode !== 'from-file') {
+        await persistGraphMasteredLatencyToParameterFiles({
+          graph: finalGraph,
+          setGraph,
+          edgeIds: edgeValuesToApply.map(ev => ev.edgeUuid),
+        });
+      }
             
             // DEBUG: Log p.mean values AFTER LAG application
             console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
@@ -1819,6 +1839,58 @@ export async function runStage2EnhancementsAndInboundN(
         } else {
           console.log('[fetchDataService] No graph for inbound-n computation');
         }
+}
+
+/**
+ * Persist graph-mastered latency fields (e.g. t95/path_t95) back to parameter files.
+ *
+ * Rationale:
+ * - Versioned (file-backed) fetch uses parameter file latency to construct cohort conversion windows (cs).
+ * - If derived horizons drift between graph and file, identical queries can yield different n/k.
+ * - This mirrors the established anchor/query pattern: graph is authoritative; file is updated unless overridden.
+ */
+export async function persistGraphMasteredLatencyToParameterFiles(args: {
+  graph: Graph;
+  setGraph: (g: Graph | null) => void;
+  edgeIds: string[];
+}): Promise<void> {
+  const { graph, setGraph, edgeIds } = args;
+  if (!graph?.edges?.length || !edgeIds?.length) return;
+
+  // Avoid toast spam during batch-derived writes.
+  const wasBatch = isBatchMode();
+  if (!wasBatch) setBatchMode(true);
+  try {
+    for (const edgeId of edgeIds) {
+      const edge = graph.edges.find((e: any) => e.uuid === edgeId || e.id === edgeId || `${e.from}->${e.to}` === edgeId) as any;
+      const paramId = edge?.p?.id;
+      if (!paramId) continue;
+
+      // Only persist when there is something to persist.
+      // (If path_t95 is missing, we avoid writing undefined into files.)
+      const lat = edge?.p?.latency;
+      const hasHorizon =
+        lat && (
+          (typeof lat.t95 === 'number' && Number.isFinite(lat.t95)) ||
+          (typeof lat.path_t95 === 'number' && Number.isFinite(lat.path_t95))
+        );
+      if (!hasHorizon) continue;
+
+      await dataOperationsService.putParameterToFile({
+        paramId,
+        edgeId: edge.uuid || edge.id || edgeId,
+        graph,
+        setGraph,
+        copyOptions: {
+          includeValues: false,      // metadata-only
+          includeMetadata: true,
+          permissionsMode: 'do_not_copy', // do not change override flags; they live on the file
+        },
+      });
+    }
+  } finally {
+    if (!wasBatch) setBatchMode(false);
+  }
 }
 
 /**

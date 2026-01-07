@@ -396,9 +396,14 @@ def calculate_path_probability(
     excluded = pruning.excluded_edges if pruning else set()
     renorm = pruning.renorm_factors if pruning else {}
     
-    # If conditional probabilities exist, use state-space expansion (conditional_p depends on visited history).
-    if _graph_has_conditional_probabilities(G):
-        return _calculate_path_probability_state_space(G, start_id, end_id, pruning)
+    # IMPORTANT (Layer-1 decision): Do NOT apply edge.conditional_p implicitly in runner analytics.
+    #
+    # conditional_p is currently treated as What-If modelling, not intrinsic Markov semantics.
+    # Runner analytics should therefore use the (already-baked) edge probability `p` only,
+    # unless/when conditional activation is explicitly requested by the analysis DSL.
+    #
+    # NOTE: This means we intentionally do NOT switch to the state-space algorithm based
+    # on the mere presence of conditional_p on any edge.
 
     # Otherwise, use fast DFS with memoization.
     # DFS with memoization for probability to reach end_id
