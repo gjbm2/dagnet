@@ -20,8 +20,8 @@ nodes:
     label: household-delegated
     absorbing: false
     layout:
-      x: 21
-      'y': 382
+      x: 9
+      'y': 380
     description: ''
     event_id: household-delegated
     images: []
@@ -30,8 +30,8 @@ nodes:
     label: Switch registered
     absorbing: false
     layout:
-      x: 283
-      'y': 314
+      x: 446
+      'y': 233
     event_id: switch-registered
     images: []
   - uuid: 04332060-3c28-4465-920e-17949934b7d4
@@ -39,8 +39,8 @@ nodes:
     label: Switch success
     absorbing: false
     layout:
-      x: 544
-      'y': 238
+      x: 664
+      'y': 111
     event_id: switch-success
     images: []
   - uuid: 5326970e-e45d-4666-953c-53905fac56ab
@@ -55,22 +55,31 @@ nodes:
     label: Gm abandonned after delegation
     absorbing: false
     layout:
-      x: 296
-      'y': 483
+      x: 293
+      'y': 533
   - uuid: 87e20915-cc26-417c-b0f0-4d6ea467e834
     id: gm-abandoned-after-registration
     label: Gm abandoned after registration
     absorbing: false
     layout:
-      x: 517
-      'y': 438
-  - uuid: c138a576-32f8-46d6-9e13-d97869aa1441
-    id: ''
-    label: Node 8
+      x: 670
+      'y': 407
+  - uuid: b7cfc075-16bf-4f39-93dd-b6a20add59e8
+    id: recommendation-offered
+    label: Recommendation offered
     absorbing: false
     layout:
-      x: 135.54196387970754
-      'y': 168.6505551178761
+      x: 185
+      'y': 318
+    event_id: recommendation-offered
+    images: []
+  - uuid: 8d5d0623-407f-44be-bc82-2dc85c62ca43
+    id: gm-abandonned-after-reco
+    label: Gm abandonned after reco
+    absorbing: false
+    layout:
+      x: 392
+      'y': 459
 edges:
   - uuid: c64ddc4d-c369-4ae8-a44a-398a63a46ab1
     id: household-created-to-household-delegated
@@ -79,29 +88,29 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.532
+      mean: 0.5573414422241529
       id: gm-create-to-delegated
       connection: amplitude-prod
       connection_overridden: false
       latency:
         anchor_node_id: household-created
-      stdev: 0.0032173495587719202
+      stdev: 0.01035253298392808
       evidence:
-        'n': 24071
-        k: 12813
-        window_from: 21-Oct-25
-        window_to: 5-Jan-26
-        retrieved_at: '2026-01-05T18:17:22.895Z'
+        'n': 2302
+        k: 1283
+        window_from: 1-Nov-25
+        window_to: 10-Nov-25
+        retrieved_at: '2026-01-07T15:21:32.152Z'
         source: amplitude
         full_query: from(household-created).to(household-delegated)
-        mean: 0.5323002783432346
-        stdev: 0.003215991083081614
+        mean: 0.5573414422241529
+        stdev: 0.010352433304657946
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-05T18:17:22.895Z'
+        retrieved_at: '2026-01-07T15:21:32.152Z'
         full_query: from(household-created).to(household-delegated)
       forecast:
-        mean: 0.5278144627679727
+        mean: 0.5328260276638915
     description: ''
     query: from(household-created).to(household-delegated)
   - uuid: 2d5ca246-b4d2-478f-bed6-487b76989b4c
@@ -111,7 +120,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.468
+      mean: 0.4427
       latency:
         anchor_node_id: household-created
     query: from(household-created).to(gm-abandonned-delegation)
@@ -123,7 +132,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.9249
+      mean: 0.2774
       latency:
         anchor_node_id: household-created
     query: from(household-delegated).to(gm-abandonned-after-delegation)
@@ -135,7 +144,7 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.2516
+      mean: 0.209
       latency:
         anchor_node_id: household-created
     query: from(switch-registered).to(gm-abandoned-after-registration)
@@ -147,81 +156,136 @@ edges:
     fromHandle: right-out
     toHandle: left-out
     p:
-      mean: 0.7484
+      mean: 0.791
       id: gm-registered-to-success
       connection: amplitude-prod
       latency:
         latency_parameter: true
         median_lag_days: 6.555877676365882
         mean_lag_days: 7.628800701296054
-        t95: 16.22
-        completeness: 0.9521015485624096
-        path_t95: 46.83
+        t95: 15.4
+        completeness: 0.9984279625313404
+        path_t95: 38.51
         anchor_node_id_overridden: false
-      stdev: 0.011176834620068077
+        latency_parameter_overridden: false
+        anchor_node_id: household-created
+      stdev: 0.03336669680529079
       evidence:
-        'n': 1580
-        k: 1147
-        window_from: 21-Oct-25
-        window_to: 5-Jan-26
-        retrieved_at: '2026-01-05T18:17:24.395Z'
+        'n': 158
+        k: 122
+        window_from: 1-Nov-25
+        window_to: 10-Nov-25
+        retrieved_at: '2026-01-07T15:21:32.286Z'
         source: amplitude
         full_query: from(switch-registered).to(switch-success)
-        mean: 0.7259493670886076
-        stdev: 0.01122121869755647
+        mean: 0.7721518987341772
+        stdev: 0.033369180051546744
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-05T18:17:24.395Z'
+        retrieved_at: '2026-01-07T15:21:32.286Z'
         full_query: from(switch-registered).to(switch-success)
       forecast:
-        mean: 0.7244043854308623
+        mean: 0.809637841113196
     description: ''
     query: from(switch-registered).to(switch-success)
-  - uuid: 7bb83fbf-3ac6-4152-a395-a8b64a12506a
-    id: household-delegated-to-switch-registered
+  - uuid: 44779055-a157-4cb3-91a8-37db766c044a
+    id: household-delegated-to-recommendation-offered
     from: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
-    to: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
+    to: b7cfc075-16bf-4f39-93dd-b6a20add59e8
     fromHandle: right-out
-    toHandle: left-out
+    toHandle: left
     p:
-      mean: 0.0751
-      id: gm-delegated-to-registered
-      connection: amplitude-prod
+      mean: 0.7226107226107226
       latency:
+        anchor_node_id: household-created
         latency_parameter: true
-        median_lag_days: 9.991963333882843
-        mean_lag_days: 10.797872242931911
-        t95: 19.1
-        completeness: 0.9933641917156454
-        path_t95: 34.58
         latency_parameter_overridden: false
-        anchor_node_id_overridden: false
-      stdev: 0.002229640069918795
+        median_lag_days: 2.002072918624562
+        mean_lag_days: 2.1622415181110535
+        t95: 3.82
+        completeness: 1
+        path_t95: 3.82
+      stdev: 0.012479952533131496
+      id: gm-delegated-to-reco
+      connection: amplitude-prod
+      connection_overridden: false
       evidence:
-        'n': 13505
-        k: 1011
-        window_from: 21-Oct-25
-        window_to: 5-Jan-26
-        retrieved_at: '2026-01-05T18:17:27.473Z'
+        'n': 1287
+        k: 930
+        window_from: 1-Nov-25
+        window_to: 10-Nov-25
+        retrieved_at: '2026-01-07T15:21:32.427Z'
         source: amplitude
-        full_query: from(household-delegated).to(switch-registered)
-        mean: 0.07486116253239541
-        stdev: 0.0022645632011859145
+        full_query: from(household-delegated).to(recommendation-offered)
+        mean: 0.7226107226107226
+        stdev: 0.012479803923394818
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-05T18:17:27.473Z'
-        full_query: from(household-delegated).to(switch-registered)
+        retrieved_at: '2026-01-07T15:21:32.427Z'
+        full_query: from(household-delegated).to(recommendation-offered)
       forecast:
-        mean: 0.07063369390472407
+        mean: 0.702612763991631
+    query: from(household-delegated).to(recommendation-offered)
     description: ''
-    query: from(household-delegated).to(switch-registered)
+  - uuid: a9ee0cea-414c-4b51-8e40-31104d14fa5b
+    id: recommendation-offered-to-gm-abandonned-after-reco
+    from: b7cfc075-16bf-4f39-93dd-b6a20add59e8
+    to: 8d5d0623-407f-44be-bc82-2dc85c62ca43
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.8351
+      latency:
+        anchor_node_id: household-created
+    query: from(recommendation-offered).to(gm-abandonned-after-reco)
+    description: ''
+  - uuid: 1b37d7e7-69e9-4f71-b3b2-8eeed659326e
+    id: recommendation-offered-to-switch-registered
+    from: b7cfc075-16bf-4f39-93dd-b6a20add59e8
+    to: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.1649
+      latency:
+        anchor_node_id: household-created
+        latency_parameter: true
+        latency_parameter_overridden: false
+        median_lag_days: 10.183614895692376
+        mean_lag_days: 10.616887415175665
+        t95: 16.37
+        completeness: 0.9999999995491538
+        path_t95: 19.13
+      stdev: 0.012314603185360998
+      id: gm-reco-to-registered
+      connection: amplitude-prod
+      connection_overridden: false
+      evidence:
+        'n': 930
+        k: 158
+        window_from: 1-Nov-25
+        window_to: 10-Nov-25
+        retrieved_at: '2026-01-07T15:21:32.570Z'
+        source: amplitude
+        full_query: from(recommendation-offered).to(switch-registered)
+        mean: 0.16989247311827957
+        stdev: 0.012314386232180051
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-07T15:21:32.570Z'
+        full_query: from(recommendation-offered).to(switch-registered)
+      forecast:
+        mean: 0.13390013145504182
+    query: from(recommendation-offered).to(switch-registered)
+    description: ''
 policies:
   default_outcome: success
 metadata:
   name: gm-rebuild-jan-25
   description: ''
   created_at: '2026-01-05T12:49:08.196Z'
-  updated_at: '2026-01-06T10:25:44.052Z'
+  updated_at: '2026-01-07T15:21:32.791Z'
   version: 1.0.0
-dataInterestsDSL: window(-75d:);cohort(-75d:)
-currentQueryDSL: cohort(29-Dec-25:4-Jan-26)
+dataInterestsDSL: window(1-Nov-25:30-Nov-25);cohort(1-Nov-25:30-Nov-25)
+currentQueryDSL: cohort(1-Nov-25:10-Nov-25)
+debugging: true

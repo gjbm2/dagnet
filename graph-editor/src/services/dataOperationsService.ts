@@ -126,6 +126,10 @@ let batchModeActive = false;
 
 /** Enable batch mode to suppress individual toasts */
 export function setBatchMode(active: boolean): void {
+  // When ending a batch, flush the aggregated toast + session log summary once.
+  if (batchModeActive && !active) {
+    flushBatchToasts();
+  }
   batchModeActive = active;
 }
 
@@ -134,21 +138,86 @@ export function isBatchMode(): boolean {
   return batchModeActive;
 }
 
+type BatchToastKind = 'success' | 'error' | 'info';
+type BatchToastEntry = { kind: BatchToastKind; message: string };
+
+let batchToastBuffer: BatchToastEntry[] = [];
+
+function recordBatchToast(kind: BatchToastKind, message: string): void {
+  batchToastBuffer.push({ kind, message });
+}
+
+function flushBatchToasts(): void {
+  if (!batchToastBuffer.length) return;
+
+  const entries = batchToastBuffer;
+  batchToastBuffer = [];
+
+  const successes = entries.filter(e => e.kind === 'success').map(e => e.message);
+  const errors = entries.filter(e => e.kind === 'error').map(e => e.message);
+  const infos = entries.filter(e => e.kind === 'info').map(e => e.message);
+
+  const successCount = successes.length;
+  const errorCount = errors.length;
+  const infoCount = infos.length;
+
+  // Single toast summary for the whole batch.
+  if (errorCount > 0) {
+    toast.error(`Updated ${successCount} item${successCount === 1 ? '' : 's'}; ${errorCount} failed`);
+  } else if (successCount > 0) {
+    toast.success(`Updated ${successCount} item${successCount === 1 ? '' : 's'}`);
+  } else {
+    toast.success(`Batch complete (${infoCount} update${infoCount === 1 ? '' : 's'})`);
+  }
+
+  // Mirror detail into session log (so details are not lost when we suppress per-item toasts).
+  // Keep the detail compact; session log can store a multi-line payload.
+  const detailLines: string[] = [];
+  if (successCount) {
+    detailLines.push('Updated:');
+    detailLines.push(...successes.map(s => `- ${s}`));
+  }
+  if (errorCount) {
+    detailLines.push('Failed:');
+    detailLines.push(...errors.map(s => `- ${s}`));
+  }
+  if (infoCount && !successCount && !errorCount) {
+    detailLines.push('Info:');
+    detailLines.push(...infos.map(s => `- ${s}`));
+  }
+  sessionLogService.success(
+    'file',
+    'BATCH_FILE_UPDATES',
+    `Batch updates: ${successCount} updated, ${errorCount} failed`,
+    detailLines.join('\n'),
+    { successCount, errorCount, infoCount }
+  );
+}
+
 /** Wrapper for toast that respects batch mode */
 function batchableToast(message: string, options?: any): string | void {
-  if (batchModeActive) return; // Suppress in batch mode
+  if (batchModeActive) {
+    recordBatchToast('info', message);
+    return;
+  }
   return toast(message, options);
 }
 
 /** Wrapper for toast.success that respects batch mode */
 function batchableToastSuccess(message: string, options?: any): string | void {
-  if (batchModeActive) return;
+  if (batchModeActive) {
+    recordBatchToast('success', message);
+    return;
+  }
   return toast.success(message, options);
 }
 
 /** Wrapper for toast.error that respects batch mode */
 function batchableToastError(message: string, options?: any): string | void {
-  if (batchModeActive) return;
+  if (batchModeActive) {
+    recordBatchToast('error', message);
+    return;
+  }
   return toast.error(message, options);
 }
 
@@ -2352,12 +2421,24 @@ class DataOperationsService {
           }
         }
 
+        // IMPORTANT: For force-copy mode, we want the file to match the graph even when
+        // the graph omits optional fields (treat omission as "cleared"/false).
+        // Without this, UPDATE mappings will skip (sourceValue undefined) and stale file
+        // values persist even under "Copy all (force copy)".
+        const forceCopy = permissionsMode === 'copy_all';
+        const effectiveQueryOverridden =
+          forceCopy ? (sourceEdge.query_overridden === true) : sourceEdge.query_overridden;
+        const effectiveNQuery =
+          forceCopy ? (typeof sourceEdge.n_query === 'string' ? sourceEdge.n_query : '') : sourceEdge.n_query;
+        const effectiveNQueryOverridden =
+          forceCopy ? (sourceEdge.n_query_overridden === true) : sourceEdge.n_query_overridden;
+
         filteredEdge = {
           p: pClone,
           query: sourceEdge.query,
-          query_overridden: sourceEdge.query_overridden,
-          n_query: sourceEdge.n_query,
-          n_query_overridden: sourceEdge.n_query_overridden,
+          query_overridden: effectiveQueryOverridden,
+          n_query: effectiveNQuery,
+          n_query_overridden: effectiveNQueryOverridden,
         };
 
         // If user requested no permission copying, remove edge-level override flags from payload.

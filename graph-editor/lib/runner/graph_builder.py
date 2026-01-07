@@ -588,6 +588,13 @@ def apply_visibility_mode(G: nx.DiGraph, mode: str) -> None:
         # runner layer so analyses cannot silently become blended.
 
         # Step 1: set per-edge p to evidence mean where present, else 0.
+        #
+        # IMPORTANT:
+        # Some graphs include `conditional_p` branches (probability depends on visited(...) history).
+        # The path runner will honour these even outside What-If mode (they are treated as intrinsic
+        # graph semantics). In evidence mode, we must ensure conditional branches are also
+        # evidence-derived, otherwise "Evidence Probability" reach can be polluted by non-evidence
+        # probabilities and no longer telescope to k/N.
         for u, v, data in G.edges(data=True):
             evidence = data.get('evidence') or {}
             evidence_mean = evidence.get('mean')
@@ -595,6 +602,30 @@ def apply_visibility_mode(G: nx.DiGraph, mode: str) -> None:
                 data['p'] = float(evidence_mean)
             else:
                 data['p'] = 0.0
+
+            # Evidence-mode handling for conditional branches:
+            # - Keep a conditional branch ONLY if it has evidence.mean.
+            # - Rewrite its p.mean to that evidence.mean, so the conditional path engine uses evidence.
+            cps = data.get('conditional_p') or []
+            if isinstance(cps, list) and cps:
+                next_cps = []
+                for cp in cps:
+                    if not isinstance(cp, dict):
+                        continue
+                    cp_p = cp.get('p') or {}
+                    if not isinstance(cp_p, dict):
+                        continue
+                    cp_ev = cp_p.get('evidence') or {}
+                    if not isinstance(cp_ev, dict):
+                        cp_ev = {}
+                    cp_ev_mean = cp_ev.get('mean')
+                    if cp_ev_mean is None:
+                        # No evidence for this conditional branch under the current slice → drop in evidence mode.
+                        continue
+                    cp_p['mean'] = float(cp_ev_mean)
+                    cp['p'] = cp_p
+                    next_cps.append(cp)
+                data['conditional_p'] = next_cps
 
         # Step 2: complement fill for nodes with evidence splits.
         for parent in G.nodes:

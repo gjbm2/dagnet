@@ -436,7 +436,7 @@ To decide whether `n_query` maths (or construction) is a plausible root cause fo
 
 ## Solutions (proposed)
 
-### Normal form: `n_query` should not explicitly encode anchors (match `query` semantics)
+### A. Normal form: `n_query` should not explicitly encode anchors (match `query` semantics)
 
 For consistency (and to reduce semantic foot-guns), it would be better if `n_query` strings typically did **not** encode the anchor explicitly, in the same way that `query` strings do not.
 
@@ -452,7 +452,7 @@ This ensures `query` and `n_query` share the same implied semantics:
 - neither string explicitly includes the anchor;
 - where anchoring is relevant, the anchor is drawn from the **cohort anchor field**, not duplicated into per-edge strings.
 
-### Window() + dual-query `n_query`: treat denominator as “single-event arrivals at X within the window”
+### B. Window() + dual-query `n_query`: treat denominator as “single-event arrivals at X within the window”
 
 **Problem:** In window mode, the DSL semantics are explicitly **X-anchored** (window bounds apply to the `from()` step). However, our current `n_query` pattern is often **A→X** (anchor→from). When the same `window(...)` bounds are applied to that `n_query`, it becomes **A-anchored**, which is *not* equivalent to “arrivals at X in-window”.
 
@@ -489,13 +489,238 @@ Code-level confirmation (current implementation):
 
 So: the proposed window-mode `n_query` fix should improve window-slice reliability (and therefore forecast baselines), but **it is unlikely to explain cohort-mode Evidence drift** on the edges where cohort semantics (`cs`, anchor identity, denominator coherence at split nodes) dominate.
 
-### Pause point / open questions to resolve next
+### C. Conditional probabilities (`conditional_p`): required structural fixes (new Layer 4 only)
+
+Limit scope: this section only covers the **new Layer 4** concern we explicitly agreed — **runner conditional branch matching must support the full constraint DSL**, not just `visited()`. It intentionally does **not** assume or depend on unresolved Layer 3 (slice/anchor retrieval) questions.
+
+#### 1) Implement full constraint evaluation for `conditional_p[i].condition` in the Python runner
+
+Current mismatch:
+
+- TS has `evaluateConstraint()` which supports constraint-only DSL: `visited`, `exclude`, `visitedAny`, `context`, `case`.
+- Python runner currently matches conditional branches by extracting only `visited(...)`, so conditions that include `exclude(...)` / `context(...)` / `case(...)` / `visitedAny(...)` are silently ignored.
+
+Required fix:
+
+- Port the same constraint parsing/evaluation semantics into the Python runner so `conditional_p[i].condition` is evaluated consistently with TS.
+
+#### 2) Make unsupported/invalid conditional conditions explicit (no silent “never matches”)
+
+Required behaviour:
+
+- If a `conditional_p[i].condition` contains an unsupported DSL construct (or is malformed), runner analytics must not silently treat it as non-matching.
+- Instead, it should surface an explicit warning/error that the condition cannot be evaluated, so analytics results are not misleading.
+
+#### 3) Required test coverage (was missing)
+
+We need explicit regression coverage for this, otherwise we will reintroduce silent semantic drift.
+
+At minimum:
+
+- Tests that assert Python runner conditional matching honours the same constraint semantics as TS (`visited`, `exclude`, `visitedAny`, `context`, `case`).
+- Tests that assert malformed/unsupported condition DSL is surfaced explicitly (warning/error), not silently ignored.
+
+#### 4) Semantic lint: conditional group alignment across siblings
+
+Even if sibling alignment is “mostly managed in UI”, it is important enough to lint explicitly because partial conditional coverage across siblings can silently break conservation.
+
+Add a semantic lint check (surfaced in the issues viewer) that flags:
+
+- A conditional group (by normalised condition string) exists on some outgoing edges from a node, but is missing on one or more sibling edges from that same node.
+
+### D. Conditional probabilities: per-conditional anchors (MSMDC + query machinery) for cohort() clarity
+
+Layer 3a diagnosis (current behaviour):
+
+- `buildDslFromEdge()` selects the cohort anchor from `constraints.cohort.anchor || edge.p.latency.anchor_node_id`.
+- `dataOperationsService.getFromSourceDirect()` builds an edge-like object for conditional fetches by overriding `query`, but it still passes `p: edge.p` into `buildDslFromEdge()` (so anchoring comes from the base edge).
+- `queryRegenerationService.applyRegeneratedQueries()` applies MSMDC anchors only to `edge.p.latency.anchor_node_id` (base probability) and does not propagate anchors to `edge.conditional_p[i].p.latency.anchor_node_id`.
+
+This means conditional branch queries can still *work* in cohort() mode (because they inherit the base anchor), but it is **confusing** and easy to misinterpret when debugging drift.
+
+Proposed solution:
+
+- Treat conditional probabilities as first-class anchored entities:
+  - MSMDC should compute and return an anchor node for each conditional branch (e.g. keyed by synthetic field like `synthetic:{edge.uuid}:conditional_p[i]`), not only per-edge base `p`.
+  - Apply these anchors into `edge.conditional_p[i].p.latency.anchor_node_id` (with an override flag if needed, mirroring the base pattern).
+- Update the query machinery so that when `conditionalIndex` is used, the “edge-like” object passed to `buildDslFromEdge()` uses the **conditional** latency anchor (i.e. `edge.conditional_p[i].p.latency.anchor_node_id`) rather than implicitly inheriting from the base edge.
+
+Outcome:
+
+- Cohort anchoring for conditional branch retrieval becomes explicit and auditable.
+- Debugging and signature reasoning becomes simpler (no “hidden inheritance” from base edge state).
+
+### E. Conditional probabilities must be fetched and planned as first-class citizens (Layer 3b defect)
+
+Layer 3b diagnosis (confirmed defect):
+
+- `fetchDataService.getItemsNeedingFetch()` only collects `edge.p`, `edge.cost_gbp`, and `edge.labour_cost`.
+- It does **not** include `edge.conditional_p[i].p` entries at all, so planner-driven workflows (coverage check, “retrieve all”, staleness checks) can fail to fetch conditional branch slices.
+
+Required fix:
+
+- Extend fetch planning/coverage/execution to include `conditional_p` entries exactly like base probabilities:
+  - add `FetchItem`s for each `conditional_p[i]` with `conditionalIndex: i`,
+  - ensure slice matching uses `conditional_p[i].query`,
+  - ensure retrieval uses the same connection fallback rules as today (conditional connection else base connection).
+
+#### Required test coverage audit (conditional_p parity across the app)
+
+We have some conditional_p tests (e.g. query selection for `conditionalIndex`, metadata writing on conditional evidence). However, the above Layer 3b defect demonstrates coverage is not yet sufficient.
+
+We should explicitly review and extend tests to cover:
+
+- fetch planning includes conditional_p items (planner + `getItemsNeedingFetch`),
+- versioned fetch / retrieve-all includes conditionalIndex items,
+- query regeneration applies anchors to conditional branches if/when Solution D is implemented.
+
+### F. What‑If semantics: “most specific wins” as the uniform matching rule + dedicated review/tests
+
+#### 1) Standardise matching semantics: most specific wins
+
+Adopt “most specific wins” as the norm throughout the app for What‑If matching whenever multiple conditional groups could match simultaneously.
+
+This should apply consistently across:
+
+- What‑If application (`computeEffectiveEdgeProbability`),
+- runner logic (TS and Python),
+- any UI previews/analytics that use conditional matching.
+
+#### 2) Review and harden What‑If handling across the app (with good test coverage)
+
+Perform a focused review of What‑If logic end-to-end and ensure we have strong regression coverage for:
+
+- condition normalisation,
+- matching precedence (“most specific wins”),
+- sibling alignment interactions,
+- and any scenario/override threading (especially for `conditionalIndex` flows).
+
+--
+
+## Pause point / open questions to resolve next
 
 The remaining discrepancies still “don’t make sense” under the naive mental model (“same events → same answers”) because the system is mixing:
 
 - different conditional denominators (delegated vs recommendation-offered), and
 - different cached query signatures / retrieval runs (even for the same high-level DSL), and
 - potentially different provider request specs (conversion window/cs, excluded cohorts, context filter compilation).
+
+#### Potential defect: exclude term dropped in persisted evidence `full_query`
+
+In the latest simplified run we observed an alarming mismatch between an edge’s `query` and the persisted evidence `full_query` for the same edge:
+
+- edge `query` indicates: `from(household-delegated).to(recommendation-offered).exclude(gave-bds-in-onboarding,viewed-coffee-screen)`
+- but `p.evidence.full_query` appears to show: `from(household-delegated).to(recommendation-offered).exclude(viewed-coffee-screen)` (missing the `gave-bds-in-onboarding` exclusion)
+
+If this is real (and not just selecting a stale cached value entry), it would mean we are **silently changing query semantics** between the graph edge definition and the executed provider request.
+
+Next steps:
+
+- Confirm whether this is a **query construction/adapter bug** (exclude list lost) versus a **cache/signature selection bug** (old evidence value attached to the edge).
+- If reproducible, add a regression test around building/executing `exclude(a,b)` for Amplitude and ensure both exclusions survive into the executed request semantics.
+
+#### Root cause for “Reach Probability wildly differs” (SV2, Evidence mode, 1-Nov-25)
+
+We can now reproduce the exact discrepancy purely from the extracted investigation graphs, using the Python analysis runner directly:
+
+- GM: `P(reach success) = 16/246 = 0.06504065`
+- SV2: previously showed `P(reach success) = 0.0709446` while `k/N = 15/246 = 0.0609756` (inflated reach vs k/N)
+
+Diagnosis: **SV2’s reach calculation was being polluted by `conditional_p` branches that are not evidence-derived for the slice**.
+
+Specifically, SV2 includes `conditional_p` on `recommendation-offered → switch-registered` (and on `recommendation-offered → post-recommendation-failure`), with conditions like `visited(gave-bds-in-onboarding)`. The path runner treats `conditional_p` as intrinsic graph semantics (not What-If), so it switches to a state-space algorithm whenever any `conditional_p` exists and then prefers `conditional_p.p.mean` over the base edge probability.
+
+However, the stored `conditional_p` branches in SV2 do **not** include slice-specific evidence (`conditional_p.p.evidence.mean` is absent), so in “Evidence Probability” mode they were still injecting non-evidence probabilities. This explains why reach could deviate dramatically from `k/N`.
+
+Mitigation (implemented in the Python runner):
+
+- In Evidence mode, drop conditional branches that lack `p.evidence.mean`, and rewrite retained branches’ `p.mean` to their `p.evidence.mean`.
+
+After this change, SV2 reach becomes the unconditional evidence-composed value (and no longer shows the large inflation):
+
+- SV2 now reports `P(reach success) = 0.0614780`, which equals the product of unconditional evidence means through the SV2 topology.
+
+Note: `0.0614780` is still slightly above `15/246 = 0.0609756` because SV2’s edge evidence means do not telescope perfectly (the evidence layer is not globally conservative). The **large** discrepancy was driven by non-evidence `conditional_p` leakage; the remaining small gap is “edge-means vs realised k/N” drift.
+
+---
+
+## 7-Jan-26: conditional probabilities (`conditional_p`) — layered investigation plan
+
+We appear to have **multiple issues at different layers**. These need to be investigated separately, otherwise we will keep mixing “design questions” with “implementation bugs”.
+
+### Layer 1 — Should `conditional_p` be used at all for runner analytics (outside What‑If)?
+
+Open question:
+
+- Do runner analytics (e.g. Reach Probability / Bridge View) treat `conditional_p` as intrinsic graph semantics, or should they ignore it unless What‑If is active?
+
+This is a product/semantics decision, but it has direct consequences for whether Reach Probability is expected to telescope to \(k/N\).
+
+Decision (agreed):
+
+- `conditional_p` should **not** be applied “naively” by runner analytics by default.
+- Runner analytics should only apply conditional probabilities when they are **explicitly activated** as a What‑If by the analysis DSL (e.g. the analysis query asserts constraints that fully satisfy a conditional group), otherwise the runner should use the unconditional edge probabilities.
+
+### Layer 2 — If `conditional_p` is used: what are the preconditions?
+
+Open questions:
+
+- Must conditional branches be MECE at each application point (mutually exclusive and collectively exhaustive), so probabilities remain conservative?
+- Do we require explicit “else” branches, or can missing mass be handled via complements?
+- What does “visited(X)” mean for conditioning in cohort vs window slices (anchor-aligned semantics)?
+
+If these preconditions are not met, even correctly retrieved conditional probabilities can create non-conservation.
+
+Current implementation reality (useful for diagnosing what can go wrong):
+
+- The existing validator (`graph-editor/src/lib/conditionalValidation.ts`) enforces:
+  - base sibling sums ≈ 1,
+  - conditional sibling sums ≈ 1 for each *referenced visited-node* condition,
+  - condition node must be upstream,
+  - basic circular-dependency checks.
+- It currently reasons about conditions via `getVisitedNodeIds(...)` only, so it effectively treats conditions as “visited-node sets” and does **not** validate MECE/exhaustiveness for:
+  - multi-clause conditions (`visited(a).exclude(b)`),
+  - overlapping conditions that can both be true (ambiguity),
+  - combinations of visited nodes (it validates each visited node independently rather than the full state space).
+- Rebalancing of conditional siblings (`UpdateManager.rebalanceConditionalProbabilities`) matches siblings by *exact* condition string equality, so “same logical condition, different string form” will not rebalance unless normalised consistently.
+
+### Layer 3 — If `conditional_p` is used in a calc: are slices being retrieved correctly?
+
+Two specific concerns:
+
+- **(a) Missing cohort anchor / conversion window alignment**: conditional branch queries appear to lack cohort anchoring and/or the same conversion window semantics, which could create time-shift inconsistencies and non-conservation. Hypothesis: MSMDC (and/or query construction) is not applying anchor generation logic to conditional branches.
+- **(b) Are conditional branches being fetched at all?** If branch probabilities are not slice-retrieved (or are retrieved only as stale/static values), then “Evidence Probability” can silently incorporate non-evidence or wrong-slice data.
+
+### Layer 4 (closed) — Provider query compilation: are `visited()` / `exclude()` semantics honoured?
+
+Status: **Not currently a serious concern** for the specific “window() accidentally becomes B→X→Y (B-anchored super-funnel)” fear.
+
+What we believe is true based on the current implementation:
+
+- Conditional branch queries are fetched using `conditional_p[i].query` (not the base edge query), so `visited(...)` terms are not silently dropped at the fetch entry point.
+- `buildDslFromEdge()` classifies `visited(B)` as `visited_upstream` when B is upstream of `from(X)`.
+- For **Amplitude**, `visited_upstream` is compiled into native segment filters and then cleared before funnel construction, so we do **not** build a B→X→Y super-funnel in that path.
+
+Remaining caveat (acknowledged but not treated as the core issue here):
+
+- Amplitude’s current `visited_upstream` segment filter uses a rolling lookback window, so it can include some users who visited(B) outside the X→Y observation window. We accept this limitation for now.
+
+### Layer 4 (new) — Runner conditional semantics: conditional branch matching must support full DSL, not just `visited(...)`
+
+This **is** a serious concern.
+
+Current runner behaviour:
+
+- The Python analysis runner’s conditional path logic only recognises `visited(...)` in `conditional_p[i].condition` strings when deciding whether a conditional branch applies.
+- Conditions containing other DSL concepts (e.g. `exclude(...)`, `context(...)`, `case(...)`, `visitedAny(...)`) are not evaluated, so those branches can never match in runner analytics even if they are meaningful and correctly retrievable in DAS.
+
+Implication:
+
+- Runner analytics can compute reach/probabilities using a conditional structure that does not match the graph’s intended conditional semantics, which can create misleading results and apparent non-conservation.
+
+Required follow-up:
+
+- Extend runner conditional evaluation to honour the same constraint semantics as the DSL (at minimum: `visited`, `exclude`, `context`, `case`, `visitedAny`, and window/cohort constraints where applicable).
 
 To get to the bottom of it, next session should:
 
