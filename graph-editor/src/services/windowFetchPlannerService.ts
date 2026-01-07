@@ -249,7 +249,7 @@ class WindowFetchPlannerService {
         // This uses path_t95 to limit how far back we fetch cohorts
         let cohortHorizon: CohortHorizonResult | undefined;
         if (isCohortQuery && connectable.type === 'parameter') {
-          cohortHorizon = this.computeBoundedCohortWindow(connectable, window, graph);
+          cohortHorizon = this.computeBoundedCohortWindow(connectable, window, graph, dsl);
         }
         
         if (needsFetch) {
@@ -887,7 +887,8 @@ class WindowFetchPlannerService {
   private computeBoundedCohortWindow(
     item: FetchItem,
     window: DateRange,
-    graph: Graph
+    graph: Graph,
+    dsl: string
   ): CohortHorizonResult | undefined {
     if (item.type !== 'parameter') return undefined;
     
@@ -916,8 +917,13 @@ class WindowFetchPlannerService {
     
     // Get existing coverage from file
     const file = fileRegistry.getFile(`parameter-${item.objectId}`);
-    const existingDates = file?.data?.values?.[0]?.dates || [];
-    const retrievedAt = file?.data?.values?.[0]?.data_source?.retrieved_at;
+    // Use the most recent matching slice family + mode, not values[0].
+    // This avoids accidental use of older cached slices when duplicates exist.
+    const isCohortQuery = dsl.includes('cohort(');
+    const effectiveDSL = item.targetSliceOverride ?? dsl;
+    const existingSlice = this.findMatchingSlice(file?.data?.values, effectiveDSL, isCohortQuery);
+    const existingDates = (existingSlice as any)?.dates || [];
+    const retrievedAt = existingSlice?.data_source?.retrieved_at;
     
     return computeCohortRetrievalHorizon({
       requestedWindow: window,
@@ -1118,17 +1124,26 @@ class WindowFetchPlannerService {
     if (!values || values.length === 0) return undefined;
     
     const targetDims = extractSliceDimensions(dsl);
-    
-    return values.find(v => {
+
+    const candidates = values.filter(v => {
       // Must match mode (cohort vs window)
-      const isCorrectMode = isCohortQuery 
-        ? isCohortModeValue(v) 
+      const isCorrectMode = isCohortQuery
+        ? isCohortModeValue(v)
         : !isCohortModeValue(v);
       if (!isCorrectMode) return false;
-      
+
       // Must match context/case dimensions
       const valueDims = extractSliceDimensions(v.sliceDSL || '');
       return targetDims === valueDims;
+    });
+
+    if (candidates.length === 0) return undefined;
+
+    // Prefer most recently retrieved slice (avoid “first in file wins”).
+    return candidates.reduce((best, cur) => {
+      const bestKey = best?.data_source?.retrieved_at || best?.cohort_to || best?.window_to || best?.cohort_from || best?.window_from || '';
+      const curKey = cur?.data_source?.retrieved_at || cur?.cohort_to || cur?.window_to || cur?.cohort_from || cur?.window_from || '';
+      return curKey > bestKey ? cur : best;
     });
   }
   

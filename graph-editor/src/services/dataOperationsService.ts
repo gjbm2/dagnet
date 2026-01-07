@@ -4487,16 +4487,22 @@ class DataOperationsService {
         if (isLatencyEnabled) {
           // Get existing slice for this context/case family
           const existingValues = paramFile?.data?.values as ParameterValue[] | undefined;
-          const existingSlice = existingValues?.find(v => {
+          const targetDims = extractSliceDimensions(targetSlice || '');
+          const matching = (existingValues || []).filter(v => {
             // Match by slice type (cohort vs window) and context dimensions
             const isCorrectMode = isCohortQuery ? isCohortModeValue(v) : !isCohortModeValue(v);
             if (!isCorrectMode) return false;
-            
-            // Match context/case dimensions (extractSliceDimensions is imported at top of file)
-            const targetDims = extractSliceDimensions(targetSlice || '');
             const valueDims = extractSliceDimensions(v.sliceDSL || '');
             return targetDims === valueDims;
           });
+          // Prefer most recent match (avoid “first in file wins” if duplicates exist).
+          const existingSlice = matching.length > 0
+            ? matching.reduce((best, cur) => {
+                const bestKey = best?.data_source?.retrieved_at || best?.cohort_to || best?.window_to || best?.cohort_from || best?.window_from || '';
+                const curKey = cur?.data_source?.retrieved_at || cur?.cohort_to || cur?.window_to || cur?.cohort_from || cur?.window_from || '';
+                return curKey > bestKey ? cur : best;
+              })
+            : undefined;
           
           refetchPolicy = shouldRefetch({
             existingSlice,
@@ -7429,12 +7435,19 @@ class DataOperationsService {
 
         const isCohortQuery = isCohortSlice;
         // Determine existing slice matching mode+dims (used for refetch policy)
-        const existingSlice = (values as any[]).find((v: any) => {
+        const matching = (values as any[]).filter((v: any) => {
           const correctMode = isCohortQuery ? isCohortModeValue(v) : !isCohortModeValue(v);
           if (!correctMode) return false;
           const vd = extractSliceDimensions(v.sliceDSL || '');
           return vd === sliceFamilyDims;
         });
+        const existingSlice = matching.length > 0
+          ? matching.reduce((best: any, cur: any) => {
+              const bestKey = best?.data_source?.retrieved_at || best?.cohort_to || best?.window_to || best?.cohort_from || best?.window_from || '';
+              const curKey = cur?.data_source?.retrieved_at || cur?.cohort_to || cur?.window_to || cur?.cohort_from || cur?.window_from || '';
+              return curKey > bestKey ? cur : best;
+            })
+          : undefined;
 
         let refetchPolicy: RefetchDecision | undefined;
         const isLatencyEnabledForReport = latencyConfig?.latency_parameter === true;
