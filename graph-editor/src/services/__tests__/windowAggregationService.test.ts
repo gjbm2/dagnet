@@ -371,6 +371,37 @@ describe('WindowAggregationService', () => {
       expect(cohortResult.needsFetch).toBe(false);
       expect(cohortResult.daysToFetch).toBe(0);
     });
+
+    it('treats missing cohort() slice (window-only cache) as cache miss (needs fetch), not as a slice isolation error', () => {
+      const values: any[] = [
+        {
+          mean: 0.7,
+          n: 100,
+          k: 70,
+          dates: ['8-Oct-25', '9-Oct-25'],
+          n_daily: [50, 50],
+          k_daily: [35, 35],
+          window_from: '8-Oct-25',
+          window_to: '9-Oct-25',
+          sliceDSL: 'window(8-Oct-25:9-Oct-25)',
+        },
+      ];
+
+      const requestedWindow = { start: '8-Oct-25', end: '9-Oct-25' };
+
+      const cohortResult = calculateIncrementalFetch(
+        { values },
+        requestedWindow,
+        undefined,
+        false,
+        'cohort(8-Oct-25:9-Oct-25)'
+      );
+
+      // Window-only cache cannot satisfy cohort() request.
+      expect(cohortResult.needsFetch).toBe(true);
+      expect(cohortResult.daysAvailable).toBe(0);
+      expect(cohortResult.daysToFetch).toBe(cohortResult.totalDays);
+    });
   });
 
   describe('aggregateFromParameter', () => {

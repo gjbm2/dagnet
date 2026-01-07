@@ -432,6 +432,63 @@ To decide whether `n_query` maths (or construction) is a plausible root cause fo
   - and confirm they are not “apples and pears”.
 - Check whether a graph using window() slices should ever apply an anchor-style `n_query` denominator at all, or whether window mode needs a distinct n_query construction rule.
 
+---
+
+## Solutions (proposed)
+
+### Normal form: `n_query` should not explicitly encode anchors (match `query` semantics)
+
+For consistency (and to reduce semantic foot-guns), it would be better if `n_query` strings typically did **not** encode the anchor explicitly, in the same way that `query` strings do not.
+
+Proposed convention:
+
+- Store `n_query` in an **anchor-free** form such as `to(X)` (read: “denominator population is arrivals at X”).
+- When executing:
+  - For **cohort() slices**, the execution layer prepends the cohort anchor (from the cohort DSL / cohort anchor field) so the realised denominator query becomes **A→X** before calling DAS.
+  - For **window() slices**, we do **not** prepend an anchor; we execute an X-anchored single-event count for X.
+
+This ensures `query` and `n_query` share the same implied semantics:
+
+- neither string explicitly includes the anchor;
+- where anchoring is relevant, the anchor is drawn from the **cohort anchor field**, not duplicated into per-edge strings.
+
+### Window() + dual-query `n_query`: treat denominator as “single-event arrivals at X within the window”
+
+**Problem:** In window mode, the DSL semantics are explicitly **X-anchored** (window bounds apply to the `from()` step). However, our current `n_query` pattern is often **A→X** (anchor→from). When the same `window(...)` bounds are applied to that `n_query`, it becomes **A-anchored**, which is *not* equivalent to “arrivals at X in-window”.
+
+**Proposed fix (Option 1):** For **window() slices**, when we are in dual-query mode due to `n_query`, we should **ignore the `from(...)` in `n_query`** and compute the denominator using a **true single-event query on X**:
+
+- Let X be the `to(...)` node in the stored `n_query` (i.e. the “from-node arrivals” target).
+- Execute a single-event count for X under the same window/context/case constraints.
+- Use that as the denominator `N(X)` for the edge probability.
+
+This is the most stable and lowest-risk approach for window mode because:
+
+- It matches the intended meaning from `docs/current/nqueryfixes.md`: “all users at the from-node within the window bounds”.
+- It avoids mixing A-anchored and X-anchored semantics in the same slice.
+- It decouples the window denominator from any upstream anchor choices or path structure.
+
+**Implementation note (high-level):** Today our DAS layer is funnel-oriented and always constructs at least a 2-step funnel (from+to). Implementing this requires adding a provider-supported “single event count” execution path (Amplitude supports this conceptually, but we do not currently construct it in DagNet).
+
+### This likely improves forecast stability, but does not explain the observed Evidence reach drift
+
+The “reach drift” we’re investigating is primarily an **Evidence-mode** inconsistency, and the earlier `nqueryfixes.md` diagnosis for drift (denominator shrinkage + inconsistent conversion windows) is framed around **cohort() semantics** (anchor identity + `cs`).
+
+Window() issues like the one above should mainly affect:
+
+- window-based evidence slices, and
+- forecast baselines derived from window slices,
+
+but the core “reach drift” failure mode we observed in Evidence mode was tied to **cohort-mode denominator/horizon coherence**.
+
+Code-level confirmation (current implementation):
+
+- In `dataOperationsService.addEvidenceAndForecastScalars`, **cohort() queries** are treated specially: `p.forecast` is copied from the corresponding **window()** slice in the same parameter file, while evidence is derived from the cohort-sliced n/k.
+- In `statisticalEnhancementService`, the forecast blend logic explicitly states: **forecast comes from WINDOW slices** and **evidence comes from COHORT slices** in cohort mode.
+- There is one important exception: in cohort-view fetch orchestration, some “simple” edges may be overridden to fetch/aggregate as **window()** even when the tab DSL is cohort-shaped (see the “cohort() mode: simple edges fetch/aggregate as window()” test).
+
+So: the proposed window-mode `n_query` fix should improve window-slice reliability (and therefore forecast baselines), but **it is unlikely to explain cohort-mode Evidence drift** on the edges where cohort semantics (`cs`, anchor identity, denominator coherence at split nodes) dominate.
+
 ### Pause point / open questions to resolve next
 
 The remaining discrepancies still “don’t make sense” under the naive mental model (“same events → same answers”) because the system is mixing:

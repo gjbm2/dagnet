@@ -387,7 +387,8 @@ export function analyzeSliceCoverage(
       missingMatureDates.push(dateStr);
     }
     
-    currentDate.setDate(currentDate.getDate() + 1);
+    // CRITICAL: Use UTC iteration to avoid DST/local-time drift across long ranges.
+    currentDate.setUTCDate(currentDate.getUTCDate() + 1);
   }
   
   const totalMatureDates = Math.max(0, 

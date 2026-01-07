@@ -1,16 +1,7 @@
 version: 1.0.0
 created_at: 2025-11-24T12:37:34.074Z
 updated_at: 2026-01-06T11:08:37.219Z
-contexts:
-  - id: channel
-    file_path: contexts/channel.yaml
-    status: active
-    created_at: 2025-11-24T12:40:40.451Z
-    updated_at: 2025-11-24T12:40:40.457Z
-    author: user
-    version: 1.0.0
-    name: Marketing Channel
-    description: Primary acquisition channel based on utm_medium
+contexts: []
 metadata:
   created_at: 2025-11-24T13:51:42.224Z
   version: 1.0.0
