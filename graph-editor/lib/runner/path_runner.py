@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 import networkx as nx
 import re
 
+import logging
+
+from .constraint_eval import evaluate_constraint_condition, parse_constraint_condition, constraint_specificity_score
+
 
 @dataclass
 class PathResult:
@@ -34,14 +38,23 @@ class PruningResult:
     renorm_factors: dict[tuple[str, str], float]  # edge -> renorm factor
 
 
-_VISITED_RE = re.compile(r"visited\(\s*([^)]+?)\s*\)")
-
-
-def _extract_visited_human_ids(condition: str | None) -> list[str]:
-    """Extract visited(nodeId) references from a conditional_p condition string."""
-    if not condition or not isinstance(condition, str):
-        return []
-    return [m.group(1).strip() for m in _VISITED_RE.finditer(condition)]
+def _extract_tracked_human_ids(condition: str | None) -> set[str]:
+    """
+    Extract all node IDs referenced by a conditional_p condition string that require visit-state tracking.
+    This includes:
+    - visited(...)
+    - exclude(...)
+    - visitedAny(...)
+    """
+    try:
+        parsed = parse_constraint_condition(condition)
+    except Exception:
+        return set()
+    out: set[str] = set(parsed.visited)
+    out.update(parsed.exclude)
+    for g in parsed.visited_any:
+        out.update(g)
+    return out
 
 
 def _graph_has_conditional_probabilities(G: nx.DiGraph) -> bool:
@@ -57,8 +70,7 @@ def _get_tracked_human_ids(G: nx.DiGraph) -> set[str]:
     for _, _, data in G.edges(data=True):
         for cp in (data.get('conditional_p') or []):
             cond = cp.get('condition') if isinstance(cp, dict) else None
-            for hid in _extract_visited_human_ids(cond):
-                tracked.add(hid)
+            tracked |= _extract_tracked_human_ids(cond)
     return tracked
 
 
@@ -72,18 +84,40 @@ def _effective_edge_probability(
     """
     cps = edge_data.get('conditional_p') or []
     if cps:
+        best_score: Optional[int] = None
+        best_p: Optional[float] = None
         for cp in cps:
             if not isinstance(cp, dict):
                 continue
             cond = cp.get('condition')
-            required = _extract_visited_human_ids(cond)
-            if required and all(r in visited_human_ids for r in required):
+            try:
+                matches = evaluate_constraint_condition(cond, visited_nodes=visited_human_ids)
+            except Exception:
+                # Invalid/unsupported condition DSL: treat as non-match here.
+                # (Any caller that explicitly activates conditional semantics should surface this separately.)
+                logging.getLogger(__name__).warning(
+                    "Unsupported or invalid conditional_p condition DSL encountered (treated as non-match): %r", cond
+                )
+                matches = False
+            if matches:
                 p = cp.get('p') or {}
                 if isinstance(p, dict):
-                    return float(p.get('mean') or 0.0)
-                if isinstance(p, (int, float)):
-                    return float(p)
-                return 0.0
+                    pv = float(p.get('mean') or 0.0)
+                elif isinstance(p, (int, float)):
+                    pv = float(p)
+                else:
+                    pv = 0.0
+
+                try:
+                    score = constraint_specificity_score(cond)
+                except Exception:
+                    score = 0
+
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_p = pv
+        if best_p is not None:
+            return best_p
     return float(edge_data.get('p') or 0.0)
 
 

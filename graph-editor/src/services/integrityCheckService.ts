@@ -25,6 +25,7 @@ import type { TabOperations } from '../types';
 import { credentialsManager } from '../lib/credentials';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
+import { normalizeConstraintString } from '../lib/queryDSL';
 
 type IssueSeverity = 'error' | 'warning' | 'info';
 
@@ -1624,6 +1625,58 @@ export class IntegrityCheckService {
           edgesBySource.set(sourceKey, []);
         }
         edgesBySource.get(sourceKey)!.push(edge);
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Conditional sibling alignment lint
+    //
+    // If a conditional group (by normalised condition string) exists on some
+    // outgoing edges from a node but is missing on other sibling edges, that can
+    // silently break conservation / interpretation.
+    // ─────────────────────────────────────────────────────────────────────────
+    for (const [sourceKey, outgoingEdges] of edgesBySource) {
+      if (outgoingEdges.length < 2) continue;
+      const allConditions = new Set<string>();
+      const perEdge = new Map<string, Set<string>>(); // edgeUuid -> condition set
+
+      for (const e of outgoingEdges) {
+        const edgeUuid = String(e.uuid || e.id || '');
+        const s = new Set<string>();
+        const cps = Array.isArray(e.conditional_p) ? e.conditional_p : [];
+        for (const cp of cps) {
+          const raw = typeof cp?.condition === 'string' ? cp.condition.trim() : '';
+          if (!raw) continue;
+          const norm = normalizeConstraintString(raw);
+          s.add(norm);
+          allConditions.add(norm);
+        }
+        perEdge.set(edgeUuid, s);
+      }
+
+      if (allConditions.size === 0) continue;
+
+      const sourceNode = nodes.find((n: any) => n.id === sourceKey || n.uuid === sourceKey);
+      const sourceName = sourceNode?.id || sourceKey;
+
+      for (const e of outgoingEdges) {
+        const edgeUuid = String(e.uuid || e.id || '');
+        const present = perEdge.get(edgeUuid) ?? new Set<string>();
+        const missing = Array.from(allConditions).filter((c) => !present.has(c));
+        if (missing.length === 0) continue;
+
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'warning',
+          category: 'semantic',
+          field: `edge: ${edgeUuid}`,
+          message:
+            `Conditional group alignment: edge "${edgeUuid}" from "${sourceName}" is missing conditional group(s): ${missing.join('; ')}`,
+          suggestion: 'Ensure sibling edges from the same node define the same set of conditional groups (or explicitly document why not).',
+          nodeUuid: sourceNode?.uuid,
+          edgeUuid: e.uuid,
+        });
       }
     }
     

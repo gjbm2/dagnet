@@ -19,7 +19,7 @@ import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 // LAG: CohortData type is used for aggregation helpers further down in this file
 import type { CohortData } from './statisticalEnhancementService';
 import { mixtureLogNormalMedian } from './lagMixtureAggregationService';
-import { resolveMECEPartitionForImplicitUncontextedSync, findBestMECEPartitionCandidateSync, parameterValueRecencyMs } from './meceSliceService';
+import { resolveMECEPartitionForImplicitUncontextedSync, findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 
 export interface RawAggregation {
   method: 'naive';
@@ -1098,23 +1098,13 @@ export function calculateIncrementalFetch(
         // - MECE recency = min(retrieved_at) across the MECE slices (set freshness = stalest member)
 
         const modeFiltered = signatureFilteredValues.filter(modeMatchesTarget);
-        const uncontextedCandidates = modeFiltered.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
-        const bestUncontexted = uncontextedCandidates.length > 0
-          ? uncontextedCandidates.reduce((best, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(best) ? cur : best))
-          : undefined;
-        const uncontextedRecency = bestUncontexted ? parameterValueRecencyMs(bestUncontexted) : 0;
+        const selection = selectImplicitUncontextedSliceSetSync({
+          candidateValues: modeFiltered,
+          requireCompleteMECE: true,
+        });
 
-        const meceCandidate = findBestMECEPartitionCandidateSync(modeFiltered, { requireComplete: true });
-        const meceValues = meceCandidate?.values ?? [];
-        const meceRecency = meceValues.length > 0
-          ? meceValues.reduce((min, cur) => Math.min(min, parameterValueRecencyMs(cur)), Number.POSITIVE_INFINITY)
-          : Number.NEGATIVE_INFINITY;
-
-        // Tie-breaker: if recency is equal, prefer MECE. This keeps coverage checks stable in tests
-        // where slices are written with the same retrieved_at.
-        const chooseMECE = meceValues.length > 0 && (uncontextedCandidates.length === 0 || meceRecency >= uncontextedRecency);
-
-        if (!chooseMECE && bestUncontexted) {
+        if (selection.kind === 'explicit_uncontexted') {
+          const bestUncontexted = selection.values[0];
           // Coverage from the single most recent explicit uncontexted slice.
           if (bestUncontexted.dates && Array.isArray(bestUncontexted.dates)) {
             for (let i = 0; i < bestUncontexted.dates.length; i++) {
@@ -1128,13 +1118,17 @@ export function calculateIncrementalFetch(
           }
           console.log('[calculateIncrementalFetch] Implicit uncontexted coverage chose explicit slice by recency', {
             targetSlice,
-            uncontextedRecency,
-            hasMECE: meceValues.length > 0,
-            meceRecency,
+            uncontextedRecencyMs: selection.diagnostics.uncontextedRecencyMs,
+            hasMECECandidate: selection.diagnostics.hasMECECandidate,
+            meceKey: selection.diagnostics.meceKey,
+            meceQuerySignature: selection.diagnostics.meceQuerySignature,
+            meceRecencyMs: selection.diagnostics.meceRecencyMs,
+            counts: selection.diagnostics.counts,
+            warnings: selection.diagnostics.warnings,
           });
-        } else if (chooseMECE) {
+        } else if (selection.kind === 'mece_partition') {
           const uniqueSlices = new Set<string>();
-          for (const value of meceValues) {
+          for (const value of selection.values) {
             const sliceDSL = extractSliceDimensions(value.sliceDSL ?? '');
             if (sliceDSL) uniqueSlices.add(sliceDSL);
           }
@@ -1179,9 +1173,12 @@ export function calculateIncrementalFetch(
           console.log(`[calculateIncrementalFetch] Implicit uncontexted coverage chose MECE by recency:`, {
             targetSlice,
             querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
-            meceKey: meceCandidate?.key,
-            uncontextedRecency,
-            meceRecency,
+            meceKey: selection.key,
+            meceQuerySignature: selection.querySignature,
+            uncontextedRecencyMs: selection.diagnostics.uncontextedRecencyMs,
+            meceRecencyMs: selection.diagnostics.meceRecencyMs,
+            counts: selection.diagnostics.counts,
+            warnings: selection.diagnostics.warnings,
             expandedSlices,
             sliceCoverage: Object.fromEntries(
               expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
@@ -1195,6 +1192,8 @@ export function calculateIncrementalFetch(
             targetSlice,
             hasUncontextedData,
             hasContextedData,
+            reason: selection.reason,
+            diagnostics: selection.diagnostics,
           });
         }
       } else {

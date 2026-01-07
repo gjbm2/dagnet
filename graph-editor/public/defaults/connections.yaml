@@ -408,6 +408,38 @@ connections:
           const csSeconds = csDays * 24 * 60 * 60;  // Convert days to seconds
           csParam = 'cs=' + csSeconds;
           
+          // ─────────────────────────────────────────────────────────────────────
+          // ENDPOINT SELECTION
+          //
+          // Default: funnel endpoint (/funnels) for normal edge queries.
+          //
+          // Special: event segmentation endpoint (/events/segmentation) for single-event counts,
+          // used by window-mode denominators (n_query normal form to(X)).
+          // ─────────────────────────────────────────────────────────────────────
+          const wantSegmentation = queryPayload && queryPayload.query_kind === 'segmentation';
+          
+          if (wantSegmentation) {
+            const single = buildEventStepFromId(queryPayload.from);
+            const eventParams = 'e=' + encodeURIComponent(JSON.stringify(single));
+            const otherParams = [
+              'start=' + startDate,
+              'end=' + endDate,
+              intervalParam,      // i=1 for daily
+              'm=uniques',        // unique users
+              segmentParam
+            ].filter(p => p).join('&');
+            
+            queryPayload.query_params = eventParams + '&' + otherParams;
+            queryPayload.path = '/events/segmentation';
+            
+            // Keep response extract templates valid (even though segmentation response has no funnel indices).
+            queryPayload.from_step_index = 0;
+            queryPayload.to_step_index = 0;
+            
+            return queryPayload;
+          }
+          
+          // Funnel query (default)
           const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');
           const otherParams = [
             'start=' + startDate,
@@ -418,6 +450,7 @@ connections:
           ].filter(p => p).join('&');  // Filter out empty strings
           
           queryPayload.query_params = eventParams + '&' + otherParams;
+          queryPayload.path = '/funnels';
           
           // CRITICAL: Set step indices for n/k extraction
           // With super-funnel, 'from' may not be at index 0 if there are upstream visited nodes
@@ -427,7 +460,7 @@ connections:
           return queryPayload;
       request:
         # Dashboard REST API uses GET with query parameters
-        url_template: "{{{connection.base_url}}}/funnels?{{{queryPayload.query_params}}}"
+        url_template: "{{{connection.base_url}}}{{{queryPayload.path}}}?{{{queryPayload.query_params}}}"
         method: GET
         headers:
           # Dashboard REST API uses HTTP Basic auth: API Key (username) + Secret Key (password)
@@ -445,6 +478,13 @@ connections:
           # Extract daily time-series data (dayFunnels) - available when i=1
           - name: day_funnels
             jmes: "data[0].dayFunnels"
+          # Extract event segmentation response fields (used for single-event denominators)
+          - name: seg_series
+            jmes: "data.series"
+          - name: seg_x_values
+            jmes: "data.xValues"
+          - name: seg_series_collapsed
+            jmes: "data.seriesCollapsed"
           # === LAG (Latency) Data Extraction ===
           # These fields are extracted for latency-tracked edges (cohort mode)
           # Per-day transition time arrays (parallel to dayFunnels.series)
@@ -488,33 +528,59 @@ connections:
               $dates := $data.day_funnels.xValues;
               $medianLags := $data.day_median_trans_times;
               $avgLags := $data.day_avg_trans_times;
+              $segDates := $data.seg_x_values;
+              $segSeries := $data.seg_series;
               
-              $data.mode = 'daily' and $data.day_funnels.series ?
-                $data.day_funnels.series ~> $map(function($dayData, $idx) {(
-                  $medianRow := $medianLags[$idx];
-                  $avgRow := $avgLags[$idx];
-                  $medianMs := $medianRow ? $medianRow[$toIdx] : null;
-                  $avgMs := $avgRow ? $avgRow[$toIdx] : null;
-                  $anchorMedianMs := $medianRow ? $medianRow[$fromIdx] : null;
-                  $anchorAvgMs := $avgRow ? $avgRow[$fromIdx] : null;
+              ($segSeries and $segDates and $count($segSeries) > 0 and $segSeries[0] and $segDates[0]) ?
+                $segDates ~> $map(function($d, $i) {(
+                  $n := $number($segSeries[0][$i]);
                   {
-                    "date": $dates[$idx],
-                    "n": $dayData[$fromIdx],
-                    "k": $dayData[$toIdx],
-                    "p": $dayData[$fromIdx] > 0 ? $dayData[$toIdx] / $dayData[$fromIdx] : 0,
-                    "median_lag_days": $medianMs != null and $medianMs > 0 ? $medianMs / 86400000 : null,
-                    "mean_lag_days": $avgMs != null and $avgMs > 0 ? $avgMs / 86400000 : null,
-                    "anchor_n": $dayData[0],
-                    "anchor_median_lag_days": $anchorMedianMs != null and $anchorMedianMs > 0 ? $anchorMedianMs / 86400000 : null,
-                    "anchor_mean_lag_days": $anchorAvgMs != null and $anchorAvgMs > 0 ? $anchorAvgMs / 86400000 : null
+                    "date": $d,
+                    "n": $n,
+                    "k": $n,
+                    "p": 1
                   }
-                )}) : []
+                )})
+              :
+                ($data.mode = 'daily' and $data.day_funnels.series ?
+                  $data.day_funnels.series ~> $map(function($dayData, $idx) {(
+                    $medianRow := $medianLags[$idx];
+                    $avgRow := $avgLags[$idx];
+                    $medianMs := $medianRow ? $medianRow[$toIdx] : null;
+                    $avgMs := $avgRow ? $avgRow[$toIdx] : null;
+                    $anchorMedianMs := $medianRow ? $medianRow[$fromIdx] : null;
+                    $anchorAvgMs := $avgRow ? $avgRow[$fromIdx] : null;
+                    {
+                      "date": $dates[$idx],
+                      "n": $dayData[$fromIdx],
+                      "k": $dayData[$toIdx],
+                      "p": $dayData[$fromIdx] > 0 ? $dayData[$toIdx] / $dayData[$fromIdx] : 0,
+                      "median_lag_days": $medianMs != null and $medianMs > 0 ? $medianMs / 86400000 : null,
+                      "mean_lag_days": $avgMs != null and $avgMs > 0 ? $avgMs / 86400000 : null,
+                      "anchor_n": $dayData[0],
+                      "anchor_median_lag_days": $anchorMedianMs != null and $anchorMedianMs > 0 ? $anchorMedianMs / 86400000 : null,
+                      "anchor_mean_lag_days": $anchorAvgMs != null and $anchorAvgMs > 0 ? $anchorAvgMs / 86400000 : null
+                    }
+                  )}) : []
+                )
             )
         # Handle null values gracefully - return 0 when no data
         - name: n
-          jsonata: "from_count != null ? $number(from_count) : 0"
+          jsonata: |
+            (
+              $segc := seg_series_collapsed;
+              ($segc and $segc[0] and $segc[0][0] and $segc[0][0].value != null)
+                ? $number($segc[0][0].value)
+                : (from_count != null ? $number(from_count) : 0)
+            )
         - name: k
-          jsonata: "to_count != null ? $number(to_count) : 0"
+          jsonata: |
+            (
+              $segc := seg_series_collapsed;
+              ($segc and $segc[0] and $segc[0][0] and $segc[0][0].value != null)
+                ? $number($segc[0][0].value)
+                : (to_count != null ? $number(to_count) : 0)
+            )
         - name: p_mean
           jsonata: "n > 0 ? k / n : 0"
         # === LAG (Latency) Aggregate Transforms ===

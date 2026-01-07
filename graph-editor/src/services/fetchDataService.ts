@@ -367,7 +367,10 @@ export function itemNeedsFetch(
     
     // Check if parameter has connection (file or direct on edge)
     const edge = graph.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
-    const param = edge?.[item.paramSlot || 'p'];
+    const param =
+      typeof item.conditionalIndex === 'number'
+        ? edge?.conditional_p?.[item.conditionalIndex]?.p
+        : edge?.[item.paramSlot || 'p'];
     const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
     const hasFileData = !!paramFile?.data;
     
@@ -474,6 +477,35 @@ export function getItemsNeedingFetch(
         const targetSlice = item.targetSliceOverride ?? dsl;
         if (itemNeedsFetch(item, window, graph, targetSlice, checkCache)) {
           items.push(item);
+        }
+      }
+
+      // Conditional probabilities (edge.conditional_p[i].p) are first-class fetchable items.
+      // Planner/coverage MUST include them; execution already supports conditionalIndex.
+      if (Array.isArray((edge as any).conditional_p)) {
+        for (let idx = 0; idx < (edge as any).conditional_p.length; idx++) {
+          const cond = (edge as any).conditional_p[idx];
+          const condParam = cond?.p;
+          const condParamId = condParam?.id;
+          if (!condParam) continue;
+
+          const item: FetchItem = {
+            id: `param-${condParamId || 'direct'}-conditional_p[${idx}]-${edgeId}`,
+            type: 'parameter',
+            name: `conditional_p[${idx}]: ${condParamId || 'direct connection'}`,
+            objectId: condParamId || '',
+            targetId: edgeId,
+            paramSlot: 'p',
+            conditionalIndex: idx,
+          };
+
+          const override = computeTargetSliceOverrideForItem(item, graph, dsl, pathT95Map);
+          if (override) item.targetSliceOverride = override;
+
+          const targetSlice = item.targetSliceOverride ?? dsl;
+          if (itemNeedsFetch(item, window, graph, targetSlice, checkCache)) {
+            items.push(item);
+          }
         }
       }
     }
