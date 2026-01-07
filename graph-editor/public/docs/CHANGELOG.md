@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.21b
+**Released:** January 07, 2026
+
+Further conditional_p fixes (more to come)
+
+---
+
 ## Version 1.1.20b
 **Released:** January 07, 2026
 
