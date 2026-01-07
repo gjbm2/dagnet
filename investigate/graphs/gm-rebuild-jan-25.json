@@ -29,8 +29,8 @@
       "label": "household-delegated",
       "absorbing": false,
       "layout": {
-        "x": 21,
-        "y": 382
+        "x": 9,
+        "y": 380
       },
       "description": "",
       "event_id": "household-delegated",
@@ -42,8 +42,8 @@
       "label": "Switch registered",
       "absorbing": false,
       "layout": {
-        "x": 283,
-        "y": 314
+        "x": 380,
+        "y": 274
       },
       "event_id": "switch-registered",
       "images": []
@@ -54,8 +54,8 @@
       "label": "Switch success",
       "absorbing": false,
       "layout": {
-        "x": 544,
-        "y": 238
+        "x": 612,
+        "y": 188
       },
       "event_id": "switch-success",
       "images": []
@@ -76,8 +76,8 @@
       "label": "Gm abandonned after delegation",
       "absorbing": false,
       "layout": {
-        "x": 296,
-        "y": 483
+        "x": 293,
+        "y": 533
       }
     },
     {
@@ -86,8 +86,30 @@
       "label": "Gm abandoned after registration",
       "absorbing": false,
       "layout": {
-        "x": 517,
-        "y": 438
+        "x": 563,
+        "y": 416
+      }
+    },
+    {
+      "uuid": "b7cfc075-16bf-4f39-93dd-b6a20add59e8",
+      "id": "recommendation-offered",
+      "label": "Recommendation offered",
+      "absorbing": false,
+      "layout": {
+        "x": 185,
+        "y": 318
+      },
+      "event_id": "recommendation-offered",
+      "images": []
+    },
+    {
+      "uuid": "8d5d0623-407f-44be-bc82-2dc85c62ca43",
+      "id": "gm-abandonned-after-reco",
+      "label": "Gm abandonned after reco",
+      "absorbing": false,
+      "layout": {
+        "x": 392,
+        "y": 459
       }
     }
   ],
@@ -113,7 +135,7 @@
           "k": 145,
           "window_from": "1-Nov-25",
           "window_to": "1-Nov-25",
-          "retrieved_at": "2026-01-06T18:05:25.898Z",
+          "retrieved_at": "2026-01-07T10:46:20.374Z",
           "source": "amplitude",
           "full_query": "from(household-created).to(household-delegated)",
           "mean": 0.5894308943089431,
@@ -121,11 +143,11 @@
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2026-01-06T18:05:25.898Z",
+          "retrieved_at": "2026-01-07T10:46:20.374Z",
           "full_query": "from(household-created).to(household-delegated)"
         },
         "forecast": {
-          "mean": 0.532920365735324
+          "mean": 0.5328260276638915
         }
       },
       "description": "",
@@ -155,7 +177,7 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.8414,
+        "mean": 0.2207,
         "latency": {
           "anchor_node_id": "household-created"
         }
@@ -171,59 +193,13 @@
       "fromHandle": "right-out",
       "toHandle": "left",
       "p": {
-        "mean": 0.205,
+        "mean": 0.2051,
         "latency": {
           "anchor_node_id": "household-created"
         }
       },
       "query": "from(switch-registered).to(gm-abandoned-after-registration)",
       "description": ""
-    },
-    {
-      "uuid": "7bb83fbf-3ac6-4152-a395-a8b64a12506a",
-      "id": "household-delegated-to-switch-registered",
-      "from": "9766ad2c-aca6-4537-b8d7-eb4d426515d6",
-      "to": "c57ab84f-91e2-43bb-be3b-6e504ef8b6f3",
-      "fromHandle": "right-out",
-      "toHandle": "left-out",
-      "p": {
-        "mean": 0.15862068965517243,
-        "id": "gm-delegated-to-registered",
-        "connection": "amplitude-prod",
-        "latency": {
-          "latency_parameter": true,
-          "median_lag_days": 9.991963333882843,
-          "mean_lag_days": 10.797872242931911,
-          "t95": 15.13,
-          "completeness": 1,
-          "path_t95": 15.13,
-          "latency_parameter_overridden": false,
-          "anchor_node_id_overridden": false,
-          "anchor_node_id": "household-created"
-        },
-        "stdev": 0.030336735441398095,
-        "evidence": {
-          "n": 145,
-          "k": 23,
-          "window_from": "1-Nov-25",
-          "window_to": "1-Nov-25",
-          "retrieved_at": "2026-01-06T18:05:26.675Z",
-          "source": "amplitude",
-          "full_query": "from(household-delegated).to(switch-registered)",
-          "mean": 0.15862068965517243,
-          "stdev": 0.030338341107614953
-        },
-        "data_source": {
-          "type": "amplitude",
-          "retrieved_at": "2026-01-06T18:05:26.675Z",
-          "full_query": "from(household-delegated).to(switch-registered)"
-        },
-        "forecast": {
-          "mean": 0.09595897806080847
-        }
-      },
-      "description": "",
-      "query": "from(household-delegated).to(switch-registered)"
     },
     {
       "uuid": "97b11265-1242-4fa8-a097-359f2384665a",
@@ -233,7 +209,7 @@
       "fromHandle": "right-out",
       "toHandle": "left-out",
       "p": {
-        "mean": 0.795,
+        "mean": 0.7949,
         "id": "gm-registered-to-success",
         "connection": "amplitude-prod",
         "latency": {
@@ -241,8 +217,8 @@
           "median_lag_days": 6.555877676365882,
           "mean_lag_days": 7.628800701296054,
           "t95": 15.4,
-          "completeness": 0.9990544297892618,
-          "path_t95": 28.1,
+          "completeness": 0.9992246243171788,
+          "path_t95": 38.51,
           "anchor_node_id_overridden": false,
           "latency_parameter_overridden": false,
           "anchor_node_id": "household-created"
@@ -253,7 +229,7 @@
           "k": 16,
           "window_from": "1-Nov-25",
           "window_to": "1-Nov-25",
-          "retrieved_at": "2026-01-06T18:05:26.804Z",
+          "retrieved_at": "2026-01-07T10:46:20.529Z",
           "source": "amplitude",
           "full_query": "from(switch-registered).to(switch-success)",
           "mean": 0.6956521739130435,
@@ -261,15 +237,123 @@
         },
         "data_source": {
           "type": "amplitude",
-          "retrieved_at": "2026-01-06T18:05:26.804Z",
+          "retrieved_at": "2026-01-07T10:46:20.529Z",
           "full_query": "from(switch-registered).to(switch-success)"
         },
         "forecast": {
-          "mean": 0.8096378411131957
+          "mean": 0.809637841113196
         }
       },
       "description": "",
       "query": "from(switch-registered).to(switch-success)"
+    },
+    {
+      "uuid": "44779055-a157-4cb3-91a8-37db766c044a",
+      "id": "household-delegated-to-recommendation-offered",
+      "from": "9766ad2c-aca6-4537-b8d7-eb4d426515d6",
+      "to": "b7cfc075-16bf-4f39-93dd-b6a20add59e8",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.7793103448275862,
+        "latency": {
+          "anchor_node_id": "household-created",
+          "latency_parameter": true,
+          "latency_parameter_overridden": false,
+          "median_lag_days": 2.002072918624562,
+          "mean_lag_days": 2.1622415181110535,
+          "t95": 3.82,
+          "completeness": 1,
+          "path_t95": 3.82
+        },
+        "stdev": 0.034440504421793625,
+        "id": "gm-delegated-to-reco",
+        "connection": "amplitude-prod",
+        "connection_overridden": false,
+        "evidence": {
+          "n": 145,
+          "k": 113,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-07T10:46:20.690Z",
+          "source": "amplitude",
+          "full_query": "from(household-delegated).to(recommendation-offered)",
+          "mean": 0.7793103448275862,
+          "stdev": 0.03443992583518536
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-07T10:46:20.690Z",
+          "full_query": "from(household-delegated).to(recommendation-offered)"
+        },
+        "forecast": {
+          "mean": 0.707936313479512
+        }
+      },
+      "query": "from(household-delegated).to(recommendation-offered)",
+      "description": ""
+    },
+    {
+      "uuid": "a9ee0cea-414c-4b51-8e40-31104d14fa5b",
+      "id": "recommendation-offered-to-gm-abandonned-after-reco",
+      "from": "b7cfc075-16bf-4f39-93dd-b6a20add59e8",
+      "to": "8d5d0623-407f-44be-bc82-2dc85c62ca43",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.8316,
+        "latency": {
+          "anchor_node_id": "household-created"
+        }
+      },
+      "query": "from(recommendation-offered).to(gm-abandonned-after-reco)",
+      "description": ""
+    },
+    {
+      "uuid": "1b37d7e7-69e9-4f71-b3b2-8eeed659326e",
+      "id": "recommendation-offered-to-switch-registered",
+      "from": "b7cfc075-16bf-4f39-93dd-b6a20add59e8",
+      "to": "c57ab84f-91e2-43bb-be3b-6e504ef8b6f3",
+      "fromHandle": "right-out",
+      "toHandle": "left",
+      "p": {
+        "mean": 0.1684,
+        "latency": {
+          "anchor_node_id": "household-created",
+          "latency_parameter": true,
+          "latency_parameter_overridden": false,
+          "median_lag_days": 10.183614895692376,
+          "mean_lag_days": 10.616887415175665,
+          "t95": 16.37,
+          "completeness": 0.9999999999578815,
+          "path_t95": 19.13
+        },
+        "stdev": 0.03787353782334886,
+        "id": "gm-reco-to-registered",
+        "connection": "amplitude-prod",
+        "connection_overridden": true,
+        "evidence": {
+          "n": 113,
+          "k": 23,
+          "window_from": "1-Nov-25",
+          "window_to": "1-Nov-25",
+          "retrieved_at": "2026-01-07T10:46:20.843Z",
+          "source": "amplitude",
+          "full_query": "from(recommendation-offered).to(switch-registered)",
+          "mean": 0.20353982300884957,
+          "stdev": 0.037876296491537155
+        },
+        "data_source": {
+          "type": "amplitude",
+          "retrieved_at": "2026-01-07T10:46:20.843Z",
+          "full_query": "from(recommendation-offered).to(switch-registered)"
+        },
+        "forecast": {
+          "mean": 0.14194390486199202
+        }
+      },
+      "query": "from(recommendation-offered).to(switch-registered)",
+      "description": ""
     }
   ],
   "policies": {
@@ -279,7 +363,7 @@
     "name": "gm-rebuild-jan-25",
     "description": "",
     "created_at": "2026-01-05T12:49:08.196Z",
-    "updated_at": "2026-01-06T18:12:02.838Z",
+    "updated_at": "2026-01-07T10:50:05.709Z",
     "version": "1.0.0"
   },
   "dataInterestsDSL": "window(-90d:);cohort(-90d:)",

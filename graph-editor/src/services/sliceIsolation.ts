@@ -154,9 +154,13 @@ export function isolateSlice<T extends { sliceDSL?: string }>(
     return true;
   });
   
-  // Validate: if file has contexts but we got nothing, that's likely a bug
-  const hasContexts = values.some(v => v.sliceDSL && v.sliceDSL !== '');
-  if (hasContexts && matched.length === 0 && normalizedTarget === '') {
+  // Validate: if file has context/case dimensions but we got nothing for an uncontexted query,
+  // that's likely accidental cross-slice aggregation. Window/cohort are NOT slice dimensions.
+  //
+  // NOTE: This guard is intentionally about *dimensions* (context/case), not about sliceDSL being non-empty.
+  // A file containing only window(...) or cohort(...) slices should NOT be treated as "contexted".
+  const hasContextedDimensions = values.some(v => extractSliceDimensions(v.sliceDSL ?? '') !== '');
+  if (hasContextedDimensions && matched.length === 0 && normalizedTarget === '') {
     throw new Error(
       `Slice isolation error: file has contexted data but query requested uncontexted. ` +
       `Use MECE aggregation if intentional.`
