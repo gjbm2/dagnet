@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.23b
+**Released:** January 07, 2026
+
+Further n_wuery fixes
+
+---
+
 ## Version 1.1.22b
 **Released:** January 07, 2026
 
