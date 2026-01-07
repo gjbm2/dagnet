@@ -1402,6 +1402,26 @@ export function mergeTimeSeriesIntoParameter(
 
   const normalizedSlice = sliceDSL || '';
   const isCohortMode = mergeOptions?.isCohortMode ?? false;
+
+  // Helper: best-effort recency score for choosing between multiple matching slice entries.
+  // Prefer ISO `data_source.retrieved_at` (provider fetch time), then fall back to slice bounds.
+  const recencyMs = (v: ParameterValue): number => {
+    const ra = v.data_source?.retrieved_at;
+    if (typeof ra === 'string' && ra.trim()) {
+      const t = new Date(ra).getTime();
+      if (!Number.isNaN(t)) return t;
+    }
+    const bound = v.cohort_to || v.window_to || v.cohort_from || v.window_from;
+    if (typeof bound === 'string' && bound.trim()) {
+      try {
+        const t = parseDate(bound).getTime();
+        if (!Number.isNaN(t)) return t;
+      } catch {
+        // ignore
+      }
+    }
+    return 0;
+  };
   
   // Convert new time series to arrays, sorted chronologically
   const sortedTimeSeries = [...newTimeSeries].sort((a, b) => 
@@ -1441,12 +1461,18 @@ export function mergeTimeSeriesIntoParameter(
   // Unlike the old "replace entire slice" approach, this preserves mature historical
   // cohort data while refreshing recent/immature cohorts from the bounded fetch.
   if (isCohortMode) {
-    // 1) Find existing cohort slice for this context/case family
-    const existingCohortSlice = existingValues.find(v => {
-      if (!isCohortModeValue(v)) return false;
-      const dims = extractSliceDimensions(v.sliceDSL ?? '');
-      return dims === targetDims;
-    });
+    // 1) Collect ALL existing cohort slices for this context/case family.
+    //
+    // In the steady state we expect a single canonical slice per (mode+dims), but historical
+    // bugs / manual edits can leave duplicates. We merge their date series with a "most recent wins"
+    // rule on overlaps, to avoid accidentally seeding from an older slice purely due to array order.
+    const existingCohortSlices = existingValues
+      .filter(v => {
+        if (!isCohortModeValue(v)) return false;
+        const dims = extractSliceDimensions(v.sliceDSL ?? '');
+        return dims === targetDims;
+      })
+      .sort((a, b) => recencyMs(a) - recencyMs(b)); // oldest → newest (newest overwrites)
     
     // 2) Build date → { n, k, median_lag, mean_lag, anchor_* } map, starting with existing data
     const cohortDateMap = new Map<string, { 
@@ -1460,7 +1486,8 @@ export function mergeTimeSeriesIntoParameter(
     }>();
     
     // Add existing cohort data first (will be overwritten by new data for overlapping dates)
-    if (existingCohortSlice?.dates && existingCohortSlice?.n_daily && existingCohortSlice?.k_daily) {
+    for (const existingCohortSlice of existingCohortSlices) {
+      if (!existingCohortSlice?.dates || !existingCohortSlice?.n_daily || !existingCohortSlice?.k_daily) continue;
       const existingMedianLag = existingCohortSlice.median_lag_days;
       const existingMeanLag = existingCohortSlice.mean_lag_days;
       // Cast to access anchor fields which may exist on the value
@@ -1592,19 +1619,18 @@ export function mergeTimeSeriesIntoParameter(
   // 2) Build date → { n, k } map
   const dateMap = new Map<string, { n: number; k: number }>();
 
-  // Helper to add existing data without overriding newer data
+  // Helper to add existing data; used with oldest→newest ordering so newer overwrites overlaps.
   const addExistingFromValue = (v: ParameterValue) => {
     if (!v.dates || !v.n_daily || !v.k_daily) return;
     for (let i = 0; i < v.dates.length; i++) {
       const ukDate = normalizeDate(v.dates[i]);
-      if (!dateMap.has(ukDate)) {
-        dateMap.set(ukDate, { n: v.n_daily[i], k: v.k_daily[i] });
-      }
+      dateMap.set(ukDate, { n: v.n_daily[i], k: v.k_daily[i] });
     }
   };
 
-  // Seed map from existing window-mode values
-  for (const v of existingForSlice) {
+  // Seed map from existing window-mode values (oldest→newest so most recent wins on overlaps).
+  const existingForSliceSorted = [...existingForSlice].sort((a, b) => recencyMs(a) - recencyMs(b));
+  for (const v of existingForSliceSorted) {
     addExistingFromValue(v);
   }
 
