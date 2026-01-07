@@ -64,6 +64,7 @@ import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
+import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
@@ -980,40 +981,58 @@ class DataOperationsService {
             });
             
             if (isUncontextedQuery && hasContextedData) {
-              // Implicit uncontexted via MECE partition selection (single context key only).
+              // Implicit uncontexted can be satisfied by either:
+              // - An explicit uncontexted slice (dims == '')
+              // - A complete MECE partition over a single context key (e.g. channel)
               //
-              // Preference rule (critical for scenario consistency):
-              // If a complete MECE partition exists, prefer it over an explicit uncontexted slice,
-              // to avoid mixing datasets where the uncontexted baseline is stale/differently signed.
-              const mece = await resolveMECEPartitionForImplicitUncontexted(candidateValues, {
-                preferMECEWhenAvailable: true,
-                requireComplete: true,
-              });
+              // Selection rule (user-specified): pick the MOST RECENT matching slice-set.
+              // - explicit uncontexted recency = max(retrieved_at)
+              // - MECE recency = min(retrieved_at) across the MECE slices (set freshness = stalest member)
 
-              if (mece.kind === 'mece_partition' && mece.canAggregate) {
-                sliceFilteredValues = mece.values;
-                console.log('[DataOperationsService] MECE aggregation path: selected MECE partition for implicit uncontexted (preferred)', {
+              // Candidate A: explicit uncontexted (choose most recent entry if multiple exist)
+              const uncontextedCandidates = candidateValues.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
+              const bestUncontexted = uncontextedCandidates.length > 0
+                ? uncontextedCandidates.reduce((best, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(best) ? cur : best))
+                : undefined;
+              const uncontextedRecency = bestUncontexted ? parameterValueRecencyMs(bestUncontexted) : 0;
+
+              // Candidate B: best complete MECE partition (if any)
+              const meceCandidate = findBestMECEPartitionCandidateSync(candidateValues, { requireComplete: true });
+              const meceValues = meceCandidate?.values ?? [];
+              const meceRecency = meceValues.length > 0
+                ? meceValues.reduce((min, cur) => Math.min(min, parameterValueRecencyMs(cur)), Number.POSITIVE_INFINITY)
+                : Number.NEGATIVE_INFINITY;
+
+              // Tie-breaker: if recency is equal, prefer MECE. This preserves the "context is transparent iff MECE"
+              // intuition and avoids tests / behaviour that expect MECE equivalence flapping due to identical timestamps.
+              const chooseMECE = meceValues.length > 0 && (uncontextedCandidates.length === 0 || meceRecency >= uncontextedRecency);
+
+              if (chooseMECE) {
+                sliceFilteredValues = meceValues;
+                console.log('[DataOperationsService] Implicit uncontexted: chose MECE slice-set by recency', {
                   targetSlice,
-                  key: mece.key,
-                  isComplete: mece.isComplete,
-                  missingValues: mece.missingValues,
-                  valueCount: mece.values.length,
+                  meceKey: meceCandidate?.key,
+                  meceRecency,
+                  uncontextedRecency,
+                  meceSliceCount: meceValues.length,
+                  hasExplicitUncontexted: uncontextedCandidates.length > 0,
                 });
-              } else if (mece.kind === 'not_resolvable') {
-                // Refuse to synthesise an uncontexted total when we cannot do so safely.
-                console.warn('[DataOperationsService] Cannot resolve MECE partition for implicit uncontexted', {
+              } else if (bestUncontexted) {
+                sliceFilteredValues = [bestUncontexted];
+                console.log('[DataOperationsService] Implicit uncontexted: chose explicit uncontexted slice by recency', {
                   targetSlice,
-                  reason: mece.reason,
-                  warnings: mece.warnings,
+                  uncontextedRecency,
+                  hasMECE: meceValues.length > 0,
+                  meceRecency,
                 });
-                toast(`Cannot compute uncontexted total from cached slices: ${mece.reason}`, {
-                  icon: '⚠️',
-                  duration: 4000,
-                });
-                sessionLogService.endOperation(logOpId, 'warning', `Cannot compute implicit uncontexted total: ${mece.reason}`);
-                return { success: false, warning: `Cannot compute implicit uncontexted total: ${mece.reason}` };
+              } else if (hasContextedData) {
+                // No explicit uncontexted, no usable MECE → refuse
+                const reason = 'No explicit uncontexted slice and no complete MECE partition available';
+                console.warn('[DataOperationsService] Cannot satisfy implicit uncontexted query from cache', { targetSlice, reason });
+                toast(`Cannot compute uncontexted total from cached slices: ${reason}`, { icon: '⚠️', duration: 4000 });
+                sessionLogService.endOperation(logOpId, 'warning', `Cannot compute implicit uncontexted total: ${reason}`);
+                return { success: false, warning: `Cannot compute implicit uncontexted total: ${reason}` };
               } else {
-                // Fall back to standard slice isolation (explicit uncontexted, specific contexts, or contextAny).
                 sliceFilteredValues = isolateSlice(candidateValues, targetSlice);
               }
             } else {
@@ -1023,6 +1042,19 @@ class DataOperationsService {
           }
           
           if (sliceFilteredValues.length > 0) {
+            // For uncontexted queries, ensure we don't accidentally "mix" multiple cached uncontexted entries.
+            // If multiple uncontexted entries match, use the most recent one.
+            const targetDims = extractSliceDimensions(targetSlice);
+            const isUncontexted = targetDims === '' && !hasContextAny(targetSlice);
+            if (isUncontexted && sliceFilteredValues.length > 1) {
+              // IMPORTANT: Do NOT collapse a MECE slice-set (contexted slices) down to one slice.
+              // Only collapse when the matched entries are themselves uncontexted (dims == '').
+              const allMatchedAreUncontexted = sliceFilteredValues.every(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
+              if (allMatchedAreUncontexted) {
+                const best = sliceFilteredValues.reduce((best, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(best) ? cur : best));
+                sliceFilteredValues = [best];
+              }
+            }
             aggregatedData = { ...aggregatedData, values: sliceFilteredValues };
             console.log('[DataOperationsService] Filtered to slice:', {
               targetSlice,

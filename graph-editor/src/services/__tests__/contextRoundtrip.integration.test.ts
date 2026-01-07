@@ -426,8 +426,9 @@ describe('Context Roundtrip Integration Tests', () => {
         ]
       };
       
-      // Uncontexted query on mixed data: should use UNCONTEXTED data only
-      // (not MECE aggregate from contexted data)
+      // Uncontexted query on mixed data:
+      // - If a complete MECE partition exists, contexted slices may satisfy implicit uncontexted.
+      // - Without retrieved_at metadata in this synthetic fixture, recency tie-breaks to MECE.
       const uncontextedResult = calculateIncrementalFetch(
         paramFile as any,
         { start: '2025-10-01T00:00:00.000Z', end: '2025-10-02T23:59:59.000Z' },
@@ -436,8 +437,8 @@ describe('Context Roundtrip Integration Tests', () => {
         '' // Empty targetSlice = uncontexted
       );
       
-      expect(uncontextedResult.existingDates.size).toBe(1); // Only Oct 1 (from uncontexted)
-      expect(uncontextedResult.missingDates.length).toBe(1); // Oct 2 missing (not in uncontexted)
+      expect(uncontextedResult.existingDates.size).toBe(2); // Both days covered via MECE (google slice)
+      expect(uncontextedResult.missingDates.length).toBe(0); // Nothing missing
       
       // Contexted query should find contexted data only (direct slice match)
       const googleResult = calculateIncrementalFetch(

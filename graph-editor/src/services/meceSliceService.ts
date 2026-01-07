@@ -12,6 +12,7 @@ import type { ParameterValue } from '../types/parameterData';
 import { contextRegistry } from './contextRegistry';
 import { parseConstraints } from '../lib/queryDSL';
 import { extractSliceDimensions } from './sliceIsolation';
+import { parseDate } from './windowAggregationService';
 
 export type MECEResolution =
   | {
@@ -39,6 +40,24 @@ export type MECEResolution =
 
 function hasUncontextedSlice(values: ParameterValue[]): boolean {
   return values.some((v) => extractSliceDimensions(v.sliceDSL ?? '') === '');
+}
+
+export function parameterValueRecencyMs(v: ParameterValue): number {
+  const ra = v.data_source?.retrieved_at;
+  if (typeof ra === 'string' && ra.trim()) {
+    const t = new Date(ra).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  const bound = v.cohort_to || v.window_to || v.cohort_from || v.window_from;
+  if (typeof bound === 'string' && bound.trim()) {
+    try {
+      const t = parseDate(bound).getTime();
+      if (!Number.isNaN(t)) return t;
+    } catch {
+      // ignore
+    }
+  }
+  return 0;
 }
 
 export type MECEResolutionOptions = {
@@ -69,20 +88,26 @@ function isEligibleContextOnlySlice(value: ParameterValue): { key: string; value
   return { key: parsed.context[0].key, value: parsed.context[0].value };
 }
 
-/**
- * Resolve a MECE partition for implicit-uncontexted aggregation.
- *
- * @param candidateValues Values already narrowed to the correct mode family (window vs cohort).
- * @returns Resolution describing whether to use explicit uncontexted, a MECE partition, or neither.
- */
-export function resolveMECEPartitionForImplicitUncontextedSync(
-  candidateValues: ParameterValue[],
-  options?: MECEResolutionOptions
-): MECEResolution {
-  const preferMECEWhenAvailable = options?.preferMECEWhenAvailable === true;
-  const requireComplete = options?.requireComplete !== false;
-  const hasExplicitUncontexted = hasUncontextedSlice(candidateValues);
+export type MECEPartitionCandidate = {
+  key: string;
+  isComplete: boolean;
+  canAggregate: boolean;
+  missingValues: string[];
+  values: ParameterValue[];
+  warnings: string[];
+  policy: string;
+};
 
+function computeBestMECEPartitionCandidate(
+  candidateValues: ParameterValue[]
+):
+  | {
+      best: { key: string; mece: { isComplete: boolean; canAggregate: boolean; missingValues: string[]; policy: string }; pvs: ParameterValue[] };
+      warnings: string[];
+      keysPresent: string[];
+      ineligibleDims: string[];
+    }
+  | null {
   // Extract eligible (single-key) context slices.
   const eligible: Array<{ pv: ParameterValue; key: string; value: string }> = [];
   const ineligibleDims = new Set<string>();
@@ -105,13 +130,7 @@ export function resolveMECEPartitionForImplicitUncontextedSync(
   }
 
   const keysPresent = Array.from(new Set(eligible.map((e) => e.key)));
-  if (keysPresent.length === 0) {
-    return {
-      kind: 'not_resolvable',
-      reason: 'No eligible single-key context slices found to form a MECE partition',
-      warnings: ineligibleDims.size > 0 ? [`Ineligible slice dimensions present: ${Array.from(ineligibleDims).join(', ')}`] : [],
-    };
-  }
+  if (keysPresent.length === 0) return null;
 
   // Group eligible slices by context key and evaluate which key forms a usable MECE partition.
   const byKey = new Map<string, { values: Set<string>; pvs: ParameterValue[] }>();
@@ -137,8 +156,6 @@ export function resolveMECEPartitionForImplicitUncontextedSync(
 
     // If the context definition is not available in memory (policy === 'unknown'),
     // degrade gracefully by assuming the user's pinned slice set is intended to be MECE.
-    // This preserves resumability and avoids requiring the user to open context files
-    // before uncontexted queries can work.
     const meceCheck =
       raw.policy === 'unknown'
         ? { isMECE: true, isComplete: true, canAggregate: true, missingValues: [] as string[], policy: 'unknown' }
@@ -164,16 +181,7 @@ export function resolveMECEPartitionForImplicitUncontextedSync(
     }
   }
 
-  if (!best) {
-    // If we have an explicit uncontexted slice and we're not preferring MECE (or none found),
-    // prefer the explicit uncontexted data.
-    if (hasExplicitUncontexted) return { kind: 'explicit_uncontexted_present' };
-    return {
-      kind: 'not_resolvable',
-      reason: `No MECE-eligible context key found among: ${keysPresent.join(', ')}`,
-      warnings: ['Ensure the context definition declares MECE via otherPolicy (null/computed/explicit)'],
-    };
-  }
+  if (!best) return null;
 
   if (keysPresent.length > 1) {
     warnings.push(`Multiple context keys present (${keysPresent.join(', ')}); using MECE key '${best.key}' for implicit uncontexted aggregation`);
@@ -184,6 +192,68 @@ export function resolveMECEPartitionForImplicitUncontextedSync(
   if (!best.mece.isComplete && best.mece.missingValues.length > 0) {
     warnings.push(`Incomplete MECE partition for '${best.key}': missing ${best.mece.missingValues.join(', ')}`);
   }
+
+  return {
+    best,
+    warnings,
+    keysPresent,
+    ineligibleDims: Array.from(ineligibleDims),
+  };
+}
+
+/**
+ * Return the best available MECE partition candidate for implicit-uncontexted aggregation,
+ * without considering (or short-circuiting on) the presence of an explicit uncontexted slice.
+ *
+ * This supports "recency wins" selection, where an explicit uncontexted slice may still win if newer.
+ */
+export function findBestMECEPartitionCandidateSync(
+  candidateValues: ParameterValue[],
+  options?: { requireComplete?: boolean }
+): MECEPartitionCandidate | null {
+  const requireComplete = options?.requireComplete !== false;
+  const computed = computeBestMECEPartitionCandidate(candidateValues);
+  if (!computed) return null;
+  const { best, warnings } = computed;
+  const isComplete = best.mece.isComplete;
+  const canAggregate = best.mece.canAggregate;
+  if (!canAggregate) return null;
+  if (requireComplete && !isComplete) return null;
+  return {
+    key: best.key,
+    isComplete,
+    canAggregate,
+    missingValues: best.mece.missingValues,
+    values: best.pvs,
+    warnings,
+    policy: best.mece.policy,
+  };
+}
+
+/**
+ * Resolve a MECE partition for implicit-uncontexted aggregation.
+ *
+ * @param candidateValues Values already narrowed to the correct mode family (window vs cohort).
+ * @returns Resolution describing whether to use explicit uncontexted, a MECE partition, or neither.
+ */
+export function resolveMECEPartitionForImplicitUncontextedSync(
+  candidateValues: ParameterValue[],
+  options?: MECEResolutionOptions
+): MECEResolution {
+  const preferMECEWhenAvailable = options?.preferMECEWhenAvailable === true;
+  const requireComplete = options?.requireComplete !== false;
+  const hasExplicitUncontexted = hasUncontextedSlice(candidateValues);
+
+  const computed = computeBestMECEPartitionCandidate(candidateValues);
+  if (!computed) {
+    if (hasExplicitUncontexted) return { kind: 'explicit_uncontexted_present' };
+    return {
+      kind: 'not_resolvable',
+      reason: 'No eligible single-key context slices found to form a MECE partition',
+      warnings: [],
+    };
+  }
+  const { best, warnings, keysPresent, ineligibleDims } = computed;
 
   const result: MECEResolution = {
     kind: 'mece_partition',
