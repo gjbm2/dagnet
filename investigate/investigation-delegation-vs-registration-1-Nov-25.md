@@ -1,7 +1,7 @@
 ## Investigation: delegation vs registration graph discrepancy (cohort 1-Nov-25)
 
-**Date:** 6-Jan-26  
-**Scope:** Explain, on an evidential basis, why **reach probability at success** differs between two graphs when running `cohort(1-Nov-25:1-Nov-25)`.
+**Dates covered:** 6–7-Jan-26  
+**Scope:** Explain, on an evidential basis, why **reach probability at success** differs between two graphs when running `cohort(1-Nov-25:1-Nov-25)`, and document the follow-on checks we used to narrow/validate hypotheses (including 1–10 Nov and 1–30 Nov windows where relevant).
 
 ### Question being answered
 
@@ -11,9 +11,33 @@ This document records what we’ve checked so far, exactly what evidence we used
 
 ---
 
+## Executive summary (current understanding)
+
+### What we can now explain with evidence
+
+- **The two graphs are not modelling the same conditional middle section**:
+  - Rebuild measures \(P(registered \mid delegated)\) directly.
+  - `success-v2` forces registration to occur *after* `recommendation-offered`, i.e. it measures \(P(registered \mid recommendation\_offered)\).
+  - Therefore denominators differ; reach-to-success can legitimately differ even when the terminal event is the same.
+
+- **A prior “reach probability wildly differs” failure mode was real and is now addressed in code**:
+  - Runner analytics were previously being polluted by `conditional_p` in a way that could inflate Evidence-mode reach vs \(k/N\).
+  - The runner now ignores `conditional_p` by default (outside explicit What‑If activation), per the agreed Layer 1 decision.
+
+- **A cache-selection defect was real and is now addressed in code**:
+  - For uncontexted queries, the system could satisfy the query via a MECE context slice-set even when an explicit uncontexted slice had been freshly fetched.
+  - The cache-selection logic now implements “most recent matching slice-set wins” with “context transparent iff MECE”.
+
+### What remains open / not yet fully diagnosed
+
+- **Tail-step evidence mismatch** between `success-v2` (Σ MECE context slices) and rebuild (explicit uncontexted slice) persists on a small number of days over 1–10 Nov.
+- **`n_query` semantics risk** (especially window vs cohort) remains an open design/logic concern; we have not yet proven it as the root cause of any remaining discrepancy.
+
+---
+
 ## Artefacts (inputs)
 
-All referenced files are from the manually attached snapshot under `investigate/`:
+Primary referenced files are from the manually attached snapshot under `investigate/` (plus local session logs used to validate fetch/caching behaviour):
 
 - **Graphs**
   - `investigate/graphs/gm-rebuild-jan-25.json`
@@ -25,12 +49,21 @@ All referenced files are from the manually attached snapshot under `investigate/
   - `investigate/parameters/gm-delegated-to-registered.yaml`
 - **Compute semantics (repo code)**
   - `graph-editor/lib/runner/graph_builder.py`
+- **Session logs (fetch/caching evidence)**
+  - `tmp.log`
+  - `tmp2.log`
+  - `tmp3.log`
+  - `tmp5.log`
 
 ---
 
 ## Method (what we did)
 
-We treated this as a **trace + compare** problem:
+We treated this as a **trace + compare** problem, with an explicit separation between:
+
+- what is true in the exported graphs,
+- what is true in the cached parameter slices,
+- and what the runtime system actually does when selecting/aggregating slices.
 
 1. **Confirm both graphs are running the same cohort filter**
    - Both graph exports contain `currentQueryDSL: "cohort(1-Nov-25:1-Nov-25)"`.
@@ -47,6 +80,35 @@ We treated this as a **trace + compare** problem:
    - We compared:
      - baseline uncontexted `n/k` (from the graph export evidence)
      - Σ contexted channel `n/k` (from the cached parameter slices)
+
+5. **Reconstruct daily evidence from cached parameter time series (1–10 Nov)**
+   - For the most disputed edges, we compared:
+     - daily totals from cached parameter `values[].dates/n_daily/k_daily` (Σ MECE channels where applicable),
+     - to the exported per-day evidence embedded in the graph snapshots.
+
+6. **Cross-check runtime behaviour using session logs**
+   - We inspected `tmp*.log` to confirm:
+     - which slices were fetched (window vs cohort),
+     - which `conversion_window_days` (`cs`) was used for cohort-mode queries,
+     - and whether uncontexted queries were being satisfied by uncontexted slices vs MECE context slice-sets.
+
+7. **Use the Python runner to reproduce analysis discrepancies from extracted assets**
+   - Where a discrepancy was suspected to be runner-side (not provider-side), we reproduced it from the extracted graphs using the runner, so we could separate “data” vs “math/selection” issues.
+
+### Reproducibility notes (how numbers were derived)
+
+To keep the investigation reproducible (and avoid “hand-wavy” comparisons), we used the following conventions consistently:
+
+- **Dates**: all human-facing dates are in DagNet’s UK `d-MMM-yy` format; when comparing across codepaths we normalised to date-only semantics (UTC midnight) as used by the app’s parsing utilities.
+- **Daily evidence**:
+  - For cached parameters, we derived per-day `n/k` from `values[].dates`, `n_daily[]`, `k_daily[]` inside the relevant `values[]` entry.
+  - For graph-export evidence, we used the embedded per-day or per-slice evidence values included in the exported graph snapshot.
+- **Uncontexted vs contexted**:
+  - “Uncontexted” means `extractSliceDimensions(sliceDSL)===''` (no `context(...)` / `case(...)`), not merely “sliceDSL is empty/non-empty”.
+  - “Contexted” means a non-empty slice dimension key (e.g. `context(channel:...)`).
+- **MECE aggregation**:
+  - We only treated context as transparent for uncontexted queries when a complete MECE partition exists (as declared by context definitions / otherPolicy), and we summed per-day totals across the MECE slice-set.
+  - We explicitly validated MECE behaviour on at least one upstream step/date to avoid assuming it.
 
 ---
 
@@ -434,9 +496,14 @@ To decide whether `n_query` maths (or construction) is a plausible root cause fo
 
 ---
 
-## Solutions (proposed)
+## Solutions (proposed / design specs)
 
-### A. Normal form: `n_query` should not explicitly encode anchors (match `query` semantics)
+**Important note on status:**
+
+- This section lists **design intentions and structural fixes** we believe are required for correctness and long-term robustness.
+- Some items are marked as “implemented in code (local)” because we applied minimal fixes to unblock investigation and restore internal consistency / tests. These are **not yet production-validated**.
+
+### A (proposed). Normal form: `n_query` should not explicitly encode anchors (match `query` semantics)
 
 For consistency (and to reduce semantic foot-guns), it would be better if `n_query` strings typically did **not** encode the anchor explicitly, in the same way that `query` strings do not.
 
@@ -452,7 +519,7 @@ This ensures `query` and `n_query` share the same implied semantics:
 - neither string explicitly includes the anchor;
 - where anchoring is relevant, the anchor is drawn from the **cohort anchor field**, not duplicated into per-edge strings.
 
-### B. Window() + dual-query `n_query`: treat denominator as “single-event arrivals at X within the window”
+### B (proposed). Window() + dual-query `n_query`: treat denominator as “single-event arrivals at X within the window”
 
 **Problem:** In window mode, the DSL semantics are explicitly **X-anchored** (window bounds apply to the `from()` step). However, our current `n_query` pattern is often **A→X** (anchor→from). When the same `window(...)` bounds are applied to that `n_query`, it becomes **A-anchored**, which is *not* equivalent to “arrivals at X in-window”.
 
@@ -489,7 +556,7 @@ Code-level confirmation (current implementation):
 
 So: the proposed window-mode `n_query` fix should improve window-slice reliability (and therefore forecast baselines), but **it is unlikely to explain cohort-mode Evidence drift** on the edges where cohort semantics (`cs`, anchor identity, denominator coherence at split nodes) dominate.
 
-### C. Conditional probabilities (`conditional_p`): required structural fixes (new Layer 4 only)
+### C (proposed). Conditional probabilities (`conditional_p`): required structural fixes (new Layer 4 only)
 
 Limit scope: this section only covers the **new Layer 4** concern we explicitly agreed — **runner conditional branch matching must support the full constraint DSL**, not just `visited()`. It intentionally does **not** assume or depend on unresolved Layer 3 (slice/anchor retrieval) questions.
 
@@ -528,7 +595,7 @@ Add a semantic lint check (surfaced in the issues viewer) that flags:
 
 - A conditional group (by normalised condition string) exists on some outgoing edges from a node, but is missing on one or more sibling edges from that same node.
 
-### D. Conditional probabilities: per-conditional anchors (MSMDC + query machinery) for cohort() clarity
+### D (proposed). Conditional probabilities: per-conditional anchors (MSMDC + query machinery) for cohort() clarity
 
 Layer 3a diagnosis (current behaviour):
 
@@ -550,7 +617,7 @@ Outcome:
 - Cohort anchoring for conditional branch retrieval becomes explicit and auditable.
 - Debugging and signature reasoning becomes simpler (no “hidden inheritance” from base edge state).
 
-### E. Conditional probabilities must be fetched and planned as first-class citizens (Layer 3b defect)
+### E (proposed). Conditional probabilities must be fetched and planned as first-class citizens (Layer 3b defect)
 
 Layer 3b diagnosis (confirmed defect):
 
@@ -574,7 +641,7 @@ We should explicitly review and extend tests to cover:
 - versioned fetch / retrieve-all includes conditionalIndex items,
 - query regeneration applies anchors to conditional branches if/when Solution D is implemented.
 
-### F. What‑If semantics: “most specific wins” as the uniform matching rule + dedicated review/tests
+### F (proposed). What‑If semantics: “most specific wins” as the uniform matching rule + dedicated review/tests
 
 #### 1) Standardise matching semantics: most specific wins
 
@@ -594,6 +661,66 @@ Perform a focused review of What‑If logic end-to-end and ensure we have strong
 - matching precedence (“most specific wins”),
 - sibling alignment interactions,
 - and any scenario/override threading (especially for `conditionalIndex` flows).
+
+### G (implemented in code (local); not yet production-validated). Implicit uncontexted cache selection: “most recent matching slice-set” (recency wins; context is transparent iff MECE)
+
+This is the specific defect that explains why an **uncontexted** query like `cohort(1-Nov-25:10-Nov-25)` can be satisfied by a **contexted** MECE slice-set (e.g. four `context(channel:*)` slices) *even when an explicit uncontexted slice was just fetched*.
+
+Observed symptom (from session logs):
+
+- For `cohort(1-Nov-25:10-Nov-25)` on `registration-to-success`, the system aggregated from 4 channel slices and produced `n=155, k=116`, rather than using the newly fetched uncontexted cohort slice.
+
+Required semantics (agreed):
+
+- **Context is transparent iff MECE**: an uncontexted query may be satisfied by a contexted slice-set only when that slice-set is a **complete, aggregatable MECE partition** over exactly one context key.
+- **Recency wins**: if both an explicit uncontexted slice and a valid MECE partition exist, choose whichever dataset is **more recent**.
+
+Concrete rule (deterministic and auditable):
+
+- Define two candidate “slice-sets” within the same mode family (cohort vs window):
+  - **Explicit uncontexted candidate**: values whose slice dimensions are empty (no `context(...)` / `case(...)`).
+  - **MECE candidate**: the best complete MECE partition (e.g. `channel`) and its component slices.
+- Define **dataset recency** from the stored `data_source.retrieved_at` timestamps:
+  - **Uncontexted recency**: max `retrieved_at` among uncontexted candidates.
+  - **MECE recency**: min `retrieved_at` across the MECE slices (the set is only as fresh as its stalest member).
+- Choose the candidate with the higher dataset recency.
+
+Implementation scope (to prevent “planner vs execution” disagreement):
+
+- Apply the same selection rule in both:
+  - **Get-from-file slice selection** (what determines what you see on the graph / in analysis), and
+  - **cache cutting / incremental fetch** (what determines whether the system thinks it is covered or needs fetch).
+
+Status:
+
+- Implemented in code (local) on **7-Jan-26** (selection now compares explicit-uncontexted vs MECE slice-sets by recency, rather than always preferring MECE whenever a partition exists). Not yet production-validated.
+
+Further robustness work (recommended before we rely on this in production):
+
+- **Select a coherent MECE “generation” (avoid cross-generation mixing)**:
+  - In practice, a parameter file can contain multiple generations of the same MECE slices (e.g. different `query_signature`s, or historical duplicates caused by non-canonical sliceDSL / legacy writes).
+  - The selection logic should treat a MECE dataset as a *set* keyed by:
+    - mode (cohort vs window),
+    - MECE key (e.g. `channel`),
+    - and (when present) `query_signature`.
+  - Then choose the most recent complete set (recency = min `retrieved_at` across the set) and aggregate only within that chosen set.
+
+- **Canonicalise at write-time to minimise duplicates**:
+  - Ensure persistence always writes `data_source.retrieved_at` and uses canonical slice identifiers so repeated fetches merge into existing entries rather than creating near-duplicates.
+  - Where possible, keep one canonical entry per (mode + slice dims) for uncontexted, and one per (mode + slice dims) per context value for MECE.
+
+- **Diagnostics: log which slice-set won (and why)**:
+  - When fulfilling an uncontexted query via cache, log:
+    - whether we chose explicit uncontexted vs MECE,
+    - the recency values used in the comparison,
+    - and (for MECE) which key and which set signature was selected.
+  - This turns future “why did it pick that?” debugging into a one-glance answer.
+
+- **Test coverage for the new semantics (explicitly)**:
+  - Add focused tests for:
+    - explicit uncontexted vs MECE where uncontexted is newer (uncontexted must win),
+    - explicit uncontexted vs MECE where MECE set is newer (MECE must win),
+    - multiple MECE generations (ensure we pick one complete set, not mix).
 
 --
 
@@ -632,15 +759,18 @@ Specifically, SV2 includes `conditional_p` on `recommendation-offered → switch
 
 However, the stored `conditional_p` branches in SV2 do **not** include slice-specific evidence (`conditional_p.p.evidence.mean` is absent), so in “Evidence Probability” mode they were still injecting non-evidence probabilities. This explains why reach could deviate dramatically from `k/N`.
 
-Mitigation (implemented in the Python runner):
+Mitigation (implemented in the Python runner, per the Layer 1 decision below):
 
-- In Evidence mode, drop conditional branches that lack `p.evidence.mean`, and rewrite retained branches’ `p.mean` to their `p.evidence.mean`.
+- Runner analytics now **ignore `conditional_p` by default** (outside explicit What‑If activation / constraint-driven conditional evaluation).
 
-After this change, SV2 reach becomes the unconditional evidence-composed value (and no longer shows the large inflation):
+Effect:
 
-- SV2 now reports `P(reach success) = 0.0614780`, which equals the product of unconditional evidence means through the SV2 topology.
+- This removes the large reach inflation in SV2 Evidence mode that came from applying non-evidence `conditional_p.p.mean` in path calculations.
+- In our extracted-graph reproduction, SV2 reach reverted to the unconditional evidence-composed value (and no longer showed a dramatic divergence from \(k/N\)).
 
-Note: `0.0614780` is still slightly above `15/246 = 0.0609756` because SV2’s edge evidence means do not telescope perfectly (the evidence layer is not globally conservative). The **large** discrepancy was driven by non-evidence `conditional_p` leakage; the remaining small gap is “edge-means vs realised k/N” drift.
+Residual note (still important, but much smaller in magnitude):
+
+- Even with `conditional_p` ignored, SV2’s reach can remain slightly above \(k/N\) because SV2’s stored edge evidence means do not telescope perfectly through the topology (the evidence layer is not globally conservative). The **large** discrepancy was driven by conditional leakage; the remaining small gap is “edge-means vs realised k/N” drift.
 
 ---
 
