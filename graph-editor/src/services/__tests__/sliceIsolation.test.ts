@@ -62,6 +62,17 @@ describe('Slice Isolation', () => {
       expect(() => isolateSlice(values, '')).toThrow('Slice isolation error');
       expect(() => isolateSlice(values, '')).toThrow('MECE aggregation');
     });
+
+    it('should not misclassify window/cohort slices as "contexted" when isolating (mode mismatch returns empty, no throw)', () => {
+      const values = [
+        { sliceDSL: 'window(8-Oct-25:6-Jan-26)', n: 16665, k: 11646 },
+      ];
+
+      // Request cohort slice: should not reuse the window slice, but this is not a "contexted file" error.
+      expect(() => isolateSlice(values, 'cohort(8-Oct-25:6-Jan-26)')).not.toThrow();
+      const out = isolateSlice(values, 'cohort(8-Oct-25:6-Jan-26)');
+      expect(out).toHaveLength(0);
+    });
     
     it('should allow empty result for missing slice (valid scenario)', () => {
       const values = [

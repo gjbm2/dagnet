@@ -777,7 +777,8 @@ export class WindowAggregationService {
     const currentDate = new Date(startDate);
     while (currentDate <= endDate) {
       expectedDates.push(normalizeDate(currentDate.toISOString()));
-      currentDate.setDate(currentDate.getDate() + 1);
+      // CRITICAL: Use UTC iteration to avoid DST/local-time drift across long ranges.
+      currentDate.setUTCDate(currentDate.getUTCDate() + 1);
     }
 
     // Create a set of available dates for quick lookup
@@ -927,7 +928,8 @@ export function calculateIncrementalFetch(
   while (currentDateIter <= endDate) {
     const dateStr = normalizeDate(currentDateIter.toISOString());
     allDatesInWindow.push(dateStr);
-    currentDateIter.setDate(currentDateIter.getDate() + 1);
+    // CRITICAL: Use UTC iteration to avoid DST/local-time drift across long ranges.
+    currentDateIter.setUTCDate(currentDateIter.getUTCDate() + 1);
   }
 
   // FAST PATH: Check if any matching slice has AGGREGATE values (mean, n)

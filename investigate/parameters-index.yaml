@@ -46,15 +46,22 @@ parameters:
     author: user
     version: 1.0.0
     name: gm-create-to-delegated
-  - id: gm-delegated-to-registered
-    file_path: parameters/gm-delegated-to-registered.yaml
+  - id: gm-delegated-to-reco
+    file_path: parameters/gm-delegated-to-reco.yaml
     status: active
     type: probability
-    created_at: 2026-01-05T13:32:30.148Z
-    updated_at: 2026-01-05T13:32:30.262Z
+    created_at: 2026-01-07T10:07:44.690Z
+    updated_at: 2026-01-07T10:07:44.693Z
     author: user
     version: 1.0.0
-    name: gm-delegated-to-registered
+  - id: gm-reco-to-registered
+    file_path: parameters/gm-reco-to-registered.yaml
+    status: active
+    type: probability
+    created_at: 2026-01-07T10:08:26.219Z
+    updated_at: 2026-01-07T10:08:26.239Z
+    author: user
+    version: 1.0.0
   - id: gm-registered-to-success
     file_path: parameters/gm-registered-to-success.yaml
     status: active
@@ -95,7 +102,7 @@ parameters:
     created_at: 2025-11-26T10:12:50.331Z
     name: registration-to-success
     type: probability
-updated_at: 2026-01-06T11:08:37.922Z
+updated_at: 2026-01-07T10:08:26.239Z
 metadata:
   created_at: 2025-11-25T18:25:43.801Z
   version: 1.0.0

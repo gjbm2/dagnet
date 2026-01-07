@@ -3255,6 +3255,8 @@ class DataOperationsService {
       const message = error instanceof Error ? error.message : String(error);
       batchableToastError(`Error fetching from source: ${message}`);
       console.error('getFromSource error:', error);
+      // IMPORTANT: propagate failure so callers (batch operations, Retrieve All) can count failures correctly.
+      throw (error instanceof Error ? error : new Error(message));
     }
   }
   
@@ -4643,8 +4645,31 @@ class DataOperationsService {
             const allValuesWithDaily = (paramFile.data.values as ParameterValue[])
               .filter(v => v.n_daily && v.k_daily && v.dates && v.n_daily.length > 0);
             
-            // CRITICAL: Isolate to target slice to prevent cross-slice date contamination
-            const valuesWithDaily = isolateSlice(allValuesWithDaily, targetSlice);
+            // CRITICAL: Isolate to target slice to prevent cross-slice date contamination.
+            //
+            // IMPORTANT (versioned fetch / Retrieve All Slices):
+            // Slice isolation errors must not abort a fetch-from-source operation. They indicate the cache
+            // cannot safely satisfy this requested slice, so we should treat this as "no usable cached values"
+            // and proceed (which will drive an external fetch + append the missing slice).
+            let valuesWithDaily: ParameterValue[] = [];
+            try {
+              valuesWithDaily = isolateSlice(allValuesWithDaily, targetSlice);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              if (msg.includes('Slice isolation error') && msg.includes('MECE aggregation')) {
+                valuesWithDaily = [];
+                sessionLogService.addChild(
+                  logOpId,
+                  'info',
+                  'CACHE_SLICE_ISOLATION_MISS',
+                  'Cache slice isolation refused implicit cross-slice use; treating as cache miss',
+                  msg,
+                  { targetSlice }
+                );
+              } else {
+                throw e;
+              }
+            }
             
             if (valuesWithDaily.length > 0 && querySignature) {
               const signatureTimestamps = new Map<string, string>();
@@ -5087,7 +5112,8 @@ class DataOperationsService {
             const currentD = new Date(startD);
             while (currentD <= endD) {
               gapZeros.push({ date: currentD.toISOString(), n: 0, k: 0, p: 0 });
-              currentD.setDate(currentD.getDate() + 1);
+              // CRITICAL: Use UTC iteration to avoid DST/local-time drift across long ranges.
+              currentD.setUTCDate(currentD.getUTCDate() + 1);
             }
 
             const forecasting = await forecastingSettingsService.getForecastingModelSettings();
@@ -6143,7 +6169,8 @@ class DataOperationsService {
                 const currentD = new Date(startD);
                 while (currentD <= endD) {
                   gapZeros.push({ date: currentD.toISOString(), n: 0, k: 0, p: 0 });
-                  currentD.setDate(currentD.getDate() + 1);
+                  // CRITICAL: Use UTC iteration to avoid DST/local-time drift across long ranges.
+                  currentD.setUTCDate(currentD.getUTCDate() + 1);
                 }
 
                 const forecasting = await forecastingSettingsService.getForecastingModelSettings();
