@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Info, Clock } from 'lucide-react';
+import { Info, Clock, RefreshCcw } from 'lucide-react';
 import { EnhancedSelector } from './EnhancedSelector';
 import { ConnectionControl } from './ConnectionControl';
 import ProbabilityInput from './ProbabilityInput';
@@ -8,6 +8,7 @@ import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { GraphData, LatencyConfig } from '../types';
 import { useTabContext } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
+import { anchorRegenerationService } from '../services/anchorRegenerationService';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { PRECISION_DECIMAL_PLACES } from '../constants/latency';
@@ -98,6 +99,7 @@ export function ParameterSection({
 }: ParameterSectionProps) {
   const { tabs, operations: tabOps } = useTabContext();
   const { graph: currentGraph, setGraph } = useGraphStore();
+  const [isRefreshingAnchor, setIsRefreshingAnchor] = useState(false);
 
   const formatOptionalNumber = (value: number | undefined, dp: number): string => {
     if (value === undefined) return '';
@@ -126,6 +128,28 @@ export function ParameterSection({
   useEffect(() => {
     setLocalPathT95(formatOptionalNumber(param?.latency?.path_t95, LATENCY_HORIZON_DECIMAL_PLACES));
   }, [param?.latency?.path_t95]);
+
+  const handleRefreshCohortAnchor = async () => {
+    if (objectType !== 'edge') return;
+    if (!currentGraph) return;
+    if (!objectId) return;
+    if (!(param?.latency?.latency_parameter === true)) return;
+    if (isRefreshingAnchor) return;
+
+    setIsRefreshingAnchor(true);
+    try {
+      const anchorNodeId = await anchorRegenerationService.computeAnchorNodeIdForEdge(currentGraph as any, objectId);
+      onUpdate({
+        latency: {
+          ...param?.latency,
+          anchor_node_id: anchorNodeId || undefined,
+          anchor_node_id_overridden: false,
+        },
+      });
+    } finally {
+      setIsRefreshingAnchor(false);
+    }
+  };
   
   // Callback to initialize a newly created parameter file from current edge data
   const handleCreateAndInitialize = async (paramId: string) => {
@@ -553,7 +577,34 @@ export function ParameterSection({
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <label className="parameter-section-label">Cohort anchor</label>
+                <label className="parameter-section-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>Cohort anchor</span>
+                  <button
+                    type="button"
+                    onClick={handleRefreshCohortAnchor}
+                    title="Refresh cohort anchor for this parameter using MSMDC"
+                    disabled={disabled || isRefreshingAnchor}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: '2px',
+                      cursor: disabled || isRefreshingAnchor ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      color: '#6B7280',
+                      opacity: disabled || isRefreshingAnchor ? 0.5 : 1,
+                      transition: 'color 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!disabled && !isRefreshingAnchor) e.currentTarget.style.color = '#3B82F6';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = '#6B7280';
+                    }}
+                  >
+                    <RefreshCcw size={14} />
+                  </button>
+                </label>
                 <input
                   type="text"
                   value={param?.latency?.anchor_node_id || ''}

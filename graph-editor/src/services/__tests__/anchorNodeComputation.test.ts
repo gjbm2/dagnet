@@ -10,6 +10,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { queryRegenerationService } from '../queryRegenerationService';
 import type { Graph, GraphEdge, GraphNode } from '../../types';
+import { graphComputeClient } from '../../lib/graphComputeClient';
+import { anchorRegenerationService } from '../anchorRegenerationService';
 
 // Helper to create a minimal graph for testing
 function createTestGraph(nodes: Partial<GraphNode>[], edges: Partial<GraphEdge>[]): Graph {
@@ -18,7 +20,7 @@ function createTestGraph(nodes: Partial<GraphNode>[], edges: Partial<GraphEdge>[
       uuid: n.uuid || `node-${i}`,
       id: n.id || `node-${i}`,
       type: n.type || 'conversion',
-      position: n.position || { x: 0, y: 0 },
+      layout: (n as any).layout || { x: 0, y: 0 },
       entry: n.entry,
       ...n
     })) as GraphNode[],
@@ -42,6 +44,27 @@ function createTestGraph(nodes: Partial<GraphNode>[], edges: Partial<GraphEdge>[
 }
 
 describe('Anchor Node Computation', () => {
+  describe('anchorRegenerationService (MSMDC anchor refresh helper)', () => {
+    it('returns the MSMDC anchor for the requested edge id', async () => {
+      const g = createTestGraph(
+        [{ id: 'start', uuid: 'start-uuid', entry: { is_start: true } }, { id: 'end', uuid: 'end-uuid' }],
+        [{ uuid: 'edge-1', from: 'start', to: 'end', p: {} }]
+      );
+
+      const transformSpy = vi.spyOn(queryRegenerationService as any, 'transformGraphForBackend').mockImplementation((x: any) => x);
+      const msmdcSpy = vi.spyOn(graphComputeClient as any, 'generateAllParameters').mockResolvedValue({
+        parameters: [],
+        anchors: { 'edge-1': 'start' },
+      });
+
+      const anchor = await anchorRegenerationService.computeAnchorNodeIdForEdge(g as any, 'edge-1');
+      expect(anchor).toBe('start');
+
+      transformSpy.mockRestore();
+      msmdcSpy.mockRestore();
+    });
+  });
+
   describe('applyRegeneratedQueries - anchor application', () => {
     it('should apply anchor_node_id to edges when not overridden', async () => {
       const graph = createTestGraph(

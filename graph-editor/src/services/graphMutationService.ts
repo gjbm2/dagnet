@@ -140,6 +140,20 @@ function detectTopologyChange(oldGraph: Graph | null, newGraph: Graph | null): {
     if (!oldLatencyEnabled && newLatencyEnabled) {
       return { hasChange: true, changeType: 'latency-edge-enabled' };
     }
+
+    // Conditional probability latency enablement should mirror base behaviour.
+    // If ANY conditional_p[i].p.latency.latency_parameter transitions false→true, treat as topology-relevant
+    // so MSMDC can compute anchors.
+    const oldCps = Array.isArray((oldEdge as any).conditional_p) ? (oldEdge as any).conditional_p : [];
+    const newCps = Array.isArray((newEdge as any).conditional_p) ? (newEdge as any).conditional_p : [];
+    const count = Math.max(oldCps.length, newCps.length);
+    for (let i = 0; i < count; i++) {
+      const oldEnabled = oldCps?.[i]?.p?.latency?.latency_parameter === true;
+      const newEnabled = newCps?.[i]?.p?.latency?.latency_parameter === true;
+      if (!oldEnabled && newEnabled) {
+        return { hasChange: true, changeType: 'conditional-latency-edge-enabled' };
+      }
+    }
   }
   
   // Check conditional_p conditions (semantic changes)
@@ -228,6 +242,7 @@ class GraphMutationService {
       'edge-removed': 'Edge removed from graph',
       'edge-connectivity-changed': 'Edge connection changed',
       'latency-edge-enabled': 'Latency enabled on edge',
+      'conditional-latency-edge-enabled': 'Latency enabled on conditional probability',
       'conditional-condition-changed': 'Conditional probability condition changed'
     };
     
