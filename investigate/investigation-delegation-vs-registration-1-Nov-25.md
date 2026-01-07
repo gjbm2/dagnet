@@ -732,6 +732,29 @@ The remaining discrepancies still “don’t make sense” under the naive menta
 - different cached query signatures / retrieval runs (even for the same high-level DSL), and
 - potentially different provider request specs (conversion window/cs, excluded cohorts, context filter compilation).
 
+#### 7-Jan-26: NEW integrity error — `household-delegated` outgoing denominators disagree (window slices)
+
+Observed (integrity checker, `conversion-flow-account-success-v2`, severity **error**):
+
+- Evidence denominators disagree for outgoing edges from `household-delegated` (evidence.n ranges 1087..1149).
+- Inbound evidence.k sum is lower than outbound evidence.n for `household-delegated` (Σk_in=1087 vs n_out=1149, Δ=-62).
+
+Representative example (window slice `16-Nov-25 → 22-Nov-25`, from `test3.json`):
+
+- Inbound `household-created → household-delegated`: `n=2056, k=1087` (window).
+- Outbound `household-delegated → viewed-coffee-screen`: `n=1149, k=485` (window; **no** `n_query`).
+- Outbound `household-delegated → recommendation-offered.exclude(...)`: `n=1087, k=346` (window; **has** `n_query: from(household-created).to(household-delegated)`).
+
+Why this is suspicious:
+
+- At the node level, the implicit expectation is that all outgoing edges from `household-delegated` share a consistent denominator (“arrivals at delegated within the active slice”) when we are reasoning about splits/partitions.
+- Here, one outgoing edge’s `n` appears to be the raw `from_count` for `from(household-delegated)` in the window (1149), while another outgoing edge’s `n` appears to be anchored via `n_query` (1087), matching the inbound `created→delegated` completions for the window.
+- That can happen if window-mode `n_query` is effectively computing “A→X completions in-window” rather than “arrivals at X in-window”, i.e. it mixes anchor semantics into an X-anchored window slice.
+
+Status / decision:
+
+- We will **pause further root-cause investigation** of this discrepancy until after implementing the proposed `n_query` window-mode fixes (Solutions **A** and **B**) because, if the diagnosis is correct, those changes may eliminate the inconsistency by making window denominators consistently X-anchored.
+
 #### Potential defect: exclude term dropped in persisted evidence `full_query`
 
 In the latest simplified run we observed an alarming mismatch between an edge’s `query` and the persisted evidence `full_query` for the same edge:
