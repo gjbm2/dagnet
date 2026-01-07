@@ -1,71 +1,42 @@
 # TODO
 
-- I'm also now seeing this which suggests a newly introduced code defect
-{
-  "id": "log-1767796913568-488",
-  "timestamp": "2026-01-07T14:41:53.568Z",
-  "level": "error",
-  "category": "msmdc",
-  "operation": "MSMDC_REGEN",
-  "message": "MSMDC query regeneration failed",
-  "context": {
-    "nodesAffected": [
-      "household-created",
-      "abandonned-before-delegation",
-      "household-delegated",
-      "gave-bds-in-onboarding",
-      "viewed-coffee-screen",
-      "switch-registered",
-      "switch-success",
-      "post-recommendation-failure",
-      "post-registration-failure",
-      "no-recommendation-sent",
-      "recommendation-offered"
-    ],
-    "edgesAffected": [
-      "switch-registered→post-registration-failure",
-      "viewed-coffee-screen→gave-bds-in-onboarding",
-      "household-created→abandonned-before-delegation",
-      "switch-registered→switch-success",
-      "household-created→household-delegated",
-      "gave-bds-in-onboarding→no-recommendation-sent",
-      "household-delegated→no-recommendation-sent",
-      "gave-bds-in-onboarding→recommendation-offered",
-      "household-delegated→viewed-coffee-screen",
-      "viewed-coffee-screen→recommendation-offered",
-      "viewed-coffee-screen→no-recommendation-sent",
-      "recommendation-offered→switch-registered",
-      "household-delegated→recommendation-offered",
-      "recommendation-offered→post-recommendation-failure"
-    ],
-    "error": "Parameter generation failed: expected an indented block after 'if' statement on line 829 (msmdc.py, line 830)",
-    "duration": 887
-  },
-  "children": [
-    {
-      "id": "log-1767796913568-489",
-      "timestamp": "2026-01-07T14:41:53.568Z",
-      "level": "info",
-      "category": "msmdc",
-      "operation": "MSMDC_API_CALL",
-      "message": "Calling Python MSMDC API",
-      "details": "Full graph regeneration",
-      "parentId": "log-1767796913568-488"
-    }
-  ],
-  "expanded": false
-}
-
-- this shouldn't be a warning:
-  {
-    "fileId": "<private-repo>-main-graph-conversion-flow-account-success-v2",
-    "severity": "warning",
-    "category": "sync",
-    "message": "Graph ↔ parameter drift for p.switch-registered-to-switch-success.p (paramId=registration-to-success) at \"latency.path_t95\" (graph=37.61 vs file=30.16). Direct fetch uses graph; versioned fetch uses parameter file.",
-    "field": "edges[3].p.latency.path_t95",
-    "edgeUuid": "370dce1d-3a36-4109-9711-204c301478c8"
-  }
-
+- ## Test suite hygiene (micro-test shrapnel) — 7-Jan-26
+- **Context**: `npm test` currently has **247** Vitest files; **~100** are “micro candidates” (≤2 tests or ≤120 lines). Audit reports: `debug/tmp.vitest-test-audit.tsv`, `debug/tmp.vitest-test-audit.v2.tsv`.
+-
+- **Goal**: Reduce test-file proliferation and “one-off shrapnel” while **preserving** regression coverage and keeping the suite navigable.
+-
+- **Non-goals**:
+- - No weakening/loosening of assertions.
+- - No broad refactors of test utilities unless needed for consolidation.
+-
+- **Policy (balanced)**:
+- - Keep **micro regression tests** when they are the best expression of a sharp invariant (especially subtle DSL edge-cases).
+- - Consolidate when a file is (a) a single assertion that clearly belongs to an existing suite, or (b) part of a cluster where the *topic* is fragmented across many tiny files.
+- - Quarantine “research / debug / repro / local-only” so they do not pollute the main suite surface area.
+-
+- **Proposed actions (staged)**:
+- - **Stage A — Quarantine obvious shrapnel (low risk)**:
+-   - Standardise *local-only* naming and location: keep these under a single pattern (e.g. `*.local.*`) and/or folder.
+-   - Candidates already flagged by name/content:
+-     - `graph-editor/src/services/__tests__/amplitudeSingleEvent.segmentation.local.research.test.ts`
+-     - `graph-editor/src/services/__tests__/cohortAxy.meceSum.vsAmplitude.local.e2e.test.ts`
+- - **Stage B — Merge “repro/debug/research/tmp/temp/csvDriven” into the nearest owning suite OR move out of `npm test`**:
+-   - Examples:
+-     - `graph-editor/src/services/__tests__/crud_repro.test.ts`
+-     - `graph-editor/src/services/__tests__/reachProbabilitySweep.*`
+-     - `graph-editor/src/services/__tests__/paramPackCsvRunner.csvDriven.tool.test.ts`
+- - **Stage C — De-fragment the biggest micro clusters (medium risk, high payoff)**:
+-   - Consolidate into one “home” suite per module (keep the existing file as the home where it already exists):
+-     - `analysisEChartsService.*.test.ts` → merge into a single `analysisEChartsService.test.ts`
+-     - `graphIssuesService.*.test.ts` → merge into `graphIssuesService.test.ts`
+-     - `integrityCheckService.*.test.ts` → merge into `integrityCheckService.test.ts` (keep the larger drift tests as-is if they’re already good homes)
+-     - `EdgeBeads.*.test.tsx` → merge into `EdgeBeads.test.tsx`
+- - **Stage D — Stop-gap guardrail**:
+-   - When adding a new test, default to “add to existing suite”; only create a new test file when there is no sensible existing home.
+-
+- **Process**:
+- - For each stage, prepare a small PR-sized patch set: consolidate + delete redundant files + keep test names/describe blocks clear.
+- - Only apply edits to existing tests with explicit approval (per `.cursorrules`); batch the diffs for review first.
 
 - For result cards in analytics: add a 'expand / contract' toggle to right of each card which shows all stats vs. key stats [and we may need to feed that through from analysis to flag which are key are which are ancillary)
 - context fixes: /home/reg/dev/dagnet/docs/current/project-lag/context-fix.md
@@ -97,9 +68,6 @@
   - Flag edges where `completeness` is persistently low for the active DSL (window/cohort)
   - Surface a **data health indicator** in the Graph Issues panel (e.g., "data shallow", "no mature cohorts yet")
   - Treat this like other graph viewer issues: informational by default, with toggles to enable/disable
-
-- Ensure integrity checker sensibly configured to support dual slice integrity checks
-
 ## LAG semantics (deferred requirement)
 
 - (16-Dec-25) `ParameterSection.tsx` currently contains inline “commit ⇒ set *_overridden=true” logic for latency fields (`t95`, `path_t95`, `anchor_node_id`, `latency_parameter`). `AutomatableField` doesn’t own override semantics (it only renders/clears), so this should be centralised behind a hook/service to keep UI as access-point only.
@@ -113,11 +81,12 @@
 ## Major components
 - Bayesian modelling
 - Cyclic graphs...
-- Port to server version (for simplicity)
 
 ---
 
 - Edge bead tooltips: add hover tooltips explaining each bead (latency: median lag + completeness; probability; costs)
+
+- Ensure integrity checker sensibly configured to support dual slice integrity checks
 
 - Structural ambiguity about analysis dsl over conditional_p journeys -- can we cover absent scenarios?
 

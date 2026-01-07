@@ -11,7 +11,7 @@ vi.mock('../queryRegenerationService', () => ({
 import { sessionLogService } from '../sessionLogService';
 import { graphMutationService } from '../graphMutationService';
 
-function makeGraph(params: { latencyEnabled: boolean }): Graph {
+function makeGraph(params: { latencyEnabled: boolean; conditionalLatencyEnabled?: boolean }): Graph {
   return {
     nodes: [
       { uuid: 'A', id: 'A', label: 'A', absorbing: false, layout: { x: 0, y: 0 } } as any,
@@ -27,6 +27,18 @@ function makeGraph(params: { latencyEnabled: boolean }): Graph {
           id: 'param-a-b',
           latency: { latency_parameter: params.latencyEnabled },
         },
+        conditional_p:
+          typeof params.conditionalLatencyEnabled === 'boolean'
+            ? [
+                {
+                  condition: 'visited(x)',
+                  p: {
+                    id: 'cond-param-0',
+                    latency: { latency_parameter: params.conditionalLatencyEnabled },
+                  },
+                },
+              ]
+            : undefined,
       } as any,
     ],
     policies: {},
@@ -60,6 +72,22 @@ describe('graphMutationService', () => {
       'graph',
       'GRAPH_LATENCY_EDGE_ENABLED',
       'Latency enabled on edge',
+      undefined
+    );
+  });
+
+  it('treats conditional_p latency_parameter false→true as topology-relevant (should not short-circuit regeneration)', async () => {
+    const oldGraph = makeGraph({ latencyEnabled: false, conditionalLatencyEnabled: false });
+    const newGraph = makeGraph({ latencyEnabled: false, conditionalLatencyEnabled: true });
+
+    const infoSpy = vi.spyOn(sessionLogService, 'info');
+
+    await graphMutationService.updateGraph(oldGraph, newGraph, (() => {}) as any);
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      'graph',
+      'GRAPH_CONDITIONAL_LATENCY_EDGE_ENABLED',
+      'Latency enabled on conditional probability',
       undefined
     );
   });

@@ -121,7 +121,11 @@ When modifying functionality:
 2. **CRITICAL: Updating existing tests is permitted ONLY with user EXPRESS authorisation**
    - This includes “small” edits like expectation tweaks, thresholds, renames, or snapshot updates.
    - If a change requires updating an existing test, the assistant MUST batch the proposed diffs and wait for explicit approval before editing.
-2. **Add new tests** - For new functionality or bug fixes
+3. **Prefer editing existing test files over creating new ones**
+   - The intent of the authorisation rule is to prevent silent weakening of test coverage, **not** to force test-file proliferation.
+   - If a change needs new assertions, the assistant should normally add them to the most relevant existing test file/suite.
+   - Only create a brand-new test file when there is no sensible existing home (e.g. no suite exists for that module/behaviour).
+4. **Add new tests** - For new functionality or bug fixes
 3. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
 4. **Check integration tests** - Only if changes affect integration points
 

@@ -825,6 +825,7 @@ export default function PropertiesPanel({
   const updateConditionalPParam = useCallback((condIndex: number, changes: Record<string, any>) => {
     if (!selectedEdgeId || !graph) return;
     
+    const oldGraph = graph;
     const next = structuredClone(graph);
     const edgeIndex = next.edges.findIndex((e: any) => 
       e.uuid === selectedEdgeId || e.id === selectedEdgeId
@@ -847,11 +848,22 @@ export default function PropertiesPanel({
       if (next.metadata) {
         next.metadata.updated_at = new Date().toISOString();
       }
-      setGraph(next);
-      
-      // Only save history if _noHistory is not set (for slider dragging, we skip history)
-      if (!_noHistory) {
-        saveHistoryState(`Update conditional probability parameter`, undefined, selectedEdgeId || undefined);
+
+      // For drag interactions (sliders) we avoid graphMutationService and just update the graph in place.
+      // For committed updates, route through graphMutationService so topology-sensitive changes
+      // (e.g. enabling latency on conditional probabilities) can trigger MSMDC regeneration (anchors).
+      if (_noHistory) {
+        setGraph(next);
+      } else {
+        (async () => {
+          const { graphMutationService } = await import('../services/graphMutationService');
+          await graphMutationService.updateGraph(oldGraph, next, setGraph, {
+            source: `PropertiesPanel.updateConditionalPParam(${condIndex})`,
+          });
+          saveHistoryState(`Update conditional probability parameter`, undefined, selectedEdgeId || undefined);
+        })().catch((e) => {
+          console.error('[PropertiesPanel] updateConditionalPParam failed:', e);
+        });
       }
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
