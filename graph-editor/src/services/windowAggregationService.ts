@@ -19,7 +19,7 @@ import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 // LAG: CohortData type is used for aggregation helpers further down in this file
 import type { CohortData } from './statisticalEnhancementService';
 import { mixtureLogNormalMedian } from './lagMixtureAggregationService';
-import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
+import { resolveMECEPartitionForImplicitUncontextedSync, findBestMECEPartitionCandidateSync, parameterValueRecencyMs } from './meceSliceService';
 
 export interface RawAggregation {
   method: 'naive';
@@ -1088,78 +1088,114 @@ export function calculateIncrementalFetch(
       const hasContextedData = signatureFilteredValues.some(v => extractSliceDimensions(v.sliceDSL ?? '') !== '');
       const hasUncontextedData = signatureFilteredValues.some(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
       
-      if (normalizedTarget === '' && hasContextedData && !hasUncontextedData) {
-        // Query has no context, but file has contexted data.
-        // Correct behaviour: if ANY ONE complete MECE partition exists for a key, we can satisfy the uncontexted query
-        // from that partition (we do NOT require all context families present in the file).
+      if (normalizedTarget === '' && hasContextedData) {
+        // Implicit uncontexted can be satisfied by:
+        // - explicit uncontexted slice (dims == '')
+        // - complete MECE partition across a single context key (e.g. channel)
+        //
+        // Selection rule: choose the MOST RECENT matching slice-set.
+        // - explicit recency = max(retrieved_at)
+        // - MECE recency = min(retrieved_at) across the MECE slices (set freshness = stalest member)
+
         const modeFiltered = signatureFilteredValues.filter(modeMatchesTarget);
-        const mece = resolveMECEPartitionForImplicitUncontextedSync(modeFiltered);
-        if (mece.kind !== 'mece_partition' || !mece.canAggregate || !mece.isComplete) {
-          console.log('[calculateIncrementalFetch] No complete MECE partition available for implicit uncontexted:', {
+        const uncontextedCandidates = modeFiltered.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
+        const bestUncontexted = uncontextedCandidates.length > 0
+          ? uncontextedCandidates.reduce((best, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(best) ? cur : best))
+          : undefined;
+        const uncontextedRecency = bestUncontexted ? parameterValueRecencyMs(bestUncontexted) : 0;
+
+        const meceCandidate = findBestMECEPartitionCandidateSync(modeFiltered, { requireComplete: true });
+        const meceValues = meceCandidate?.values ?? [];
+        const meceRecency = meceValues.length > 0
+          ? meceValues.reduce((min, cur) => Math.min(min, parameterValueRecencyMs(cur)), Number.POSITIVE_INFINITY)
+          : Number.NEGATIVE_INFINITY;
+
+        // Tie-breaker: if recency is equal, prefer MECE. This keeps coverage checks stable in tests
+        // where slices are written with the same retrieved_at.
+        const chooseMECE = meceValues.length > 0 && (uncontextedCandidates.length === 0 || meceRecency >= uncontextedRecency);
+
+        if (!chooseMECE && bestUncontexted) {
+          // Coverage from the single most recent explicit uncontexted slice.
+          if (bestUncontexted.dates && Array.isArray(bestUncontexted.dates)) {
+            for (let i = 0; i < bestUncontexted.dates.length; i++) {
+              const date = bestUncontexted.dates[i];
+              const hasValidN = bestUncontexted.n_daily && bestUncontexted.n_daily[i] !== null && bestUncontexted.n_daily[i] !== undefined;
+              const hasValidK = bestUncontexted.k_daily && bestUncontexted.k_daily[i] !== null && bestUncontexted.k_daily[i] !== undefined;
+              if (hasValidN || hasValidK) {
+                existingDates.add(normalizeDate(date));
+              }
+            }
+          }
+          console.log('[calculateIncrementalFetch] Implicit uncontexted coverage chose explicit slice by recency', {
             targetSlice,
-            meceKind: mece.kind,
-            ...(mece.kind === 'mece_partition'
-              ? { key: mece.key, isComplete: mece.isComplete, canAggregate: mece.canAggregate }
-              : { reason: (mece as any).reason }),
+            uncontextedRecency,
+            hasMECE: meceValues.length > 0,
+            meceRecency,
           });
-        } else {
+        } else if (chooseMECE) {
           const uniqueSlices = new Set<string>();
-          for (const value of mece.values) {
+          for (const value of meceValues) {
             const sliceDSL = extractSliceDimensions(value.sliceDSL ?? '');
             if (sliceDSL) uniqueSlices.add(sliceDSL);
           }
           const expandedSlices = Array.from(uniqueSlices).sort();
-        
-        // For MECE, a date is "existing" only if it exists in ALL slices
-        const datesPerSlice: Map<string, Set<string>> = new Map();
-        
-        for (const sliceId of expandedSlices) {
-          const sliceDates = new Set<string>();
-          const sliceValues = signatureFilteredValues.filter(v => {
-            if (!modeMatchesTarget(v)) return false;
-            const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
-            return valueSlice === sliceId;
-          });
-          
-          for (const value of sliceValues) {
-            // CRITICAL: Only count dates with VALID data (non-null n_daily/k_daily)
-            if (value.dates && Array.isArray(value.dates)) {
-              for (let i = 0; i < value.dates.length; i++) {
-                const date = value.dates[i];
-                const hasValidN = value.n_daily && value.n_daily[i] !== null && value.n_daily[i] !== undefined;
-                const hasValidK = value.k_daily && value.k_daily[i] !== null && value.k_daily[i] !== undefined;
-                
-                if (hasValidN || hasValidK) {
-                  sliceDates.add(normalizeDate(date));
+
+          // For MECE, a date is "existing" only if it exists in ALL slices
+          const datesPerSlice: Map<string, Set<string>> = new Map();
+
+          for (const sliceId of expandedSlices) {
+            const sliceDates = new Set<string>();
+            const sliceValues = signatureFilteredValues.filter(v => {
+              if (!modeMatchesTarget(v)) return false;
+              const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
+              return valueSlice === sliceId;
+            });
+
+            for (const value of sliceValues) {
+              if (value.dates && Array.isArray(value.dates)) {
+                for (let i = 0; i < value.dates.length; i++) {
+                  const date = value.dates[i];
+                  const hasValidN = value.n_daily && value.n_daily[i] !== null && value.n_daily[i] !== undefined;
+                  const hasValidK = value.k_daily && value.k_daily[i] !== null && value.k_daily[i] !== undefined;
+                  if (hasValidN || hasValidK) {
+                    sliceDates.add(normalizeDate(date));
+                  }
                 }
               }
             }
+            datesPerSlice.set(sliceId, sliceDates);
           }
-          datesPerSlice.set(sliceId, sliceDates);
-        }
-        
-        // A date exists only if ALL slices have it
-        for (const date of allDatesInWindow) {
-          const allSlicesHaveDate = expandedSlices.every(sliceId => {
-            const sliceDates = datesPerSlice.get(sliceId);
-            return sliceDates && sliceDates.has(date);
+
+          for (const date of allDatesInWindow) {
+            const allSlicesHaveDate = expandedSlices.every(sliceId => {
+              const sliceDates = datesPerSlice.get(sliceId);
+              return sliceDates && sliceDates.has(date);
+            });
+            if (allSlicesHaveDate) {
+              existingDates.add(date);
+            }
+          }
+
+          console.log(`[calculateIncrementalFetch] Implicit uncontexted coverage chose MECE by recency:`, {
+            targetSlice,
+            querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
+            meceKey: meceCandidate?.key,
+            uncontextedRecency,
+            meceRecency,
+            expandedSlices,
+            sliceCoverage: Object.fromEntries(
+              expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
+            ),
+            datesWithFullCoverage: existingDates.size,
+            totalDatesRequested: allDatesInWindow.length,
           });
-          if (allSlicesHaveDate) {
-            existingDates.add(date);
-          }
-        }
-        
-        console.log(`[calculateIncrementalFetch] MECE aggregation (uncontexted query with contexted data):`, {
-          targetSlice,
-          querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
-          meceKey: mece.key,
-          expandedSlices,
-          sliceCoverage: Object.fromEntries(
-            expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
-          ),
-          datesWithFullCoverage: existingDates.size,
-          totalDatesRequested: allDatesInWindow.length,
-        });
+        } else {
+          // No usable explicit slice, no complete MECE.
+          console.log('[calculateIncrementalFetch] Implicit uncontexted: no usable explicit slice or complete MECE partition', {
+            targetSlice,
+            hasUncontextedData,
+            hasContextedData,
+          });
         }
       } else {
         // CRITICAL: Isolate to target slice first
