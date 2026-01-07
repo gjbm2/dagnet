@@ -858,6 +858,42 @@ export class QueryRegenerationService {
               if (decision.decision === 'updated') fileUpdates++;
             }
           }
+
+          // Also apply the same anchor to conditional probability params (edge.conditional_p[i].p.latency),
+          // unless the conditional param has its own anchor override.
+          //
+          // Rationale: buildDslFromEdge reads anchor_node_id from the param's latency config.
+          // Without this, conditional cohort anchoring is implicit/inherited and hard to audit.
+          if (Array.isArray((edge as any).conditional_p)) {
+            for (let idx = 0; idx < (edge as any).conditional_p.length; idx++) {
+              const cond = (edge as any).conditional_p[idx];
+              const p = cond?.p;
+              if (!p) continue;
+              if (p.latency?.anchor_node_id_overridden) continue;
+              p.latency = p.latency || {};
+
+              const oldCondAnchor = p.latency.anchor_node_id;
+              const newCondAnchor = anchorNodeId || undefined;
+              if (oldCondAnchor !== newCondAnchor) {
+                p.latency.anchor_node_id = newCondAnchor;
+                graphUpdates++;
+                changedAnchors.push({
+                  edgeUuid: edge.uuid,
+                  edgeLocation: `${formatEdgeLocation(graph, edge)} conditional_p[${idx}]`,
+                  paramId: typeof p?.id === 'string' ? p.id : null,
+                  oldAnchor: oldCondAnchor,
+                  newAnchor: anchorNodeId,
+                });
+
+                const condParamId = p?.id;
+                if (typeof condParamId === 'string' && condParamId.trim().length > 0 && !condParamId.startsWith('synthetic:')) {
+                  const decision = await updateParameterFileAnchorNodeId(condParamId, anchorNodeId);
+                  fileCascadeDecisions.push(decision);
+                  if (decision.decision === 'updated') fileUpdates++;
+                }
+              }
+            }
+          }
         }
       }
     }

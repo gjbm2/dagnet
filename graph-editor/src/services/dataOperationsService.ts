@@ -64,7 +64,7 @@ import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
-import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs } from './meceSliceService';
+import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
@@ -989,51 +989,41 @@ class DataOperationsService {
               // - explicit uncontexted recency = max(retrieved_at)
               // - MECE recency = min(retrieved_at) across the MECE slices (set freshness = stalest member)
 
-              // Candidate A: explicit uncontexted (choose most recent entry if multiple exist)
-              const uncontextedCandidates = candidateValues.filter(v => extractSliceDimensions(v.sliceDSL ?? '') === '');
-              const bestUncontexted = uncontextedCandidates.length > 0
-                ? uncontextedCandidates.reduce((best, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(best) ? cur : best))
-                : undefined;
-              const uncontextedRecency = bestUncontexted ? parameterValueRecencyMs(bestUncontexted) : 0;
+              const selection = selectImplicitUncontextedSliceSetSync({
+                candidateValues,
+                requireCompleteMECE: true,
+              });
 
-              // Candidate B: best complete MECE partition (if any)
-              const meceCandidate = findBestMECEPartitionCandidateSync(candidateValues, { requireComplete: true });
-              const meceValues = meceCandidate?.values ?? [];
-              const meceRecency = meceValues.length > 0
-                ? meceValues.reduce((min, cur) => Math.min(min, parameterValueRecencyMs(cur)), Number.POSITIVE_INFINITY)
-                : Number.NEGATIVE_INFINITY;
-
-              // Tie-breaker: if recency is equal, prefer MECE. This preserves the "context is transparent iff MECE"
-              // intuition and avoids tests / behaviour that expect MECE equivalence flapping due to identical timestamps.
-              const chooseMECE = meceValues.length > 0 && (uncontextedCandidates.length === 0 || meceRecency >= uncontextedRecency);
-
-              if (chooseMECE) {
-                sliceFilteredValues = meceValues;
+              if (selection.kind === 'mece_partition') {
+                sliceFilteredValues = selection.values;
                 console.log('[DataOperationsService] Implicit uncontexted: chose MECE slice-set by recency', {
                   targetSlice,
-                  meceKey: meceCandidate?.key,
-                  meceRecency,
-                  uncontextedRecency,
-                  meceSliceCount: meceValues.length,
-                  hasExplicitUncontexted: uncontextedCandidates.length > 0,
+                  meceKey: selection.key,
+                  meceQuerySignature: selection.querySignature,
+                  meceRecencyMs: selection.diagnostics.meceRecencyMs,
+                  uncontextedRecencyMs: selection.diagnostics.uncontextedRecencyMs,
+                  counts: selection.diagnostics.counts,
+                  warnings: selection.diagnostics.warnings,
                 });
-              } else if (bestUncontexted) {
-                sliceFilteredValues = [bestUncontexted];
+              } else if (selection.kind === 'explicit_uncontexted') {
+                sliceFilteredValues = selection.values;
                 console.log('[DataOperationsService] Implicit uncontexted: chose explicit uncontexted slice by recency', {
                   targetSlice,
-                  uncontextedRecency,
-                  hasMECE: meceValues.length > 0,
-                  meceRecency,
+                  uncontextedRecencyMs: selection.diagnostics.uncontextedRecencyMs,
+                  hasMECECandidate: selection.diagnostics.hasMECECandidate,
+                  meceKey: selection.diagnostics.meceKey,
+                  meceQuerySignature: selection.diagnostics.meceQuerySignature,
+                  meceRecencyMs: selection.diagnostics.meceRecencyMs,
+                  counts: selection.diagnostics.counts,
+                  warnings: selection.diagnostics.warnings,
                 });
-              } else if (hasContextedData) {
-                // No explicit uncontexted, no usable MECE → refuse
-                const reason = 'No explicit uncontexted slice and no complete MECE partition available';
+              } else {
+                // No explicit uncontexted, no usable complete MECE → refuse
+                const reason = selection.reason;
                 console.warn('[DataOperationsService] Cannot satisfy implicit uncontexted query from cache', { targetSlice, reason });
                 toast(`Cannot compute uncontexted total from cached slices: ${reason}`, { icon: '⚠️', duration: 4000 });
                 sessionLogService.endOperation(logOpId, 'warning', `Cannot compute implicit uncontexted total: ${reason}`);
                 return { success: false, warning: `Cannot compute implicit uncontexted total: ${reason}` };
-              } else {
-                sliceFilteredValues = isolateSlice(candidateValues, targetSlice);
               }
             } else {
               // Standard path: use isolateSlice (handles contextAny and specific context queries)
@@ -3892,17 +3882,24 @@ class DataOperationsService {
 
               // Create edge-like object with effective query (may be from conditional_p)
               // and persisted config merged in (versioned only).
+              const graphPForDsl =
+                conditionalIndex !== undefined
+                  ? targetEdge?.conditional_p?.[conditionalIndex]?.p
+                  : targetEdge?.p;
               const edgeForDsl = {
                 ...targetEdge,
                 query: effectiveQuery, // Use effective query (base or conditional_p)
-                p: targetEdge?.p
+                // IMPORTANT: buildDslFromEdge reads anchor_node_id from edge.p.latency.
+                // For conditional fetches, use the conditional param's latency config so cohort anchoring
+                // is explicit and auditable (no hidden inheritance from base edge state).
+                p: graphPForDsl
                   ? {
-                      ...targetEdge.p,
+                      ...graphPForDsl,
                       ...(persistedCfg.source === 'file' && persistedCfg.connection ? { connection: persistedCfg.connection } : {}),
                       ...(persistedCfg.source === 'file' && persistedCfg.connection_string ? { connection_string: persistedCfg.connection_string } : {}),
                       ...(persistedCfg.source === 'file' && persistedCfg.latency ? { latency: persistedCfg.latency } : {}),
                     }
-                  : targetEdge?.p,
+                  : graphPForDsl,
               };
               edgeForQuerySignature = edgeForDsl;
               
@@ -4153,6 +4150,8 @@ class DataOperationsService {
       let baseQueryPayload: any = null;
       let needsDualQuery = false;
       let explicitNQuery: string | undefined = undefined;
+      let explicitNQueryWasToOnlyNormalForm = false;
+      let explicitNQueryWindowDenomUsesFromCount = false;
       
       // Check for explicit n_query on edge (used when 'from' node shares an event with siblings
       // and n can't be derived by simply stripping upstream conditions)
@@ -4177,6 +4176,12 @@ class DataOperationsService {
         nQueryString = explicitNQuery;
         needsDualQuery = true;
         console.log('[DataOps:DUAL_QUERY] Detected explicit n_query on edge:', explicitNQuery);
+
+        // Anchor-free MSMDC normal form: "to(X)" (no from()).
+        // Legacy "from(A).to(X)" remains supported.
+        if (/^\s*to\(\s*[^)]+?\s*\)\s*$/.test(explicitNQuery)) {
+          explicitNQueryWasToOnlyNormalForm = true;
+        }
         
         // Check if n_query has excludes() that need compilation (same as main query)
         const nQueryHasExcludes = /\.excludes?\(/.test(nQueryString);
@@ -4253,15 +4258,15 @@ class DataOperationsService {
             // currentDSL is AUTHORITATIVE - from graphStore.currentDSL
             const effectiveDSL = targetSlice || currentDSL || '';
             const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
-            const nQueryEdgeConstraints = parseConstraints(explicitNQuery);
+            const nQueryEdgeConstraints = explicitNQueryWasToOnlyNormalForm ? null : parseConstraints(explicitNQuery);
             
             nQueryConstraints = {
-              context: [...(graphConstraints?.context || []), ...(nQueryEdgeConstraints?.context || [])],
-              contextAny: [...(graphConstraints?.contextAny || []), ...(nQueryEdgeConstraints?.contextAny || [])],
-              window: nQueryEdgeConstraints?.window || graphConstraints?.window || null,
-              cohort: nQueryEdgeConstraints?.cohort || graphConstraints?.cohort || null,  // A-anchored cohort for latency edges
-              visited: nQueryEdgeConstraints?.visited || [],
-              visitedAny: nQueryEdgeConstraints?.visitedAny || []
+              context: [...(graphConstraints?.context || []), ...((nQueryEdgeConstraints as any)?.context || [])],
+              contextAny: [...(graphConstraints?.contextAny || []), ...((nQueryEdgeConstraints as any)?.contextAny || [])],
+              window: (nQueryEdgeConstraints as any)?.window || graphConstraints?.window || null,
+              cohort: (nQueryEdgeConstraints as any)?.cohort || graphConstraints?.cohort || null,  // A-anchored cohort for latency edges
+              visited: (nQueryEdgeConstraints as any)?.visited || [],
+              visitedAny: (nQueryEdgeConstraints as any)?.visitedAny || []
             };
           } catch (error) {
             console.warn('[DataOps:DUAL_QUERY] Failed to parse n_query constraints:', error);
@@ -4279,6 +4284,54 @@ class DataOperationsService {
               ...nQueryEdge,
               query: nQueryString || explicitNQuery,  // Use compiled version if available
             };
+
+            // Support anchor-free normal form: "to(X)".
+            // We synthesise a concrete query string that buildDslFromEdge can resolve:
+            // - cohort(): from(anchor).to(X) (anchor taken from cohort DSL / edge latency)
+            // - window(): from(X).to(mainTo) and later use from_count as the denominator
+            if (explicitNQueryWasToOnlyNormalForm) {
+              const toOnlyMatch = explicitNQuery.match(/^\s*to\(\s*([^)]+?)\s*\)\s*$/);
+              const xId = toOnlyMatch ? toOnlyMatch[1].trim() : null;
+              try {
+                const { parseConstraints, parseDSL } = await import('../lib/queryDSL');
+                const effectiveDSL = targetSlice || currentDSL || '';
+                const graphConstraints = effectiveDSL ? parseConstraints(effectiveDSL) : null;
+                const wantsCohort = !!graphConstraints?.cohort;
+                const wantsWindow = !!graphConstraints?.window && !wantsCohort;
+
+                // Parse the *main edge* query to obtain a stable "to" node id for window synthesis.
+                let mainToId: string | null = null;
+                try {
+                  const parsedMain = parseDSL((nQueryEdge as any)?.query || '');
+                  mainToId = parsedMain?.to ? String(parsedMain.to) : null;
+                } catch {
+                  mainToId = null;
+                }
+
+                if (wantsCohort) {
+                  const anchorId = (graphConstraints?.cohort as any)?.anchor || (nQueryEdgeData as any)?.p?.latency?.anchor_node_id;
+                  if (anchorId && xId) {
+                    nQueryEdgeData.query = `from(${anchorId}).to(${xId})`;
+                  } else {
+                    console.warn('[DataOps:DUAL_QUERY] to(X) n_query in cohort mode but no anchor available; skipping explicit n_query for this run');
+                    explicitNQuery = undefined;
+                    needsDualQuery = false;
+                  }
+                } else if (wantsWindow) {
+                  if (xId) {
+                    // Window-mode denominator for to(X) is a single-event "arrivals at X" count.
+                    // We execute this via the Amplitude /events/segmentation endpoint (uniques),
+                    // but we still build a normal QueryPayload via buildDslFromEdge to get
+                    // eventDefinitions + context filters. We then tag the payload so the adapter
+                    // switches endpoint/response parsing.
+                    nQueryEdgeData.query = `from(${xId}).to(${xId})`;
+                    explicitNQueryWindowDenomUsesFromCount = true;
+                  }
+                }
+              } catch (error) {
+                console.warn('[DataOps:DUAL_QUERY] Failed to synthesise concrete query for to(X) n_query:', error);
+              }
+            }
             
             nQueryResult = await buildDslFromEdgeForNQuery(
               nQueryEdgeData,
@@ -4319,6 +4372,12 @@ class DataOperationsService {
           }
           
           baseQueryPayload = nQueryResult.queryPayload;
+
+          // Mark window-mode to(X) denominators as "segmentation" so the Amplitude adapter uses
+          // the single-event endpoint rather than /funnels.
+          if (explicitNQueryWasToOnlyNormalForm && explicitNQueryWindowDenomUsesFromCount) {
+            (baseQueryPayload as any).query_kind = 'segmentation';
+          }
           
           // CRITICAL: Merge n_query's event definitions into main eventDefinitions
           // Without this, the adapter won't have provider_event_names for n_query nodes
@@ -5424,12 +5483,19 @@ class DataOperationsService {
           // CRITICAL: Different extraction depending on n_query type:
           // - Explicit n_query (e.g., "from(A).to(D)"): we want the COMPLETION count (k/to_count)
           //   because n_query defines a funnel, and we want "users who completed that funnel"
+          // - Explicit n_query in anchor-free normal form "to(X)" executed under window(): we want FROM count (n/from_count)
+          //   because the synthetic query is "from(X).to(mainTo)" and the denominator is arrivals at X in-window.
           // - Auto-stripped query: we want the FROM count (n/from_count)
           //   because we stripped visited_upstream but kept from/to, so n = all users at 'from'
           if (explicitNQuery) {
             // Explicit n_query: use k (to_count) = users who completed the n_query funnel
-            baseN = baseRaw?.k ?? 0;
-            console.log('[DataOps:DUAL_QUERY] Explicit n_query: using k (to_count) as baseN:', baseN);
+            if (explicitNQueryWasToOnlyNormalForm && explicitNQueryWindowDenomUsesFromCount) {
+              baseN = baseRaw?.n ?? 0;
+              console.log('[DataOps:DUAL_QUERY] Explicit n_query (to(X) window): using n (from_count) as baseN:', baseN);
+            } else {
+              baseN = baseRaw?.k ?? 0;
+              console.log('[DataOps:DUAL_QUERY] Explicit n_query: using k (to_count) as baseN:', baseN);
+            }
           } else {
             // Auto-stripped: use n (from_count) = all users at 'from'
             baseN = baseRaw?.n ?? 0;
@@ -5440,12 +5506,21 @@ class DataOperationsService {
           if (Array.isArray(baseRaw?.time_series)) {
             if (explicitNQuery) {
               // For explicit n_query, the "n" for the main query is the "k" of the n_query
-              baseTimeSeries = baseRaw.time_series.map((day: any) => ({
-                date: day.date,
-                n: day.k,  // Use k as n
-                k: day.k,  // (k is the same for reference)
-                p: day.p
-              }));
+              if (explicitNQueryWasToOnlyNormalForm && explicitNQueryWindowDenomUsesFromCount) {
+                baseTimeSeries = baseRaw.time_series.map((day: any) => ({
+                  date: day.date,
+                  n: day.n,  // Use from_count as n for window-mode to(X)
+                  k: day.n,
+                  p: day.p
+                }));
+              } else {
+                baseTimeSeries = baseRaw.time_series.map((day: any) => ({
+                  date: day.date,
+                  n: day.k,  // Use k as n
+                  k: day.k,  // (k is the same for reference)
+                  p: day.p
+                }));
+              }
             } else {
               baseTimeSeries = baseRaw.time_series;
             }

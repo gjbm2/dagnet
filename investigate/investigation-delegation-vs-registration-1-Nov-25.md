@@ -769,6 +769,13 @@ Next steps:
 - Confirm whether this is a **query construction/adapter bug** (exclude list lost) versus a **cache/signature selection bug** (old evidence value attached to the edge).
 - If reproducible, add a regression test around building/executing `exclude(a,b)` for Amplitude and ensure both exclusions survive into the executed request semantics.
 
+**Status (7-Jan-26): Open investigation (Phase 7).**
+
+- This remains an **open area for further investigation** and is **not yet scheduled for implementation** until we can prove whether the root cause is:
+  - a query construction / adapter bug (exclude list lost), or
+  - a cache/signature selection bug (stale evidence provenance attached).
+
+
 #### Root cause for “Reach Probability wildly differs” (SV2, Evidence mode, 1-Nov-25)
 
 We can now reproduce the exact discrepancy purely from the extracted investigation graphs, using the Python analysis runner directly:
