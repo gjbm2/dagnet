@@ -98,6 +98,281 @@ export type MECEPartitionCandidate = {
   policy: string;
 };
 
+export type ImplicitUncontextedSelection =
+  | {
+      kind: 'explicit_uncontexted';
+      values: [ParameterValue];
+      diagnostics: {
+        /** Milliseconds since epoch (derived from data_source.retrieved_at when available). */
+        uncontextedRecencyMs: number;
+        /** Whether any MECE candidate existed (even if it lost). */
+        hasMECECandidate: boolean;
+        /** Milliseconds since epoch for the chosen MECE candidate set, if any (set freshness = stalest member). */
+        meceRecencyMs: number | null;
+        meceKey: string | null;
+        meceQuerySignature: string | null;
+        /** Counts of raw candidates present (before dedupe). */
+        counts: {
+          uncontextedCandidates: number;
+          meceEligibleCandidates: number;
+          meceGenerationsConsidered: number;
+        };
+        warnings: string[];
+      };
+    }
+  | {
+      kind: 'mece_partition';
+      key: string;
+      /** The chosen generation’s query signature. Null means legacy/un-signed generation. */
+      querySignature: string | null;
+      values: ParameterValue[];
+      diagnostics: {
+        uncontextedRecencyMs: number | null;
+        meceRecencyMs: number;
+        counts: {
+          uncontextedCandidates: number;
+          meceEligibleCandidates: number;
+          meceGenerationsConsidered: number;
+        };
+        warnings: string[];
+      };
+    }
+  | {
+      kind: 'not_resolvable';
+      reason: string;
+      diagnostics: {
+        uncontextedRecencyMs: number | null;
+        meceRecencyMs: number | null;
+        meceKey: string | null;
+        meceQuerySignature: string | null;
+        counts: {
+          uncontextedCandidates: number;
+          meceEligibleCandidates: number;
+          meceGenerationsConsidered: number;
+        };
+        warnings: string[];
+      };
+    };
+
+type MECEGenerationCandidate = {
+  key: string;
+  querySignature: string | null;
+  values: ParameterValue[]; // deduped per context value
+  mece: { isComplete: boolean; canAggregate: boolean; missingValues: string[]; policy: string };
+  warnings: string[];
+  recencyMs: number; // set freshness = min recency across members
+};
+
+function normaliseQuerySignature(sig: unknown): string | null {
+  if (typeof sig !== 'string') return null;
+  const s = sig.trim();
+  return s ? s : null;
+}
+
+function dedupeBySliceDimsMostRecent(values: ParameterValue[]): ParameterValue[] {
+  const byDims = new Map<string, ParameterValue>();
+  for (const v of values) {
+    const dims = extractSliceDimensions(v.sliceDSL ?? '');
+    const existing = byDims.get(dims);
+    if (!existing) {
+      byDims.set(dims, v);
+      continue;
+    }
+    if (parameterValueRecencyMs(v) > parameterValueRecencyMs(existing)) {
+      byDims.set(dims, v);
+    }
+  }
+  return Array.from(byDims.values());
+}
+
+function computeMECEGenerationCandidates(
+  candidateValues: ParameterValue[],
+  options?: { requireComplete?: boolean }
+): { candidates: MECEGenerationCandidate[]; warnings: string[]; meceEligibleCandidates: number; meceGenerationsConsidered: number } {
+  const requireComplete = options?.requireComplete !== false;
+
+  // Extract eligible (single-key) context slices and group by (key, query_signature).
+  const eligible: Array<{ pv: ParameterValue; key: string; value: string; sig: string | null }> = [];
+  const warnings: string[] = [];
+
+  for (const pv of candidateValues) {
+    const ctx = isEligibleContextOnlySlice(pv);
+    if (!ctx) continue;
+    eligible.push({ pv, key: ctx.key, value: ctx.value, sig: normaliseQuerySignature((pv as any).query_signature) });
+  }
+
+  const meceEligibleCandidates = eligible.length;
+
+  // Group into generations. Within each generation, dedupe per context value to the most recent entry.
+  const byGeneration = new Map<string, { key: string; sig: string | null; byValue: Map<string, ParameterValue> }>();
+  for (const e of eligible) {
+    const genKey = `${e.key}||${e.sig ?? '__legacy__'}`;
+    const entry = byGeneration.get(genKey) ?? { key: e.key, sig: e.sig, byValue: new Map<string, ParameterValue>() };
+    const existingForValue = entry.byValue.get(e.value);
+    if (!existingForValue || parameterValueRecencyMs(e.pv) > parameterValueRecencyMs(existingForValue)) {
+      entry.byValue.set(e.value, e.pv);
+    }
+    byGeneration.set(genKey, entry);
+  }
+
+  const meceGenerationsConsidered = byGeneration.size;
+
+  const out: MECEGenerationCandidate[] = [];
+  for (const gen of byGeneration.values()) {
+    const pvs = Array.from(gen.byValue.values());
+    const valuesPresent = Array.from(new Set(pvs.map((pv) => {
+      const ctx = isEligibleContextOnlySlice(pv);
+      return ctx ? ctx.value : '';
+    }).filter(Boolean)));
+    const mockWindows = valuesPresent.map((v) => ({ sliceDSL: `context(${gen.key}:${v})` }));
+    const raw = contextRegistry.detectMECEPartitionSync(mockWindows, gen.key);
+    const meceCheck =
+      raw.policy === 'unknown'
+        // Degrade gracefully: if context definition is not loaded, assume the pinned slice set is intended
+        // to be MECE. This matches existing behaviour and allows cache/coverage logic to function in tests
+        // and in environments where the context registry is not hydrated.
+        ? { isMECE: true, isComplete: true, canAggregate: true, missingValues: [] as string[], policy: 'unknown' }
+        : raw;
+
+    if (!meceCheck.isMECE) continue;
+    if (!meceCheck.canAggregate) continue;
+    if (requireComplete && !meceCheck.isComplete) continue;
+
+    // Dataset freshness = stalest member
+    const recencyMs =
+      pvs.length > 0
+        ? pvs.reduce((min, cur) => Math.min(min, parameterValueRecencyMs(cur)), Number.POSITIVE_INFINITY)
+        : Number.NEGATIVE_INFINITY;
+
+    const genWarnings: string[] = [];
+    if (meceCheck.policy === 'unknown') {
+      genWarnings.push(`Context '${gen.key}' definition not loaded; assuming MECE for implicit uncontexted aggregation`);
+    }
+    if (!meceCheck.isComplete && meceCheck.missingValues.length > 0) {
+      genWarnings.push(`Incomplete MECE partition for '${gen.key}': missing ${meceCheck.missingValues.join(', ')}`);
+    }
+
+    out.push({
+      key: gen.key,
+      querySignature: gen.sig,
+      values: dedupeBySliceDimsMostRecent(pvs),
+      mece: meceCheck,
+      warnings: genWarnings,
+      recencyMs: Number.isFinite(recencyMs) ? recencyMs : 0,
+    });
+  }
+
+  return { candidates: out, warnings, meceEligibleCandidates, meceGenerationsConsidered };
+}
+
+/**
+ * Select the slice-set to fulfil an implicit uncontexted query (dims == '').
+ *
+ * Hardening vs the original implementation:
+ * - Dedupes explicit uncontexted candidates (choose the most recent entry).
+ * - Selects a coherent MECE generation keyed by (MECE key + query_signature), avoiding cross-generation mixing.
+ * - Within a chosen MECE generation, dedupes per context value + per slice dims to avoid duplicate entries.
+ *
+ * Selection rule:
+ * - Compare recency: explicit uncontexted recency = max(retrieved_at) of uncontexted candidates,
+ *   MECE recency = min(retrieved_at) across slices in the chosen MECE set (set freshness = stalest member).
+ * - Pick the higher recency dataset; tie-breaker prefers MECE (determinism and “context transparent iff MECE” intuition).
+ */
+export function selectImplicitUncontextedSliceSetSync(args: {
+  candidateValues: ParameterValue[];
+  requireCompleteMECE?: boolean;
+}): ImplicitUncontextedSelection {
+  const { candidateValues } = args;
+  const requireCompleteMECE = args.requireCompleteMECE !== false;
+
+  const warnings: string[] = [];
+
+  const uncontextedCandidatesRaw = candidateValues.filter((v) => extractSliceDimensions(v.sliceDSL ?? '') === '');
+  const bestUncontexted =
+    uncontextedCandidatesRaw.length > 0
+      ? uncontextedCandidatesRaw.reduce((best, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(best) ? cur : best))
+      : undefined;
+  const uncontextedRecencyMs = bestUncontexted ? parameterValueRecencyMs(bestUncontexted) : 0;
+
+  const meceGen = computeMECEGenerationCandidates(candidateValues, { requireComplete: requireCompleteMECE });
+  const meceCandidates = meceGen.candidates;
+
+  // Pick best MECE generation by recency (newest set wins). Tie-breaker: prefer the set with more slices.
+  const bestMECE =
+    meceCandidates.length > 0
+      ? meceCandidates.reduce((best, cur) => {
+          if (cur.recencyMs > best.recencyMs) return cur;
+          if (cur.recencyMs < best.recencyMs) return best;
+          if (cur.values.length > best.values.length) return cur;
+          // Deterministic final tie-breaker: key then signature lexicographically
+          const bestSig = best.querySignature ?? '';
+          const curSig = cur.querySignature ?? '';
+          const k = cur.key.localeCompare(best.key);
+          if (k !== 0) return k < 0 ? cur : best;
+          return curSig.localeCompare(bestSig) < 0 ? cur : best;
+        })
+      : undefined;
+
+  const hasMECECandidate = !!bestMECE;
+  const meceRecencyMs = bestMECE ? bestMECE.recencyMs : null;
+
+  const counts = {
+    uncontextedCandidates: uncontextedCandidatesRaw.length,
+    meceEligibleCandidates: meceGen.meceEligibleCandidates,
+    meceGenerationsConsidered: meceGen.meceGenerationsConsidered,
+  };
+
+  if (bestMECE?.warnings?.length) warnings.push(...bestMECE.warnings);
+
+  // Tie-breaker prefers MECE when recency is equal.
+  const chooseMECE =
+    !!bestMECE && (uncontextedCandidatesRaw.length === 0 || (meceRecencyMs ?? Number.NEGATIVE_INFINITY) >= uncontextedRecencyMs);
+
+  if (chooseMECE) {
+    return {
+      kind: 'mece_partition',
+      key: bestMECE!.key,
+      querySignature: bestMECE!.querySignature,
+      values: bestMECE!.values,
+      diagnostics: {
+        uncontextedRecencyMs: uncontextedCandidatesRaw.length > 0 ? uncontextedRecencyMs : null,
+        meceRecencyMs: bestMECE!.recencyMs,
+        counts,
+        warnings,
+      },
+    };
+  }
+
+  if (bestUncontexted) {
+    return {
+      kind: 'explicit_uncontexted',
+      values: [bestUncontexted],
+      diagnostics: {
+        uncontextedRecencyMs,
+        hasMECECandidate,
+        meceRecencyMs,
+        meceKey: bestMECE?.key ?? null,
+        meceQuerySignature: bestMECE?.querySignature ?? null,
+        counts,
+        warnings,
+      },
+    };
+  }
+
+  return {
+    kind: 'not_resolvable',
+    reason: 'No explicit uncontexted slice and no complete MECE partition available',
+    diagnostics: {
+      uncontextedRecencyMs: null,
+      meceRecencyMs,
+      meceKey: bestMECE?.key ?? null,
+      meceQuerySignature: bestMECE?.querySignature ?? null,
+      counts,
+      warnings,
+    },
+  };
+}
+
 function computeBestMECEPartitionCandidate(
   candidateValues: ParameterValue[]
 ):

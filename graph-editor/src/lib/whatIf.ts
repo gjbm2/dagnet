@@ -201,6 +201,13 @@ function getImplicitlyVisitedNodes(
   return visitedNodes;
 }
 
+function constraintSpecificityScoreForCondition(condition: string): number {
+  const parsed = parseConstraints(condition);
+  const positive = parsed.visited.length + parsed.exclude.length + parsed.cases.length + parsed.context.length;
+  const visitedAnyPenalty = parsed.visitedAny.reduce((acc, g) => acc + g.length, 0);
+  return positive * 1000 - visitedAnyPenalty;
+}
+
 /**
  * Compute the effective probability of an edge, accounting for:
  * - Base probability (edge.p.mean)
@@ -270,6 +277,8 @@ export function computeEffectiveEdgeProbability(
       const caseVariants: Record<string, string> = {};
       
       if (allVisitedNodes.size > 0 || Object.keys(context).length > 0 || Object.keys(caseVariants).length > 0) {
+        let bestProb: number | null = null;
+        let bestScore: number | null = null;
         for (const conditionalProb of edge.conditional_p) {
           // Skip old format conditions
           if (typeof conditionalProb.condition !== 'string') {
@@ -278,10 +287,16 @@ export function computeEffectiveEdgeProbability(
           
           // Use evaluateConstraint for full DSL evaluation (supports exclude, context, case)
           if (evaluateConstraint(conditionalProb.condition, allVisitedNodes, context, caseVariants)) {
-            // Automatically apply conditional probability
-            probability = conditionalProb.p?.mean ?? probability;
-            break;
+            const p = conditionalProb.p?.mean ?? probability;
+            const score = constraintSpecificityScoreForCondition(conditionalProb.condition);
+            if (bestScore === null || score > bestScore) {
+              bestScore = score;
+              bestProb = p;
+            }
           }
+        }
+        if (bestProb !== null) {
+          probability = bestProb;
         }
       }
     }
@@ -386,13 +401,22 @@ export function getEdgeWhatIfDisplay(
         const overrideSet = override instanceof Set ? override : new Set(Array.isArray(override) ? override : []);
         const context: Record<string, string> = {};
         const caseVariants: Record<string, string> = {};
-        
+
+        let bestProb: number | null = null;
+        let bestScore: number | null = null;
         for (const conditionalProb of edge.conditional_p) {
           if (typeof conditionalProb.condition !== 'string') continue;
           if (evaluateConstraint(conditionalProb.condition, overrideSet, context, caseVariants)) {
-            matchingProb = conditionalProb.p?.mean ?? matchingProb;
-            break;
+            const p = conditionalProb.p?.mean ?? matchingProb;
+            const score = constraintSpecificityScoreForCondition(conditionalProb.condition);
+            if (bestScore === null || score > bestScore) {
+              bestScore = score;
+              bestProb = p;
+            }
           }
+        }
+        if (bestProb !== null) {
+          matchingProb = bestProb;
         }
       }
       
@@ -411,6 +435,8 @@ export function getEdgeWhatIfDisplay(
       const caseVariants: Record<string, string> = {};
       
       if (implicitlyVisited.size > 0 || Object.keys(context).length > 0 || Object.keys(caseVariants).length > 0) {
+        let bestProb: number | null = null;
+        let bestScore: number | null = null;
         for (const conditionalProb of edge.conditional_p) {
           // Skip old format conditions
           if (typeof conditionalProb.condition !== 'string') {
@@ -419,13 +445,21 @@ export function getEdgeWhatIfDisplay(
           
           // Use evaluateConstraint for full DSL evaluation (supports exclude, context, case)
           if (evaluateConstraint(conditionalProb.condition, implicitlyVisited, context, caseVariants)) {
-            return {
-              type: 'conditional',
-              probability: conditionalProb.p?.mean ?? 0,
-              isOverridden: true,
-              displayLabel: '🔗 Auto' // Auto-applied due to case what-if
-            };
+            const p = conditionalProb.p?.mean ?? 0;
+            const score = constraintSpecificityScoreForCondition(conditionalProb.condition);
+            if (bestScore === null || score > bestScore) {
+              bestScore = score;
+              bestProb = p;
+            }
           }
+        }
+        if (bestProb !== null) {
+          return {
+            type: 'conditional',
+            probability: bestProb,
+            isOverridden: true,
+            displayLabel: '🔗 Auto' // Auto-applied due to case what-if
+          };
         }
       }
     }

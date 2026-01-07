@@ -940,13 +940,19 @@ def generate_all_parameter_queries(
             param_id = getattr(edge.p, 'id', None) or f"synthetic:{edge.uuid}:p"
             result = generate_query_for_edge(graph, edge, condition=None, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
             
-            # Auto-generate n_query for MECE split mechanics (exclude/minus/plus),
-            # unless anchor == from (A=X case) where a base n_query is not meaningful.
+            # Auto-generate n_query for MECE split mechanics (exclude/minus/plus).
+            #
+            # IMPORTANT: n_query is stored in an anchor-free normal form:
+            #   to(X)
+            #
+            # where X is the "from-node arrivals" target for this edge.
+            #
+            # Execution-time semantics:
+            # - cohort(): prepend from(A) iff a cohort anchor exists for the slice/edge
+            # - window(): do NOT prepend an anchor (denominator is X-anchored in-window)
             n_query: Optional[str] = None
             if ('.exclude(' in result.query_string) or ('.minus(' in result.query_string) or ('.plus(' in result.query_string):
-                anchor_id = anchor_map.get(edge.uuid)
-                if anchor_id and anchor_id != from_id:
-                    n_query = f"from({anchor_id}).to({from_id})"
+                n_query = f"to({from_id})"
             parameters.append(ParameterQuery(
                 param_type="edge_base_p",
                 param_id=param_id,
