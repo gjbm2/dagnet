@@ -825,7 +825,7 @@ def _extract_connection_info(edge: Edge) -> Tuple[Optional[str], Optional[str], 
                 connection_name = settings.get('connection_name')
             except Exception:
                 pass
-
+        
         if not provider and ds is not None:
             provider = getattr(ds, 'source_type', None)
         

@@ -2054,8 +2054,18 @@ export class IntegrityCheckService {
 
     // Shared persisted fields (parameter file top-level) that also exist on graph edge.
     // Note: query/n_query live on the edge (not inside p/cost_gbp/labour_cost).
-    if (paramFile?.query !== edge?.query) drift('query', paramFile?.query, edge?.query);
-    if (paramFile?.n_query !== edge?.n_query) drift('n_query', paramFile?.n_query, edge?.n_query);
+    const normaliseOptionalQuery = (v: unknown): string | undefined => {
+      if (typeof v !== 'string') return undefined;
+      const s = v.trim();
+      return s.length ? s : undefined;
+    };
+    const fileQueryNorm = normaliseOptionalQuery(paramFile?.query);
+    const graphQueryNorm = normaliseOptionalQuery(edge?.query);
+    if (fileQueryNorm !== graphQueryNorm) drift('query', paramFile?.query, edge?.query);
+
+    const fileNQueryNorm = normaliseOptionalQuery(paramFile?.n_query);
+    const graphNQueryNorm = normaliseOptionalQuery(edge?.n_query);
+    if (fileNQueryNorm !== graphNQueryNorm) drift('n_query', paramFile?.n_query, edge?.n_query);
     // Permission flags (override status) matter because they control whether future derived writes are allowed.
     driftPermission('query_overridden', paramFile?.query_overridden, edge?.query_overridden);
     driftPermission('n_query_overridden', paramFile?.n_query_overridden, edge?.n_query_overridden);
