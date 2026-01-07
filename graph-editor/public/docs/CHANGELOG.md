@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.20b
+**Released:** January 07, 2026
+
+Various smaller retrieval fixes and date edge fixes
+
+---
+
 ## Version 1.1.19b
 **Released:** January 06, 2026
 
