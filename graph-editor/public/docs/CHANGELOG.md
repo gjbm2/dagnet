@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.27b
+**Released:** January 08, 2026
+
+Forecast fixes applied -- testing
+
+---
+
 ## Version 1.1.26b
 **Released:** January 08, 2026
 
