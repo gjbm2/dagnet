@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.25b
+**Released:** January 08, 2026
+
+Further (final?) set of n_query fixes identified and scoped
+
+---
+
 ## Version 1.1.24b
 **Released:** January 07, 2026
 
