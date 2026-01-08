@@ -1,6 +1,14 @@
 version: 1.0.0
 created_at: 2025-11-24T10:43:39.892Z
 events:
+  - id: energy-rec
+    file_path: events/energy-rec.yaml
+    status: active
+    created_at: 2025-11-28T22:22:34.766Z
+    updated_at: 2025-11-28T22:22:34.767Z
+    author: user
+    version: 1.0.0
+    name: energy-rec
   - id: gave-bds-in-onboarding
     file_path: events/gave-bds-in-onboarding.yaml
     status: active
@@ -25,13 +33,14 @@ events:
     description: Household has completed delegation step
     tags: []
     category: conversion
-  - id: recommendation-offered
-    file_path: events/recommendation-offered.yaml
+  - id: non-energy-rec
+    file_path: events/non-energy-rec.yaml
     status: active
-    created_at: 2025-11-24T16:17:25.705Z
-    name: recommendation-offered
-    tags: []
-    category: conversion
+    created_at: 2026-01-07T22:43:58.530Z
+    updated_at: 2026-01-07T22:43:58.532Z
+    author: user
+    version: 1.0.0
+    name: non-energy-rec
   - id: switch-registered
     file_path: events/switch-registered.yaml
     status: active
@@ -54,7 +63,7 @@ events:
     tags: []
     category: conversion
     description: dirtying
-updated_at: 2025-12-22T14:34:32.239Z
+updated_at: 2026-01-07T22:43:58.532Z
 metadata:
   created_at: 2025-11-24T13:02:17.553Z
   version: 1.0.0
