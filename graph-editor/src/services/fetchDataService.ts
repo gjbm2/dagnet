@@ -363,7 +363,18 @@ export function itemNeedsFetch(
   const normalizedWindow = normalizeWindow(window);
   
   if (item.type === 'parameter') {
-    const paramFile = item.objectId ? fileRegistry.getFile(`parameter-${item.objectId}`) : null;
+    // PARAM FILES ARE OPTIONAL:
+    // If there is no parameter file for this item (either because objectId is empty OR the file is missing),
+    // then this parameter is OUT OF SCOPE for fetch planning/coverage. This must apply uniformly to:
+    // - base edge params (p/cost/labour)
+    // - conditional_p[i].p
+    //
+    // Rationale: "No parameter file" means there's no persisted slice cache to check and no versioned
+    // fetch target to write into. We therefore skip it rather than blocking coverage with needs_fetch.
+    if (!item.objectId) return false;
+
+    const paramFile = fileRegistry.getFile(`parameter-${item.objectId}`);
+    if (!paramFile) return false;
     
     // Check if parameter has connection (file or direct on edge)
     const edge = graph.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);

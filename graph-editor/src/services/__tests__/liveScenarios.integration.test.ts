@@ -443,8 +443,9 @@ describe('Live Scenarios Integration Tests', () => {
         'window(1-Nov-25:7-Nov-25)',
       ], graph);
       
-      expect(results[0].needsFetch).toBe(true);
-      expect(results[0].items.length).toBe(2);
+      // Option A: missing parameter files are out-of-scope for fetch planning (skipped).
+      expect(results[0].needsFetch).toBe(false);
+      expect(results[0].items).toEqual([]);
     });
   });
 

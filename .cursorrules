@@ -125,6 +125,7 @@ When modifying functionality:
    - The intent of the authorisation rule is to prevent silent weakening of test coverage, **not** to force test-file proliferation.
    - If a change needs new assertions, the assistant should normally add them to the most relevant existing test file/suite.
    - Only create a brand-new test file when there is no sensible existing home (e.g. no suite exists for that module/behaviour).
+   - **NO NEW TEST FILES** unless there is **manifestly no better place** for the test. Default to extending the most relevant existing suite.
 4. **Add new tests** - For new functionality or bug fixes
 3. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
 4. **Check integration tests** - Only if changes affect integration points

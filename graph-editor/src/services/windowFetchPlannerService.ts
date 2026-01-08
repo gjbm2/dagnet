@@ -328,7 +328,7 @@ class WindowFetchPlannerService {
       // Always log the specific items that need action (concise, capped), so the Session Log is actionable
       // even when diagnostic logging is disabled.
       if (fetchPlanItems.length > 0) {
-        const { message, context } = this.summariseItemsForLog(fetchPlanItems, 10);
+        const { message, context } = this.summariseItemsForLog(fetchPlanItems, 10, graph);
         sessionLogService.addChild(
           logOpId,
           'warning',
@@ -340,7 +340,7 @@ class WindowFetchPlannerService {
       }
 
       if (staleCandidates.length > 0) {
-        const { message, context } = this.summariseItemsForLog(staleCandidates, 10);
+        const { message, context } = this.summariseItemsForLog(staleCandidates, 10, graph);
         sessionLogService.addChild(
           logOpId,
           'info',
@@ -352,7 +352,7 @@ class WindowFetchPlannerService {
       }
 
       if (unfetchableGaps.length > 0) {
-        const { message, context } = this.summariseItemsForLog(unfetchableGaps, 10);
+        const { message, context } = this.summariseItemsForLog(unfetchableGaps, 10, graph);
         sessionLogService.addChild(
           logOpId,
           'warning',
@@ -1274,7 +1274,8 @@ class WindowFetchPlannerService {
 
   private summariseItemsForLog(
     items: PlannerItem[],
-    limit: number
+    limit: number,
+    graph?: Graph
   ): {
     message: string;
     context: {
@@ -1289,6 +1290,14 @@ class WindowFetchPlannerService {
         name?: string;
         targetId: string;
         paramSlot?: PlannerItem['paramSlot'];
+        conditionalIndex?: number;
+        targetSliceOverride?: string;
+        edgeId?: string;
+        edgeFrom?: string;
+        edgeTo?: string;
+        query?: string;
+        condition?: string;
+        connection?: string;
         classification: PlannerItem['classification'];
         missingDates?: number;
         stalenessReason?: string;
@@ -1298,8 +1307,50 @@ class WindowFetchPlannerService {
   } {
     const shownItems = items.slice(0, Math.max(0, limit));
     const enriched = shownItems.map(i => {
-      const fileId = i.type === 'parameter' ? `parameter-${i.objectId}` : `case-${i.objectId}`;
-      const file = fileRegistry.getFile(fileId);
+      const isDirect = !i.objectId;
+      const fileId =
+        i.type === 'parameter'
+          ? (isDirect ? 'parameter:<direct>' : `parameter-${i.objectId}`)
+          : (isDirect ? 'case:<direct>' : `case-${i.objectId}`);
+      const file = fileId.includes(':<direct>') ? null : fileRegistry.getFile(fileId);
+
+      const nodeIdByUuid = (() => {
+        if (!graph?.nodes) return new Map<string, string>();
+        const m = new Map<string, string>();
+        for (const n of graph.nodes as any[]) {
+          if (n?.uuid && n?.id) m.set(n.uuid, n.id);
+        }
+        return m;
+      })();
+
+      const edge =
+        graph?.edges?.find((e: any) => e.uuid === i.targetId || e.id === i.targetId) ?? null;
+
+      const edgeFrom = edge?.from ? (nodeIdByUuid.get(edge.from) ?? edge.from) : undefined;
+      const edgeTo = edge?.to ? (nodeIdByUuid.get(edge.to) ?? edge.to) : undefined;
+
+      const conditionalIndex = i.conditionalIndex;
+      const cond = (typeof conditionalIndex === 'number' && edge?.conditional_p)
+        ? edge.conditional_p[conditionalIndex]
+        : undefined;
+
+      const query =
+        typeof conditionalIndex === 'number'
+          ? (cond?.query ?? undefined)
+          : (edge?.query ?? undefined);
+      const condition =
+        typeof conditionalIndex === 'number'
+          ? (cond?.condition ?? undefined)
+          : undefined;
+
+      const param =
+        i.type !== 'parameter'
+          ? undefined
+          : (typeof conditionalIndex === 'number'
+              ? cond?.p
+              : edge?.[i.paramSlot || 'p']);
+      const connection = typeof param?.connection === 'string' ? param.connection : undefined;
+
       return {
         type: i.type,
         objectId: i.objectId,
@@ -1308,6 +1359,14 @@ class WindowFetchPlannerService {
         name: file?.name,
         targetId: i.targetId,
         paramSlot: i.paramSlot,
+        conditionalIndex,
+        targetSliceOverride: i.targetSliceOverride,
+        edgeId: edge?.id,
+        edgeFrom,
+        edgeTo,
+        query,
+        condition,
+        connection,
         classification: i.classification,
         missingDates: i.missingDates,
         stalenessReason: i.stalenessReason,
@@ -1317,9 +1376,14 @@ class WindowFetchPlannerService {
 
     // Human-friendly, compact label list (prefer repo path; fall back to fileId).
     const labels = enriched.map(e => {
-      const where = e.path || e.name || e.fileId;
+      const edgeLabel = (e.edgeFrom && e.edgeTo) ? `${e.edgeFrom}→${e.edgeTo}` : undefined;
+      const where = e.path || e.name || (edgeLabel ? `edge:${edgeLabel}` : e.fileId);
       const slot = e.paramSlot ? `:${e.paramSlot}` : '';
-      return `${where} [${e.type}${slot} ${e.objectId}]`;
+      const direct = e.objectId ? e.objectId : 'direct';
+      const cond = typeof e.conditionalIndex === 'number' ? ` conditional_p[${e.conditionalIndex}]` : '';
+      const missing = typeof e.missingDates === 'number' ? ` missing=${e.missingDates}d` : '';
+      const condition = e.condition ? ` (${e.condition})` : '';
+      return `${where} [${e.type}${slot}${cond} ${direct}]${missing}${condition}`;
     });
 
     const truncated = items.length > enriched.length;
