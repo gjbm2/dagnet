@@ -13,6 +13,26 @@ import type { Graph, GraphEdge, GraphNode } from '../../types';
 import { graphComputeClient } from '../../lib/graphComputeClient';
 import { anchorRegenerationService } from '../anchorRegenerationService';
 
+// Minimal fileRegistry mock (must match production import path).
+// We need this to verify graph→file cascade for anchor_node_id.
+vi.mock('../../contexts/TabContext', () => {
+  const mockFiles = new Map<string, any>();
+  return {
+    fileRegistry: {
+      getFile: vi.fn((id: string) => mockFiles.get(id)),
+      updateFile: vi.fn(async (id: string, data: any) => {
+        mockFiles.set(id, { data: structuredClone(data) });
+      }),
+      registerFile: vi.fn(async (id: string, data: any) => {
+        mockFiles.set(id, { data: structuredClone(data) });
+      }),
+      _mockFiles: mockFiles,
+    },
+  };
+});
+
+const { fileRegistry } = await import('../../contexts/TabContext');
+
 // Helper to create a minimal graph for testing
 function createTestGraph(nodes: Partial<GraphNode>[], edges: Partial<GraphEdge>[]): Graph {
   return {
@@ -44,6 +64,11 @@ function createTestGraph(nodes: Partial<GraphNode>[], edges: Partial<GraphEdge>[
 }
 
 describe('Anchor Node Computation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fileRegistry as any)._mockFiles.clear();
+  });
+
   describe('anchorRegenerationService (MSMDC anchor refresh helper)', () => {
     it('returns the MSMDC anchor for the requested edge id', async () => {
       const g = createTestGraph(
@@ -96,6 +121,38 @@ describe('Anchor Node Computation', () => {
       expect(result.graphUpdates).toBeGreaterThanOrEqual(2);
     });
     
+    it('should cascade anchor_node_id into the connected parameter file even when latency tracking is off', async () => {
+      const graph = createTestGraph(
+        [
+          { id: 'start', uuid: 'start-uuid', entry: { is_start: true } },
+          { id: 'end', uuid: 'end-uuid' },
+        ],
+        [
+          {
+            uuid: 'edge-1',
+            from: 'start',
+            to: 'end',
+            p: { id: 'p1', connection: 'amplitude-prod' }, // latency.latency_parameter intentionally absent
+          },
+        ]
+      );
+
+      // Existing parameter file with a different anchor; not overridden.
+      await (fileRegistry as any).registerFile('parameter-p1', {
+        id: 'p1',
+        connection: 'amplitude-prod',
+        latency: { anchor_node_id: 'old', anchor_node_id_overridden: false },
+        values: [],
+      });
+
+      const anchors: Record<string, string | null> = { 'edge-1': 'start' };
+      await queryRegenerationService.applyRegeneratedQueries(graph, [], anchors);
+
+      const updatedFile = (fileRegistry as any).getFile('parameter-p1');
+      expect(updatedFile?.data?.latency?.anchor_node_id).toBe('start');
+      expect(updatedFile?.data?.latency?.anchor_node_id_overridden).toBe(false);
+    });
+
     it('should NOT apply anchor_node_id when anchor_node_id_overridden is true', async () => {
       const graph = createTestGraph(
         [

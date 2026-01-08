@@ -419,19 +419,31 @@ export async function buildDslFromEdge(
       
       const { startDate: cohortStart, endDate: cohortEnd } = resolveCohortDates(constraints.cohort);
       
-      // Get anchor event_id - either from explicit anchor in DSL or from edge.p.latency.anchor_node_id
-      // NOTE: anchor_node_id SHOULD be pre-computed by MSMDC for each latency-enabled edge
-      // by traversing upstream to find the START node. If it's missing, cohort queries
-      // will anchor at the edge's FROM node (which may give unexpected results for downstream edges).
+      // Get anchor event_id - either from explicit anchor in DSL or from edge.p.latency.anchor_node_id.
+      //
+      // IMPORTANT (cohort semantics):
+      // - We use anchor_node_id as the cohort anchor for cohort-mode execution (A in A→from→to).
+      // - This is now conceptually independent of "latency tracking enablement".
+      // - If the resolved anchor is the same node as the FROM node (A == from), we intentionally
+      //   omit anchor_event_id so the provider executes a 2-step funnel (from→to).
       let anchorEventId: string | undefined;
       const anchorNodeId = constraints.cohort.anchor || edge.p?.latency?.anchor_node_id;
       
       if (anchorNodeId) {
         const anchorNode = findNode(anchorNodeId);
         if (anchorNode && anchorNode.event_id) {
-          anchorEventId = anchorNode.event_id as string;
-          await loadEventDefinition(anchorEventId);
-          console.log(`[buildQueryPayload] Resolved anchor node "${anchorNodeId}" to event_id "${anchorEventId}"`);
+          // A == from: do NOT set anchor_event_id (2-step cohort funnel is sufficient)
+          const anchorIsFrom =
+            (fromNode && (anchorNode.id === fromNode.id || anchorNode.uuid === fromNode.uuid)) ||
+            anchorNodeId === query.from;
+          if (anchorIsFrom) {
+            anchorEventId = undefined;
+            console.log(`[buildQueryPayload] Anchor "${anchorNodeId}" matches FROM "${query.from}" - using 2-step cohort funnel`);
+          } else {
+            anchorEventId = anchorNode.event_id as string;
+            await loadEventDefinition(anchorEventId);
+            console.log(`[buildQueryPayload] Resolved anchor node "${anchorNodeId}" to event_id "${anchorEventId}"`);
+          }
         } else {
           console.warn(`[buildQueryPayload] Anchor node "${anchorNodeId}" not found or missing event_id`);
         }

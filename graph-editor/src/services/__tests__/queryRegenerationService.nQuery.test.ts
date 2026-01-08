@@ -176,6 +176,61 @@ describe('QueryRegenerationService n_query application', () => {
     expect(file.data.n_query).toBe('from(A).to(B)');
   });
 
+  it('applies nQuery from regenerated conditional_p payload (conditional-only regeneration)', async () => {
+    const graph: Graph = {
+      schema_version: '1.0.0',
+      id: 'g1',
+      name: 'Test',
+      description: '',
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', event_id: 'a', layout: { x: 0, y: 0 } } as any,
+        { id: 'B', uuid: 'B', label: 'B', event_id: 'b', layout: { x: 0, y: 0 } } as any,
+      ],
+      edges: [
+        {
+          id: 'e1',
+          uuid: 'e1',
+          from: 'A',
+          to: 'B',
+          p: { id: 'p1' } as any,
+          conditional_p: [
+            { condition: 'visited(x)', p: { id: 'cp1', mean: 0.5 } as any } as any,
+          ],
+          query: 'from(A).to(B)',
+          query_overridden: false,
+          n_query_overridden: false,
+        } as any,
+      ],
+    };
+
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      query_overridden: false,
+      n_query_overridden: false,
+    });
+
+    // Simulate a backend response when regenerating ONLY the conditional:
+    // paramId is the conditional param's id, but nQuery should still apply to the EDGE (base p1).
+    const parameters: any[] = [
+      {
+        paramType: 'edge_conditional_p',
+        paramId: 'cp1',
+        edgeUuid: 'e1',
+        edgeKey: 'A->B',
+        condition: 'visited(x)',
+        query: 'from(A).to(B).visited(x)',
+        nQuery: 'to(A)',
+        stats: { checks: 0, literals: 0 },
+      },
+    ];
+
+    await queryRegenerationService.applyRegeneratedQueries(graph, parameters as any);
+
+    expect((graph.edges[0] as any).n_query).toBe('to(A)');
+    const file = (fileRegistry as any).getFile('parameter-p1');
+    expect(file.data.n_query).toBe('to(A)');
+  });
+
   it('does not apply nQuery when edge n_query_overridden is true', async () => {
     const graph: Graph = {
       schema_version: '1.0.0',

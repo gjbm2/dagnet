@@ -902,16 +902,16 @@ class WindowFetchPlannerService {
     // and should use cohort-based retrieval with bounded horizon.
     const pathT95 = this.getPathT95ForEdge(edge, graph);
     
-    // COHORT-VIEW: Use path_t95 to classify edges, not just local latencyConfig.
-    // If path_t95 > 0, this edge is downstream of latency edges and needs
-    // cohort-based treatment. If path_t95 = 0 (or undefined on first run),
-    // treat as simple edge with no bounding.
+    // COHORT-VIEW: Use path_t95 to classify whether bounding is needed.
+    // If path_t95 > 0, this edge is downstream of latency edges and should use
+    // bounded cohort retrieval horizons. If path_t95 = 0 (or undefined on first run),
+    // treat as “simple” for bounding purposes (no bounding), but still cohort-mode retrieval.
     const hasLocalLatency = latencyConfig?.latency_parameter === true || !!latencyConfig?.t95;
     const isBehindLaggedPath = (pathT95 ?? 0) > 0;
     
     if (!hasLocalLatency && !isBehindLaggedPath) {
-      // Truly simple edge: no latency config AND no upstream lag
-      // No bounding needed - use window-style retrieval
+      // Truly simple edge: no latency config AND no upstream lag.
+      // No bounding needed.
       return undefined;
     }
     
