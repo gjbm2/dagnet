@@ -1,16 +1,13 @@
 /**
- * E2E-ish Test: cohort() mode + simple edges should fetch as window()
+ * E2E-ish Test: cohort() mode + simple edges should fetch as cohort()
  *
  * Validates the cohort-view-implementation behaviour:
  * - In a cohort-mode tab, edges with NO local latency and path_t95 == 0
- *   should NOT be retrieved/aggregated using cohort() slices.
- * - Instead, they should be read as window() for the cohort date range.
+ *   should still be retrieved/aggregated using cohort() slices.
  *
- * This test asserts that the resulting edge scalars come from the window slice:
- * - p.mean
- * - p.evidence.mean / n / k
- * - p.forecast.mean (from window baseline forecast scalar)
- * - and that no latency block is attached (this is a simple edge).
+ * This test asserts that:
+ * - Evidence (n/k/mean) comes from the cohort slice
+ * - Forecast is still derived from the window slice baseline (per cohort-mode design)
  *
  * @vitest-environment node
  */
@@ -27,7 +24,7 @@ vi.mock('../../components/ProgressToast', () => ({
   completeProgressToast: vi.fn(),
 }));
 
-describe('cohort() mode: simple edges fetch/aggregate as window()', () => {
+describe('cohort() mode: simple edges fetch/aggregate as cohort()', () => {
   beforeEach(async () => {
     // Clear file registry state
     // @ts-ignore - internal state for tests
@@ -37,13 +34,12 @@ describe('cohort() mode: simple edges fetch/aggregate as window()', () => {
     }
   });
 
-  it('derives p.mean / evidence / forecast from the window slice, not the cohort slice', async () => {
+  it('derives evidence from the cohort slice (and forecast from the window slice)', async () => {
     const paramId = 'simple-edge';
     const edgeUuid = 'edge-simple';
 
     // Parameter file contains BOTH cohort and window slices with deliberately different means.
-    // If the cohort slice were (incorrectly) used in cohort-mode for this simple edge,
-    // we'd see p.mean ≈ 0.90. Correct behaviour should yield p.mean ≈ 0.20.
+    // follow-up 2b: cohort-mode should use the COHORT slice for evidence.
     const paramFileData: any = {
       id: paramId,
       connection: 'amplitude-prod',
@@ -102,6 +98,8 @@ describe('cohort() mode: simple edges fetch/aggregate as window()', () => {
           p: {
             id: paramId,
             connection: 'amplitude-prod',
+            // follow-up 2a/2b: anchor is meaningful for cohort semantics even when latency tracking is off
+            latency: { anchor_node_id: 'A' },
           },
         } as any,
       ],
@@ -135,16 +133,13 @@ describe('cohort() mode: simple edges fetch/aggregate as window()', () => {
     const edge = updated.edges.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
     expect(edge).toBeDefined();
 
-    // Confirm we DID NOT use the cohort slice (mean 0.9)
-    expect(edge.p.mean).toBeCloseTo(0.2, 6);
-
-    // Evidence should be derived and attached for this query slice
+    // Evidence should be derived and attached for this query slice (from COHORT values)
     expect(edge.p.evidence).toBeDefined();
     expect(edge.p.evidence.n).toBe(100);
-    expect(edge.p.evidence.k).toBe(20);
-    expect(edge.p.evidence.mean).toBeCloseTo(0.2, 6);
+    expect(edge.p.evidence.k).toBe(90);
+    expect(edge.p.evidence.mean).toBeCloseTo(0.9, 6);
 
-    // Forecast baseline should be attached from window slice's forecast scalar
+    // Forecast baseline should still be attached from window slice's forecast scalar
     expect(edge.p.forecast).toBeDefined();
     // Forecast is recomputed at query time from daily arrays (true half-life recency; as-of = max(window date)).
     const asOf = parseDate('7-Nov-25');
@@ -167,8 +162,8 @@ describe('cohort() mode: simple edges fetch/aggregate as window()', () => {
     expect(expectedForecast).toBeDefined();
     expect(edge.p.forecast.mean).toBeCloseTo(expectedForecast as number, 6);
 
-    // No latency block for a simple edge
-    expect(edge.p.latency).toBeUndefined();
+    // Anchor should remain present (cohort anchor is independent of latency tracking)
+    expect(edge.p.latency?.anchor_node_id).toBe('A');
   });
 });
 

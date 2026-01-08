@@ -158,9 +158,20 @@ def generate_query_for_edge(
             coverage_stats={"checks": stats_checks, "literals": 0}
         )
     
-    # Special case: For unconditional queries (no condition), detect alternate paths
-    # FROM the edge's from_node and add exclusions to discriminate direct from indirect
-    if not condition or (not cond_visited and not cond_exclude and not cond_visited_any):
+    # Topology discriminator: detect alternate paths FROM from_node TO to_node (not using direct edge)
+    # and add exclusions to discriminate the DIRECT edge from indirect routes.
+    #
+    # CRITICAL SEMANTICS:
+    # This discriminator must apply even when a condition is present. Conditional queries
+    # must preserve topology discriminators AND add conditional discriminators, otherwise
+    # the query no longer represents the direct edge.
+    #
+    # Example (triangle): a->b->c plus a->c
+    # - Unconditional: from(a).to(c).exclude(b)
+    # - Conditional visited(y): from(a).to(c).exclude(b).visited(y)
+    #
+    # Without this, conditional queries can drift into "any path to to_node" semantics.
+    if True:
         # Check if there are alternate paths FROM from_node TO to_node (not using direct edge)
         # Get immediate predecessors of to_node (excluding from_node itself)
         predecessors = set(G.predecessors(to_node)) - {from_node}
@@ -358,7 +369,29 @@ def generate_query_for_edge(
                     G, from_node, to_node, to_node, L_exc_sorted
                 )
                 
-                query_string = compiled_query
+                # IMPORTANT: Preserve non-exclude constraints (visited/visitedAny/case/context) in the base funnel.
+                # The optimized compiler returns: "from(X).to(Y).minus(...).plus(...)"
+                # We must splice the minus/plus suffix onto the full base-with-constraints.
+                #
+                # Example:
+                #   constraints: from(a).to(c).visited(y).exclude(b)
+                #   compiled:    from(a).to(c).minus(b)
+                #   desired:     from(a).to(c).visited(y).minus(b)
+                compiled_parts = compiled_query.split(".")
+                suffix_parts = compiled_parts[2:] if len(compiled_parts) >= 2 else compiled_parts
+                base_no_exclude = QueryConstraints(
+                    from_node, to_node,
+                    visited=L_vis_sorted,
+                    exclude=[],
+                    visited_any=L_vany,
+                    cases=final_cases,
+                    contexts=final_contexts
+                ).to_query_string()
+                
+                query_string = base_no_exclude
+                if suffix_parts:
+                    query_string = ".".join([base_no_exclude] + suffix_parts)
+                
                 print(f"[MSMDC] Compiled query: {query_string}")
                 
             except Exception as e:
@@ -933,6 +966,64 @@ def generate_all_parameter_queries(
         # Extract connection info ONCE per edge (pessimistic: checks ALL params)
         connection_name, provider, _ = _extract_connection_info(edge)
         
+        # Determine whether we need to emit an edge-level n_query candidate for this edge.
+        #
+        # Core rule (topology mass conservation):
+        # - n_query should be emitted when MSMDC must narrow the edge's start population to discriminate
+        #   topology (classic: direct edge vs indirect alternate route). This is primarily expressed via
+        #   exclude() literals in MSMDC's unconditional/topology generation.
+        #
+        # IMPORTANT: We do NOT attempt to infer provenance from the final query string. Instead we:
+        # - Prefer the unconditional/base MSMDC result (condition=None) as the topology signal when available.
+        # - When generating ONLY a conditional (conditional_index), we still compute the unconditional topology
+        #   result once so we can decide whether the edge needs n_query protection.
+        def _has_narrowing_constraints(c: QueryConstraints) -> bool:
+            if not c:
+                return False
+            # Narrowing families that affect the funnel population / start counts.
+            # We intentionally exclude case/context here (slice semantics rather than topology mechanics).
+            return bool(c.exclude) or bool(c.visited) or bool(c.visited_any)
+        
+        edge_params: List[ParameterQuery] = []
+        needs_n_query = False
+        
+        def _cond_sets(cond_str: Optional[str]):
+            cond_v, cond_e, cond_cases, cond_ctx, cond_vany = _parse_condition(cond_str)
+            return (
+                set(cond_v),
+                set(cond_e),
+                set(cond_cases),
+                set(cond_ctx),
+                {tuple(sorted(g)) for g in cond_vany if g},
+            )
+        
+        def _final_sets(c: QueryConstraints):
+            return (
+                set(c.visited or []),
+                set(c.exclude or []),
+                set(c.cases or []),
+                set(c.contexts or []),
+                {tuple(sorted(g)) for g in (c.visited_any or []) if g},
+            )
+        
+        def _residual_has_narrowing(final_c: QueryConstraints, cond_str: Optional[str]) -> bool:
+            """
+            Set-math attribution:
+            - final constraints include both condition-originated and MSMDC-added literals.
+            - subtract condition-originated literals (parsed from condition_str) to get residual.
+            - if residual contains ANY narrowing terms, then topology forced extra narrowing and we need n_query.
+            """
+            fv, fe, fcase, fctx, fvany = _final_sets(final_c)
+            cv, ce, ccase, cctx, cvany = _cond_sets(cond_str)
+            residual_visited = fv - cv
+            residual_exclude = fe - ce
+            residual_vany = fvany - cvany
+            # Cases/contexts are included for completeness; MSMDC does not currently add them topologically,
+            # but including them here is harmless and keeps the rule future-proof.
+            residual_cases = fcase - ccase
+            residual_ctx = fctx - cctx
+            return bool(residual_visited or residual_exclude or residual_vany or residual_cases or residual_ctx)
+        
         # 1. Base probability (edge.p) - unconditional
         # Skip if filtering by conditional_index (only want conditional, not base)
         if edge.p and conditional_index is None:
@@ -950,17 +1041,18 @@ def generate_all_parameter_queries(
             # Execution-time semantics:
             # - cohort(): prepend from(A) iff a cohort anchor exists for the slice/edge
             # - window(): do NOT prepend an anchor (denominator is X-anchored in-window)
-            n_query: Optional[str] = None
-            if ('.exclude(' in result.query_string) or ('.minus(' in result.query_string) or ('.plus(' in result.query_string):
-                n_query = f"to({from_id})"
-            parameters.append(ParameterQuery(
+            # For unconditional query, condition_str is None, so residual==final.
+            if _residual_has_narrowing(result.constraints, None):
+                needs_n_query = True
+            
+            edge_params.append(ParameterQuery(
                 param_type="edge_base_p",
                 param_id=param_id,
                 edge_uuid=edge.uuid,
                 edge_key=edge_key,
                 condition=None,
                 query=result.query_string,
-                n_query=n_query,
+                n_query=None,
                 stats=result.coverage_stats
             ))
         
@@ -975,15 +1067,33 @@ def generate_all_parameter_queries(
                 param_id = getattr(cond_p.p, 'id', None) or f"synthetic:{edge.uuid}:conditional_p[{idx}]"
                 condition_str = cond_p.condition
                 result = generate_query_for_edge(graph, edge, condition=condition_str, max_checks=max_checks, literal_weights=literal_weights, preserve_condition=preserve_condition, preserve_case_context=preserve_case_context, connection_name=connection_name, provider=provider)
-                parameters.append(ParameterQuery(
+                
+                if _residual_has_narrowing(result.constraints, condition_str):
+                    needs_n_query = True
+                
+                edge_params.append(ParameterQuery(
                     param_type="edge_conditional_p",
                     param_id=param_id,
                     edge_uuid=edge.uuid,
                     edge_key=edge_key,
                     condition=condition_str,
                     query=result.query_string,
+                    # n_query is edge-level metadata (keyed by edge base p.id) carried on conditional params
+                    # to support conditional_index-only regeneration responses.
+                    n_query=None,
                     stats=result.coverage_stats
                 ))
+        
+        # If topology discrimination requires n_query, attach it to both base and conditional params for this edge.
+        # (Costs do not carry n_query.)
+        if needs_n_query:
+            nq = f"to({from_id})"
+            for p in edge_params:
+                if p.param_type in ("edge_base_p", "edge_conditional_p"):
+                    p.n_query = nq
+        
+        # Flush this edge's params into global list.
+        parameters.extend(edge_params)
         
         # 3. Cost parameters (edge.cost_gbp, edge.labour_cost)
         # These use same query as base probability (unconditional)

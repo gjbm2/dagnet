@@ -6,6 +6,9 @@
 **Status (updated 8-Jan-26):**
 - The work described in `docs/current/implementation-plan-investigation-followups-7-Jan-26.md` (phases 1–6: Solutions A–F + hardening of Solution G) has now been implemented.
 - Remaining work is tracked below under “Follow-on work (new proposals)”.
+- MSMDC query-generation semantics were corrected so that **conditional edge queries preserve topology discriminators** (direct-vs-indirect discrimination) *as well as* condition discriminators; this is necessary for consistent “direct edge” semantics in conditional queries.
+- `n_query` generation logic was strengthened to use **constraint-set subtraction** (final constraints minus condition constraints) and to treat `visited(...)` / `visitedAny(...)` as narrowing terms alongside `exclude(...)` / `minus(...)` / `plus(...)`.
+- I am now more confident that Evidence-mode mass conservation and reach-probability calculation are correct in most cases; however I suspect **Forecast-mode** logic (window-slice-driven forecasting/blending) is defective and needs a targeted review.
 
 ### Question being answered
 
@@ -35,7 +38,19 @@ This document records what we’ve checked so far, exactly what evidence we used
 ### What remains open / not yet fully diagnosed
 
 - **Tail-step evidence mismatch** between `success-v2` (Σ MECE context slices) and rebuild (explicit uncontexted slice) persists on a small number of days over 1–10 Nov.
-- **`n_query` semantics risk** (especially window vs cohort) remains an open design/logic concern; we have not yet proven it as the root cause of any remaining discrepancy.
+- **Forecast-mode correctness risk**: forecasting relies on `window(...)` slices and blending logic; even if Evidence mode is now largely mass-conserving, forecast computations may still be inconsistent or invalid.
+- **`n_query` semantics risk** (especially window vs cohort) remains an open design/logic concern; we have not yet proven it as the root cause of any remaining discrepancy, but the generation and application pipeline has been tightened materially.
+
+### Implementation notes (updated 8-Jan-26)
+
+- **Conditional MSMDC queries now preserve topology discriminators**:
+  - Previously, conditional queries could omit direct-vs-indirect discriminators in triangle-like topologies, causing conditional queries to drift into “any path to to-node” semantics.
+  - MSMDC now always applies topology discrimination (e.g. excluding alternate-route predecessor hops) and then layers conditional discriminators on top.
+- **`n_query` generation is now set-maths based and less brittle**:
+  - For conditional queries, we compute “residual topology narrowing” by subtracting the condition-derived constraint sets from the final generated constraint sets.
+  - If any residual narrowing remains (including `visited(...)` / `visitedAny(...)`), MSMDC emits `n_query = to(from)` as edge-level denominator protection.
+- **Deprecated exclude→minus/plus compilation now preserves non-exclude constraints**:
+  - When compiling excludes to inclusion–exclusion, the generated query string now preserves `visited(...)`, `visitedAny(...)`, and case/context constraints instead of dropping them.
 
 ---
 

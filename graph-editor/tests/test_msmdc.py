@@ -147,6 +147,30 @@ class TestMSMDCUserExamples:
         # Anchored at edge; should discriminate using visited(b) or exclude(e)
         assert result.query_string.startswith("from(c).to(d)")
         assert ("visited(b)" in result.query_string) or ("exclude(e)" in result.query_string)
+
+    def test_conditional_query_preserves_topology_discriminator(self):
+        """
+        Conditional queries MUST preserve topology discriminators for the direct edge.
+        Triangle: a->b->c plus a->c.
+        Conditional on a->c must still discriminate direct vs indirect (exclude/minus b),
+        while also including the condition literal.
+        """
+        graph = create_minimal_graph(
+            [{"id": "a"}, {"id": "b"}, {"id": "c"}],
+            [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "c"},
+                {"from": "a", "to": "c"},
+            ]
+        )
+        direct_edge = [e for e in graph.edges if e.from_node == "a" and e.to == "c"][0]
+
+        result = generate_query_for_edge(graph, direct_edge, condition="visited(y)")
+
+        # Must include the condition
+        assert "visited(y)" in result.query_string
+        # Must also include the topology discriminator for the direct edge (exclude or minus compilation)
+        assert ("exclude(b)" in result.query_string) or ("minus(b)" in result.query_string)
     
     def test_rewrite_exclude_to_visitedAny_on_sibling_routes(self):
         """
@@ -759,6 +783,52 @@ class TestEdgeScopedQueryGeneration:
         assert "edge_base_p" not in param_types
         assert "edge_cost_gbp" not in param_types
         assert "edge_labour_cost" not in param_types
+
+    def test_conditional_index_includes_n_query_when_topology_requires_it(self):
+        """
+        When regenerating ONLY a specific conditional (conditional_index), MSMDC must still
+        provide the correct edge-level n_query candidate when topology-driven discrimination
+        introduces exclude() (classic triangle X-Y, Y-Z, X-Z where X-Z excludes(Y)).
+        """
+        from msmdc import generate_all_parameter_queries
+
+        # Triangle: a->b->c and a->c direct. MSMDC unconditional for a->c should include exclude(b).
+        nodes = [
+            Node(uuid="a-uuid", id="a"),
+            Node(uuid="b-uuid", id="b"),
+            Node(uuid="c-uuid", id="c"),
+        ]
+
+        edges = [
+            Edge(uuid="ab", from_node="a", to="b", p={"mean": 0.5}),
+            Edge(uuid="bc", from_node="b", to="c", p={"mean": 0.5}),
+            Edge(
+                uuid="ac",
+                from_node="a",
+                to="c",
+                p={"mean": 0.5},
+                conditional_p=[
+                    {"condition": "visited(x)", "p": {"mean": 0.6}},
+                    {"condition": "visited(y)", "p": {"mean": 0.7}},
+                ],
+            ),
+        ]
+
+        graph = Graph(
+            nodes=nodes,
+            edges=edges,
+            policies=Policies(default_outcome="default", overflow_policy="error", free_edge_policy="complement"),
+            metadata=Metadata(version="1.0.0", created_at=datetime.now()),
+        )
+
+        # Regenerate only conditional index 1 on edge a->c.
+        params = generate_all_parameter_queries(graph, edge_uuid="ac", conditional_index=1)
+        assert len(params) == 1
+        assert params[0].param_type == "edge_conditional_p"
+        assert params[0].edge_key == "a->c"
+
+        # Topology requires a protective n_query representing arrivals at 'a'.
+        assert params[0].n_query == "to(a)"
     
     def test_edge_uuid_without_conditional_index_includes_all_base_params(self):
         """When only edge_uuid is specified (no conditional_index), include base_p and costs."""

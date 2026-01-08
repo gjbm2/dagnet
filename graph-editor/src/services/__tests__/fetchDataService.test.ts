@@ -871,7 +871,7 @@ describe('FetchDataService', () => {
       expect(result[0].objectId).toBe('case-1');
     });
 
-    it('cohort mode: should override target slice to window() for simple edges (path_t95 = 0)', () => {
+    it('cohort mode: should NOT override target slice to window() for simple edges (follow-up 2b)', () => {
       // cohort-mode tab selecting cohorts by entry date
       const cohortDSL = 'cohort(1-Nov-25:7-Nov-25)';
       (parseConstraints as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -907,7 +907,7 @@ describe('FetchDataService', () => {
             to: 'B',
             p: { id: 'p-lag', connection: {}, latency: { latency_parameter: true, t95: 5 } },
           } as any,
-          // Simple edge branch (no local latency, not behind lagged path => path_t95 = 0)
+      // Simple edge branch (no local latency, not behind lagged path => path_t95 = 0)
           {
             uuid: 'e-simple',
             id: 'e-simple',
@@ -926,7 +926,8 @@ describe('FetchDataService', () => {
       expect(simple).toBeDefined();
       expect(lagged).toBeDefined();
 
-      expect(simple?.targetSliceOverride).toBe('window(1-Nov-25:7-Nov-25)');
+      // follow-up 2b: no cohort→window override; both items remain cohort-shaped
+      expect(simple?.targetSliceOverride).toBeUndefined();
       expect(lagged?.targetSliceOverride).toBeUndefined();
     });
   });
