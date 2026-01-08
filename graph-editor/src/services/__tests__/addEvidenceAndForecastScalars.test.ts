@@ -341,8 +341,49 @@ describe('Forecast: From Window Slice', () => {
     
     const outputValue = result.values[0] as any;
     
-    // Should use newer window slice (then recompute forecast from its dailies)
-    expect(outputValue.forecast).toBeCloseTo(0.5, 10);
+    // Forecast baseline is built greedily across the widest available horizon, with maturity censoring.
+    // In this fixture, the newer window slice is entirely within the maturity-excluded range, so the
+    // forecast is driven by the older (but mature) window data (≈200/500 = 0.40).
+    expect(outputValue.forecast).toBeCloseTo(0.4, 2);
+  });
+
+  it('prefers newer explicit uncontexted window data over older MECE context slices (uncontexted query)', () => {
+    const cohortVal = createCohortValue({
+      dates: [daysAgo(90), daysAgo(80)],
+      n: 200,
+      k: 100,
+    });
+
+    // Explicit uncontexted window slice (NEWER) with mean 0.20.
+    const explicitUncontexted = createWindowValue({
+      startDaysAgo: 30,
+      endDaysAgo: 20,
+      n: 1000,
+      k: 200,
+    });
+    explicitUncontexted.data_source = {
+      type: 'api',
+      retrieved_at: '2025-12-08T00:00:00Z',
+    };
+
+    // Older MECE context slices that would sum to a very different mean if incorrectly selected.
+    const ctxA = createWindowValue({ startDaysAgo: 30, endDaysAgo: 20, n: 500, k: 450, context: 'channel=A' }); // 0.90
+    const ctxB = createWindowValue({ startDaysAgo: 30, endDaysAgo: 20, n: 500, k: 450, context: 'channel=B' }); // 0.90
+    const ctxC = createWindowValue({ startDaysAgo: 30, endDaysAgo: 20, n: 500, k: 450, context: 'channel=C' }); // 0.90
+    for (const v of [ctxA, ctxB, ctxC]) {
+      v.data_source = { type: 'api', retrieved_at: '2025-12-01T00:00:00Z' };
+    }
+
+    const result = addEvidenceAndForecastScalars(
+      { type: 'probability', values: [cohortVal] },
+      { values: [cohortVal, explicitUncontexted, ctxA, ctxB, ctxC] },
+      `cohort(anchor,${daysAgo(90)}:${daysAgo(80)})` // Uncontexted target dims
+    );
+
+    const outputValue = result.values[0] as any;
+
+    // Forecast recomputed from daily arrays; should track the NEWER explicit uncontexted baseline (200/1000 = 0.20).
+    expect(outputValue.forecast).toBeCloseTo(0.2, 10);
   });
   
   it('does not overwrite existing forecast on cohort value', () => {
