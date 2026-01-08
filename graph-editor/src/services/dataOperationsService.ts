@@ -8330,103 +8330,316 @@ class DataOperationsService {
         return !!parsed.window && !parsed.cohort;
       });
 
-      // Find window() slices in the same param file with matching context/case dimensions.
-      const windowCandidates = allWindowValues.filter((v) => {
-        if (!v.sliceDSL) return false;
-        const parsed = parseConstraints(v.sliceDSL);
-        const hasWindow = !!parsed.window;
-        const hasCohort = !!parsed.cohort;
-        if (!hasWindow || hasCohort) return false;
-        
-        const dims = extractSliceDimensions(v.sliceDSL);
-        if (dims !== targetDims) return false;
+      const isDailyCapable = (v: ParameterValue): boolean => {
+        const dates: unknown = (v as any).dates;
+        const nDaily: unknown = (v as any).n_daily;
+        const kDaily: unknown = (v as any).k_daily;
+        return (
+          Array.isArray(dates) &&
+          Array.isArray(nDaily) &&
+          Array.isArray(kDaily) &&
+          dates.length > 0 &&
+          nDaily.length === dates.length &&
+          kDaily.length === dates.length
+        );
+      };
 
-        // Candidate if it already has a forecast scalar, OR if we can compute one from daily arrays.
-        if ((v as any).forecast !== undefined) return true;
-        const hasDailyArrays =
-          Array.isArray((v as any).dates) &&
-          Array.isArray((v as any).n_daily) &&
-          Array.isArray((v as any).k_daily) &&
-          (v as any).dates.length > 0 &&
-          (v as any).n_daily.length === (v as any).dates.length &&
-          (v as any).k_daily.length === (v as any).dates.length;
-        return hasDailyArrays;
-      });
+      type DailyAccessor = {
+        sliceDSL: string;
+        recencyMs: number;
+        startMs: number;
+        endMs: number;
+        coverageDays: number;
+        hasDaily: boolean;
+        getNKForDay: (dayUK: string) => { covered: boolean; n: number; k: number };
+      };
 
-      // If this is an implicit-uncontexted query (targetDims === '') and there is no explicit uncontexted window slice,
-      // attempt a MECE partition across all window slices to build a baseline forecast at query time.
-      let meceKey: string | undefined;
-      let meceWarnings: string[] | undefined;
-      let effectiveWindowCandidates: ParameterValue[] = windowCandidates;
-      if (targetDims === '' && allWindowValues.length > 0) {
-        // Preference rule: if a complete MECE partition exists, prefer it over an explicit uncontexted window slice
-        // to avoid mixing datasets across scenarios.
-        const mece = resolveMECEPartitionForImplicitUncontextedSync(allWindowValues, {
-          preferMECEWhenAvailable: true,
-          requireComplete: true,
-        });
-        if (mece.kind === 'mece_partition' && mece.canAggregate) {
-          meceKey = mece.key;
-          meceWarnings = mece.warnings;
-          effectiveWindowCandidates = mece.values;
+      const buildDailyAccessor = (v: ParameterValue): DailyAccessor | null => {
+        const sliceDSL = v.sliceDSL ?? '';
+        if (!sliceDSL.trim()) return null;
+        const recencyMs = parameterValueRecencyMs(v);
+
+        const hasDaily = isDailyCapable(v);
+        const dates: string[] = hasDaily ? ((v as any).dates as string[]) : [];
+        const nDaily: number[] = hasDaily ? ((v as any).n_daily as number[]) : [];
+        const kDaily: number[] = hasDaily ? ((v as any).k_daily as number[]) : [];
+
+        // Coverage bounds: prefer explicit window_from/window_to; fall back to min/max of dates.
+        let startMs = Number.POSITIVE_INFINITY;
+        let endMs = Number.NEGATIVE_INFINITY;
+        try {
+          if (typeof (v as any).window_from === 'string' && String((v as any).window_from).trim()) {
+            startMs = parseDate(String((v as any).window_from)).getTime();
+          }
+        } catch {
+          // ignore
         }
-      }
-
-      if (effectiveWindowCandidates.length > 0) {
-        // Choose "best" per slice-dim family to avoid double-counting overlaps across multiple retrieved windows.
-        const byDims = new Map<string, ParameterValue[]>();
-        for (const v of effectiveWindowCandidates) {
-          const dims = extractSliceDimensions(v.sliceDSL ?? '');
-          const arr = byDims.get(dims) ?? [];
-          arr.push(v);
-          byDims.set(dims, arr);
-        }
-
-        const chosen: any[] = [];
-        for (const arr of byDims.values()) {
-          const best = [...arr].sort((a, b) => {
-            const aDate = (a as any).data_source?.retrieved_at || (a as any).window_to || '';
-            const bDate = (b as any).data_source?.retrieved_at || (b as any).window_to || '';
-            return String(bDate).localeCompare(String(aDate));
-          })[0] as any;
-          chosen.push(best);
+        try {
+          if (typeof (v as any).window_to === 'string' && String((v as any).window_to).trim()) {
+            endMs = parseDate(String((v as any).window_to)).getTime();
+          }
+        } catch {
+          // ignore
         }
 
-        // As-of date for recency weighting: max(window date) across chosen window slice(s).
-        const maxDateFromSlice = (w: any): Date | undefined => {
-          const dates: string[] | undefined = w?.dates;
-          if (Array.isArray(dates) && dates.length > 0) {
-            let best: Date | undefined;
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+          if (hasDaily) {
             for (const ds of dates) {
               try {
-                const d = parseDate(ds);
-                if (!Number.isNaN(d.getTime())) {
-                  if (!best || d.getTime() > best.getTime()) best = d;
+                const t = parseDate(ds).getTime();
+                if (!Number.isNaN(t)) {
+                  if (t < startMs) startMs = t;
+                  if (t > endMs) endMs = t;
                 }
               } catch {
                 // ignore
               }
             }
-            if (best) return best;
           }
-          const windowTo = w?.window_to;
-          if (typeof windowTo === 'string' && windowTo.trim()) {
-            try {
-              const d = parseDate(windowTo);
-              if (!Number.isNaN(d.getTime())) return d;
-            } catch {
-              // ignore
-            }
+        }
+
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+          // No usable bounds; treat as non-covering.
+          return {
+            sliceDSL,
+            recencyMs,
+            startMs: Number.POSITIVE_INFINITY,
+            endMs: Number.NEGATIVE_INFINITY,
+            coverageDays: 0,
+            hasDaily,
+            getNKForDay: () => ({ covered: false, n: 0, k: 0 }),
+          };
+        }
+
+        const coverageDays = Math.max(1, Math.floor((endMs - startMs) / (24 * 60 * 60 * 1000)) + 1);
+
+        // Index for sparse arrays; missing day within coverage counts as 0 (thin day), not “invalid”.
+        const index = new Map<string, number>();
+        if (hasDaily) {
+          for (let i = 0; i < dates.length; i++) index.set(dates[i], i);
+        }
+
+        const getNKForDay = (dayUK: string): { covered: boolean; n: number; k: number } => {
+          let t = Number.NaN;
+          try {
+            t = parseDate(dayUK).getTime();
+          } catch {
+            return { covered: false, n: 0, k: 0 };
           }
-          return undefined;
+          if (Number.isNaN(t)) return { covered: false, n: 0, k: 0 };
+          if (t < startMs || t > endMs) return { covered: false, n: 0, k: 0 };
+          if (!hasDaily) return { covered: true, n: 0, k: 0 };
+          const i = index.get(dayUK);
+          if (i === undefined) {
+            // Missing day within declared coverage → treat as 0 contribution.
+            return { covered: true, n: 0, k: 0 };
+          }
+          const n = typeof nDaily[i] === 'number' && Number.isFinite(nDaily[i]) ? nDaily[i] : 0;
+          const k = typeof kDaily[i] === 'number' && Number.isFinite(kDaily[i]) ? kDaily[i] : 0;
+          return { covered: true, n, k };
         };
 
+        return { sliceDSL, recencyMs, startMs, endMs, coverageDays, hasDaily, getNKForDay };
+      };
+
+      // Find window() slices in the same param file with matching context/case dimensions (for contexted queries).
+      const contextMatchedWindowCandidates = allWindowValues.filter((v) => extractSliceDimensions(v.sliceDSL ?? '') === targetDims);
+
+      // For uncontexted queries, we may also synthesise an implicit-uncontexted MECE baseline on a per-day basis.
+      const isUncontextedTarget = targetDims === '';
+      const bestMECE = isUncontextedTarget ? findBestMECEPartitionCandidateSync(allWindowValues, { requireComplete: true }) : null;
+      const meceKey = bestMECE?.key;
+      const meceWarnings = bestMECE?.warnings;
+
+      // Build accessors for:
+      // - context-matching (always) OR explicit uncontexted (when targetDims === '')
+      // - MECE member slices (uncontexted only)
+      const explicitAccessorsRaw =
+        isUncontextedTarget
+          ? allWindowValues.filter((v) => extractSliceDimensions(v.sliceDSL ?? '') === '')
+          : contextMatchedWindowCandidates;
+      const explicitAccessors = explicitAccessorsRaw.map(buildDailyAccessor).filter((a): a is DailyAccessor => !!a);
+
+      // Group MECE accessors by the MECE key's value (e.g. channel=paid-search).
+      const meceByValue = new Map<string, DailyAccessor[]>();
+      if (bestMECE && meceKey) {
+        for (const pv of bestMECE.values) {
+          const dims = extractSliceDimensions(pv.sliceDSL ?? '');
+          const parsed = parseConstraints(dims);
+          const ctx = parsed.context?.[0];
+          if (!ctx || ctx.key !== meceKey) continue;
+          const acc = buildDailyAccessor(pv);
+          if (!acc) continue;
+          const arr = meceByValue.get(ctx.value) ?? [];
+          arr.push(acc);
+          meceByValue.set(ctx.value, arr);
+        }
+      }
+
+      const anyDailyInputs =
+        explicitAccessors.some((a) => a.hasDaily) ||
+        Array.from(meceByValue.values()).some((arr) => arr.some((a) => a.hasDaily));
+
+      if (anyDailyInputs) {
+        // Meta-slice day range: union of all candidate coverage intervals (greedy temporally-wide).
+        const allBounds: Array<{ startMs: number; endMs: number }> = [];
+        for (const a of explicitAccessors) {
+          if (Number.isFinite(a.startMs) && Number.isFinite(a.endMs) && a.startMs <= a.endMs) {
+            allBounds.push({ startMs: a.startMs, endMs: a.endMs });
+          }
+        }
+        for (const arr of meceByValue.values()) {
+          for (const a of arr) {
+            if (Number.isFinite(a.startMs) && Number.isFinite(a.endMs) && a.startMs <= a.endMs) {
+              allBounds.push({ startMs: a.startMs, endMs: a.endMs });
+            }
+          }
+        }
+        const minStart = allBounds.reduce((m, b) => Math.min(m, b.startMs), Number.POSITIVE_INFINITY);
+        const maxEnd = allBounds.reduce((m, b) => Math.max(m, b.endMs), Number.NEGATIVE_INFINITY);
+
+        // If we still don't have bounds, fall back to "now" and skip.
+        const startDate = Number.isFinite(minStart) ? new Date(minStart) : new Date();
+        const endDate = Number.isFinite(maxEnd) ? new Date(maxEnd) : new Date();
+
+        const pickBestAccessorForDay = (arr: DailyAccessor[], dayUK: string): DailyAccessor | null => {
+          let best: DailyAccessor | null = null;
+          for (const a of arr) {
+            // Only consider slices that can cover this day (coverage window), regardless of whether the day is present in dates[].
+            const nk = a.getNKForDay(dayUK);
+            if (!nk.covered) continue;
+            if (!best) {
+              best = a;
+              continue;
+            }
+            if (a.recencyMs > best.recencyMs) {
+              best = a;
+              continue;
+            }
+            if (a.recencyMs < best.recencyMs) continue;
+            if (a.coverageDays > best.coverageDays) {
+              best = a;
+              continue;
+            }
+          }
+          return best;
+        };
+
+        const datesMeta: string[] = [];
+        const nMeta: number[] = [];
+        const kMeta: number[] = [];
+
+        // For diagnostics: record winner switchpoints (not per-day spam).
+        type WinnerKind = 'explicit' | 'mece';
+        const winnerRuns: Array<{ kind: WinnerKind; from: string; to: string; detail: string }> = [];
+        const pushRun = (kind: WinnerKind, dayUK: string, detail: string): void => {
+          const last = winnerRuns[winnerRuns.length - 1];
+          if (last && last.kind === kind && last.detail === detail) {
+            last.to = dayUK;
+            return;
+          }
+          winnerRuns.push({ kind, from: dayUK, to: dayUK, detail });
+        };
+
+        // Iterate day-by-day over the wide horizon.
+        const dayMs = 24 * 60 * 60 * 1000;
+        for (let t = startDate.getTime(); t <= endDate.getTime(); t += dayMs) {
+          const dayUK = formatDateUK(new Date(t));
+
+          // Contexted queries: only use context-matching explicit series (never uncontexted).
+          if (!isUncontextedTarget) {
+            const best = pickBestAccessorForDay(explicitAccessors.filter((a) => a.hasDaily), dayUK);
+            if (!best) continue;
+            const nk = best.getNKForDay(dayUK);
+            datesMeta.push(dayUK);
+            nMeta.push(nk.n);
+            kMeta.push(nk.k);
+            pushRun('explicit', dayUK, best.sliceDSL);
+            continue;
+          }
+
+          // Uncontexted: consider explicit-uncontexted and MECE aggregate (if available).
+          const bestExplicit = pickBestAccessorForDay(explicitAccessors.filter((a) => a.hasDaily), dayUK);
+
+          // Build MECE aggregate for this day: require every context value to cover the day.
+          let meceCovered = meceByValue.size > 0;
+          let meceN = 0;
+          let meceK = 0;
+          let meceRecencyMs = Number.POSITIVE_INFINITY;
+          let meceCoverageDays = Number.POSITIVE_INFINITY;
+          const meceDetails: string[] = [];
+
+          if (meceCovered) {
+            for (const [ctxVal, arr] of meceByValue.entries()) {
+              const best = pickBestAccessorForDay(arr.filter((a) => a.hasDaily), dayUK);
+              if (!best) {
+                meceCovered = false;
+                break;
+              }
+              const nk = best.getNKForDay(dayUK);
+              meceN += nk.n;
+              meceK += nk.k;
+              meceRecencyMs = Math.min(meceRecencyMs, best.recencyMs);
+              meceCoverageDays = Math.min(meceCoverageDays, best.coverageDays);
+              meceDetails.push(`${ctxVal}:${best.sliceDSL}`);
+            }
+          }
+
+          const explicitCovered = !!bestExplicit;
+
+          // Pick per-day winner: freshest dataset wins; tie-break by wider coverage; final tie-break prefers explicit.
+          let winner: { kind: WinnerKind; n: number; k: number; detail: string } | null = null;
+          if (explicitCovered && meceCovered) {
+            const explicitRecencyMs = bestExplicit!.recencyMs;
+            if (explicitRecencyMs > meceRecencyMs) {
+              const nk = bestExplicit!.getNKForDay(dayUK);
+              winner = { kind: 'explicit', n: nk.n, k: nk.k, detail: bestExplicit!.sliceDSL };
+            } else if (explicitRecencyMs < meceRecencyMs) {
+              winner = { kind: 'mece', n: meceN, k: meceK, detail: `MECE(${meceKey ?? 'unknown'})` };
+            } else {
+              // Tie on recency: prefer wider coverage; if still tied, prefer explicit deterministically.
+              const explicitCoverageDays = bestExplicit!.coverageDays;
+              if (explicitCoverageDays > meceCoverageDays) {
+                const nk = bestExplicit!.getNKForDay(dayUK);
+                winner = { kind: 'explicit', n: nk.n, k: nk.k, detail: bestExplicit!.sliceDSL };
+              } else if (explicitCoverageDays < meceCoverageDays) {
+                winner = { kind: 'mece', n: meceN, k: meceK, detail: `MECE(${meceKey ?? 'unknown'})` };
+              } else {
+                const nk = bestExplicit!.getNKForDay(dayUK);
+                winner = { kind: 'explicit', n: nk.n, k: nk.k, detail: bestExplicit!.sliceDSL };
+              }
+            }
+          } else if (explicitCovered) {
+            const nk = bestExplicit!.getNKForDay(dayUK);
+            winner = { kind: 'explicit', n: nk.n, k: nk.k, detail: bestExplicit!.sliceDSL };
+          } else if (meceCovered) {
+            winner = { kind: 'mece', n: meceN, k: meceK, detail: `MECE(${meceKey ?? 'unknown'})` };
+          } else {
+            continue;
+          }
+
+          datesMeta.push(dayUK);
+          nMeta.push(winner.n);
+          kMeta.push(winner.k);
+          pushRun(winner.kind, dayUK, winner.detail);
+        }
+
+        // As-of date for maturity + recency weighting: max meta date.
         const asOfDate =
-          chosen
-            .map((w) => maxDateFromSlice(w))
-            .filter((d): d is Date => !!d)
-            .sort((a, b) => b.getTime() - a.getTime())[0]
-          ?? new Date();
+          datesMeta.length > 0
+            ? (() => {
+                let best = new Date(0);
+                for (const ds of datesMeta) {
+                  try {
+                    const d = parseDate(ds);
+                    if (!Number.isNaN(d.getTime()) && d.getTime() > best.getTime()) best = d;
+                  } catch {
+                    // ignore
+                  }
+                }
+                return best.getTime() > 0 ? best : new Date();
+              })()
+            : new Date();
 
         // Prefer t95 from the caller (edge-authoritative); then the aggregated latency; then window slice latency.
         const latestAggregatedValue: any = (nextAggregated.values as any[])?.[(nextAggregated.values as any[]).length - 1];
@@ -8438,53 +8651,23 @@ class DataOperationsService {
                 ? options.t95Days
                 : (typeof latestAggregatedValue?.latency?.t95 === 'number'
                     ? latestAggregatedValue.latency.t95
-                    : (typeof chosen?.[0]?.latency?.t95 === 'number' ? chosen[0].latency.t95 : undefined)));
+                    : undefined));
 
-        let weightedNTotal = 0;
-        let weightedKTotal = 0;
-        let maturityDaysUsed =
-          inferredT95Days === 0
-            ? 0
-            : (Math.ceil((Number.isFinite(inferredT95Days as number) && (inferredT95Days as number) > 0 ? (inferredT95Days as number) : DEFAULT_T95_DAYS)) + 1);
-        let usedAllDaysFallback = false;
-        const sliceSummaries: Array<{ sliceDSL?: string; used: 'daily' | 'scalar'; n?: number; k?: number; forecast?: number }> = [];
-
-        for (const w of chosen) {
-          const dailyResult = computeRecencyWeightedMatureForecast({
-            bestWindow: w,
-            t95Days: inferredT95Days,
-            asOfDate,
-          });
-          if (dailyResult.mean !== undefined && dailyResult.weightedN > 0) {
-            weightedNTotal += dailyResult.weightedN;
-            weightedKTotal += dailyResult.weightedK;
-            maturityDaysUsed = dailyResult.maturityDays || maturityDaysUsed;
-            usedAllDaysFallback = usedAllDaysFallback || dailyResult.usedAllDaysFallback;
-            sliceSummaries.push({ sliceDSL: w?.sliceDSL, used: 'daily' });
-            continue;
-          }
-
-          // Fallback: no usable daily arrays → use stored slice scalar forecast (weighted by header n).
-          const n = typeof w?.n === 'number' && Number.isFinite(w.n) && w.n > 0 ? w.n : 0;
-          const f = typeof w?.forecast === 'number' && Number.isFinite(w.forecast) ? w.forecast : undefined;
-          if (n > 0 && f !== undefined) {
-            weightedNTotal += n;
-            weightedKTotal += n * f;
-          }
-          sliceSummaries.push({ sliceDSL: w?.sliceDSL, used: 'scalar', n: w?.n, k: w?.k, forecast: w?.forecast });
-        }
+        const dailyResult = computeRecencyWeightedMatureForecast({
+          bestWindow: { dates: datesMeta, n_daily: nMeta, k_daily: kMeta },
+          t95Days: inferredT95Days,
+          asOfDate,
+        });
+        const weightedNTotal = dailyResult.weightedN;
+        const weightedKTotal = dailyResult.weightedK;
+        const maturityDaysUsed = dailyResult.maturityDays;
+        const usedAllDaysFallback = dailyResult.usedAllDaysFallback;
 
         // If we have a proper weighted population, compute the weighted mean.
         // Otherwise, if there is exactly one chosen slice with a scalar forecast, use it directly
         // (we still want F-mode to work even if header n is missing in some legacy fixtures).
         let forecastMeanComputed: number | undefined =
           weightedNTotal > 0 ? (weightedKTotal / weightedNTotal) : undefined;
-        if (forecastMeanComputed === undefined && chosen.length === 1) {
-          const lone = chosen[0] as any;
-          if (typeof lone?.forecast === 'number' && Number.isFinite(lone.forecast)) {
-            forecastMeanComputed = lone.forecast;
-          }
-        }
         if (forecastMeanComputed !== undefined) {
           // Attach forecast scalar (query-time) – always overwrite so F-mode is explainable and consistent.
           nextAggregated = {
@@ -8496,54 +8679,57 @@ class DataOperationsService {
           };
 
           if (options?.logOpId) {
+            const diagnosticsOn = sessionLogService.getDiagnosticLoggingEnabled();
             const basisLabel =
-              meceKey
-                ? `MECE(${meceKey})`
-                : 'context-matching';
+              (!isUncontextedTarget)
+                ? 'context-matching'
+                : (meceKey ? `meta-slice (explicit vs MECE(${meceKey}))` : 'meta-slice (explicit)');
+
             const effectiveT95ForLog =
               (typeof inferredT95Days === 'number' && Number.isFinite(inferredT95Days) && inferredT95Days > 0)
                 ? inferredT95Days
                 : (inferredT95Days === 0 ? 0 : DEFAULT_T95_DAYS);
-            // Compute effective halfLife for logging (mirrors computeWindowForecastFromDaily logic)
+
             const effectiveHalfLifeForLog =
               typeof options?.forecasting?.RECENCY_HALF_LIFE_DAYS === 'number' &&
               Number.isFinite(options.forecasting.RECENCY_HALF_LIFE_DAYS) &&
               options.forecasting.RECENCY_HALF_LIFE_DAYS > 0
                 ? options.forecasting.RECENCY_HALF_LIFE_DAYS
                 : RECENCY_HALF_LIFE_DAYS;
-            const detailLines: string[] = [];
-            detailLines.push(`basis: ${basisLabel}`);
-            detailLines.push(`as_of: ${normalizeDate(asOfDate.toISOString())} (max window date)`);
-            detailLines.push(
+
+            const summaryLines: string[] = [];
+            summaryLines.push(`basis: ${basisLabel}`);
+            summaryLines.push(`as_of: ${normalizeDate(asOfDate.toISOString())} (max window date)`);
+            summaryLines.push(
               inferredT95Days === 0
                 ? `maturity_exclusion: none (non-latency)`
                 : `maturity_exclusion: last ${maturityDaysUsed} days (t95≈${effectiveT95ForLog})`
             );
-            if (options.t95Source) {
-              detailLines.push(`t95_source: ${options.t95Source}`);
-            }
-            detailLines.push(`recency_weight: w=exp(-ln2*age/${effectiveHalfLifeForLog}d)`);
-            detailLines.push(`weighted: N=${Math.round(weightedNTotal)}, K=${Math.round(weightedKTotal)} → forecast=${(forecastMeanComputed * 100).toFixed(2)}%`);
-            if (usedAllDaysFallback) {
-              detailLines.push(`fallback: censoring left no mature days; used full-window mean for at least one slice`);
-            }
-            if (Array.isArray(meceWarnings) && meceWarnings.length > 0) {
-              detailLines.push(`mece_warnings: ${meceWarnings.join(' | ')}`);
-            }
-            const sliceList = sliceSummaries
-              .map((s) => `${s.used}: ${s.sliceDSL ?? '<missing sliceDSL>'}`)
-              .join('\n');
+            if (options.t95Source) summaryLines.push(`t95_source: ${options.t95Source}`);
+            summaryLines.push(`recency_weight: w=exp(-ln2*age/${effectiveHalfLifeForLog}d)`);
+            summaryLines.push(`weighted: N=${Math.round(weightedNTotal)}, K=${Math.round(weightedKTotal)} → forecast=${(forecastMeanComputed * 100).toFixed(2)}%`);
+            if (usedAllDaysFallback) summaryLines.push(`fallback: censoring left no mature days; used full-window mean`);
+            if (Array.isArray(meceWarnings) && meceWarnings.length > 0) summaryLines.push(`mece_warnings: ${meceWarnings.join(' | ')}`);
+
+            const verboseDetails =
+              diagnosticsOn
+                ? (() => {
+                    const runs = winnerRuns
+                      .slice(0, 250) // hard cap for safety; switchpoints should be small in practice
+                      .map((r) => `${r.kind}: ${r.from} → ${r.to} :: ${r.detail}`)
+                      .join('\n');
+                    return `${summaryLines.join('\n')}\n\nmeta-slice switchpoints:\n${runs}`;
+                  })()
+                : summaryLines.join('\n');
+
             sessionLogService.addChild(
               options.logOpId,
               'info',
               'FORECAST_BASIS',
               `Forecast recomputed at query time (${basisLabel})`,
-              `${detailLines.join('\n')}\n\nSlices:\n${sliceList}`,
+              verboseDetails,
               {
-                // Note: targetSlice is the slice we attach the scalar to, which may be cohort().
-                // The forecast basis is ALWAYS window() slices (listed below), even for cohort queries.
                 requestedSlice: targetSlice,
-                forecastWindowSlices: chosen.map((w: any) => w?.sliceDSL).filter(Boolean),
                 targetDims,
                 meceKey,
                 asOf: asOfDate.toISOString(),
@@ -8554,6 +8740,83 @@ class DataOperationsService {
                 forecastMean: forecastMeanComputed,
                 t95Days: effectiveT95ForLog,
                 t95Source: options.t95Source,
+                metaDays: datesMeta.length,
+                switchpoints: winnerRuns.length,
+                diagnosticsOn,
+              }
+            );
+          }
+        }
+      } else {
+        // Scalar-only fallback: no usable daily arrays anywhere. Preserve legacy behaviour by attaching a
+        // scalar forecast when available (even if header n is missing).
+        const scalarCandidates = contextMatchedWindowCandidates.filter((v) => {
+          const f = (v as any).forecast;
+          return typeof f === 'number' && Number.isFinite(f);
+        });
+
+        // For uncontexted, if there is no explicit uncontexted scalar, attempt an implicit-uncontexted MECE aggregate
+        // (weighted by header n when present).
+        let forecastMeanComputed: number | undefined;
+        let basisLabel = 'scalar (context-matching)';
+        let basisSlices: string[] = [];
+
+        if (scalarCandidates.length > 0) {
+          const best = scalarCandidates.reduce((b, cur) => (parameterValueRecencyMs(cur) > parameterValueRecencyMs(b) ? cur : b));
+          forecastMeanComputed = (best as any).forecast;
+          basisSlices = [best.sliceDSL ?? '<missing sliceDSL>'];
+          basisLabel = isUncontextedTarget ? 'scalar (explicit uncontexted)' : 'scalar (context-matching)';
+        } else if (isUncontextedTarget && bestMECE?.values?.length) {
+          let wN = 0;
+          let wK = 0;
+          let lone: any | undefined;
+          for (const v of bestMECE.values) {
+            const f = (v as any).forecast;
+            if (typeof f !== 'number' || !Number.isFinite(f)) continue;
+            lone = v;
+            const n = typeof (v as any).n === 'number' && Number.isFinite((v as any).n) && (v as any).n > 0 ? (v as any).n : 0;
+            if (n > 0) {
+              wN += n;
+              wK += n * f;
+            }
+            basisSlices.push(v.sliceDSL ?? '<missing sliceDSL>');
+          }
+          if (wN > 0) {
+            forecastMeanComputed = wK / wN;
+            basisLabel = `scalar (MECE(${meceKey ?? 'unknown'}))`;
+          } else if (lone && typeof (lone as any).forecast === 'number') {
+            // Last resort: single slice forecast with no n weighting available.
+            forecastMeanComputed = (lone as any).forecast;
+            basisLabel = `scalar (MECE(${meceKey ?? 'unknown'}), unweighted)`;
+          }
+        }
+
+        if (forecastMeanComputed !== undefined) {
+          nextAggregated = {
+            ...nextAggregated,
+            values: (nextAggregated.values as ParameterValue[]).map((v: any) => ({
+              ...v,
+              forecast: forecastMeanComputed,
+            })),
+          };
+
+          if (options?.logOpId) {
+            const diagnosticsOn = sessionLogService.getDiagnosticLoggingEnabled();
+            const msg = `Forecast attached from stored scalar (${basisLabel})`;
+            const details = diagnosticsOn ? `slices:\n${basisSlices.join('\n')}` : undefined;
+            sessionLogService.addChild(
+              options.logOpId,
+              'info',
+              'FORECAST_BASIS',
+              msg,
+              details,
+              {
+                requestedSlice: targetSlice,
+                targetDims,
+                meceKey,
+                forecastMean: forecastMeanComputed,
+                basis: basisLabel,
+                diagnosticsOn,
               }
             );
           }
