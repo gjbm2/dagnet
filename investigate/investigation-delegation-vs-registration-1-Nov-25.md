@@ -3,6 +3,10 @@
 **Dates covered:** 6–7-Jan-26  
 **Scope:** Explain, on an evidential basis, why **reach probability at success** differs between two graphs when running `cohort(1-Nov-25:1-Nov-25)`, and document the follow-on checks we used to narrow/validate hypotheses (including 1–10 Nov and 1–30 Nov windows where relevant).
 
+**Status (updated 8-Jan-26):**
+- The work described in `docs/current/implementation-plan-investigation-followups-7-Jan-26.md` (phases 1–6: Solutions A–F + hardening of Solution G) has now been implemented.
+- Remaining work is tracked below under “Follow-on work (new proposals)”.
+
 ### Question being answered
 
 You observed that two graphs (one “delegation”/rebuild view and one “registration”/success-v2 view) produce discrepant reach-at-success numbers for the same cohort.
@@ -34,6 +38,26 @@ This document records what we’ve checked so far, exactly what evidence we used
 - **`n_query` semantics risk** (especially window vs cohort) remains an open design/logic concern; we have not yet proven it as the root cause of any remaining discrepancy.
 
 ---
+
+## Follow-on work (new proposals)
+
+These are additional pieces of work identified after phases 1–6 were completed.
+
+### 2a) MSMDC should populate cohort anchors for all edges (latency and non-latency alike)
+
+MSMDC already computes an anchor map (edge UUID → furthest upstream START node). We should apply that consistently to the graph and parameter files for **all edges**, regardless of whether an edge is marked as a latency edge. This separates:
+
+- “What is my cohort anchor (A)?” (topology-derived)
+- from “Am I a latency edge?” (latency modelling / forecasting)
+
+### 2b) In cohort mode, build 3-step funnels everywhere (except when anchor == from)
+
+In `cohort(...)` mode, we should build A-anchored cohort funnels consistently:
+
+- Default: **A → from → to** (3-step)
+- Only exception: when **A == from**, a 2-step funnel is sufficient (**from → to**)
+
+This avoids mixing cohort-anchored and window-style semantics within a single cohort view and reduces conservation failures at split nodes.
 
 ## Artefacts (inputs)
 

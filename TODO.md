@@ -1,42 +1,54 @@
 # TODO
 
-- ## Test suite hygiene (micro-test shrapnel) — 7-Jan-26
-- **Context**: `npm test` currently has **247** Vitest files; **~100** are “micro candidates” (≤2 tests or ≤120 lines). Audit reports: `debug/tmp.vitest-test-audit.tsv`, `debug/tmp.vitest-test-audit.v2.tsv`.
--
-- **Goal**: Reduce test-file proliferation and “one-off shrapnel” while **preserving** regression coverage and keeping the suite navigable.
--
-- **Non-goals**:
-- - No weakening/loosening of assertions.
-- - No broad refactors of test utilities unless needed for consolidation.
--
-- **Policy (balanced)**:
-- - Keep **micro regression tests** when they are the best expression of a sharp invariant (especially subtle DSL edge-cases).
-- - Consolidate when a file is (a) a single assertion that clearly belongs to an existing suite, or (b) part of a cluster where the *topic* is fragmented across many tiny files.
-- - Quarantine “research / debug / repro / local-only” so they do not pollute the main suite surface area.
--
-- **Proposed actions (staged)**:
-- - **Stage A — Quarantine obvious shrapnel (low risk)**:
--   - Standardise *local-only* naming and location: keep these under a single pattern (e.g. `*.local.*`) and/or folder.
--   - Candidates already flagged by name/content:
--     - `graph-editor/src/services/__tests__/amplitudeSingleEvent.segmentation.local.research.test.ts`
--     - `graph-editor/src/services/__tests__/cohortAxy.meceSum.vsAmplitude.local.e2e.test.ts`
-- - **Stage B — Merge “repro/debug/research/tmp/temp/csvDriven” into the nearest owning suite OR move out of `npm test`**:
--   - Examples:
--     - `graph-editor/src/services/__tests__/crud_repro.test.ts`
--     - `graph-editor/src/services/__tests__/reachProbabilitySweep.*`
--     - `graph-editor/src/services/__tests__/paramPackCsvRunner.csvDriven.tool.test.ts`
-- - **Stage C — De-fragment the biggest micro clusters (medium risk, high payoff)**:
--   - Consolidate into one “home” suite per module (keep the existing file as the home where it already exists):
--     - `analysisEChartsService.*.test.ts` → merge into a single `analysisEChartsService.test.ts`
--     - `graphIssuesService.*.test.ts` → merge into `graphIssuesService.test.ts`
--     - `integrityCheckService.*.test.ts` → merge into `integrityCheckService.test.ts` (keep the larger drift tests as-is if they’re already good homes)
--     - `EdgeBeads.*.test.tsx` → merge into `EdgeBeads.test.tsx`
-- - **Stage D — Stop-gap guardrail**:
--   - When adding a new test, default to “add to existing suite”; only create a new test file when there is no sensible existing home.
--
-- **Process**:
-- - For each stage, prepare a small PR-sized patch set: consolidate + delete redundant files + keep test names/describe blocks clear.
-- - Only apply edits to existing tests with explicit approval (per `.cursorrules`); batch the diffs for review first.
+## Investigation pointer (updated 8-Jan-26)
+
+See `investigate/investigation-delegation-vs-registration-1-Nov-25.md`.
+
+**Remaining work to complete (new follow-ons):**
+- MSMDC should apply/populate cohort anchors (`anchor_node_id`) for **all** edges (latency and non-latency alike), and cascade to parameter files as appropriate.
+- In `cohort(...)` mode, build **3-step** funnels everywhere (**A → from → to**), except when **anchor == from** (then 2-step is sufficient).
+
+- Investigate Forecast calcs (now that we think evidence is semi-stable)
+- More testing of conditional_p logic under what-if scenarios
+- Let's make Current scenario visible at all times
+
+## Test suite hygiene (micro-test shrapnel) — 7-Jan-26
+  - **Context**: `npm test` currently has **247** Vitest files; **~100** are “micro candidates” (≤2 tests or ≤120 lines). Audit reports: `debug/tmp.vitest-test-audit.tsv`, `debug/tmp.vitest-test-audit.v2.tsv`.
+  -
+  - **Goal**: Reduce test-file proliferation and “one-off shrapnel” while **preserving** regression coverage and keeping the suite navigable.
+  -
+  - **Non-goals**:
+  - - No weakening/loosening of assertions.
+  - - No broad refactors of test utilities unless needed for consolidation.
+  -
+  - **Policy (balanced)**:
+  - - Keep **micro regression tests** when they are the best expression of a sharp invariant (especially subtle DSL edge-cases).
+  - - Consolidate when a file is (a) a single assertion that clearly belongs to an existing suite, or (b) part of a cluster where the *topic* is fragmented across many tiny files.
+  - - Quarantine “research / debug / repro / local-only” so they do not pollute the main suite surface area.
+  -
+  - **Proposed actions (staged)**:
+  - - **Stage A — Quarantine obvious shrapnel (low risk)**:
+  -   - Standardise *local-only* naming and location: keep these under a single pattern (e.g. `*.local.*`) and/or folder.
+  -   - Candidates already flagged by name/content:
+  -     - `graph-editor/src/services/__tests__/amplitudeSingleEvent.segmentation.local.research.test.ts`
+  -     - `graph-editor/src/services/__tests__/cohortAxy.meceSum.vsAmplitude.local.e2e.test.ts`
+  - - **Stage B — Merge “repro/debug/research/tmp/temp/csvDriven” into the nearest owning suite OR move out of `npm test`**:
+  -   - Examples:
+  -     - `graph-editor/src/services/__tests__/crud_repro.test.ts`
+  -     - `graph-editor/src/services/__tests__/reachProbabilitySweep.*`
+  -     - `graph-editor/src/services/__tests__/paramPackCsvRunner.csvDriven.tool.test.ts`
+  - - **Stage C — De-fragment the biggest micro clusters (medium risk, high payoff)**:
+  -   - Consolidate into one “home” suite per module (keep the existing file as the home where it already exists):
+  -     - `analysisEChartsService.*.test.ts` → merge into a single `analysisEChartsService.test.ts`
+  -     - `graphIssuesService.*.test.ts` → merge into `graphIssuesService.test.ts`
+  -     - `integrityCheckService.*.test.ts` → merge into `integrityCheckService.test.ts` (keep the larger drift tests as-is if they’re already good homes)
+  -     - `EdgeBeads.*.test.tsx` → merge into `EdgeBeads.test.tsx`
+  - - **Stage D — Stop-gap guardrail**:
+  -   - When adding a new test, default to “add to existing suite”; only create a new test file when there is no sensible existing home.
+  -
+  - **Process**:
+  - - For each stage, prepare a small PR-sized patch set: consolidate + delete redundant files + keep test names/describe blocks clear.
+  - - Only apply edits to existing tests with explicit approval (per `.cursorrules`); batch the diffs for review first.
 
 - For result cards in analytics: add a 'expand / contract' toggle to right of each card which shows all stats vs. key stats [and we may need to feed that through from analysis to flag which are key are which are ancillary)
 - context fixes: /home/reg/dev/dagnet/docs/current/project-lag/context-fix.md
