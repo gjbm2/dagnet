@@ -2,24 +2,10 @@ id: no-bdos-to-rec
 name: no-bdos-to-rec
 type: probability
 values:
-  - mean: 0.547
-    n: 380
-    k: 208
+  - mean: 1
+    n: 294
+    k: 294
     n_daily:
-      - 1
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 5
-      - 4
-      - 2
-      - 7
       - 6
       - 2
       - 4
@@ -81,129 +67,71 @@ values:
       - 1
       - 1
       - 7
-      - 5
-      - 3
-      - 1
-      - 0
-      - 2
-      - 2
-      - 9
-      - 12
-      - 7
-      - 4
-      - 2
-      - 7
-      - 6
-      - 3
-      - 4
       - 0
     k_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
+      - 6
+      - 3
       - 4
-      - 4
-      - 1
       - 1
       - 2
+      - 4
+      - 5
+      - 4
+      - 3
+      - 3
       - 1
       - 3
+      - 6
+      - 7
+      - 12
+      - 6
+      - 2
       - 0
-      - 1
-      - 2
-      - 1
-      - 1
-      - 1
-      - 2
-      - 1
+      - 0
+      - 0
+      - 6
+      - 3
+      - 4
+      - 6
+      - 7
       - 3
       - 2
       - 4
+      - 6
+      - 6
       - 7
       - 1
       - 1
-      - 0
-      - 0
-      - 0
-      - 1
-      - 1
-      - 2
       - 5
       - 4
-      - 1
-      - 2
       - 4
       - 4
-      - 0
-      - 2
-      - 1
-      - 0
-      - 3
-      - 3
-      - 2
-      - 4
-      - 3
       - 6
-      - 3
-      - 5
-      - 8
-      - 0
-      - 1
-      - 1
-      - 0
-      - 2
-      - 3
-      - 5
+      - 11
       - 7
       - 10
-      - 6
-      - 4
-      - 5
-      - 5
-      - 6
+      - 13
+      - 0
+      - 1
       - 3
-      - 2
-      - 1
-      - 1
-      - 2
-      - 1
-      - 1
-      - 1
       - 0
       - 2
-      - 0
-      - 7
-      - 7
-      - 7
-      - 1
-      - 1
-      - 4
       - 5
+      - 5
+      - 7
+      - 19
+      - 13
+      - 8
+      - 9
+      - 7
+      - 11
+      - 5
+      - 4
+      - 2
       - 0
-      - 0
+      - 1
       - 0
     dates:
-      - 8-Oct-25
-      - 9-Oct-25
-      - 10-Oct-25
-      - 11-Oct-25
-      - 12-Oct-25
-      - 13-Oct-25
-      - 14-Oct-25
-      - 15-Oct-25
-      - 16-Oct-25
-      - 17-Oct-25
-      - 18-Oct-25
-      - 19-Oct-25
-      - 20-Oct-25
-      - 21-Oct-25
       - 22-Oct-25
       - 23-Oct-25
       - 24-Oct-25
@@ -266,48 +194,19 @@ values:
       - 20-Dec-25
       - 21-Dec-25
       - 22-Dec-25
-      - 23-Dec-25
-      - 24-Dec-25
-      - 25-Dec-25
-      - 26-Dec-25
-      - 27-Dec-25
-      - 28-Dec-25
-      - 29-Dec-25
-      - 30-Dec-25
-      - 31-Dec-25
-      - 1-Jan-26
-      - 2-Jan-26
-      - 3-Jan-26
-      - 4-Jan-26
-      - 5-Jan-26
-      - 6-Jan-26
-    window_from: 8-Oct-25
-    window_to: 6-Jan-26
-    query_signature: ed054d757dfe1b3bf6a5fffc28899d44da3591010c6b7a198d446c9dae3ad919
-    sliceDSL: window(8-Oct-25:6-Jan-26).context(channel:paid-search)
-    forecast: 0.5667641126235894
+    window_from: 22-Oct-25
+    window_to: 22-Dec-25
+    query_signature: 448ca5c849903b62e35dc4caaf638663f4bbdd3a9fc9d74770a422c634b7c21e
+    sliceDSL: window(22-Oct-25:22-Dec-25).context(channel:paid-search)
+    forecast: 1.0398122540292023
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-06T14:08:57.573Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.61
-    n: 3205
-    k: 1955
+      retrieved_at: 2025-12-22T09:55:41.316Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+  - mean: 0.887
+    n: 2823
+    k: 2505
     n_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
       - 0
       - 0
       - 0
@@ -348,7 +247,7 @@ values:
       - 126
       - 121
       - 4
-      - 137
+      - 136
       - 86
       - 25
       - 9
@@ -359,32 +258,17 @@ values:
       - 15
       - 170
       - 180
-      - 347
+      - 345
       - 126
-      - 134
+      - 133
       - 127
       - 88
       - 8
       - 8
-      - 59
+      - 58
       - 53
-      - 77
-      - 45
-      - 6
-      - 0
-      - 0
-      - 1
-      - 0
-      - 25
-      - 160
-      - 86
-      - 16
-      - 3
-      - 17
-      - 10
-      - 19
-      - 7
-      - 0
+      - 75
+      - 20
     k_daily:
       - 0
       - 0
@@ -408,90 +292,47 @@ values:
       - 0
       - 0
       - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 20
-      - 96
-      - 55
-      - 11
-      - 8
-      - 14
-      - 69
-      - 52
-      - 25
-      - 12
-      - 0
-      - 17
-      - 9
-      - 5
       - 31
-      - 75
-      - 97
-      - 12
-      - 68
-      - 60
-      - 17
-      - 2
-      - 33
+      - 175
+      - 115
+      - 13
+      - 11
+      - 18
+      - 87
+      - 83
+      - 43
       - 16
+      - 0
       - 23
-      - 15
-      - 7
-      - 85
-      - 103
-      - 233
-      - 99
+      - 16
+      - 8
+      - 45
+      - 113
+      - 118
+      - 13
+      - 119
+      - 92
+      - 26
+      - 5
+      - 51
+      - 28
+      - 31
+      - 26
+      - 13
+      - 140
+      - 180
+      - 319
+      - 139
+      - 121
+      - 110
       - 82
-      - 77
-      - 47
-      - 6
-      - 2
-      - 41
-      - 36
-      - 48
-      - 40
-      - 4
-      - 0
-      - 0
-      - 1
-      - 0
-      - 7
-      - 102
-      - 56
-      - 15
-      - 2
       - 12
-      - 7
-      - 0
+      - 5
+      - 48
+      - 24
+      - 5
       - 1
-      - 0
     dates:
-      - 8-Oct-25
-      - 9-Oct-25
-      - 10-Oct-25
-      - 11-Oct-25
-      - 12-Oct-25
-      - 13-Oct-25
-      - 14-Oct-25
-      - 15-Oct-25
-      - 16-Oct-25
-      - 17-Oct-25
-      - 18-Oct-25
-      - 19-Oct-25
-      - 20-Oct-25
-      - 21-Oct-25
       - 22-Oct-25
       - 23-Oct-25
       - 24-Oct-25
@@ -554,48 +395,19 @@ values:
       - 20-Dec-25
       - 21-Dec-25
       - 22-Dec-25
-      - 23-Dec-25
-      - 24-Dec-25
-      - 25-Dec-25
-      - 26-Dec-25
-      - 27-Dec-25
-      - 28-Dec-25
-      - 29-Dec-25
-      - 30-Dec-25
-      - 31-Dec-25
-      - 1-Jan-26
-      - 2-Jan-26
-      - 3-Jan-26
-      - 4-Jan-26
-      - 5-Jan-26
-      - 6-Jan-26
-    window_from: 8-Oct-25
-    window_to: 6-Jan-26
-    query_signature: 42ff4419edbf4a23d88748f1df09e917c8976d8eca3fc8209c6afa0d406eb488
-    sliceDSL: window(8-Oct-25:6-Jan-26).context(channel:influencer)
-    forecast: 0.6153489427875242
+    window_from: 22-Oct-25
+    window_to: 22-Dec-25
+    query_signature: 898dd6df20c23edb9dbf5c15136c098e93c2ad8eb4b7f39f19ce8ad9af2c0cd8
+    sliceDSL: window(22-Oct-25:22-Dec-25).context(channel:influencer)
+    forecast: 0.9340655272664455
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-06T14:09:20.658Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.451
-    n: 406
-    k: 183
+      retrieved_at: 2025-12-22T09:56:11.263Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+  - mean: 0.79
+    n: 385
+    k: 304
     n_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 1
-      - 6
-      - 9
-      - 1
       - 13
       - 6
       - 4
@@ -657,129 +469,71 @@ values:
       - 4
       - 1
       - 1
-      - 1
-      - 1
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 1
-      - 1
       - 0
     k_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 1
-      - 5
-      - 5
-      - 1
+      - 9
       - 4
       - 3
+      - 15
+      - 27
+      - 7
+      - 3
+      - 4
       - 2
+      - 4
+      - 5
+      - 5
+      - 9
+      - 10
+      - 8
       - 6
-      - 19
       - 5
+      - 0
+      - 0
       - 1
       - 2
-      - 1
-      - 0
-      - 4
-      - 3
       - 7
       - 4
       - 5
-      - 3
-      - 2
-      - 0
-      - 0
-      - 0
-      - 2
-      - 3
-      - 2
-      - 3
-      - 11
-      - 4
-      - 0
-      - 3
+      - 16
+      - 12
       - 1
-      - 0
-      - 2
-      - 0
-      - 11
-      - 2
-      - 0
-      - 0
-      - 2
-      - 3
-      - 4
-      - 1
-      - 3
+      - 6
       - 7
-      - 1
-      - 1
-      - 1
       - 3
-      - 3
-      - 1
-      - 2
-      - 4
       - 5
       - 1
+      - 17
+      - 5
+      - 1
+      - 0
+      - 2
+      - 5
+      - 6
+      - 3
+      - 5
+      - 12
+      - 2
+      - 2
+      - 3
+      - 6
+      - 3
+      - 3
+      - 5
       - 4
-      - 0
-      - 0
+      - 6
+      - 4
+      - 5
       - 0
       - 1
+      - 1
+      - 3
       - 0
       - 3
       - 1
-      - 1
-      - 1
-      - 1
       - 0
       - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 1
-      - 0
-      - 1
     dates:
-      - 8-Oct-25
-      - 9-Oct-25
-      - 10-Oct-25
-      - 11-Oct-25
-      - 12-Oct-25
-      - 13-Oct-25
-      - 14-Oct-25
-      - 15-Oct-25
-      - 16-Oct-25
-      - 17-Oct-25
-      - 18-Oct-25
-      - 19-Oct-25
-      - 20-Oct-25
-      - 21-Oct-25
       - 22-Oct-25
       - 23-Oct-25
       - 24-Oct-25
@@ -842,48 +596,19 @@ values:
       - 20-Dec-25
       - 21-Dec-25
       - 22-Dec-25
-      - 23-Dec-25
-      - 24-Dec-25
-      - 25-Dec-25
-      - 26-Dec-25
-      - 27-Dec-25
-      - 28-Dec-25
-      - 29-Dec-25
-      - 30-Dec-25
-      - 31-Dec-25
-      - 1-Jan-26
-      - 2-Jan-26
-      - 3-Jan-26
-      - 4-Jan-26
-      - 5-Jan-26
-      - 6-Jan-26
-    window_from: 8-Oct-25
-    window_to: 6-Jan-26
-    query_signature: c9e12bc8969ce66bab8cf615cc3b9077565edbd406e4ca00e80d37bf82a856eb
-    sliceDSL: window(8-Oct-25:6-Jan-26).context(channel:paid-social)
-    forecast: 0.4448615898305722
+    window_from: 22-Oct-25
+    window_to: 22-Dec-25
+    query_signature: fab78306ccedde789ee813ed31ccf8519fcb4d71444816265ca12dacc07c6a54
+    sliceDSL: window(22-Oct-25:22-Dec-25).context(channel:paid-social)
+    forecast: 0.780434264892501
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-06T14:09:43.773Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.527
-    n: 1405
-    k: 740
+      retrieved_at: 2025-12-22T09:56:37.933Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+  - mean: 0.932
+    n: 1246
+    k: 1161
     n_daily:
-      - 0
-      - 0
-      - 1
-      - 0
-      - 0
-      - 4
-      - 1
-      - 5
-      - 1
-      - 11
-      - 29
-      - 9
-      - 8
-      - 39
       - 66
       - 20
       - 0
@@ -939,423 +664,77 @@ values:
       - 8
       - 5
       - 6
-      - 5
-      - 3
-      - 3
-      - 1
-      - 0
-      - 1
-      - 5
-      - 2
-      - 1
-      - 0
-      - 1
-      - 1
-      - 2
-      - 6
-      - 7
-      - 3
-      - 2
-      - 7
-      - 5
-      - 1
-      - 3
       - 4
+      - 3
+      - 3
+      - 1
+      - 0
+      - 1
+      - 0
     k_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 12
-      - 21
-      - 5
-      - 4
-      - 20
-      - 31
-      - 12
+      - 56
+      - 17
       - 1
-      - 1
-      - 26
-      - 41
+      - 2
+      - 39
+      - 76
+      - 67
+      - 6
       - 27
-      - 2
-      - 19
-      - 9
-      - 31
-      - 31
-      - 28
-      - 20
+      - 17
+      - 50
       - 51
-      - 14
-      - 3
-      - 0
-      - 0
-      - 26
+      - 43
+      - 34
+      - 71
       - 21
-      - 16
-      - 35
-      - 35
-      - 7
-      - 3
-      - 6
-      - 10
-      - 10
-      - 5
-      - 3
-      - 2
-      - 4
-      - 3
-      - 3
-      - 7
-      - 6
-      - 13
       - 8
-      - 3
-      - 2
-      - 9
-      - 3
       - 0
       - 0
-      - 4
+      - 69
+      - 55
+      - 25
+      - 68
+      - 70
+      - 22
       - 5
-      - 4
-      - 1
-      - 7
-      - 5
+      - 8
+      - 12
+      - 13
       - 11
-      - 5
-      - 2
-      - 7
-      - 5
-      - 1
-      - 2
-      - 2
-      - 1
-      - 1
+      - 8
       - 4
-      - 1
-      - 0
-      - 0
-      - 1
-      - 2
-      - 1
-      - 3
-      - 7
-      - 2
-      - 0
-      - 3
-      - 3
-      - 0
-      - 1
-      - 0
-    dates:
-      - 8-Oct-25
-      - 9-Oct-25
-      - 10-Oct-25
-      - 11-Oct-25
-      - 12-Oct-25
-      - 13-Oct-25
-      - 14-Oct-25
-      - 15-Oct-25
-      - 16-Oct-25
-      - 17-Oct-25
-      - 18-Oct-25
-      - 19-Oct-25
-      - 20-Oct-25
-      - 21-Oct-25
-      - 22-Oct-25
-      - 23-Oct-25
-      - 24-Oct-25
-      - 25-Oct-25
-      - 26-Oct-25
-      - 27-Oct-25
-      - 28-Oct-25
-      - 29-Oct-25
-      - 30-Oct-25
-      - 31-Oct-25
-      - 1-Nov-25
-      - 2-Nov-25
-      - 3-Nov-25
-      - 4-Nov-25
-      - 5-Nov-25
-      - 6-Nov-25
-      - 7-Nov-25
-      - 8-Nov-25
-      - 9-Nov-25
-      - 10-Nov-25
-      - 11-Nov-25
-      - 12-Nov-25
-      - 13-Nov-25
-      - 14-Nov-25
-      - 15-Nov-25
-      - 16-Nov-25
-      - 17-Nov-25
-      - 18-Nov-25
-      - 19-Nov-25
-      - 20-Nov-25
-      - 21-Nov-25
-      - 22-Nov-25
-      - 23-Nov-25
-      - 24-Nov-25
-      - 25-Nov-25
-      - 26-Nov-25
-      - 27-Nov-25
-      - 28-Nov-25
-      - 29-Nov-25
-      - 30-Nov-25
-      - 1-Dec-25
-      - 2-Dec-25
-      - 3-Dec-25
-      - 4-Dec-25
-      - 5-Dec-25
-      - 6-Dec-25
-      - 7-Dec-25
-      - 8-Dec-25
-      - 9-Dec-25
-      - 10-Dec-25
-      - 11-Dec-25
-      - 12-Dec-25
-      - 13-Dec-25
-      - 14-Dec-25
-      - 15-Dec-25
-      - 16-Dec-25
-      - 17-Dec-25
-      - 18-Dec-25
-      - 19-Dec-25
-      - 20-Dec-25
-      - 21-Dec-25
-      - 22-Dec-25
-      - 23-Dec-25
-      - 24-Dec-25
-      - 25-Dec-25
-      - 26-Dec-25
-      - 27-Dec-25
-      - 28-Dec-25
-      - 29-Dec-25
-      - 30-Dec-25
-      - 31-Dec-25
-      - 1-Jan-26
-      - 2-Jan-26
-      - 3-Jan-26
-      - 4-Jan-26
-      - 5-Jan-26
-      - 6-Jan-26
-    window_from: 8-Oct-25
-    window_to: 6-Jan-26
-    query_signature: 9aba3bfbaaec3d63bd47e7401a04974161cac1c7c1e9ea3a684e04b4de57a7b4
-    sliceDSL: window(8-Oct-25:6-Jan-26).context(channel:other)
-    forecast: 0.5523284120289426
-    data_source:
-      type: amplitude
-      retrieved_at: 2026-01-06T14:10:07.397Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.447
-    n: 380
-    k: 170
-    n_daily:
-      - 1
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 5
-      - 4
-      - 2
-      - 7
       - 6
-      - 2
-      - 4
-      - 2
-      - 4
       - 5
-      - 4
-      - 4
-      - 5
-      - 2
-      - 2
       - 3
-      - 6
-      - 6
-      - 10
-      - 5
-      - 2
-      - 1
-      - 0
-      - 2
-      - 6
-      - 3
-      - 4
-      - 4
-      - 10
-      - 4
-      - 3
-      - 5
-      - 7
-      - 3
-      - 5
-      - 2
-      - 1
-      - 6
-      - 3
-      - 3
-      - 3
-      - 4
-      - 10
-      - 7
-      - 6
-      - 11
-      - 2
-      - 2
-      - 2
-      - 0
-      - 2
-      - 3
-      - 6
-      - 9
       - 18
+      - 9
+      - 15
+      - 10
+      - 5
+      - 8
+      - 14
+      - 6
+      - 2
+      - 4
+      - 6
+      - 6
+      - 3
+      - 2
+      - 10
+      - 7
+      - 17
+      - 12
+      - 7
       - 12
       - 9
-      - 9
-      - 7
-      - 11
-      - 5
-      - 3
-      - 1
-      - 1
-      - 7
-      - 5
-      - 3
-      - 1
-      - 0
-      - 2
-      - 2
-      - 9
-      - 12
-      - 7
-      - 4
-      - 2
-      - 7
-      - 6
-      - 3
-      - 4
-      - 0
-    k_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 4
-      - 4
-      - 1
-      - 1
-      - 2
-      - 1
-      - 3
-      - 0
-      - 1
-      - 2
-      - 1
-      - 1
-      - 1
-      - 1
-      - 1
-      - 2
-      - 2
-      - 3
-      - 4
-      - 1
-      - 1
-      - 0
-      - 0
-      - 0
-      - 1
-      - 1
-      - 2
-      - 3
-      - 1
-      - 2
-      - 0
-      - 4
-      - 4
-      - 0
-      - 1
-      - 1
-      - 0
       - 3
       - 3
       - 1
-      - 2
-      - 1
-      - 6
-      - 4
-      - 3
-      - 7
-      - 0
       - 1
       - 1
-      - 0
-      - 2
-      - 2
-      - 5
-      - 5
-      - 7
-      - 4
-      - 5
-      - 3
-      - 5
-      - 6
-      - 2
-      - 1
-      - 0
-      - 1
-      - 2
-      - 1
-      - 1
-      - 1
-      - 0
-      - 2
-      - 0
-      - 7
-      - 6
-      - 3
-      - 1
-      - 1
-      - 4
-      - 4
-      - 0
-      - 0
       - 0
     dates:
-      - 8-Oct-25
-      - 9-Oct-25
-      - 10-Oct-25
-      - 11-Oct-25
-      - 12-Oct-25
-      - 13-Oct-25
-      - 14-Oct-25
-      - 15-Oct-25
-      - 16-Oct-25
-      - 17-Oct-25
-      - 18-Oct-25
-      - 19-Oct-25
-      - 20-Oct-25
-      - 21-Oct-25
       - 22-Oct-25
       - 23-Oct-25
       - 24-Oct-25
@@ -1418,48 +797,19 @@ values:
       - 20-Dec-25
       - 21-Dec-25
       - 22-Dec-25
-      - 23-Dec-25
-      - 24-Dec-25
-      - 25-Dec-25
-      - 26-Dec-25
-      - 27-Dec-25
-      - 28-Dec-25
-      - 29-Dec-25
-      - 30-Dec-25
-      - 31-Dec-25
-      - 1-Jan-26
-      - 2-Jan-26
-      - 3-Jan-26
-      - 4-Jan-26
-      - 5-Jan-26
-      - 6-Jan-26
-    cohort_from: 8-Oct-25
-    cohort_to: 6-Jan-26
-    query_signature: ed054d757dfe1b3bf6a5fffc28899d44da3591010c6b7a198d446c9dae3ad919
-    sliceDSL: cohort(household-created,8-Oct-25:6-Jan-26).context(channel:paid-search)
+    window_from: 22-Oct-25
+    window_to: 22-Dec-25
+    query_signature: bc04d39b5782a9dc11a4b2e054937b34f3590264b9ada5ec8e4c46260df4a553
+    sliceDSL: window(22-Oct-25:22-Dec-25).context(channel:other)
+    forecast: 0.9471316733316213
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-06T14:10:27.031Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.575
-    n: 3205
-    k: 1843
+      retrieved_at: 2025-12-22T09:57:07.259Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+  - mean: 0.548
+    n: 2817
+    k: 1543
     n_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
       - 0
       - 0
       - 0
@@ -1482,12 +832,12 @@ values:
       - 0
       - 0
       - 33
-      - 191
+      - 189
       - 130
       - 13
       - 12
       - 24
-      - 95
+      - 94
       - 89
       - 44
       - 16
@@ -1496,62 +846,32 @@ values:
       - 16
       - 8
       - 56
-      - 126
-      - 121
+      - 125
+      - 120
       - 4
-      - 137
+      - 136
       - 86
       - 25
       - 9
       - 58
       - 32
       - 35
-      - 32
+      - 31
       - 15
       - 170
       - 180
-      - 347
+      - 345
       - 126
-      - 134
+      - 133
       - 127
       - 88
       - 8
       - 8
-      - 59
+      - 58
       - 53
-      - 77
-      - 45
-      - 6
-      - 0
-      - 0
-      - 1
-      - 0
-      - 25
-      - 160
-      - 86
-      - 16
-      - 3
-      - 17
-      - 10
-      - 19
-      - 7
-      - 0
+      - 75
+      - 20
     k_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
       - 0
       - 0
       - 0
@@ -1578,9 +898,9 @@ values:
       - 56
       - 8
       - 8
-      - 14
-      - 68
-      - 50
+      - 13
+      - 67
+      - 49
       - 24
       - 10
       - 0
@@ -1588,62 +908,32 @@ values:
       - 8
       - 5
       - 31
-      - 72
-      - 88
+      - 71
+      - 87
       - 2
-      - 65
+      - 62
       - 54
-      - 12
+      - 11
       - 2
       - 33
-      - 16
-      - 22
-      - 14
+      - 15
+      - 21
+      - 13
       - 8
-      - 86
-      - 95
+      - 84
+      - 94
       - 230
       - 83
       - 78
       - 77
-      - 45
+      - 44
+      - 3
+      - 1
+      - 38
+      - 17
       - 4
       - 1
-      - 41
-      - 35
-      - 47
-      - 30
-      - 3
-      - 0
-      - 0
-      - 1
-      - 0
-      - 7
-      - 99
-      - 51
-      - 11
-      - 2
-      - 10
-      - 5
-      - 0
-      - 1
-      - 0
     dates:
-      - 8-Oct-25
-      - 9-Oct-25
-      - 10-Oct-25
-      - 11-Oct-25
-      - 12-Oct-25
-      - 13-Oct-25
-      - 14-Oct-25
-      - 15-Oct-25
-      - 16-Oct-25
-      - 17-Oct-25
-      - 18-Oct-25
-      - 19-Oct-25
-      - 20-Oct-25
-      - 21-Oct-25
-      - 22-Oct-25
       - 23-Oct-25
       - 24-Oct-25
       - 25-Oct-25
@@ -1705,51 +995,21 @@ values:
       - 20-Dec-25
       - 21-Dec-25
       - 22-Dec-25
-      - 23-Dec-25
-      - 24-Dec-25
-      - 25-Dec-25
-      - 26-Dec-25
-      - 27-Dec-25
-      - 28-Dec-25
-      - 29-Dec-25
-      - 30-Dec-25
-      - 31-Dec-25
-      - 1-Jan-26
-      - 2-Jan-26
-      - 3-Jan-26
-      - 4-Jan-26
-      - 5-Jan-26
-      - 6-Jan-26
-    cohort_from: 8-Oct-25
-    cohort_to: 6-Jan-26
-    query_signature: 42ff4419edbf4a23d88748f1df09e917c8976d8eca3fc8209c6afa0d406eb488
-    sliceDSL: cohort(household-created,8-Oct-25:6-Jan-26).context(channel:influencer)
+    cohort_from: 23-Oct-25
+    cohort_to: 22-Dec-25
+    query_signature: 898dd6df20c23edb9dbf5c15136c098e93c2ad8eb4b7f39f19ce8ad9af2c0cd8
+    sliceDSL: cohort(household-created,23-Oct-25:22-Dec-25).context(channel:influencer)
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-06T14:10:44.285Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.441
-    n: 406
-    k: 179
+      retrieved_at: 2025-12-22T10:02:13.792Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+  - mean: 0.425
+    n: 369
+    k: 157
     n_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 1
-      - 6
-      - 9
-      - 1
-      - 13
-      - 6
-      - 4
-      - 18
+      - 5
+      - 3
+      - 17
       - 30
       - 7
       - 3
@@ -1807,42 +1067,12 @@ values:
       - 4
       - 1
       - 1
-      - 1
-      - 1
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 1
-      - 1
       - 0
     k_daily:
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 1
-      - 5
-      - 5
-      - 1
-      - 4
-      - 3
+      - 2
       - 2
       - 6
-      - 19
+      - 18
       - 5
       - 1
       - 2
@@ -1876,7 +1106,7 @@ values:
       - 0
       - 2
       - 3
-      - 4
+      - 5
       - 1
       - 3
       - 6
@@ -1884,7 +1114,7 @@ values:
       - 1
       - 1
       - 3
-      - 3
+      - 2
       - 2
       - 2
       - 4
@@ -1897,40 +1127,10 @@ values:
       - 1
       - 0
       - 3
-      - 1
       - 0
-      - 1
-      - 1
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 0
-      - 1
       - 0
       - 0
     dates:
-      - 8-Oct-25
-      - 9-Oct-25
-      - 10-Oct-25
-      - 11-Oct-25
-      - 12-Oct-25
-      - 13-Oct-25
-      - 14-Oct-25
-      - 15-Oct-25
-      - 16-Oct-25
-      - 17-Oct-25
-      - 18-Oct-25
-      - 19-Oct-25
-      - 20-Oct-25
-      - 21-Oct-25
-      - 22-Oct-25
       - 23-Oct-25
       - 24-Oct-25
       - 25-Oct-25
@@ -1992,53 +1192,23 @@ values:
       - 20-Dec-25
       - 21-Dec-25
       - 22-Dec-25
-      - 23-Dec-25
-      - 24-Dec-25
-      - 25-Dec-25
-      - 26-Dec-25
-      - 27-Dec-25
-      - 28-Dec-25
-      - 29-Dec-25
-      - 30-Dec-25
-      - 31-Dec-25
-      - 1-Jan-26
-      - 2-Jan-26
-      - 3-Jan-26
-      - 4-Jan-26
-      - 5-Jan-26
-      - 6-Jan-26
-    cohort_from: 8-Oct-25
-    cohort_to: 6-Jan-26
-    query_signature: c9e12bc8969ce66bab8cf615cc3b9077565edbd406e4ca00e80d37bf82a856eb
-    sliceDSL: cohort(household-created,8-Oct-25:6-Jan-26).context(channel:paid-social)
+    cohort_from: 23-Oct-25
+    cohort_to: 22-Dec-25
+    query_signature: fab78306ccedde789ee813ed31ccf8519fcb4d71444816265ca12dacc07c6a54
+    sliceDSL: cohort(household-created,23-Oct-25:22-Dec-25).context(channel:paid-social)
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-06T14:11:01.479Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.457
-    n: 1406
-    k: 642
+      retrieved_at: 2025-12-22T10:02:29.946Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+  - mean: 0.445
+    n: 1178
+    k: 524
     n_daily:
-      - 0
-      - 0
-      - 1
-      - 0
-      - 0
-      - 4
-      - 1
-      - 5
-      - 1
-      - 11
-      - 29
-      - 9
-      - 8
-      - 39
-      - 66
       - 20
       - 0
       - 2
       - 41
-      - 82
+      - 81
       - 71
       - 6
       - 31
@@ -2062,7 +1232,7 @@ values:
       - 15
       - 21
       - 17
-      - 13
+      - 12
       - 5
       - 2
       - 7
@@ -2088,45 +1258,15 @@ values:
       - 8
       - 5
       - 6
-      - 5
-      - 3
-      - 3
-      - 1
-      - 0
-      - 1
-      - 5
-      - 2
-      - 1
-      - 0
-      - 1
-      - 1
-      - 2
-      - 6
-      - 7
-      - 3
-      - 2
-      - 7
-      - 5
-      - 1
-      - 3
-      - 5
-    k_daily:
-      - 0
-      - 0
-      - 1
-      - 0
-      - 0
-      - 1
-      - 0
-      - 1
-      - 0
-      - 11
-      - 21
-      - 6
       - 4
-      - 21
-      - 30
-      - 11
+      - 3
+      - 3
+      - 1
+      - 0
+      - 1
+      - 0
+    k_daily:
+      - 10
       - 0
       - 1
       - 25
@@ -2137,14 +1277,14 @@ values:
       - 9
       - 29
       - 30
-      - 30
+      - 28
       - 20
       - 51
       - 14
       - 2
       - 0
       - 0
-      - 26
+      - 24
       - 20
       - 15
       - 34
@@ -2152,7 +1292,7 @@ values:
       - 6
       - 1
       - 6
-      - 8
+      - 7
       - 7
       - 1
       - 1
@@ -2186,38 +1326,8 @@ values:
       - 0
       - 0
       - 1
-      - 3
-      - 1
-      - 0
-      - 0
-      - 0
-      - 1
-      - 1
-      - 1
-      - 2
-      - 1
-      - 0
-      - 3
-      - 3
-      - 0
-      - 0
       - 0
     dates:
-      - 8-Oct-25
-      - 9-Oct-25
-      - 10-Oct-25
-      - 11-Oct-25
-      - 12-Oct-25
-      - 13-Oct-25
-      - 14-Oct-25
-      - 15-Oct-25
-      - 16-Oct-25
-      - 17-Oct-25
-      - 18-Oct-25
-      - 19-Oct-25
-      - 20-Oct-25
-      - 21-Oct-25
-      - 22-Oct-25
       - 23-Oct-25
       - 24-Oct-25
       - 25-Oct-25
@@ -2279,124 +1389,109 @@ values:
       - 20-Dec-25
       - 21-Dec-25
       - 22-Dec-25
-      - 23-Dec-25
-      - 24-Dec-25
-      - 25-Dec-25
-      - 26-Dec-25
-      - 27-Dec-25
-      - 28-Dec-25
-      - 29-Dec-25
-      - 30-Dec-25
-      - 31-Dec-25
-      - 1-Jan-26
-      - 2-Jan-26
-      - 3-Jan-26
-      - 4-Jan-26
-      - 5-Jan-26
-      - 6-Jan-26
-    cohort_from: 8-Oct-25
-    cohort_to: 6-Jan-26
-    query_signature: 9aba3bfbaaec3d63bd47e7401a04974161cac1c7c1e9ea3a684e04b4de57a7b4
-    sliceDSL: cohort(household-created,8-Oct-25:6-Jan-26).context(channel:other)
+    cohort_from: 23-Oct-25
+    cohort_to: 22-Dec-25
+    query_signature: bc04d39b5782a9dc11a4b2e054937b34f3590264b9ada5ec8e4c46260df4a553
+    sliceDSL: cohort(household-created,23-Oct-25:22-Dec-25).context(channel:other)
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-06T15:17:53.573Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.56
-    n: 5445
-    k: 3048
+      retrieved_at: 2025-12-22T10:02:44.048Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+  - mean: 0.488
+    n: 6146
+    k: 2999
     n_daily:
       - 0
-      - 1
       - 0
       - 0
-      - 4
-      - 1
-      - 5
-      - 1
-      - 11
-      - 35
-      - 19
-      - 19
-      - 47
-      - 85
-      - 28
-      - 8
-      - 22
-      - 75
-      - 94
-      - 78
-      - 14
-      - 38
-      - 22
-      - 58
-      - 59
-      - 69
-      - 51
-      - 99
-      - 32
-      - 35
-      - 1
       - 0
-      - 82
-      - 76
-      - 41
-      - 116
-      - 270
-      - 182
-      - 56
-      - 32
-      - 58
-      - 135
-      - 114
-      - 65
-      - 24
-      - 28
-      - 40
-      - 23
-      - 33
-      - 72
-      - 144
-      - 144
-      - 20
-      - 157
-      - 118
-      - 34
-      - 16
-      - 66
-      - 42
-      - 49
-      - 44
-      - 28
-      - 190
-      - 209
-      - 376
-      - 149
-      - 150
-      - 142
-      - 105
-      - 18
-      - 14
-      - 65
-      - 55
-      - 86
-      - 56
+      - 0
+      - 0
+      - 0
+      - 0
       - 12
-      - 2
-      - 0
-      - 4
-      - 3
       - 36
-      - 178
-      - 100
-      - 23
-      - 7
-      - 31
-      - 21
-      - 24
-      - 15
+      - 20
+      - 20
+      - 47
+      - 84
+      - 30
+      - 9
+      - 22
+      - 78
+      - 97
+      - 80
+      - 16
+      - 39
+      - 25
+      - 62
+      - 61
+      - 69
+      - 52
+      - 104
+      - 39
+      - 38
+      - 0
+      - 0
+      - 83
+      - 82
       - 44
-      - 10
+      - 120
+      - 275
+      - 196
+      - 65
+      - 37
+      - 65
+      - 144
+      - 125
+      - 80
+      - 35
+      - 36
+      - 53
+      - 31
+      - 42
+      - 79
+      - 157
+      - 160
+      - 34
+      - 171
+      - 138
+      - 48
+      - 24
+      - 71
+      - 47
+      - 55
+      - 59
+      - 32
+      - 194
+      - 228
+      - 392
+      - 179
+      - 161
+      - 161
+      - 121
+      - 41
+      - 23
+      - 77
+      - 64
+      - 90
+      - 80
+      - 19
+      - 8
+      - 0
+      - 12
+      - 8
+      - 37
+      - 191
+      - 118
+      - 36
+      - 11
+      - 37
+      - 28
+      - 28
+      - 27
+      - 49
+      - 98
     k_daily:
       - 0
       - 0
@@ -2408,21 +1503,21 @@ values:
       - 0
       - 12
       - 26
-      - 14
+      - 13
       - 10
-      - 22
-      - 36
-      - 16
+      - 21
+      - 34
+      - 14
       - 6
       - 7
-      - 46
-      - 48
+      - 45
+      - 47
       - 29
       - 5
       - 21
       - 11
       - 36
-      - 37
+      - 36
       - 37
       - 27
       - 63
@@ -2430,7 +1525,7 @@ values:
       - 6
       - 0
       - 0
-      - 26
+      - 24
       - 24
       - 20
       - 59
@@ -2438,55 +1533,55 @@ values:
       - 77
       - 18
       - 15
+      - 28
+      - 82
+      - 53
       - 31
-      - 83
-      - 57
-      - 31
-      - 15
       - 14
-      - 25
-      - 15
       - 13
-      - 39
-      - 88
-      - 111
+      - 24
+      - 14
+      - 13
+      - 38
+      - 86
+      - 109
       - 19
-      - 77
+      - 73
       - 83
-      - 21
+      - 20
       - 4
       - 35
-      - 22
-      - 32
-      - 22
+      - 21
+      - 30
+      - 20
       - 15
-      - 100
-      - 118
-      - 248
+      - 98
+      - 117
+      - 247
       - 111
       - 87
-      - 86
-      - 57
-      - 11
+      - 85
+      - 55
+      - 9
       - 6
       - 44
-      - 39
-      - 52
+      - 38
+      - 50
       - 45
       - 7
       - 1
       - 0
-      - 4
-      - 2
+      - 3
+      - 1
       - 15
-      - 110
+      - 109
       - 68
       - 18
       - 3
       - 19
       - 15
       - 11
-      - 4
+      - 8
       - 6
       - 1
     dates:
@@ -2583,21 +1678,21 @@ values:
       - 7-Jan-26
     window_from: 9-Oct-25
     window_to: 7-Jan-26
-    query_signature: 4ccb37e8626313591994a08a8d3a7a2eb4b6bff6ae3124505adcf80f2789cf2d
+    query_signature: a6b1e38c2f993003d35340f7715e61c227882dcdabfee654c70ddde443be5bda
     sliceDSL: window(9-Oct-25:7-Jan-26)
-    forecast: 0.5696544504872262
+    forecast: 0.5007897178861975
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-07T10:48:57.124Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
-  - mean: 0.524
-    n: 5445
-    k: 2851
+      retrieved_at: 2026-01-07T23:25:56.584Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+  - mean: 0.512
+    n: 5525
+    k: 2828
     n_daily:
       - 0
       - 1
       - 0
-      - 0
+      - 1
       - 4
       - 1
       - 5
@@ -2684,7 +1779,7 @@ values:
       - 24
       - 15
       - 44
-      - 10
+      - 89
     k_daily:
       - 0
       - 1
@@ -2696,14 +1791,14 @@ values:
       - 0
       - 11
       - 26
-      - 15
+      - 14
       - 10
-      - 23
-      - 36
-      - 15
+      - 22
+      - 34
+      - 13
       - 5
       - 7
-      - 45
+      - 44
       - 46
       - 29
       - 5
@@ -2718,7 +1813,7 @@ values:
       - 5
       - 0
       - 0
-      - 26
+      - 24
       - 23
       - 19
       - 57
@@ -2726,9 +1821,9 @@ values:
       - 74
       - 14
       - 14
-      - 29
+      - 27
       - 80
-      - 51
+      - 50
       - 28
       - 11
       - 13
@@ -2737,29 +1832,29 @@ values:
       - 13
       - 37
       - 82
-      - 100
+      - 99
       - 9
-      - 75
+      - 72
       - 74
-      - 14
+      - 13
       - 4
       - 35
       - 21
-      - 29
+      - 27
       - 19
       - 16
-      - 99
-      - 108
+      - 98
+      - 107
       - 241
       - 95
       - 82
       - 84
-      - 52
-      - 8
+      - 51
+      - 7
       - 4
       - 44
-      - 37
-      - 50
+      - 36
+      - 48
       - 35
       - 6
       - 1
@@ -2767,14 +1862,14 @@ values:
       - 3
       - 1
       - 15
-      - 106
+      - 105
       - 56
       - 13
       - 3
       - 17
       - 12
       - 11
-      - 2
+      - 6
       - 5
       - 1
     dates:
@@ -2871,26 +1966,26 @@ values:
       - 7-Jan-26
     cohort_from: 9-Oct-25
     cohort_to: 7-Jan-26
-    query_signature: 6e2d7a0190982decba73d94f41323455c15b70cb3b4b88aa8068c80662cca7d6
+    query_signature: 9b9e5522ce03c994cde74fd01184579c4b85eb152688b556956180317994863c
     sliceDSL: cohort(household-created,9-Oct-25:7-Jan-26)
     data_source:
       type: amplitude
-      retrieved_at: 2026-01-07T10:49:27.369Z
-      full_query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
+      retrieved_at: 2026-01-07T23:26:11.948Z
+      full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
 metadata:
   description: ""
   created_at: 2025-12-02T15:47:33.214Z
   updated_at: 2025-12-02T15:47:33.214Z
   author: user
   version: 1.0.0
-query: from(viewed-coffee-screen).to(recommendation-offered).exclude(gave-bds-in-onboarding)
+query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
 query_overridden: false
-n_query: from(household-created).to(viewed-coffee-screen)
+n_query: to(viewed-coffee-screen)
 n_query_overridden: false
 connection: amplitude-prod
 latency:
   latency_parameter: true
   anchor_node_id: household-created
-  t95: 7.86
-  path_t95: 7.86
+  t95: 8.94
+  path_t95: 8.94
   latency_parameter_overridden: false
