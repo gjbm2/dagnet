@@ -133,7 +133,6 @@ export function ParameterSection({
     if (objectType !== 'edge') return;
     if (!currentGraph) return;
     if (!objectId) return;
-    if (!(param?.latency?.latency_parameter === true)) return;
     if (isRefreshingAnchor) return;
 
     setIsRefreshingAnchor(true);
@@ -561,77 +560,75 @@ export function ParameterSection({
             </>
           )}
           
-          {/* Anchor Node (only shown when latency tracking is enabled) */}
-          {(param?.latency?.latency_parameter === true) && (
-            <AutomatableField
-              label=""
-              value={param?.latency?.anchor_node_id || ''}
-              overridden={param?.latency?.anchor_node_id_overridden || false}
-              onClearOverride={() => {
-                onUpdate({ 
-                  latency: { 
-                    ...param?.latency,
-                    anchor_node_id_overridden: false 
-                  } 
-                });
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <label className="parameter-section-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>Cohort anchor</span>
-                  <button
-                    type="button"
-                    onClick={handleRefreshCohortAnchor}
-                    title="Refresh cohort anchor for this parameter using MSMDC"
-                    disabled={disabled || isRefreshingAnchor}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      padding: '2px',
-                      cursor: disabled || isRefreshingAnchor ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      color: '#6B7280',
-                      opacity: disabled || isRefreshingAnchor ? 0.5 : 1,
-                      transition: 'color 0.2s',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!disabled && !isRefreshingAnchor) e.currentTarget.style.color = '#3B82F6';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = '#6B7280';
-                    }}
-                  >
-                    <RefreshCcw size={14} />
-                  </button>
-                </label>
-                <input
-                  type="text"
-                  value={param?.latency?.anchor_node_id || ''}
-                  onChange={(e) => {
-                    onUpdate({
-                      latency: {
-                        ...param?.latency,
-                        anchor_node_id: e.target.value || undefined,
-                      }
-                    });
+          {/* Cohort anchor (always visible; independent of latency tracking enablement) */}
+          <AutomatableField
+            label=""
+            value={param?.latency?.anchor_node_id || ''}
+            overridden={param?.latency?.anchor_node_id_overridden || false}
+            onClearOverride={() => {
+              onUpdate({
+                latency: {
+                  ...param?.latency,
+                  anchor_node_id_overridden: false,
+                },
+              });
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <label className="parameter-section-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>Cohort anchor</span>
+                <button
+                  type="button"
+                  onClick={handleRefreshCohortAnchor}
+                  title="Refresh cohort anchor for this parameter using MSMDC"
+                  disabled={disabled || isRefreshingAnchor}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: '2px',
+                    cursor: disabled || isRefreshingAnchor ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: '#6B7280',
+                    opacity: disabled || isRefreshingAnchor ? 0.5 : 1,
+                    transition: 'color 0.2s',
                   }}
-                  onBlur={() => {
-                    onUpdate({
-                      latency: {
-                        ...param?.latency,
-                        anchor_node_id_overridden: true,
-                      }
-                    });
+                  onMouseEnter={(e) => {
+                    if (!disabled && !isRefreshingAnchor) e.currentTarget.style.color = '#3B82F6';
                   }}
-                  disabled={disabled}
-                  className="parameter-input"
-                  placeholder="(auto)"
-                  title="Cohort entry point for this edge. Defaults to furthest upstream START node."
-                />
-              </div>
-            </AutomatableField>
-          )}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = '#6B7280';
+                  }}
+                >
+                  <RefreshCcw size={14} />
+                </button>
+              </label>
+              <input
+                type="text"
+                value={param?.latency?.anchor_node_id || ''}
+                onChange={(e) => {
+                  onUpdate({
+                    latency: {
+                      ...param?.latency,
+                      anchor_node_id: e.target.value || undefined,
+                    },
+                  });
+                }}
+                onBlur={() => {
+                  onUpdate({
+                    latency: {
+                      ...param?.latency,
+                      anchor_node_id_overridden: true,
+                    },
+                  });
+                }}
+                disabled={disabled}
+                className="parameter-input"
+                placeholder="(auto)"
+                title="Cohort entry point for this edge. Defaults to furthest upstream START node."
+              />
+            </div>
+          </AutomatableField>
         </div>
       )}
       

@@ -206,99 +206,14 @@ export function extractParamDetails(param: any): string {
 }
 
 // ============================================================================
-// Cohort-mode per-item targeting (cohort-view-implementation.md)
+// Cohort-mode semantics (investigation follow-up 2b)
 // ============================================================================
-
-function stripCohortClause(dsl: string): string {
-  // Remove cohort(...) clauses from a DSL string.
-  //
-  // IMPORTANT: Our DSL uses dot-chained constraints (e.g. "context(x).cohort(a:b)")
-  // and sometimes semicolon-separated clauses (e.g. "window(...);context(x)").
-  // This helper must support BOTH, otherwise we can accidentally produce invalid combined
-  // slices like "window(...);context(x).cohort(...)" which will never match stored sliceDSL.
-  const parts = dsl
-    .split(';')
-    .map(s => s.trim())
-    .filter(Boolean)
-    .map((part) => {
-      // Remove ".cohort(...)" or leading "cohort(...)".
-      let out = part.replace(/(^|[.])\s*cohort\([^)]+\)/g, '');
-      // Clean up dot artefacts
-      out = out.replace(/\.\./g, '.').replace(/^\./, '').replace(/\.$/, '');
-      return out.trim();
-    })
-    .filter(Boolean);
-  return parts.join(';');
-}
-
-function buildWindowClauseFromCohort(dsl: string): string | null {
-  try {
-    const parsed: any = parseConstraints(dsl);
-    const start = parsed?.cohort?.start;
-    const end = parsed?.cohort?.end;
-    if (!start || !end) return null;
-    return `window(${start}:${end})`;
-  } catch {
-    return null;
-  }
-}
-
-function computePathT95MapForGraph(graph: Graph): Map<string, number> {
-  const graphForPath: GraphForPath = {
-    nodes: (graph.nodes || []).map((n: any) => ({
-      id: n.id || n.uuid || '',
-      type: n.type || (n.entry?.is_start ? 'start' : undefined),
-      entry: n.entry,
-    })),
-    edges: (graph.edges || [])
-      .filter((e: any) => e.from && e.to)
-      .map((e: any) => ({
-        id: e.id,
-        uuid: e.uuid,
-        from: e.from,
-        to: e.to,
-        p: e.p,
-      })),
-  };
-
-  if (graphForPath.edges.length === 0) return new Map<string, number>();
-
-  const active = getActiveEdges(graphForPath);
-  if (active.size === 0) return new Map<string, number>();
-  return computePathT95(graphForPath, active);
-}
-
-function computeTargetSliceOverrideForItem(
-  item: FetchItem,
-  graph: Graph,
-  dsl: string,
-  pathT95Map: Map<string, number>
-): string | undefined {
-  if (!dsl.includes('cohort(')) return undefined;
-  if (item.type !== 'parameter') return undefined;
-
-  const edge = graph.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
-  if (!edge) return undefined;
-
-  const latency = edge?.p?.latency;
-  const hasLocalLatency = latency?.latency_parameter === true || !!latency?.t95;
-
-  const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
-  const computedPathT95 = pathT95Map.get(edgeId);
-  const persistedPathT95 = latency?.path_t95;
-  const pathT95 = (computedPathT95 ?? persistedPathT95 ?? 0);
-  const isBehindLaggedPath = pathT95 > 0;
-
-  if (hasLocalLatency || isBehindLaggedPath) return undefined;
-
-  const windowClause = buildWindowClauseFromCohort(dsl);
-  if (!windowClause) return undefined;
-
-  const withoutCohort = stripCohortClause(dsl);
-  if (withoutCohort.includes('window(')) return withoutCohort;
-  // Prefer dot-chaining over semicolons so this matches stored sliceDSL semantics.
-  return withoutCohort ? `${withoutCohort}.${windowClause}` : windowClause;
-}
+//
+// Historical behaviour (pre-8-Jan-26) allowed cohort() tabs to override some “simple” edges
+// to window() slices (path_t95 == 0). That caused mixed cohort/window semantics within a
+// single cohort view and created denominator inconsistencies at split nodes.
+//
+// Per follow-up 2b, we no longer apply any per-item window() override in cohort mode.
 
 // ============================================================================
 // Helper: Extract window from DSL
@@ -453,10 +368,6 @@ export function getItemsNeedingFetch(
   checkCache: boolean = true
 ): FetchItem[] {
   if (!graph) return [];
-  
-  // COHORT-VIEW: Precompute path_t95 once so we can decide, per edge,
-  // whether cohort-mode should be overridden to window() for "simple" edges.
-  const pathT95Map = dsl.includes('cohort(') ? computePathT95MapForGraph(graph) : new Map<string, number>();
 
   const items: FetchItem[] = [];
   
@@ -481,12 +392,8 @@ export function getItemsNeedingFetch(
           targetId: edgeId,
           paramSlot: slot,
         };
-        
-        const override = computeTargetSliceOverrideForItem(item, graph, dsl, pathT95Map);
-        if (override) item.targetSliceOverride = override;
 
-        const targetSlice = item.targetSliceOverride ?? dsl;
-        if (itemNeedsFetch(item, window, graph, targetSlice, checkCache)) {
+        if (itemNeedsFetch(item, window, graph, dsl, checkCache)) {
           items.push(item);
         }
       }
@@ -510,11 +417,7 @@ export function getItemsNeedingFetch(
             conditionalIndex: idx,
           };
 
-          const override = computeTargetSliceOverrideForItem(item, graph, dsl, pathT95Map);
-          if (override) item.targetSliceOverride = override;
-
-          const targetSlice = item.targetSliceOverride ?? dsl;
-          if (itemNeedsFetch(item, window, graph, targetSlice, checkCache)) {
+          if (itemNeedsFetch(item, window, graph, dsl, checkCache)) {
             items.push(item);
           }
         }
@@ -1182,16 +1085,8 @@ export async function fetchItems(
     setGraph(g);
   };
   
-  // COHORT-VIEW: Apply per-item targetSlice overrides so cohort-mode tabs only use
-  // cohort-shaped retrieval for edges behind lagged paths (path_t95 > 0) or with
-  // local latency config. Truly simple edges are fetched via window().
-  const pathT95Map = effectiveDSL.includes('cohort(') ? computePathT95MapForGraph(graph) : new Map<string, number>();
-  const effectiveItems: FetchItem[] = items.map((it) => {
-    if (!effectiveDSL.includes('cohort(')) return it;
-    if (it.type !== 'parameter') return it;
-    const override = it.targetSliceOverride ?? computeTargetSliceOverrideForItem(it, graph, effectiveDSL, pathT95Map);
-    return override ? { ...it, targetSliceOverride: override } : it;
-  });
+  // Cohort-mode semantics (follow-up 2b): do NOT override cohort() retrieval to window().
+  const effectiveItems: FetchItem[] = items;
 
   const batchStart = performance.now();
   const results: FetchResult[] = [];

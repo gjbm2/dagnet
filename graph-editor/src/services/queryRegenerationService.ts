@@ -557,6 +557,15 @@ function getCurrentNQuery(graph: Graph, paramId: string): string | null {
   return null;
 }
 
+function getBaseParamIdForEdgeUuid(graph: Graph, edgeUuid: string): string | null {
+  const edge = graph.edges.find(e => e.uuid === edgeUuid || e.id === edgeUuid);
+  if (!edge) return null;
+  const baseParamId = edge.p?.id;
+  if (typeof baseParamId === 'string' && baseParamId.trim().length > 0) return baseParamId;
+  // Fall back to synthetic id scheme used by regeneration for edge-base params.
+  return `synthetic:${edge.uuid}:p`;
+}
+
 /**
  * Update case file with new query (only for real case_ids, not synthetic)
  */
@@ -898,33 +907,88 @@ export class QueryRegenerationService {
       }
     }
     
+    // Apply n_query first, independently of query changes.
+    // n_query is edge-level metadata keyed by base probability param_id (edge.p.id).
+    //
+    // IMPORTANT: Conditional params must be treated as first-class citizens.
+    // MSMDC may return nQuery alongside edge_conditional_p when regenerating a single conditional
+    // (conditional_index), but the n_query must still be applied to the owning EDGE (base param id),
+    // not the conditional param id.
+    const nQueryCandidatesByEdgeUuid = new Map<string, { nQuery: string; sourceParamType: string }>();
     for (const param of parameters) {
-      // Apply n_query first (base probability params only), independently of query changes.
-      // n_query is edge-level metadata used by retrieval to protect denominators.
-      if (param.paramType === 'edge_base_p' && typeof param.nQuery === 'string' && param.nQuery.trim().length > 0) {
-        const nQueryOverridden = this.isNQueryOverridden(graph, param.paramId);
-        if (!nQueryOverridden) {
-          const currentNQuery = getCurrentNQuery(graph, param.paramId);
-          if (currentNQuery !== param.nQuery) {
-            const r = applyNQueryToGraph(graph, param.paramId, param.nQuery);
-            if (r.applied) {
-              graphUpdates++;
-            }
-            changedNQueries.push({
-              paramId: param.paramId,
-              oldNQuery: currentNQuery || '',
-              newNQuery: param.nQuery,
-              location: r.location,
-            });
-            // Cascade to parameter file if present and not overridden
-            if (!param.paramId.startsWith('synthetic:')) {
-              const decision = await updateParameterFileNQuery(param.paramId, param.nQuery);
-              fileCascadeDecisions.push(decision);
-              if (decision.decision === 'updated') fileUpdates++;
-            }
-          }
-        }
+      if (typeof param.nQuery !== 'string') continue;
+      const trimmed = param.nQuery.trim();
+      if (!trimmed) continue;
+      if (!param.edgeUuid) continue;
+      const existing = nQueryCandidatesByEdgeUuid.get(param.edgeUuid);
+      // Prefer edge_base_p if present; otherwise keep first candidate deterministically.
+      if (!existing || (existing.sourceParamType !== 'edge_base_p' && param.paramType === 'edge_base_p')) {
+        nQueryCandidatesByEdgeUuid.set(param.edgeUuid, { nQuery: trimmed, sourceParamType: param.paramType });
       }
+    }
+
+    for (const [edgeUuid, { nQuery }] of nQueryCandidatesByEdgeUuid.entries()) {
+      const baseParamId = getBaseParamIdForEdgeUuid(graph, edgeUuid);
+      if (!baseParamId) continue;
+      const nQueryOverridden = this.isNQueryOverridden(graph, baseParamId);
+      if (nQueryOverridden) continue;
+
+      const currentNQuery = getCurrentNQuery(graph, baseParamId);
+      if (currentNQuery === nQuery) continue;
+
+      const r = applyNQueryToGraph(graph, baseParamId, nQuery);
+      if (r.applied) {
+        graphUpdates++;
+      }
+      changedNQueries.push({
+        paramId: baseParamId,
+        oldNQuery: currentNQuery || '',
+        newNQuery: nQuery,
+        location: r.location,
+      });
+
+      // Cascade to base parameter file if present and not overridden
+      if (!baseParamId.startsWith('synthetic:')) {
+        const decision = await updateParameterFileNQuery(baseParamId, nQuery);
+        fileCascadeDecisions.push(decision);
+        if (decision.decision === 'updated') fileUpdates++;
+      }
+    }
+
+    // Backwards-compatible fallback: if backend omitted edgeUuid (older mocks/tests),
+    // still apply n_query when present on edge_base_p using the base paramId path.
+    for (const param of parameters) {
+      if (param.paramType !== 'edge_base_p') continue;
+      if (typeof param.nQuery !== 'string') continue;
+      const trimmed = param.nQuery.trim();
+      if (!trimmed) continue;
+      if (param.edgeUuid) continue; // already handled above
+
+      const nQueryOverridden = this.isNQueryOverridden(graph, param.paramId);
+      if (nQueryOverridden) continue;
+
+      const currentNQuery = getCurrentNQuery(graph, param.paramId);
+      if (currentNQuery === trimmed) continue;
+
+      const r = applyNQueryToGraph(graph, param.paramId, trimmed);
+      if (r.applied) {
+        graphUpdates++;
+      }
+      changedNQueries.push({
+        paramId: param.paramId,
+        oldNQuery: currentNQuery || '',
+        newNQuery: trimmed,
+        location: r.location,
+      });
+
+      if (!param.paramId.startsWith('synthetic:')) {
+        const decision = await updateParameterFileNQuery(param.paramId, trimmed);
+        fileCascadeDecisions.push(decision);
+        if (decision.decision === 'updated') fileUpdates++;
+      }
+    }
+    
+    for (const param of parameters) {
       
       // Get current query from graph
       const currentQuery = this.getCurrentQuery(graph, param.paramId);
