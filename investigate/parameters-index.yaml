@@ -28,6 +28,15 @@ parameters:
     author: user
     version: 1.0.0
     name: delegated-to-coffee
+  - id: delegated-to-non-energy-rec
+    file_path: parameters/delegated-to-non-energy-rec.yaml
+    status: active
+    type: probability
+    created_at: 2025-12-02T16:10:08.901Z
+    updated_at: 2025-12-02T16:10:08.902Z
+    author: user
+    version: 1.0.0
+    name: delegated-to-non-energy-rec
   - id: delegation-straight-to-energy-rec
     file_path: parameters/delegation-straight-to-energy-rec.yaml
     status: active
@@ -37,40 +46,6 @@ parameters:
     author: user
     version: 1.0.0
     name: delegation-straight-to-energy-rec
-  - id: gm-create-to-delegated
-    file_path: parameters/gm-create-to-delegated.yaml
-    status: active
-    type: probability
-    created_at: 2026-01-05T13:13:01.710Z
-    updated_at: 2026-01-05T13:13:01.722Z
-    author: user
-    version: 1.0.0
-    name: gm-create-to-delegated
-  - id: gm-delegated-to-reco
-    file_path: parameters/gm-delegated-to-reco.yaml
-    status: active
-    type: probability
-    created_at: 2026-01-07T10:07:44.690Z
-    updated_at: 2026-01-07T10:07:44.693Z
-    author: user
-    version: 1.0.0
-  - id: gm-reco-to-registered
-    file_path: parameters/gm-reco-to-registered.yaml
-    status: active
-    type: probability
-    created_at: 2026-01-07T10:08:26.219Z
-    updated_at: 2026-01-07T10:08:26.239Z
-    author: user
-    version: 1.0.0
-  - id: gm-registered-to-success
-    file_path: parameters/gm-registered-to-success.yaml
-    status: active
-    type: probability
-    created_at: 2026-01-05T13:32:49.266Z
-    updated_at: 2026-01-05T13:32:52.361Z
-    author: user
-    version: 1.0.0
-    name: gm-registered-to-success
   - id: household-delegation-rate
     file_path: parameters/household-delegation-rate.yaml
     status: active
@@ -86,6 +61,15 @@ parameters:
     author: user
     version: 1.0.0
     name: no-bdos-to-rec
+  - id: non-energy-rec-to-reg
+    file_path: parameters/non-energy-rec-to-reg.yaml
+    status: active
+    type: probability
+    created_at: 2025-12-02T17:00:29.374Z
+    updated_at: 2025-12-02T17:00:29.375Z
+    author: user
+    version: 1.0.0
+    name: non-energy-rec-to-reg
   - id: rec-with-bdos-to-registration
     file_path: parameters/rec-with-bdos-to-registration.yaml
     status: active
@@ -102,7 +86,7 @@ parameters:
     created_at: 2025-11-26T10:12:50.331Z
     name: registration-to-success
     type: probability
-updated_at: 2026-01-07T10:08:26.239Z
+updated_at: 2026-01-05T20:47:10.131Z
 metadata:
   created_at: 2025-11-25T18:25:43.801Z
   version: 1.0.0

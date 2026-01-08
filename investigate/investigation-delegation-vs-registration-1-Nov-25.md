@@ -41,6 +41,100 @@ This document records what we’ve checked so far, exactly what evidence we used
 - **Forecast-mode correctness risk**: forecasting relies on `window(...)` slices and blending logic; even if Evidence mode is now largely mass-conserving, forecast computations may still be inconsistent or invalid.
 - **`n_query` semantics risk** (especially window vs cohort) remains an open design/logic concern; we have not yet proven it as the root cause of any remaining discrepancy, but the generation and application pipeline has been tightened materially.
 
+### Forecast-mode follow-up: proposed forecast meta-slice selection + logging plan (added 8-Jan-26)
+
+This is a detailed plan to adjust forecast construction so that forecast baselines are (a) explainable, (b) robust to multiple window slice families in a parameter file, and (c) consistent with the principle “forecast should be greedy about available history”.
+
+#### Principles (first-principles goals)
+
+- Forecast is **not** “the same as Evidence within the active `window(...)`”. It should cast a **wider temporal net** than the evidence window to maximise usable signal.
+- Forecast should be computed from **window-mode daily series** (not cohort series) and should produce a single scalar `p.forecast.mean` per parameter for the current run.
+- Forecast must be derived from a **deterministic** and **debuggable** selection process. When something looks wrong (forecast far above recent evidence), logs must clearly show which underlying series contributed and why.
+- Forecast selection must respect the requested query’s **slice dimensions**:
+  - If the query is contexted (e.g. `context(channel:paid-search)`), forecast must be built from that same contexted family (never from uncontexted data).
+  - If the query is uncontexted, forecast may use either an explicit uncontexted series or an implicitly uncontexted MECE aggregate series (see below).
+
+#### Step 1 — Define eligible input series (per parameter file)
+
+For each probability parameter, consider all stored `window(...)` values in the parameter file that include daily arrays (`dates`, `n_daily`, `k_daily`). Treat each stored value as a candidate “daily series” with metadata:
+
+- slice identifier (`sliceDSL`),
+- time coverage (`window_from`, `window_to`, and/or min/max date present),
+- retrieval timestamp (`data_source.retrieved_at`),
+- daily observations (`n_daily`, `k_daily`).
+
+Note: thin contexts are allowed. There is no minimum “quality threshold”; we use what exists.
+
+#### Step 2 — Construct MECE aggregate series (uncontexted only)
+
+For uncontexted forecast requests, the system may attempt to construct an “implicit uncontexted” daily series from a complete MECE partition (e.g. channel slices).
+
+Key requirement: **missing days do not invalidate MECE**.
+
+Policy for missing days:
+
+- A context slice that has no entry for a day is treated as contributing **zero** for that day *within its own declared coverage interval* (window range / date span).
+- Days outside a slice’s coverage interval are treated as “not covered by this slice family”; forecast should fall back to other eligible series that do cover those days (e.g. explicit uncontexted series, or another MECE generation).
+
+This keeps MECE usable even when some contexts are thin or sporadic.
+
+#### Step 3 — Build the greedy forecast meta-slice (per day best-of)
+
+Instead of selecting a single “winning” slice-set for the entire horizon, construct a “meta-slice” time series across the widest feasible horizon:
+
+- Define the meta-slice day range as the union of all days covered by eligible window series.
+- For each day, compute candidate observations:
+  - explicit series candidate (when available for that day and for the requested slice dimensions),
+  - MECE aggregate candidate (uncontexted only; when available for that day).
+- Choose the winner for that day using a deterministic, simple rule that is consistent with the “best available dataset” intuition:
+  - Prefer candidates whose underlying series is more recently retrieved (using `retrieved_at`).
+  - If retrieval timestamps are equal/absent, prefer candidates with broader local coverage (e.g. series that covers more of the surrounding horizon), to avoid tiny “new but extremely short” series dominating.
+  - Tie-break deterministically (documented in code and this doc).
+
+Important: this selection must never substitute uncontexted data into a contexted forecast request.
+
+#### Step 4 — Apply maturity censoring and recency weighting
+
+Once the meta-slice daily series is constructed:
+
+- Apply right-edge censoring using a maturity policy based on **per-parameter (per-edge) t95** rather than path-level latency. (Rationale: forecast is window-baseline logic; path-level latency is a cohort/path concept and can be over-conservative when used to censor window baselines.)
+- Apply recency half-life weighting across the remaining “mature” days to produce a scalar forecast mean.
+
+#### Step 5 — Logging and explainability (no toasts)
+
+Forecast recomputation is background logic and must not produce toasts.
+
+Logging must use the existing session-log diagnostics flag:
+
+- Diagnostics OFF:
+  - Log only a very compact summary, and do so as **a small number of children** under the existing `GET_FROM_FILE` operation (rather than one log per parameter).
+  - The summary should include: which basis was used (explicit vs MECE vs mixed meta-slice), the horizon bounds used, censoring settings, half-life settings, and the resulting forecast mean.
+- Diagnostics ON:
+  - Add a thorough trace sufficient to debug the meta-slice composition:
+    - which series were eligible,
+    - which MECE partitions were available/complete,
+    - the “winner” selection over time (compressed into switchpoints rather than per-day spam),
+    - weighted totals and the highest-impact day ranges.
+
+#### Step 6 — Consistency with existing fetch slice selection
+
+Forecast selection should share the same core “best available” / recency principles as slice selection used for data retrieval, but adapted to forecast’s wider temporal scope:
+
+- Retrieval selection decides “best slice-set for this query now”.
+- Forecast meta-slice selection decides “best per-day provenance over a wide horizon”, while respecting slice dimensions and using deterministic tie-breaking.
+
+#### Verification plan (prose only)
+
+- For a parameter file that contains both:
+  - a newly retrieved uncontexted `window(...)` series spanning ~90 days, and
+  - older MECE contexted window series spanning a different range,
+  confirm forecast uses the correct per-day “best-of” mix and does not get stuck on an older MECE window range.
+- For a contexted query (e.g. `context(channel:paid-search)`), confirm forecast never sources from uncontexted series.
+- Confirm that when diagnostics are on, the log output clearly identifies:
+  - which days used explicit vs MECE,
+  - the chosen horizon and censoring,
+  - and the weighted totals that produced the final scalar.
+
 ### Implementation notes (updated 8-Jan-26)
 
 - **Conditional MSMDC queries now preserve topology discriminators**:
