@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.26b
+**Released:** January 08, 2026
+
+n_query fixes applied. evidence mode I think now is kinda ok
+
+---
+
 ## Version 1.1.25b
 **Released:** January 08, 2026
 
