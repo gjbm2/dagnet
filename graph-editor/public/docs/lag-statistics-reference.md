@@ -217,10 +217,8 @@ This document is the canonical reference for LAG statistics and convolution logi
 │   │     t95: 4.6    (computed from μ,σ or fallback to DEFAULT_T95_DAYS)        │   │
 │   │   }                                                                         │   │
 │   │                                                                             │   │
-│   │   anchor_latency: {                               ── A→(this edge) SUMMARY  │   │
-│   │     median_lag_days: 5.5,                                                   │   │
-│   │     mean_lag_days: 6                                                        │   │
-│   │   }                                                                         │   │
+│   │   (No persisted anchor_latency summary block)                               │   │
+│   │   (A→source summary is derived on demand from anchor_* arrays)              │   │
 │   │                                                                             │   │
 │   └─────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                     │
@@ -240,9 +238,10 @@ NOTE (18-Dec-25): We distinguish two “window” concepts:
 
 NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
 
-- For `cohort()` queries: `cs` is driven by the cohort conversion horizon (Phase 2: `path_t95`/`t95` with overrides; currently carried via `cohort.t95` as a transport field to the adapter).
-- For `window()` queries (baseline window retrieval): we must set a **fixed** `cs = 30 days` to avoid accidental censoring by provider defaults when building baseline lag summaries and derived horizons.
-  - Design: use `DEFAULT_T95_DAYS = 30` as the single source of truth for this value.
+- For `cohort()` queries: `cs` is driven by the **cohort conversion window** carried to the adapter as `cohort.conversion_window_days`.
+  - Current implementation (as of 8-Jan-26): `conversion_window_days = ceil(max(path_t95 | t95 over graph))` clamped to 90 days, so cohort-mode denominators are coherent across edges within a slice.
+- For `window()` queries (baseline window retrieval): we set a **fixed** `cs = 30 days` to avoid accidental censoring by provider defaults when building baseline lag summaries and derived horizons.
+  - Current implementation (as of 8-Jan-26): this 30-day default is enforced in the shipped Amplitude adapter (`public/defaults/connections.yaml`), not sourced from `DEFAULT_T95_DAYS` (though both default to 30 in shipped settings).
 
 ---
 
@@ -654,13 +653,15 @@ Phase 2 clarifies that **`p.mean` is the canonical completeness-weighted blend**
 │                ▼                                                                    │
 │   ┌─────────────────────────────────────────────────────────────────────────────┐  │
 │   │                                                                             │  │
-│   │   n_eff = completeness × p.n                                                │  │
+│   │   c_w = completeness^η         (η = LATENCY_BLEND_COMPLETENESS_POWER)       │  │
+│   │   n_eff = c_w × p.n                                                        │  │
 │   │                                                                             │  │
-│   │   m₀ = λ × n_baseline        (λ = FORECAST_BLEND_LAMBDA, typically 0.25)    │  │
+│   │   m₀ = λ × n_baseline        (λ = FORECAST_BLEND_LAMBDA)                    │  │
+│   │   m₀_eff = m₀ × (1 - c_w)     (forecast weight vanishes as completeness→1)  │  │
 │   │                                                                             │  │
 │   │                           n_eff                                             │  │
 │   │   w_evidence = ─────────────────────                                        │  │
-│   │                     m₀ + n_eff                                              │  │
+│   │                    m₀_eff + n_eff                                            │  │
 │   │                                                                             │  │
 │   │   p.mean = w_evidence × p.evidence.mean                                     │  │
 │   │          + (1 - w_evidence) × p.forecast.mean                               │  │
@@ -693,7 +694,9 @@ Phase 2 clarifies that **`p.mean` is the canonical completeness-weighted blend**
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 7.0 Cohort-path evidence de-biasing (right-censor correction) — Updated 16-Dec-25
+NOTE (8-Jan-26): `p.evidence.mean` remains the raw observed \(k/n\). In cohort path-anchored mode, the **blend** may use an adjusted evidence rate (see §7.0) while keeping `p.evidence.mean` unchanged for semantic clarity.
+
+### 7.0 Cohort-path evidence adjustment for blending (right-censor correction) — Updated 8-Jan-26
 
 In `cohort(...)` mode, `p.evidence.mean = k/n` for a downstream edge is often **right-censored**: many cohort members have started the journey, but have not yet had time to complete the edge by the query date.
 
@@ -705,17 +708,22 @@ Under that interpretation, the observed `k/n` is expected to be biased low by ap
 
 - `E[k/n] ≈ p∞ × completeness`
 
-So for blending (and **only** in cohort path-anchored mode), we de-bias the evidence rate before applying the canonical blend weight:
+So for blending (and **only** in cohort path-anchored mode), we adjust the evidence rate **used for blending** without dividing by very small completeness (which can blow up and create unstable behaviour).
 
 ```
-evidence_mean_used_for_blend = clamp01( (k/n) / completeness )
+evidence_mean_used_for_blend = BetaPosteriorMean(
+  k_obs,
+  n_eff,
+  prior_mean = p.forecast.mean,
+  prior_strength ≈ LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE / completeness
+)
 ```
 
 Guardrails:
 
 - Applies only when **cohort-mode completeness is path-anchored** (A→Y), not in `window(...)` mode.
 - Does not apply when cohort completeness is a fallback/conditional estimate.
-- Uses a small floor on completeness (to avoid division blow-ups); if completeness is extremely small, we keep using raw `k/n`.
+- `p.evidence.mean` remains the **raw observed** signal (`k/n`) for semantic clarity; only the blend uses the adjusted value.
 
 This change reduces the systematic “mid-window tug” where evidence is incomplete but was still treated as an estimate of the eventual rate.
 
@@ -762,7 +770,7 @@ When deriving `p.forecast.mean`, **recent mature days are weighted more heavily*
 │   RECENCY_HALF_LIFE_DAYS = 30                                                       │
 │                                                                                     │
 │   Defined in: src/constants/latency.ts                                              │
-│   (Not currently user-configurable; future enhancement)                             │
+│   Configurable via settings/settings.yaml (see public/docs/forecasting-settings.md) │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -955,9 +963,6 @@ When deriving `p.forecast.mean`, **recent mature days are weighted more heavily*
 │  latency.median_lag_days    │  Slice-level median lag summary (this edge)          │
 │  latency.mean_lag_days      │  Slice-level mean lag summary (this edge)            │
 │  latency.t95                │  Slice-level 95th percentile lag                     │
-│                             │                                                      │
-│  anchor_latency.median_lag_days │  Slice-level A→(this edge source) median         │
-│  anchor_latency.mean_lag_days   │  Slice-level A→(this edge source) mean           │
 └─────────────────────────────┴──────────────────────────────────────────────────────┘
 ```
 
@@ -1250,12 +1255,19 @@ When a node has **case allocations** (e.g., A/B test with 50/50 split), this aff
 
 ## 12. Constants Reference
 
-Key constants used in LAG calculations (defined in `src/constants/latency.ts`):
+Key defaults used in LAG calculations:
+
+- **Shipped defaults**: `public/defaults/settings.yaml` (seeded into the repo as `settings/settings.yaml`)
+- **Compiled fallbacks**: `src/constants/latency.ts` (used if the settings file is missing or malformed)
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `FORECAST_BLEND_LAMBDA` | 0.25 | Scales forecast prior strength in blend formula (§7) |
 | `RECENCY_HALF_LIFE_DAYS` | 30 | Half-life for recency weighting in p∞ estimation (§7.1) |
+| `LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE` | 150 | Stability guardrail for recency weighting and cohort evidence adjustment |
+| `DEFAULT_T95_DAYS` | 30 | Default horizon when no reliable t95 is available |
+| `FORECAST_BLEND_LAMBDA` | 0.15 | Forecast prior strength λ in blend weighting (§7) |
+| `LATENCY_BLEND_COMPLETENESS_POWER` | 2.25 | Completeness power η used for blend weighting (§7) |
+| `ANCHOR_DELAY_BLEND_K_CONVERSIONS` | 50 | Credibility threshold for anchor-delay soft transition (cohort completeness) |
 | `LATENCY_DEFAULT_SIGMA` | 0.5 | Default log-normal σ when insufficient data (§3) |
 | `LATENCY_MIN_FIT_CONVERTERS` | 30 | Minimum k for reliable empirical fit (§3) |
 | `PRECISION_DECIMAL_PLACES` | 4 | Decimal precision for probability values |
