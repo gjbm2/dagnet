@@ -26,8 +26,14 @@ describe('fetchDataService - conditional_p fetch planning (Phase 3)', () => {
       ],
     } as any;
 
-    // No files exist; checkCache=false should return all connectable items.
-    vi.spyOn(fileRegistry, 'getFile').mockReturnValue(null as any);
+    // Param files are optional; when missing, parameters are skipped for fetch planning/coverage.
+    // For inclusion here, we simulate that the relevant parameter files exist.
+    vi.spyOn(fileRegistry, 'getFile').mockImplementation((fileId: string) => {
+      if (fileId === 'parameter-base-param') return { data: { connection: 'amplitude-prod', values: [] } } as any;
+      if (fileId === 'parameter-cond-param-0') return { data: { connection: 'amplitude-prod', values: [] } } as any;
+      if (fileId === 'parameter-cond-param-1') return { data: { connection: 'amplitude-prod', values: [] } } as any;
+      return null as any;
+    });
 
     const items = getItemsNeedingFetch({ start: '1-Nov-25', end: '7-Nov-25' } as any, graph, 'window(1-Nov-25:7-Nov-25)', false);
     const ids = items.map(i => i.id);
@@ -56,8 +62,12 @@ describe('fetchDataService - conditional_p fetch planning (Phase 3)', () => {
       ],
     } as any;
 
-    // No parameter file exists (so coverage cannot be satisfied); but item is still fetchable due to conditional connection.
-    vi.spyOn(fileRegistry, 'getFile').mockReturnValue(null as any);
+    // Param files are optional; when missing, parameters are skipped for fetch planning/coverage.
+    // Simulate presence of the conditional parameter file so itemNeedsFetch can evaluate coverage.
+    vi.spyOn(fileRegistry, 'getFile').mockImplementation((fileId: string) => {
+      if (fileId === 'parameter-cond-param-0') return { data: { values: [], connection: undefined } } as any;
+      return null as any;
+    });
 
     const needs = itemNeedsFetch(
       {

@@ -5,6 +5,11 @@
 **Scope:** Implement **Solutions A–F** and harden **Solution G** (cache selection), with the clarified semantics below.  
 **Explicit non-scope:** Phase 7 “exclude term dropped in persisted evidence full_query” remains an **open investigation** item only (no implementation yet).
 
+**Status (updated 8-Jan-26): Completed**
+- Phases **1–6** in this plan have now been implemented.
+- Phase 7 remains an open investigation item (as stated above).
+- Additional follow-on work beyond this plan is now tracked in `investigate/investigation-delegation-vs-registration-1-Nov-25.md` under “Follow-on work (new proposals)”.
+
 ---
 
 ### Key clarifications (authoritative for this plan)

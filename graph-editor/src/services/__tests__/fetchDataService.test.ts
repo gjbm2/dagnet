@@ -674,7 +674,7 @@ describe('FetchDataService', () => {
       expect(result).toBe(true);
     });
 
-    it('should return needsFetch=true when param file does not exist', () => {
+    it('should return needsFetch=false when param file does not exist (param files are optional; missing means skip)', () => {
       const graph = createMockGraph({
         edges: [{ uuid: 'edge-1', p: { id: 'param-1', connection: {} } }],
       });
@@ -692,7 +692,7 @@ describe('FetchDataService', () => {
 
       const result = itemNeedsFetch(item, mockWindow, graph, mockDSL);
       
-      expect(result).toBe(true);
+      expect(result).toBe(false);
     });
 
     it('should return needsFetch=false for parameter without connection', () => {
@@ -816,7 +816,7 @@ describe('FetchDataService', () => {
       
       // First param needs fetch, second doesn't
       (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
-        if (id === 'parameter-param-1') return null; // No file = needs fetch
+        if (id === 'parameter-param-1') return null; // No file = skip (out of scope)
         if (id === 'parameter-param-2') {
           // File exists but has no slices for this DSL -> not previously fetched
           return { data: { connection: {}, values: [] } };
@@ -826,8 +826,8 @@ describe('FetchDataService', () => {
 
       const result = getItemsNeedingFetch(mockWindow, graph, mockDSL);
       
-      expect(result.length).toBe(2);
-      expect(result.map(r => r.objectId).sort()).toEqual(['param-1', 'param-2']);
+      expect(result.length).toBe(1);
+      expect(result.map(r => r.objectId).sort()).toEqual(['param-2']);
     });
 
     it('should include all param slots (p, cost_gbp, labour_cost) that need fetch', () => {
@@ -840,8 +840,13 @@ describe('FetchDataService', () => {
         }],
       });
       
-      // All params need fetch
-      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      // Param files are optional; missing files are skipped. To test slot inclusion, simulate file presence.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
+        if (id === 'parameter-param-p') return { data: { connection: {}, values: [] } };
+        if (id === 'parameter-param-cost') return { data: { connection: {}, values: [] } };
+        if (id === 'parameter-param-time') return { data: { connection: {}, values: [] } };
+        return null;
+      });
 
       const result = getItemsNeedingFetch(mockWindow, graph, mockDSL);
       
@@ -880,9 +885,12 @@ describe('FetchDataService', () => {
         contextAny: [],
       });
 
-      // No files needed for this test (checkCache=false), but items must be "fetchable"
-      // so we provide a direct connection on each edge.
-      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      // Param files are optional; missing files are skipped. Simulate file presence for the parameters under test.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
+        if (id === 'parameter-p-simple') return { data: { connection: {}, values: [] } };
+        if (id === 'parameter-p-lag') return { data: { connection: {}, values: [] } };
+        return null;
+      });
 
       const graph: Graph = {
         nodes: [
@@ -960,7 +968,11 @@ describe('FetchDataService', () => {
         edges: [{ uuid: 'edge-1', p: { id: 'param-1', connection: {} } }],
       });
       
-      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      // Param files are optional; missing files are skipped (out of scope).
+      // To produce a real "needs fetch" result, the file must exist but not cover the requested window.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { connection: {}, values: [] }, // no slice headers => not previously fetched => needs fetch
+      });
 
       const result = checkDSLNeedsFetch('window(1-Nov-25:7-Nov-25)', graph);
       
@@ -1097,7 +1109,11 @@ describe('FetchDataService', () => {
         edges: [{ uuid: 'edge-1', p: { id: 'param-1', connection: {} } }],
       });
       
-      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      // Param files are optional; missing files are skipped, so "all-uncached" must mean:
+      // files exist but have no coverage for these windows.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { connection: {}, values: [] },
+      });
 
       const results = checkMultipleDSLsNeedFetch([
         'window(1-Nov-25:7-Nov-25)',
@@ -1115,7 +1131,12 @@ describe('FetchDataService', () => {
         ],
       });
       
-      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      // Files exist but have no slice coverage => both items need fetch.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
+        if (id === 'parameter-param-1') return { data: { connection: {}, values: [] } };
+        if (id === 'parameter-param-2') return { data: { connection: {}, values: [] } };
+        return null;
+      });
 
       const results = checkMultipleDSLsNeedFetch([
         'window(1-Nov-25:7-Nov-25)',
@@ -1136,7 +1157,10 @@ describe('FetchDataService', () => {
         edges: [{ id: 'edge-1', p: { id: 'param-1', connection: {} } }],
       });
       
-      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      // File exists but has no slice headers for this DSL => needs fetch.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { connection: {}, values: [] },
+      });
 
       const item: FetchItem = {
         id: 'param-1',
