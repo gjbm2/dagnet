@@ -1,12 +1,24 @@
 # TODO
 
-## Investigation pointer (updated 8-Jan-26)
+## Immediate triage
+
+- this shouldn't be a warning:
+  {
+    "fileId": "<private-repo>-main-graph-conversion-flow-account-success-v2",
+    "severity": "warning",
+    "category": "sync",
+    "message": "Graph ↔ parameter drift for p.switch-registered-to-switch-success.p (paramId=registration-to-success) at \"latency.path_t95\" (graph=37.61 vs file=30.16). Direct fetch uses graph; versioned fetch uses parameter file.",
+    "field": "edges[3].p.latency.path_t95",
+    "edgeUuid": "370dce1d-3a36-4109-9711-204c301478c8"
+  }
+
+## Investigation pointer (updated 9-Jan-26)
 
 See `investigate/investigation-delegation-vs-registration-1-Nov-25.md`.
 
 **Remaining work to complete (new follow-ons):**
-- MSMDC should apply/populate cohort anchors (`anchor_node_id`) for **all** edges (latency and non-latency alike), and cascade to parameter files as appropriate.
-- In `cohort(...)` mode, build **3-step** funnels everywhere (**A → from → to**), except when **anchor == from** (then 2-step is sufficient).
+- ✅ (Completed; see `docs/current/project-lag/implemented/status.md`) MSMDC should apply/populate cohort anchors (`anchor_node_id`) for **all** edges (latency and non-latency alike), and cascade to parameter files as appropriate.
+- ✅ (Completed; see `docs/current/project-lag/implemented/status.md`) In `cohort(...)` mode, build **3-step** funnels everywhere (**A → from → to**), except when **anchor == from** (then 2-step is sufficient).
 
 - Investigate Forecast calcs (now that we think evidence is semi-stable)
 - More testing of conditional_p logic under what-if scenarios
@@ -93,6 +105,7 @@ See `investigate/investigation-delegation-vs-registration-1-Nov-25.md`.
 ## Major components
 - Bayesian modelling
 - Cyclic graphs...
+- Port to server version (for simplicity)
 
 ---
 

@@ -3,13 +3,6 @@
 **Dates covered:** 6–7-Jan-26  
 **Scope:** Explain, on an evidential basis, why **reach probability at success** differs between two graphs when running `cohort(1-Nov-25:1-Nov-25)`, and document the follow-on checks we used to narrow/validate hypotheses (including 1–10 Nov and 1–30 Nov windows where relevant).
 
-**Status (updated 8-Jan-26):**
-- The work described in `docs/current/implementation-plan-investigation-followups-7-Jan-26.md` (phases 1–6: Solutions A–F + hardening of Solution G) has now been implemented.
-- Remaining work is tracked below under “Follow-on work (new proposals)”.
-- MSMDC query-generation semantics were corrected so that **conditional edge queries preserve topology discriminators** (direct-vs-indirect discrimination) *as well as* condition discriminators; this is necessary for consistent “direct edge” semantics in conditional queries.
-- `n_query` generation logic was strengthened to use **constraint-set subtraction** (final constraints minus condition constraints) and to treat `visited(...)` / `visitedAny(...)` as narrowing terms alongside `exclude(...)` / `minus(...)` / `plus(...)`.
-- I am now more confident that Evidence-mode mass conservation and reach-probability calculation are correct in most cases; however I suspect **Forecast-mode** logic (window-slice-driven forecasting/blending) is defective and needs a targeted review.
-
 ### Question being answered
 
 You observed that two graphs (one “delegation”/rebuild view and one “registration”/success-v2 view) produce discrepant reach-at-success numbers for the same cohort.
@@ -38,135 +31,26 @@ This document records what we’ve checked so far, exactly what evidence we used
 ### What remains open / not yet fully diagnosed
 
 - **Tail-step evidence mismatch** between `success-v2` (Σ MECE context slices) and rebuild (explicit uncontexted slice) persists on a small number of days over 1–10 Nov.
-- **Forecast-mode correctness risk**: forecasting relies on `window(...)` slices and blending logic; even if Evidence mode is now largely mass-conserving, forecast computations may still be inconsistent or invalid.
-- **`n_query` semantics risk** (especially window vs cohort) remains an open design/logic concern; we have not yet proven it as the root cause of any remaining discrepancy, but the generation and application pipeline has been tightened materially.
+- **`n_query` semantics risk** (especially window vs cohort) remains an open design/logic concern; we have not yet proven it as the root cause of any remaining discrepancy.
 
-### Forecast-mode follow-up: proposed forecast meta-slice selection + logging plan (added 8-Jan-26)
+### Status (updated 9-Jan-26): repo alignment note
 
-This is a detailed plan to adjust forecast construction so that forecast baselines are (a) explainable, (b) robust to multiple window slice families in a parameter file, and (c) consistent with the principle “forecast should be greedy about available history”.
+This investigation document is now being used as a *living* evidence record. As of **9-Jan-26**, the repo implementation has moved on from the original pause points in this write-up:
 
-#### Principles (first-principles goals)
+- **Implemented (repo)**:
+  - **Implicit-uncontexted cache selection hardening**: “most recent matching slice-set wins”, with context transparent iff MECE, and “MECE generation” isolation to avoid cross-generation mixing.
+  - **`n_query` normal form + window-mode denominators**: MSMDC emits anchor-free `to(X)` `n_query` strings; window-mode execution computes the denominator via a single-event (segmentation) path, so window denominators are consistently X-anchored (rather than accidentally A-anchored).
+  - **Cohort-mode conversion window coherence**: cohort execution applies a graph-level cohort conversion window policy so “arrived at X” is coherent across edges within a cohort slice.
+  - **Planner coverage for `conditional_p`**: fetch planning includes conditional probability items (so retrieve-all / coverage checks cannot silently omit them).
+  - **What‑If precedence**: frontend What‑If matching uses “most specific wins”.
+  - **Conditional anchor propagation (clarity/auditability)**: conditional probability params can carry explicit `anchor_node_id` (rather than relying on implicit inheritance).
+- **Still open (repo)**:
+  - **Phase 7**: “exclude term dropped in persisted evidence `full_query`” remains an open investigation item (no fix committed).
+  - **Python runner conditional activation and surfacing**: the runner has constraint parsing/evaluation helpers for conditional conditions, but “conditional activation via analysis DSL” and user-visible surfacing of malformed/unsupported conditions are not yet fully wired end-to-end.
 
-- Forecast is **not** “the same as Evidence within the active `window(...)`”. It should cast a **wider temporal net** than the evidence window to maximise usable signal.
-- Forecast should be computed from **window-mode daily series** (not cohort series) and should produce a single scalar `p.forecast.mean` per parameter for the current run.
-- Forecast must be derived from a **deterministic** and **debuggable** selection process. When something looks wrong (forecast far above recent evidence), logs must clearly show which underlying series contributed and why.
-- Forecast selection must respect the requested query’s **slice dimensions**:
-  - If the query is contexted (e.g. `context(channel:paid-search)`), forecast must be built from that same contexted family (never from uncontexted data).
-  - If the query is uncontexted, forecast may use either an explicit uncontexted series or an implicitly uncontexted MECE aggregate series (see below).
-
-#### Step 1 — Define eligible input series (per parameter file)
-
-For each probability parameter, consider all stored `window(...)` values in the parameter file that include daily arrays (`dates`, `n_daily`, `k_daily`). Treat each stored value as a candidate “daily series” with metadata:
-
-- slice identifier (`sliceDSL`),
-- time coverage (`window_from`, `window_to`, and/or min/max date present),
-- retrieval timestamp (`data_source.retrieved_at`),
-- daily observations (`n_daily`, `k_daily`).
-
-Note: thin contexts are allowed. There is no minimum “quality threshold”; we use what exists.
-
-#### Step 2 — Construct MECE aggregate series (uncontexted only)
-
-For uncontexted forecast requests, the system may attempt to construct an “implicit uncontexted” daily series from a complete MECE partition (e.g. channel slices).
-
-Key requirement: **missing days do not invalidate MECE**.
-
-Policy for missing days:
-
-- A context slice that has no entry for a day is treated as contributing **zero** for that day *within its own declared coverage interval* (window range / date span).
-- Days outside a slice’s coverage interval are treated as “not covered by this slice family”; forecast should fall back to other eligible series that do cover those days (e.g. explicit uncontexted series, or another MECE generation).
-
-This keeps MECE usable even when some contexts are thin or sporadic.
-
-#### Step 3 — Build the greedy forecast meta-slice (per day best-of)
-
-Instead of selecting a single “winning” slice-set for the entire horizon, construct a “meta-slice” time series across the widest feasible horizon:
-
-- Define the meta-slice day range as the union of all days covered by eligible window series.
-- For each day, compute candidate observations:
-  - explicit series candidate (when available for that day and for the requested slice dimensions),
-  - MECE aggregate candidate (uncontexted only; when available for that day).
-- Choose the winner for that day using a deterministic, simple rule that is consistent with the “best available dataset” intuition:
-  - Prefer candidates whose underlying series is more recently retrieved (using `retrieved_at`).
-  - If retrieval timestamps are equal/absent, prefer candidates with broader local coverage (e.g. series that covers more of the surrounding horizon), to avoid tiny “new but extremely short” series dominating.
-  - Tie-break deterministically (documented in code and this doc).
-
-Important: this selection must never substitute uncontexted data into a contexted forecast request.
-
-#### Step 4 — Apply maturity censoring and recency weighting
-
-Once the meta-slice daily series is constructed:
-
-- Apply right-edge censoring using a maturity policy based on **per-parameter (per-edge) t95** rather than path-level latency. (Rationale: forecast is window-baseline logic; path-level latency is a cohort/path concept and can be over-conservative when used to censor window baselines.)
-- Apply recency half-life weighting across the remaining “mature” days to produce a scalar forecast mean.
-
-#### Step 5 — Logging and explainability (no toasts)
-
-Forecast recomputation is background logic and must not produce toasts.
-
-Logging must use the existing session-log diagnostics flag:
-
-- Diagnostics OFF:
-  - Log only a very compact summary, and do so as **a small number of children** under the existing `GET_FROM_FILE` operation (rather than one log per parameter).
-  - The summary should include: which basis was used (explicit vs MECE vs mixed meta-slice), the horizon bounds used, censoring settings, half-life settings, and the resulting forecast mean.
-- Diagnostics ON:
-  - Add a thorough trace sufficient to debug the meta-slice composition:
-    - which series were eligible,
-    - which MECE partitions were available/complete,
-    - the “winner” selection over time (compressed into switchpoints rather than per-day spam),
-    - weighted totals and the highest-impact day ranges.
-
-#### Step 6 — Consistency with existing fetch slice selection
-
-Forecast selection should share the same core “best available” / recency principles as slice selection used for data retrieval, but adapted to forecast’s wider temporal scope:
-
-- Retrieval selection decides “best slice-set for this query now”.
-- Forecast meta-slice selection decides “best per-day provenance over a wide horizon”, while respecting slice dimensions and using deterministic tie-breaking.
-
-#### Verification plan (prose only)
-
-- For a parameter file that contains both:
-  - a newly retrieved uncontexted `window(...)` series spanning ~90 days, and
-  - older MECE contexted window series spanning a different range,
-  confirm forecast uses the correct per-day “best-of” mix and does not get stuck on an older MECE window range.
-- For a contexted query (e.g. `context(channel:paid-search)`), confirm forecast never sources from uncontexted series.
-- Confirm that when diagnostics are on, the log output clearly identifies:
-  - which days used explicit vs MECE,
-  - the chosen horizon and censoring,
-  - and the weighted totals that produced the final scalar.
-
-### Implementation notes (updated 8-Jan-26)
-
-- **Conditional MSMDC queries now preserve topology discriminators**:
-  - Previously, conditional queries could omit direct-vs-indirect discriminators in triangle-like topologies, causing conditional queries to drift into “any path to to-node” semantics.
-  - MSMDC now always applies topology discrimination (e.g. excluding alternate-route predecessor hops) and then layers conditional discriminators on top.
-- **`n_query` generation is now set-maths based and less brittle**:
-  - For conditional queries, we compute “residual topology narrowing” by subtracting the condition-derived constraint sets from the final generated constraint sets.
-  - If any residual narrowing remains (including `visited(...)` / `visitedAny(...)`), MSMDC emits `n_query = to(from)` as edge-level denominator protection.
-- **Deprecated exclude→minus/plus compilation now preserves non-exclude constraints**:
-  - When compiling excludes to inclusion–exclusion, the generated query string now preserves `visited(...)`, `visitedAny(...)`, and case/context constraints instead of dropping them.
+Authoritative follow-up plan for what was implemented vs what remains open: `docs/current/implementation-plan-investigation-followups-7-Jan-26.md`.
 
 ---
-
-## Follow-on work (new proposals)
-
-These are additional pieces of work identified after phases 1–6 were completed.
-
-### 2a) MSMDC should populate cohort anchors for all edges (latency and non-latency alike)
-
-MSMDC already computes an anchor map (edge UUID → furthest upstream START node). We should apply that consistently to the graph and parameter files for **all edges**, regardless of whether an edge is marked as a latency edge. This separates:
-
-- “What is my cohort anchor (A)?” (topology-derived)
-- from “Am I a latency edge?” (latency modelling / forecasting)
-
-### 2b) In cohort mode, build 3-step funnels everywhere (except when anchor == from)
-
-In `cohort(...)` mode, we should build A-anchored cohort funnels consistently:
-
-- Default: **A → from → to** (3-step)
-- Only exception: when **A == from**, a 2-step funnel is sufficient (**from → to**)
-
-This avoids mixing cohort-anchored and window-style semantics within a single cohort view and reduces conservation failures at split nodes.
 
 ## Artefacts (inputs)
 
@@ -886,7 +770,7 @@ Why this is suspicious:
 
 Status / decision:
 
-- We will **pause further root-cause investigation** of this discrepancy until after implementing the proposed `n_query` window-mode fixes (Solutions **A** and **B**) because, if the diagnosis is correct, those changes may eliminate the inconsistency by making window denominators consistently X-anchored.
+- **Update (9-Jan-26)**: the `n_query` window-mode fixes (Solutions **A** and **B**) have now been implemented in the repo (see status note above). This means any remaining window-slice denominator discrepancies should now be investigated **after** re-fetching under the new semantics (to avoid comparing stale, pre-fix cache generations against post-fix executions).
 
 #### Potential defect: exclude term dropped in persisted evidence `full_query`
 
@@ -901,13 +785,6 @@ Next steps:
 
 - Confirm whether this is a **query construction/adapter bug** (exclude list lost) versus a **cache/signature selection bug** (old evidence value attached to the edge).
 - If reproducible, add a regression test around building/executing `exclude(a,b)` for Amplitude and ensure both exclusions survive into the executed request semantics.
-
-**Status (7-Jan-26): Open investigation (Phase 7).**
-
-- This remains an **open area for further investigation** and is **not yet scheduled for implementation** until we can prove whether the root cause is:
-  - a query construction / adapter bug (exclude list lost), or
-  - a cache/signature selection bug (stale evidence provenance attached).
-
 
 #### Root cause for “Reach Probability wildly differs” (SV2, Evidence mode, 1-Nov-25)
 
