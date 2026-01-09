@@ -1,8 +1,7 @@
 # TODO
 
-
-- Sankey mode:
-  - some edges looking weird
+- Work on case files:
+  docs/current/case-lag-updates.md
 
 ## Immediate triage
 
