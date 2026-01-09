@@ -1,5 +1,9 @@
 # TODO
 
+
+- Sankey mode:
+  - some edges looking weird
+
 ## Immediate triage
 
 - this shouldn't be a warning:
