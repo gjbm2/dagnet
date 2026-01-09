@@ -2,6 +2,21 @@
 
 Last updated: 22-Dec-25
 
+### Update (9-Jan-26): implementation status (repo alignment)
+
+The changes described in this document have now been **implemented in the repo**, with the following important clarifications so the document remains faithful to current behaviour:
+
+- **Change A (`n_query`) is implemented**:
+  - MSMDC emits an **anchor-free normal form** `n_query` of the shape **`to(X)`** (rather than baking anchors into the stored string).
+  - Legacy `from(A).to(X)` values remain supported.
+  - For **window()** execution, `to(X)` denominators are treated as **X-anchored arrivals in-window** and are executed via a **single-event** query path (Amplitude segmentation).
+  - For **cohort()** execution, `to(X)` denominators are anchored using the cohort anchor **iff** an anchor exists (explicit in DSL or via `anchor_node_id`); otherwise we do not invent one.
+
+- **Change B (cohort conversion window coherence) is implemented**:
+  - Cohort execution uses a **graph-level cohort conversion window** policy (Amplitude `cs`) so that “arrived at node X” is coherent across edges within a cohort slice.
+
+This document remains useful as the *why* and *design intent* behind the fixes; the authoritative “what is now implemented” record is in code plus the investigation follow-up plan (`docs/current/implementation-plan-investigation-followups-7-Jan-26.md`).
+
 ### Background and problem statement
 
 We observed “reach drift” in Evidence mode where modelled reach probabilities (computed by composing edge probabilities) do not match observed reach counts derived from funnel evidence. After instrumented direct fetch logging (`tmp2.log`) and a fresh graph export (`test2.json`), the internal pipeline is consistent (what is logged is what is persisted), so the integrity problem is in the semantics of how denominators and horizons are defined, not in caching or writeback.

@@ -339,7 +339,14 @@ export const LAG_ANCHOR_STIPPLE_RADIUS = 1.5;
 export const HIDDEN_CURRENT_STIPPLE_ANGLE = -30;
 
 /** Opacity for hidden current layer stipple dots (0-1) */
-export const HIDDEN_CURRENT_OPACITY = 0.2;
+export const HIDDEN_CURRENT_OPACITY = 0.15;
+
+/**
+ * Opacity for hidden current stipple dots when the edge is highlighted/selected (0-1).
+ * Hidden current is intentionally subtle, but interaction should make it pop.
+ */
+export const HIDDEN_CURRENT_HIGHLIGHTED_OPACITY = 0.65;
+export const HIDDEN_CURRENT_SELECTED_OPACITY = 0.9;
 
 // =============================================================================
 // Sankey F+E (Forecast + Evidence) Constants

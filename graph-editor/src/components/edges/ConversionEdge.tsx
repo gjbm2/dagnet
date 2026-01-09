@@ -65,6 +65,8 @@ import {
   LAG_ANCHOR_STIPPLE_RADIUS,
   HIDDEN_CURRENT_STIPPLE_ANGLE,
   HIDDEN_CURRENT_OPACITY,
+  HIDDEN_CURRENT_HIGHLIGHTED_OPACITY,
+  HIDDEN_CURRENT_SELECTED_OPACITY,
   SANKEY_NODE_INSET,
   COMPLETENESS_CHEVRON_MIN_HALF_WIDTH,
   COMPLETENESS_CHEVRON_WIDTH_PADDING,
@@ -2157,7 +2159,12 @@ export default function ConversionEdge({
               cy={LAG_ANCHOR_STIPPLE_SPACING / 2} 
               r={LAG_ANCHOR_STIPPLE_RADIUS} 
               fill={getEdgeColour()}
-              fillOpacity={HIDDEN_CURRENT_OPACITY}
+              // Interaction parity: selected/highlighted hidden-current must "pop" more.
+              fillOpacity={
+                effectiveSelected
+                  ? HIDDEN_CURRENT_SELECTED_OPACITY
+                  : (data?.isHighlighted ? HIDDEN_CURRENT_HIGHLIGHTED_OPACITY : HIDDEN_CURRENT_OPACITY)
+              }
             />
           </pattern>
         )}
@@ -2172,9 +2179,11 @@ export default function ConversionEdge({
               id={`lag-anchor-fade-${id}`}
               gradientUnits="userSpaceOnUse"
               x1={adjustedSourceX}
-              y1={adjustedSourceY}
+              // Sankey: keep fade axis horizontal so the fade boundary is vertical (flat),
+              // rather than perpendicular to a spline-angled gradient.
+              y1={data?.useSankeyView ? (adjustedSourceY + adjustedTargetY) / 2 : adjustedSourceY}
               x2={adjustedTargetX}
-              y2={adjustedTargetY}
+              y2={data?.useSankeyView ? (adjustedSourceY + adjustedTargetY) / 2 : adjustedTargetY}
             >
               {(() => {
                 const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
@@ -2255,9 +2264,10 @@ export default function ConversionEdge({
                   id={`lag-anchor-fade-white-${id}`}
                   gradientUnits="userSpaceOnUse"
                   x1={adjustedSourceX}
-                  y1={adjustedSourceY}
+                  // Sankey: align mask gradient horizontally so the visible/invisible boundary is vertical.
+                  y1={data?.useSankeyView ? (adjustedSourceY + adjustedTargetY) / 2 : adjustedSourceY}
                   x2={adjustedTargetX}
-                  y2={adjustedTargetY}
+                  y2={data?.useSankeyView ? (adjustedSourceY + adjustedTargetY) / 2 : adjustedTargetY}
                 >
                   {(() => {
                     const completeness = (data?.edgeLatencyDisplay?.completeness_pct ?? 100) / 100;
@@ -2323,14 +2333,22 @@ export default function ConversionEdge({
               <path
                 id={`${id}-sankey-outer`}
                 style={{
-                  fill: sankeyFERibbons.mode === 'e'
-                    ? ((effectiveSelected || data?.isHighlighted)
-                        ? getEdgeColour()
-                        : (data?.scenarioColour || getEdgeColour()))
-                    : `url(#lag-stripe-outer-${id})`,
+                  // Hidden-current should use the SAME mottled/stippled treatment as normal mode
+                  // (i.e. not stripe-filled ribbons).
+                  fill: isHiddenCurrent
+                    ? `url(#lag-anchor-stipple-${id})`
+                    : sankeyFERibbons.mode === 'e'
+                      ? ((effectiveSelected || data?.isHighlighted)
+                          ? getEdgeColour()
+                          : (data?.scenarioColour || getEdgeColour()))
+                      : `url(#lag-stripe-outer-${id})`,
                   // In E mode, apply NO_EVIDENCE_E_MODE_OPACITY for edges without evidence
-                  fillOpacity: isHiddenCurrent 
-                    ? 1 
+                  // IMPORTANT: Hidden-current should NOT be more opaque in Sankey mode than normal mode.
+                  // The scenario pipeline sets data.strokeOpacity (e.g. ~0.05) for hidden current.
+                  // For hidden-current, opacity should be driven by the stipple pattern itself
+                  // (mirrors non-Sankey branches that use `isHiddenCurrent ? 1 : ...`).
+                  fillOpacity: isHiddenCurrent
+                    ? 1
                     : (sankeyFERibbons.mode === 'e' && data?.edgeLatencyDisplay?.useNoEvidenceOpacity)
                       ? (data?.strokeOpacity ?? EDGE_OPACITY) * NO_EVIDENCE_E_MODE_OPACITY
                       : (data?.strokeOpacity ?? EDGE_OPACITY),
@@ -2354,7 +2372,11 @@ export default function ConversionEdge({
                 <path
                   id={`${id}-sankey-inner`}
                   style={{
-                    fill: `url(#lag-stripe-inner-${id})`,
+                    // Hidden-current should use stipple mottling, not stripes.
+                    fill: isHiddenCurrent
+                      ? `url(#lag-anchor-stipple-${id})`
+                      : `url(#lag-stripe-inner-${id})`,
+                    // For hidden-current, opacity is driven by the stipple pattern itself.
                     fillOpacity: isHiddenCurrent ? 1 : (data?.strokeOpacity ?? EDGE_OPACITY),
                     mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
                     stroke: 'none',
@@ -2386,6 +2408,45 @@ export default function ConversionEdge({
                 d={ribbonPath.topEdge}
                 style={{ display: 'none' }}
                 pointerEvents="none"
+              />
+
+              {/* 
+                Sankey parity: render the same LAG anchor stroke as normal mode so that:
+                - Selected/highlighted edges get the same opacity boost behaviour
+                - Hidden-current uses the same stipple "mottling" treatment
+                This is visual-only here (pointerEvents disabled) to avoid changing interaction surfaces.
+              */}
+              <path
+                id={`${id}-lag-anchor-sankey`}
+                // Mask is only relevant for stripe-based anchors (fade is implemented via mask).
+                mask={LAG_ANCHOR_USE_STRIPES && !isHiddenCurrent ? `url(#lag-anchor-fade-mask-${id})` : undefined}
+                style={{
+                  // Sankey: completeness/anchor overlay must be ribbon-shaped, not a stroked path.
+                  // Reuse the normal-mode anchor paint sources (fade / stripes / stipple).
+                  fill: isHiddenCurrent
+                    ? `url(#lag-anchor-stipple-${id})`   // Stipple for hidden current
+                    : LAG_ANCHOR_USE_STRIPES
+                      ? `url(#lag-anchor-stripe-${id})`  // Stripes (mask handles fade)
+                      : `url(#lag-anchor-fade-${id})`,   // Plain gradient fade
+                  // Opacity semantics match normal mode's anchor strokeOpacity.
+                  fillOpacity: effectiveSelected
+                    ? LAG_ANCHOR_SELECTED_OPACITY
+                    : data?.isHighlighted
+                      ? LAG_ANCHOR_HIGHLIGHTED_OPACITY
+                      : LAG_ANCHOR_OPACITY,
+                  // Keep strokeOpacity in sync for any tooling/tests reading it (even though stroke is none).
+                  strokeOpacity: effectiveSelected
+                    ? LAG_ANCHOR_SELECTED_OPACITY
+                    : data?.isHighlighted
+                      ? LAG_ANCHOR_HIGHLIGHTED_OPACITY
+                      : LAG_ANCHOR_OPACITY,
+                  mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
+                  stroke: 'none',
+                  transition: 'opacity 0.3s ease-in-out',
+                  pointerEvents: 'none',
+                }}
+                className="react-flow__edge-path"
+                d={sankeyFERibbons.outerRibbon}
               />
             </>
           ) : shouldShowConfidenceIntervals && confidenceData ? (

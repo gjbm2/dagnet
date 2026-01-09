@@ -5,10 +5,13 @@
 **Scope:** Implement **Solutions A–F** and harden **Solution G** (cache selection), with the clarified semantics below.  
 **Explicit non-scope:** Phase 7 “exclude term dropped in persisted evidence full_query” remains an **open investigation** item only (no implementation yet).
 
-**Status (updated 8-Jan-26): Completed**
-- Phases **1–6** in this plan have now been implemented.
-- Phase 7 remains an open investigation item (as stated above).
-- Additional follow-on work beyond this plan is now tracked in `investigate/investigation-delegation-vs-registration-1-Nov-25.md` under “Follow-on work (new proposals)”.
+**Status (updated 9-Jan-26): Implemented (with one remaining gap)**
+- Phases **1–4** and **6** in this plan have been implemented in the repo.
+- Phase **5** is **partially implemented**:
+  - The Python runner now has constraint parsing/evaluation utilities for conditional condition DSL (parity with TS for `visited`, `exclude`, `visitedAny`, `context`, `case`) and a “most specific wins” scoring helper.
+  - **However**: “conditional activation via analysis DSL” and “surfacing malformed/unsupported conditions as a user-visible warning/error in analysis outputs” are **not yet fully wired end-to-end** (they are currently logged / treated as non-matching where encountered).
+- Phase **7** remains an open investigation item (as stated above).
+- Follow-on work beyond this plan is tracked in `investigate/investigation-delegation-vs-registration-1-Nov-25.md` under “Follow-on work (new proposals)”.
 
 ---
 
