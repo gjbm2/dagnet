@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.28b
+**Released:** January 09, 2026
+
+Sankey mode visual fixes
+
+---
+
 ## Version 1.1.27b
 **Released:** January 08, 2026
 
