@@ -107,7 +107,9 @@ class WorkspaceService {
         { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
         { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
         { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' },
-        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' }
+        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' },
+        // Shared, repo-committed settings file(s)
+        { path: 'settings', type: 'settings' as ObjectType, extension: 'yaml' }
       ];
 
       const remoteFiles: any[] = [];
@@ -259,7 +261,9 @@ class WorkspaceService {
         { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
         { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
         { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' },
-        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' }
+        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' },
+        // Shared, repo-committed settings file(s)
+        { path: 'settings', type: 'settings' as ObjectType, extension: 'yaml' }
       ];
 
       // Build list of files to fetch
@@ -752,7 +756,9 @@ class WorkspaceService {
         { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
         { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
         { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' },
-        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' }
+        { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' },
+        // Shared, repo-committed settings file(s)
+        { path: 'settings', type: 'settings' as ObjectType, extension: 'yaml' }
       ];
 
       const remoteFileMap = new Map<string, any>(); // path -> treeItem
@@ -1483,7 +1489,9 @@ class WorkspaceService {
       { path: gitCreds.contextsPath || 'contexts', type: 'context' as ObjectType, extension: 'yaml' },
       { path: gitCreds.casesPath || 'cases', type: 'case' as ObjectType, extension: 'yaml' },
       { path: gitCreds.nodesPath || 'nodes', type: 'node' as ObjectType, extension: 'yaml' },
-      { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' }
+      { path: gitCreds.eventsPath || 'events', type: 'event' as ObjectType, extension: 'yaml' },
+      // Shared, repo-committed settings file(s)
+      { path: 'settings', type: 'settings' as ObjectType, extension: 'yaml' }
     ];
 
     const filesToFetch: Array<{ treeItem: any; dirConfig: any }> = [];
