@@ -20,6 +20,8 @@ function inferGraphName(graphFileId: string): string {
 
 class DailyRetrieveAllAutomationService {
   private static instance: DailyRetrieveAllAutomationService;
+  private queueTail: Promise<void> = Promise.resolve();
+  private queuedCount: number = 0;
 
   static getInstance(): DailyRetrieveAllAutomationService {
     if (!DailyRetrieveAllAutomationService.instance) {
@@ -28,7 +30,46 @@ class DailyRetrieveAllAutomationService {
     return DailyRetrieveAllAutomationService.instance;
   }
 
+  private async withCrossTabLock<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      const nav: any = (typeof navigator !== 'undefined') ? (navigator as any) : null;
+      if (nav?.locks?.request) {
+        // Web Locks API serialises across tabs/windows for the same origin.
+        return await nav.locks.request('dagnet:daily-retrieveall', { mode: 'exclusive' }, async () => {
+          return await fn();
+        });
+      }
+    } catch {
+      // Best-effort only; fall back to in-tab queue.
+    }
+    return await fn();
+  }
+
   async run(options: DailyRetrieveAllAutomationOptions): Promise<void> {
+    // Serialise runs so multiple scheduled graphs (or multiple triggers) cannot overlap.
+    // This avoids competing pulls/commits and keeps session logs readable.
+    this.queuedCount += 1;
+    const position = this.queuedCount;
+
+    if (position > 1) {
+      const graphName = inferGraphName(options.graphFileId);
+      sessionLogService.info(
+        'session',
+        'DAILY_RETRIEVE_ALL_QUEUED',
+        `Daily automation queued (position ${position}): ${graphName}`,
+        undefined,
+        { repository: options.repository, branch: options.branch, fileId: options.graphFileId, position }
+      );
+    }
+
+    const task = this.queueTail.then(() => this.withCrossTabLock(() => this.runInternal(options)));
+    this.queueTail = task.then(() => undefined, () => undefined);
+    return task.finally(() => {
+      this.queuedCount = Math.max(0, this.queuedCount - 1);
+    });
+  }
+
+  private async runInternal(options: DailyRetrieveAllAutomationOptions): Promise<void> {
     const { repository, branch, graphFileId, getGraph, setGraph, shouldAbort } = options;
 
     const graphName = inferGraphName(graphFileId);

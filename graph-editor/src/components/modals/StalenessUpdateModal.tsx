@@ -23,6 +23,8 @@ export interface StalenessUpdateModalProps {
   onRun: () => void;
   onSnooze: () => void;
   onClose: () => void;
+  autoProceedSecondsRemaining?: number | null;
+  onCancelAutoProceed?: () => void;
 }
 
 /**
@@ -40,6 +42,8 @@ export function StalenessUpdateModal({
   onRun,
   onSnooze,
   onClose,
+  autoProceedSecondsRemaining,
+  onCancelAutoProceed,
 }: StalenessUpdateModalProps) {
   if (!isOpen) return null;
 
@@ -47,6 +51,8 @@ export function StalenessUpdateModal({
   const anyDue = actions.some(a => a.due);
   const reloadChecked = actions.some(a => a.key === 'reload' && a.checked && !a.disabled);
   const otherChecked = actions.some(a => a.key !== 'reload' && a.checked && !a.disabled);
+
+  const showAutoProceed = typeof autoProceedSecondsRemaining === 'number' && autoProceedSecondsRemaining > 0;
 
   const modalContent = (
     <div className="modal-overlay" onClick={onClose}>
@@ -139,6 +145,23 @@ export function StalenessUpdateModal({
                   </div>
                 </label>
               </div>
+
+              {showAutoProceed ? (
+                <div style={{ marginTop: 12, padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: 6, background: '#f9fafb' }}>
+                  <div style={{ fontSize: 12, color: '#374151' }}>
+                    Auto-proceed in <strong>{autoProceedSecondsRemaining}</strong>s (unattended update).
+                  </div>
+                  {onCancelAutoProceed ? (
+                    <button
+                      className="modal-btn modal-btn-secondary"
+                      style={{ marginTop: 8 }}
+                      onClick={onCancelAutoProceed}
+                    >
+                      Cancel auto-proceed
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </>
           )}
         </div>
@@ -148,7 +171,7 @@ export function StalenessUpdateModal({
             Snooze 1 hour
           </button>
           <button className="modal-btn modal-btn-secondary" onClick={onClose}>
-            Dismiss
+            Dismiss 24 hours
           </button>
           <button className="modal-btn modal-btn-primary" onClick={onRun} disabled={!anyChecked}>
             Run selected

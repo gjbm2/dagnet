@@ -105,6 +105,30 @@ node graph-editor/scripts/export-graph-bundle.js \
 - `2`: exported, but one or more referenced files were missing (warnings printed)
 - `1`: fatal error (e.g. graph file not found)
 
+## `daily-retrieveall.ps1` – schedule daily RetrieveAll for graphs (Windows Task Scheduler)
+
+DagNet supports a headless daily automation workflow via URL parameters:
+
+- `?retrieveall=<graph-name>` (see `graph-editor/public/docs/dev/URL_PARAMS.md`)
+
+This script helps you “switch on/off” a daily run for one or more graphs by creating Windows Task Scheduler entries.
+
+Notes:
+
+- **Browser required**: automation relies on browser storage (IndexedDB) for credentials.
+- **Machine must be running** at the scheduled time.
+- **Automation container (required)**: scheduled runs use `-BrowserUserDataDir` (a dedicated browser container) so the run can be auto-closed without affecting your normal browser windows.
+- **Auto-close (required)**: use `-CloseAfterMinutes` (must be > 0) to avoid leaving a new window/tab every working day.
+
+Quick examples:
+
+- **Windows**:
+  - One-time setup (create/configure the automation container): `.\daily-retrieveall.ps1 -SetupProfile -BrowserUserDataDir "C:\DagNet\automation-profile"`
+  - Install (daily 06:30): `.\daily-retrieveall.ps1 -Install -Graphs conversion-funnel,user-journey -Time 06:30`
+  - Install (close after 30 mins): `.\daily-retrieveall.ps1 -Install -Graphs conversion-funnel -Time 06:30 -CloseAfterMinutes 30 -BrowserUserDataDir "C:\DagNet\automation-profile"`
+  - Disable one: `.\daily-retrieveall.ps1 -Disable -Graphs conversion-funnel`
+  - Enable all: `.\daily-retrieveall.ps1 -Enable`
+
 
 
 

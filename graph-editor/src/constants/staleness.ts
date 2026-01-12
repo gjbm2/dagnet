@@ -4,11 +4,20 @@
  * Centralised here so all nudges and related UX use consistent timings.
  */
 export const STALENESS_NUDGE_RELOAD_AFTER_MS = 12 * 60 * 60 * 1000; // 12h
-export const STALENESS_NUDGE_GIT_PULL_AFTER_MS = 12 * 60 * 60 * 1000; // 12h
+export const STALENESS_NUDGE_GIT_PULL_AFTER_MS = 24 * 60 * 60 * 1000; // 24h (user terminals should not pull more than daily by default)
 export const STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS = 20 * 60 * 60 * 1000; // 20h (tentative)
 
 /** User snooze duration for nudges. */
 export const STALENESS_NUDGE_SNOOZE_MS = 60 * 60 * 1000; // 1h
+
+/** User dismiss duration for nudges (distinct from snooze). */
+export const STALENESS_NUDGE_DISMISS_MS = 24 * 60 * 60 * 1000; // 24h
+
+/**
+ * Visible-tab polling interval for unattended terminals.
+ * We still gate on "due" checks (e.g. 24h since last sync) so this does not cause repeated pulls.
+ */
+export const STALENESS_NUDGE_VISIBLE_POLL_MS = 5 * 60 * 1000; // 5m
 
 /**
  * Guardrail: even if conditions persist, don't re-prompt immediately after a user action.

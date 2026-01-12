@@ -7,6 +7,8 @@ import { usePullAll } from './usePullAll';
 import { StalenessUpdateModal, type StalenessUpdateActionKey } from '../components/modals/StalenessUpdateModal';
 import { retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
 import { sessionLogService } from '../services/sessionLogService';
+import { repositoryOperationsService } from '../services/repositoryOperationsService';
+import { STALENESS_NUDGE_VISIBLE_POLL_MS } from '../constants/staleness';
 
 export interface UseStalenessNudgesResult {
   /** Must be rendered somewhere (for pull conflict resolution UI). */
@@ -55,6 +57,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     description: string;
     label: string;
   }>>([]);
+  const [autoProceedSecondsRemaining, setAutoProceedSecondsRemaining] = useState<number | null>(null);
+  const autoProceedIntervalRef = useRef<number | null>(null);
 
   // Opt-out: suppress staleness nudges for this session when the URL contains ?nonudge
   // (used by creds-share links for read-only explore flows).
@@ -77,15 +81,28 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     return false;
   }, []);
 
-  const closeModal = useCallback(() => setIsModalOpen(false), []);
+  const stopAutoProceed = useCallback(() => {
+    setAutoProceedSecondsRemaining(null);
+    if (autoProceedIntervalRef.current !== null) {
+      window.clearInterval(autoProceedIntervalRef.current);
+      autoProceedIntervalRef.current = null;
+    }
+  }, []);
+
+  const closeModal = useCallback(() => {
+    stopAutoProceed();
+    setIsModalOpen(false);
+  }, [stopAutoProceed]);
 
   const toggleAction = useCallback((key: StalenessUpdateActionKey) => {
+    stopAutoProceed();
     setModalActions(prev => prev.map(a => (a.key === key ? { ...a, checked: !a.checked } : a)));
-  }, []);
+  }, [stopAutoProceed]);
 
   const toggleAutomaticMode = useCallback((enabled: boolean) => {
+    stopAutoProceed();
     setAutomaticMode(enabled);
-  }, []);
+  }, [stopAutoProceed]);
 
   // Clear any persisted nudge state on mount so it can never survive a refresh (F5).
   useEffect(() => {
@@ -94,7 +111,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
   const runSelectedKeys = useCallback(async (
     selected: Set<StalenessUpdateActionKey>,
-    opts?: { headlessRetrieve?: boolean }
+    opts?: { headlessRetrieve?: boolean; unattended?: boolean }
   ) => {
     const now = Date.now();
     const storage = window.localStorage;
@@ -122,7 +139,12 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     }
 
     if (wantsPull) {
-      await pullAll();
+      if (opts?.unattended && repo) {
+        // Unattended user-terminal behaviour: prefer "remote wins" to avoid blocking on a conflict modal.
+        await repositoryOperationsService.pullLatestRemoteWins(repo, branch);
+      } else {
+        await pullAll();
+      }
     }
 
     if (wantsRetrieve) {
@@ -201,6 +223,27 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     setAutomaticMode(false);
   }, [modalActions, closeModal, runSelectedKeys]);
 
+  const onDismissAll = useCallback(() => {
+    const now = Date.now();
+    const storage = window.localStorage;
+    const repo = navState.selectedRepo;
+    const branch = navState.selectedBranch || 'main';
+
+    // Dismiss is a 24h suppression (distinct from 1h snooze).
+    for (const a of modalActions) {
+      if (!a.due) continue;
+      if (a.key === 'reload') {
+        stalenessNudgeService.dismiss('reload', undefined, now, storage);
+      } else if (a.key === 'git-pull') {
+        if (repo) stalenessNudgeService.dismiss('git-pull', `${repo}-${branch}`, now, storage);
+      } else if (a.key === 'retrieve-all-slices') {
+        if (activeFileId) stalenessNudgeService.dismiss('retrieve-all-slices', activeFileId, now, storage);
+      }
+    }
+
+    closeModal();
+  }, [modalActions, navState.selectedRepo, navState.selectedBranch, activeFileId, closeModal]);
+
   const onSnoozeAll = useCallback(() => {
     const now = Date.now();
     const storage = window.localStorage;
@@ -221,6 +264,41 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
     closeModal();
   }, [modalActions, navState.selectedRepo, navState.selectedBranch, activeFileId, closeModal]);
+
+  // Auto-proceed countdown: if the nudge modal is shown and the user does nothing,
+  // auto-run a conservative unattended update (by default, git pull only).
+  useEffect(() => {
+    if (!isModalOpen) return;
+    if (autoProceedSecondsRemaining !== null) return;
+    if (suppressStalenessNudges) return;
+
+    // Only auto-proceed when a git pull is due (the "unattended terminal" use case).
+    const gitPull = modalActions.find(a => a.key === 'git-pull');
+    if (!gitPull?.due || gitPull.disabled) return;
+
+    // Start at 30 seconds (mirrors retrieveall pattern).
+    let remaining = 30;
+    setAutoProceedSecondsRemaining(remaining);
+
+    autoProceedIntervalRef.current = window.setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        // Stop timer first to avoid double-fire.
+        stopAutoProceed();
+
+        // Auto-run only git-pull (unattended). Do NOT auto-trigger retrieve/reload on user terminals.
+        const selected = new Set<StalenessUpdateActionKey>(['git-pull']);
+        closeModal();
+        void runSelectedKeys(selected, { unattended: true });
+        return;
+      }
+      setAutoProceedSecondsRemaining(remaining);
+    }, 1000);
+
+    return () => {
+      stopAutoProceed();
+    };
+  }, [isModalOpen, modalActions, suppressStalenessNudges, autoProceedSecondsRemaining, closeModal, runSelectedKeys, stopAutoProceed]);
 
   const maybePrompt = useCallback(async () => {
     if (suppressStalenessNudges) return;
@@ -348,6 +426,21 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     };
   }, [maybePrompt]);
 
+  // Unattended terminals: if the app is open and visible for long periods (dashboard PCs),
+  // poll periodically so we can pull shortly after the nightly cron updates land.
+  // Guardrails:
+  // - maybePrompt already rate-limits and checks "due" thresholds (e.g. 24h since last sync)
+  // - only runs when the tab is visible
+  useEffect(() => {
+    if (suppressStalenessNudges) return;
+    const id = window.setInterval(() => {
+      if (!document.hidden) void maybePrompt();
+    }, STALENESS_NUDGE_VISIBLE_POLL_MS);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [maybePrompt, suppressStalenessNudges]);
+
   // Also re-check when the active graph file actually loads/changes (not just on focus).
   // This matters because staleness checks depend on graph content + connected parameter files.
   useEffect(() => {
@@ -381,7 +474,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     onToggle: toggleAction,
     onRun: onRunSelected,
     onSnooze: onSnoozeAll,
-    onClose: closeModal,
+    onClose: onDismissAll,
+    autoProceedSecondsRemaining,
+    onCancelAutoProceed: stopAutoProceed,
   });
 
   if (suppressStalenessNudges) {

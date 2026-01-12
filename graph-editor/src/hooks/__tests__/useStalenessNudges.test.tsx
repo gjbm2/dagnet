@@ -4,10 +4,11 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 
 const hoisted = vi.hoisted(() => ({
   pullAll: vi.fn(),
+  pullLatestRemoteWins: vi.fn(),
   requestRetrieveAllSlices: vi.fn(),
   retrieveAllSlicesExecute: vi.fn(),
   getFile: vi.fn(),
@@ -20,6 +21,7 @@ const hoisted = vi.hoisted(() => ({
   canPrompt: vi.fn(),
   markPrompted: vi.fn(),
   snooze: vi.fn(),
+  dismiss: vi.fn(),
   shouldCheckGitPull: vi.fn(),
   getRemoteAheadStatus: vi.fn(),
   getRetrieveAllSlicesStalenessStatus: vi.fn(),
@@ -80,6 +82,7 @@ vi.mock('../../services/stalenessNudgeService', () => ({
     canPrompt: hoisted.canPrompt,
     markPrompted: hoisted.markPrompted,
     snooze: hoisted.snooze,
+    dismiss: hoisted.dismiss,
     shouldCheckGitPull: hoisted.shouldCheckGitPull,
     getRemoteAheadStatus: hoisted.getRemoteAheadStatus,
     getRetrieveAllSlicesStalenessStatus: hoisted.getRetrieveAllSlicesStalenessStatus,
@@ -89,6 +92,12 @@ vi.mock('../../services/stalenessNudgeService', () => ({
     clearVolatileFlags: hoisted.clearVolatileFlags,
     getAutomaticMode: hoisted.getAutomaticMode,
     setAutomaticMode: hoisted.setAutomaticMode,
+  },
+}));
+
+vi.mock('../../services/repositoryOperationsService', () => ({
+  repositoryOperationsService: {
+    pullLatestRemoteWins: hoisted.pullLatestRemoteWins,
   },
 }));
 
@@ -116,6 +125,8 @@ describe('useStalenessNudges', () => {
     });
     hoisted.getPendingPlan.mockReturnValue(undefined);
     hoisted.getAutomaticMode.mockReturnValue(false);
+    hoisted.dismiss.mockReset();
+    hoisted.pullLatestRemoteWins.mockReset();
 
     hoisted.getFile.mockReturnValue({
       type: 'graph',
@@ -248,6 +259,51 @@ describe('useStalenessNudges', () => {
     // Retrieve should be skipped (no request event, no direct execute)
     expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
     expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
+  });
+
+  it('dismisses due nudges for 24h when clicking Dismiss', async () => {
+    hoisted.shouldPromptReload.mockReturnValue(true);
+    hoisted.shouldCheckGitPull.mockResolvedValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+
+    render(<Harness />);
+
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+    screen.getByRole('button', { name: 'Dismiss 24 hours' }).click();
+
+    await waitFor(() => {
+      expect(hoisted.dismiss).toHaveBeenCalled();
+    });
+
+    // Reload is global scope (undefined), git-pull is workspace-scoped.
+    expect(hoisted.dismiss).toHaveBeenCalledWith('reload', undefined, expect.any(Number), expect.anything());
+    expect(hoisted.dismiss).toHaveBeenCalledWith('git-pull', 'repo-1-main', expect.any(Number), expect.anything());
+  });
+
+  it('auto-proceeds unattended git pull after countdown when git-pull is due', async () => {
+    vi.useFakeTimers();
+
+    hoisted.shouldPromptReload.mockReturnValue(false);
+    hoisted.shouldCheckGitPull.mockResolvedValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+
+    render(<Harness />);
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+    expect(screen.getByText('Pull latest from git')).toBeTruthy();
+
+    // Fast-forward the 30s countdown.
+    await act(async () => {
+      vi.advanceTimersByTime(31_000);
+      // flush microtasks for async pull
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(hoisted.pullLatestRemoteWins).toHaveBeenCalledTimes(1);
+    });
+    expect(hoisted.pullAll).toHaveBeenCalledTimes(0);
+
+    vi.useRealTimers();
   });
 });
 

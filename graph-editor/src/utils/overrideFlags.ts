@@ -60,12 +60,14 @@ export function listOverriddenFlagPaths(value: unknown, maxDepth = 6, prefix = '
  * Edge-level query overrides are represented by either:
  * - `query_overridden: true`
  * - `n_query_overridden: true`
- * - `n_query` present (treated as a manual override because it changes semantics)
  */
 export function hasAnyEdgeQueryOverride(edge: unknown): boolean {
   if (!edge || typeof edge !== 'object') return false;
   const e = edge as any;
-  return !!e.query_overridden || !!e.n_query_overridden || !!e.n_query;
+  if (e.query_overridden === true) return true;
+  if (e.n_query_overridden === true) return true;
+  if (Array.isArray(e.conditional_p) && e.conditional_p.some((cp: any) => cp?.query_overridden === true)) return true;
+  return false;
 }
 
 

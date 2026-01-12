@@ -6,6 +6,7 @@ import {
   STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS,
   STALENESS_PENDING_PLAN_MAX_AGE_MS,
   STALENESS_NUDGE_SNOOZE_MS,
+  STALENESS_NUDGE_DISMISS_MS,
   STALENESS_AUTOMATIC_MODE_DEFAULT,
 } from '../constants/staleness';
 import { sessionLogService } from './sessionLogService';
@@ -137,6 +138,10 @@ class StalenessNudgeService {
 
   snooze(kind: NudgeKind, scope: string | undefined, nowMs: number, storage: StorageLike): void {
     safeSetNumber(storage, LS.snoozedUntilMs(kind, scope), nowMs + STALENESS_NUDGE_SNOOZE_MS);
+  }
+
+  dismiss(kind: NudgeKind, scope: string | undefined, nowMs: number, storage: StorageLike): void {
+    safeSetNumber(storage, LS.snoozedUntilMs(kind, scope), nowMs + STALENESS_NUDGE_DISMISS_MS);
   }
 
   isSnoozed(kind: NudgeKind, scope: string | undefined, nowMs: number, storage: StorageLike): boolean {

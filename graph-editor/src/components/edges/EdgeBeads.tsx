@@ -170,7 +170,6 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge.conditional_p?.length, // Conditional probabilities count
     JSON.stringify(edge.conditional_p ?? []), // Conditional entries (override flags / query overrides)
     edge.query_overridden, // Override flag for query
-    (edge as any).n_query, // n_query presence is treated as an override indicator
     (edge as any).n_query_overridden, // Override flag for n_query
     // IMPORTANT: Some override flags live on fields we don't explicitly list here (e.g. connection_overridden).
     // Include a compact override signature so EdgeBeads re-renders for ANY override changes.
