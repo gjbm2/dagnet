@@ -47,12 +47,15 @@ export async function seedSettingsFile(): Promise<void> {
       await db.files.put({
         fileId,
         type: 'settings',
+        // Ensure this seed is commit-able if the repo is missing the file (and avoids commit crashes due to missing path).
+        // Source (repo/branch) is intentionally unset during init; it will be populated by pull/clone flows.
+        path: 'settings/settings.yaml',
         data: defaultData,
         lastModified: Date.now(),
         viewTabs: existing?.viewTabs || [],
         isDirty: false,
         originalData: defaultData,
-        // Intentionally no repo source: this is a local default seed.
+        // Intentionally no repo source: this is a local default seed until repo selection/pull populates source.
       });
 
       console.log('[seedSettings] ✅ settings.yaml created from defaults');

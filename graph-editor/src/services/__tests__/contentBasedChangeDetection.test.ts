@@ -120,7 +120,7 @@ describe('SHA-Based Change Detection', () => {
         type: 'parameter',
         data: { id: 'new', p: { mean: 0.5 } },
         // No sha = never pushed to remote
-        source: { repository: 'test-repo', branch: 'main' },
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/new.yaml' },
         viewTabs: [],
       });
 
@@ -142,7 +142,7 @@ describe('SHA-Based Change Detection', () => {
         data: { id: 'test', value: 'modified' },  // Different from remote!
         sha: remoteSha,  // SHA of original content
         isDirty: false,  // Even if isDirty is false
-        source: { repository: 'test-repo', branch: 'main' },
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/changed.yaml' },
         viewTabs: [],
       });
 
@@ -186,11 +186,61 @@ describe('SHA-Based Change Detection', () => {
       expect(committableFiles).toHaveLength(0);
     });
 
-    it('should include settings files (shared, repo-committed)', async () => {
+    it('should include settings files (shared, repo-committed) when they have a commit-able path', async () => {
       mockFiles.push({
         fileId: 'settings-settings',
         type: 'settings',
         data: { theme: 'dark' },
+        path: 'settings/settings.yaml',
+        // Repo-backed (even if SHA is missing in some edge cases, presence of source indicates it belongs to the repo)
+        source: { repository: 'test-repo', branch: 'main', path: 'settings/settings.yaml' },
+        viewTabs: [],
+      });
+
+      const committableFiles = await repositoryOperationsService.getCommittableFiles();
+      
+      expect(committableFiles).toHaveLength(1);
+      expect(committableFiles[0].fileId).toBe('settings-settings');
+    });
+
+    it('should NOT include settings files when they have no path (cannot be committed)', async () => {
+      mockFiles.push({
+        fileId: 'settings-settings',
+        type: 'settings',
+        data: { theme: 'dark' },
+        // No `path` and no `source.path`
+        viewTabs: [],
+      });
+
+      const committableFiles = await repositoryOperationsService.getCommittableFiles();
+      
+      expect(committableFiles).toHaveLength(0);
+    });
+
+    it('should NOT include default-seeded settings after Clean (no sha/source, not dirty)', async () => {
+      mockFiles.push({
+        fileId: 'settings-settings',
+        type: 'settings',
+        data: { theme: 'dark' },
+        path: 'settings/settings.yaml',
+        // No sha, no source = local seed
+        isDirty: false,
+        viewTabs: [],
+      });
+
+      const committableFiles = await repositoryOperationsService.getCommittableFiles();
+      
+      expect(committableFiles).toHaveLength(0);
+    });
+
+    it('should include seeded settings if user edited it (no sha/source but dirty)', async () => {
+      mockFiles.push({
+        fileId: 'settings-settings',
+        type: 'settings',
+        data: { theme: 'dark' },
+        path: 'settings/settings.yaml',
+        // No sha, no source, but edited
+        isDirty: true,
         viewTabs: [],
       });
 
@@ -232,7 +282,7 @@ describe('SHA-Based Change Detection', () => {
         originalData: { id: 'test', value: 'v3-local-edit' }, // Same as data (after pull normalized)
         sha: remoteSha,  // SHA from when we originally cloned (v1)
         isDirty: false,
-        source: { repository: 'test-repo', branch: 'main' },
+        source: { repository: 'test-repo', branch: 'main', path: 'parameters/post-pull.yaml' },
         viewTabs: [],
       });
 
@@ -253,7 +303,7 @@ describe('SHA-Based Change Detection', () => {
         data: { nodes: [{ id: 'new-node' }], edges: [] },  // Added a node!
         sha: remoteSha,
         isDirty: false,
-        source: { repository: 'test-repo', branch: 'main' },
+        source: { repository: 'test-repo', branch: 'main', path: 'graphs/edited.json' },
         viewTabs: [],
       });
 

@@ -595,7 +595,7 @@ class RepositoryOperationsService {
    * Returns files that:
    * 1. Have different content SHA than stored remote SHA
    * 2. OR are local-only (no SHA = never pushed)
-   * 3. AND are committable (not credentials, settings, or temporary)
+   * 3. AND are committable (not credentials/images/temporary/excluded, and have a commit-able path)
    */
   async getCommittableFiles(repository?: string, branch?: string): Promise<FileState[]> {
     const cacheKey = `${repository || ''}-${branch || ''}`;
@@ -675,6 +675,21 @@ class RepositoryOperationsService {
       
       // Skip files without data
       if (!file.data) continue;
+
+      // Safety: don't return files that cannot be committed (commit requires a real repo path)
+      // This prevents crashes in headless automation when a local seed exists without any source/path.
+      if (!file.path && !file.source?.path) {
+        console.log(`  ⏭️ Skipping: ${file.fileId} (no path; cannot be committed)`);
+        continue;
+      }
+
+      // Safety (settings seed): after "Clean", we seed a default settings file locally.
+      // If the repo doesn't have settings/settings.yaml (or pull fails), we must not commit
+      // the default seed back to the repo unless the user explicitly edited it.
+      if (file.type === 'settings' && !file.sha && !file.source && !file.isDirty) {
+        console.log(`  ⏭️ Skipping: ${file.fileId} (settings seed; no sha/source and not dirty)`);
+        continue;
+      }
       
       // Check if file has changes compared to remote
       let hasChanges = false;
