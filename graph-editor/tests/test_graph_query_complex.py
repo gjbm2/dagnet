@@ -20,7 +20,7 @@ from graph_select import apply_query_to_graph
 
 @pytest.fixture
 def diamond_graph():
-    """
+    r"""
     Diamond pattern with multiple paths:
          start
         /    \
@@ -283,7 +283,7 @@ def shortcut_graph():
 
 @pytest.fixture
 def antitree_graph():
-    """
+    r"""
     Anti-tree (reverse tree): Multiple roots converging to single leaf.
     
          r1    r2    r3
@@ -321,7 +321,7 @@ def antitree_graph():
 
 @pytest.fixture
 def polytree_forest():
-    """
+    r"""
     Forest of disconnected trees (polytree).
     
     Tree 1:     Tree 2:     Tree 3:
@@ -561,7 +561,7 @@ def sources_and_sinks_graph():
 
 @pytest.fixture
 def lattice_graph():
-    """
+    r"""
     Lattice structure: Every pair of nodes has unique LCA (Lowest Common Ancestor).
     
          root

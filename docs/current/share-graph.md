@@ -41,11 +41,86 @@ We require a design that supports:
 
 - Keep UI entry points as access points only: URL building and live-load logic must live in centralised services/utility modules, not menu files.
 
-## Non-goals (for the first rollout)
+## Phasing (implementation order — all features remain planned)
+
+All features in this document are planned. This section defines an explicit implementation order based on dependencies — **not a descope**.
+
+### Phase 1 — Core boot, isolation, and graph share (foundation)
+
+This phase establishes the share infrastructure. Everything else depends on it.
+
+- **Boot resolver**: share-mode decision point before IndexedDB initialisation.
+- **Hard IndexedDB isolation**: share-scoped DB names to prevent workspace overwrites and cross-share collisions.
+- **URL contracts**: `mode=static` and `mode=live` parsing; identity metadata in static links.
+- **Credentials unlock**: `?secret=` validation and `gitService` configuration for live mode.
+- **Static share boot**: decode `data=`, seed temp graph, enforce read-only, apply scenario URL params.
+- **Live share boot**: minimal GitHub fetch (graph + dependency closure + index resolution), seed share-scoped cache, open tab.
+- **Dependency closure**: production TypeScript collector (using script as reference).
+- **Read-only enforcement**: centralised signal for static mode restrictions.
+- **"Enter live mode"**: upgrade path from static to live.
+- **Session logging**: share link generation, live boot steps, credential unlock.
+
+### Phase 2 — Share bundle modal and per-tab actions (UX surfaces)
+
+This phase adds more entry points and multi-tab support, using the Phase 1 infrastructure.
+
+- **`File → Share link…` modal**: checklist of tabs, dashboard mode toggle, live/static toggle, include-scenarios toggle.
+- **Per-tab share actions**: tab context menu and navigator context menu items for individual tabs.
+- **Tab bundle payload**: URL encoding for multi-tab bundles with deduplication.
+
+### Phase 3 — Chart share and scenario-level actions (view-specific)
+
+This phase extends sharing to chart tabs and adds scenario-level granularity.
+
+- **Chart share**: chart recipe and baked artefact payloads; URL size policy enforcement.
+- **Scenario-level share**: scenario context menu items; share a single DSL scenario with graph context.
+
+### Dependency summary
+
+| Phase | Depends on |
+|-------|------------|
+| Phase 1 | — (foundational) |
+| Phase 2 | Phase 1 boot + isolation + URL contracts |
+| Phase 3 | Phase 1 + Phase 2 bundle payload structure |
+
+---
+
+## Phase 1 scope (detailed)
+
+Phase 1 is the explicit implementation target for the first rollout. All items below are **required** before we can ship share links to production.
+
+### Included in Phase 1
+
+- **Graph-only share**:
+  - Static share link generation (existing `?data=...`), plus v1 contract refinements (see below).
+  - Live share link generation (`mode=live`) and live boot that fetches the graph + minimal dependency set.
+  - "Enter live mode" from a static share.
+- **Scenario URL params support**:
+  - Accept and apply existing `?scenarios=...` and `?hidecurrent` behaviour for share links (graph target only).
+- **Hard storage isolation**:
+  - Share sessions must not read/write the user's normal workspace IndexedDB content (Nous or otherwise).
+  - Share sessions must also not collide with each other across different repos/graphs.
+- **Static read-only enforcement**:
+  - Static share views must be view-first and must not allow data retrieval or repo-mutating actions unless the user enters live mode.
+- **Session logging** for share and live boot.
+
+### Deferred to Phase 2
+
+- Share bundles / cross-tab share modal (`File → Share link…`).
+- Per-tab share entry points across all UI surfaces (tab context menu, navigator context menus).
+
+### Deferred to Phase 3
+
+- Chart/analysis share payloads and baked artefacts (URL size policy still applies, but implementation is deferred).
+- Scenario-level share UI from scenario context menus.
+
+## Non-goals (not planned for any phase)
+
+These items are explicitly **not** part of the share feature roadmap:
 
 - Supporting full repo browsing inside the embed context (Navigator listing, full registry UX, etc.).
 - Guaranteeing that all data operations work offline in Notion (Notion reload behaviour prevents durable caching).
-- Perfect parity with full workspace mode behaviour (we explicitly create an “embed/live mode” path).
+- Perfect parity with full workspace mode behaviour (we explicitly create an "embed/live mode" path).
 
 ## Existing relevant mechanisms (today)
 
@@ -62,11 +137,16 @@ We require a design that supports:
 
 - **Dependency closure logic (offline script)**:
   - `graph-editor/scripts/export-graph-bundle.js` can compute the dependency closure of a graph and (optionally) write filtered root index files.
-  - This is the intended single source of truth for “graph → referenced files” dependency detection.
+  - Treat this as a **reference implementation** for dependency detection. v1 must implement equivalent detection in production app code.
 
 ## Proposed user-facing UX
 
-### 0) Share link (new, preferred over “Export”)
+> **Phasing note**: This section describes the full UX vision. Implementation is phased:
+> - **Phase 1**: §1 (static snapshot improved), §2 (live mode link), §3 (enter live mode from static)
+> - **Phase 2**: §0 (share link philosophy), §4 (per-tab share), §5 (cross-tab share bundle modal)
+> - **Phase 3**: §4.1 (scenario-level share), chart share payloads
+
+### 0) Share link (new, preferred over "Export")
 
 We should treat sharing as a first-class interaction, not a file export:
 
@@ -76,6 +156,8 @@ We should treat sharing as a first-class interaction, not a file export:
   - **Cross-tab sharing** (a deliberate bundle of multiple tabs).
 
 This removes “guessing” which tabs are included: the user explicitly selects the scope.
+
+Note: the share-bundle UX is **Phase 2** (see Phasing section). Phase 1 focuses on graph-only share via the existing Export menu and the new live-mode link variant.
 
 ### 1) Share static snapshot (existing, improved)
 
@@ -106,7 +188,7 @@ The intended interaction pattern is:
 - If `secret` is present (or can be supplied), the app transitions to live mode:
   - It fetches the latest graph and dependencies from GitHub.
   - It replaces the temporary “url-data” graph with a “url-live” graph (or updates the same tab’s backing file in FileRegistry/IDB).
-  - It updates the URL to the live-mode form (and removes the bulky `data` payload, to avoid leaking it and to keep the URL stable).
+  - It updates the URL to the live-mode form and removes the bulky `data` payload (live mode has an independent source of truth).
 
 #### Static → live transition: identity and rename/move handling
 
@@ -143,7 +225,6 @@ Each tab should offer a share action that produces a link for **that tab only**.
   - The share link captures the **target view** implied by that tab:
     - Graph tab → `target=graph`
     - Chart tab → `target=chart`
-    - (Future) analysis view tab/panel → `target=analysis`
   - It captures the **tab-specific view state** needed to reconstruct what the user sees (scenarios, visibility modes, selected scenario, etc.).
   - Dashboard mode: on by default
 
@@ -202,13 +283,15 @@ Provide a modal that allows explicit selection of which tabs are included in the
 - Parameters:
   - `data`: compressed graph JSON payload
   - `nonudge=1`: suppress nudges for share flows 
+  - `mode=static`: v1 explicit mode marker for newly-generated links
+  - `repo`, `branch`, `graph`: v1 identity metadata (included when sharing from a workspace graph to enable deterministic upgrade-to-live)
 
 ### Live mode (C)
 
 - Parameters:
   - `mode=live`: indicates “live mode” (mode applies to the view, not the graph)
-  - `repo`: repository name (must match a git credential entry name) *** OPTIONAL: USE DEFAULT IN CREDS IF NOT PROVIDED ***
-  - `branch`: branch name *** LIKEWISE OPTIONAL ***
+  - `repo`: repository name (must match a git credential entry name) (**required in v1**)
+  - `branch`: branch name (**required in v1**)
   - `graph`: graph identifier (same meaning as existing `?graph=` usage)
   - `secret`: required to unlock credentials for private repos in embed environments
   - `nonudge=1`: suppress nudges for share flows
@@ -226,19 +309,23 @@ Provide a modal that allows explicit selection of which tabs are included in the
 - Ensure the URL-loaded tab is initialised with a well-formed graph `editorState`, including:
   - Current layer visible by default (`visibleScenarioIds` contains `current`).
 - Ensure `nonudge` is set for share URLs and respected by boot.
+  - v1 decision: in share mode, do **not** remove `data` from the address bar after processing, so static links remain reloadable under cold-cache conditions (Notion embed).
 
 ### C) Live mode path (`mode=live`)
 
 Implement a new branch in the URL boot flow that:
 
 1. Validates required parameters are present (`repo`, `branch`, `graph`, `secret`).
-2. Loads credentials using the existing `credentialsManager` precedence rules, so `?secret` unlocks system credentials.
+2. Loads credentials using the share/embed contract: `?secret` unlocks system credentials from `SHARE_JSON` gated by `SHARE_SECRET`.
 3. Configures `gitService` with the selected repo credential.
 4. Fetches the latest graph file content from GitHub using a single-file fetch primitive (not workspace clone).
 5. Computes the dependency closure for that graph and fetches the required supporting files from GitHub.
 6. Seeds the fetched files into IndexedDB and FileRegistry using normal `FileState` shapes so downstream services behave consistently.
 7. Opens the graph tab from the seeded graph file with a well-formed `editorState` (Current visible, etc.).
-8. Cleans URL parameters that should not persist in the address bar if appropriate (note: we may keep `mode=live&repo=...&branch=...&graph=...` stable, but `nonudge` is safe to remove after first use; `secret` should be handled deliberately per security policy).
+8. URL clean-up policy (v1):
+   - Remove `nonudge` after persisting session suppression (as today).
+   - Keep `mode`, `repo`, `branch`, `graph` stable in the address bar so the link remains meaningful and debuggable.
+   - Keep `secret` in the URL in v1 so reloads under cold-cache conditions can re-auth. This is a deliberate security trade-off; mitigation is operational (short-lived secrets, rotation, avoid sharing secrets broadly).
 
 #### Starting directly in live mode
 
@@ -250,7 +337,7 @@ Live mode must work when the user starts there (Notion embed opening a live link
 
 ## Dependency closure (“graph bundle”) logic
 
-We should reuse the `export-graph-bundle.js` dependency detection logic, not re-invent it:
+We should treat `export-graph-bundle.js` as a behaviour reference and implement equivalent detection in production code:
 
 - **Inputs**:
   - Graph JSON.
@@ -300,6 +387,9 @@ The export script supports index files as an optimisation and for non-standard p
 
 Recommendation for MVP: start with Option 2 if any repos use non-standard paths; otherwise Option 1.
 
+v1 decision: use **Option 2** (fetch full root indexes) for correctness and to avoid assuming conventional paths.
+Later optimisation (post-v1): filter indexes inside the isolated share storage if we need to reduce bytes, but never write filtered indexes into the user’s normal workspace storage.
+
 ## “Enter live mode” from static snapshot
 
 Implement a transition that:
@@ -336,35 +426,80 @@ Note: GitHub’s contents API exposes file SHA; we can treat “unchanged SHA”
 
 - `secret` in URL is sensitive:
   - It can leak via screenshots, referrers, logs, and Notion itself.
-  - Mitigation: keep `secret` short-lived if possible; consider removing it from the URL after credentials load (but ensure the view can still refresh if needed).
+  - v1 mitigation: keep `secret` short-lived and rotate it. We intentionally keep it in the URL for reloadability under cold-cache conditions.
 
 - `nonudge=1` should be present for share flows to avoid UI interruptions.
 
 ## Testing plan (prose only)
 
+### Phase 1 tests
+
 - **Static share**:
   - Copy share URL; open in a fresh browser profile; ensure Current layer is visible and no staleness modal appears.
+  - Verify read-only enforcement: query/window editing disabled, data retrieval actions disabled.
+  - Verify "Enter live mode" action is available and functional (when identity metadata is present).
 
 - **Live share**:
   - Generate live link; open in a fresh browser profile; ensure it loads without workspace clone and shows the correct graph.
-  - Validate that parameter files referenced by the graph are present in the cache and that “fetch” operations reuse them.
+  - Validate that parameter files referenced by the graph are present in the cache and that "fetch" operations reuse them.
+  - Verify credentials unlock via `?secret=` against `SHARE_SECRET` and `SHARE_JSON`.
+
+- **Storage isolation**:
+  - Open a share link in a browser session that already has a Nous workspace.
+  - Verify that the share link does not restore workspace tabs.
+  - Verify that share link cache seeding does not overwrite any files in the workspace DB.
+  - Open two different live share links (different repos/graphs); verify they do not collide (each uses its own share-scoped DB).
 
 - **Notion embed**:
   - Embed both static and live URLs.
   - Verify behaviour across:
-    - opening a new Notion tab (storage persists)
+    - opening a new Notion tab (storage persists within session)
     - restarting the Notion app (storage resets)
   - Confirm cold-cache live load remains performant and does not pull the whole repo.
+
+- **Dependency closure**:
+  - For representative graphs, verify the in-app dependency collector finds the same parameter IDs as the reference script.
+  - Verify conditional probability param references are included.
 
 - **Regression checks**:
   - Existing workspace mode boot remains unchanged.
   - No business logic added to menu files; only service/hook calls.
 
+### Phase 2 tests
+
+- **Share bundle modal**:
+  - Open modal; verify all open tabs are listed with correct icons.
+  - Select subset of tabs; generate link; open in fresh profile; verify only selected tabs appear.
+  - Verify initial active tab respects modal selection.
+  - Verify dashboard mode toggle produces correct presentation on load.
+
+- **Per-tab share actions**:
+  - Verify tab context menu and navigator context menu items are present.
+  - Verify they produce correct single-tab share links.
+
+- **Tab bundle deduplication**:
+  - Share two tabs referencing the same graph; verify URL does not duplicate graph content.
+
+### Phase 3 tests
+
+- **Chart share**:
+  - Share static chart; open in fresh profile; verify baked chart is displayed.
+  - Share live chart; open in fresh profile; verify chart is recomputed.
+  - Verify URL size policy: attempt to share oversized baked payload; verify refusal and alternative offer.
+
+- **Scenario-level share**:
+  - Share single scenario from context menu; open in fresh profile; verify only that scenario is visible.
 
 
-## Share payload v1 (graphs + scenarios + analysis/chart)
 
-This section defines a single conceptual “share payload” shape that can recreate the intended view in **static** or **live** mode, while aligning to today’s state model:
+## Share payload (graphs + scenarios + analysis/chart)
+
+> **Phasing note**: This section defines the full share payload architecture. Implementation is phased:
+> - **Phase 1**: §1–2 (mode/target, graph identity), §3–4 (scenario definitions and view state for graph-only share)
+> - **Phase 2**: tab bundles, deduplication, bundle-level presentation
+> - **Phase 3**: §5–6 (analysis/chart recipe and baked artefacts)
+
+This section defines a single conceptual "share payload" shape that can recreate the intended view in **static** or **live** mode, while aligning to today's state model:
 
 - Analysis view state is stored in `TabState.editorState` (e.g. `analyticsQueryDSL`, and scenario selection/modes).
 - Chart view state is stored as a persisted “chart file” (`chart_kind`, `source.query_dsl`, `source.analysis_type`, and baked `payload.analysis_result`).
@@ -380,7 +515,7 @@ Therefore, we need a **separate view payload** that describes what the share lin
 
 ### Payload fields (conceptual)
 
-A v1 payload should include the following groups.
+A share payload should include the following groups (Phase 1 implements §1–4; Phase 3 implements §5–6).
 
 #### 1) Mode and target view
 
@@ -422,7 +557,7 @@ This corresponds directly to today’s `editorState.scenarioState`:
 
 #### 5) Analysis recipe (for target=analysis or target=chart)
 
-This corresponds to today’s tab state and compute inputs:
+This corresponds to today's tab state and compute inputs:
 
 - **query DSL** (the string to run)
 - **analysis type** identifier
@@ -536,7 +671,7 @@ The share entry point must never infer which tabs to include:
 
 ### Static → live upgrade (chart + analysis)
 
-On “Enter live mode”, preserve intent:
+On "Enter live mode", preserve intent:
 
 - Keep target view (analysis/chart).
 - Keep scenario order/visibility/modes.
@@ -549,7 +684,7 @@ Then:
 - Re-run analysis.
 - Refresh the chart/analysis view to the latest results.
 
-### Explicit limitations and decision points (v1)
+### Explicit limitations and decision points (Phase 1 and beyond)
 
 - **URL size**: baked analysis results may be too large for reliable links/embeds.
   - v1 must define a policy: refuse baked chart share when too large and offer live share instead.
@@ -639,113 +774,304 @@ The policy should be:
 
 The threshold is an implementation detail but must exist so share links are predictable rather than flaky.
 
-## Open questions / design issues (grounded in current code)
+## Impacted code files (Phase 1)
 
-This section flags concrete design questions and implementation risks based on the current repo state (as of **13-Jan-26**) and the traced URL/share/credentials codepaths.
+This is the exhaustive list of code files that will be modified or created for Phase 1.
 
-### 1) “Live mode” URL contract is not implemented anywhere yet
+### Files to MODIFY
 
-- **Current reality**: There is **no** `mode=live` branch in the URL boot flow. The only URL-driven graph loaders in `TabContext` today are:
-  - `?data=...` → decode and create a temporary `graph-url-data-<timestamp>` file (and a tab).
-  - `?graph=...` → load from GitHub via `graphGitService.getGraph()` (but this uses Navigator-selected repo/branch or `credentials.defaultGitRepo`, not explicit URL repo/branch).
-- **Implication**: The proposed live-mode URL parameters (`mode=live`, `repo`, `branch`, `graph`) are currently **documentation-only**. The first “live mode” rollout will need a new central boot handler and cannot be “just a new share URL builder”.
+| File | Impact |
+|------|--------|
+| `graph-editor/src/main.tsx` | Add boot resolver call before App renders; DB init must happen after share mode detection |
+| `graph-editor/src/db/appDatabase.ts` | Parameterise `AppDatabase` constructor to accept DB name; export factory instead of singleton |
+| `graph-editor/src/lib/shareUrl.ts` | Update `encodeStateToUrl()` to add `mode=static`, `repo`, `branch`, `graph` identity metadata |
+| `graph-editor/src/contexts/TabContext.tsx` | Update `loadFromURLData()` to detect `mode=live` and dispatch to live boot; pass read-only signal; skip workspace tab restore in share mode |
+| `graph-editor/src/lib/credentials.ts` | Possibly minor updates to clarify share mode credential flow (already handles `?secret=`) |
+| `graph-editor/src/hooks/useStalenessNudges.ts` | Already handles `?nonudge`; verify no changes needed |
+| `graph-editor/src/services/gitService.ts` | Already has `getFileContent()`; verify it works for minimal fetch use case |
+| `graph-editor/src/services/graphGitService.ts` | Already has `getGraph()`; may need minor updates for share boot |
+| `graph-editor/src/components/editors/GraphEditor.tsx` | Already accepts `readonly` prop; wire to share mode context |
+| `graph-editor/src/components/editors/FormEditor.tsx` | Already accepts `readonly` prop; wire to share mode context |
+| `graph-editor/src/components/editors/RawView.tsx` | Already accepts `readonly` prop; wire to share mode context |
+| `graph-editor/src/components/WindowSelector.tsx` | Disable date/context/fetch controls in static share mode |
+| `graph-editor/src/components/panels/AnalyticsPanel.tsx` | Disable analysis operations in static share mode |
+| `graph-editor/src/components/PropertiesPanel.tsx` | Disable mutations in static share mode |
+| `graph-editor/src/components/MenuBar/FileMenu.tsx` | Update `handleShareURL()` for new URL contract; add "Enter live mode" action; add "Copy live share link" |
+| `graph-editor/src/services/sessionLogService.ts` | Add share-specific log operations (share link generation, live boot steps) |
+| `graph-editor/src/hooks/useURLScenarios.ts` | Verify works in share mode; may need awareness of share context |
+| `graph-editor/src/AppShell.tsx` | Wire share mode context to component tree |
+| `graph-editor/src/contexts/DashboardModeContext.tsx` | Verify `?dashboard` param works in share links (likely no changes needed) |
+| `graph-editor/src/lib/urlSettings.ts` | Verify URL settings parsing doesn't conflict with share params (likely no changes needed) |
+| `graph-editor/src/hooks/useURLDailyRetrieveAllQueue.ts` | Must be disabled/no-op in share mode (no automation in embeds) |
+| `graph-editor/src/contexts/NavigatorContext.tsx` | May need to skip workspace loading in share mode |
 
-*** THAT'S WHY WE WROTE THIS DESIGN DOC.... IS THERE ANYTHING _MISSING_ FROM THE DESIGN DOC ? ***_
+### Files to CREATE (new)
 
-### 2) Credentials unlock env var names are inconsistent between doc and client implementation
+| File | Purpose |
+|------|---------|
+| `graph-editor/src/lib/shareBootResolver.ts` | Detect share mode from URL; compute scoped DB name; return boot config |
+| `graph-editor/src/contexts/ShareModeContext.tsx` | Centralised share mode signal (`none` / `static` / `live`); consumed by editors and panels for read-only enforcement |
+| `graph-editor/src/services/liveShareBootService.ts` | Orchestrate live boot: credential unlock → graph fetch → dependency closure → cache seeding → tab open |
+| `graph-editor/src/lib/dependencyClosure.ts` | Production TypeScript dependency collector (mirrors `scripts/export-graph-bundle.js` logic) |
+| `graph-editor/src/hooks/useEnterLiveMode.ts` | Hook for "Enter live mode" transition from static share |
+| `graph-editor/src/services/shareLinkService.ts` | Centralised share URL building (static + live); called by menus |
 
-- **Doc claim**: `?secret=<value>` unlocks credentials from `SHARE_JSON` / `SHARE_SECRET`.
-- **Client reality** (`credentialsManager` in `graph-editor/src/lib/credentials.ts`):
-  - `?secret=...` triggers “system secret” load.
-  - The system secret loader reads from **`VITE_CREDENTIALS_JSON` / `VITE_CREDENTIALS_SECRET`** (via `import.meta.env` in the browser and `process.env` in Node contexts).
-  - `SHARE_JSON` / `SHARE_SECRET` are *not* the primary variables used by the client loader today (even though the repo does define them in Vite config and in serverless contexts).
-- **Design issue**: We need to decide whether the embed/share environment is keyed off `SHARE_*` or `VITE_CREDENTIALS_*` (or both, with a single canonical precedence rule). Right now, the document does not match the client’s source of truth.
+### Reference files (not modified, used for behaviour spec)
 
-*** SHARE_* IS CORRECT FOR THESE NEW SHARING FEATURE ***
+| File | Purpose |
+|------|---------|
+| `graph-editor/scripts/export-graph-bundle.js` | Reference implementation for dependency closure logic |
+| `graph-editor/scripts/__tests__/export-graph-bundle.test.ts` | Test cases for dependency detection edge cases |
 
+---
 
-### 3) There are currently two “share credential” mechanisms, and they target different threat models
+## Implementation plan (Phase 1) — complete and thorough
 
-- **Static graph share** (`File → Export → Copy Shareable URL`): encodes graph JSON into `?data=...` and adds `nonudge=1`.
-- **Creds share link** (`CredsShareLinkModal` + `credentialsShareLinkService`): generates a link with **`?creds=<json>`** (explicitly described in UI as “token-in-URL” and “unsafe”).
+This section provides the step-by-step implementation plan for Phase 1. It is prose-only by design and covers all Phase 1 scope items.
 
-*** REMIND ME WHERE THIS IS EXPOSED TO USER? ***
+### 0) Guiding constraints (non-negotiable)
 
-- **Secret-based unlock** (`?secret=...`): intended to unlock credentials from deployment environment without embedding tokens in the link.
+- **Hard storage isolation**: share/live sessions must not be able to overwrite any existing workspace content (especially index files) when a user opens a share link in a browser where they already use DagNet normally (e.g. Nous).
+- **No workspace clone/pull for live mode**: live shares must use single-file and minimal-set GitHub fetches only.
+- **Menus are access points**: share URL building and boot logic must be in services/modules, not menu files.
 
-Open question:
-- **Which share flow is the intended Notion embed path?**
-  - If it’s secret-based, we should be careful not to “accidentally” rely on `?creds=` for live embeds (it is a materially different security posture).
-  - If it’s creds-in-URL, then the doc should explicitly acknowledge the risk and explain mitigation and operational practices (time-limited read-only tokens, rotation, etc.).
+### 1) Finalise URL contracts (explicit mode; backwards compatible)
 
+#### Static share (Phase 1)
 
-  *** HOW IS THIS AN 'OPEN QUESTION'? WHY WOULD IT USE CREDS? THAT'S NOT SPECIFIED ANYWHERE IN THIS DOC. ***
+- Continue to use `data=` as the source of truth for content.
+- Add `mode=static` to all newly generated static share links.
+- Continue to include `nonudge=1` in share links.
+- Include identity metadata (`repo`, `branch`, `graph`) in static links generated from a real workspace graph so "Enter live mode" can be deterministic.
+  - This identity metadata is *not* used to load static content; it exists to enable upgrade-to-live.
 
-### 4) Static share “read-only restrictions” are not centrally enforced today
+Backwards compatibility:
+- Treat legacy links that have `data=` but no `mode=` as `mode=static`.
 
-- **Doc intent**: Static share mode should be view-only and should disable query/window edits and external operations unless entering live mode.
-- **Current reality**:
-  - `GraphEditor` supports a `readonly` prop, but `TabContext` does not set any “share/static readonly” flag when loading from `?data=`.
-  - `?nonudge` suppresses staleness nudges, but it does **not** enforce read-only behaviour; it only disables the nudge modal for that browser session.
-- **Design issue**: We need a single authoritative “share mode” signal (context/service) and an inventory of all operations it must gate (graph mutations, scenario edits, query/window changes, retrieve flows, git ops, etc.). Otherwise static links will remain “editable” in practice.
+#### Live share (Phase 1)
 
-*** AGREE. PROPOSE ONE. I DON'T THINK WE NEED CANONICAL CONTROLS, JUST DISABLE THE NAVIGATIONAL ASPECTSE OF THE WINDOWCOMPONENT IN STATIC MODE AS IN PRACTICE NONE OF THEM WILL WORK ***
+- Use `mode=live` plus identity params `repo`, `branch`, `graph`, and `secret`.
+- Treat `repo` and `branch` as optional only if there is a clear, deterministic default rule; otherwise require them. For Notion embeds, prefer explicit values.
 
-### 5) URL clean-up behaviour differs per parameter family (and can affect share-link stability)
+### 2) Decide the boot pipeline order for share sessions (and keep workspace boot unchanged)
 
-- `TabContext` removes `data` from the URL after loading a static share.
-- `useStalenessNudges` removes `nonudge` from the URL after persisting the suppression bit into `sessionStorage`.
-- `useURLScenarios` removes `scenarios` and `hidecurrent` after applying them.
+Current boot restores tabs from IndexedDB before URL handling. For share sessions, we need deterministic URL-driven boot without interacting with the user’s workspace.
 
-Open questions:
-- For live links, which parameters should be **stable** (kept in the address bar) vs **one-shot** (removed after processing)?
-- Security trade-off: should `secret` be removed after credential load, and if so how do we handle subsequent refreshes in Notion (cold cache is common)?
+Proposal:
+- Introduce a distinct “share boot mode” decision point that happens as early as possible during app initialisation.
+- If the URL indicates share mode (`mode=static`/`mode=live`, or legacy `data=`), then:
+  - do not restore normal workspace tabs,
+  - do not reuse the normal workspace IndexedDB database,
+  - perform share boot as a self-contained path.
+- If the URL does not indicate share mode, keep existing boot behaviour unchanged.
 
-*** CURRETNLY THE APP DOESN'T ATTEMPT TO HOLD STATE IN URLS. WHY WOULD WE CHANGE THAT? IS THERE ANY ACTUAL RISK HERE? ***
+Concrete placement (Phase 1):
+- The share-mode decision must occur **before** the IndexedDB/Dexie instance is initialised and before Tab restoration begins.
+- Implement this as a small “boot resolver” module that:
+  - inspects `window.location.search`,
+  - determines share mode (none/static/live),
+  - determines the correct DB name to use (workspace vs share-scoped),
+  - then initialises the rest of the app against that DB.
 
-### 6) Dependency closure: the “single source of truth” is currently a Node script, not a shared library
+### 3) Hard isolation boundary (IndexedDB) — per-share scope to avoid collisions
 
-- The dependency closure logic (`collectGraphDependencies`) lives in `graph-editor/scripts/export-graph-bundle.js` and is tested in `graph-editor/scripts/__tests__/export-graph-bundle.test.ts`.
-- The app (browser) code does not currently import/reuse this logic.
+We need *two* layers of protection:
+- isolation from the user’s normal workspace (Nous), and
+- avoidance of collisions *between* different share links opened in the same browser origin (because `fileId` is a primary key, and IDs like `parameter-foo` can exist in multiple repos).
 
-Design issue:
-- If we truly want this to be the single source of truth, do we:
-  - extract the dependency collector into a shared module usable by both the Node script and the browser bundle, or
-  - treat the script as “reference” and re-implement carefully in the client (with explicit parity tests)?
+Proposal:
+- Use a separate IndexedDB database name for share mode, chosen at startup.
+- Make the share DB name **scoped**, not global, so different live shares cannot collide:
+  - Normal workspace DB: `DagNetGraphEditor`
+  - Live share DB: `DagNetGraphEditorShare:<scopeKey>`
+    - `scopeKey` is a deterministic identifier derived from `repo`, `branch`, and `graph` with these rules:
+      - it must be stable across reloads for the same link,
+      - it must not contain raw secrets,
+      - it must be safe for use as part of an IndexedDB database name,
+      - it must not exceed practical length limits.
+    - v1 proposal: compute `scopeKey` as a short stable hash of the normalised identity tuple (repo/branch/graph), and include a short human-readable prefix for debugging.
+    - This ensures that opening two different live shares does not mix their caches.
+  - Static share DB: optional; either:
+    - use `DagNetGraphEditorShareStatic:<scopeKey>` if static links have identity metadata, or
+    - keep static shares ephemeral in memory only (no persistence), depending on desired UX.
 
-  *** THE LATTTER. THE SCRIPT WAS JUST A DESIGN REFERENCE FOR THE EXTRACTION LOGIC; WE WILL OBVIOUSLY NEED TO IMPLEMENTE THIS PROPERLY AND ROBUSTLY IN PRODUCTION CODE ***
+v1 decision:
+- Use the scoped DB for **live shares**.
+- For **static shares**, keep content in-memory (no persistence) until we have a clear reason to persist static share state; static shares already embed their full source of truth in `data=`.
 
-### 7) “Live mode should not clone/pull” must avoid existing workspace-centric assumptions in tab loading
+Garbage collection policy (v1):
+- Keep it simple: no automatic deletion in v1 unless we observe runaway storage.
+- If needed, add a small retention policy later (e.g. delete older share DBs beyond a small cap).
 
-- Today, non-graph files (`parameter`, `context`, `case`, `node`) opened via `TabContext.openTab` are **workspace-only**: it expects them to exist in IndexedDB/FileRegistry already and will throw if they don’t.
-- Many services (e.g. staleness checks and planners) assume file IDs like `parameter-<id>` and will consult IndexedDB as source of truth when FileRegistry misses entries.
+### 4) Credentials unlock and Git configuration (share/embed contract)
 
-Design issues:
-- For live embeds, what is the canonical “workspace scope” in IndexedDB for the seeded minimal cache?
-  - Do we seed unprefixed IDs (`parameter-foo`) with `source.repository/source.branch` set appropriately?
-  - Do we seed prefixed IDs (`<repo>-<branch>-parameter-foo`) and rely on fallback queries?
-  - Whatever we choose must be consistent with existing services’ lookup logic.
+Proposal:
+- In share mode, credential unlock is driven by `?secret=...` validated against `SHARE_SECRET`, and credentials loaded from `SHARE_JSON`.
+- Configure `gitService` using the selected git credential entry (matching `repo`) and the requested `branch`.
+- Do not persist `secret` anywhere (not in IndexedDB, not in logs). Treat it as a sensitive input.
+- Add session logging for:
+  - credential unlock start/success/failure,
+  - selected repo/branch,
+  - any refusal to proceed due to missing/invalid secret.
 
-*** DO NOT FOLLOW ***
+### 5) Static share boot (mode=static)
 
-### 8) Graph identity for “Enter live mode” from `?data=` is not derivable today
+Steps:
+- Decode the graph from `data=`.
+- Seed a temporary graph file into the share session storage (or keep in-memory if static shares are ephemeral in v1).
+- Open a graph tab with a well-formed default editor state (Current visible).
+- Enforce static read-only restrictions (see §8).
+- Apply URL scenario params (`scenarios`, `hidecurrent`) if present, using the existing scenario URL processing pattern.
 
-- `?data=` creates a temporary file with `source.repository='url'` and `path='url-data'`.
-- No repository/branch/graph metadata is stored alongside that payload today.
+URL clean-up policy (static):
+- Always remove `nonudge` after persisting session suppression (as today).
+- Do **not** automatically remove `data` in share mode, because Notion embeds often face cold-cache conditions and must remain reloadable from the URL.
 
-Open question:
-- When upgrading from static to live, do we require the static link to already carry `repo/branch/graph`, or do we prompt?
-- If we want “one link that can be upgraded”, we need to decide where to store/encode the canonical graph identity in static shares.
+### 6) Live share boot (mode=live) — minimal fetch + cache seeding
 
-*** YOU'LL NEED TO, OTHERWISE THOSE DATA CAN'T BE INFERRED. ***
+Steps:
+- Validate required params: `graph`, `secret`, and enough identity to resolve repository/branch.
+- Unlock credentials and configure `gitService`.
+- Fetch the latest graph file using a single-file GitHub fetch (no workspace clone).
+- Compute dependency closure from the fetched graph (see §7).
+- Resolve dependency file paths:
+  - v1 recommendation: fetch the relevant root index files (at least `parameters-index.yaml`) unfiltered, and use them to map IDs to file paths where present.
+  - If an index file does not exist, fall back to conventional paths (e.g. `parameters/<id>.yaml`).
+- Fetch the minimal required supporting files:
+  - v1 minimum: parameter files referenced by the graph (including conditional probability param references).
+  - Expand later as needed (events/cases/contexts/nodes) only when required for correctness.
+- Seed the fetched files into share session storage as normal `FileState` records so downstream services behave consistently.
+- Open the graph tab from the seeded live graph file with a well-formed editor state (Current visible).
 
-### 9) Share URL base path / routing assumptions
+Caching behaviour (within a session):
+- Use GitHub file SHA to avoid re-downloading unchanged files during the same share session.
+- Do not attempt cross-session caching in Notion beyond what IndexedDB provides; treat cold-cache as the default.
 
-- `encodeStateToUrl()` builds the share URL as `${origin}${pathname}?data=...`, not necessarily the app root (`/`).
-- Other share URL builders (e.g. `buildCredsShareUrl`) explicitly force `pathname='/'`.
+### 7) Dependency closure implementation (production code, script as reference)
 
-Open question:
-- For Notion embeds, should share links always land on app root to minimise routing edge cases?
+Proposal:
+- Implement a production TypeScript dependency collector that mirrors the export script’s intent:
+  - edge base probability param ID
+  - edge conditional probability param IDs
+  - edge cost param IDs (`cost_gbp`, `labour_cost`)
+  - context keys referenced in persisted DSL fields (`dataInterestsDSL`, `currentQueryDSL`, `baseDSL`)
+  - optionally node/event/case references when needed for correctness
+- Treat `graph-editor/scripts/export-graph-bundle.js` and its test suite as a reference for behaviour and edge cases, not as reusable production code.
 
-*** APP TODAY IS ALWAYS AT SAME PLACE SO THIS IS A BIT ACADEMIC. ***
+Testing (design requirement):
+- Add integration tests in the existing service test suites to ensure the in-app collector finds the same dependency IDs for representative graphs (requires explicit authorisation when we update tests).
 
+### 8) Read-only enforcement in static share mode (minimal, centralised)
+
+Proposal:
+- Introduce a single share-mode signal derived during URL boot (e.g. `none`, `static`, `live`).
+- In `mode=static`:
+  - open editors in read-only mode,
+  - disable navigational and data-fetching actions in `WindowSelector` (date changes, context changes, fetch/refresh, bulk scenario creation),
+  - disable scenario creation/regeneration and other repo-mutating actions.
+- Allow inspection: selection, pan/zoom, viewing current DSL, viewing chart outputs that are already embedded.
+- Only permitted transition is explicit **Enter live mode**.
+
+### 9) “Enter live mode” upgrade path (static → live)
+
+Requirements:
+- Static shares must include `repo`, `branch`, `graph` identity metadata at creation time (or else the upgrade must prompt).
+
+Proposal (v1):
+- The “Enter live mode” action navigates the app to the corresponding `mode=live` URL (carrying identity and `secret`) and performs a hard reload into the live share session.
+- Preserve view intent where feasible:
+  - scenario visibility/order,
+  - selected scenario,
+  - target view (graph vs chart vs analysis) via the share payload parameter planned elsewhere in this doc.
+
+### 10) Opening a share link inside an existing browser session (existing Nous IndexedDB workspace)
+
+Problem:
+- Without isolation, live-mode cache seeding risks overwriting workspace files (especially index files) when the user opens a share link in an existing DagNet session.
+
+Proposal:
+- Share sessions never touch the normal workspace DB.
+- Share sessions use a dedicated share-scoped DB name (see §3), so:
+  - opening a share link does not restore workspace tabs,
+  - seeding abridged/derived files cannot overwrite Nous (or any other workspace) files,
+  - multiple share links do not collide with each other.
+
+Return-to-workspace behaviour:
+- Navigating back to the normal app (no share params) uses the normal workspace DB and restores the user’s tabs as usual.
+
+Explicit non-overwrite guarantee (Phase 1):
+- Live share boot must never write to `DagNetGraphEditor` (the workspace DB), even if the browser already has a populated Nous workspace.
+- Any filtered/derived artefacts (including index filtering in future optimisations) must live only in the share-scoped DB for that link.
+
+---
+
+## Implementation plan (Phase 2) — bundle modal and per-tab actions
+
+Phase 2 builds on the Phase 1 infrastructure to add more UX entry points and multi-tab support.
+
+### Prerequisites (Phase 1 must be complete)
+
+- Boot resolver and IndexedDB isolation working.
+- URL contracts (`mode`, identity params) established.
+- Share link generation and boot flows functional for single-graph share.
+
+### 11) Share bundle modal (`File → Share link…`)
+
+- Create a modal component that:
+  - lists all open tabs (graph/chart/analysis) with checkboxes,
+  - provides "select all / clear all" controls,
+  - provides a radio selector for initial active tab,
+  - provides toggles for: dashboard mode, live mode, include scenarios.
+- The modal calls a centralised share service to build the URL.
+- The URL payload encodes tab bundle structure (see §13).
+
+### 12) Per-tab share actions (tab context menu, navigator context menu)
+
+- Add context menu items "Share link (static)" and "Share link (live)" to:
+  - tab context menu,
+  - navigator item context menu (for graph files).
+- These call the same share service used by the modal but for a single-tab bundle.
+- Per-tab actions must reuse Phase 1 infrastructure (share mode signal, URL building, boot flows).
+
+### 13) Tab bundle URL payload structure
+
+- Define a `view=` (or `share=`) URL parameter that encodes:
+  - `tabs[]`: array of tab descriptors (kind, mode, payload reference).
+  - `activeTabIndex`: which tab to focus on load.
+  - `presentation`: dashboard vs normal tabs.
+- Implement deduplication: if multiple tabs reference the same graph, encode the graph once and have tab descriptors reference it.
+- Implement boot reconstruction: the share boot flow must iterate `tabs[]` and open each tab with correct editor state.
+
+---
+
+## Implementation plan (Phase 3) — chart share and scenario-level actions
+
+Phase 3 extends sharing to chart tabs and adds scenario-level granularity.
+
+### Prerequisites (Phase 2 must be complete)
+
+- Tab bundle payload structure working.
+- Multi-tab boot reconstruction functional.
+
+### 14) Chart share (static and live)
+
+- Static chart share:
+  - Capture baked chart artefact (matches chart file schema: `chart_kind`, `payload.analysis_result`, `payload.scenario_ids`, etc.).
+  - Encode in the tab descriptor payload.
+  - On boot, materialise a temporary chart file from the baked payload and open the chart tab.
+- Live chart share:
+  - Capture chart recipe (chart kind, analysis recipe, scenario IDs).
+  - On boot, load graph + dependencies, recreate scenarios, compute analysis, materialise chart, open tab.
+- URL size policy enforcement:
+  - Define a threshold for baked payload size.
+  - If exceeded, refuse static chart share and offer live share (or static graph-only) instead.
+  - Surface a clear user-facing message explaining the limitation.
+
+### 15) Scenario-level share (scenario context menu)
+
+- Add context menu items to scenarios: "Share link for this scenario (static)" and "Share link for this scenario (live)".
+- Scenario share requires graph context; encode:
+  - static graph snapshot (via `data=`) or live graph reference (`mode=live` + identity), and
+  - single scenario DSL (plus label/colour metadata for charts).
+- On boot, open graph view with only that scenario visible and selected.
+- Restriction: only DSL-backed live scenarios are shareable in Phase 3; non-live scenario overlays remain out of scope until we define a repo-backed representation.
