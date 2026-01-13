@@ -60,7 +60,6 @@ export function resolveShareSecretForLinkGeneration(): string | null {
     }
 
     // 2) Vite-injected envs
-    // @ts-expect-error - Injected via Vite define at build time (dev/prod).
     const shareSecret = (import.meta.env.SHARE_SECRET as string | undefined) || undefined;
     if (shareSecret) return shareSecret;
 

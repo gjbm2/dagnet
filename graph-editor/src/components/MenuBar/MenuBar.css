@@ -99,6 +99,32 @@
   object-fit: contain;
 }
 
+/* Share link button (icon only, left of brand) */
+.share-link-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #555;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.share-link-button:hover {
+  background: #e9ecef;
+  border-color: #ddd;
+  color: #333;
+}
+
+.share-link-button:active {
+  background: #dee2e6;
+}
+
 .dagnet-brand:hover {
   background: linear-gradient(135deg, #e8e8e8 0%, #e0e0e0 100%);
   border-color: #ccc;
@@ -283,6 +309,20 @@
 
   .dagnet-brand:active {
     background: linear-gradient(135deg, #3d3d3d 0%, #353535 100%);
+  }
+
+  .share-link-button {
+    color: #999;
+  }
+
+  .share-link-button:hover {
+    background: #3d3d3d;
+    border-color: #555;
+    color: #e0e0e0;
+  }
+
+  .share-link-button:active {
+    background: #4d4d4d;
   }
 
   .menubar-trigger {

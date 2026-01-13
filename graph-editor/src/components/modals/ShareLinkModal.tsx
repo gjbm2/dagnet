@@ -13,9 +13,9 @@
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
-import { X, Copy, Check, Share2, LayoutDashboard, Layers } from 'lucide-react';
+import { X, Copy, Check, Share2, LayoutDashboard, Layers, Zap } from 'lucide-react';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
-import { shareLinkService, extractIdentityFromFileSource } from '../../services/shareLinkService';
+import { shareLinkService, extractIdentityFromFileSource, resolveShareSecretForLinkGeneration } from '../../services/shareLinkService';
 import { sessionLogService } from '../../services/sessionLogService';
 import toast from 'react-hot-toast';
 import './ShareLinkModal.css';
@@ -39,6 +39,7 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
   // Modal state
   const [selectedTabIds, setSelectedTabIds] = useState<Set<string>>(new Set());
   const [dashboardMode, setDashboardMode] = useState(true);
+  const [liveMode, setLiveMode] = useState(false);
   const [includeScenarios, setIncludeScenarios] = useState(true);
   const [copied, setCopied] = useState(false);
   
@@ -109,22 +110,54 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
         }
         
         const identity = extractIdentityFromFileSource(file.source);
-        const url = shareLinkService.buildStaticShareUrl({
-          graphData: file.data,
-          identity,
-          dashboardMode,
-        });
+        let url: string;
+
+        if (liveMode) {
+          if (selectedTab.type !== 'graph') {
+            toast.error('Live mode share is only supported for graph tabs');
+            return;
+          }
+          if (!identity?.repo || !identity.branch || !identity.graph) {
+            toast.error('Live mode requires repo/branch/graph identity');
+            return;
+          }
+          const secret = resolveShareSecretForLinkGeneration();
+          if (!secret) {
+            toast.error('No share secret available (set SHARE_SECRET or open with ?secret=…)');
+            return;
+          }
+          url = shareLinkService.buildLiveShareUrl({
+            repo: identity.repo,
+            branch: identity.branch,
+            graph: identity.graph,
+            secret,
+            dashboardMode,
+          });
+        } else {
+          url = shareLinkService.buildStaticShareUrl({
+            graphData: file.data,
+            identity,
+            dashboardMode,
+          });
+        }
         
         await navigator.clipboard.writeText(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
         
-        sessionLogService.success('session', 'SHARE_LINK_COPIED', 
-          `Share link copied for: ${selectedTab.title}`);
+        sessionLogService.success(
+          'session',
+          liveMode ? 'SHARE_LIVE_LINK_COPIED' : 'SHARE_LINK_COPIED',
+          `${liveMode ? 'Live' : 'Static'} share link copied for: ${selectedTab.title}`
+        );
         
-        toast.success('Share link copied to clipboard!');
+        toast.success(`${liveMode ? 'Live' : 'Static'} share link copied to clipboard!`);
       } else {
         // Multi-tab bundle share
+        if (liveMode) {
+          toast.error('Live mode share is not supported for multi-tab bundles');
+          return;
+        }
         const bundle: { type: 'bundle'; version: '1.0.0'; items: any[]; options: any } = {
           type: 'bundle',
           version: '1.0.0',
@@ -173,7 +206,7 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
       console.error('Failed to create share link:', error);
       toast.error('Failed to create share link');
     }
-  }, [selectedTabIds, shareableTabs, dashboardMode, includeScenarios]);
+  }, [selectedTabIds, shareableTabs, dashboardMode, liveMode, includeScenarios]);
   
   if (!isOpen) return null;
   
@@ -251,6 +284,17 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
               <LayoutDashboard size={16} />
               <span>Open in dashboard mode</span>
             </label>
+
+            <label className="share-link-modal__option">
+              <input
+                type="checkbox"
+                checked={liveMode}
+                onChange={e => setLiveMode(e.target.checked)}
+                disabled={selectedTabIds.size !== 1}
+              />
+              <Zap size={16} />
+              <span>Live mode (fetch latest from GitHub)</span>
+            </label>
             
             <label className="share-link-modal__option">
               <input
@@ -265,7 +309,10 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
           
           {/* Info note */}
           <div className="share-link-modal__note">
-            <strong>Note:</strong> This creates a static snapshot link. Recipients can view but not edit.
+            <strong>Note:</strong>{' '}
+            {liveMode
+              ? 'This creates a live link. Recipients will fetch the latest from GitHub.'
+              : 'This creates a static snapshot link. Recipients can view but not edit.'}
             {selectedTabIds.size > 1 && (
               <span className="share-link-modal__info">
                 {' '}({selectedTabIds.size} tabs will be bundled)
