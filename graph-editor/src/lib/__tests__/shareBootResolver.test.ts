@@ -131,10 +131,10 @@ describe('shareBootResolver', () => {
       expect(getShareDbName()).toBe('DagNetGraphEditor');
     });
 
-    it('uses default DB name for static mode (ephemeral)', async () => {
+    it('uses isolated DB name for static mode (share-scoped)', async () => {
       mockLocation('?mode=static&data=x');
       const { getShareDbName } = await getModule();
-      expect(getShareDbName()).toBe('DagNetGraphEditor');
+      expect(getShareDbName()).toMatch(/^DagNetGraphEditorShareStatic:/);
     });
 
     it('uses scoped DB name for live mode', async () => {
