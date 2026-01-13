@@ -1,0 +1,97 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Notion storage probe (lite)</title>
+<pre id="out">Loading…</pre>
+<script>
+  (async () => {
+    const out = document.getElementById('out');
+    const now = Date.now();
+    const lsKey = 'probe_lite_install_id';
+    const idbName = 'probe-lite';
+    const storeName = 'kv';
+    const idbKey = 'installId';
+
+    const env = {
+      href: location.href,
+      origin: location.origin,
+      inIframe: window.top !== window.self,
+      referrer: document.referrer || '',
+      userAgent: navigator.userAgent,
+    };
+
+    function log(obj) {
+      out.textContent = JSON.stringify(obj, null, 2);
+    }
+
+    function randomId() {
+      return `p_${Math.random().toString(36).slice(2)}_${now.toString(36)}`;
+    }
+
+    function idbOpen() {
+      return new Promise((resolve, reject) => {
+        if (!('indexedDB' in window)) return reject(new Error('indexedDB not available'));
+        const req = indexedDB.open(idbName, 1);
+        req.onerror = () => reject(req.error || new Error('IDB open failed'));
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(storeName)) db.createObjectStore(storeName);
+        };
+        req.onsuccess = () => resolve(req.result);
+      });
+    }
+
+    function idbGet(db, key) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const store = tx.objectStore(storeName);
+        const req = store.get(key);
+        req.onerror = () => reject(req.error || new Error('IDB get failed'));
+        req.onsuccess = () => resolve(req.result);
+      });
+    }
+
+    function idbPut(db, key, value) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        const req = store.put(value, key);
+        req.onerror = () => reject(req.error || new Error('IDB put failed'));
+        req.onsuccess = () => resolve(undefined);
+      });
+    }
+
+    const report = { env, now, localStorage: {}, indexedDB: {} };
+
+    // localStorage
+    try {
+      let id = localStorage.getItem(lsKey);
+      const existed = Boolean(id);
+      if (!id) {
+        id = randomId();
+        localStorage.setItem(lsKey, id);
+      }
+      report.localStorage = { ok: true, existed, installId: id };
+    } catch (e) {
+      report.localStorage = { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+
+    // IndexedDB
+    try {
+      const db = await idbOpen();
+      let id = await idbGet(db, idbKey);
+      const existed = Boolean(id);
+      if (!id) {
+        id = randomId();
+        await idbPut(db, idbKey, id);
+      }
+      try { db.close(); } catch {}
+      report.indexedDB = { ok: true, existed, installId: id };
+    } catch (e) {
+      report.indexedDB = { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+
+    log(report);
+  })();
+</script>
+
