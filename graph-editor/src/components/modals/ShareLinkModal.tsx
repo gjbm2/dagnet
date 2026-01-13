@@ -1,0 +1,305 @@
+/**
+ * ShareLinkModal
+ * 
+ * Modal for creating share links with explicit tab selection.
+ * Part of Phase 2: Share bundle modal and per-tab actions.
+ * 
+ * Features:
+ * - Lists all open graph tabs with checkboxes
+ * - Select all / clear all controls
+ * - Dashboard mode toggle
+ * - Include scenarios toggle
+ * - Generates static share URL (live share deferred)
+ */
+
+import React, { useState, useMemo, useCallback } from 'react';
+import { X, Copy, Check, Share2, LayoutDashboard, Layers } from 'lucide-react';
+import { useTabContext, fileRegistry } from '../../contexts/TabContext';
+import { shareLinkService, extractIdentityFromFileSource } from '../../services/shareLinkService';
+import { sessionLogService } from '../../services/sessionLogService';
+import toast from 'react-hot-toast';
+import './ShareLinkModal.css';
+
+interface ShareLinkModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+interface ShareableTab {
+  id: string;
+  fileId: string;
+  title: string;
+  type: 'graph' | 'chart' | 'other';
+  isSelected: boolean;
+}
+
+export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
+  const { tabs, activeTabId } = useTabContext();
+  
+  // Modal state
+  const [selectedTabIds, setSelectedTabIds] = useState<Set<string>>(new Set());
+  const [dashboardMode, setDashboardMode] = useState(true);
+  const [includeScenarios, setIncludeScenarios] = useState(true);
+  const [copied, setCopied] = useState(false);
+  
+  // Get shareable tabs (graphs and charts only for now)
+  const shareableTabs = useMemo<ShareableTab[]>(() => {
+    return tabs
+      .filter(tab => tab.fileId.startsWith('graph-') || tab.fileId.startsWith('chart-'))
+      .map(tab => ({
+        id: tab.id,
+        fileId: tab.fileId,
+        title: tab.title,
+        type: tab.fileId.startsWith('graph-') ? 'graph' as const : 
+              tab.fileId.startsWith('chart-') ? 'chart' as const : 'other' as const,
+        isSelected: selectedTabIds.has(tab.id),
+      }));
+  }, [tabs, selectedTabIds]);
+  
+  // Initialize selection with active tab when modal opens
+  React.useEffect(() => {
+    if (isOpen && activeTabId) {
+      const activeIsShareable = shareableTabs.some(t => t.id === activeTabId);
+      if (activeIsShareable) {
+        setSelectedTabIds(new Set([activeTabId]));
+      }
+    }
+  }, [isOpen, activeTabId, shareableTabs]);
+  
+  // Toggle tab selection
+  const toggleTab = useCallback((tabId: string) => {
+    setSelectedTabIds(prev => {
+      const next = new Set(prev);
+      if (next.has(tabId)) {
+        next.delete(tabId);
+      } else {
+        next.add(tabId);
+      }
+      return next;
+    });
+  }, []);
+  
+  // Select all / clear all
+  const selectAll = useCallback(() => {
+    setSelectedTabIds(new Set(shareableTabs.map(t => t.id)));
+  }, [shareableTabs]);
+  
+  const clearAll = useCallback(() => {
+    setSelectedTabIds(new Set());
+  }, []);
+  
+  // Generate share URL
+  const handleShare = useCallback(async () => {
+    if (selectedTabIds.size === 0) {
+      toast.error('Please select at least one tab to share');
+      return;
+    }
+    
+    const selectedTabs = shareableTabs.filter(t => selectedTabIds.has(t.id));
+    if (selectedTabs.length === 0) return;
+    
+    try {
+      if (selectedTabs.length === 1) {
+        // Single tab share - use simple format
+        const selectedTab = selectedTabs[0];
+        const file = fileRegistry.getFile(selectedTab.fileId);
+        if (!file?.data) {
+          toast.error('No data available for selected tab');
+          return;
+        }
+        
+        const identity = extractIdentityFromFileSource(file.source);
+        const url = shareLinkService.buildStaticShareUrl({
+          graphData: file.data,
+          identity,
+          dashboardMode,
+        });
+        
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        
+        sessionLogService.success('session', 'SHARE_LINK_COPIED', 
+          `Share link copied for: ${selectedTab.title}`);
+        
+        toast.success('Share link copied to clipboard!');
+      } else {
+        // Multi-tab bundle share
+        const bundle: { type: 'bundle'; version: '1.0.0'; items: any[]; options: any } = {
+          type: 'bundle',
+          version: '1.0.0',
+          items: [],
+          options: {
+            dashboardMode,
+            includeScenarios,
+          },
+        };
+        
+        for (const tab of selectedTabs) {
+          const file = fileRegistry.getFile(tab.fileId);
+          if (!file?.data) continue;
+          
+          const identity = extractIdentityFromFileSource(file.source);
+          bundle.items.push({
+            type: tab.type,
+            title: tab.title,
+            data: file.data,
+            identity,
+          });
+        }
+        
+        if (bundle.items.length === 0) {
+          toast.error('No data available for selected tabs');
+          return;
+        }
+        
+        // Build bundle share URL
+        const url = shareLinkService.buildStaticShareUrl({
+          graphData: bundle,
+          identity: bundle.items[0]?.identity,
+          dashboardMode,
+        });
+        
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        
+        sessionLogService.success('session', 'SHARE_BUNDLE_LINK_COPIED', 
+          `Share link copied for ${bundle.items.length} tabs`);
+        
+        toast.success(`Share link copied (${bundle.items.length} tabs)!`);
+      }
+    } catch (error) {
+      console.error('Failed to create share link:', error);
+      toast.error('Failed to create share link');
+    }
+  }, [selectedTabIds, shareableTabs, dashboardMode, includeScenarios]);
+  
+  if (!isOpen) return null;
+  
+  return (
+    <div className="share-link-modal-overlay" onClick={onClose}>
+      <div className="share-link-modal" onClick={e => e.stopPropagation()}>
+        <div className="share-link-modal__header">
+          <div className="share-link-modal__title">
+            <Share2 size={20} />
+            <span>Share Link</span>
+          </div>
+          <button className="share-link-modal__close" onClick={onClose}>
+            <X size={20} />
+          </button>
+        </div>
+        
+        <div className="share-link-modal__content">
+          {/* Tab selection */}
+          <div className="share-link-modal__section">
+            <div className="share-link-modal__section-header">
+              <span className="share-link-modal__section-title">Select tabs to share</span>
+              <div className="share-link-modal__section-actions">
+                <button 
+                  className="share-link-modal__text-button"
+                  onClick={selectAll}
+                >
+                  Select all
+                </button>
+                <span className="share-link-modal__separator">|</span>
+                <button 
+                  className="share-link-modal__text-button"
+                  onClick={clearAll}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            
+            <div className="share-link-modal__tab-list">
+              {shareableTabs.length === 0 ? (
+                <div className="share-link-modal__empty">
+                  No shareable tabs open. Open a graph to share.
+                </div>
+              ) : (
+                shareableTabs.map(tab => (
+                  <label 
+                    key={tab.id}
+                    className={`share-link-modal__tab-item ${tab.isSelected ? 'selected' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedTabIds.has(tab.id)}
+                      onChange={() => toggleTab(tab.id)}
+                    />
+                    <span className="share-link-modal__tab-icon">
+                      {tab.type === 'graph' ? '📊' : tab.type === 'chart' ? '📈' : '📄'}
+                    </span>
+                    <span className="share-link-modal__tab-title">{tab.title}</span>
+                  </label>
+                ))
+              )}
+            </div>
+          </div>
+          
+          {/* Options */}
+          <div className="share-link-modal__section">
+            <span className="share-link-modal__section-title">Options</span>
+            
+            <label className="share-link-modal__option">
+              <input
+                type="checkbox"
+                checked={dashboardMode}
+                onChange={e => setDashboardMode(e.target.checked)}
+              />
+              <LayoutDashboard size={16} />
+              <span>Open in dashboard mode</span>
+            </label>
+            
+            <label className="share-link-modal__option">
+              <input
+                type="checkbox"
+                checked={includeScenarios}
+                onChange={e => setIncludeScenarios(e.target.checked)}
+              />
+              <Layers size={16} />
+              <span>Include scenarios</span>
+            </label>
+          </div>
+          
+          {/* Info note */}
+          <div className="share-link-modal__note">
+            <strong>Note:</strong> This creates a static snapshot link. Recipients can view but not edit.
+            {selectedTabIds.size > 1 && (
+              <span className="share-link-modal__info">
+                {' '}({selectedTabIds.size} tabs will be bundled)
+              </span>
+            )}
+          </div>
+        </div>
+        
+        <div className="share-link-modal__footer">
+          <button 
+            className="share-link-modal__button share-link-modal__button--secondary"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button 
+            className="share-link-modal__button share-link-modal__button--primary"
+            onClick={handleShare}
+            disabled={selectedTabIds.size === 0}
+          >
+            {copied ? (
+              <>
+                <Check size={16} />
+                Copied!
+              </>
+            ) : (
+              <>
+                <Copy size={16} />
+                Copy Link
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

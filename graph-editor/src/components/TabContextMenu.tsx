@@ -7,6 +7,7 @@ import { HistoryModal } from './modals/HistoryModal';
 import { ObjectType } from '../types';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { useViewHistory } from '../hooks/useViewHistory';
+import { useShareLink } from '../hooks/useShareLink';
 
 interface TabContextMenuProps {
   tabId: string;
@@ -42,6 +43,16 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     history,
     currentContent
   } = useViewHistory(tab?.fileId);
+  
+  // Share link hook
+  const {
+    canShare,
+    canShareStatic,
+    canShareLive,
+    copyStaticShareLink,
+    copyLiveShareLink,
+    liveShareUnavailableReason,
+  } = useShareLink(tab?.fileId);
 
   const menuItems: ContextMenuItem[] = useMemo(() => {
     if (!tab) return [];
@@ -177,6 +188,30 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     });
     items.push({ label: '', onClick: () => {}, divider: true });
     
+    // Share links (for graphs and charts only)
+    if (canShare) {
+      if (canShareStatic) {
+        items.push({
+          label: 'Copy Static Share Link',
+          onClick: async () => {
+            await copyStaticShareLink();
+            onClose();
+          }
+        });
+      }
+      
+      items.push({
+        label: canShareLive ? 'Copy Live Share Link' : `Copy Live Share Link (${liveShareUnavailableReason || 'unavailable'})`,
+        onClick: async () => {
+          await copyLiveShareLink();
+          onClose();
+        },
+        disabled: !canShareLive
+      });
+      
+      items.push({ label: '', onClick: () => {}, divider: true });
+    }
+    
     // Info
     items.push({
       label: 'Copy File ID',
@@ -184,7 +219,7 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     });
     
     return items;
-  }, [tab, tabId, tabs, operations, canViewHistory, showHistoryModal]);
+  }, [tab, tabId, tabs, operations, canViewHistory, showHistoryModal, canShare, canShareStatic, canShareLive, copyStaticShareLink, copyLiveShareLink, liveShareUnavailableReason, onClose]);
   
   const handleDuplicate = async (name: string, type: ObjectType) => {
     if (!tab) return;

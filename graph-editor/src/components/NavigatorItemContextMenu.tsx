@@ -15,6 +15,7 @@ import { gitService } from '../services/gitService';
 import { fileRegistry } from '../contexts/TabContext';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
+import { useShareLink } from '../hooks/useShareLink';
 import { usePullFile } from '../hooks/usePullFile';
 import { usePullAll } from '../hooks/usePullAll';
 import { useRenameFile } from '../hooks/useRenameFile';
@@ -95,6 +96,16 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
 
   // Copy-paste hook
   const { copyToClipboard } = useCopyPaste();
+  
+  // Share link hook
+  const {
+    canShare,
+    canShareStatic,
+    canShareLive,
+    copyStaticShareLink,
+    copyLiveShareLink,
+    liveShareUnavailableReason,
+  } = useShareLink(fileId);
   
   // Check if this item type can be copied (nodes, parameters, cases)
   const canCopy = item.type === 'node' || item.type === 'parameter' || item.type === 'case';
@@ -269,6 +280,28 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
         onClose();
       },
       disabled: isSearchingWhereUsed
+    });
+  }
+
+  // Share links (for graphs and charts)
+  if (canShare) {
+    if (canShareStatic) {
+      menuItems.push({
+        label: 'Copy Static Share Link',
+        onClick: async () => {
+          await copyStaticShareLink();
+          onClose();
+        }
+      });
+    }
+    
+    menuItems.push({
+      label: canShareLive ? 'Copy Live Share Link' : `Copy Live Share Link (${liveShareUnavailableReason || 'unavailable'})`,
+      onClick: async () => {
+        await copyLiveShareLink();
+        onClose();
+      },
+      disabled: !canShareLive
     });
   }
 

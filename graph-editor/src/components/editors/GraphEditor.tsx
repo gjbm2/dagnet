@@ -1014,8 +1014,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           externalSelectedEdgeId={selectedEdgeId}
         />
         {/* WindowSelector is chrome; keep it out of dashboard mode.
-            ScenarioLegend chips are required in dashboard mode for clarity. */}
-        {!isDashboardMode && <WindowSelector tabId={tabId} />}
+            Static share mode is view-first: do not render the WindowSelector machinery at all. */}
+        {!isDashboardMode && !readonly && <WindowSelector tabId={tabId} />}
         {tabId && <ScenarioLegendWrapper tabId={tabId} />}
       </div>
     );

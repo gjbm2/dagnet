@@ -29,8 +29,11 @@ import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
 import { getObjectTypeTheme } from './theme/objectTypeTheme';
 import { DashboardModeProvider } from './contexts/DashboardModeContext';
+import { ShareModeProvider } from './contexts/ShareModeContext';
 import { useDashboardMode } from './hooks/useDashboardMode';
+import { useIsReadOnlyShare } from './contexts/ShareModeContext';
 import { DashboardShell } from './components/Dashboard/DashboardShell';
+import { ShareModeBanner } from './components/ShareModeBanner';
 import 'rc-dock/dist/rc-dock.css'; // Import rc-dock base styles
 import './styles/dock-theme.css'; // Safe customizations
 import './styles/active-tab-highlight.css'; // Active tab highlighting
@@ -47,6 +50,7 @@ import './styles/file-state-indicators.css'; // File state visual indicators
  */
 function MainAppShellContent() {
   const { tabs, activeTabId, operations: tabOperations } = useTabContext();
+  const isReadOnlyShare = useIsReadOnlyShare();
   const { state: navState, operations: navOperations } = useNavigatorContext();
   const dialogOps = useDialog();
   const { updateFromLayout } = useVisibleTabs();
@@ -642,7 +646,7 @@ function MainAppShellContent() {
               onClick={() => tabOperations.switchTab(tab.id)}
               style={{ width: '100%', height: '100%' }}
             >
-              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} onChange={() => {}} />
+              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} readonly={isReadOnlyShare} onChange={() => {}} />
             </div>
           ),
           closable: true,  // Main app tabs are always closable
@@ -712,7 +716,7 @@ function MainAppShellContent() {
             <div 
               style={{ width: '100%', height: '100%' }}
             >
-              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} onChange={() => {}} />
+              <EditorComponent fileId={tab.fileId} viewMode={tab.viewMode} tabId={tab.id} readonly={isReadOnlyShare} onChange={() => {}} />
             </div>
           ),
           closable: true,  // Main app tabs are always closable
@@ -1356,7 +1360,7 @@ function MainAppShellContent() {
           <EditorComponent
             fileId={activeTab.fileId}
             tabId={activeTab.id}
-            readonly={false}
+            readonly={isReadOnlyShare}
             onChange={() => {}}
             viewMode={activeTab.viewMode}
           />
@@ -1856,6 +1860,7 @@ function AppShellContent() {
   if (isDashboardMode) {
     return (
       <>
+        <ShareModeBanner />
         <AutomationBanner />
         <DashboardShell />
       </>
@@ -1863,6 +1868,7 @@ function AppShellContent() {
   }
   return (
     <>
+      <ShareModeBanner />
       <AutomationBanner />
       <MainAppShellContent />
     </>
@@ -1910,44 +1916,46 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
-      <Toaster 
-        position="bottom-center"
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: '#363636',
-            color: '#fff',
-            fontSize: '14px',
-          },
-          success: {
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
+      <ShareModeProvider>
+        <Toaster 
+          position="bottom-center"
+          toastOptions={{
+            duration: 3000,
+            style: {
+              background: '#363636',
+              color: '#fff',
+              fontSize: '14px',
             },
-          },
-          error: {
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
+            success: {
+              iconTheme: {
+                primary: '#10b981',
+                secondary: '#fff',
+              },
             },
-          },
-        }}
-      />
-      <DashboardModeProvider>
-        <DialogProvider>
-          <ValidationProvider>
-            <TabProvider>
-              <NavigatorProvider>
-                <VisibleTabsProvider>
-                  <CopyPasteProvider>
-                    <AppShellContent />
-                  </CopyPasteProvider>
-                </VisibleTabsProvider>
-              </NavigatorProvider>
-            </TabProvider>
-          </ValidationProvider>
-        </DialogProvider>
-      </DashboardModeProvider>
+            error: {
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#fff',
+              },
+            },
+          }}
+        />
+        <DashboardModeProvider>
+          <DialogProvider>
+            <ValidationProvider>
+              <TabProvider>
+                <NavigatorProvider>
+                  <VisibleTabsProvider>
+                    <CopyPasteProvider>
+                      <AppShellContent />
+                    </CopyPasteProvider>
+                  </VisibleTabsProvider>
+                </NavigatorProvider>
+              </TabProvider>
+            </ValidationProvider>
+          </DialogProvider>
+        </DashboardModeProvider>
+      </ShareModeProvider>
     </ErrorBoundary>
   );
 }

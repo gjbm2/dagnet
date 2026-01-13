@@ -7,6 +7,7 @@ import { usePullAll } from './usePullAll';
 import { StalenessUpdateModal, type StalenessUpdateActionKey } from '../components/modals/StalenessUpdateModal';
 import { retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
 import { sessionLogService } from '../services/sessionLogService';
+import { STALENESS_NUDGE_COUNTDOWN_SECONDS } from '../constants/staleness';
 
 export interface UseStalenessNudgesResult {
   /** Must be rendered somewhere (for pull conflict resolution UI). */
@@ -56,8 +57,18 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     label: string;
   }>>([]);
 
+  // Countdown timer state for auto-pull when remote is ahead
+  const [countdownSeconds, setCountdownSeconds] = useState<number | undefined>(undefined);
+  const countdownIntervalRef = useRef<number | null>(null);
+  // Track the remote SHA that triggered this modal (for dismiss logic)
+  const currentRemoteShaRef = useRef<string | null>(null);
+
   // Opt-out: suppress staleness nudges for this session when the URL contains ?nonudge
-  // (used by creds-share links for read-only explore flows).
+  // (used by share/embed links for read-only explore flows).
+  //
+  // IMPORTANT: We do NOT rewrite the URL to remove ?nonudge.
+  // - Notion embeds and share links often rely on the URL being stable across reloads.
+  // - Rewriting can make behaviour seem “brittle” when an embed cold-starts and the param is gone.
   const suppressStalenessNudges = useMemo(() => {
     try {
       const ss = window.sessionStorage;
@@ -66,9 +77,6 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       const url = new URL(window.location.href);
       if (url.searchParams.has('nonudge')) {
         ss.setItem('dagnet:nonudge', '1');
-        // Remove the parameter to avoid it lingering in shared screenshots / copied URLs.
-        url.searchParams.delete('nonudge');
-        window.history.replaceState({}, document.title, url.toString());
         return true;
       }
     } catch {
@@ -77,7 +85,19 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     return false;
   }, []);
 
-  const closeModal = useCallback(() => setIsModalOpen(false), []);
+  // Stop countdown timer
+  const stopCountdown = useCallback(() => {
+    if (countdownIntervalRef.current !== null) {
+      window.clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setCountdownSeconds(undefined);
+  }, []);
+
+  const closeModal = useCallback(() => {
+    stopCountdown();
+    setIsModalOpen(false);
+  }, [stopCountdown]);
 
   const toggleAction = useCallback((key: StalenessUpdateActionKey) => {
     setModalActions(prev => prev.map(a => (a.key === key ? { ...a, checked: !a.checked } : a)));
@@ -123,6 +143,10 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
     if (wantsPull) {
       await pullAll();
+      // Clear dismissed SHA after successful pull so future changes are detected
+      if (repo) {
+        stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
+      }
     }
 
     if (wantsRetrieve) {
@@ -195,11 +219,12 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   const onRunSelected = useCallback(async () => {
     const selected = new Set(modalActions.filter(a => a.checked && !a.disabled).map(a => a.key));
 
-    closeModal();
+    stopCountdown();
+    setIsModalOpen(false);
     await runSelectedKeys(selected);
     // "Automatic mode" only applies to the workflow the user just initiated.
     setAutomaticMode(false);
-  }, [modalActions, closeModal, runSelectedKeys]);
+  }, [modalActions, stopCountdown, runSelectedKeys]);
 
   const onSnoozeAll = useCallback(() => {
     const now = Date.now();
@@ -221,6 +246,59 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
     closeModal();
   }, [modalActions, navState.selectedRepo, navState.selectedBranch, activeFileId, closeModal]);
+
+  /**
+   * Dismiss: records the current remote SHA so user won't be nudged again
+   * until the next cron cycle (when remote SHA changes).
+   */
+  const onDismiss = useCallback(() => {
+    const storage = window.localStorage;
+    const repo = navState.selectedRepo;
+    const branch = navState.selectedBranch || 'main';
+    const remoteSha = currentRemoteShaRef.current;
+
+    // Record this SHA as dismissed - won't prompt again until new commit appears
+    if (repo && remoteSha) {
+      stalenessNudgeService.dismissRemoteSha(repo, branch, remoteSha, storage);
+      sessionLogService.info(
+        'session',
+        'STALENESS_DISMISS',
+        `Dismissed git-pull nudge for SHA ${remoteSha.slice(0, 7)}; won't prompt again until next remote commit`,
+        undefined,
+        { repository: repo, branch, remoteSha }
+      );
+    }
+
+    closeModal();
+  }, [navState.selectedRepo, navState.selectedBranch, closeModal]);
+
+  /**
+   * Auto-pull: called when countdown expires. Pulls from git ONLY (no retrieve-all).
+   */
+  const onCountdownExpire = useCallback(async () => {
+    const repo = navState.selectedRepo;
+    const branch = navState.selectedBranch || 'main';
+    const storage = window.localStorage;
+
+    sessionLogService.info(
+      'session',
+      'STALENESS_AUTO_PULL',
+      'Auto-pulling from repository (countdown expired)',
+      undefined,
+      { repository: repo, branch }
+    );
+
+    stopCountdown();
+    setIsModalOpen(false);
+
+    // Execute git-pull only (not retrieve-all)
+    await pullAll();
+
+    // Clear dismissed SHA after successful pull (so future changes are detected)
+    if (repo) {
+      stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
+    }
+  }, [navState.selectedRepo, navState.selectedBranch, stopCountdown, pullAll]);
 
   const maybePrompt = useCallback(async () => {
     if (suppressStalenessNudges) return;
@@ -250,15 +328,23 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       const branch: string | undefined = navState.selectedBranch || 'main';
 
       let gitPullDue = false;
+      let detectedRemoteSha: string | null = null;
       if (
         repository &&
         !stalenessNudgeService.isSnoozed('git-pull', `${repository}-${branch}`, now, storage) &&
         stalenessNudgeService.canPrompt('git-pull', now, storage)
       ) {
-        const shouldCheck = await stalenessNudgeService.shouldCheckGitPull(repository, branch, now);
+        // Rate-limited remote HEAD check (every 30 mins or on focus)
+        const shouldCheck = stalenessNudgeService.shouldCheckRemoteHead(repository, branch, now, storage);
         if (shouldCheck) {
-          const status = await stalenessNudgeService.getRemoteAheadStatus(repository, branch);
-          gitPullDue = status.isRemoteAhead;
+          const status = await stalenessNudgeService.getRemoteAheadStatus(repository, branch, storage);
+          if (status.isRemoteAhead && status.remoteHeadSha) {
+            // Only nudge if this SHA hasn't been dismissed
+            if (!stalenessNudgeService.isRemoteShaDismissed(repository, branch, status.remoteHeadSha, storage)) {
+              gitPullDue = true;
+              detectedRemoteSha = status.remoteHeadSha;
+            }
+          }
         }
       }
 
@@ -308,7 +394,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         {
           key: 'retrieve-all-slices',
           label: 'Retrieve all slices (active graph)',
-          description: 'Runs the Retrieve All Slices flow for the currently focused graph.',
+          description: 'Runs the Retrieve All Slices flow for the currently focused graph. Usually handled by daily cron; only due if >24h stale.',
           due: retrieveDue,
           checked: retrieveDue,
           disabled: !activeFileId,
@@ -317,17 +403,57 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
       setModalActions(actions);
 
+      // Store the remote SHA for dismiss logic
+      currentRemoteShaRef.current = detectedRemoteSha;
+
       setIsModalOpen(true);
+
+      // Start countdown if git-pull is due (remote is ahead)
+      if (gitPullDue && detectedRemoteSha) {
+        setCountdownSeconds(STALENESS_NUDGE_COUNTDOWN_SECONDS);
+      }
     } finally {
       inFlightRef.current = false;
     }
-  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen, runSelectedKeys]);
+  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen]);
 
   // Record the page load baseline once on mount.
   useEffect(() => {
     stalenessNudgeService.recordPageLoad(Date.now(), window.localStorage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Countdown interval effect
+  useEffect(() => {
+    if (countdownSeconds === undefined || countdownSeconds <= 0) {
+      return;
+    }
+
+    // Start the interval
+    countdownIntervalRef.current = window.setInterval(() => {
+      setCountdownSeconds(prev => {
+        if (prev === undefined || prev <= 1) {
+          // Countdown expired - will trigger auto-pull via separate effect
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (countdownIntervalRef.current !== null) {
+        window.clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+    };
+  }, [countdownSeconds !== undefined && countdownSeconds > 0]);
+
+  // Effect to handle countdown expiration
+  useEffect(() => {
+    if (countdownSeconds === 0 && isModalOpen) {
+      void onCountdownExpire();
+    }
+  }, [countdownSeconds, isModalOpen, onCountdownExpire]);
 
   // Run on key "user is back" moments.
   useEffect(() => {
@@ -345,6 +471,24 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     return () => {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [maybePrompt]);
+
+  // Background polling interval for unattended terminals (e.g. dashboard mode).
+  // Runs maybePrompt every 30 minutes, but only if tab is visible.
+  // This supports dashboards left open but avoids wasting resources on background tabs.
+  useEffect(() => {
+    const BACKGROUND_POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+    const intervalId = window.setInterval(() => {
+      // Only poll if tab is visible (respects browser power management)
+      if (!document.hidden) {
+        void maybePrompt();
+      }
+    }, BACKGROUND_POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
     };
   }, [maybePrompt]);
 
@@ -381,7 +525,11 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     onToggle: toggleAction,
     onRun: onRunSelected,
     onSnooze: onSnoozeAll,
-    onClose: closeModal,
+    // Backdrop/× close should behave like Snooze (avoid accidental long-lived dismissal).
+    onClose: onSnoozeAll,
+    // Explicit Dismiss button records SHA; won't prompt until next remote commit.
+    onDismiss,
+    countdownSeconds,
   });
 
   if (suppressStalenessNudges) {

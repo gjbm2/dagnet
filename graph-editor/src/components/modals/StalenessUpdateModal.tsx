@@ -1,6 +1,22 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import './Modal.css';
+
+// Inject countdown spinner animation if not already present
+const COUNTDOWN_STYLE_ID = 'staleness-countdown-keyframes';
+function ensureCountdownStyles(): void {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(COUNTDOWN_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = COUNTDOWN_STYLE_ID;
+  style.textContent = `
+    @keyframes staleness-countdown-pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 export type StalenessUpdateActionKey = 'reload' | 'git-pull' | 'retrieve-all-slices';
 
@@ -22,7 +38,14 @@ export interface StalenessUpdateModalProps {
   onToggle: (key: StalenessUpdateActionKey) => void;
   onRun: () => void;
   onSnooze: () => void;
+  /** Backdrop/× close action (wired by caller; we use this for Snooze semantics). */
   onClose: () => void;
+  /** Explicit dismiss action (wired by caller; we use this for "dismiss until next remote commit"). */
+  onDismiss: () => void;
+  /** Countdown seconds remaining (undefined = no countdown active). */
+  countdownSeconds?: number;
+  /** Called when countdown expires (hook handles the auto-pull). */
+  onCountdownExpire?: () => void;
 }
 
 /**
@@ -40,6 +63,8 @@ export function StalenessUpdateModal({
   onRun,
   onSnooze,
   onClose,
+  onDismiss,
+  countdownSeconds,
 }: StalenessUpdateModalProps) {
   if (!isOpen) return null;
 
@@ -47,6 +72,13 @@ export function StalenessUpdateModal({
   const anyDue = actions.some(a => a.due);
   const reloadChecked = actions.some(a => a.key === 'reload' && a.checked && !a.disabled);
   const otherChecked = actions.some(a => a.key !== 'reload' && a.checked && !a.disabled);
+  const gitPullDue = actions.some(a => a.key === 'git-pull' && a.due);
+  const hasCountdown = countdownSeconds !== undefined && countdownSeconds > 0 && gitPullDue;
+
+  // Ensure countdown animation styles are injected
+  useEffect(() => {
+    if (hasCountdown) ensureCountdownStyles();
+  }, [hasCountdown]);
 
   const modalContent = (
     <div className="modal-overlay" onClick={onClose}>
@@ -63,8 +95,50 @@ export function StalenessUpdateModal({
             </p>
           ) : (
             <>
+              {hasCountdown && (
+                <div
+                  style={{
+                    marginBottom: 14,
+                    padding: '12px 14px',
+                    background: 'linear-gradient(135deg, #1e3a5f 0%, #0f2744 100%)',
+                    borderRadius: 8,
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: '50%',
+                      border: '3px solid rgba(255,255,255,0.3)',
+                      borderTopColor: '#60a5fa',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 16,
+                      fontWeight: 700,
+                      fontVariantNumeric: 'tabular-nums',
+                      animation: 'staleness-countdown-pulse 1s ease-in-out infinite',
+                    }}
+                  >
+                    {countdownSeconds}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>
+                      Auto-pulling from repository in {countdownSeconds}s
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+                      New data is available. Snooze or dismiss to cancel.
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <p style={{ marginTop: 0, marginBottom: 14, fontSize: 13, color: '#555', lineHeight: 1.4 }}>
-                Select what you’d like to do now. Defaults are pre-selected based on what appears due.
+                Select what you'd like to do now. Defaults are pre-selected based on what appears due.
               </p>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -147,7 +221,7 @@ export function StalenessUpdateModal({
           <button className="modal-btn modal-btn-secondary" onClick={onSnooze}>
             Snooze 1 hour
           </button>
-          <button className="modal-btn modal-btn-secondary" onClick={onClose}>
+          <button className="modal-btn modal-btn-secondary" onClick={onDismiss}>
             Dismiss
           </button>
           <button className="modal-btn modal-btn-primary" onClick={onRun} disabled={!anyChecked}>

@@ -6,6 +6,7 @@ import { gitConfig } from '../config/gitConfig';
 import { workspaceService } from '../services/workspaceService';
 import { fileRegistry } from './TabContext';
 import { registryService } from '../services/registryService';
+import { isShareMode } from '../lib/shareBootResolver';
 
 /**
  * Navigator Context
@@ -69,6 +70,13 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
   // Load state from IndexedDB and credentials on mount
   useEffect(() => {
     const initialize = async () => {
+      // Share sessions must NOT initialise / clone a workspace.
+      // Live share uses a minimal boot path in TabContext + liveShareBootService.
+      if (isShareMode()) {
+        console.log('[NavigatorContext] Share mode detected - skipping workspace initialisation');
+        setIsInitialized(true);
+        return;
+      }
       const savedState = await loadStateFromDB();
       const repoBranch = await loadCredentialsAndUpdateRepo(savedState);
       // Policy: NO remote sync on init unless this is the first time the repo/branch is being initialised locally.
@@ -417,6 +425,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     branch: string,
     opts?: { syncMode?: LoadItemsSyncMode }
   ) => {
+    // Hard guard: share sessions must never clone/pull an entire workspace.
+    if (isShareMode()) {
+      console.log(`[NavigatorContext] Share mode: skipping loadItems for ${repo}/${branch}`);
+      return;
+    }
     console.log(`📦 WorkspaceService: loadItems called for ${repo}/${branch}`);
     if (!repo) {
       console.log('📦 WorkspaceService: No repo provided, skipping');

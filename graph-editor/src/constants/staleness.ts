@@ -4,8 +4,14 @@
  * Centralised here so all nudges and related UX use consistent timings.
  */
 export const STALENESS_NUDGE_RELOAD_AFTER_MS = 12 * 60 * 60 * 1000; // 12h
-export const STALENESS_NUDGE_GIT_PULL_AFTER_MS = 12 * 60 * 60 * 1000; // 12h
-export const STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS = 20 * 60 * 60 * 1000; // 20h (tentative)
+export const STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS = 24 * 60 * 60 * 1000; // 24h (cron handles daily retrieves)
+
+/**
+ * How often to check if remote is ahead of local (for git-pull nudge).
+ * The actual nudge is triggered by SHA mismatch, not by time elapsed.
+ * This just gates how frequently we make the network call to check remote HEAD.
+ */
+export const STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30m
 
 /** User snooze duration for nudges. */
 export const STALENESS_NUDGE_SNOOZE_MS = 60 * 60 * 1000; // 1h
@@ -27,5 +33,12 @@ export const STALENESS_PENDING_PLAN_MAX_AGE_MS = 30 * 60 * 1000; // 30m
  * When enabled, DagNet will run the due update actions without prompting (except pull conflicts).
  */
 export const STALENESS_AUTOMATIC_MODE_DEFAULT = false;
+
+/**
+ * Countdown timer before auto-executing git pull when remote is ahead.
+ * User can dismiss/snooze to cancel, otherwise pull happens automatically.
+ * This supports unattended clients (e.g. dashboard mode) picking up daily cron updates.
+ */
+export const STALENESS_NUDGE_COUNTDOWN_SECONDS = 30;
 
 

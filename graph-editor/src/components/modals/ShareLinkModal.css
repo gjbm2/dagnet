@@ -1,0 +1,247 @@
+/**
+ * ShareLinkModal styles
+ */
+
+.share-link-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.share-link-modal {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  width: 480px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.share-link-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.share-link-modal__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.share-link-modal__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.15s ease;
+}
+
+.share-link-modal__close:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.share-link-modal__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.share-link-modal__section {
+  margin-bottom: 20px;
+}
+
+.share-link-modal__section:last-child {
+  margin-bottom: 0;
+}
+
+.share-link-modal__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.share-link-modal__section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.share-link-modal__section-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-link-modal__text-button {
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: #2563eb;
+  cursor: pointer;
+  padding: 0;
+}
+
+.share-link-modal__text-button:hover {
+  text-decoration: underline;
+}
+
+.share-link-modal__separator {
+  color: #d1d5db;
+  font-size: 12px;
+}
+
+.share-link-modal__tab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.share-link-modal__tab-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.share-link-modal__tab-item:hover {
+  background: #f3f4f6;
+}
+
+.share-link-modal__tab-item.selected {
+  background: #eff6ff;
+}
+
+.share-link-modal__tab-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+}
+
+.share-link-modal__tab-icon {
+  font-size: 16px;
+}
+
+.share-link-modal__tab-title {
+  flex: 1;
+  font-size: 13px;
+  color: #374151;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-link-modal__empty {
+  padding: 20px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.share-link-modal__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: #374151;
+}
+
+.share-link-modal__option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+}
+
+.share-link-modal__note {
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.share-link-modal__warning {
+  color: #b45309;
+}
+
+.share-link-modal__info {
+  color: #0284c7;
+}
+
+.share-link-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.share-link-modal__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.share-link-modal__button--secondary {
+  background: white;
+  border: 1px solid #d1d5db;
+  color: #374151;
+}
+
+.share-link-modal__button--secondary:hover {
+  background: #f3f4f6;
+}
+
+.share-link-modal__button--primary {
+  background: #2563eb;
+  border: none;
+  color: white;
+}
+
+.share-link-modal__button--primary:hover {
+  background: #1d4ed8;
+}
+
+.share-link-modal__button--primary:disabled {
+  background: #93c5fd;
+  cursor: not-allowed;
+}
