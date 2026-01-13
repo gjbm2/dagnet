@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
+import { Share2 } from 'lucide-react';
 import { FileMenu } from './FileMenu';
 import { EditMenu } from './EditMenu';
 import { ViewMenu } from './ViewMenu';
@@ -10,6 +11,7 @@ import { HelpMenu } from './HelpMenu';
 import { useTabContext } from '../../contexts/TabContext';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { DevConsoleMirrorControls } from './DevConsoleMirrorControls';
+import { ShareLinkModal } from '../modals/ShareLinkModal';
 import packageJson from '../../../package.json';
 import './MenuBar.css';
 
@@ -23,7 +25,8 @@ const APP_VERSION = packageJson.version;
  */
 export function MenuBarComponent() {
   const { operations } = useTabContext();
-  const { toggleDashboardMode } = useDashboardMode();
+  const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
+  const [shareModalOpen, setShareModalOpen] = useState(false);
 
   const handleBrandClick = async () => {
     toggleDashboardMode({ updateUrl: true });
@@ -42,6 +45,15 @@ export function MenuBarComponent() {
       </Menubar.Root>
       <div className="dagnet-right-controls">
         <DevConsoleMirrorControls />
+        {!isDashboardMode && (
+          <button
+            className="share-link-button"
+            onClick={() => setShareModalOpen(true)}
+            title="Share link..."
+          >
+            <Share2 size={18} />
+          </button>
+        )}
         <div
           className="dagnet-brand"
           onClick={handleBrandClick}
@@ -51,6 +63,7 @@ export function MenuBarComponent() {
           <span>Dagnet</span>
         </div>
       </div>
+      <ShareLinkModal isOpen={shareModalOpen} onClose={() => setShareModalOpen(false)} />
     </div>
   );
 }
