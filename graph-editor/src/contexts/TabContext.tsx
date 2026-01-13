@@ -1162,9 +1162,17 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       //
       // Also support `?retrieveall=<graph-name>` as a convenience for headless daily automation:
       // - TabContext opens the graph tab
-      // - A separate hook (`useURLDailyRetrieveAll`) runs pull → retrieve → commit after load
-      const retrieveAllGraphName = urlParams.get('retrieveall');
-      const graphName = urlParams.get('graph') || (retrieveAllGraphName && retrieveAllGraphName.trim() !== '' ? retrieveAllGraphName : null);
+      // - A separate hook (`useURLDailyRetrieveAllQueue`) runs pull → retrieve → commit after load
+      //
+      // Multi-graph support:
+      // - `?retrieveall=a,b,c` (comma-separated)
+      // - `?retrieveall=a&retrieveall=b` (repeated param)
+      // TabContext only opens the FIRST graph; the queue runner opens the rest.
+      const retrieveAllValues = urlParams.getAll('retrieveall');
+      const retrieveAllFirst = retrieveAllValues
+        .flatMap(v => String(v ?? '').split(',').map(s => s.trim()).filter(s => s.length > 0))
+        .find(Boolean) || null;
+      const graphName = urlParams.get('graph') || retrieveAllFirst;
       if (graphName) {
         console.log(`TabContext: Loading graph '${graphName}' from default repo`);
         
