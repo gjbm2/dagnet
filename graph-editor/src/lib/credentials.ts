@@ -317,9 +317,9 @@ export class CredentialsManager {
         credentialsSecret = process.env.SHARE_SECRET || process.env.VITE_CREDENTIALS_SECRET;
       }
       
-      console.log('🔧 CredentialsManager: VITE_CREDENTIALS_JSON exists:', !!credentialsJson);
-      console.log('🔧 CredentialsManager: VITE_CREDENTIALS_SECRET exists:', !!credentialsSecret);
-      console.log('🔧 CredentialsManager: Raw JSON (first 100 chars):', credentialsJson?.substring(0, 100));
+      // SECURITY: never log credential material (even partial). Presence booleans are enough.
+      console.log('🔧 CredentialsManager: System credentials JSON exists:', !!credentialsJson);
+      console.log('🔧 CredentialsManager: System credentials secret exists:', !!credentialsSecret);
       
       if (!credentialsJson) {
         console.log('🔧 CredentialsManager: No credentials JSON in environment');
@@ -344,9 +344,8 @@ export class CredentialsManager {
       // Parse the credentials JSON
       let credentials: CredentialsData;
       try {
-        console.log('🔧 CredentialsManager: Parsing JSON...');
+        console.log('🔧 CredentialsManager: Parsing system credentials JSON...');
         credentials = JSON.parse(credentialsJson);
-        console.log('🔧 CredentialsManager: Parsed credentials:', credentials);
       } catch (parseError) {
         console.error('🔧 CredentialsManager: JSON parse error:', parseError);
         return {

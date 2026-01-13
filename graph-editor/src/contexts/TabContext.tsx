@@ -1290,11 +1290,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             console.log('[TabContext] Successfully loaded graph from ?data parameter');
           }
           
-          // In share mode, do NOT remove ?data from URL - keep it for reloadability (Notion embeds)
-          // Only remove nonudge after persisting session suppression
-          const url = new URL(window.location.href);
-          url.searchParams.delete('nonudge');
-          window.history.replaceState({}, document.title, url.toString());
+          // In share mode, do NOT rewrite the URL (keep `data` and `nonudge` stable for reloadability).
         } else {
           console.error('[TabContext] Failed to decode ?data parameter');
         }

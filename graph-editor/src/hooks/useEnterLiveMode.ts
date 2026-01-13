@@ -13,7 +13,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { useShareMode } from '../contexts/ShareModeContext';
-import { buildLiveShareUrl } from '../services/shareLinkService';
+import { buildLiveShareUrl, resolveShareSecretForLinkGeneration } from '../services/shareLinkService';
 import { sessionLogService } from '../services/sessionLogService';
 
 export interface EnterLiveModeResult {
@@ -45,8 +45,9 @@ export function useEnterLiveMode(): EnterLiveModeResult {
     const { repo, branch, graph } = shareMode.identity;
     if (!repo || !branch || !graph) return false;
     
-    // Must have a secret
-    if (!shareMode.secret) return false;
+    // Must have a secret (URL or env)
+    const secret = shareMode.secret || resolveShareSecretForLinkGeneration();
+    if (!secret) return false;
     
     return true;
   }, [shareMode.isStaticMode, shareMode.identity, shareMode.secret]);
@@ -61,7 +62,7 @@ export function useEnterLiveMode(): EnterLiveModeResult {
       return 'Missing identity metadata (repo/branch/graph) - this static link cannot be upgraded to live mode';
     }
     
-    if (!shareMode.secret) {
+    if (!(shareMode.secret || resolveShareSecretForLinkGeneration())) {
       return 'No secret available - live mode requires a secret for authentication';
     }
     
@@ -75,7 +76,7 @@ export function useEnterLiveMode(): EnterLiveModeResult {
     }
     
     const { repo, branch, graph } = shareMode.identity;
-    const { secret } = shareMode;
+    const secret = shareMode.secret || resolveShareSecretForLinkGeneration() || undefined;
     
     if (!repo || !branch || !graph || !secret) {
       console.error('[useEnterLiveMode] Missing required params');
