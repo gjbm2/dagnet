@@ -54,9 +54,16 @@ https://dagnet.vercel.app/?graph=conversion-funnel&retrieveall
 https://dagnet.vercel.app/?retrieveall=conversion-funnel&pullalllatest
 ```
 
+**Multiple graphs (serialised in one browser session):**
+```
+https://dagnet.vercel.app/?retrieveall=graph-a,graph-b,graph-c
+https://dagnet.vercel.app/?retrieveall=graph-a&retrieveall=graph-b&retrieveall=graph-c
+```
+
 **How it works:**
 - The app opens the graph tab (same as `?graph=`).
 - After the graph loads, it runs the workflow via service-layer code (no UI prompts).
+- If multiple graphs are specified, DagNet processes them **one at a time** (serialised) within the same browser session.
 - Merge conflicts during pull are automatically resolved by accepting the **remote** version.
 - A commit is made only if there are committable file changes.
 - The commit message includes a UK date (`d-MMM-yy`), e.g. `Daily data refresh (conversion-funnel) - 18-Dec-25`.

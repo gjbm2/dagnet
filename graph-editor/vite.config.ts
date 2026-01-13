@@ -32,6 +32,11 @@ export default defineConfig(({ mode }) => {
   // Credentials init env (optional, used by welcome-screen init)
   const initSecret = env.INIT_CREDENTIALS_SECRET || '';
   const initCredentialsJson = env.INIT_CREDENTIALS_JSON || '';
+
+  // Share-mode credentials env (optional, used by ?secret= flows in embeds)
+  // Note: These are intentionally NOT the generic VITE_CREDENTIALS_* names to reduce accidental coupling.
+  const shareSecret = env.SHARE_SECRET || '';
+  const shareJson = env.SHARE_JSON || '';
   
   return {
     plugins: [
@@ -179,6 +184,8 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_GIT_COMMIT': JSON.stringify(gitCommit),
       'import.meta.env.VITE_INIT_CREDENTIALS_SECRET': JSON.stringify(initSecret),
       'import.meta.env.VITE_INIT_CREDENTIALS_JSON': JSON.stringify(initCredentialsJson),
+      'import.meta.env.SHARE_SECRET': JSON.stringify(shareSecret),
+      'import.meta.env.SHARE_JSON': JSON.stringify(shareJson),
     },
     resolve: {
       alias: {

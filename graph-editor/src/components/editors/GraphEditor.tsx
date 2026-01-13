@@ -20,7 +20,6 @@ import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useURLScenarios } from '../../hooks/useURLScenarios';
-import { useURLDailyRetrieveAll } from '../../hooks/useURLDailyRetrieveAll';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestListener';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
@@ -77,13 +76,10 @@ function URLScenariosProcessor({ fileId }: { fileId: string }) {
   return null; // No UI - just processes URL params
 }
 
-/**
- * URLDailyRetrieveAllProcessor - processes URL daily automation parameters after graph loads
- * Must be inside TabProvider + NavigatorProvider (AppShell) so services have context.
- */
-function URLDailyRetrieveAllProcessor({ fileId }: { fileId: string }) {
-  // The graph is loaded if we're rendering (GraphEditorInner gates on data)
-  useURLDailyRetrieveAll(true, fileId);
+// NOTE: Daily automation URL handling (`?retrieveall=...`) is mounted once in `AppShell`
+// via `useURLDailyRetrieveAllQueue()`. Do not add per-tab automation hooks here.
+
+function URLDailyRetrieveAllProcessor(_props: { fileId: string }) {
   return null;
 }
 
