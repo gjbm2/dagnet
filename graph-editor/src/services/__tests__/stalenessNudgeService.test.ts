@@ -43,7 +43,10 @@ vi.mock('../sessionLogService', () => ({
 }));
 
 import { stalenessNudgeService } from '../stalenessNudgeService';
-import { STALENESS_NUDGE_RELOAD_AFTER_MS } from '../../constants/staleness';
+import {
+  STALENESS_NUDGE_RELOAD_AFTER_MS,
+  STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS,
+} from '../../constants/staleness';
 
 class MemoryStorage {
   private map = new Map<string, string>();
@@ -102,7 +105,8 @@ describe('stalenessNudgeService', () => {
         return {
           data: {
             values: [
-              { data_source: { retrieved_at: new Date(now - (21 * 60 * 60 * 1000)).toISOString() } },
+              // Must exceed the 24h threshold to be considered stale.
+              { data_source: { retrieved_at: new Date(now - (25 * 60 * 60 * 1000)).toISOString() } },
             ],
           },
         };
@@ -138,10 +142,45 @@ describe('stalenessNudgeService', () => {
     });
     hoisted.mockGitGetRemoteHeadSha.mockResolvedValue('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
 
-    const res = await stalenessNudgeService.getRemoteAheadStatus('repo-1', 'main');
+    const storage = new MemoryStorage() as any;
+    const res = await stalenessNudgeService.getRemoteAheadStatus('repo-1', 'main', storage);
     expect(res.isRemoteAhead).toBe(true);
     expect(res.localSha).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     expect(res.remoteHeadSha).toBe('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+  });
+
+  it('should rate-limit remote head checks per repo-branch', () => {
+    const storage = new MemoryStorage() as any;
+    const repo = 'repo-1';
+    const branch = 'main';
+    const t0 = 123_000_000;
+
+    // First time: should check.
+    expect(stalenessNudgeService.shouldCheckRemoteHead(repo, branch, t0, storage)).toBe(true);
+    stalenessNudgeService.markRemoteHeadChecked(repo, branch, t0, storage);
+
+    // Within interval: should NOT check.
+    expect(stalenessNudgeService.shouldCheckRemoteHead(repo, branch, t0 + STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS - 1, storage)).toBe(false);
+
+    // After interval: should check.
+    expect(stalenessNudgeService.shouldCheckRemoteHead(repo, branch, t0 + STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS + 1, storage)).toBe(true);
+  });
+
+  it('should persist dismissed remote SHA and clear it', () => {
+    const storage = new MemoryStorage() as any;
+    const repo = 'repo-1';
+    const branch = 'main';
+    const shaA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const shaB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+    expect(stalenessNudgeService.isRemoteShaDismissed(repo, branch, shaA, storage)).toBe(false);
+
+    stalenessNudgeService.dismissRemoteSha(repo, branch, shaA, storage);
+    expect(stalenessNudgeService.isRemoteShaDismissed(repo, branch, shaA, storage)).toBe(true);
+    expect(stalenessNudgeService.isRemoteShaDismissed(repo, branch, shaB, storage)).toBe(false);
+
+    stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
+    expect(stalenessNudgeService.isRemoteShaDismissed(repo, branch, shaA, storage)).toBe(false);
   });
 });
 

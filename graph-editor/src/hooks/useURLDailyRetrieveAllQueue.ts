@@ -22,6 +22,7 @@ import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { sessionLogService } from '../services/sessionLogService';
 import { dailyRetrieveAllAutomationService } from '../services/dailyRetrieveAllAutomationService';
 import { automationRunService } from '../services/automationRunService';
+import { isShareMode } from '../lib/shareBootResolver';
 
 interface URLDailyRetrieveAllQueueParams {
   retrieveAllValues: string[]; // raw values from ?retrieveall=... (can be empty strings)
@@ -166,6 +167,12 @@ export function useURLDailyRetrieveAllQueue(): void {
   useEffect(() => {
     if (processedRef.current) return;
     if (urlDailyRetrieveAllQueueProcessed) {
+      processedRef.current = true;
+      return;
+    }
+    
+    // Disable automation in share mode - makes no sense for embedded views
+    if (isShareMode()) {
       processedRef.current = true;
       return;
     }

@@ -20,7 +20,11 @@ const hoisted = vi.hoisted(() => ({
   canPrompt: vi.fn(),
   markPrompted: vi.fn(),
   snooze: vi.fn(),
-  shouldCheckGitPull: vi.fn(),
+  shouldCheckRemoteHead: vi.fn(),
+  markRemoteHeadChecked: vi.fn(),
+  isRemoteShaDismissed: vi.fn(),
+  dismissRemoteSha: vi.fn(),
+  clearDismissedRemoteSha: vi.fn(),
   getRemoteAheadStatus: vi.fn(),
   getRetrieveAllSlicesStalenessStatus: vi.fn(),
   getPendingPlan: vi.fn(),
@@ -80,7 +84,11 @@ vi.mock('../../services/stalenessNudgeService', () => ({
     canPrompt: hoisted.canPrompt,
     markPrompted: hoisted.markPrompted,
     snooze: hoisted.snooze,
-    shouldCheckGitPull: hoisted.shouldCheckGitPull,
+    shouldCheckRemoteHead: hoisted.shouldCheckRemoteHead,
+    markRemoteHeadChecked: hoisted.markRemoteHeadChecked,
+    isRemoteShaDismissed: hoisted.isRemoteShaDismissed,
+    dismissRemoteSha: hoisted.dismissRemoteSha,
+    clearDismissedRemoteSha: hoisted.clearDismissedRemoteSha,
     getRemoteAheadStatus: hoisted.getRemoteAheadStatus,
     getRetrieveAllSlicesStalenessStatus: hoisted.getRetrieveAllSlicesStalenessStatus,
     getPendingPlan: hoisted.getPendingPlan,
@@ -107,8 +115,9 @@ describe('useStalenessNudges', () => {
 
     hoisted.isSnoozed.mockReturnValue(false);
     hoisted.canPrompt.mockReturnValue(true);
-    hoisted.shouldCheckGitPull.mockResolvedValue(false);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(false);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: false });
+    hoisted.isRemoteShaDismissed.mockReturnValue(false);
     hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
       isStale: false,
       parameterCount: 0,
@@ -185,7 +194,7 @@ describe('useStalenessNudges', () => {
 
   it('should persist pending plan when Reload + Pull are selected', async () => {
     hoisted.shouldPromptReload.mockReturnValue(true);
-    hoisted.shouldCheckGitPull.mockResolvedValue(true);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
 
     const reloadSpy = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
@@ -201,13 +210,14 @@ describe('useStalenessNudges', () => {
     await waitFor(() => {
       expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
     });
+    expect(hoisted.clearDismissedRemoteSha).toHaveBeenCalledTimes(1);
     expect(reloadSpy).toHaveBeenCalledTimes(1);
     reloadSpy.mockRestore();
   });
 
   it('should NOT auto-run due actions without user confirmation (no silent retrieve)', async () => {
     hoisted.shouldPromptReload.mockReturnValue(false);
-    hoisted.shouldCheckGitPull.mockResolvedValue(false);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(false);
     hoisted.getRetrieveAllSlicesStalenessStatus.mockReturnValue({
       isStale: true,
       parameterCount: 1,
@@ -224,7 +234,7 @@ describe('useStalenessNudges', () => {
 
   it('should skip retrieve-all after pull when pull brings fresh retrieval state (not stale)', async () => {
     hoisted.shouldPromptReload.mockReturnValue(false);
-    hoisted.shouldCheckGitPull.mockResolvedValue(true);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
 
     // First call (modal due computation): stale → shows Retrieve action as due/checked.
@@ -248,6 +258,141 @@ describe('useStalenessNudges', () => {
     // Retrieve should be skipped (no request event, no direct execute)
     expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
     expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
+  });
+
+  it('should auto-pull after 30s countdown when remote is ahead (no retrieve-all)', async () => {
+    vi.useFakeTimers();
+    hoisted.shouldPromptReload.mockReturnValue(false);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+    hoisted.isRemoteShaDismissed.mockReturnValue(false);
+
+    render(<Harness />);
+
+    // Under fake timers, React effects + Testing Library async flows may require explicit timer advancement.
+    // Poll briefly until the modal appears.
+    for (let i = 0; i < 200; i++) {
+      if (screen.queryByText('Updates recommended')) break;
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.resolve();
+    }
+    expect(screen.getByText('Updates recommended')).toBeTruthy();
+    expect(screen.getByText('Pull latest from git')).toBeTruthy();
+    expect(screen.getByText(/Auto-pulling from repository in/i)).toBeTruthy();
+
+    // Advance time until the countdown expires and the hook runs pullAll.
+    // We use a loop (rather than a single 30s jump) to avoid race conditions with effect scheduling.
+    for (let i = 0; i < 40; i++) {
+      if (hoisted.pullAll.mock.calls.length > 0) break;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
+    expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
+    expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
+    vi.useRealTimers();
+  });
+
+  it('should cancel countdown when Snooze is clicked', async () => {
+    vi.useFakeTimers();
+    hoisted.shouldPromptReload.mockReturnValue(false);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+    hoisted.isRemoteShaDismissed.mockReturnValue(false);
+
+    render(<Harness />);
+
+    for (let i = 0; i < 200; i++) {
+      if (screen.queryByRole('button', { name: 'Snooze 1 hour' })) break;
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.resolve();
+    }
+
+    // Snooze should cancel countdown and close the modal.
+    screen.getByRole('button', { name: 'Snooze 1 hour' }).click();
+
+    await vi.advanceTimersByTimeAsync(35_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(hoisted.pullAll).toHaveBeenCalledTimes(0);
+    vi.useRealTimers();
+  });
+
+  it('should dismiss current SHA and not re-nudge until remote SHA changes', async () => {
+    hoisted.shouldPromptReload.mockReturnValue(false);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
+
+    // Simulate SHA-dismiss storage behaviour in the mock layer.
+    let dismissedSha: string | null = null;
+    hoisted.isRemoteShaDismissed.mockImplementation((_repo: string, _branch: string, remoteSha: string) => dismissedSha === remoteSha);
+    hoisted.dismissRemoteSha.mockImplementation((_repo: string, _branch: string, remoteSha: string) => {
+      dismissedSha = remoteSha;
+    });
+
+    // First: remote SHA b
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+
+    render(<Harness />);
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+
+    screen.getByRole('button', { name: 'Dismiss' }).click();
+    expect(hoisted.dismissRemoteSha).toHaveBeenCalledTimes(1);
+
+    // Trigger another check with same SHA b -> should not re-open modal
+    window.dispatchEvent(new Event('focus'));
+    await new Promise(r => setTimeout(r, 50));
+    expect(screen.queryByText('Updates recommended')).toBeNull();
+
+    // Now remote advances to SHA c -> should re-open modal
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'c' });
+    window.dispatchEvent(new Event('focus'));
+
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+  });
+
+  it('backdrop/× close should snooze (not dismiss)', async () => {
+    hoisted.shouldPromptReload.mockReturnValue(false);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+    hoisted.isRemoteShaDismissed.mockReturnValue(false);
+
+    render(<Harness />);
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+
+    // Click the × (wired to onClose -> Snooze).
+    screen.getByRole('button', { name: '×' }).click();
+
+    expect(hoisted.snooze).toHaveBeenCalledTimes(1);
+    expect(hoisted.dismissRemoteSha).toHaveBeenCalledTimes(0);
+  });
+
+  it('should not poll in background when document is hidden, but should prompt on visibility restore', async () => {
+    hoisted.shouldPromptReload.mockReturnValue(false);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+    hoisted.isRemoteShaDismissed.mockReturnValue(false);
+
+    const originalHidden = document.hidden;
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+
+    render(<Harness />);
+
+    // Hidden: focus/visibility checks should not open modal (isVisible gate).
+    window.dispatchEvent(new Event('focus'));
+    await new Promise(r => setTimeout(r, 50));
+    expect(screen.queryByText('Updates recommended')).toBeNull();
+
+    // Make visible and trigger visibilitychange: should prompt now.
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+
+    // Restore hidden
+    Object.defineProperty(document, 'hidden', { value: originalHidden, configurable: true });
   });
 });
 

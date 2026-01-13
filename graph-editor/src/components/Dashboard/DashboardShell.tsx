@@ -7,6 +7,7 @@ import { useVisibleTabs } from '../../contexts/VisibleTabsContext';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { buildDashboardDockLayout } from '../../layouts/dashboardDockLayout';
 import { getEditorComponent } from '../editors/EditorRegistry';
+import { useIsReadOnlyShare } from '../../contexts/ShareModeContext';
 
 import '../../styles/dashboard-mode.css';
 
@@ -14,6 +15,7 @@ export function DashboardShell() {
   const { tabs } = useTabContext();
   const { updateFromLayout } = useVisibleTabs();
   const { toggleDashboardMode } = useDashboardMode();
+  const isReadOnlyShare = useIsReadOnlyShare();
 
   const dashboardTabMeta = useMemo(() => {
     return tabs
@@ -68,13 +70,13 @@ export function DashboardShell() {
       title: '',
       content: (
         <div style={{ width: '100%', height: '100%' }}>
-          <EditorComponent fileId={fileId} tabId={tabId} viewMode="interactive" readonly={false} onChange={() => {}} />
+          <EditorComponent fileId={fileId} tabId={tabId} viewMode="interactive" readonly={isReadOnlyShare} onChange={() => {}} />
         </div>
       ),
       cached: true,
       closable: false,
     };
-  }, []);
+  }, [isReadOnlyShare]);
 
   // Keep VisibleTabsContext in sync so GraphCanvas/GraphEditor visibility gating works.
   // Dashboard layout is static (no dragging/splitting), so only update when the tab set changes.

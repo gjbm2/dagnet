@@ -924,10 +924,23 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   // Load tabs from IndexedDB on mount, initialize credentials and connections
   useEffect(() => {
     const initializeApp = async () => {
-      await loadTabsFromDB();
-      await initializeCredentials();
-      await initializeConnections();
-      await initializeSettings();
+      // Import share mode utilities
+      const { isShareMode } = await import('../lib/shareBootResolver');
+      
+      // In share mode, skip workspace tab restoration and related init
+      // Share sessions are isolated and don't use the user's workspace state
+      if (isShareMode()) {
+        console.log('[TabContext] Share mode detected - skipping workspace tab restoration');
+        // Still initialize credentials (needed for live mode) but skip connections/settings
+        await initializeCredentials();
+      } else {
+        // Normal workspace boot
+        await loadTabsFromDB();
+        await initializeCredentials();
+        await initializeConnections();
+        await initializeSettings();
+      }
+      
       await loadFromURLData();
 
       // Signal that TabContext initialisation (including URL-driven tab opening) is complete.
@@ -1066,12 +1079,96 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   const loadFromURLData = async () => {
     try {
       const urlParams = new URLSearchParams(window.location.search);
+      const modeParam = urlParams.get('mode');
+      
+      // =======================================================================
+      // LIVE SHARE MODE: fetch graph from GitHub, seed cache, open tab
+      // =======================================================================
+      if (modeParam === 'live') {
+        console.log('[TabContext] Live share mode detected');
+        const { liveShareBootService } = await import('../services/liveShareBootService');
+        const result = await liveShareBootService.performBoot();
+        
+        if (!result.success || !result.graphData) {
+          console.error('[TabContext] Live share boot failed:', result.error);
+          // TODO: Show user-friendly error UI
+          return;
+        }
+        
+        // Create file in registry with fetched graph data
+        const { identity, graphData, graphSha, graphPath } = result;
+        const fileId = `graph-live-${identity?.graph || 'unknown'}`;
+        await fileRegistry.getOrCreateFile(fileId, 'graph', {
+          repository: identity?.repo || 'url',
+          path: graphPath || 'live-graph',
+          branch: identity?.branch || 'main',
+        }, graphData);
+        
+        // Seed parameter files into registry
+        if (result.parameters) {
+          for (const [paramId, paramData] of result.parameters) {
+            const paramFileId = `parameter-${paramId}`;
+            await fileRegistry.getOrCreateFile(paramFileId, 'parameter', {
+              repository: identity?.repo || 'url',
+              path: paramData.path,
+              branch: identity?.branch || 'main',
+            }, paramData.data);
+          }
+        }
+        
+        // Create tab with well-formed editor state
+        const tabId = `tab-${fileId}-interactive`;
+        const defaultEditorState = {
+          useUniformScaling: false,
+          massGenerosity: 0.5,
+          autoReroute: true,
+          useSankeyView: false,
+          sidebarOpen: true,
+          whatIfOpen: false,
+          propertiesOpen: true,
+          jsonOpen: false,
+          selectedNodeId: null,
+          selectedEdgeId: null,
+          scenarioState: {
+            scenarioOrder: ['current'],
+            visibleScenarioIds: ['current'],
+            visibleColourOrderIds: ['current'],
+            selectedScenarioId: undefined,
+          },
+        };
+        
+        const newTab: TabState = {
+          id: tabId,
+          fileId: fileId,
+          title: identity?.graph || 'Live Graph',
+          viewMode: 'interactive',
+          group: 'main-content',
+          closable: true,
+          icon: getIconForType('graph'),
+          editorState: defaultEditorState,
+        };
+        
+        setTabs(prev => [...prev, newTab]);
+        setActiveTabId(newTab.id);
+        await db.tabs.add({
+          ...newTab,
+          editorState: serializeEditorState(newTab.editorState),
+        } as TabState);
+        await db.saveAppState({ activeTabId: newTab.id });
+        
+        // IMPORTANT: Do not rewrite the URL to remove `nonudge`.
+        // Share/embed URLs must remain stable across reloads (Notion cold starts).
+        
+        console.log('[TabContext] Live share boot complete');
+        return;
+      }
 
       // Optional preflight: pull latest before any URL-driven loads.
       // Example:
       //   `/?graph=conversion-flow-v2-recs-collapsed&pullalllatest`
       // will pull first, then open the graph.
-      if (urlParams.has('pullalllatest')) {
+      // NOTE: Skip pullalllatest in share mode - it doesn't make sense
+      if (urlParams.has('pullalllatest') && modeParam !== 'static') {
         try {
           const { repositoryOperationsService } = await import('../services/repositoryOperationsService');
           await repositoryOperationsService.pullLatestForCurrentNavigatorSelection();
@@ -1086,27 +1183,19 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         window.history.replaceState({}, document.title, url.toString());
       }
       
-      // Handle ?data parameter (compressed/uncompressed JSON)
+      // =======================================================================
+      // STATIC SHARE MODE: decode ?data parameter (compressed/uncompressed JSON)
+      // =======================================================================
       const dataParam = urlParams.get('data');
       if (dataParam) {
-        console.log('TabContext: Found ?data parameter, attempting to decode...');
+        console.log('[TabContext] Static share mode: Found ?data parameter, attempting to decode...');
         const { decodeStateFromUrl } = await import('../lib/shareUrl');
         const urlData = decodeStateFromUrl();
         
         if (urlData) {
-          console.log('TabContext: Successfully decoded graph data from ?data parameter');
+          console.log('[TabContext] Successfully decoded data from ?data parameter');
           
-          // Create file in registry with URL data
           const timestamp = Date.now();
-          const fileId = `graph-url-data-${timestamp}`;
-          await fileRegistry.getOrCreateFile(fileId, 'graph', { repository: 'url', path: 'url-data', branch: 'main' }, urlData);
-          
-          // Create new tab directly with the data (don't use openTab which tries to load from GitHub)
-          // IMPORTANT:
-          // We must seed a well-formed graph editorState here. Several render paths read
-          // tab.editorState.scenarioState directly (not via getScenarioState), and if it's missing
-          // the Current layer can start hidden for URL-loaded graphs.
-          const tabId = `tab-${fileId}-interactive`;
           const defaultEditorState = {
             useUniformScaling: false,
             massGenerosity: 0.5,
@@ -1118,7 +1207,6 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             jsonOpen: false,
             selectedNodeId: null,
             selectedEdgeId: null,
-            // Current layer visible by default
             scenarioState: {
               scenarioOrder: ['current'],
               visibleScenarioIds: ['current'],
@@ -1126,34 +1214,89 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
               selectedScenarioId: undefined,
             },
           };
-
-          const newTab: TabState = {
-            id: tabId,
-            fileId: fileId,
-            title: 'Shared Graph',
-            viewMode: 'interactive',
-            group: 'main-content',
-            closable: true,
-            icon: getIconForType('graph'),
-            editorState: defaultEditorState,
-          };
           
-          setTabs(prev => [...prev, newTab]);
-          setActiveTabId(newTab.id);
-          await db.tabs.add({
-            ...newTab,
-            editorState: serializeEditorState(newTab.editorState),
-          } as TabState);
-          await db.saveAppState({ activeTabId: newTab.id });
+          // Check if this is a bundle payload
+          if (urlData.type === 'bundle' && Array.isArray(urlData.items)) {
+            console.log(`[TabContext] Bundle share detected: ${urlData.items.length} items`);
+            
+            const newTabs: TabState[] = [];
+            let firstTabId: string | null = null;
+            
+            for (let i = 0; i < urlData.items.length; i++) {
+              const item = urlData.items[i];
+              const itemType = item.type === 'chart' ? 'chart' : 'graph';
+              const fileId = `${itemType}-url-data-${timestamp}-${i}`;
+              const tabId = `tab-${fileId}-interactive`;
+              
+              await fileRegistry.getOrCreateFile(
+                fileId, 
+                itemType as any, 
+                { repository: 'url', path: `url-data-${i}`, branch: 'main' }, 
+                item.data
+              );
+              
+              const newTab: TabState = {
+                id: tabId,
+                fileId: fileId,
+                title: item.title || `Shared ${itemType}`,
+                viewMode: 'interactive',
+                group: 'main-content',
+                closable: true,
+                icon: getIconForType(itemType),
+                editorState: defaultEditorState,
+              };
+              
+              newTabs.push(newTab);
+              if (!firstTabId) firstTabId = tabId;
+              
+              await db.tabs.add({
+                ...newTab,
+                editorState: serializeEditorState(newTab.editorState),
+              } as TabState);
+            }
+            
+            setTabs(prev => [...prev, ...newTabs]);
+            if (firstTabId) {
+              setActiveTabId(firstTabId);
+              await db.saveAppState({ activeTabId: firstTabId });
+            }
+            
+            console.log(`[TabContext] Bundle loaded: ${newTabs.length} tabs created`);
+          } else {
+            // Single graph/chart share
+            const fileId = `graph-url-data-${timestamp}`;
+            await fileRegistry.getOrCreateFile(fileId, 'graph', { repository: 'url', path: 'url-data', branch: 'main' }, urlData);
+            
+            const tabId = `tab-${fileId}-interactive`;
+            const newTab: TabState = {
+              id: tabId,
+              fileId: fileId,
+              title: 'Shared Graph',
+              viewMode: 'interactive',
+              group: 'main-content',
+              closable: true,
+              icon: getIconForType('graph'),
+              editorState: defaultEditorState,
+            };
+            
+            setTabs(prev => [...prev, newTab]);
+            setActiveTabId(newTab.id);
+            await db.tabs.add({
+              ...newTab,
+              editorState: serializeEditorState(newTab.editorState),
+            } as TabState);
+            await db.saveAppState({ activeTabId: newTab.id });
+            
+            console.log('[TabContext] Successfully loaded graph from ?data parameter');
+          }
           
-          // Clean up URL parameter
+          // In share mode, do NOT remove ?data from URL - keep it for reloadability (Notion embeds)
+          // Only remove nonudge after persisting session suppression
           const url = new URL(window.location.href);
-          url.searchParams.delete('data');
+          url.searchParams.delete('nonudge');
           window.history.replaceState({}, document.title, url.toString());
-          
-          console.log('TabContext: Successfully loaded graph from ?data parameter');
         } else {
-          console.error('TabContext: Failed to decode ?data parameter');
+          console.error('[TabContext] Failed to decode ?data parameter');
         }
         return;
       }

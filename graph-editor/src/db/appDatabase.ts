@@ -2,6 +2,10 @@ import Dexie, { Table } from 'dexie';
 import { FileState, TabState, AppState, SettingsData, WorkspaceState } from '../types';
 import { CredentialsData } from '../types/credentials';
 import { Scenario } from '../types/scenarios';
+import { getShareDbName } from '../lib/shareBootResolver';
+
+/** Default workspace DB name */
+export const DEFAULT_DB_NAME = 'DagNetGraphEditor';
 
 /**
  * IndexedDB database for persisting app state
@@ -14,6 +18,10 @@ import { Scenario } from '../types/scenarios';
  * - appState: Application-level state (layout, navigator, etc.)
  * - settings: User settings (local only, not synced to git)
  * - credentials: User authentication credentials (local only, not synced to git)
+ * 
+ * DB name is determined by shareBootResolver:
+ * - Normal workspace: 'DagNetGraphEditor'
+ * - Live share: 'DagNetGraphEditorShare:<scopeKey>'
  */
 export class AppDatabase extends Dexie {
   // Tables
@@ -25,8 +33,9 @@ export class AppDatabase extends Dexie {
   settings!: Table<SettingsData, string>;
   credentials!: Table<CredentialsData & { id: string; source: string; timestamp: number }, string>;
 
-  constructor() {
-    super('DagNetGraphEditor');
+  constructor(dbName: string = DEFAULT_DB_NAME) {
+    super(dbName);
+    console.log(`[AppDatabase] Initialising with DB name: ${dbName}`);
     
     this.version(1).stores({
       // fileId is primary key
@@ -212,8 +221,9 @@ export class AppDatabase extends Dexie {
   }
 }
 
-// Create singleton instance
-export const db = new AppDatabase();
+// Create singleton instance using resolved DB name from boot config
+// This runs at module load time, so shareBootResolver.getShareDbName() is called early
+export const db = new AppDatabase(getShareDbName());
 
 // Debug exposure for console access
 if (typeof window !== 'undefined') {
