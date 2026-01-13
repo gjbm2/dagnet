@@ -57,6 +57,37 @@ if [ "$CLEAN_MODE" = true ]; then
     echo ""
 fi
 
+# Ensure Node is installed + set to the repo-pinned version (graph-editor/.nvmrc)
+REQUIRED_NODE_MAJOR="$(cat graph-editor/.nvmrc 2>/dev/null | tr -d '[:space:]')"
+if [[ -z "${REQUIRED_NODE_MAJOR}" ]]; then
+    REQUIRED_NODE_MAJOR="22"
+fi
+
+NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo "")"
+if [[ "${NODE_MAJOR}" != "${REQUIRED_NODE_MAJOR}" ]]; then
+    echo -e "${YELLOW}⚠️  Installing/using Node ${REQUIRED_NODE_MAJOR} (per graph-editor/.nvmrc)...${NC}"
+
+    if [[ ! -s "${HOME}/.nvm/nvm.sh" ]]; then
+        # Install nvm (user-space) if missing
+        if ! command -v curl &> /dev/null; then
+            if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+                sudo apt-get update && sudo apt-get install -y curl
+            elif [[ "$OSTYPE" == "darwin"* ]]; then
+                brew install curl
+            fi
+        fi
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+    fi
+
+    # shellcheck source=/dev/null
+    . "${HOME}/.nvm/nvm.sh"
+
+    cd graph-editor
+    nvm install "${REQUIRED_NODE_MAJOR}"
+    nvm use "${REQUIRED_NODE_MAJOR}"
+    cd ..
+fi
+
 # Install frontend dependencies
 echo -e "${GREEN}📦 Installing frontend dependencies...${NC}"
 cd graph-editor
@@ -65,7 +96,31 @@ cd ..
 
 # Setup Python environment
 echo -e "${GREEN}🐍 Setting up Python environment...${NC}"
-if [ ! -d "graph-editor/venv" ]; then
+VENV_DIR="graph-editor/venv"
+VENV_ACTIVATE="${VENV_DIR}/bin/activate"
+
+# Ensure `python3 -m venv` will work (needs both venv + ensurepip on Ubuntu/WSL)
+if ! python3 -c "import venv, ensurepip" &> /dev/null; then
+    echo -e "${YELLOW}⚠️  Installing Python venv support (ensurepip)...${NC}"
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        py_minor="$(python3 -c "import sys; print(sys.version_info.minor)")"
+        sudo apt-get update
+        if ! sudo apt-get install -y python3-venv; then
+            sudo apt-get install -y "python3.${py_minor}-venv"
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "Python ensurepip missing. Install a Python build that includes ensurepip (or install via pyenv) and re-run."
+        exit 1
+    else
+        echo "Python ensurepip missing. Please install python3-venv (or equivalent) and re-run."
+        exit 1
+    fi
+fi
+
+# Create (or repair) venv in graph-editor/venv.
+# We key off the activate script, not just the directory, because partial venvs can exist.
+if [ ! -f "${VENV_ACTIVATE}" ]; then
+    rm -rf "${VENV_DIR}"
     cd graph-editor && python3 -m venv venv && cd ..
     INSTALL_PY_DEPS=true
 else
@@ -77,7 +132,13 @@ if [ "$CLEAN_MODE" = true ]; then
     INSTALL_PY_DEPS=true
 fi
 
-source graph-editor/venv/bin/activate
+if [ ! -f "${VENV_ACTIVATE}" ]; then
+    echo -e "${YELLOW}ERROR:${NC} Expected venv activate script not found at ${VENV_ACTIVATE}"
+    echo -e "${YELLOW}       venv creation appears to have failed. Try installing python3-venv and re-running.${NC}"
+    exit 1
+fi
+
+source "${VENV_ACTIVATE}"
 
 if [ "$INSTALL_PY_DEPS" = true ]; then
     echo -e "${GREEN}📦 Installing Python dependencies...${NC}"

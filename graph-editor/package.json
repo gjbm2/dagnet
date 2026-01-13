@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.1.29-beta",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "npm run generate-docs && vite",
     "generate-docs": "node scripts/generate-docs-index.js",

@@ -13,9 +13,14 @@ const initializeLibraries = () => {
 initializeLibraries();
 
 export function encodeStateToUrl(graph: any): string {
-  const base = window.location.origin + window.location.pathname;
+  const base = `${window.location.origin}${window.location.pathname}`;
+  const url = new URL(base);
   const data = compressToEncodedURIComponent(JSON.stringify(graph));
-  return `${base}?data=${data}`;
+  url.searchParams.set('data', data);
+  // Suppress staleness/safety nudges for share links (read-only explore use case).
+  // Presence is enough; value is informational.
+  url.searchParams.set('nonudge', '1');
+  return url.toString();
 }
 
 export function decodeStateFromUrl(): any | null {

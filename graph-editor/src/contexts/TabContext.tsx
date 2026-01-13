@@ -1102,16 +1102,48 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
           await fileRegistry.getOrCreateFile(fileId, 'graph', { repository: 'url', path: 'url-data', branch: 'main' }, urlData);
           
           // Create new tab directly with the data (don't use openTab which tries to load from GitHub)
+          // IMPORTANT:
+          // We must seed a well-formed graph editorState here. Several render paths read
+          // tab.editorState.scenarioState directly (not via getScenarioState), and if it's missing
+          // the Current layer can start hidden for URL-loaded graphs.
+          const tabId = `tab-${fileId}-interactive`;
+          const defaultEditorState = {
+            useUniformScaling: false,
+            massGenerosity: 0.5,
+            autoReroute: true,
+            useSankeyView: false,
+            sidebarOpen: true,
+            whatIfOpen: false,
+            propertiesOpen: true,
+            jsonOpen: false,
+            selectedNodeId: null,
+            selectedEdgeId: null,
+            // Current layer visible by default
+            scenarioState: {
+              scenarioOrder: ['current'],
+              visibleScenarioIds: ['current'],
+              visibleColourOrderIds: ['current'],
+              selectedScenarioId: undefined,
+            },
+          };
+
           const newTab: TabState = {
-            id: `tab-${fileId}-interactive`,
+            id: tabId,
             fileId: fileId,
             title: 'Shared Graph',
-            viewMode: 'interactive'
+            viewMode: 'interactive',
+            group: 'main-content',
+            closable: true,
+            icon: getIconForType('graph'),
+            editorState: defaultEditorState,
           };
           
           setTabs(prev => [...prev, newTab]);
           setActiveTabId(newTab.id);
-          await db.tabs.add(newTab);
+          await db.tabs.add({
+            ...newTab,
+            editorState: serializeEditorState(newTab.editorState),
+          } as TabState);
           await db.saveAppState({ activeTabId: newTab.id });
           
           // Clean up URL parameter
