@@ -1,12 +1,12 @@
 import { db } from '../db/appDatabase';
 import {
-  STALENESS_NUDGE_GIT_PULL_AFTER_MS,
   STALENESS_NUDGE_MIN_REPEAT_MS,
   STALENESS_NUDGE_RELOAD_AFTER_MS,
   STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS,
   STALENESS_PENDING_PLAN_MAX_AGE_MS,
   STALENESS_NUDGE_SNOOZE_MS,
   STALENESS_AUTOMATIC_MODE_DEFAULT,
+  STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS,
 } from '../constants/staleness';
 import { sessionLogService } from './sessionLogService';
 import { credentialsManager } from '../lib/credentials';
@@ -79,6 +79,10 @@ const LS = {
     `dagnet:staleness:snoozedUntilMs:${kind}${scope ? `:${scope}` : ''}`,
   pendingPlan: 'dagnet:staleness:pendingPlan',
   automaticMode: 'dagnet:staleness:automaticMode',
+  /** Tracks the last remote SHA that the user dismissed (per repo-branch). */
+  dismissedRemoteSha: (repoBranch: string) => `dagnet:staleness:dismissedRemoteSha:${repoBranch}`,
+  /** Tracks when we last checked remote HEAD (to rate-limit network calls). */
+  lastRemoteCheckAtMs: (repoBranch: string) => `dagnet:staleness:lastRemoteCheckAtMs:${repoBranch}`,
 };
 
 export interface RemoteAheadStatus {
@@ -192,17 +196,94 @@ class StalenessNudgeService {
     safeSetNumber(storage, LS.automaticMode, enabled ? 1 : 0);
   }
 
-  async shouldCheckGitPull(repository: string, branch: string, nowMs: number = safeNow()): Promise<boolean> {
-    const ws = await db.workspaces.get(`${repository}-${branch}`);
-    if (!ws?.lastSynced) return true; // never synced -> treat as stale so we can nudge
-    return nowMs - ws.lastSynced > STALENESS_NUDGE_GIT_PULL_AFTER_MS;
+  /**
+   * Determines if we should make a network call to check remote HEAD.
+   * Rate-limited to avoid excessive network traffic.
+   */
+  shouldCheckRemoteHead(
+    repository: string,
+    branch: string,
+    nowMs: number = safeNow(),
+    storage: StorageLike = defaultStorage()
+  ): boolean {
+    const repoBranch = `${repository}-${branch}`;
+    const lastCheck = safeGetNumber(storage, LS.lastRemoteCheckAtMs(repoBranch));
+    if (lastCheck === undefined) return true;
+    return nowMs - lastCheck > STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS;
+  }
+
+  /**
+   * Record that we just checked remote HEAD (for rate-limiting).
+   */
+  markRemoteHeadChecked(
+    repository: string,
+    branch: string,
+    nowMs: number = safeNow(),
+    storage: StorageLike = defaultStorage()
+  ): void {
+    const repoBranch = `${repository}-${branch}`;
+    safeSetNumber(storage, LS.lastRemoteCheckAtMs(repoBranch), nowMs);
+  }
+
+  /**
+   * Check if a specific remote SHA has been dismissed by the user.
+   * Used to implement "dismiss until next cron cycle" behaviour.
+   */
+  isRemoteShaDismissed(
+    repository: string,
+    branch: string,
+    remoteSha: string,
+    storage: StorageLike = defaultStorage()
+  ): boolean {
+    const repoBranch = `${repository}-${branch}`;
+    try {
+      const dismissed = storage.getItem(LS.dismissedRemoteSha(repoBranch));
+      return dismissed === remoteSha;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Dismiss a specific remote SHA. User won't be nudged for this SHA again
+   * until a new commit appears on remote (i.e. next daily cron run).
+   */
+  dismissRemoteSha(
+    repository: string,
+    branch: string,
+    remoteSha: string,
+    storage: StorageLike = defaultStorage()
+  ): void {
+    const repoBranch = `${repository}-${branch}`;
+    try {
+      storage.setItem(LS.dismissedRemoteSha(repoBranch), remoteSha);
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Clear dismissed SHA (e.g. after successful pull, so future changes are detected).
+   */
+  clearDismissedRemoteSha(
+    repository: string,
+    branch: string,
+    storage: StorageLike = defaultStorage()
+  ): void {
+    const repoBranch = `${repository}-${branch}`;
+    safeRemove(storage, LS.dismissedRemoteSha(repoBranch));
   }
 
   /**
    * Lightweight remote-ahead check (no pull).
    * Reuses the same primitive used by commit flow: compare workspace.commitSHA vs remote HEAD.
+   * Automatically records the check timestamp for rate-limiting.
    */
-  async getRemoteAheadStatus(repository: string, branch: string): Promise<RemoteAheadStatus> {
+  async getRemoteAheadStatus(
+    repository: string,
+    branch: string,
+    storage: StorageLike = defaultStorage()
+  ): Promise<RemoteAheadStatus> {
     const logOpId = sessionLogService.startOperation(
       'info',
       'git',
@@ -210,6 +291,9 @@ class StalenessNudgeService {
       `Checking remote HEAD for ${repository}/${branch}`,
       { repository, branch }
     );
+
+    // Record that we checked (for rate-limiting)
+    this.markRemoteHeadChecked(repository, branch, safeNow(), storage);
 
     try {
       const workspaceId = `${repository}-${branch}`;

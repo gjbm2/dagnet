@@ -13,10 +13,11 @@ import { useFileAudit } from '../../hooks/useFileAudit';
 import { useWhereUsed } from '../../hooks/useWhereUsed';
 import { HistoryModal } from '../modals/HistoryModal';
 import { db } from '../../db/appDatabase';
-import { encodeStateToUrl } from '../../lib/shareUrl';
 import { CommitModal } from '../CommitModal';
+import { useShareLink } from '../../hooks/useShareLink';
 import { NewFileModal } from '../NewFileModal';
 import { RenameModal } from '../RenameModal';
+import { ShareLinkModal } from '../modals/ShareLinkModal';
 // MergeConflictModal is handled by usePullAll hook
 import { gitService } from '../../services/gitService';
 import { gitConfig } from '../../config/gitConfig';
@@ -90,6 +91,16 @@ export function FileMenu() {
   // Where used hook
   const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(activeTab?.fileId);
   
+  // Share link hook - centralised share operations
+  const {
+    canShare,
+    canShareStatic,
+    canShareLive,
+    copyStaticShareLink,
+    copyLiveShareLink,
+    liveShareUnavailableReason,
+  } = useShareLink(activeTab?.fileId);
+  
   // Get isDirty state for active tab
   const activeFile = activeTab ? fileRegistry.getFile(activeTab.fileId) : null;
   const isDirty = activeFile?.isDirty ?? false;
@@ -101,6 +112,9 @@ export function FileMenu() {
   // New file modal state
   const [isNewFileModalOpen, setIsNewFileModalOpen] = useState(false);
   const [newFileType, setNewFileType] = useState<ObjectType | undefined>(undefined);
+  
+  // Share link modal state
+  const [isShareLinkModalOpen, setIsShareLinkModalOpen] = useState(false);
   
   // Track dirty files - update when tabs or files change
   // NOTE: Use content-based detection for reliable cross-session dirty tracking
@@ -300,24 +314,13 @@ export function FileMenu() {
     }
   };
 
-  const handleShareURL = async () => {
-    if (!activeTab?.fileId || !isGraphTab) return;
+  // Share URL handlers - use the hook
+  const handleShareStaticURL = async () => {
+    await copyStaticShareLink();
+  };
 
-    try {
-      const file = await fileRegistry.getFile(activeTab.fileId);
-      if (!file || !file.data) {
-        alert('No data to share');
-        return;
-      }
-
-      // Encode only the graph data (not the FileState wrapper)
-      const url = encodeStateToUrl(file.data);
-      await navigator.clipboard.writeText(url);
-      alert('Shareable URL copied to clipboard!');
-    } catch (error) {
-      console.error('Failed to create shareable URL:', error);
-      alert('Failed to create shareable URL: ' + error);
-    }
+  const handleShareLiveURL = async () => {
+    await copyLiveShareLink();
   };
 
   const handleClearData = async () => {
@@ -616,10 +619,26 @@ export function FileMenu() {
                   </Menubar.Item>
                   <Menubar.Item 
                     className="menubar-item" 
-                    onSelect={handleShareURL}
-                    disabled={!isGraphTab}
+                    onSelect={handleShareStaticURL}
+                    disabled={!canShareStatic}
                   >
-                    Copy Shareable URL
+                    Copy Static Share Link
+                  </Menubar.Item>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={handleShareLiveURL}
+                    disabled={!canShareLive}
+                    title={liveShareUnavailableReason}
+                  >
+                    Copy Live Share Link
+                  </Menubar.Item>
+                  <Menubar.Separator className="menubar-separator" />
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={() => setIsShareLinkModalOpen(true)}
+                    disabled={!canShare}
+                  >
+                    Share Link...
                   </Menubar.Item>
                 </Menubar.SubContent>
               </Menubar.Portal>
@@ -731,6 +750,12 @@ export function FileMenu() {
       {/* Merge Conflict Modal */}
       {/* Pull all conflict modal - managed by usePullAll hook */}
       {pullAllConflictModal}
+
+      {/* Share Link Modal */}
+      <ShareLinkModal
+        isOpen={isShareLinkModalOpen}
+        onClose={() => setIsShareLinkModalOpen(false)}
+      />
     </>
   );
 }

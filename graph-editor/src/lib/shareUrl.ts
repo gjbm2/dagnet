@@ -1,5 +1,6 @@
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 import pako from 'pako';
+import { buildStaticShareUrl, ShareLinkIdentity } from '../services/shareLinkService';
 
 // Make libraries available globally for browser access
 const initializeLibraries = () => {
@@ -12,15 +13,21 @@ const initializeLibraries = () => {
 // Initialize libraries immediately
 initializeLibraries();
 
-export function encodeStateToUrl(graph: any): string {
-  const base = `${window.location.origin}${window.location.pathname}`;
-  const url = new URL(base);
-  const data = compressToEncodedURIComponent(JSON.stringify(graph));
-  url.searchParams.set('data', data);
-  // Suppress staleness/safety nudges for share links (read-only explore use case).
-  // Presence is enough; value is informational.
-  url.searchParams.set('nonudge', '1');
-  return url.toString();
+/**
+ * Encode graph state to a shareable URL.
+ * 
+ * @param graph - Graph data to encode
+ * @param identity - Optional identity metadata for upgrade-to-live support
+ * @returns Shareable URL string
+ * 
+ * @deprecated Prefer using shareLinkService.buildStaticShareUrl() directly for new code.
+ *             This function is kept for backwards compatibility.
+ */
+export function encodeStateToUrl(graph: any, identity?: ShareLinkIdentity): string {
+  return buildStaticShareUrl({
+    graphData: graph,
+    identity,
+  });
 }
 
 export function decodeStateFromUrl(): any | null {

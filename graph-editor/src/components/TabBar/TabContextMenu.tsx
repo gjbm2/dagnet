@@ -6,6 +6,7 @@ import { usePullAll } from '../../hooks/usePullAll';
 import { useRenameFile } from '../../hooks/useRenameFile';
 import { useViewHistory } from '../../hooks/useViewHistory';
 import { useWhereUsed } from '../../hooks/useWhereUsed';
+import { useShareLink } from '../../hooks/useShareLink';
 import { RenameModal } from '../RenameModal';
 import { HistoryModal } from '../modals/HistoryModal';
 import './TabBar.css';
@@ -68,6 +69,16 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
 
   // Where used hook
   const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(tab?.fileId);
+  
+  // Share link hook
+  const {
+    canShare,
+    canShareStatic,
+    canShareLive,
+    copyStaticShareLink,
+    copyLiveShareLink,
+    liveShareUnavailableReason,
+  } = useShareLink(tab?.fileId);
 
   if (!tab) return <>{children}</>;
 
@@ -260,6 +271,28 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
           >
             Reveal in Navigator
           </DropdownMenu.Item>
+
+          {canShare && (
+            <>
+              <DropdownMenu.Separator className="tab-context-separator" />
+              {canShareStatic && (
+                <DropdownMenu.Item 
+                  className="tab-context-item" 
+                  onSelect={copyStaticShareLink}
+                >
+                  Copy Static Share Link
+                </DropdownMenu.Item>
+              )}
+              <DropdownMenu.Item 
+                className="tab-context-item" 
+                onSelect={copyLiveShareLink}
+                disabled={!canShareLive}
+                title={liveShareUnavailableReason}
+              >
+                Copy Live Share Link
+              </DropdownMenu.Item>
+            </>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
       

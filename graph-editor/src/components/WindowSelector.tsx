@@ -25,6 +25,7 @@ import { BulkScenarioCreationModal } from './modals/BulkScenarioCreationModal';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useBulkScenarioCreation } from '../hooks/useBulkScenarioCreation';
 import { windowFetchPlannerService, type PlannerResult } from '../services/windowFetchPlannerService';
+import { useIsReadOnlyShare } from '../contexts/ShareModeContext';
 
 
 interface WindowSelectorProps {
@@ -37,6 +38,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // Use getState() in callbacks to avoid stale closure issues
   const getLatestGraph = () => (graphStore as any).getState?.()?.graph ?? graph;
   const { tabs, operations } = useTabContext();
+  
+  // Share mode: disable all data operations in static share mode
+  const isReadOnlyShare = useIsReadOnlyShare();
 
   // Workspace scoping for context loading (avoid mixing contexts across repos/branches in IndexedDB).
   const workspaceForContextRegistry = useMemo(() => {
@@ -1128,14 +1132,16 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         <div className="window-selector-fetch-column">
           <button
             onClick={handleFetchData}
-            disabled={isAnalysing || isFetching}
+            disabled={isAnalysing || isFetching || isReadOnlyShare}
             className={`window-selector-button ${showShimmer && buttonNeedsAttention ? 'shimmer' : ''}`}
             title={
-              isAnalysing
-                ? "Checking data coverage..."
-                : isFetching
-                  ? "Fetching data..."
-                  : buttonTooltip
+              isReadOnlyShare
+                ? "Data operations disabled in static share mode"
+                : isAnalysing
+                  ? "Checking data coverage..."
+                  : isFetching
+                    ? "Fetching data..."
+                    : buttonTooltip
             }
           >
             {isAnalysing ? 'Checking...' : isFetching ? 'Fetching...' : buttonLabel}
