@@ -22,6 +22,20 @@ import { collectGraphDependencies, getMinimalParameterIds } from '../lib/depende
 import { getShareBootConfig, ShareBootConfig } from '../lib/shareBootResolver';
 import YAML from 'yaml';
 
+type ParameterIndexEntry = { id: string; file_path?: string };
+
+function resolveParamPathFromIndex(
+  paramId: string,
+  index: any | null | undefined,
+  fallback: string
+): string {
+  const entries: ParameterIndexEntry[] = (index && Array.isArray(index.parameters)) ? index.parameters : [];
+  const match = entries.find((e) => e?.id === paramId);
+  const p = match?.file_path;
+  if (typeof p === 'string' && p.trim()) return p.trim();
+  return fallback;
+}
+
 export interface LiveBootResult {
   success: boolean;
   error?: string;
@@ -111,6 +125,21 @@ export async function performLiveShareBoot(): Promise<LiveBootResult> {
     const parameterIds = getMinimalParameterIds(graphData);
     sessionLogService.addChild(logOpId, 'info', 'DEPENDENCY_CLOSURE', 
       `Dependency closure: ${parameterIds.length} parameters`);
+
+    // Step 4.5: Fetch parameters-index.yaml for path resolution (v1 correctness)
+    let parametersIndex: any | null = null;
+    try {
+      sessionLogService.addChild(logOpId, 'info', 'INDEX_FETCH', 'Fetching parameters-index.yaml...');
+      const indexRes = await gitService.getFileContent('parameters-index.yaml', branch);
+      if (indexRes.success && indexRes.data?.content) {
+        parametersIndex = YAML.parse(indexRes.data.content);
+        sessionLogService.addChild(logOpId, 'success', 'INDEX_FETCH_SUCCESS', 'Fetched parameters-index.yaml');
+      } else {
+        sessionLogService.addChild(logOpId, 'warning', 'INDEX_FETCH_MISSING', 'No parameters-index.yaml (falling back to conventional paths)');
+      }
+    } catch (e) {
+      sessionLogService.addChild(logOpId, 'warning', 'INDEX_FETCH_ERROR', 'Failed to fetch parameters-index.yaml (falling back to conventional paths)');
+    }
     
     // Step 5: Fetch parameters (minimal set for v1)
     const parameters = new Map<string, { data: any; sha?: string; path: string }>();
@@ -122,7 +151,8 @@ export async function performLiveShareBoot(): Promise<LiveBootResult> {
       // Fetch parameters in parallel with concurrency limit
       const CONCURRENCY = 5;
       const fetchParam = async (paramId: string) => {
-        const paramPath = `parameters/${paramId}.yaml`;
+        const fallbackPath = `parameters/${paramId}.yaml`;
+        const paramPath = resolveParamPathFromIndex(paramId, parametersIndex, fallbackPath);
         try {
           const result = await gitService.getFileContent(paramPath, branch);
           if (result.success && result.data?.content) {
@@ -132,6 +162,17 @@ export async function performLiveShareBoot(): Promise<LiveBootResult> {
               sha: result.data.sha,
               path: paramPath,
             });
+          } else if (paramPath !== fallbackPath) {
+            // Try conventional path as fallback when index path fails
+            const fallbackRes = await gitService.getFileContent(fallbackPath, branch);
+            if (fallbackRes.success && fallbackRes.data?.content) {
+              const data = YAML.parse(fallbackRes.data.content);
+              parameters.set(paramId, {
+                data,
+                sha: fallbackRes.data.sha,
+                path: fallbackPath,
+              });
+            }
           }
         } catch (e) {
           console.warn(`[LiveShareBoot] Failed to fetch parameter ${paramId}:`, e);

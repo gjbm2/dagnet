@@ -32,6 +32,7 @@ const WORKSPACE_DB_NAME = 'DagNetGraphEditor';
 
 /** Prefix for live share DBs */
 const LIVE_SHARE_DB_PREFIX = 'DagNetGraphEditorShare:';
+const STATIC_SHARE_DB_PREFIX = 'DagNetGraphEditorShareStatic:';
 
 /**
  * Compute a stable, short hash for the scope key.
@@ -56,6 +57,24 @@ function computeLiveShareDbName(repo: string, branch: string, graph: string): st
   // Include a readable prefix for debugging
   const prefix = repo.substring(0, 8).replace(/[^a-zA-Z0-9]/g, '');
   return `${LIVE_SHARE_DB_PREFIX}${prefix}-${hash}`;
+}
+
+/**
+ * Compute the scoped DB name for a static share session.
+ *
+ * Static shares must not touch the user's normal workspace DB.
+ * Use identity when present; otherwise hash the `data` payload so different links don't collide.
+ */
+function computeStaticShareDbName(opts: { data?: string | null; repo?: string; branch?: string; graph?: string }): string {
+  const { data, repo, branch, graph } = opts;
+  if (repo && branch && graph) {
+    const normalised = `${repo}/${branch}/${graph}`.toLowerCase();
+    const hash = hashScopeKey(`static:${normalised}`);
+    const prefix = repo.substring(0, 8).replace(/[^a-zA-Z0-9]/g, '');
+    return `${STATIC_SHARE_DB_PREFIX}${prefix}-${hash}`;
+  }
+  const dataHash = hashScopeKey(`static-data:${String(data ?? '')}`);
+  return `${STATIC_SHARE_DB_PREFIX}data-${dataHash}`;
 }
 
 /**
@@ -103,7 +122,7 @@ export function resolveShareBootConfig(): ShareBootConfig {
     if (dataParam) {
       return {
         mode: 'static',
-        dbName: WORKSPACE_DB_NAME, // Static shares don't need isolated DB - they're ephemeral
+        dbName: computeStaticShareDbName({ data: dataParam, repo, branch, graph }),
         repo,
         branch,
         graph,
@@ -122,7 +141,7 @@ export function resolveShareBootConfig(): ShareBootConfig {
   if (modeParam === 'static' || dataParam) {
     return {
       mode: 'static',
-      dbName: WORKSPACE_DB_NAME, // Static shares are ephemeral, use workspace DB but don't persist
+      dbName: computeStaticShareDbName({ data: dataParam, repo, branch, graph }),
       repo,
       branch,
       graph,
@@ -148,7 +167,15 @@ let _bootConfig: ShareBootConfig | null = null;
 export function getShareBootConfig(): ShareBootConfig {
   if (!_bootConfig) {
     _bootConfig = resolveShareBootConfig();
-    console.log('[ShareBootResolver] Resolved boot config:', _bootConfig);
+    // SECURITY: never log secrets or full payload-bearing configs.
+    console.log('[ShareBootResolver] Resolved boot config:', {
+      mode: _bootConfig.mode,
+      dbName: _bootConfig.dbName,
+      repo: _bootConfig.repo,
+      branch: _bootConfig.branch,
+      graph: _bootConfig.graph,
+      hasDataParam: _bootConfig.hasDataParam,
+    });
   }
   return _bootConfig;
 }
