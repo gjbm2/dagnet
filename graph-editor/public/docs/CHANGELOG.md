@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.30b
+**Released:** January 13, 2026
+
+About to improve link sharing for Notion
+
+---
+
 ## Version 1.1.29b
 **Released:** January 12, 2026
 
