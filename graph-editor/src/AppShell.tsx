@@ -22,6 +22,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useCommitHandler } from './hooks/useCommitHandler';
 import { CopyPasteProvider } from './hooks/useCopyPaste';
 import { useStalenessNudges } from './hooks/useStalenessNudges';
+import { useURLDailyRetrieveAllQueue } from './hooks/useURLDailyRetrieveAllQueue';
 import { AutomationBanner } from './components/AutomationBanner';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
@@ -50,6 +51,7 @@ function MainAppShellContent() {
   const dialogOps = useDialog();
   const { updateFromLayout } = useVisibleTabs();
   const { modals: stalenessNudgeModals } = useStalenessNudges();
+  useURLDailyRetrieveAllQueue();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
   const isProgrammaticSwitchRef = useRef(false); // Track when WE trigger rc-dock updates

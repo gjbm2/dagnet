@@ -286,12 +286,24 @@ export class CredentialsManager {
       // Support both import.meta.env (browser/Vite) and process.env (serverless)
       let credentialsJson: string | undefined;
       let credentialsSecret: string | undefined;
+      let sourceLabel: 'SHARE' | 'VITE_CREDENTIALS' | undefined;
       
       try {
         // Try browser/Vite environment first
         if (typeof import.meta !== 'undefined' && (import.meta as any).env) {
-          credentialsJson = (import.meta as any).env.VITE_CREDENTIALS_JSON;
-          credentialsSecret = (import.meta as any).env.VITE_CREDENTIALS_SECRET;
+          const shareJson = (import.meta as any).env.SHARE_JSON;
+          const shareSecret = (import.meta as any).env.SHARE_SECRET;
+
+          // Prefer share-specific env vars when present.
+          if (shareJson) {
+            credentialsJson = shareJson;
+            credentialsSecret = shareSecret;
+            sourceLabel = 'SHARE';
+          } else {
+            credentialsJson = (import.meta as any).env.VITE_CREDENTIALS_JSON;
+            credentialsSecret = (import.meta as any).env.VITE_CREDENTIALS_SECRET;
+            sourceLabel = credentialsJson ? 'VITE_CREDENTIALS' : undefined;
+          }
         }
       } catch (e) {
         // import.meta.env doesn't exist in Node, that's fine
@@ -299,12 +311,19 @@ export class CredentialsManager {
       
       // Fall back to process.env (serverless/Node)
       if (!credentialsJson && typeof process !== 'undefined' && process.env) {
-        credentialsJson = process.env.VITE_CREDENTIALS_JSON;
-        credentialsSecret = process.env.VITE_CREDENTIALS_SECRET;
+        if (process.env.SHARE_JSON) {
+          credentialsJson = process.env.SHARE_JSON;
+          credentialsSecret = process.env.SHARE_SECRET;
+          sourceLabel = 'SHARE';
+        } else {
+          credentialsJson = process.env.VITE_CREDENTIALS_JSON;
+          credentialsSecret = process.env.VITE_CREDENTIALS_SECRET;
+          sourceLabel = credentialsJson ? 'VITE_CREDENTIALS' : undefined;
+        }
       }
       
-      console.log('🔧 CredentialsManager: VITE_CREDENTIALS_JSON exists:', !!credentialsJson);
-      console.log('🔧 CredentialsManager: VITE_CREDENTIALS_SECRET exists:', !!credentialsSecret);
+      console.log(`🔧 CredentialsManager: ${sourceLabel || 'NO_ENV'} credentials JSON exists:`, !!credentialsJson);
+      console.log(`🔧 CredentialsManager: ${sourceLabel || 'NO_ENV'} credentials secret exists:`, !!credentialsSecret);
       console.log('🔧 CredentialsManager: Raw JSON (first 100 chars):', credentialsJson?.substring(0, 100));
       
       if (!credentialsJson) {

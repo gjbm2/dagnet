@@ -60,7 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     if (secret && typeof secret === 'string') {
       // Validate secret
-      const envSecret = process.env.VITE_CREDENTIALS_SECRET;
+      const envSecret = process.env.SHARE_SECRET || process.env.VITE_CREDENTIALS_SECRET;
       if (!envSecret) {
         return res.status(500).json({ error: 'Server secret not configured' });
       }
@@ -70,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       
       // Load credentials from environment
-      const credentialsJson = process.env.VITE_CREDENTIALS_JSON;
+      const credentialsJson = process.env.SHARE_JSON || process.env.VITE_CREDENTIALS_JSON;
       if (!credentialsJson) {
         return res.status(500).json({ error: 'Server credentials not configured' });
       }
