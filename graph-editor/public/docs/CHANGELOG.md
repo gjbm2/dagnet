@@ -1,230 +1,36 @@
 # DagNet Release Notes
-## Version 1.1.31b
-**Released:** January 14, 2026
 
-Completed implementation of chart sharing and added Playwright e2e tests to confirm proper operation
+## Version 1.2.x Series (13-Jan-26 to 14-Jan-26)
+**Share links & live charts**
 
----
-
-## Version 1.1.30b
-**Released:** January 14, 2026
-
-Completed implementation of chart sharing and added Playwright e2e tests to confirm proper operation
+- Added sharing functionality and sharable link fixes
+- Chron fixes and minor fixes
 
 ---
 
-## Version 1.2.3b
-**Released:** January 14, 2026
+## Version 1.1.15b–1.1.31b (05-Jan-26 to 14-Jan-26)
+**Stability + sharing rollout**
 
-Chron fixes
-
----
-
-## Version 1.2.2b
-**Released:** January 13, 2026
-
-Minor fixes
+- Chart sharing and Playwright e2e verification
+- Retrieval, sync, and forecasting fixes
+- n_query fixes and evidence mode tweaks
+- Sankey mode visual fixes and debugging badges
+- Creds sharing and settings/auto-retrieval improvements
 
 ---
 
-## Version 1.2.1b
-**Released:** January 13, 2026
-
-Sharable links fixes
-
----
-
-## Version 1.2.0b
-**Released:** January 13, 2026
-
-Added sharing functionality
-
----
-
-## Version 1.1.30b
-**Released:** January 13, 2026
-
-About to improve link sharing for Notion
-
----
-
-## Version 1.1.29b
-**Released:** January 12, 2026
-
-retrieve fix
-
----
-
-## Version 1.1.28b
-**Released:** January 09, 2026
-
-Sankey mode visual fixes
-
----
-
-## Version 1.1.27b
-**Released:** January 08, 2026
-
-Forecast fixes applied -- testing
-
----
-
-## Version 1.1.26b
-**Released:** January 08, 2026
-
-n_query fixes applied. evidence mode I think now is kinda ok
-
----
-
-## Version 1.1.25b
-**Released:** January 08, 2026
-
-Further (final?) set of n_query fixes identified and scoped
-
----
-
-## Version 1.1.24b
-**Released:** January 07, 2026
-
-Further fixes to n_query logic
-
----
-
-## Version 1.1.23b
-**Released:** January 07, 2026
-
-Further n_wuery fixes
-
----
-
-## Version 1.1.22b
-**Released:** January 07, 2026
-
-Further fixes, pending n_query solution implementation
-
----
-
-## Version 1.1.21b
-**Released:** January 07, 2026
-
-Further conditional_p fixes (more to come)
-
----
-
-## Version 1.1.20b
-**Released:** January 07, 2026
-
-Various smaller retrieval fixes and date edge fixes
-
----
-
-## Version 1.1.19b
-**Released:** January 06, 2026
-
-Various n_query fixes
-
----
-
-## Version 1.1.18b
-**Released:** January 06, 2026
-
-Added debugging badges to graphs
-
----
-
-## Version 1.1.17b
-**Released:** January 06, 2026
-
-Added creds sharing
-
----
-
-## Version 1.1.16b
-**Released:** January 06, 2026
-
-Further sync fixes
-
----
-
-## Version 1.1.15b
-**Released:** January 05, 2026
-
-Various data retrieval and sync fixes
-
----
-
-## Version 1.1.14b
-**Released:** December 22, 2025
-
-Various fetch fixes, conservation fixes (MECE logic was faulty), n_query fixes (ditto); added semantic linting for mass conservation.
-
----
-
-## Version 1.1.13b
-**Released:** December 19, 2025
-
-Various fetch fixes
-
----
-
-## Version 1.1.11b
-**Released:** December 19, 2025
-
-Bridge charts
-
----
-
-## Version 1.1.10b
-**Released:** December 18, 2025
-
-Basic charting, auto-retrieval
-
----
-
-## Version 1.1.9b
-**Released:** December 18, 2025
-
-Settings page
-
----
-
-## Version 1.1.8b
-**Released:** December 18, 2025
-
-E mode sceanrio fix for Reach Proabability
-
----
-
-## Version 1.1.7b
-**Released:** December 18, 2025
-
-Fixed auto-scenario creation
-
----
-
-## Version 1.1.6b
-**Released:** December 18, 2025
-
-Automated staleness checking
-
----
-
-## Version 1.1.5b
-**Released:** December 18, 2025
-
-Extensive context() fixes and forecasting logic repairs
-
----
-
-## Version 1.1.4b
-**Released:** December 17, 2025
-
-Dashboard view!
+## Version 1.1.4b–1.1.14b (17-Dec-25 to 22-Dec-25)
+**Dashboard + data pipeline hardening**
+
+- Dashboard view and automation nudges
+- Context and forecasting fixes
+- Fetch and conservation fixes, semantic linting
+- Bridge charts and settings UI
 
 ---
 
 ## Version 1.1.1b
-**Released:** December 17, 2025
+**Released:** 17-Dec-25
 
 I've done some tuning of the stats model. It's no longer spouting nonsense, and I think in general the tool is starting to provide some stable insight.
 
@@ -447,7 +253,7 @@ Major improvements to Amplitude query generation:
 ---
 
 ## Version 0.91b
-**Released:** November 18, 2024
+**Released:** 18-Nov-24
 
 ### 🎯 Major Features
 - **Initial Credentials Setup**: New installations can bootstrap credentials using a server secret

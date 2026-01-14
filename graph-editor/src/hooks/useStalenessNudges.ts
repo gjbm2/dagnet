@@ -7,11 +7,12 @@ import { usePullAll } from './usePullAll';
 import { StalenessUpdateModal, type StalenessUpdateActionKey } from '../components/modals/StalenessUpdateModal';
 import { retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
 import { sessionLogService } from '../services/sessionLogService';
-import { STALENESS_NUDGE_COUNTDOWN_SECONDS } from '../constants/staleness';
+import { STALENESS_NUDGE_COUNTDOWN_SECONDS, STALENESS_NUDGE_VISIBLE_POLL_MS } from '../constants/staleness';
 import { db } from '../db/appDatabase';
 import { useShareModeOptional } from '../contexts/ShareModeContext';
 import { useDashboardMode } from '../contexts/DashboardModeContext';
 import { liveShareSyncService } from '../services/liveShareSyncService';
+import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import toast from 'react-hot-toast';
 
 export interface UseStalenessNudgesResult {
@@ -346,8 +347,13 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       return;
     }
 
-    // Execute git-pull only (not retrieve-all)
-    await pullAll();
+    if (isDashboardMode && repo) {
+      // Unattended terminals should prefer "remote wins" to avoid blocking on conflicts.
+      await repositoryOperationsService.pullLatestRemoteWins(repo, branch);
+    } else {
+      // Execute git-pull only (not retrieve-all)
+      await pullAll();
+    }
 
     // Clear dismissed SHA after successful pull (so future changes are detected)
     if (repo) {
@@ -586,14 +592,12 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   // Runs maybePrompt every 30 minutes, but only if tab is visible.
   // This supports dashboards left open but avoids wasting resources on background tabs.
   useEffect(() => {
-    const BACKGROUND_POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-
     const intervalId = window.setInterval(() => {
       // Only poll if tab is visible (respects browser power management)
       if (!document.hidden) {
         void maybePrompt();
       }
-    }, BACKGROUND_POLL_INTERVAL_MS);
+    }, STALENESS_NUDGE_VISIBLE_POLL_MS);
 
     return () => {
       window.clearInterval(intervalId);

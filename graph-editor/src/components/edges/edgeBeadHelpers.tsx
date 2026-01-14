@@ -797,7 +797,7 @@ export function buildBeadDefinitions(
   // ============================================================================
   // 2. Probability Bead
   // ============================================================================
-  // Check if edge has query-level overrides (query_overridden, n_query specified, or n_query_overridden)
+  // Check if edge has query-level overrides (explicit *_overridden flags)
   const hasQueryOverride = hasAnyEdgeQueryOverride(edge);
   const probOverridePaths = listOverriddenFlagPaths((edge as any).p);
   const hasProbabilityOverrides = probOverridePaths.length > 0;
