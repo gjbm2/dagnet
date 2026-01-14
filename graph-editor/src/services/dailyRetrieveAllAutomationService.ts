@@ -28,7 +28,26 @@ class DailyRetrieveAllAutomationService {
     return DailyRetrieveAllAutomationService.instance;
   }
 
+  private async withCrossTabLock<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      const nav: any = (typeof navigator !== 'undefined') ? (navigator as any) : null;
+      if (nav?.locks?.request) {
+        // Web Locks API serialises across tabs/windows for the same origin.
+        return await nav.locks.request('dagnet:daily-retrieveall', { mode: 'exclusive' }, async () => {
+          return await fn();
+        });
+      }
+    } catch {
+      // Best-effort only; fall back to in-tab execution.
+    }
+    return await fn();
+  }
+
   async run(options: DailyRetrieveAllAutomationOptions): Promise<void> {
+    return this.withCrossTabLock(() => this.runInternal(options));
+  }
+
+  private async runInternal(options: DailyRetrieveAllAutomationOptions): Promise<void> {
     const { repository, branch, graphFileId, getGraph, setGraph, shouldAbort } = options;
 
     const graphName = inferGraphName(graphFileId);

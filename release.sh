@@ -101,7 +101,7 @@ if [[ "$RUN_TESTS" == true ]]; then
   echo ""
   
   # Run all npm tests (unit + integration)
-  print_yellow "[1/2] Running npm tests..."
+  print_yellow "[1/3] Running npm tests..."
   if ! (cd graph-editor && npm run test:all); then
     echo ""
     print_red "✗ npm tests failed!"
@@ -110,9 +110,20 @@ if [[ "$RUN_TESTS" == true ]]; then
   fi
   print_green "✓ npm tests passed"
   echo ""
+
+  # Run Playwright E2E tests
+  print_yellow "[2/3] Running Playwright E2E tests..."
+  if ! (cd graph-editor && npm run e2e); then
+    echo ""
+    print_red "✗ Playwright tests failed!"
+    print_red "Release aborted."
+    exit 1
+  fi
+  print_green "✓ Playwright tests passed"
+  echo ""
   
   # Run Python tests
-  print_yellow "[2/2] Running Python tests..."
+  print_yellow "[3/3] Running Python tests..."
   if ! graph-editor/venv/bin/pytest --tb=short -q; then
     echo ""
     print_red "✗ Python tests failed!"
@@ -143,7 +154,7 @@ if [[ "$RUN_BUILD" == true ]]; then
   TSC_EXIT=${TSC_EXIT:-0}
   
   if [[ $TSC_EXIT -ne 0 ]]; then
-    echo "$TSC_OUTPUT" | head -50
+    echo "$TSC_OUTPUT"
     echo ""
     print_red "✗ TypeScript errors - build would fail!"
     print_red "Release aborted."
