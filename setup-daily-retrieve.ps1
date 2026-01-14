@@ -28,6 +28,50 @@ function Get-DagNetTasks {
     }
 }
 
+function Resolve-DefaultBrowserExe {
+    <#
+      Attempts to resolve the current user's default browser executable for https:// URLs.
+      This is ONLY used when we need to pass profile arguments (dedicated scheduler profile).
+
+      Notes:
+      - If we cannot resolve a concrete exe path, we fall back to Start-Process <url>
+        (which uses the system default browser, but cannot force a profile).
+    #>
+    try {
+        $progId = $null
+        try {
+            $uc = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice" -ErrorAction Stop
+            $progId = $uc.ProgId
+        } catch { }
+        if ([string]::IsNullOrWhiteSpace($progId)) {
+            try {
+                $uc = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice" -ErrorAction Stop
+                $progId = $uc.ProgId
+            } catch { }
+        }
+        if ([string]::IsNullOrWhiteSpace($progId)) { return $null }
+
+        $cmdKey = "Registry::HKEY_CLASSES_ROOT\$progId\shell\open\command"
+        $cmdItem = Get-Item -Path $cmdKey -ErrorAction SilentlyContinue
+        if (-not $cmdItem) { return $null }
+        $command = $cmdItem.GetValue("")
+        if ([string]::IsNullOrWhiteSpace($command)) { return $null }
+
+        $exe = $null
+        if ($command -match '^\s*"([^"]+)"') {
+            $exe = $Matches[1]
+        } else {
+            $exe = ($command.Trim() -split '\s+')[0]
+        }
+        if ([string]::IsNullOrWhiteSpace($exe)) { return $null }
+        if (Test-Path $exe) { return $exe }
+        return $null
+    }
+    catch {
+        return $null
+    }
+}
+
 function Show-Menu {
     Clear-Host
     Write-Host ""
@@ -155,6 +199,7 @@ function Show-Menu {
     Write-Host "Options:"
     Write-Host "  [A] Add new graph"
     Write-Host "  [R] Remove a graph"
+    Write-Host "  [T] Trigger a graph now (run the scheduled task immediately)"
     Write-Host "  [D] Debug - show all tasks"
     Write-Host "  [Q] Quit"
     Write-Host ""
@@ -279,7 +324,7 @@ function Add-Graph {
     
     Write-Host ""
     Write-Host "How long should browser stay open? (so you can review logs)" -ForegroundColor Gray
-    Write-Host "Default is 1439 mins (24h - 1 min, closes just before next run)" -ForegroundColor Gray
+    Write-Host "Default is 1439 mins (24h - 1 min, ends just before next run)" -ForegroundColor Gray
     $timeout = Read-Host "Minutes to stay open (default: 1439)"
     if ([string]::IsNullOrWhiteSpace($timeout)) {
         $timeout = 1439
@@ -292,18 +337,19 @@ function Add-Graph {
     $catchUp = Read-Host "Choice (default: 1)"
     $startWhenAvailable = ($catchUp -ne "2")
     
-    # Find browser
-    $browser = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
-    if (-not (Test-Path $browser)) {
-        $browser = "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
-    }
-    if (-not (Test-Path $browser)) {
-        Write-Host "Could not find Chrome or Edge." -ForegroundColor Yellow
-        $browser = Read-Host "Enter full path to browser exe"
-    }
-    else {
-        Write-Host "Using browser: $browser" -ForegroundColor Gray
-    }
+    Write-Host ""
+    Write-Host "Browser window behaviour:" -ForegroundColor Gray
+    Write-Host "  [1] Normal (visible) - DEFAULT" -ForegroundColor Gray
+    Write-Host "  [2] Start minimised" -ForegroundColor Gray
+    $windowChoice = Read-Host "Choice (default: 1)"
+    if ([string]::IsNullOrWhiteSpace($windowChoice)) { $windowChoice = "1" }
+    $startMinimised = ($windowChoice -eq "2")
+
+    # Default behaviour: use the system default browser.
+    # If the user opts into a dedicated scheduler profile, we attempt to resolve the default browser EXE
+    # so we can pass profile arguments. If we can't resolve it, we fall back to plain Start-Process <url>.
+    $useDefaultBrowser = $true
+    $browser = $null
     
     Write-Host ""
     Write-Host "Creating scheduled task..." -ForegroundColor Yellow
@@ -319,14 +365,69 @@ function Add-Graph {
     Write-Host "  If PC off: $(if ($startWhenAvailable) { 'Catch up when PC wakes' } else { 'Skip missed runs' })" -ForegroundColor Gray
     Write-Host ""
     
-    # Build the command
-    $cmd = "Start-Process '$browser' -ArgumentList '$fullUrl'; Start-Sleep -Seconds $timeoutSeconds"
+    # Optional: dedicated browser profile for scheduled runs (recommended for stable credentials/IndexedDB).
+    # IMPORTANT: For a dedicated profile we need a concrete browser executable to pass CLI flags.
+    $profileDir = $null
+    $browserArgs = $null
+    Write-Host "Use a dedicated DagNet scheduler browser profile? (recommended)" -ForegroundColor Gray
+    Write-Host "  This keeps credentials/IndexedDB stable and avoids 'wrong browser profile' failures." -ForegroundColor DarkGray
+    $useDedicated = Read-Host "Use dedicated profile? (Y/n)"
+    if ([string]::IsNullOrWhiteSpace($useDedicated) -or $useDedicated.ToLower() -eq "y" -or $useDedicated.ToLower() -eq "yes") {
+        $browser = Resolve-DefaultBrowserExe
+        if ($browser) {
+            $useDefaultBrowser = $false
+            Write-Host "Resolved default browser exe: $browser" -ForegroundColor Gray
+            $profileDir = Join-Path $env:LOCALAPPDATA "DagNet\scheduled-browser-profile"
+            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+
+            $exeName = [System.IO.Path]::GetFileName($browser).ToLower()
+            if ($exeName -like "*firefox*") {
+                $browserArgs = "-profile `"$profileDir`" -new-window `"$fullUrl`""
+            }
+            else {
+                # Assume Chromium-family flags (Brave/Chrome/Edge etc.)
+                $browserArgs = "--user-data-dir=`"$profileDir`" --new-window `"$fullUrl`""
+                if ($startMinimised) {
+                    $browserArgs = "$browserArgs --start-minimized"
+                }
+            }
+
+            # Escape any single quotes for PowerShell single-quoted string usage in the encoded command.
+            $browserArgs = $browserArgs -replace "'", "''"
+        }
+        else {
+            Write-Host "WARNING: Could not resolve the default browser exe; will use the default browser without a forced profile." -ForegroundColor Yellow
+            Write-Host "  You can still credentialise it, but it may use a different profile depending on Windows/browser." -ForegroundColor Yellow
+        }
+    }
+
+    # Build the command executed by Task Scheduler (PowerShell -EncodedCommand uses UTF-16LE).
+    # NOTE: Task Scheduler has its own independent execution time limit; we set it below to match your timeout.
+    if ($useDefaultBrowser) {
+        # When launching the default browser via URL, "minimised" is best-effort (Windows/browser may ignore it).
+        if ($startMinimised) {
+            $cmd = "Start-Process -WindowStyle Minimized '$fullUrl'; Start-Sleep -Seconds $timeoutSeconds"
+        }
+        else {
+            $cmd = "Start-Process '$fullUrl'; Start-Sleep -Seconds $timeoutSeconds"
+        }
+    }
+    else {
+        if ($startMinimised) {
+            $cmd = "Start-Process '$browser' -ArgumentList '$browserArgs' -WindowStyle Minimized; Start-Sleep -Seconds $timeoutSeconds"
+        }
+        else {
+            $cmd = "Start-Process '$browser' -ArgumentList '$browserArgs'; Start-Sleep -Seconds $timeoutSeconds"
+        }
+    }
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($cmd))
     
     try {
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -EncodedCommand $encoded"
         $trigger = New-ScheduledTaskTrigger -Daily -At $startTime
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable:$startWhenAvailable
+        # Align Task Scheduler's "Stop the task if it runs longer than:" EXACTLY with the chosen minutes.
+        $execLimit = New-TimeSpan -Minutes ([int]$timeout)
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable:$startWhenAvailable -ExecutionTimeLimit $execLimit
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
         
         # Remove if exists
@@ -361,6 +462,32 @@ function Add-Graph {
             Write-Host "  Name: $taskName" -ForegroundColor Green
             Write-Host "  Location: Task Scheduler > Task Scheduler Library" -ForegroundColor Green
             Write-Host "  (Run 'taskschd.msc' to view)" -ForegroundColor Gray
+
+            if (-not $useDefaultBrowser -and $profileDir) {
+                Write-Host ""
+                Write-Host "Dedicated scheduler profile:" -ForegroundColor Cyan
+                Write-Host "  $profileDir" -ForegroundColor White
+            }
+
+            Write-Host ""
+            Write-Host "Launch once now (recommended) so you can log in / cache credentials for scheduled runs?" -ForegroundColor Yellow
+            $launchNow = Read-Host "Launch now? (Y/n)"
+            if ([string]::IsNullOrWhiteSpace($launchNow) -or $launchNow.ToLower() -eq "y" -or $launchNow.ToLower() -eq "yes") {
+                try {
+                    # For this one-off interactive run, prefer visible window even if the scheduled run is minimised,
+                    # so you can complete credential setup easily.
+                    if ($useDefaultBrowser) {
+                        Start-Process $fullUrl
+                    }
+                    else {
+                        Start-Process $browser -ArgumentList $browserArgs
+                    }
+                    Write-Host "Opened browser. Please complete login/authorisation in that window/profile." -ForegroundColor Green
+                }
+                catch {
+                    Write-Host "WARNING: Could not launch browser: $($_.Exception.Message)" -ForegroundColor Yellow
+                }
+            }
         }
         else {
             Write-Host ""
@@ -409,6 +536,47 @@ function Remove-Graph {
     try {
         Unregister-ScheduledTask -TaskName $taskToRemove.TaskName -Confirm:$false
         Write-Host "Removed: $($taskToRemove.TaskName)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    Read-Host "Press Enter to continue"
+}
+
+function Trigger-Graph {
+    $tasks = Get-DagNetTasks
+    $taskCount = ($tasks | Measure-Object).Count
+    
+    if ($taskCount -eq 0) {
+        Write-Host "No tasks to run." -ForegroundColor Yellow
+        Read-Host "Press Enter to continue"
+        return
+    }
+    
+    Write-Host ""
+    Write-Host "=== Run Scheduled Graph Now ===" -ForegroundColor Cyan
+    Write-Host ""
+    
+    $i = 1
+    foreach ($task in $tasks) {
+        $graphName = $task.TaskName -replace '^DagNet_DailyRetrieve_', ''
+        Write-Host "  [$i] $graphName"
+        $i++
+    }
+    Write-Host ""
+    
+    $choice = Read-Host "Enter number to run now (0 to cancel)"
+    $num = 0
+    if (-not [int]::TryParse($choice, [ref]$num)) { return }
+    if ($num -lt 1 -or $num -gt $taskCount) { return }
+    
+    $taskToRun = $tasks[$num - 1]
+    try {
+        Write-Host ""
+        Write-Host "Starting task now: $($taskToRun.TaskName)" -ForegroundColor Yellow
+        Write-Host "  This runs the task's configured Action (same browser/profile args as the scheduler will use)." -ForegroundColor Gray
+        Start-ScheduledTask -TaskName $taskToRun.TaskName
+        Write-Host "Started. Check your browser window and Task Scheduler History for details." -ForegroundColor Green
     }
     catch {
         Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
@@ -469,6 +637,7 @@ while ($true) {
     switch ($choice.ToUpper()) {
         "A" { Add-Graph }
         "R" { Remove-Graph }
+        "T" { Trigger-Graph }
         "D" { Show-Debug }
         "Q" { exit }
     }

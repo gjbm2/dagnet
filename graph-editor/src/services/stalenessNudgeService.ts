@@ -75,6 +75,8 @@ function defaultStorage(): StorageLike {
 const LS = {
   lastPageLoadAtMs: 'dagnet:staleness:lastPageLoadAtMs',
   lastPromptedAtMs: (kind: NudgeKind) => `dagnet:staleness:lastPromptedAtMs:${kind}`,
+  lastDoneAtMs: (kind: NudgeKind, scope?: string) =>
+    `dagnet:staleness:lastDoneAtMs:${kind}${scope ? `:${scope}` : ''}`,
   snoozedUntilMs: (kind: NudgeKind, scope?: string) =>
     `dagnet:staleness:snoozedUntilMs:${kind}${scope ? `:${scope}` : ''}`,
   pendingPlan: 'dagnet:staleness:pendingPlan',
@@ -131,6 +133,24 @@ class StalenessNudgeService {
 
   recordPageLoad(nowMs: number = safeNow(), storage: StorageLike = defaultStorage()): void {
     safeSetNumber(storage, LS.lastPageLoadAtMs, nowMs);
+  }
+
+  /**
+   * UI-only helper: "last done" timestamps shown in the staleness update modal.
+   * These must not affect behaviour (only display).
+   */
+  recordDone(kind: NudgeKind, nowMs: number = safeNow(), scope?: string, storage: StorageLike = defaultStorage()): void {
+    safeSetNumber(storage, LS.lastDoneAtMs(kind, scope), nowMs);
+  }
+
+  /** UI-only helper: read "last done" timestamp (ms). */
+  getLastDoneAtMs(kind: NudgeKind, scope?: string, storage: StorageLike = defaultStorage()): number | undefined {
+    return safeGetNumber(storage, LS.lastDoneAtMs(kind, scope));
+  }
+
+  /** UI-only helper: last page load timestamp used as "Reload last done". */
+  getLastPageLoadAtMs(storage: StorageLike = defaultStorage()): number | undefined {
+    return safeGetNumber(storage, LS.lastPageLoadAtMs);
   }
 
   shouldPromptReload(nowMs: number = safeNow(), storage: StorageLike = defaultStorage()): boolean {
@@ -420,6 +440,9 @@ class StalenessNudgeService {
     safeRemove(storage, LS.lastPromptedAtMs('reload'));
     safeRemove(storage, LS.lastPromptedAtMs('git-pull'));
     safeRemove(storage, LS.lastPromptedAtMs('retrieve-all-slices'));
+    safeRemove(storage, LS.lastDoneAtMs('reload'));
+    safeRemove(storage, LS.lastDoneAtMs('git-pull'));
+    safeRemove(storage, LS.lastDoneAtMs('retrieve-all-slices'));
   }
 }
 

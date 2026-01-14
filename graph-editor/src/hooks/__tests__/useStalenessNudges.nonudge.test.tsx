@@ -12,6 +12,9 @@ vi.mock('../../services/stalenessNudgeService', () => ({
   stalenessNudgeService: {
     clearVolatileFlags: vi.fn(),
     recordPageLoad: vi.fn(),
+    recordDone: vi.fn(),
+    getLastDoneAtMs: vi.fn(),
+    getLastPageLoadAtMs: vi.fn(),
     isSnoozed: vi.fn(() => false),
     shouldPromptReload: vi.fn(() => true),
     canPrompt: vi.fn(() => true),
@@ -85,6 +88,22 @@ describe('useStalenessNudges (nonudge)', () => {
 
     // The staleness modal title should not appear when suppressed.
     expect(queryByText('Updates recommended')).toBeNull();
+  });
+
+  it('suppresses the staleness update modal when retrieveall is present (autonomous mode)', async () => {
+    window.sessionStorage.clear();
+    window.history.replaceState({}, document.title, '/?retrieveall=my-graph');
+
+    const { queryByText, getByTestId } = render(<Harness />);
+
+    // Conflict modal remains renderable (only shown when needed).
+    expect(getByTestId('conflict-modal')).toBeTruthy();
+
+    // The staleness modal title should not appear when suppressed.
+    expect(queryByText('Updates recommended')).toBeNull();
+
+    // Suppression is persisted for the session so later URL cleanup cannot re-enable nudges mid-run.
+    expect(window.sessionStorage.getItem('dagnet:nonudge')).toBe('1');
   });
 });
 

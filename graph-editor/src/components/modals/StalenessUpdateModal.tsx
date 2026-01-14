@@ -1,6 +1,11 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import './Modal.css';
+import {
+  STALENESS_NUDGE_RELOAD_AFTER_MS,
+  STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS,
+  STALENESS_NUDGE_GIT_PULL_LAST_DONE_RED_AFTER_MS,
+} from '../../constants/staleness';
 
 // Inject countdown spinner animation if not already present
 const COUNTDOWN_STYLE_ID = 'staleness-countdown-keyframes';
@@ -27,6 +32,8 @@ export interface StalenessUpdateAction {
   due: boolean;
   checked: boolean;
   disabled?: boolean;
+  /** For display: last completion time (ms since epoch). */
+  lastDoneAtMs?: number;
 }
 
 export interface StalenessUpdateModalProps {
@@ -68,12 +75,41 @@ export function StalenessUpdateModal({
 }: StalenessUpdateModalProps) {
   if (!isOpen) return null;
 
+  const nowMs = Date.now();
+
   const anyChecked = actions.some(a => a.checked && !a.disabled);
   const anyDue = actions.some(a => a.due);
   const reloadChecked = actions.some(a => a.key === 'reload' && a.checked && !a.disabled);
   const otherChecked = actions.some(a => a.key !== 'reload' && a.checked && !a.disabled);
   const gitPullDue = actions.some(a => a.key === 'git-pull' && a.due);
   const hasCountdown = countdownSeconds !== undefined && countdownSeconds > 0 && gitPullDue;
+
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  const formatDmyHm = (ms: number) => {
+    const d = new Date(ms);
+    const day = d.getDate();
+    const mon = MONTHS[d.getMonth()] ?? 'Jan';
+    const yy = String(d.getFullYear()).slice(-2);
+    const hh = pad2(d.getHours());
+    const mm = pad2(d.getMinutes());
+    return `${day}-${mon}-${yy} ${hh}:${mm}`;
+  };
+
+  const lastDoneRedAfterMsFor = (key: StalenessUpdateActionKey): number => {
+    if (key === 'reload') return STALENESS_NUDGE_RELOAD_AFTER_MS;
+    if (key === 'git-pull') return STALENESS_NUDGE_GIT_PULL_LAST_DONE_RED_AFTER_MS;
+    return STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS;
+  };
+
+  const lastDoneColourFor = (key: StalenessUpdateActionKey, lastDoneAtMs?: number): string => {
+    if (!lastDoneAtMs) return '#6b7280'; // grey (unknown/never)
+    const age = Math.max(0, nowMs - lastDoneAtMs);
+    const redAfter = lastDoneRedAfterMsFor(key);
+    if (age > redAfter) return '#dc2626'; // red
+    if (age > redAfter / 2) return '#b45309'; // amber
+    return '#059669'; // green
+  };
 
   // Ensure countdown animation styles are injected
   useEffect(() => {
@@ -138,7 +174,7 @@ export function StalenessUpdateModal({
               )}
 
               <p style={{ marginTop: 0, marginBottom: 14, fontSize: 13, color: '#555', lineHeight: 1.4 }}>
-                Select what you'd like to do now. Defaults are pre-selected based on what appears due.
+                Select what you'd like to do now. Some defaults are pre-selected based on what appears due.
               </p>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -169,8 +205,21 @@ export function StalenessUpdateModal({
                         <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
                           {a.label}
                         </div>
-                        <div style={{ fontSize: 12, color: a.due ? '#b45309' : '#6b7280', whiteSpace: 'nowrap' }}>
-                          {a.due ? 'Due' : 'Not due'}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                          <div style={{ fontSize: 12, color: a.due ? '#b45309' : '#6b7280', whiteSpace: 'nowrap' }}>
+                            {a.due ? 'Due' : 'Not due'}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              color: lastDoneColourFor(a.key, a.lastDoneAtMs),
+                              whiteSpace: 'nowrap',
+                              fontVariantNumeric: 'tabular-nums',
+                            }}
+                            title={a.lastDoneAtMs ? `Last done: ${formatDmyHm(a.lastDoneAtMs)}` : 'Last done: Never'}
+                          >
+                            Last: {a.lastDoneAtMs ? formatDmyHm(a.lastDoneAtMs) : 'Never'}
+                          </div>
                         </div>
                       </div>
                       <div style={{ marginTop: 4, fontSize: 13, color: '#4b5563', lineHeight: 1.35 }}>
