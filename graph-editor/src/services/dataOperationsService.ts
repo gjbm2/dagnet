@@ -129,6 +129,17 @@ let batchModeActive = false;
 export function setBatchMode(active: boolean): void {
   // When ending a batch, flush the aggregated toast + session log summary once.
   if (batchModeActive && !active) {
+    // Ensure any lingering "data fetch" spinner toast is closed out at the end of a batch.
+    // In batch mode, some paths may show a toast.loading with a fixed id (e.g. 'das-fetch'),
+    // while success/error toasts are suppressed/buffered. Without this, the spinner can stick.
+    try {
+      const t: any = toast as any;
+      if (typeof t?.dismiss === 'function') {
+        t.dismiss('das-fetch');
+      }
+    } catch {
+      // ignore
+    }
     flushBatchToasts();
   }
   batchModeActive = active;

@@ -13,6 +13,24 @@ import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
 import { encodeSharePayloadToParam, stableShortHash, type SharePayloadV1 } from '../lib/sharePayload';
 
+/**
+ * Share URL length policy (soft warning only).
+ *
+ * Notion documents a 2,000 character limit for "Any URL" and `text.link.url` in its API request limits.
+ * While the embed UI path is not explicitly documented separately, treating ~2,000 chars as a practical
+ * ceiling is the safest assumption for Notion embeds.
+ *
+ * Source: https://developers.notion.com/reference/request-limits
+ */
+export const NOTION_DOCUMENTED_URL_LIMIT_CHARS = 2000;
+export const SHARE_URL_SOFT_WARN_CHARS = 1800;
+
+export function getShareUrlSoftWarning(url: string): string | null {
+  const len = url.length;
+  if (len < SHARE_URL_SOFT_WARN_CHARS) return null;
+  return `Warning: share link is ${len} characters. Notion appears to cap URLs at ~${NOTION_DOCUMENTED_URL_LIMIT_CHARS} characters; this embed may fail. Consider live share, fewer tabs, or fewer scenarios.`;
+}
+
 export interface ShareLinkIdentity {
   repo: string;
   branch: string;
@@ -243,6 +261,14 @@ export interface LiveChartShareUrlResult {
   error?: string;
 }
 
+type ShareChartPayload = Extract<SharePayloadV1, { target: 'chart' }>;
+
+export interface LiveBundleShareUrlResult {
+  success: boolean;
+  url?: string;
+  error?: string;
+}
+
 /**
  * Build a live chart share URL from an existing chart file.
  *
@@ -292,7 +318,7 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     const scenarios: any[] = await db.scenarios.where('fileId').equals(parentFileId).toArray();
     const byId = new Map(scenarios.map(s => [s.id, s]));
 
-    const liveScenarioItems: SharePayloadV1['scenarios']['items'] = [];
+    const liveScenarioItems: ShareChartPayload['scenarios']['items'] = [];
     for (const scenarioId of visibleScenarioIds) {
       if (scenarioId === 'base' || scenarioId === 'current') continue;
       const s = byId.get(scenarioId);
@@ -377,6 +403,308 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
 }
 
 /**
+ * Build a live multi-tab bundle share URL.
+ *
+ * v1 constraints:
+ * - All selected tabs must refer to the same live graph identity (repo/branch/graph)
+ * - If includeScenarios is on, all included (non-base/current) scenarios must be DSL-backed live scenarios
+ */
+export async function buildLiveBundleShareUrlFromTabs(args: {
+  tabIds: string[];
+  dashboardMode?: boolean;
+  includeScenarios?: boolean;
+  activeTabId?: string;
+  baseUrl?: string;
+  secretOverride?: string;
+}): Promise<LiveBundleShareUrlResult> {
+  const { tabIds, dashboardMode, includeScenarios = true, activeTabId, baseUrl, secretOverride } = args;
+
+  try {
+    if (!Array.isArray(tabIds) || tabIds.length < 2) {
+      return { success: false, error: 'Live bundle share requires at least 2 tabs' };
+    }
+
+    const tabs = (await Promise.all(tabIds.map(id => db.tabs.get(id)))).filter(Boolean) as any[];
+    if (tabs.length !== tabIds.length) {
+      return { success: false, error: 'Some selected tabs no longer exist' };
+    }
+
+    const resolveIdentityForTab = async (t: any) => {
+      const f: any = fileRegistry.getFile(t.fileId) || (await db.files.get(t.fileId));
+      if (!f) return undefined;
+      const isChart = (f as any)?.type === 'chart' || String(t.fileId).startsWith('chart-');
+      if (!isChart) return extractIdentityFromFileSource(f.source);
+      const parentFileId: string | undefined = (f as any)?.data?.source?.parent_file_id;
+      if (!parentFileId) return undefined;
+      const parent: any = fileRegistry.getFile(parentFileId) || (await db.files.get(parentFileId));
+      return extractIdentityFromFileSource(parent?.source);
+    };
+
+    const identities = await Promise.all(tabs.map(resolveIdentityForTab));
+    const identity = identities[0];
+    if (!identity?.repo || !identity.branch || !identity.graph) {
+      return { success: false, error: 'Live bundle share requires repo/branch/graph identity' };
+    }
+    for (const id of identities) {
+      if (!id?.repo || !id.branch || !id.graph) {
+        return { success: false, error: 'All selected tabs must have live identity' };
+      }
+      if (id.repo !== identity.repo || id.branch !== identity.branch || id.graph !== identity.graph) {
+        return { success: false, error: 'Live bundle share only supports tabs from the same graph (repo/branch/graph)' };
+      }
+    }
+
+    const secret = secretOverride || resolveShareSecretForLinkGeneration();
+    if (!secret) {
+      return { success: false, error: 'No share secret available (set SHARE_SECRET or open with ?secret=…)' };
+    }
+
+    const preferredTabId = activeTabId && tabIds.includes(activeTabId) ? activeTabId : tabIds[0];
+    const preferredTab: any = await db.tabs.get(preferredTabId);
+    const preferredFileId: string | undefined = preferredTab?.fileId;
+
+    const scenarioState = preferredTab?.editorState?.scenarioState || {};
+    const visibleScenarioIds: string[] = Array.isArray(scenarioState.visibleScenarioIds) ? scenarioState.visibleScenarioIds : [];
+    const visibilityMode: Record<string, 'f+e' | 'f' | 'e'> = scenarioState.visibilityMode || {};
+
+    const scenarios: any[] = preferredFileId ? await db.scenarios.where('fileId').equals(preferredFileId).toArray() : [];
+    const byId = new Map(scenarios.map(s => [s.id, s]));
+
+    const liveScenarioItems: Array<{
+      dsl: string;
+      name?: string;
+      colour?: string;
+      visibility_mode?: 'f+e' | 'f' | 'e';
+      subtitle?: string;
+    }> = [];
+    if (includeScenarios) {
+      for (const scenarioId of visibleScenarioIds) {
+        if (scenarioId === 'base' || scenarioId === 'current') continue;
+        const s = byId.get(scenarioId);
+        const dsl: string | undefined = s?.meta?.queryDSL;
+        const isLive: boolean = Boolean(s?.meta?.isLive);
+        if (!isLive || !dsl || !dsl.trim()) {
+          return {
+            success: false,
+            error:
+              'Live bundle share only supports DSL-backed live scenarios (disable "include scenarios" or remove non-live scenarios)',
+          };
+        }
+        liveScenarioItems.push({
+          dsl,
+          name: s?.name,
+          colour: s?.colour,
+          visibility_mode: visibilityMode?.[scenarioId] || 'f+e',
+          subtitle: undefined,
+        });
+      }
+    }
+
+    const hideCurrent = includeScenarios ? !visibleScenarioIds.includes('current') : false;
+    const selectedScenarioId: string | undefined = scenarioState.selectedScenarioId;
+    const selectedScenarioDsl =
+      includeScenarios && selectedScenarioId && selectedScenarioId !== 'base' && selectedScenarioId !== 'current'
+        ? (byId.get(selectedScenarioId)?.meta?.queryDSL as string | undefined) || null
+        : null;
+
+    const bundleTabs: any[] = [];
+    for (const t of tabs) {
+      const f: any = fileRegistry.getFile(t.fileId) || (await db.files.get(t.fileId));
+      if (!f) continue;
+      const isChart = (f as any)?.type === 'chart' || String(t.fileId).startsWith('chart-');
+      if (!isChart) {
+        bundleTabs.push({ type: 'graph', title: t.title });
+        continue;
+      }
+
+      const chartData: any = f.data;
+      const chartKind = chartData?.chart_kind;
+      const queryDsl: string | undefined = chartData?.source?.query_dsl;
+      if (!chartKind || !queryDsl || !queryDsl.trim()) {
+        return { success: false, error: 'One of the selected charts is missing recipe metadata (chart_kind/query_dsl)' };
+      }
+
+      const parentTabId: string | undefined = chartData?.source?.parent_tab_id;
+      const parentTab: any = parentTabId ? await db.tabs.get(parentTabId) : null;
+      const whatIfDsl: string | null | undefined = parentTab?.editorState?.whatIfDSL ?? null;
+
+      bundleTabs.push({
+        type: 'chart',
+        title: t.title,
+        chart: { kind: chartKind },
+        analysis: {
+          query_dsl: queryDsl,
+          analysis_type: chartData?.source?.analysis_type ?? null,
+          what_if_dsl: whatIfDsl,
+        },
+      });
+    }
+
+    const payload: SharePayloadV1 = {
+      version: '1.0.0',
+      target: 'bundle',
+      presentation: {
+        dashboardMode: dashboardMode !== false,
+        activeTabIndex: (() => {
+          const idx = activeTabId ? tabIds.indexOf(activeTabId) : -1;
+          return idx >= 0 ? idx : 0;
+        })(),
+      },
+      tabs: bundleTabs,
+      scenarios: includeScenarios
+        ? {
+            items: liveScenarioItems,
+            hide_current: hideCurrent,
+            selected_scenario_dsl: selectedScenarioDsl,
+          }
+        : { items: [], hide_current: false, selected_scenario_dsl: null },
+    } as any;
+
+    const encoded = encodeSharePayloadToParam(payload);
+    const url = new URL(
+      buildLiveShareUrl({
+        repo: identity.repo,
+        branch: identity.branch,
+        graph: identity.graph,
+        secret,
+        dashboardMode,
+        baseUrl,
+      })
+    );
+    url.searchParams.set('share', encoded);
+    url.searchParams.set('shareid', stableShortHash(JSON.stringify(payload)));
+
+    sessionLogService.info(
+      'session',
+      'SHARE_LIVE_BUNDLE_LINK_CREATED',
+      `Created live bundle share link for ${identity.repo}/${identity.branch}/${identity.graph}`,
+      undefined,
+      { repo: identity.repo, branch: identity.branch, graph: identity.graph, tabs: bundleTabs.map(t => t.type) }
+    );
+
+    return { success: true, url: url.toString() };
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+export interface StaticBundleShareUrlResult {
+  success: boolean;
+  url?: string;
+  error?: string;
+}
+
+/**
+ * Build a static multi-tab bundle URL (data= bundle payload).
+ *
+ * This is still a static share: all data needed to render is embedded in the URL payload.
+ * We implement lightweight deduplication for graph JSON to avoid duplicating the same graph
+ * across multiple tabs in the same link.
+ */
+export async function buildStaticBundleShareUrlFromTabs(args: {
+  tabIds: string[];
+  dashboardMode?: boolean;
+  includeScenarios?: boolean;
+  activeTabId?: string;
+  baseUrl?: string;
+}): Promise<StaticBundleShareUrlResult> {
+  const { tabIds, dashboardMode, includeScenarios = true, activeTabId, baseUrl } = args;
+  try {
+    if (!Array.isArray(tabIds) || tabIds.length < 2) {
+      return { success: false, error: 'Static bundle share requires at least 2 tabs' };
+    }
+
+    const tabs = (await Promise.all(tabIds.map(id => db.tabs.get(id)))).filter(Boolean) as any[];
+    if (tabs.length !== tabIds.length) return { success: false, error: 'Some selected tabs no longer exist' };
+
+    const sharedGraphs: Record<string, any> = {};
+    const scenariosByGraphRef: Record<string, any[]> = {};
+    const items: any[] = [];
+
+    let identityForUpgrade: ShareLinkIdentity | undefined = undefined;
+
+    for (const t of tabs) {
+      const f: any = fileRegistry.getFile(t.fileId) || (await db.files.get(t.fileId));
+      if (!f?.data) continue;
+
+      const isChart = (f as any)?.type === 'chart' || String(t.fileId).startsWith('chart-');
+      if (isChart) {
+        const id = extractIdentityFromFileSource(f.source);
+        if (!identityForUpgrade && id) identityForUpgrade = id;
+        items.push({
+          type: 'chart',
+          title: t.title,
+          data: f.data,
+          identity: id,
+        });
+        continue;
+      }
+
+      // Graph tab
+      const graphData = f.data;
+      const graphRef = stableShortHash(JSON.stringify(graphData));
+      if (!sharedGraphs[graphRef]) sharedGraphs[graphRef] = graphData;
+
+      const id = extractIdentityFromFileSource(f.source);
+      if (!identityForUpgrade && id) identityForUpgrade = id;
+
+      const item: any = {
+        type: 'graph',
+        title: t.title,
+        graphRef,
+        identity: id,
+      };
+
+      if (includeScenarios) {
+        const scenarios: any[] = await db.scenarios.where('fileId').equals(t.fileId).toArray();
+        scenariosByGraphRef[graphRef] = scenarios;
+        item.scenariosRef = graphRef;
+      }
+
+      items.push(item);
+    }
+
+    if (items.length === 0) return { success: false, error: 'No data available for selected tabs' };
+
+    const activeTabIndex = (() => {
+      const idx = activeTabId ? tabIds.indexOf(activeTabId) : -1;
+      return idx >= 0 ? idx : 0;
+    })();
+
+    const bundle = {
+      type: 'bundle',
+      version: '1.0.0',
+      shared: {
+        graphs: sharedGraphs,
+        ...(includeScenarios ? { scenariosByGraphRef } : null),
+      },
+      items,
+      options: {
+        dashboardMode,
+        includeScenarios,
+        activeTabIndex,
+      },
+    };
+
+    const url = buildStaticShareUrl({
+      graphData: bundle,
+      identity: identityForUpgrade,
+      dashboardMode,
+      baseUrl,
+    });
+
+    sessionLogService.info('session', 'SHARE_STATIC_BUNDLE_LINK_CREATED', `Created static bundle share link`, undefined, {
+      tabs: items.map((it: any) => it.type),
+      includeScenarios,
+    });
+
+    return { success: true, url };
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
  * Service singleton for dependency injection in tests.
  */
 class ShareLinkService {
@@ -384,6 +712,9 @@ class ShareLinkService {
   buildStaticSingleTabShareUrl = buildStaticSingleTabShareUrl;
   buildLiveShareUrl = buildLiveShareUrl;
   buildLiveChartShareUrlFromChartFile = buildLiveChartShareUrlFromChartFile;
+  buildLiveBundleShareUrlFromTabs = buildLiveBundleShareUrlFromTabs;
+  buildStaticBundleShareUrlFromTabs = buildStaticBundleShareUrlFromTabs;
+  getShareUrlSoftWarning = getShareUrlSoftWarning;
   extractIdentityFromFileSource = extractIdentityFromFileSource;
   resolveShareSecretForLinkGeneration = resolveShareSecretForLinkGeneration;
 }

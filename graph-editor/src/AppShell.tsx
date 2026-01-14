@@ -34,6 +34,8 @@ import { useDashboardMode } from './hooks/useDashboardMode';
 import { useIsReadOnlyShare } from './contexts/ShareModeContext';
 import { DashboardShell } from './components/Dashboard/DashboardShell';
 import { ShareModeBanner } from './components/ShareModeBanner';
+import { ShareChartBootstrapper } from './components/share/ShareChartBootstrapper';
+import { ShareBundleBootstrapper } from './components/share/ShareBundleBootstrapper';
 import 'rc-dock/dist/rc-dock.css'; // Import rc-dock base styles
 import './styles/dock-theme.css'; // Safe customizations
 import './styles/active-tab-highlight.css'; // Active tab highlighting
@@ -1577,7 +1579,7 @@ function MainAppShellContent() {
                 height: '100%'
               }}
             />
-            
+
             {/* Welcome screen when no tabs - positioned BEHIND dock panels */}
             {tabs.length === 0 && (
               <div style={{
@@ -1862,6 +1864,8 @@ function AppShellContent() {
       <>
         <ShareModeBanner />
         <AutomationBanner />
+        <ShareChartBootstrapper />
+        <ShareBundleBootstrapper />
         <DashboardShell />
       </>
     );
@@ -1870,6 +1874,8 @@ function AppShellContent() {
     <>
       <ShareModeBanner />
       <AutomationBanner />
+      <ShareChartBootstrapper />
+      <ShareBundleBootstrapper />
       <MainAppShellContent />
     </>
   );

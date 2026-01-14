@@ -34,6 +34,7 @@ import { generateIdFromLabel as generateIdFromLabelUtil } from '@/lib/idUtils';
 import './PropertiesPanel.css';
 import type { Evidence } from '../types';
 import { useDialog } from '../contexts/DialogContext';
+import { graphMutationService } from '../services/graphMutationService';
 
 // ID validation pattern (matches schema: letters, numbers, hyphens, underscores)
 const VALID_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
@@ -679,7 +680,6 @@ export default function PropertiesPanel({
       if (_noHistory) {
         setGraph(next);
       } else {
-        const { graphMutationService } = await import('../services/graphMutationService');
         await graphMutationService.updateGraph(oldGraph, next, setGraph, {
           source: `PropertiesPanel.updateEdgeParam(${paramSlot})`,
         });

@@ -160,7 +160,9 @@ interface ScenariosProviderProps {
 export function ScenariosProvider({ children, fileId, tabId }: ScenariosProviderProps) {
   // Get graph from GraphStore (available inside GraphEditor)
   const graphStore = useGraphStore();
-  const graph = graphStore?.getState().graph || null;
+  // IMPORTANT: subscribe to graph so ScenariosProvider reacts to GraphStore updates even when
+  // GraphEditor isn't mounted (e.g. chart-only live share bootstrap).
+  const graph = useGraphStore(state => state.graph) || null;
   
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [baseParams, setBaseParams] = useState<ScenarioParams>({ edges: {}, nodes: {} });

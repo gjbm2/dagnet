@@ -23,16 +23,41 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
   const { operations, tabs } = useTabContext();
 
   const payload = useMemo(() => decodeSharePayloadFromUrl(), []);
+  const chartPayload = useMemo(
+    () => (payload && payload.target === 'chart' ? payload : null),
+    [payload]
+  );
 
   const isEligible =
-    Boolean(payload && payload.target === 'chart') &&
+    Boolean(chartPayload) &&
     Boolean(shareMode?.isLiveMode) &&
     Boolean(shareMode?.identity.repo && shareMode?.identity.branch && shareMode?.identity.graph);
 
+  // Dev-only introspection for Playwright/debugging.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    try {
+      const o = (window as any).__dagnetShareChartBootstrapper;
+      if (!o) return;
+      o.hook = {
+        isEligible,
+        hasPayload: Boolean(payload),
+        payloadTarget: (payload as any)?.target,
+        shareMode: shareMode
+          ? { isLiveMode: shareMode.isLiveMode, identity: shareMode.identity }
+          : null,
+        hasScenariosContext: Boolean(scenariosContext),
+        scenariosReady: Boolean((scenariosContext as any)?.scenariosReady),
+      };
+    } catch {
+      // ignore
+    }
+  }, [isEligible, payload, shareMode, scenariosContext]);
+
   const chartFileId = useMemo(() => {
-    if (!payload || payload.target !== 'chart') return null;
-    return `chart-share-${stableShortHash(JSON.stringify(payload))}`;
-  }, [payload]);
+    if (!chartPayload) return null;
+    return `chart-share-${stableShortHash(JSON.stringify(chartPayload))}`;
+  }, [chartPayload]);
 
   const processedRef = useRef(false);
 
@@ -48,14 +73,14 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
 
     await chartOperationsService.openExistingChartTab({
       fileId: chartFileId,
-      title: (payload as any)?.chart?.title || 'Chart',
+      title: chartPayload?.chart?.title || 'Chart',
     });
     return true;
-  }, [chartFileId, tabs, payload]);
+  }, [chartFileId, tabs, chartPayload]);
 
-  const ensureScenarios = useCallback(async (): Promise<Array<{ id: string; dsl: string }>> => {
-    if (!scenariosContext || !tabId) return [];
-    const items = (payload as SharePayloadV1).scenarios.items || [];
+  const ensureScenarios = useCallback(async (): Promise<Array<{ id: string; dsl: string; scenario?: any }>> => {
+    if (!scenariosContext || !chartPayload) return [];
+    const items = chartPayload.scenarios?.items || [];
 
     const existingByDsl = new Map<string, string>();
     for (const s of scenariosContext.scenarios || []) {
@@ -63,27 +88,28 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       if (dsl) existingByDsl.set(dsl, s.id);
     }
 
-    const created: Array<{ id: string; dsl: string }> = [];
+    const created: Array<{ id: string; dsl: string; scenario?: any }> = [];
     for (const item of items) {
       const dsl = item.dsl;
       if (!dsl || !dsl.trim()) continue;
       const existingId = existingByDsl.get(dsl);
       if (existingId) {
-        created.push({ id: existingId, dsl });
+        const existingScenario = scenariosContext.scenarios?.find(s => s.id === existingId);
+        created.push({ id: existingId, dsl, scenario: existingScenario });
         continue;
       }
       const scenario = await scenariosContext.createLiveScenario(dsl, item.name, tabId, item.colour);
-      created.push({ id: scenario.id, dsl });
+      created.push({ id: scenario.id, dsl, scenario });
     }
 
     return created;
-  }, [payload, scenariosContext, tabId]);
+  }, [chartPayload, scenariosContext, tabId]);
 
   const applyScenarioViewState = useCallback(
     async (scenarioIdsByDsl: Array<{ id: string; dsl: string }>) => {
-      if (!tabId) return;
-      const items = (payload as SharePayloadV1).scenarios.items || [];
-      const hideCurrent = Boolean((payload as SharePayloadV1).scenarios.hide_current);
+    if (!tabId || !chartPayload) return;
+    const items = chartPayload.scenarios?.items || [];
+    const hideCurrent = Boolean(chartPayload.scenarios?.hide_current);
 
       const orderedScenarioIds = items
         .map(i => scenarioIdsByDsl.find(s => s.dsl === i.dsl)?.id)
@@ -99,7 +125,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         await operations.setScenarioVisibilityMode(tabId, id, mode);
       }
     },
-    [payload, tabId, operations]
+    [chartPayload, tabId, operations]
   );
 
   const recomputeChart = useCallback(
@@ -108,19 +134,26 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       const graph = scenariosContext.graph;
       if (!graph) return;
 
-      const p = payload as SharePayloadV1;
-      const queryDsl = p.analysis.query_dsl;
-      const analysisType = p.analysis.analysis_type || undefined;
-      const whatIfDsl = p.analysis.what_if_dsl || undefined;
+      if (!chartPayload?.analysis) return;
+      const queryDsl = chartPayload.analysis.query_dsl;
+      const analysisType = chartPayload.analysis.analysis_type || undefined;
+      const whatIfDsl = chartPayload.analysis.what_if_dsl || undefined;
 
-      const items = p.scenarios.items || [];
-      const hideCurrent = Boolean(p.scenarios.hide_current);
+      const items = chartPayload.scenarios?.items || [];
+      const hideCurrent = Boolean(chartPayload.scenarios?.hide_current);
 
       const orderedScenarioIds = items
         .map(i => scenarioIdsByDsl.find(s => s.dsl === i.dsl)?.id)
         .filter((id): id is string => Boolean(id));
 
       const visibleScenarioIds = hideCurrent ? [...orderedScenarioIds] : ['current', ...orderedScenarioIds];
+
+      const scenarioDslSubtitleById: Record<string, string> = {};
+      for (const item of items) {
+        const id = scenarioIdsByDsl.find(s => s.dsl === item.dsl)?.id;
+        if (!id) continue;
+        scenarioDslSubtitleById[id] = (item.subtitle || item.dsl || '').trim();
+      }
 
       // Build scenario graphs for analysis (same semantics as AnalyticsPanel).
       const scenarioGraphs = visibleScenarioIds.map(scenarioId => {
@@ -172,30 +205,27 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
 
       // Re-materialise (or update) a stable chart artefact file, then open a tab for it.
       await chartOperationsService.openAnalysisChartTabFromAnalysis({
-        chartKind: p.chart.kind,
+        chartKind: chartPayload.chart.kind,
         analysisResult,
         scenarioIds: visibleScenarioIds,
-        title: p.chart.title || analysisResult.analysis_name || 'Chart',
+        title: chartPayload.chart.title || analysisResult.analysis_name || 'Chart',
         source: {
           parent_file_id: fileId,
           parent_tab_id: tabId,
           query_dsl: queryDsl,
           analysis_type: analysisType,
         },
+        scenarioDslSubtitleById,
         fileId: chartFileId,
       });
     },
-    [payload, scenariosContext, chartFileId, fileId, tabId]
+    [chartPayload, scenariosContext, chartFileId, fileId, tabId]
   );
 
   const runBootIfNeeded = useCallback(async () => {
-    if (!isEligible || !payload || payload.target !== 'chart') return;
+    if (!isEligible || !chartPayload) return;
     if (!scenariosContext?.scenariosReady) return;
-    if (!tabId) return;
     if (processedRef.current) return;
-
-    // Ensure we only process once per session (per graph tab).
-    processedRef.current = true;
 
     // Fast path: show cached chart immediately if present.
     await openCachedChartIfPresent();
@@ -203,26 +233,85 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     // If we already have a cached chart artefact, do not recompute on boot.
     const cachedChart = chartFileId ? await fileRegistry.restoreFile(chartFileId) : null;
     const hasCachedResult = Boolean((cachedChart as any)?.data?.payload?.analysis_result);
-    if (hasCachedResult) return;
+    if (hasCachedResult) {
+      processedRef.current = true;
+      return;
+    }
+
+    // Wait until the graph is actually available in ScenariosContext.
+    // In chart-only share boot, scenariosReady can become true before graphStore is hydrated.
+    // If we proceed without a graph, recomputeChart will no-op and we'd never retry.
+    if (!scenariosContext.graph) return;
+
+    // Ensure we only process once per session (after prerequisites are satisfied).
+    processedRef.current = true;
+
+    if (import.meta.env.DEV) {
+      try {
+        const o = (window as any).__dagnetShareChartBootstrapper;
+        if (o) o.mode = 'hook-start';
+      } catch {
+        // ignore
+      }
+    }
 
     try {
       const created = await ensureScenarios();
       await applyScenarioViewState(created);
+
+      // CRITICAL: live scenarios must be regenerated before analysis,
+      // otherwise they are just "copies of Current" and will yield identical results.
+      const liveIds = created.map(c => c.id);
+      if (liveIds.length > 0) {
+        // CRITICAL: call regenerateScenario with explicit overrides so we don't depend on
+        // React state having already incorporated newly-created scenarios.
+        const allScenariosOverride = created.map(c => c.scenario).filter(Boolean);
+        for (const c of created) {
+          await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds);
+        }
+      }
+
+      if (import.meta.env.DEV) {
+        try {
+          const o = (window as any).__dagnetShareChartBootstrapper;
+          if (o) o.mode = 'pre-analyze';
+        } catch {
+          // ignore
+        }
+      }
+
       await recomputeChart(created);
+
+      if (import.meta.env.DEV) {
+        try {
+          const o = (window as any).__dagnetShareChartBootstrapper;
+          if (o) o.mode = 'chart-opened';
+        } catch {
+          // ignore
+        }
+      }
     } catch (e: any) {
       processedRef.current = false;
+      if (import.meta.env.DEV) {
+        try {
+          (window as any).__dagnetShareChartBootError = e?.message || String(e);
+        } catch {
+          // ignore
+        }
+      }
       toast.error(e?.message || 'Failed to load live chart share');
     }
   }, [
     isEligible,
-    payload,
+    chartPayload,
     scenariosContext?.scenariosReady,
-    tabId,
+    scenariosContext?.graph,
     openCachedChartIfPresent,
     chartFileId,
     ensureScenarios,
     applyScenarioViewState,
     recomputeChart,
+    scenariosContext,
   ]);
 
   // Boot (mount) behaviour
@@ -232,10 +321,9 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
 
   // Refresh pipeline: after live-share refresh, regenerate live scenarios and recompute the chart.
   useEffect(() => {
-    if (!isEligible || !payload || payload.target !== 'chart') return;
+    if (!isEligible || !chartPayload) return;
     if (!shareMode?.identity.repo || !shareMode?.identity.branch || !shareMode?.identity.graph) return;
     if (!scenariosContext?.scenariosReady) return;
-    if (!tabId) return;
 
     const onRefreshed = async (ev: any) => {
       const detail = ev?.detail || {};
@@ -246,8 +334,12 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       try {
         const created = await ensureScenarios();
         await applyScenarioViewState(created);
-        // Regenerate all live scenarios (ensures versions increment and analysis keys change)
-        await scenariosContext.regenerateAllLive(undefined, created.map(c => c.id));
+        // Regenerate live scenarios (with overrides) so this works even when scenarios were just created.
+        const liveIds = created.map(c => c.id);
+        const allScenariosOverride = created.map(c => c.scenario).filter(Boolean);
+        for (const c of created) {
+          await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds);
+        }
         await recomputeChart(created);
       } catch (e: any) {
         toast.error(e?.message || 'Failed to refresh live chart');
@@ -256,6 +348,6 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
 
     window.addEventListener('dagnet:liveShareRefreshed', onRefreshed as any);
     return () => window.removeEventListener('dagnet:liveShareRefreshed', onRefreshed as any);
-  }, [isEligible, payload, shareMode, scenariosContext, tabId, ensureScenarios, applyScenarioViewState, recomputeChart]);
+  }, [isEligible, chartPayload, shareMode, scenariosContext, ensureScenarios, applyScenarioViewState, recomputeChart]);
 }
 

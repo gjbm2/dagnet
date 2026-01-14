@@ -22,7 +22,7 @@ const hoisted = vi.hoisted(() => ({
     hoisted.scenarios.push(scenario);
     return scenario;
   }),
-  regenerateAllLive: vi.fn(async () => {}),
+  regenerateScenario: vi.fn(async () => {}),
 }));
 
 vi.mock('../../lib/sharePayload', () => ({
@@ -59,7 +59,7 @@ vi.mock('../../contexts/ScenariosContext', () => ({
     scenarios: hoisted.scenarios,
     currentColour: '#3b82f6',
     createLiveScenario: hoisted.createLiveScenario,
-    regenerateAllLive: hoisted.regenerateAllLive,
+    regenerateScenario: hoisted.regenerateScenario,
   }),
 }));
 
@@ -114,7 +114,7 @@ describe('useShareChartFromUrl', () => {
     hoisted.setVisibleScenarios.mockClear();
     hoisted.setScenarioVisibilityMode.mockClear();
     hoisted.createLiveScenario.mockClear();
-    hoisted.regenerateAllLive.mockClear();
+    hoisted.regenerateScenario.mockClear();
     hoisted.scenarios.length = 0;
   });
 
@@ -164,7 +164,7 @@ describe('useShareChartFromUrl', () => {
     );
 
     await waitFor(() => {
-      expect(hoisted.regenerateAllLive).toHaveBeenCalled();
+      expect(hoisted.regenerateScenario).toHaveBeenCalled();
       expect(hoisted.openAnalysisChartTabFromAnalysis).toHaveBeenCalledTimes(2);
     });
   });

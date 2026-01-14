@@ -236,17 +236,19 @@ function getTodayUK(): string {
 export function extractWindowFromDSL(dsl: string): DateRange | null {
   try {
     const constraints = parseConstraints(dsl);
-    // Handle open-ended windows like window(-10d:) where end is undefined or empty
-    // In this case, default to "today" for the end date (matching resolveWindowDates behavior)
-    if (constraints.window && constraints.window.start) {
-      // Resolve any relative dates to actual dates
-      const start = resolveRelativeDate(constraints.window.start);
-      // If end is undefined/empty, default to today
-      const end = constraints.window.end 
-        ? resolveRelativeDate(constraints.window.end)
-        : getTodayUK();
+    // Handle open-ended ranges like window(-10d:) / cohort(-10d:) where end is undefined/empty.
+    // Default the end to "today" (matching resolveWindowDates behaviour).
+    const resolveRange = (startRaw?: string, endRaw?: string): DateRange | null => {
+      if (!startRaw) return null;
+      const start = resolveRelativeDate(startRaw);
+      const end = endRaw ? resolveRelativeDate(endRaw) : getTodayUK();
       return { start, end };
-    }
+    };
+
+    const w = resolveRange(constraints.window?.start, constraints.window?.end);
+    if (w) return w;
+    const c = resolveRange(constraints.cohort?.start, constraints.cohort?.end);
+    if (c) return c;
   } catch (e) {
     console.warn('[fetchDataService] Failed to parse DSL for window:', e);
   }
@@ -1888,16 +1890,34 @@ export function checkDSLNeedsFetch(dsl: string, graph: Graph): CacheCheckResult 
   if (!graph) {
     return { needsFetch: false, items: [] };
   }
+
+  // Dev-only E2E: in share-live Playwright runs we stub external boundaries and do not want
+  // scenario regeneration to kick off real provider fetches. Treat cache as "sufficient" so
+  // regeneration follows the from-file path.
+  //
+  // Gated by:
+  // - DEV build
+  // - URL contains ?e2e=1
+  try {
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('e2e')) {
+        return { needsFetch: false, items: [] };
+      }
+    }
+  } catch {
+    // ignore
+  }
   
   // Extract window from DSL
-  const window = extractWindowFromDSL(dsl);
-  if (!window) {
+  const dateWindow = extractWindowFromDSL(dsl);
+  if (!dateWindow) {
     // No window in DSL - can't check cache, assume no fetch needed
     // (This handles pure what-if DSLs like "case(my-case:treatment)")
     return { needsFetch: false, items: [] };
   }
   
-  const items = getItemsNeedingFetch(window, graph, dsl);
+  const items = getItemsNeedingFetch(dateWindow, graph, dsl);
   
   return {
     needsFetch: items.length > 0,
