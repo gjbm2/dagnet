@@ -47,6 +47,8 @@ Runs a **headless daily automation** workflow for a specific graph:
 
 This is intended for simple local schedulers (e.g. Windows Task Scheduler) on a machine left running.
 
+For a user-facing overview, see: `public/docs/automation-and-scheduling.md`.
+
 **Examples:**
 ```
 https://dagnet.vercel.app/?retrieveall=conversion-funnel
