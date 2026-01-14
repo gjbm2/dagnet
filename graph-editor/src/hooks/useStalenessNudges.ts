@@ -14,6 +14,7 @@ import { useDashboardMode } from '../contexts/DashboardModeContext';
 import { liveShareSyncService } from '../services/liveShareSyncService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import toast from 'react-hot-toast';
+import { APP_VERSION } from '../version';
 
 export interface UseStalenessNudgesResult {
   /** Must be rendered somewhere (for pull conflict resolution UI). */
@@ -381,9 +382,41 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       }
 
       // Compute which actions are due (and not snoozed).
+      const reloadSnoozed = stalenessNudgeService.isSnoozed('reload', undefined, now, storage);
+
+      // Prefer a deployed-version check over the crude time-based heuristic:
+      // - If version.json indicates a newer client is deployed, nudge immediately (subject to canPrompt).
+      // - If offline / unavailable, fall back to the existing time-based nudge.
+      //
+      // NOTE: the `typeof` guards keep this hook resilient to test mocks that stub
+      // stalenessNudgeService partially.
+      if (!reloadSnoozed) {
+        const refreshFn = (stalenessNudgeService as any).refreshRemoteAppVersionIfDue;
+        if (typeof refreshFn === 'function') {
+          await refreshFn.call(stalenessNudgeService, now, storage);
+        }
+      }
+
+      let isOutdated = false;
+      const diffFn = (stalenessNudgeService as any).isRemoteAppVersionDifferent;
+      if (typeof diffFn === 'function') {
+        isOutdated = !!diffFn.call(stalenessNudgeService, APP_VERSION, storage);
+      }
+
+      // Unattended terminals (dashboard mode): auto-reload when a new client is deployed.
+      // This avoids a modal that nobody can click, and keeps kiosk consoles fresh.
+      if (isDashboardMode && isOutdated) {
+        const autoFn = (stalenessNudgeService as any).maybeAutoReloadForUpdate;
+        if (typeof autoFn === 'function') {
+          const didReload = !!autoFn.call(stalenessNudgeService, APP_VERSION, now, storage);
+          if (didReload) return;
+        }
+      }
+
       const reloadDue =
-        !stalenessNudgeService.isSnoozed('reload', undefined, now, storage) &&
-        stalenessNudgeService.shouldPromptReload(now, storage);
+        !reloadSnoozed &&
+        ((isOutdated && stalenessNudgeService.canPrompt('reload', now, storage)) ||
+          stalenessNudgeService.shouldPromptReload(now, storage));
 
       const isShareLive = shareMode?.isLiveMode ?? false;
       const repository: string | undefined = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
@@ -440,7 +473,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
             repository ? { repository, branch } : undefined
           );
           retrieveDue = staleness.isStale;
-          retrieveMostRecentRetrievedAtMs = staleness.mostRecentRetrievedAtMs;
+          // Prefer graph-level "last successful run" marker (cross-device), else fall back.
+          retrieveMostRecentRetrievedAtMs = staleness.lastSuccessfulRunAtMs ?? staleness.mostRecentRetrievedAtMs;
         }
       }
 

@@ -1,3 +1,11 @@
+# ARCHIVED (Superseded)
+#
+# **Status**: Archived on 14-Jan-26
+# **Superseded by**: `docs/current/refactor/src-slimdown.md`
+#
+# This document is retained for historical context only. Its proposals are now consolidated into
+# the slimdown plan, and its testing guidance may not match current repo rules.
+
 # Refactoring Plan: Graph Components
 
 ## Executive Summary
