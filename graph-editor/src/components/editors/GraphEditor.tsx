@@ -20,6 +20,7 @@ import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useURLScenarios } from '../../hooks/useURLScenarios';
+import { useShareChartFromUrl } from '../../hooks/useShareChartFromUrl';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestListener';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
@@ -74,6 +75,15 @@ function URLScenariosProcessor({ fileId }: { fileId: string }) {
   // The graph is loaded if we're rendering (GraphEditorInner gates on data)
   useURLScenarios(true, fileId);
   return null; // No UI - just processes URL params
+}
+
+/**
+ * ShareChartProcessor - processes live chart share recipe payloads (?share=...)
+ * Must be inside ScenariosProvider to access scenario context.
+ */
+function ShareChartProcessor({ fileId, tabId }: { fileId: string; tabId?: string }) {
+  useShareChartFromUrl({ fileId, tabId });
+  return null;
 }
 
 // NOTE: Daily automation URL handling (`?retrieveall=...`) is mounted once in `AppShell`
@@ -1765,6 +1775,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       <SelectionContext.Provider value={selectionContextValue}>
         <ScenariosProvider fileId={fileId} tabId={tabId}>
           <URLScenariosProcessor fileId={fileId} />
+          <ShareChartProcessor fileId={fileId} tabId={tabId} />
           <URLDailyRetrieveAllProcessor fileId={fileId} />
           <PutToBaseRequestProcessor tabId={tabId} />
           <ViewPreferencesProvider tabId={tabId}>

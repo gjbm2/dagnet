@@ -155,13 +155,23 @@ export interface MappingConfiguration {
 // ============================================================
 
 export class UpdateManager {
+  // Mappings are large and expensive to initialise.
+  // In production this is fine (singleton), but in tests we may instantiate UpdateManager multiple times.
+  // Share a single mapping table per process to avoid repeated heavy initialisation (prevents CI timeouts).
+  private static sharedMappingConfigurations: Map<string, MappingConfiguration> | null = null;
+
   private mappingConfigurations: Map<string, MappingConfiguration>;
   private auditLog: any[];
   
   constructor() {
-    this.mappingConfigurations = new Map();
     this.auditLog = [];
-    this.initializeMappings();
+    if (!UpdateManager.sharedMappingConfigurations) {
+      this.mappingConfigurations = new Map();
+      this.initializeMappings();
+      UpdateManager.sharedMappingConfigurations = this.mappingConfigurations;
+    } else {
+      this.mappingConfigurations = UpdateManager.sharedMappingConfigurations;
+    }
   }
   
   /**

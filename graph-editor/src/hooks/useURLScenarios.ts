@@ -24,6 +24,7 @@ interface URLScenariosParams {
   scenariosParam: string | null;
   hideCurrent: boolean;
   graphParam: string | null; // The graph specified in URL (to match against fileId)
+  selectedScenarioDslParam: string | null; // Optional DSL to auto-select after creation
 }
 
 // Global flag to prevent multiple tabs from processing URL params
@@ -38,6 +39,7 @@ export function parseURLScenariosParams(): URLScenariosParams {
     scenariosParam: searchParams.get('scenarios'),
     hideCurrent: searchParams.has('hidecurrent'),
     graphParam: searchParams.get('graph'),
+    selectedScenarioDslParam: searchParams.get('selectedscenario'),
   };
 }
 
@@ -55,6 +57,7 @@ export function cleanURLScenariosParams(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete('scenarios');
   url.searchParams.delete('hidecurrent');
+  url.searchParams.delete('selectedscenario');
   window.history.replaceState({}, document.title, url.toString());
 }
 
@@ -138,6 +141,7 @@ export function useURLScenarios(graphLoaded: boolean, fileId: string | undefined
       
       // Track created scenario IDs across both operations
       const createdIds: string[] = [];
+      const selectedDsl = params.selectedScenarioDslParam ? decodeURIComponent(params.selectedScenarioDslParam) : null;
 
       try {
         // Process scenarios parameter
@@ -240,6 +244,14 @@ export function useURLScenarios(graphLoaded: boolean, fileId: string | undefined
             const newlyCreatedNotYetInState = createdIds.filter(id => !scenarioState.visibleScenarioIds.includes(id));
             const newVisible = [...existingVisible, ...newlyCreatedNotYetInState];
             await operations.setVisibleScenarios(activeTabId, newVisible);
+          }
+        }
+
+        // Optional: auto-select a specific scenario by DSL (scenario-level share links).
+        if (selectedDsl && scenariosContext?.scenarios) {
+          const match = scenariosContext.scenarios.find(s => s?.meta?.queryDSL === selectedDsl);
+          if (match?.id) {
+            await operations.selectScenario(activeTabId, match.id);
           }
         }
 

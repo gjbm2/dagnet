@@ -161,6 +161,80 @@ class FileRegistry {
   }
 
   /**
+   * Upsert a file with "clean" semantics (overwrite seed).
+   *
+   * This is critical for share/live refresh flows:
+   * - If we fetched fresh remote content, we must NOT keep stale cached content via get-or-create behaviour.
+   * - Seeded files should be treated as clean (originalData matches data, isDirty=false).
+   */
+  async upsertFileClean(
+    fileId: string,
+    type: RepositoryItem['type'],
+    source: FileState['source'],
+    data: any,
+    opts?: { sha?: string; lastSynced?: number }
+  ): Promise<FileState> {
+    const now = Date.now();
+    const existingInMemory = this.files.get(fileId);
+    const existingInDb = existingInMemory ? undefined : await db.files.get(fileId);
+    const file = (existingInMemory || existingInDb) as FileState | undefined;
+
+    const wasDirty = file?.isDirty ?? false;
+
+    const next: FileState = file
+      ? {
+          ...file,
+          type,
+          source,
+          data,
+          originalData: structuredClone(data),
+          isDirty: false,
+          isInitializing: false,
+          lastModified: now,
+          sha: opts?.sha ?? file.sha,
+          lastSynced: opts?.lastSynced ?? file.lastSynced ?? now,
+        }
+      : {
+          fileId,
+          type,
+          source,
+          data,
+          originalData: structuredClone(data),
+          isDirty: false,
+          isInitializing: false,
+          viewTabs: [],
+          lastModified: now,
+          sha: opts?.sha,
+          lastSynced: opts?.lastSynced ?? now,
+        };
+
+    await db.files.put(next);
+
+    // Also update prefixed version if it exists (used by workspace loading/commit).
+    // In share DBs this is harmless but keeps behaviour consistent.
+    if (next.source?.repository && next.source?.branch) {
+      const prefixedId = `${next.source.repository}-${next.source.branch}-${fileId}`;
+      const prefixedFile = { ...next, fileId: prefixedId };
+      await db.files.put(prefixedFile);
+    }
+
+    this.files.set(fileId, next);
+    this.notifyListeners(fileId, next);
+
+    if (wasDirty !== next.isDirty) {
+      if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('dagnet:fileDirtyChanged', {
+            detail: { fileId, isDirty: next.isDirty },
+          })
+        );
+      }
+    }
+
+    return next;
+  }
+
+  /**
    * Update file data
    */
   async updateFile(fileId: string, newData: any): Promise<void> {
@@ -1087,37 +1161,71 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       if (modeParam === 'live') {
         console.log('[TabContext] Live share mode detected');
         const { liveShareBootService } = await import('../services/liveShareBootService');
-        const result = await liveShareBootService.performBoot();
-        
-        if (!result.success || !result.graphData) {
-          console.error('[TabContext] Live share boot failed:', result.error);
-          // TODO: Show user-friendly error UI
-          return;
-        }
-        
-        // Create file in registry with fetched graph data
-        const { identity, graphData, graphSha, graphPath } = result;
-        const fileId = `graph-live-${identity?.graph || 'unknown'}`;
-        await fileRegistry.getOrCreateFile(fileId, 'graph', {
-          repository: identity?.repo || 'url',
-          path: graphPath || 'live-graph',
-          branch: identity?.branch || 'main',
-        }, graphData);
-        
-        // Seed parameter files into registry
-        if (result.parameters) {
-          for (const [paramId, paramData] of result.parameters) {
-            const paramFileId = `parameter-${paramId}`;
-            await fileRegistry.getOrCreateFile(paramFileId, 'parameter', {
-              repository: identity?.repo || 'url',
-              path: paramData.path,
-              branch: identity?.branch || 'main',
-            }, paramData.data);
+        const { getShareBootConfig } = await import('../lib/shareBootResolver');
+        const bootConfig = getShareBootConfig();
+        const graphName = bootConfig.graph || urlParams.get('graph') || 'unknown';
+        const repo = bootConfig.repo || urlParams.get('repo') || 'url';
+        const branch = bootConfig.branch || urlParams.get('branch') || 'main';
+
+        // Canonical file ID so URL-driven logic (e.g. useURLScenarios) can target deterministically.
+        const fileId = `graph-${graphName}`;
+
+        // Cache-first: if we already have the graph in the share-scoped DB, load instantly.
+        const cached = await fileRegistry.restoreFile(fileId);
+        if (!cached || !cached.data) {
+          const result = await liveShareBootService.performBoot();
+
+          if (!result.success || !result.graphData || !result.identity) {
+            console.error('[TabContext] Live share boot failed:', result.error);
+            // TODO: Show user-friendly error UI
+            return;
+          }
+
+          const { identity, graphData, graphSha, graphPath } = result;
+
+          // Overwrite-seed graph and dependencies (no stale reuse).
+          await fileRegistry.upsertFileClean(
+            fileId,
+            'graph',
+            {
+              repository: identity.repo,
+              path: graphPath || `graphs/${identity.graph}.json`,
+              branch: identity.branch,
+            },
+            graphData,
+            { sha: graphSha, lastSynced: Date.now() }
+          );
+
+          // Record "last seen remote HEAD" for share-scoped staleness tracking.
+          if (typeof window !== 'undefined' && result.remoteHeadSha) {
+            const { stalenessNudgeService } = await import('../services/stalenessNudgeService');
+            stalenessNudgeService.recordShareLastSeenRemoteHeadSha(
+              { repository: identity.repo, branch: identity.branch, graph: identity.graph },
+              result.remoteHeadSha,
+              window.localStorage
+            );
+          }
+
+          if (result.parameters) {
+            for (const [paramId, paramData] of result.parameters) {
+              const paramFileId = `parameter-${paramId}`;
+              await fileRegistry.upsertFileClean(
+                paramFileId,
+                'parameter',
+                {
+                  repository: identity.repo,
+                  path: paramData.path,
+                  branch: identity.branch,
+                },
+                paramData.data,
+                { sha: paramData.sha, lastSynced: Date.now() }
+              );
+            }
           }
         }
-        
-        // Create tab with well-formed editor state
-        const tabId = `tab-${fileId}-interactive`;
+
+        // Create tab with well-formed editor state (unique tabId to avoid IDB collisions across reloads)
+        const tabId = `tab-${fileId}-interactive-${Date.now()}`;
         const defaultEditorState = {
           useUniformScaling: false,
           massGenerosity: 0.5,
@@ -1140,7 +1248,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         const newTab: TabState = {
           id: tabId,
           fileId: fileId,
-          title: identity?.graph || 'Live Graph',
+          title: graphName || 'Live Graph',
           viewMode: 'interactive',
           group: 'main-content',
           closable: true,
@@ -1263,19 +1371,48 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             
             console.log(`[TabContext] Bundle loaded: ${newTabs.length} tabs created`);
           } else {
-            // Single graph/chart share
-            const fileId = `graph-url-data-${timestamp}`;
-            await fileRegistry.getOrCreateFile(fileId, 'graph', { repository: 'url', path: 'url-data', branch: 'main' }, urlData);
+            // Single graph/chart share (legacy: chart may be embedded directly, not as a bundle item)
+            const isChartPayload =
+              urlData &&
+              typeof urlData === 'object' &&
+              (urlData as any).version === '1.0.0' &&
+              (typeof (urlData as any).chart_kind === 'string') &&
+              (urlData as any).payload;
+
+            const itemType = isChartPayload ? 'chart' : 'graph';
+            const graphIdFromUrl = !isChartPayload ? (urlParams.get('graph') || undefined) : undefined;
+            const fileId =
+              itemType === 'graph' && graphIdFromUrl
+                ? `graph-${graphIdFromUrl}`
+                : `${itemType}-url-data-${timestamp}`;
+
+            // IMPORTANT: In share mode, `data=` is the source of truth.
+            // If we re-open the same share DB, we must overwrite-seed from the URL (no stale reuse).
+            if (itemType === 'graph') {
+              await fileRegistry.upsertFileClean(
+                fileId,
+                'graph' as any,
+                { repository: 'url', path: 'url-data', branch: 'main' },
+                urlData
+              );
+            } else {
+              await fileRegistry.getOrCreateFile(
+                fileId,
+                itemType as any,
+                { repository: 'url', path: 'url-data', branch: 'main' },
+                urlData
+              );
+            }
             
             const tabId = `tab-${fileId}-interactive`;
             const newTab: TabState = {
               id: tabId,
               fileId: fileId,
-              title: 'Shared Graph',
+              title: isChartPayload ? ((urlData as any).title || 'Shared Chart') : 'Shared Graph',
               viewMode: 'interactive',
               group: 'main-content',
               closable: true,
-              icon: getIconForType('graph'),
+              icon: getIconForType(itemType),
               editorState: defaultEditorState,
             };
             

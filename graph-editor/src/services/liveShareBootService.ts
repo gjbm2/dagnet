@@ -44,6 +44,8 @@ export interface LiveBootResult {
   graphData?: any;
   graphSha?: string;
   graphPath?: string;
+  /** Remote HEAD SHA for the branch (commit SHA), used for share-live staleness tracking. */
+  remoteHeadSha?: string | null;
   
   // Fetched parameter files (on success)
   parameters?: Map<string, { data: any; sha?: string; path: string }>;
@@ -80,6 +82,27 @@ export async function performLiveShareBoot(): Promise<LiveBootResult> {
     `Live share boot: ${repo}/${branch}/${graph}`
   );
   
+  return await fetchLiveShareBundle(
+    { repo, branch, graph },
+    { logOpId, operationLabel: 'LIVE_SHARE_BOOT' }
+  );
+}
+
+export async function fetchLiveShareBundle(
+  args: { repo: string; branch: string; graph: string },
+  opts: { logOpId?: string; operationLabel: 'LIVE_SHARE_BOOT' | 'LIVE_SHARE_REFRESH' }
+): Promise<LiveBootResult> {
+  const { repo, branch, graph } = args;
+  const logOpId =
+    opts.logOpId ||
+    sessionLogService.startOperation(
+      'info',
+      'git',
+      opts.operationLabel,
+      `${opts.operationLabel}: ${repo}/${branch}/${graph}`,
+      { repo, branch, graph }
+    );
+
   try {
     // Step 1: Unlock credentials
     sessionLogService.addChild(logOpId, 'info', 'CREDENTIAL_UNLOCK', 'Unlocking credentials...');
@@ -104,6 +127,15 @@ export async function performLiveShareBoot(): Promise<LiveBootResult> {
       git: [gitCreds],
       defaultGitRepo: repo,
     });
+
+    // Step 2.5: Fetch remote HEAD SHA (commit) for staleness tracking
+    let remoteHeadSha: string | null = null;
+    try {
+      remoteHeadSha = await gitService.getRemoteHeadSha(branch);
+    } catch {
+      // Best-effort only; do not fail boot/refresh on HEAD lookup.
+      remoteHeadSha = null;
+    }
     
     // Step 3: Fetch graph
     sessionLogService.addChild(logOpId, 'info', 'GRAPH_FETCH', `Fetching graph: ${graph}`);
@@ -197,6 +229,7 @@ export async function performLiveShareBoot(): Promise<LiveBootResult> {
       graphData,
       graphSha,
       graphPath,
+      remoteHeadSha,
       parameters,
       identity: { repo, branch, graph },
     };

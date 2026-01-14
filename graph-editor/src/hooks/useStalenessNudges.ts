@@ -8,6 +8,11 @@ import { StalenessUpdateModal, type StalenessUpdateActionKey } from '../componen
 import { retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
 import { sessionLogService } from '../services/sessionLogService';
 import { STALENESS_NUDGE_COUNTDOWN_SECONDS } from '../constants/staleness';
+import { db } from '../db/appDatabase';
+import { useShareModeOptional } from '../contexts/ShareModeContext';
+import { useDashboardMode } from '../contexts/DashboardModeContext';
+import { liveShareSyncService } from '../services/liveShareSyncService';
+import toast from 'react-hot-toast';
 
 export interface UseStalenessNudgesResult {
   /** Must be rendered somewhere (for pull conflict resolution UI). */
@@ -29,6 +34,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   const { pullAll, conflictModal } = usePullAll();
   const fileRegistry = useFileRegistry();
   const tabOperations = tabContext.operations;
+  const shareMode = useShareModeOptional();
+  const { isDashboardMode } = useDashboardMode();
 
   const activeTabId: string | null = tabContext.activeTabId ?? null;
   const tabs: any[] = tabContext.tabs ?? [];
@@ -62,6 +69,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   const countdownIntervalRef = useRef<number | null>(null);
   // Track the remote SHA that triggered this modal (for dismiss logic)
   const currentRemoteShaRef = useRef<string | null>(null);
+  // Share-live dashboard mode: refresh without a blocking modal.
+  const [shareAutoRefreshPending, setShareAutoRefreshPending] = useState<boolean>(false);
 
   // Opt-out: suppress staleness nudges for this session when the URL contains ?nonudge
   // (used by share/embed links for read-only explore flows).
@@ -103,6 +112,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       countdownIntervalRef.current = null;
     }
     setCountdownSeconds(undefined);
+    setShareAutoRefreshPending(false);
   }, []);
 
   const closeModal = useCallback(() => {
@@ -130,8 +140,10 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     const now = Date.now();
     const storage = window.localStorage;
 
-    const repo = navState.selectedRepo;
-    const branch = navState.selectedBranch || 'main';
+    const isShareLive = shareMode?.isLiveMode ?? false;
+    const repo = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
+    const branch = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
+    const graph = isShareLive ? shareMode?.identity.graph : undefined;
     const graphFileId = activeFileId;
 
     const wantsReload = selected.has('reload');
@@ -153,21 +165,24 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     }
 
     if (wantsPull) {
-      await pullAll();
-      if (repo) {
-        stalenessNudgeService.recordDone('git-pull', Date.now(), `${repo}-${branch}`, storage);
-      }
-      // Clear dismissed SHA after successful pull so future changes are detected
-      if (repo) {
-        stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
+      if (isShareLive && repo && graph) {
+        const res = await liveShareSyncService.refreshToLatest();
+        if (!res.success) {
+          toast.error(res.error || 'Live refresh failed');
+        } else {
+          toast.success('Updated to latest');
+          stalenessNudgeService.clearDismissedShareRemoteSha({ repository: repo, branch, graph }, storage);
+        }
+      } else {
+        await pullAll();
+        // Clear dismissed SHA after successful pull so future changes are detected
+        if (repo) {
+          stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
+        }
       }
     }
 
     if (wantsRetrieve) {
-      // SAFETY: never default retrieve-all to selected; record when the user explicitly triggers it.
-      if (activeFileId) {
-        stalenessNudgeService.recordDone('retrieve-all-slices', Date.now(), activeFileId, storage);
-      }
       const mustCompleteBeforeReload = wantsReload;
       if (wantsPull && activeFileId) {
         // Intended behaviour for READ-ONLY users:
@@ -248,22 +263,25 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     const now = Date.now();
     const storage = window.localStorage;
 
-    const repo = navState.selectedRepo;
-    const branch = navState.selectedBranch || 'main';
+    const isShareLive = shareMode?.isLiveMode ?? false;
+    const repo = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
+    const branch = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
+    const graph = isShareLive ? shareMode?.identity.graph : undefined;
+    const pullScope = repo ? (isShareLive && graph ? `${repo}-${branch}-${graph}` : `${repo}-${branch}`) : undefined;
 
     for (const a of modalActions) {
       if (!a.due) continue;
       if (a.key === 'reload') {
         stalenessNudgeService.snooze('reload', undefined, now, storage);
       } else if (a.key === 'git-pull') {
-        if (repo) stalenessNudgeService.snooze('git-pull', `${repo}-${branch}`, now, storage);
+        if (pullScope) stalenessNudgeService.snooze('git-pull', pullScope, now, storage);
       } else if (a.key === 'retrieve-all-slices') {
         if (activeFileId) stalenessNudgeService.snooze('retrieve-all-slices', activeFileId, now, storage);
       }
     }
 
     closeModal();
-  }, [modalActions, navState.selectedRepo, navState.selectedBranch, activeFileId, closeModal]);
+  }, [modalActions, navState.selectedRepo, navState.selectedBranch, activeFileId, closeModal, shareMode]);
 
   /**
    * Dismiss: records the current remote SHA so user won't be nudged again
@@ -271,13 +289,19 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
    */
   const onDismiss = useCallback(() => {
     const storage = window.localStorage;
-    const repo = navState.selectedRepo;
-    const branch = navState.selectedBranch || 'main';
+    const isShareLive = shareMode?.isLiveMode ?? false;
+    const repo = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
+    const branch = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
+    const graph = isShareLive ? shareMode?.identity.graph : undefined;
     const remoteSha = currentRemoteShaRef.current;
 
     // Record this SHA as dismissed - won't prompt again until new commit appears
     if (repo && remoteSha) {
-      stalenessNudgeService.dismissRemoteSha(repo, branch, remoteSha, storage);
+      if (isShareLive && graph) {
+        stalenessNudgeService.dismissShareRemoteSha({ repository: repo, branch, graph }, remoteSha, storage);
+      } else {
+        stalenessNudgeService.dismissRemoteSha(repo, branch, remoteSha, storage);
+      }
       sessionLogService.info(
         'session',
         'STALENESS_DISMISS',
@@ -288,38 +312,48 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     }
 
     closeModal();
-  }, [navState.selectedRepo, navState.selectedBranch, closeModal]);
+  }, [navState.selectedRepo, navState.selectedBranch, closeModal, shareMode]);
 
   /**
    * Auto-pull: called when countdown expires. Pulls from git ONLY (no retrieve-all).
    */
   const onCountdownExpire = useCallback(async () => {
-    const repo = navState.selectedRepo;
-    const branch = navState.selectedBranch || 'main';
+    const isShareLive = shareMode?.isLiveMode ?? false;
+    const repo = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
+    const branch = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
+    const graph = isShareLive ? shareMode?.identity.graph : undefined;
     const storage = window.localStorage;
 
     sessionLogService.info(
       'session',
       'STALENESS_AUTO_PULL',
-      'Auto-pulling from repository (countdown expired)',
+      isShareLive ? 'Auto-refreshing live share (countdown expired)' : 'Auto-pulling from repository (countdown expired)',
       undefined,
-      { repository: repo, branch }
+      { repository: repo, branch, graph }
     );
 
     stopCountdown();
     setIsModalOpen(false);
 
+    if (isShareLive && repo && graph) {
+      const res = await liveShareSyncService.refreshToLatest();
+      if (!res.success) {
+        toast.error(res.error || 'Live refresh failed');
+        return;
+      }
+      toast.success('Updated to latest');
+      stalenessNudgeService.clearDismissedShareRemoteSha({ repository: repo, branch, graph }, storage);
+      return;
+    }
+
     // Execute git-pull only (not retrieve-all)
     await pullAll();
-    if (repo) {
-      stalenessNudgeService.recordDone('git-pull', Date.now(), `${repo}-${branch}`, storage);
-    }
 
     // Clear dismissed SHA after successful pull (so future changes are detected)
     if (repo) {
       stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
     }
-  }, [navState.selectedRepo, navState.selectedBranch, stopCountdown, pullAll]);
+  }, [navState.selectedRepo, navState.selectedBranch, stopCountdown, pullAll, shareMode]);
 
   const maybePrompt = useCallback(async () => {
     if (suppressStalenessNudges) return;
@@ -345,31 +379,52 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         !stalenessNudgeService.isSnoozed('reload', undefined, now, storage) &&
         stalenessNudgeService.shouldPromptReload(now, storage);
 
-      const repository: string | undefined = navState.selectedRepo;
-      const branch: string | undefined = navState.selectedBranch || 'main';
+      const isShareLive = shareMode?.isLiveMode ?? false;
+      const repository: string | undefined = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
+      const branch: string | undefined = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
+      const graph: string | undefined = isShareLive ? shareMode?.identity.graph : undefined;
 
       let gitPullDue = false;
       let detectedRemoteSha: string | null = null;
       if (
         repository &&
-        !stalenessNudgeService.isSnoozed('git-pull', `${repository}-${branch}`, now, storage) &&
+        !stalenessNudgeService.isSnoozed(
+          'git-pull',
+          (isShareLive && graph) ? `${repository}-${branch}-${graph}` : `${repository}-${branch}`,
+          now,
+          storage
+        ) &&
         stalenessNudgeService.canPrompt('git-pull', now, storage)
       ) {
-        // Rate-limited remote HEAD check (every 30 mins or on focus)
-        const shouldCheck = stalenessNudgeService.shouldCheckRemoteHead(repository, branch, now, storage);
-        if (shouldCheck) {
-          const status = await stalenessNudgeService.getRemoteAheadStatus(repository, branch, storage);
-          if (status.isRemoteAhead && status.remoteHeadSha) {
-            // Only nudge if this SHA hasn't been dismissed
-            if (!stalenessNudgeService.isRemoteShaDismissed(repository, branch, status.remoteHeadSha, storage)) {
-              gitPullDue = true;
-              detectedRemoteSha = status.remoteHeadSha;
+        if (isShareLive && graph) {
+          const shouldCheck = stalenessNudgeService.shouldCheckShareRemoteHead({ repository, branch, graph }, now, storage);
+          if (shouldCheck) {
+            const status = await stalenessNudgeService.getShareRemoteAheadStatus({ repository, branch, graph }, storage);
+            if (status.isRemoteAhead && status.remoteHeadSha) {
+              if (!stalenessNudgeService.isShareRemoteShaDismissed({ repository, branch, graph }, status.remoteHeadSha, storage)) {
+                gitPullDue = true;
+                detectedRemoteSha = status.remoteHeadSha;
+              }
+            }
+          }
+        } else {
+          // Rate-limited remote HEAD check (every 30 mins or on focus)
+          const shouldCheck = stalenessNudgeService.shouldCheckRemoteHead(repository, branch, now, storage);
+          if (shouldCheck) {
+            const status = await stalenessNudgeService.getRemoteAheadStatus(repository, branch, storage);
+            if (status.isRemoteAhead && status.remoteHeadSha) {
+              // Only nudge if this SHA hasn't been dismissed
+              if (!stalenessNudgeService.isRemoteShaDismissed(repository, branch, status.remoteHeadSha, storage)) {
+                gitPullDue = true;
+                detectedRemoteSha = status.remoteHeadSha;
+              }
             }
           }
         }
       }
 
       let retrieveDue = false;
+      let retrieveMostRecentRetrievedAtMs: number | undefined;
       if (activeFileId && !stalenessNudgeService.isSnoozed('retrieve-all-slices', activeFileId, now, storage)) {
         const activeFile = fileRegistry.getFile(activeFileId) as any;
         if (activeFile?.type === 'graph' && activeFile?.data && stalenessNudgeService.canPrompt('retrieve-all-slices', now, storage)) {
@@ -379,6 +434,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
             repository ? { repository, branch } : undefined
           );
           retrieveDue = staleness.isStale;
+          retrieveMostRecentRetrievedAtMs = staleness.mostRecentRetrievedAtMs;
         }
       }
 
@@ -388,6 +444,26 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       if (reloadDue) stalenessNudgeService.markPrompted('reload', now, storage);
       if (gitPullDue) stalenessNudgeService.markPrompted('git-pull', now, storage);
       if (retrieveDue) stalenessNudgeService.markPrompted('retrieve-all-slices', now, storage);
+
+      // "Last done" values must be derived from sources of truth:
+      // - git pull: IDB workspace metadata (workspace.lastSynced)
+      // - retrieve all: data freshness (connected parameters' retrieved_at)
+      //
+      // Avoid localStorage UI stamps; they lie when actions run via other entry points (scheduler, menus).
+      let gitPullLastDoneAtMs: number | undefined;
+      if (repository) {
+        if (isShareLive && graph) {
+          const f = fileRegistry.getFile(`graph-${graph}`) as any;
+          gitPullLastDoneAtMs = typeof f?.lastSynced === 'number' ? f.lastSynced : undefined;
+        } else {
+          try {
+            const ws = await db.workspaces.get(`${repository}-${branch}`);
+            gitPullLastDoneAtMs = typeof ws?.lastSynced === 'number' ? ws.lastSynced : undefined;
+          } catch {
+            gitPullLastDoneAtMs = undefined;
+          }
+        }
+      }
 
       const actions: Array<{
         key: StalenessUpdateActionKey;
@@ -413,7 +489,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
           due: gitPullDue,
           checked: gitPullDue,
           disabled: !repository,
-          lastDoneAtMs: repository ? stalenessNudgeService.getLastDoneAtMs('git-pull', `${repository}-${branch}`, storage) : undefined,
+          lastDoneAtMs: gitPullLastDoneAtMs,
         },
         {
           key: 'retrieve-all-slices',
@@ -422,7 +498,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
           due: retrieveDue,
           checked: false,
           disabled: !activeFileId,
-          lastDoneAtMs: activeFileId ? stalenessNudgeService.getLastDoneAtMs('retrieve-all-slices', activeFileId, storage) : undefined,
+          lastDoneAtMs: retrieveMostRecentRetrievedAtMs,
         },
       ];
 
@@ -430,6 +506,13 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
       // Store the remote SHA for dismiss logic
       currentRemoteShaRef.current = detectedRemoteSha;
+
+      // Share-live dashboard mode: non-blocking refresh UX (no modal).
+      if (isShareLive && isDashboardMode && gitPullDue && detectedRemoteSha) {
+        setShareAutoRefreshPending(true);
+        setCountdownSeconds(STALENESS_NUDGE_COUNTDOWN_SECONDS);
+        return;
+      }
 
       setIsModalOpen(true);
 
@@ -440,7 +523,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     } finally {
       inFlightRef.current = false;
     }
-  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen]);
+  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen, shareMode, isDashboardMode]);
 
   // Record the page load baseline once on mount.
   useEffect(() => {
@@ -475,10 +558,10 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
   // Effect to handle countdown expiration
   useEffect(() => {
-    if (countdownSeconds === 0 && isModalOpen) {
+    if (countdownSeconds === 0 && (isModalOpen || shareAutoRefreshPending)) {
       void onCountdownExpire();
     }
-  }, [countdownSeconds, isModalOpen, onCountdownExpire]);
+  }, [countdownSeconds, isModalOpen, shareAutoRefreshPending, onCountdownExpire]);
 
   // Run on key "user is back" moments.
   useEffect(() => {
@@ -557,6 +640,28 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     countdownSeconds,
   });
 
+  const shareLiveCountdown =
+    shareAutoRefreshPending && countdownSeconds !== undefined
+      ? React.createElement(
+          'div',
+          {
+            style: {
+              position: 'fixed',
+              right: 12,
+              bottom: 12,
+              zIndex: 60,
+              background: '#111827',
+              color: '#fff',
+              borderRadius: 10,
+              padding: '10px 12px',
+              fontSize: 12,
+              boxShadow: '0 10px 25px rgba(0,0,0,0.25)',
+            },
+          },
+          `Update pending — refreshing in ${countdownSeconds}s`
+        )
+      : null;
+
   if (suppressStalenessNudges) {
     return {
       modals: React.createElement(React.Fragment, null, conflictModal as any),
@@ -564,7 +669,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   }
 
   return {
-    modals: React.createElement(React.Fragment, null, conflictModal as any, modal),
+    modals: React.createElement(React.Fragment, null, conflictModal as any, shareLiveCountdown, modal),
   };
 }
 

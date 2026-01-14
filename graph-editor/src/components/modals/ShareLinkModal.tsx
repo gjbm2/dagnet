@@ -113,32 +113,52 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
         let url: string;
 
         if (liveMode) {
-          if (selectedTab.type !== 'graph') {
-            toast.error('Live mode share is only supported for graph tabs');
-            return;
-          }
-          if (!identity?.repo || !identity.branch || !identity.graph) {
-            toast.error('Live mode requires repo/branch/graph identity');
-            return;
-          }
           const secret = resolveShareSecretForLinkGeneration();
           if (!secret) {
             toast.error('No share secret available (set SHARE_SECRET or open with ?secret=…)');
             return;
           }
-          url = shareLinkService.buildLiveShareUrl({
-            repo: identity.repo,
-            branch: identity.branch,
-            graph: identity.graph,
-            secret,
-            dashboardMode,
-          });
+          if (selectedTab.type === 'chart') {
+            const res = await shareLinkService.buildLiveChartShareUrlFromChartFile({
+              chartFileId: selectedTab.fileId,
+              dashboardMode,
+              secretOverride: secret,
+            });
+            if (!res.success || !res.url) {
+              toast.error(res.error || 'Live chart share is not available for this chart');
+              return;
+            }
+            url = res.url;
+          } else {
+            if (!identity?.repo || !identity.branch || !identity.graph) {
+              toast.error('Live mode requires repo/branch/graph identity');
+              return;
+            }
+            url = shareLinkService.buildLiveShareUrl({
+              repo: identity.repo,
+              branch: identity.branch,
+              graph: identity.graph,
+              secret,
+              dashboardMode,
+            });
+          }
         } else {
-          url = shareLinkService.buildStaticShareUrl({
-            graphData: file.data,
-            identity,
-            dashboardMode,
-          });
+          if (selectedTab.type === 'chart') {
+            const title = (file.data as any)?.title || selectedTab.title || 'Chart';
+            url = shareLinkService.buildStaticSingleTabShareUrl({
+              tabType: 'chart',
+              title,
+              data: file.data,
+              identity,
+              dashboardMode,
+            });
+          } else {
+            url = shareLinkService.buildStaticShareUrl({
+              graphData: file.data,
+              identity,
+              dashboardMode,
+            });
+          }
         }
         
         await navigator.clipboard.writeText(url);

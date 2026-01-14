@@ -142,6 +142,18 @@ export function useURLDailyRetrieveAllQueue(): void {
   const paramsRef = useRef<URLDailyRetrieveAllQueueParams | null>(null);
   const tabContextInitDoneRef = useRef(false);
 
+  // IMPORTANT: This hook uses async loops. Never rely on render-captured values inside long-running
+  // async loops, or you can get stuck reading stale state (e.g. repo becomes selected later but the
+  // loop never sees it). Keep refs updated on every render.
+  const latestNavStateRef = useRef(navState);
+  latestNavStateRef.current = navState;
+
+  const latestTabOpsRef = useRef(tabOps);
+  latestTabOpsRef.current = tabOps;
+
+  const latestTabsRef = useRef(tabs);
+  latestTabsRef.current = tabs;
+
   // Parse params on mount (before TabContext cleans them).
   useEffect(() => {
     if (!paramsRef.current) paramsRef.current = parseURLParams();
@@ -187,8 +199,6 @@ export function useURLDailyRetrieveAllQueue(): void {
     urlDailyRetrieveAllQueueProcessed = true;
 
     void (async () => {
-      const repository: string | undefined = navState.selectedRepo;
-      const branch: string = navState.selectedBranch || 'main';
       const originalTitle = document.title;
       const setAutomationTitle = (phase: string) => {
         const prefix = `[Automation: ${phase}] `;
@@ -224,8 +234,8 @@ export function useURLDailyRetrieveAllQueue(): void {
             return;
           }
 
-          const repo = navState.selectedRepo;
-          const hasTabOps = !!tabOps?.openTab;
+          const repo = latestNavStateRef.current.selectedRepo;
+          const hasTabOps = !!latestTabOpsRef.current?.openTab;
           const tabCtxReady = tabContextInitDoneRef.current || isTabContextInitDone();
 
           if (repo && hasTabOps && tabCtxReady) break;
@@ -256,7 +266,8 @@ export function useURLDailyRetrieveAllQueue(): void {
           await sleep(pollMs);
         }
 
-        const repoFinal: string = navState.selectedRepo as string;
+        const repoFinal: string = latestNavStateRef.current.selectedRepo as string;
+        const branchFinal: string = latestNavStateRef.current.selectedBranch || 'main';
 
         // Open Session Log early so the user sees progress immediately. Best-effort only.
         try {
@@ -318,9 +329,9 @@ export function useURLDailyRetrieveAllQueue(): void {
           };
 
           // Ensure the graph is open (so it gets loaded into the registry).
-          const existingTab = tabs.find((t) => t.fileId === graphFileId);
+          const existingTab = latestTabsRef.current.find((t) => t.fileId === graphFileId);
           if (!existingTab) {
-            await tabOps.openTab(graphItem, 'interactive', false);
+            await latestTabOpsRef.current.openTab(graphItem, 'interactive', false);
           }
 
           // Keep Session Log in view after tab operations.
@@ -345,10 +356,10 @@ export function useURLDailyRetrieveAllQueue(): void {
 
           await dailyRetrieveAllAutomationService.run({
             repository: repoFinal,
-            branch,
+            branch: branchFinal,
             graphFileId,
             getGraph: () => (fileRegistry.getFile(graphFileId) as any)?.data || null,
-            setGraph: (g) => tabOps.updateTabData(graphFileId, g),
+            setGraph: (g) => latestTabOpsRef.current.updateTabData(graphFileId, g),
             shouldAbort: () => automationRunService.shouldStop(runId),
           });
         }

@@ -185,6 +185,148 @@ This is the primary workflow that motivated the Phase 3 “live chart” work. I
   - After a repo refresh, the chart recomputes from the recipe and updates in-place (no manual user action required in dashboard embeds).
   - If any scenario in the chart is a non-live overlay, live chart share must be refused (with a clear alternative offer), rather than producing a link that cannot rehydrate.
 
+## E2E testing proposal (Playwright OSS; persistence-first; GitHub not tested)
+
+This section proposes **real browser E2E tests** for the Phase 3 live-share workflow, focusing on **DagNet’s persistence and refresh correctness** rather than validating GitHub itself.
+
+### Principles / scope
+
+- **Primary goal**: Verify **share-scoped persistence** and **refresh correctness** end-to-end in a real browser.
+- **Not testing GitHub**:
+  - GitHub is treated as an **external boundary**.
+  - Network calls are **intercepted and stubbed** with deterministic fixtures.
+  - We assert that DagNet behaves correctly given specific “remote” responses; we do not assert GitHub’s behaviour.
+- **Real browser runtime**: Use Playwright’s OSS runner (`@playwright/test`) to exercise:
+  - URL boot (`mode=live` + `share=` recipe payload),
+  - IndexedDB (Dexie) persistence and DB scoping,
+  - localStorage share-live “last seen remote HEAD” markers,
+  - dashboard non-blocking refresh UX and recompute pipeline.
+- **Determinism**:
+  - Stub *all* external network boundaries (remote HEAD + file contents + compute/analyse).
+  - Keep fixtures tiny and stable so tests are fast and reliable.
+
+### What these E2E tests must prove (Phase 3 invariants)
+
+- **Isolation**: share links must use a share-scoped IndexedDB DB name; different `repo/branch/graph` must not collide.
+- **Cache-first**: warm-load reuses share-scoped IndexedDB content (and chart artefacts) without refetching content.
+- **Refresh correctness**:
+  - remote-ahead detection triggers refresh (live links do not include `nonudge`),
+  - refresh overwrites cached files (no “stale reuse”),
+  - live scenarios regenerate (versions increment / effective state updates),
+  - chart recomputes from recipe and updates in-place.
+- **Dashboard UX**: in `dashboard=1`, refresh is non-blocking:
+  - show countdown/pending indicator,
+  - perform refresh,
+  - show toast (“Updated to latest”).
+
+### Tooling & placement
+
+- **Playwright OSS**:
+  - Add Playwright test runner to `graph-editor` dev deps.
+  - Place tests under `graph-editor/e2e/`.
+- **Server**:
+  - E2E runs against the local dev server or preview server (implementation choice to be decided during implementation).
+- **No secrets**:
+  - Do not rely on real `secret` material; tests use fake values.
+  - Any credential unlock paths should be exercised using stubbed responses.
+
+### Stubbing strategy (external boundaries only)
+
+Stubs are provided via Playwright request routing/interception:
+
+- **Remote-ahead check**: stub the request that resolves “remote HEAD SHA” to return:
+  - `sha_v1` on first runs,
+  - `sha_v2` after we simulate a repo advance.
+- **File fetches**: stub graph file + minimal dependency files:
+  - graph JSON content (v1 vs v2),
+  - `parameters-index.yaml` (if required by the boot path),
+  - a minimal set of parameter YAML files (v1 vs v2).
+- **Compute/analyse**: stub compute endpoint(s) to return deterministic analysis results:
+  - analysis result v1 (baseline),
+  - analysis result v2 (changed) so we can prove recompute happened.
+
+### Fixtures (two-state model)
+
+Maintain a minimal deterministic fixture set:
+
+- **Remote state v1**:
+  - head SHA: `sha_v1`
+  - graph content: `graph_v1.json`
+  - parameter(s): `param_v1.yaml` (at least one referenced param)
+  - analysis result: `analysis_v1.json`
+- **Remote state v2** (simulated repo advance):
+  - head SHA: `sha_v2`
+  - graph content: `graph_v2.json` (meaningfully different)
+  - parameter(s): `param_v2.yaml` (meaningfully different)
+  - analysis result: `analysis_v2.json` (meaningfully different)
+
+Fixtures should be small but must be sufficient to detect stale reuse:
+- The graph or a referenced parameter must differ between v1 and v2.
+- The analysis result must differ between v1 and v2.
+
+### Core E2E scenarios (minimum ship set)
+
+#### 1) Live chart share: cold-cache boot
+
+- Start with a fresh Playwright context (empty storage).
+- Navigate to a live chart share URL (`mode=live` + `share=` recipe payload + `dashboard=1`).
+- Assert:
+  - share-scoped DB is created and does not match the workspace DB name,
+  - graph tab loads,
+  - live scenarios are created from DSL definitions,
+  - chart tab appears and renders with analysis result v1,
+  - share-live “last seen remote HEAD SHA” is recorded for the share scope.
+
+#### 2) Live chart share: warm-cache boot (cache-first)
+
+- Reopen the same link in the same persisted browser context.
+- Assert:
+  - chart artefact displays immediately from IndexedDB (or equivalently, chart loads without waiting for network),
+  - content fetch routes are not called (or are called only for rate-limited remote-ahead check, depending on policy),
+  - no “seeding overwrite” occurs unless remote-ahead indicates refresh.
+
+#### 3) Dashboard remote-ahead refresh: overwrite seed + scenario regen + chart recompute
+
+- With warm cache present, switch stubs to remote state v2 and trigger the remote-ahead check.
+- Assert:
+  - countdown/pending indicator appears (non-modal),
+  - refresh runs and overwrites graph/parameter files in IndexedDB,
+  - scenarios regenerate (detect via persisted scenario version change),
+  - chart recomputes and updates to analysis result v2,
+  - toast appears (“Updated to latest”),
+  - share-live “last seen remote HEAD SHA” updates to `sha_v2`.
+
+#### 4) Share isolation: two different links do not collide
+
+- Open link A and seed its cache.
+- Open link B (different `repo/branch/graph`) and seed its cache.
+- Assert:
+  - two distinct share DB names exist,
+  - files/scenarios/chart artefacts differ and do not overwrite each other.
+
+#### 5) Scenario-level share link: determinism
+
+- Navigate to a scenario-level share URL (uses `scenarios=` and `selectedscenario=`).
+- Assert:
+  - only the requested scenario is visible and selected (Current hidden when required),
+  - deterministic scenario creation from DSL on cold cache.
+
+### Persistence assertions (how we’ll verify IndexedDB state)
+
+Assertions should inspect IndexedDB directly in-browser:
+
+- Enumerate databases and pick the share-scoped DB name.
+- Read the `files` and `scenarios` tables for:
+  - graph file record,
+  - at least one parameter file record,
+  - the chart artefact file record,
+  - scenario records and their `version` values.
+
+### Notes / limitations
+
+- These E2E tests provide high confidence in DagNet’s persistence logic, but Notion embeds still require a small manual smoke test due to Notion’s unique storage persistence behaviour and embed constraints.
+
+
 ## Phasing (implementation order — all features remain planned)
 
 All features in this document are planned. This section defines an explicit implementation order based on dependencies — **not a descope**.

@@ -56,7 +56,15 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
     if (!file?.data) return null;
     
     const identity = extractIdentityFromFileSource(file.source);
-    return { file, identity };
+    // Chart tabs are local-only files; for live sharing we must derive identity from the parent graph.
+    const chartParentIdentity = (() => {
+      if (!fileId.startsWith('chart-')) return undefined;
+      const parentFileId = (file.data as any)?.source?.parent_file_id as string | undefined;
+      if (!parentFileId) return undefined;
+      const parent = fileRegistry.getFile(parentFileId);
+      return extractIdentityFromFileSource(parent?.source);
+    })();
+    return { file, identity, chartParentIdentity };
   }, [fileId]);
   
   const urlSecrets = useMemo(() => {
@@ -73,13 +81,21 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
 
   // Check if live share is possible
   const liveShareCheck = useMemo(() => {
-    if (!fileInfo?.identity) {
+    if (!fileInfo) {
+      return { canLive: false, reason: 'No file data available' };
+    }
+
+    const isChart = Boolean(fileId?.startsWith('chart-'));
+    const effectiveIdentity = isChart ? fileInfo.chartParentIdentity : fileInfo.identity;
+
+    // For charts, we validate identity lazily during link generation (using chart source parent).
+    if (!effectiveIdentity && !isChart) {
       return { canLive: false, reason: 'No repository identity - file may be local-only' };
     }
-    
-    const { repo, branch, graph } = fileInfo.identity;
+
+    const { repo, branch, graph } = (effectiveIdentity || {}) as any;
     if (!repo || !branch || !graph) {
-      return { canLive: false, reason: 'Missing repo/branch/graph identity' };
+      if (!isChart) return { canLive: false, reason: 'Missing repo/branch/graph identity' };
     }
     
     // Live share links currently require:
@@ -91,7 +107,7 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
     }
 
     return { canLive: false, reason: 'No share secret available (set SHARE_SECRET or open with ?secret=…)' };
-  }, [fileInfo, urlSecrets]);
+  }, [fileInfo, urlSecrets, fileId]);
   
   const canShare = isShareableType && !isReadOnlyShare && !!fileInfo;
   const canShareStatic = canShare;
@@ -105,10 +121,24 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
     }
     
     try {
-      const url = shareLinkService.buildStaticShareUrl({
-        graphData: fileInfo.file.data,
-        identity: fileInfo.identity,
-      });
+      const tabType: 'graph' | 'chart' = fileId?.startsWith('chart-') ? 'chart' : 'graph';
+      const title =
+        tabType === 'chart'
+          ? (fileInfo.file.data?.title as string | undefined) || 'Chart'
+          : 'Shared Graph';
+
+      const url =
+        tabType === 'chart'
+          ? shareLinkService.buildStaticSingleTabShareUrl({
+              tabType,
+              title,
+              data: fileInfo.file.data,
+              identity: fileInfo.identity,
+            })
+          : shareLinkService.buildStaticShareUrl({
+              graphData: fileInfo.file.data,
+              identity: fileInfo.identity,
+            });
       
       await navigator.clipboard.writeText(url);
       toast.success('Static share link copied!');
@@ -123,17 +153,6 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
   
   // Copy live share link
   const copyLiveShareLink = useCallback(async () => {
-    if (!fileInfo?.identity) {
-      toast.error('No repository identity available');
-      return;
-    }
-    
-    const { repo, branch, graph } = fileInfo.identity;
-    if (!repo || !branch || !graph) {
-      toast.error('Missing repository identity');
-      return;
-    }
-    
     try {
       const secret = urlSecrets.secret;
       if (!secret) {
@@ -141,23 +160,47 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
         return;
       }
 
-      const url = shareLinkService.buildLiveShareUrl({
-        repo,
-        branch,
-        graph,
-        secret,
-      });
+      let url: string;
+      if (fileId?.startsWith('chart-')) {
+        const res = await shareLinkService.buildLiveChartShareUrlFromChartFile({
+          chartFileId: fileId,
+          secretOverride: secret,
+        });
+        if (!res.success || !res.url) {
+          toast.error(res.error || 'Live chart share is not available for this chart');
+          return;
+        }
+        url = res.url;
+      } else {
+        if (!fileInfo?.identity) {
+          toast.error('No repository identity available');
+          return;
+        }
+
+        const { repo, branch, graph } = fileInfo.identity;
+        if (!repo || !branch || !graph) {
+          toast.error('Missing repository identity');
+          return;
+        }
+
+        url = shareLinkService.buildLiveShareUrl({
+          repo,
+          branch,
+          graph,
+          secret,
+        });
+      }
       
       await navigator.clipboard.writeText(url);
       toast.success('Live share link copied!');
       
       sessionLogService.success('session', 'SHARE_LIVE_LINK_COPIED',
-        `Live share link copied for: ${repo}/${branch}/${graph}`);
+        `Live share link copied for: ${fileId}`);
     } catch (error) {
       console.error('Failed to create live share link:', error);
       toast.error('Failed to copy live share link');
     }
-  }, [fileInfo, urlSecrets]);
+  }, [fileInfo, urlSecrets, fileId]);
   
   return {
     canShare,
