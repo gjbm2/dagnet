@@ -398,9 +398,15 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       }
 
       let isOutdated = false;
-      const diffFn = (stalenessNudgeService as any).isRemoteAppVersionDifferent;
-      if (typeof diffFn === 'function') {
-        isOutdated = !!diffFn.call(stalenessNudgeService, APP_VERSION, storage);
+      const newerFn = (stalenessNudgeService as any).isRemoteAppVersionNewerThanLocal;
+      if (typeof newerFn === 'function') {
+        isOutdated = !!newerFn.call(stalenessNudgeService, APP_VERSION, storage);
+      } else {
+        // Backwards-compatible fallback for partial mocks / older service shape.
+        const diffFn = (stalenessNudgeService as any).isRemoteAppVersionDifferent;
+        if (typeof diffFn === 'function') {
+          isOutdated = !!diffFn.call(stalenessNudgeService, APP_VERSION, storage);
+        }
       }
 
       // Unattended terminals (dashboard mode): auto-reload when a new client is deployed.

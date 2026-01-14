@@ -49,7 +49,7 @@ export function useAppUpdateAvailable(): AppUpdateAvailableState {
   }, []);
 
   const isUpdateAvailable = useMemo(() => {
-    return !!(remoteVersion && remoteVersion !== APP_VERSION);
+    return stalenessNudgeService.isRemoteAppVersionNewerThanLocal(APP_VERSION, window.localStorage);
   }, [remoteVersion]);
 
   const reloadNow = useCallback(() => {
