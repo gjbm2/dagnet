@@ -36,6 +36,9 @@ const hoisted = vi.hoisted(() => ({
   clearVolatileFlags: vi.fn(),
   getAutomaticMode: vi.fn(),
   setAutomaticMode: vi.fn(),
+
+  // db fakes
+  dbWorkspacesGet: vi.fn(),
 }));
 
 vi.mock('../../contexts/NavigatorContext', () => ({
@@ -76,6 +79,32 @@ vi.mock('../useRetrieveAllSlicesRequestListener', () => ({
 vi.mock('../../services/retrieveAllSlicesService', () => ({
   retrieveAllSlicesService: {
     execute: hoisted.retrieveAllSlicesExecute,
+  },
+}));
+
+vi.mock('../../contexts/ShareModeContext', () => ({
+  useShareModeOptional: () => null,
+}));
+
+vi.mock('../../contexts/DashboardModeContext', () => ({
+  useDashboardMode: () => ({ isDashboardMode: false, setDashboardMode: vi.fn(), toggleDashboardMode: vi.fn() }),
+}));
+
+vi.mock('../../services/liveShareSyncService', () => ({
+  liveShareSyncService: { refreshToLatest: vi.fn(async () => ({ success: true })) },
+}));
+
+vi.mock('react-hot-toast', () => ({
+  default: {
+    success: vi.fn(),
+    error: vi.fn(),
+    loading: vi.fn(),
+  },
+}));
+
+vi.mock('../../db/appDatabase', () => ({
+  db: {
+    workspaces: { get: hoisted.dbWorkspacesGet },
   },
 }));
 
@@ -139,6 +168,7 @@ describe('useStalenessNudges', () => {
     hoisted.shouldCheckRemoteHead.mockReturnValue(false);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: false });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);
+    hoisted.dbWorkspacesGet.mockResolvedValue({ lastSynced: Date.now() });
     hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
       isStale: false,
       parameterCount: 0,

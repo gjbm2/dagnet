@@ -28,6 +28,7 @@ import { parseConstraints } from '@/lib/queryDSL';
 import { computeInheritedDSL, computeEffectiveFetchDSL, deriveBaseDSLForRebase, LIVE_EMPTY_DIFF_DSL, diffQueryDSLFromBase } from '../../services/scenarioRegenerationService';
 import { fetchDataService } from '../../services/fetchDataService';
 import { useCopyAllScenarioParamPacks } from '../../hooks/useCopyAllScenarioParamPacks';
+import { useScenarioShareLink } from '../../hooks/useScenarioShareLink';
 import { 
   Eye, 
   EyeOff,
@@ -133,6 +134,9 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }
   
   const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour, createLiveScenario, regenerateScenario, regenerateAllLive, putToBase, baseDSL } = scenariosContext;
+  const currentTabForShare = tabs.find(t => t.id === tabId);
+  const graphFileIdForShare = currentTabForShare?.fileId || '';
+  const { canShareScenario, copyStaticScenarioShareLink, copyLiveScenarioShareLink } = useScenarioShareLink(graphFileIdForShare, tabId);
   
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -992,6 +996,18 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       label: 'Edit',
       onClick: () => handleOpenEditor(scenarioId)
     });
+
+    // Share (scenario-level share; Phase 3)
+    if (canShareScenario(scenarioId)) {
+      items.push({
+        label: 'Share link (static)',
+        onClick: () => void copyStaticScenarioShareLink(scenarioId),
+      });
+      items.push({
+        label: 'Share link (live)',
+        onClick: () => void copyLiveScenarioShareLink(scenarioId),
+      });
+    }
     
     // Use as current (not for current itself)
     if (scenarioId !== 'current') {
@@ -1019,7 +1035,19 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     }
     
     return items;
-  }, [visibleScenarioIds, scenarios, handleToggleVisibility, handleShowOnly, handleOpenEditor, handleUseAsCurrent, handleMergeDown, handleDelete]);
+  }, [
+    visibleScenarioIds,
+    scenarios,
+    handleToggleVisibility,
+    handleShowOnly,
+    handleOpenEditor,
+    handleUseAsCurrent,
+    handleMergeDown,
+    handleDelete,
+    canShareScenario,
+    copyStaticScenarioShareLink,
+    copyLiveScenarioShareLink,
+  ]);
   
   /**
    * Handle context menu on scenario

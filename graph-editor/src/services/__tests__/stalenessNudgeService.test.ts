@@ -182,6 +182,49 @@ describe('stalenessNudgeService', () => {
     stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
     expect(stalenessNudgeService.isRemoteShaDismissed(repo, branch, shaA, storage)).toBe(false);
   });
+
+  it('should rate-limit share remote head checks per repo-branch-graph', () => {
+    const storage = new MemoryStorage() as any;
+    const scope = { repository: 'repo-1', branch: 'main', graph: 'g-1' };
+    const t0 = 123_000_000;
+
+    expect(stalenessNudgeService.shouldCheckShareRemoteHead(scope, t0, storage)).toBe(true);
+    stalenessNudgeService.markShareRemoteHeadChecked(scope, t0, storage);
+
+    expect(stalenessNudgeService.shouldCheckShareRemoteHead(scope, t0 + STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS - 1, storage)).toBe(false);
+    expect(stalenessNudgeService.shouldCheckShareRemoteHead(scope, t0 + STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS + 1, storage)).toBe(true);
+  });
+
+  it('should report share remote-ahead when remote HEAD differs from last-seen (and treat missing last-seen as ahead)', async () => {
+    hoisted.mockCredentialsLoad.mockResolvedValue({
+      success: true,
+      credentials: { defaultGitRepo: 'repo-1', git: [{ name: 'repo-1' }] },
+    });
+    hoisted.mockGitGetRemoteHeadSha.mockResolvedValue('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+
+    const storage = new MemoryStorage() as any;
+    const scope = { repository: 'repo-1', branch: 'main', graph: 'my-graph' };
+
+    // No last-seen: should be treated as ahead (bootstrap refresh).
+    const res1 = await stalenessNudgeService.getShareRemoteAheadStatus(scope, storage);
+    expect(res1.isRemoteAhead).toBe(true);
+    expect(res1.localSha).toBeUndefined();
+    expect(res1.remoteHeadSha).toBe('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+
+    // Record last-seen and check again with same remote: not ahead.
+    stalenessNudgeService.recordShareLastSeenRemoteHeadSha(scope, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', storage);
+    const res2 = await stalenessNudgeService.getShareRemoteAheadStatus(scope, storage);
+    expect(res2.isRemoteAhead).toBe(false);
+    expect(res2.localSha).toBe('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+    expect(res2.remoteHeadSha).toBe('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+
+    // Remote changes: ahead.
+    hoisted.mockGitGetRemoteHeadSha.mockResolvedValue('cccccccccccccccccccccccccccccccccccccccc');
+    const res3 = await stalenessNudgeService.getShareRemoteAheadStatus(scope, storage);
+    expect(res3.isRemoteAhead).toBe(true);
+    expect(res3.localSha).toBe('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+    expect(res3.remoteHeadSha).toBe('cccccccccccccccccccccccccccccccccccccccc');
+  });
 });
 
 

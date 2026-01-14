@@ -11,11 +11,12 @@ const hoisted = vi.hoisted(() => ({
   openTab: vi.fn(),
   updateTabData: vi.fn(),
   openLogTab: vi.fn(async () => 'session-log-tab-1'),
+  navState: { selectedRepo: 'repo-1', selectedBranch: 'main' as string },
 }));
 
 vi.mock('../../contexts/NavigatorContext', () => ({
   useNavigatorContext: () => ({
-    state: { selectedRepo: 'repo-1', selectedBranch: 'main' },
+    state: hoisted.navState,
     operations: {},
   }),
 }));
@@ -52,6 +53,7 @@ describe('useURLDailyRetrieveAllQueue', () => {
     hoisted.openTab.mockReset();
     hoisted.updateTabData.mockReset();
     hoisted.openLogTab.mockClear();
+    hoisted.navState = { selectedRepo: 'repo-1', selectedBranch: 'main' };
     resetURLDailyRetrieveAllQueueProcessed();
 
     // Start each test with a clean URL.
@@ -116,6 +118,34 @@ describe('useURLDailyRetrieveAllQueue', () => {
     await waitFor(() => {
       expect(window.location.search).toBe('');
     });
+  });
+
+  it('does not get stuck if repo becomes selected after mount (scheduler-style init)', async () => {
+    vi.useFakeTimers();
+    hoisted.navState = { selectedRepo: '', selectedBranch: '' };
+    window.history.replaceState({}, document.title, '/?retrieveall=my-graph');
+
+    const { rerender } = renderHook(() => useURLDailyRetrieveAllQueue());
+
+    // Give the waiting loop a chance to start; should not run without a repo.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(hoisted.run).toHaveBeenCalledTimes(0);
+
+    // Repo becomes selected later (e.g. NavigatorContext finishes initialising).
+    hoisted.navState = { selectedRepo: 'repo-1', selectedBranch: 'main' };
+    rerender();
+
+    // Drive the internal polling loop (sleep(250ms)) until automation starts.
+    // Avoid waitFor here because we're under fake timers.
+    for (let i = 0; i < 20; i++) {
+      if (hoisted.run.mock.calls.length > 0) break;
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    expect(hoisted.run).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });
 

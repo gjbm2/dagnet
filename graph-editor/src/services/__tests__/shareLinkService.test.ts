@@ -3,8 +3,29 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// shareLinkService now imports db + fileRegistry for live chart share.
+// For URL-building unit tests we stub those dependencies to avoid Dexie/IDB in happy-dom.
+vi.mock('../../db/appDatabase', () => ({
+  db: {
+    files: { get: vi.fn(async () => null) },
+    tabs: { get: vi.fn(async () => null) },
+    scenarios: { where: vi.fn(() => ({ equals: vi.fn(() => ({ toArray: vi.fn(async () => []) })) })) },
+  },
+}));
+
+vi.mock('../../contexts/TabContext', () => ({
+  fileRegistry: { getFile: vi.fn(() => null) },
+}));
+
+vi.mock('../../lib/sharePayload', () => ({
+  encodeSharePayloadToParam: vi.fn(() => 'x'),
+  stableShortHash: vi.fn(() => 'x'),
+}));
+
 import {
   buildStaticShareUrl,
+  buildStaticSingleTabShareUrl,
   buildLiveShareUrl,
   extractIdentityFromFileSource,
 } from '../shareLinkService';
@@ -90,7 +111,7 @@ describe('shareLinkService', () => {
       expect(url).toContain('branch=main');
       expect(url).toContain('graph=test-graph');
       expect(url).toContain('secret=abc123');
-      expect(url).toContain('nonudge=1');
+      expect(url).not.toContain('nonudge=1');
       expect(url).toContain('dashboard=1');
     });
 
@@ -117,6 +138,21 @@ describe('shareLinkService', () => {
       });
 
       expect(url).not.toContain('dashboard=1');
+    });
+  });
+
+  describe('buildStaticSingleTabShareUrl', () => {
+    it('wraps chart tabs in a bundle payload', () => {
+      const url = buildStaticSingleTabShareUrl({
+        tabType: 'chart',
+        title: 'My Chart',
+        data: { version: '1.0.0', chart_kind: 'analysis_funnel', title: 'My Chart', created_at_uk: '1-Jan-26', created_at_ms: 0, payload: { analysis_result: {}, scenario_ids: [] } },
+        baseUrl: 'https://example.com/app',
+      });
+
+      expect(url).toContain('data=');
+      expect(url).toContain('mode=static');
+      expect(url).toContain('nonudge=1');
     });
   });
 
