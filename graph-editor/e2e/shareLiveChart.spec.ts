@@ -84,6 +84,179 @@ function buildLiveChartShareUrl(payload: SharePayloadV1): string {
 }
 
 test.describe.serial('Share-live chart (persistence-first)', () => {
+  test('generated live chart share link replays scenario labels/colours/modes exactly (authoring → share)', async ({ browser, baseURL }) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+
+    // 1) Authoring page: seed a graph + scenarios + a bridge chart file in IndexedDB, then generate a live share URL via the real service.
+    const authoringContext = await browser.newContext();
+    const authoringPage = await authoringContext.newPage();
+    await installShareLiveStubs(authoringPage, state);
+    await authoringPage.goto(new URL('/?e2e=1', baseURL).toString(), { waitUntil: 'domcontentloaded' });
+
+    const chartFileId = 'chart-author-bridge-1';
+    const graphFileId = 'graph-test-graph';
+    const parentTabId = 'tab-graph-author-1';
+    const scenarioAId = 'scenario-a';
+    const scenarioBId = 'scenario-b';
+
+    await authoringPage.evaluate(
+      async ({ chartFileId, graphFileId, parentTabId, scenarioAId, scenarioBId }) => {
+        const w: any = window as any;
+        const db = w.db;
+        if (!db) throw new Error('db missing');
+        if (!w.dagnetE2e?.buildLiveChartShareUrlFromChartFile) throw new Error('dagnetE2e hooks missing');
+
+        // Seed graph file with live identity.
+        await db.files.put({
+          fileId: graphFileId,
+          type: 'graph',
+          viewTabs: [],
+          data: { nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }], edges: [] },
+          // IMPORTANT: repository must match the credential entry name (not owner/repo).
+          source: { repository: 'repo-1', branch: 'main', path: 'graphs/test-graph.json' },
+        });
+
+        // Seed live scenarios (source of truth for DSL).
+        await db.scenarios.put({
+          id: scenarioAId,
+          fileId: graphFileId,
+          name: 'new month',
+          colour: '#06B6D4',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          meta: { isLive: true, queryDSL: 'cohort(-1m:)' },
+          params: { edges: {}, nodes: {} },
+        });
+        await db.scenarios.put({
+          id: scenarioBId,
+          fileId: graphFileId,
+          name: 'old month',
+          colour: '#F97316',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          meta: { isLive: true, queryDSL: 'cohort(-2m:-1m)' },
+          params: { edges: {}, nodes: {} },
+        });
+
+        // Seed parent graph tab state (only for share link generation legacy fallback).
+        await db.tabs.put({
+          id: parentTabId,
+          fileId: graphFileId,
+          viewMode: 'interactive',
+          title: 'Graph',
+          editorState: {
+            scenarioState: {
+              visibleScenarioIds: [scenarioAId, scenarioBId],
+              visibilityMode: { [scenarioAId]: 'e', [scenarioBId]: 'f' },
+              selectedScenarioId: scenarioAId,
+            },
+          },
+        });
+
+        // Seed a bridge chart file that embeds the canonical scenario display metadata in analysis_result.metadata.
+        await db.files.put({
+          fileId: chartFileId,
+          type: 'chart',
+          viewTabs: [],
+          data: {
+            version: '1.0.0',
+            chart_kind: 'analysis_bridge',
+            title: 'Chart — Bridge View',
+            created_at_uk: '14-Jan-26',
+            created_at_ms: Date.now(),
+            source: {
+              parent_tab_id: parentTabId,
+              parent_file_id: graphFileId,
+              query_dsl: 'to(switch-success)',
+              analysis_type: 'bridge_view',
+            },
+            payload: {
+              analysis_result: {
+                analysis_type: 'bridge_view',
+                analysis_name: 'Bridge View',
+                analysis_description: 'Decompose the Reach Probability difference between two scenarios',
+                metadata: {
+                  scenario_a: {
+                    scenario_id: scenarioAId,
+                    name: 'new month',
+                    colour: '#06B6D4',
+                    visibility_mode: 'e',
+                    probability_label: 'Evidence Probability',
+                  },
+                  scenario_b: {
+                    scenario_id: scenarioBId,
+                    name: 'old month',
+                    colour: '#F97316',
+                    visibility_mode: 'f',
+                    probability_label: 'Forecast Probability',
+                  },
+                },
+                dimension_values: { bridge_step: {} },
+                data: [],
+              },
+              scenario_ids: [],
+            },
+          },
+        });
+      },
+      { chartFileId, graphFileId, parentTabId, scenarioAId, scenarioBId }
+    );
+
+    const shareUrl = await authoringPage.evaluate(async ({ chartFileId }) => {
+      const w: any = window as any;
+      const res = await w.dagnetE2e.buildLiveChartShareUrlFromChartFile({ chartFileId, secretOverride: 'test-secret', dashboardMode: true });
+      if (!res?.success || !res?.url) throw new Error(res?.error || 'Failed to build share URL');
+      return res.url as string;
+    }, { chartFileId });
+
+    await authoringContext.close();
+
+    // 2) Share page: open the generated URL and assert the recompute inputs preserve scenario display metadata.
+    const shareContext = await browser.newContext();
+    const sharePage = await shareContext.newPage();
+    await installShareLiveStubs(sharePage, state);
+
+    await sharePage.goto(new URL(shareUrl, baseURL).toString(), { waitUntil: 'domcontentloaded' });
+    await expect(sharePage.getByText('Live view')).toBeVisible();
+
+    // Assert compute boundary received the exact scenario labels/colours/modes (this is what drives chart display).
+    await expect
+      .poll(async () => {
+        return (state.lastAnalyzeRequest?.scenarios || []).map((s: any) => ({
+          name: s.name,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+        }));
+      })
+      .toEqual([
+        { name: 'new month', colour: '#06B6D4', visibility_mode: 'e' },
+        { name: 'old month', colour: '#F97316', visibility_mode: 'f' },
+      ]);
+
+    // Assert the share session materialised exactly two user scenarios with the correct display metadata.
+    await expect
+      .poll(async () => {
+        return await sharePage.evaluate(async () => {
+          const db: any = (window as any).db;
+          const all = await db.scenarios.toArray();
+          return all.map((s: any) => ({ name: s?.name, colour: s?.colour, dsl: s?.meta?.queryDSL }));
+        });
+      })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: 'new month', colour: '#06B6D4', dsl: 'cohort(-1m:)' }),
+          expect.objectContaining({ name: 'old month', colour: '#F97316', dsl: 'cohort(-2m:-1m)' }),
+        ])
+      );
+
+    // Guard against the "double chart tab" regression: the chart UI should be rendered once.
+    await expect(sharePage.getByText('Chart — Bridge View')).toHaveCount(1);
+    await sharePage.waitForTimeout(1000);
+    await expect(sharePage.getByText('Chart — Bridge View')).toHaveCount(1);
+
+    await shareContext.close();
+  });
+
   test('cold boot seeds share-scoped IndexedDB and materialises a chart artefact', async ({ browser, baseURL }) => {
     const state: ShareLiveStubState = { version: 'v1', counts: {} };
     const context = await browser.newContext();

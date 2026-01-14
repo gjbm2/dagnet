@@ -205,6 +205,21 @@ class RetrieveAllSlicesService {
         if (aborted) break;
       }
 
+      // On a fully successful run, stamp a graph-level marker so other devices that pull
+      // can suppress retrieve-all nudges (nightly cron is the primary driver).
+      if (!aborted && totalErrors === 0) {
+        try {
+          const g = getGraph();
+          if (g && typeof g === 'object' && (g as any).metadata) {
+            const next: any = { ...(g as any) };
+            next.metadata = { ...(next.metadata || {}), last_retrieve_all_slices_success_at_ms: Date.now() };
+            setGraph(next);
+          }
+        } catch {
+          // Best-effort only; do not fail the run because a marker could not be written.
+        }
+      }
+
       sessionLogService.endOperation(
         logOpId,
         totalErrors > 0 ? 'warning' : 'success',

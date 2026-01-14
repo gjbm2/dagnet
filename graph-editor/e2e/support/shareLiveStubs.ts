@@ -7,6 +7,7 @@ export interface ShareLiveStubState {
   counts: Record<string, number>;
   lastServedGraphMean?: number;
   lastServedGraphVersion?: RemoteStateVersion;
+  lastAnalyzeRequest?: any;
 }
 
 function inc(state: ShareLiveStubState, key: string) {
@@ -155,17 +156,58 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
       inc(state, 'compute:analyze');
       inc(state, `compute:analyze:${state.version}`);
       const analysisName = state.version === 'v1' ? 'E2E Analysis v1' : 'E2E Analysis v2';
+
+      // Capture request so E2E can assert scenario names/colours/modes precisely.
+      try {
+        const body = route.request().postData();
+        state.lastAnalyzeRequest = body ? JSON.parse(body) : null;
+      } catch {
+        state.lastAnalyzeRequest = null;
+      }
+
+      // For correctness tests, echo scenario display metadata back into the response
+      // so the chart layer can render stable labels.
+      const req = state.lastAnalyzeRequest || {};
+      const reqScenarios: any[] = Array.isArray(req?.scenarios) ? req.scenarios : [];
+      const a = reqScenarios[0] || null;
+      const b = reqScenarios[1] || null;
+
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           success: true,
           result: {
-            analysis_type: 'graph_overview',
+            analysis_type: req?.analysis_type || 'graph_overview',
             analysis_name: analysisName,
             analysis_description: 'E2E stubbed analysis result',
+            metadata: {
+              scenario_a: a
+                ? {
+                    scenario_id: a.scenario_id,
+                    name: a.name,
+                    colour: a.colour,
+                    visibility_mode: a.visibility_mode,
+                  }
+                : null,
+              scenario_b: b
+                ? {
+                    scenario_id: b.scenario_id,
+                    name: b.name,
+                    colour: b.colour,
+                    visibility_mode: b.visibility_mode,
+                  }
+                : null,
+            },
+            dimension_values: {
+              scenario_id: Object.fromEntries(
+                reqScenarios.map(s => [
+                  s.scenario_id,
+                  { name: s.name, colour: s.colour, visibility_mode: s.visibility_mode },
+                ])
+              ),
+            },
             data: [{ marker: state.version }],
-            dimension_values: { scenario_id: {} },
           },
         }),
       });

@@ -817,6 +817,11 @@ export interface Metadata {
   name?: string; // Human-readable graph name for display in UI
   created_at: string; // ISO datetime or UK format (d-MMM-yy)
   updated_at?: string;
+  /**
+   * Cross-device marker: last time a full Retrieve All Slices run completed successfully for this graph.
+   * Stored as epoch ms to avoid ISO date strings in file storage.
+   */
+  last_retrieve_all_slices_success_at_ms?: number;
   author?: string;
   description?: string;
   tags?: string[];

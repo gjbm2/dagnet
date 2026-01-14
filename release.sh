@@ -309,7 +309,7 @@ print_blue "Proceeding with release..."
 echo ""
 
 # Update package.json version
-print_blue "[1/6] Updating package.json..."
+print_blue "[1/7] Updating package.json..."
 (cd graph-editor && npm version "$NEW_VERSION" --no-git-tag-version)
 
 # Verify the version was updated correctly
@@ -321,10 +321,20 @@ if [[ "$UPDATED_VERSION" != "$NEW_VERSION" ]]; then
   exit 1
 fi
 
+# Update deployed version marker (used by reload-page nudge)
+print_blue "[2/7] Updating graph-editor/public/version.json..."
+cat > graph-editor/public/version.json << EOF
+{
+  "version": "${NEW_VERSION}",
+  "versionShort": "${NEW_DISPLAY}"
+}
+EOF
+
 # Update CHANGELOG.md if release notes were provided
-print_blue "[2/6] Updating CHANGELOG.md..."
+print_blue "[3/7] Updating CHANGELOG.md..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  CURRENT_DATE=$(date +"%B %d, %Y")
+  # DagNet date format: d-MMM-yy (e.g., 1-Dec-25)
+  CURRENT_DATE="$(date "+%e-%b-%y" | sed 's/^ //')"
   
   # Create new changelog entry in a temp file
   cat > /tmp/changelog_entry.tmp << EOF
@@ -349,29 +359,29 @@ else
 fi
 
 # Stage changes
-print_blue "[3/6] Staging changes..."
+print_blue "[4/7] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/docs/CHANGELOG.md
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md
 else
-  git add graph-editor/package.json graph-editor/package-lock.json
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json
 fi
 
 # Commit the version bump
-print_blue "[4/6] Committing version bump..."
+print_blue "[5/7] Committing version bump..."
 git commit -m "Bump version to ${NEW_VERSION}"
 
 # Create git tag
-print_blue "[5/6] Creating git tag v${NEW_VERSION}..."
+print_blue "[6/7] Creating git tag v${NEW_VERSION}..."
 git tag "v${NEW_VERSION}"
 
 # Push changes and tags
-print_blue "[6/6] Pushing ${CURRENT_BRANCH} to remote..."
+print_blue "[7/7] Pushing ${CURRENT_BRANCH} to remote..."
 git push origin "$CURRENT_BRANCH" --tags
 
 # Merge to main if requested
 if [[ "$MERGE_TO_MAIN" == true ]]; then
   echo ""
-  print_blue "[7/7] Pushing to main..."
+  print_blue "[8/8] Pushing to main..."
   
   # Push current branch directly to main without checking it out
   git push origin "${CURRENT_BRANCH}:main" --tags

@@ -7,6 +7,7 @@ import {
   STALENESS_NUDGE_SNOOZE_MS,
   STALENESS_AUTOMATIC_MODE_DEFAULT,
   STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS,
+  STALENESS_NUDGE_APP_VERSION_CHECK_INTERVAL_MS,
 } from '../constants/staleness';
 import { sessionLogService } from './sessionLogService';
 import { credentialsManager } from '../lib/credentials';
@@ -85,6 +86,13 @@ const LS = {
   /** Tracks when we last checked remote HEAD (to rate-limit network calls). */
   lastRemoteCheckAtMs: (repoBranch: string) => `dagnet:staleness:lastRemoteCheckAtMs:${repoBranch}`,
 
+  /** Tracks when we last checked version.json (rate limit). */
+  lastAppVersionCheckAtMs: 'dagnet:staleness:lastAppVersionCheckAtMs',
+  /** Tracks the last version.json "version" we observed ("last seen deployed version"). */
+  lastSeenRemoteAppVersion: 'dagnet:staleness:lastSeenRemoteAppVersion',
+  /** Guard against reload loops: last remote version we auto-reloaded for (dashboard/unattended). */
+  lastAutoReloadedRemoteAppVersion: 'dagnet:staleness:lastAutoReloadedRemoteAppVersion',
+
   // =====================================================================
   // Share-live scoped remote-ahead tracking (must NOT depend on workspaces)
   // =====================================================================
@@ -114,6 +122,8 @@ export interface RetrieveAllSlicesStalenessStatus {
   staleParameterCount: number;
   /** Most recent retrieved_at timestamp seen across connected parameters (ms). */
   mostRecentRetrievedAtMs?: number;
+  /** If present, graph-level marker for last successful Retrieve All Slices completion (ms). */
+  lastSuccessfulRunAtMs?: number;
 }
 
 export interface WorkspaceScope {
@@ -159,6 +169,136 @@ class StalenessNudgeService {
     const lastLoad = safeGetNumber(storage, LS.lastPageLoadAtMs);
     if (!lastLoad) return false; // first load
     return nowMs - lastLoad > STALENESS_NUDGE_RELOAD_AFTER_MS && this.canPrompt('reload', nowMs, storage);
+  }
+
+  /**
+   * Time-based fallback for reload nudge.
+   * This intentionally does NOT include canPrompt(), so callers can compose
+   * multiple signals behind a single prompt gate.
+   */
+  isReloadTimeBasedDue(nowMs: number = safeNow(), storage: StorageLike = defaultStorage()): boolean {
+    const lastLoad = safeGetNumber(storage, LS.lastPageLoadAtMs);
+    if (!lastLoad) return false; // first load
+    return nowMs - lastLoad > STALENESS_NUDGE_RELOAD_AFTER_MS;
+  }
+
+  /**
+   * Determines if we should fetch version.json.
+   * Rate-limited to avoid excessive network traffic.
+   */
+  shouldCheckRemoteAppVersion(nowMs: number = safeNow(), storage: StorageLike = defaultStorage()): boolean {
+    const lastCheck = safeGetNumber(storage, LS.lastAppVersionCheckAtMs);
+    if (lastCheck === undefined) return true;
+    return nowMs - lastCheck > STALENESS_NUDGE_APP_VERSION_CHECK_INTERVAL_MS;
+  }
+
+  private markRemoteAppVersionChecked(nowMs: number, storage: StorageLike): void {
+    safeSetNumber(storage, LS.lastAppVersionCheckAtMs, nowMs);
+  }
+
+  getCachedRemoteAppVersion(storage: StorageLike = defaultStorage()): string | undefined {
+    try {
+      const v = storage.getItem(LS.lastSeenRemoteAppVersion);
+      return v || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private setCachedRemoteAppVersion(version: string, storage: StorageLike): void {
+    try {
+      storage.setItem(LS.lastSeenRemoteAppVersion, version);
+    } catch {
+      // ignore
+    }
+  }
+
+  isRemoteAppVersionDifferent(localVersion: string, storage: StorageLike = defaultStorage()): boolean {
+    const remote = this.getCachedRemoteAppVersion(storage);
+    if (!remote) return false;
+    return remote !== localVersion;
+  }
+
+  private getLastAutoReloadedRemoteAppVersion(storage: StorageLike): string | undefined {
+    try {
+      const v = storage.getItem(LS.lastAutoReloadedRemoteAppVersion);
+      return v || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private markAutoReloadedRemoteAppVersion(remoteVersion: string, storage: StorageLike): void {
+    try {
+      storage.setItem(LS.lastAutoReloadedRemoteAppVersion, remoteVersion);
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Dashboard/unattended behaviour: if a newer client is deployed, reload automatically (once per remote version).
+   * Returns true if it triggered a reload attempt.
+   */
+  maybeAutoReloadForUpdate(
+    localVersion: string,
+    nowMs: number = safeNow(),
+    storage: StorageLike = defaultStorage()
+  ): boolean {
+    const remoteVersion = this.getCachedRemoteAppVersion(storage);
+    if (!remoteVersion) return false;
+    if (remoteVersion === localVersion) return false;
+
+    const lastAuto = this.getLastAutoReloadedRemoteAppVersion(storage);
+    if (lastAuto === remoteVersion) return false;
+
+    // Mark before reloading to avoid loops if the reload fails for any reason.
+    this.markAutoReloadedRemoteAppVersion(remoteVersion, storage);
+
+    sessionLogService.warning(
+      'session',
+      'APP_AUTO_RELOAD_FOR_UPDATE',
+      'New client version detected in unattended mode; reloading page',
+      undefined,
+      { localVersion, remoteVersion, nowMs }
+    );
+
+    if (typeof window !== 'undefined' && window.location?.reload) {
+      window.location.reload();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Fetch deployed version.json and cache it in localStorage.
+   * Never throws; failures simply leave the cached value unchanged.
+   */
+  async refreshRemoteAppVersionIfDue(
+    nowMs: number = safeNow(),
+    storage: StorageLike = defaultStorage()
+  ): Promise<void> {
+    if (!this.shouldCheckRemoteAppVersion(nowMs, storage)) return;
+
+    // Mark early so repeated callers don't dogpile if fetch is slow/fails.
+    this.markRemoteAppVersionChecked(nowMs, storage);
+
+    try {
+      // Respect Vite base path; ensures this works under non-root deployments.
+      const baseUrl = (import.meta as any)?.env?.BASE_URL || '/';
+      const url = `${baseUrl.replace(/\/?$/, '/') }version.json`;
+
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) return;
+
+      const data = (await res.json()) as { version?: unknown };
+      const version = typeof data?.version === 'string' ? data.version : undefined;
+      if (!version) return;
+
+      this.setCachedRemoteAppVersion(version, storage);
+    } catch {
+      // ignore (offline, blocked, etc.)
+    }
   }
 
   snooze(kind: NudgeKind, scope: string | undefined, nowMs: number, storage: StorageLike): void {
@@ -496,6 +636,17 @@ class StalenessNudgeService {
     nowMs: number = safeNow(),
     workspace?: WorkspaceScope
   ): Promise<RetrieveAllSlicesStalenessStatus> {
+    const graphMarker = (graph as any)?.metadata?.last_retrieve_all_slices_success_at_ms;
+    if (typeof graphMarker === 'number' && Number.isFinite(graphMarker) && graphMarker >= 0) {
+      return {
+        isStale: nowMs - graphMarker > STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS,
+        parameterCount: 0,
+        staleParameterCount: 0,
+        mostRecentRetrievedAtMs: graphMarker,
+        lastSuccessfulRunAtMs: graphMarker,
+      };
+    }
+
     const targets = retrieveAllSlicesPlannerService.collectTargets(graph);
     const parameterTargets = targets.filter(t => t.type === 'parameter') as Array<Extract<typeof targets[number], { type: 'parameter' }>>;
 

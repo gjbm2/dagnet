@@ -1,7 +1,7 @@
 # TODO
 
 - Share linkes should carry Sankey status
-
+ 
 - Work on case files:
   docs/current/case-lag-updates.md
 
@@ -374,7 +374,6 @@ Could use Web Worker for true background execution:
 ---
 
 ## Major components
-- Dashboarding views
 - Bayesian modelling (...is expected?)
 - Asynch / api updates
 - Cyclic graphs

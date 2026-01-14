@@ -8,15 +8,13 @@ import { ObjectsMenu } from './ObjectsMenu';
 import { DataMenu } from './DataMenu';
 import { RepositoryMenu } from './RepositoryMenu';
 import { HelpMenu } from './HelpMenu';
+import { AppUpdateBadge } from './AppUpdateBadge';
 import { useTabContext } from '../../contexts/TabContext';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { DevConsoleMirrorControls } from './DevConsoleMirrorControls';
 import { ShareLinkModal } from '../modals/ShareLinkModal';
-import packageJson from '../../../package.json';
+import { APP_VERSION } from '../../version';
 import './MenuBar.css';
-
-// Version from package.json - single source of truth
-const APP_VERSION = packageJson.version;
 
 /**
  * Application Menu Bar
@@ -42,6 +40,7 @@ export function MenuBarComponent() {
         <DataMenu />
         <RepositoryMenu />
         <HelpMenu />
+        <AppUpdateBadge />
       </Menubar.Root>
       <div className="dagnet-right-controls">
         <DevConsoleMirrorControls />

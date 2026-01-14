@@ -1,3 +1,11 @@
+# ARCHIVED (Superseded)
+#
+# **Status**: Archived on 14-Jan-26
+# **Superseded by**: `docs/current/refactor/src-slimdown.md`
+#
+# This document is retained for historical context only. It previously served as a deep-dive analysis
+# and refactor recommendation set for GraphCanvas; the current canonical plan is the slimdown doc.
+
 # GraphCanvas Architecture
 
 ## Overview

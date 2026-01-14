@@ -156,6 +156,16 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       }
 
       // Build scenario graphs for analysis (same semantics as AnalyticsPanel).
+      //
+      // IMPORTANT:
+      // When scenarios are just created, React state may not yet reflect them in scenariosContext.scenarios.
+      // Use the passed-in scenarioIdsByDsl set as the authoritative map (created scenarios are included there
+      // via ensureScenarios()) so we preserve names/colours deterministically.
+      const scenarioOverrideById = new Map<string, any>();
+      for (const s of scenarioIdsByDsl as any[]) {
+        if (s?.id && (s as any).scenario) scenarioOverrideById.set(s.id, (s as any).scenario);
+      }
+
       const scenarioGraphs = visibleScenarioIds.map(scenarioId => {
         const visibilityMode = (() => {
           if (scenarioId === 'current' || scenarioId === 'base') return 'f+e' as const;
@@ -173,14 +183,12 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
           visibilityMode
         );
 
-        const name =
-          scenarioId === 'current'
-            ? 'Current'
-            : scenariosContext.scenarios.find(s => s.id === scenarioId)?.name || scenarioId;
-        const colour =
-          scenarioId === 'current'
-            ? scenariosContext.currentColour
-            : scenariosContext.scenarios.find(s => s.id === scenarioId)?.colour;
+        const scenarioOverride = scenarioOverrideById.get(scenarioId);
+        const scenarioFromState = scenariosContext.scenarios.find(s => s.id === scenarioId);
+        const scenario = scenarioOverride || scenarioFromState;
+
+        const name = scenarioId === 'current' ? 'Current' : scenario?.name || scenarioId;
+        const colour = scenarioId === 'current' ? scenariosContext.currentColour : scenario?.colour;
 
         return {
           scenario_id: scenarioId,

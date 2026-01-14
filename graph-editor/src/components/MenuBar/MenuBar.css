@@ -157,6 +157,20 @@
   transition: background-color 0.15s ease;
 }
 
+/* "New version available" badge next to Help */
+.menubar-update-badge {
+  gap: 6px;
+  padding: 4px 10px;
+  background: #fff3cd;
+  border: 1px solid #ffecb5;
+  color: #7a5b00;
+  font-weight: 700;
+}
+
+.menubar-update-badge:hover {
+  background: #ffe8a1;
+}
+
 .menubar-trigger:hover {
   background-color: #e9ecef;
 }

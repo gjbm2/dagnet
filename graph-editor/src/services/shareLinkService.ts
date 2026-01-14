@@ -318,8 +318,22 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     const scenarios: any[] = await db.scenarios.where('fileId').equals(parentFileId).toArray();
     const byId = new Map(scenarios.map(s => [s.id, s]));
 
+    // For bridge charts, scenario_ids are intentionally empty (the result embeds scenario context).
+    // Therefore, the canonical "what the user saw" for scenario names/colours/modes is the analysis result metadata.
+    const analysisMeta: any = chartData?.payload?.analysis_result?.metadata || {};
+    const metaA = analysisMeta?.scenario_a || null;
+    const metaB = analysisMeta?.scenario_b || null;
+
+    const orderedScenarioIdsFromAnalysis: string[] =
+      metaA?.scenario_id && metaB?.scenario_id ? [metaA.scenario_id, metaB.scenario_id] : [];
+
+    const orderedScenarioIds: string[] =
+      orderedScenarioIdsFromAnalysis.length > 0
+        ? orderedScenarioIdsFromAnalysis
+        : visibleScenarioIds.filter((id: string) => id !== 'base' && id !== 'current');
+
     const liveScenarioItems: ShareChartPayload['scenarios']['items'] = [];
-    for (const scenarioId of visibleScenarioIds) {
+    for (const scenarioId of orderedScenarioIds) {
       if (scenarioId === 'base' || scenarioId === 'current') continue;
       const s = byId.get(scenarioId);
       const dsl: string | undefined = s?.meta?.queryDSL;
@@ -327,17 +341,19 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
       if (!isLive || !dsl || !dsl.trim()) {
         return { success: false, error: 'Live chart share is only supported for DSL-backed live scenarios' };
       }
+
+      const meta = metaA?.scenario_id === scenarioId ? metaA : metaB?.scenario_id === scenarioId ? metaB : null;
       const subtitle = chartData?.payload?.scenario_dsl_subtitle_by_id?.[scenarioId];
       liveScenarioItems.push({
         dsl,
-        name: s?.name,
-        colour: s?.colour,
-        visibility_mode: visibilityMode?.[scenarioId] || 'f+e',
+        name: (typeof meta?.name === 'string' && meta.name.trim()) ? meta.name : s?.name,
+        colour: (typeof meta?.colour === 'string' && meta.colour.trim()) ? meta.colour : s?.colour,
+        visibility_mode: (meta?.visibility_mode as any) || visibilityMode?.[scenarioId] || 'f+e',
         subtitle: typeof subtitle === 'string' ? subtitle : undefined,
       });
     }
 
-    const hideCurrent = !visibleScenarioIds.includes('current');
+    const hideCurrent = true;
     const selectedScenarioId: string | undefined = scenarioState.selectedScenarioId;
     const selectedScenarioDsl =
       selectedScenarioId && selectedScenarioId !== 'base' && selectedScenarioId !== 'current'

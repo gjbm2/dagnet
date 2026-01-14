@@ -293,6 +293,11 @@ class Metadata(BaseModel):
     name: Optional[str] = Field(None, max_length=256, description="Human-readable graph name for display in UI")
     created_at: str = Field(..., description="Creation timestamp (UK format or ISO)")
     updated_at: Optional[str] = Field(None, description="Last update timestamp (UK format or ISO)")
+    last_retrieve_all_slices_success_at_ms: Optional[float] = Field(
+        None,
+        ge=0,
+        description="Cross-device marker: epoch ms when a full Retrieve All Slices run completed successfully for this graph.",
+    )
     author: Optional[str] = Field(None, max_length=256)
     description: Optional[str] = None
     tags: Optional[List[str]] = None

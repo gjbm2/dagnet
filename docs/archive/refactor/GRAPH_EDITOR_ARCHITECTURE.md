@@ -1,3 +1,11 @@
+# ARCHIVED (Superseded)
+#
+# **Status**: Archived on 14-Jan-26
+# **Superseded by**: `docs/current/refactor/src-slimdown.md`
+#
+# This document is retained for historical context only. It previously served as an analysis and
+# refactor recommendation set for GraphEditor; the current canonical plan is the slimdown doc.
+
 # GraphEditor Architecture
 
 ## Overview
