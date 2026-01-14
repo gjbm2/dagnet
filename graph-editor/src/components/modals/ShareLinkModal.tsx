@@ -41,6 +41,7 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
   const [dashboardMode, setDashboardMode] = useState(true);
   const [liveMode, setLiveMode] = useState(false);
   const [includeScenarios, setIncludeScenarios] = useState(true);
+  const [activeBundleTabId, setActiveBundleTabId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   
   // Get shareable tabs (graphs and charts only for now)
@@ -63,9 +64,23 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
       const activeIsShareable = shareableTabs.some(t => t.id === activeTabId);
       if (activeIsShareable) {
         setSelectedTabIds(new Set([activeTabId]));
+        setActiveBundleTabId(activeTabId);
       }
     }
   }, [isOpen, activeTabId, shareableTabs]);
+
+  // Keep bundle active tab consistent with selection
+  React.useEffect(() => {
+    if (!activeBundleTabId) {
+      const first = Array.from(selectedTabIds)[0] || null;
+      if (first) setActiveBundleTabId(first);
+      return;
+    }
+    if (!selectedTabIds.has(activeBundleTabId)) {
+      const first = Array.from(selectedTabIds)[0] || null;
+      setActiveBundleTabId(first);
+    }
+  }, [selectedTabIds, activeBundleTabId]);
   
   // Toggle tab selection
   const toggleTab = useCallback((tabId: string) => {
@@ -164,6 +179,12 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
         await navigator.clipboard.writeText(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
+
+        const warning = shareLinkService.getShareUrlSoftWarning?.(url) ?? null;
+        if (warning) {
+          toast(warning);
+          sessionLogService.warning('session', 'SHARE_URL_LONG_WARNING', warning, undefined, { urlLength: url.length });
+        }
         
         sessionLogService.success(
           'session',
@@ -174,59 +195,60 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
         toast.success(`${liveMode ? 'Live' : 'Static'} share link copied to clipboard!`);
       } else {
         // Multi-tab bundle share
+        let url: string | null = null;
+
         if (liveMode) {
-          toast.error('Live mode share is not supported for multi-tab bundles');
-          return;
-        }
-        const bundle: { type: 'bundle'; version: '1.0.0'; items: any[]; options: any } = {
-          type: 'bundle',
-          version: '1.0.0',
-          items: [],
-          options: {
+          const secret = resolveShareSecretForLinkGeneration();
+          if (!secret) {
+            toast.error('No share secret available (set SHARE_SECRET or open with ?secret=…)');
+            return;
+          }
+          const res = await shareLinkService.buildLiveBundleShareUrlFromTabs({
+            tabIds: selectedTabs.map(t => t.id),
             dashboardMode,
             includeScenarios,
-          },
-        };
-        
-        for (const tab of selectedTabs) {
-          const file = fileRegistry.getFile(tab.fileId);
-          if (!file?.data) continue;
-          
-          const identity = extractIdentityFromFileSource(file.source);
-          bundle.items.push({
-            type: tab.type,
-            title: tab.title,
-            data: file.data,
-            identity,
+            activeTabId: activeBundleTabId || activeTabId || undefined,
+            secretOverride: secret,
           });
+          if (!res.success || !res.url) {
+            toast.error(res.error || 'Failed to create live bundle share link');
+            return;
+          }
+          url = res.url;
+        } else {
+          const res = await shareLinkService.buildStaticBundleShareUrlFromTabs({
+            tabIds: selectedTabs.map(t => t.id),
+            dashboardMode,
+            includeScenarios,
+            activeTabId: activeBundleTabId || activeTabId || undefined,
+          });
+          if (!res.success || !res.url) {
+            toast.error(res.error || 'Failed to create static bundle share link');
+            return;
+          }
+          url = res.url;
         }
-        
-        if (bundle.items.length === 0) {
-          toast.error('No data available for selected tabs');
-          return;
-        }
-        
-        // Build bundle share URL
-        const url = shareLinkService.buildStaticShareUrl({
-          graphData: bundle,
-          identity: bundle.items[0]?.identity,
-          dashboardMode,
-        });
-        
+
         await navigator.clipboard.writeText(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
+
+        const warning = shareLinkService.getShareUrlSoftWarning?.(url) ?? null;
+        if (warning) {
+          toast(warning);
+          sessionLogService.warning('session', 'SHARE_URL_LONG_WARNING', warning, undefined, { urlLength: url.length });
+        }
         
         sessionLogService.success('session', 'SHARE_BUNDLE_LINK_COPIED', 
-          `Share link copied for ${bundle.items.length} tabs`);
+          `Share link copied for ${selectedTabs.length} tabs`);
         
-        toast.success(`Share link copied (${bundle.items.length} tabs)!`);
+        toast.success(`Share link copied (${selectedTabs.length} tabs)!`);
       }
     } catch (error) {
       console.error('Failed to create share link:', error);
       toast.error('Failed to create share link');
     }
-  }, [selectedTabIds, shareableTabs, dashboardMode, liveMode, includeScenarios]);
+  }, [selectedTabIds, shareableTabs, dashboardMode, liveMode, includeScenarios, activeBundleTabId, activeTabId]);
   
   if (!isOpen) return null;
   
@@ -281,6 +303,17 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
                       checked={selectedTabIds.has(tab.id)}
                       onChange={() => toggleTab(tab.id)}
                     />
+                    {selectedTabIds.size > 1 && selectedTabIds.has(tab.id) ? (
+                      <input
+                        type="radio"
+                        name="bundle-active-tab"
+                        checked={(activeBundleTabId || activeTabId) === tab.id}
+                        onChange={() => setActiveBundleTabId(tab.id)}
+                        title="Initial active tab"
+                        aria-label="Initial active tab"
+                        style={{ marginLeft: 8 }}
+                      />
+                    ) : null}
                     <span className="share-link-modal__tab-icon">
                       {tab.type === 'graph' ? '📊' : tab.type === 'chart' ? '📈' : '📄'}
                     </span>

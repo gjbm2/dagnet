@@ -595,9 +595,22 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   
   const mergedVisitedAny = [...existing.visitedAny, ...newParsed.visitedAny];
   const mergedContextAny = [...existing.contextAny, ...newParsed.contextAny];
-  // For window/cohort: new value replaces existing (last wins)
-  const mergedWindow = newParsed.window || existing.window;
-  const mergedCohort = newParsed.cohort || existing.cohort;
+  // For window/cohort: date mode is MUTUALLY EXCLUSIVE.
+  //
+  // In scenario stacking, if an upper layer introduces a cohort(), it must override (and clear)
+  // any inherited window() below it, and vice-versa. Mixed-mode DSLs like `window(...).cohort(...)`
+  // are a source of cache misses and ambiguous semantics.
+  //
+  // Precedence rule:
+  // - If new constraint contains cohort() → cohort mode wins, clear window()
+  // - Else if new constraint contains window() → window mode wins, clear cohort()
+  // - Else (no new date clause) → inherit existing date clause as-is
+  const hasNewCohort = !!newParsed.cohort;
+  const hasNewWindow = !!newParsed.window;
+  const mergedWindow =
+    hasNewCohort ? null : (hasNewWindow ? newParsed.window : existing.window);
+  const mergedCohort =
+    hasNewCohort ? newParsed.cohort : (hasNewWindow ? null : existing.cohort);
   
   // Rebuild DSL using normalize (ensures canonical order)
   const merged: ParsedConstraints = {

@@ -1162,6 +1162,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         console.log('[TabContext] Live share mode detected');
         const { liveShareBootService } = await import('../services/liveShareBootService');
         const { getShareBootConfig } = await import('../lib/shareBootResolver');
+        const { decodeSharePayloadFromUrl } = await import('../lib/sharePayload');
         const bootConfig = getShareBootConfig();
         const graphName = bootConfig.graph || urlParams.get('graph') || 'unknown';
         const repo = bootConfig.repo || urlParams.get('repo') || 'url';
@@ -1169,6 +1170,13 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
         // Canonical file ID so URL-driven logic (e.g. useURLScenarios) can target deterministically.
         const fileId = `graph-${graphName}`;
+
+        // If this is a chart-only share link, we still need to seed the graph cache,
+        // but we MUST NOT open a visible graph tab. The chart bootstrapper will materialise
+        // and open the chart tab.
+        const sharePayload = decodeSharePayloadFromUrl();
+        const shareTarget = (sharePayload as any)?.target;
+        const isNonGraphTabShare = Boolean(sharePayload && (shareTarget === 'chart' || shareTarget === 'bundle'));
 
         // Cache-first: if we already have the graph in the share-scoped DB, load instantly.
         const cached = await fileRegistry.restoreFile(fileId);
@@ -1222,6 +1230,11 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
               );
             }
           }
+        }
+
+        if (isNonGraphTabShare) {
+          console.log('[TabContext] Live share: non-graph target payload detected; skipping graph tab creation', { shareTarget });
+          return;
         }
 
         // Create tab with well-formed editor state (unique tabId to avoid IDB collisions across reloads)
@@ -1329,19 +1342,62 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             
             const newTabs: TabState[] = [];
             let firstTabId: string | null = null;
+            const activeTabIndex =
+              typeof (urlData as any)?.options?.activeTabIndex === 'number' ? (urlData as any).options.activeTabIndex : 0;
+            const includeScenarios = Boolean((urlData as any)?.options?.includeScenarios);
+            const sharedGraphs = (urlData as any)?.shared?.graphs || {};
+            const sharedScenariosByRef = (urlData as any)?.shared?.scenariosByGraphRef || {};
             
             for (let i = 0; i < urlData.items.length; i++) {
               const item = urlData.items[i];
               const itemType = item.type === 'chart' ? 'chart' : 'graph';
-              const fileId = `${itemType}-url-data-${timestamp}-${i}`;
-              const tabId = `tab-${fileId}-interactive`;
+              const graphRef: string | undefined = itemType === 'graph' ? (item.graphRef as string | undefined) : undefined;
+              const fileId =
+                itemType === 'graph' && graphRef ? `graph-share-${graphRef}` : `${itemType}-url-data-${timestamp}-${i}`;
+              // IMPORTANT: multiple bundle tabs may point at the same underlying fileId (dedup).
+              // Tab IDs must therefore be unique per bundle item.
+              const tabId = `tab-${fileId}-interactive-${timestamp}-${i}`;
               
-              await fileRegistry.getOrCreateFile(
-                fileId, 
-                itemType as any, 
-                { repository: 'url', path: `url-data-${i}`, branch: 'main' }, 
-                item.data
+              const resolvedData =
+                item.data ??
+                (itemType === 'graph' && graphRef && sharedGraphs && sharedGraphs[graphRef] ? sharedGraphs[graphRef] : null);
+
+              if (!resolvedData) {
+                console.warn('[TabContext] Bundle item had no data', { i, itemType, item });
+                continue;
+              }
+
+              // In share mode, URL payload is the source of truth; always overwrite-seed.
+              await fileRegistry.upsertFileClean(
+                fileId,
+                itemType as any,
+                { repository: 'url', path: `url-data-${i}`, branch: 'main' },
+                resolvedData
               );
+
+              // Optional: seed scenarios into IndexedDB for graph tabs when provided.
+              // This is best-effort and only applies to share-scoped DBs.
+              if (itemType === 'graph' && includeScenarios) {
+                const scenariosRef: string | undefined = item.scenariosRef as string | undefined;
+                const scenariosFromItem: any[] | undefined = Array.isArray(item.scenarios) ? item.scenarios : undefined;
+                const scenariosFromShared: any[] | undefined =
+                  scenariosRef && sharedScenariosByRef && Array.isArray(sharedScenariosByRef[scenariosRef])
+                    ? sharedScenariosByRef[scenariosRef]
+                    : undefined;
+                const toSeed = scenariosFromItem || scenariosFromShared;
+                if (Array.isArray(toSeed) && toSeed.length > 0) {
+                  try {
+                    await db.scenarios.bulkPut(
+                      toSeed.map(s => ({
+                        ...s,
+                        fileId,
+                      }))
+                    );
+                  } catch (e) {
+                    console.warn('[TabContext] Failed to seed scenarios from bundle', e);
+                  }
+                }
+              }
               
               const newTab: TabState = {
                 id: tabId,
@@ -1364,9 +1420,10 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             }
             
             setTabs(prev => [...prev, ...newTabs]);
-            if (firstTabId) {
-              setActiveTabId(firstTabId);
-              await db.saveAppState({ activeTabId: firstTabId });
+            const desiredActive = newTabs[Math.max(0, Math.min(newTabs.length - 1, activeTabIndex))]?.id || firstTabId;
+            if (desiredActive) {
+              setActiveTabId(desiredActive);
+              await db.saveAppState({ activeTabId: desiredActive });
             }
             
             console.log(`[TabContext] Bundle loaded: ${newTabs.length} tabs created`);

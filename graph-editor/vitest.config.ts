@@ -40,6 +40,12 @@ export default defineConfig({
       '.next',
       '.vercel',
       '**/api/**',
+      // Playwright E2E suite lives under graph-editor/e2e and must NOT be executed by Vitest.
+      // It uses @playwright/test APIs and expects a dev server runner, so importing it under Vitest
+      // can cause hard failures / unhandled network errors.
+      'e2e/**',
+      'test-results/**',
+      'playwright-report/**',
       // Local-only tests that require developer env files / real external HTTP.
       // CI must not attempt to run them.
       ...(process.env.CI ? ['**/*.local.*'] : []),

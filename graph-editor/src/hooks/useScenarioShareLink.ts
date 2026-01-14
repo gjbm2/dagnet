@@ -87,6 +87,8 @@ export function useScenarioShareLink(fileId: string, tabId: string | undefined):
       try {
         const url = await buildScenarioUrl(scenarioId, 'static');
         await navigator.clipboard.writeText(url);
+        const warning = shareLinkService.getShareUrlSoftWarning(url);
+        if (warning) toast(warning);
         toast.success('Scenario share link copied!');
       } catch (e: any) {
         toast.error(e?.message || 'Failed to copy scenario share link');
@@ -100,6 +102,8 @@ export function useScenarioShareLink(fileId: string, tabId: string | undefined):
       try {
         const url = await buildScenarioUrl(scenarioId, 'live');
         await navigator.clipboard.writeText(url);
+        const warning = shareLinkService.getShareUrlSoftWarning(url);
+        if (warning) toast(warning);
         toast.success('Live scenario share link copied!');
       } catch (e: any) {
         toast.error(e?.message || 'Failed to copy live scenario share link');

@@ -25,6 +25,44 @@ export type SharePayloadV1 =
         hide_current?: boolean;
         selected_scenario_dsl?: string | null;
       };
+    }
+  | {
+      version: '1.0.0';
+      target: 'bundle';
+      /** Presentation hints */
+      presentation?: {
+        dashboardMode?: boolean;
+        activeTabIndex?: number;
+      };
+      /** Bundle tab list (ordered) */
+      tabs: Array<
+        | {
+            type: 'graph';
+            title?: string;
+          }
+        | {
+            type: 'chart';
+            title?: string;
+            chart: { kind: 'analysis_funnel' | 'analysis_bridge' };
+            analysis: {
+              query_dsl: string;
+              analysis_type?: string | null;
+              what_if_dsl?: string | null;
+            };
+          }
+      >;
+      /** Shared scenario definitions applied across tabs */
+      scenarios?: {
+        items: Array<{
+          dsl: string;
+          name?: string;
+          colour?: string;
+          visibility_mode?: 'f+e' | 'f' | 'e';
+          subtitle?: string;
+        }>;
+        hide_current?: boolean;
+        selected_scenario_dsl?: string | null;
+      };
     };
 
 export function encodeSharePayloadToParam(payload: SharePayloadV1): string {
@@ -38,6 +76,8 @@ export function decodeSharePayloadFromParam(param: string): SharePayloadV1 | nul
     const parsed = JSON.parse(decompressed) as SharePayloadV1;
     if (!parsed || typeof parsed !== 'object') return null;
     if ((parsed as any).version !== '1.0.0') return null;
+    const target = (parsed as any).target;
+    if (target !== 'chart' && target !== 'bundle') return null;
     return parsed;
   } catch {
     return null;

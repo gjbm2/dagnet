@@ -141,6 +141,11 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
             });
       
       await navigator.clipboard.writeText(url);
+      const warning = shareLinkService.getShareUrlSoftWarning(url);
+      if (warning) {
+        toast(warning);
+        sessionLogService.warning('session', 'SHARE_URL_LONG_WARNING', warning, undefined, { urlLength: url.length });
+      }
       toast.success('Static share link copied!');
       
       sessionLogService.success('session', 'SHARE_STATIC_LINK_COPIED',
@@ -192,6 +197,11 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
       }
       
       await navigator.clipboard.writeText(url);
+      const warning = shareLinkService.getShareUrlSoftWarning(url);
+      if (warning) {
+        toast(warning);
+        sessionLogService.warning('session', 'SHARE_URL_LONG_WARNING', warning, undefined, { urlLength: url.length });
+      }
       toast.success('Live share link copied!');
       
       sessionLogService.success('session', 'SHARE_LIVE_LINK_COPIED',
