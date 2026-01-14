@@ -75,8 +75,6 @@ function defaultStorage(): StorageLike {
 const LS = {
   lastPageLoadAtMs: 'dagnet:staleness:lastPageLoadAtMs',
   lastPromptedAtMs: (kind: NudgeKind) => `dagnet:staleness:lastPromptedAtMs:${kind}`,
-  lastDoneAtMs: (kind: NudgeKind, scope?: string) =>
-    `dagnet:staleness:lastDoneAtMs:${kind}${scope ? `:${scope}` : ''}`,
   snoozedUntilMs: (kind: NudgeKind, scope?: string) =>
     `dagnet:staleness:snoozedUntilMs:${kind}${scope ? `:${scope}` : ''}`,
   pendingPlan: 'dagnet:staleness:pendingPlan',
@@ -85,6 +83,16 @@ const LS = {
   dismissedRemoteSha: (repoBranch: string) => `dagnet:staleness:dismissedRemoteSha:${repoBranch}`,
   /** Tracks when we last checked remote HEAD (to rate-limit network calls). */
   lastRemoteCheckAtMs: (repoBranch: string) => `dagnet:staleness:lastRemoteCheckAtMs:${repoBranch}`,
+
+  // =====================================================================
+  // Share-live scoped remote-ahead tracking (must NOT depend on workspaces)
+  // =====================================================================
+  /** Tracks when we last checked remote HEAD for a share-live scope (rate limit). */
+  shareLastRemoteCheckAtMs: (scopeKey: string) => `dagnet:share:staleness:lastRemoteCheckAtMs:${scopeKey}`,
+  /** Tracks the last remote HEAD SHA we observed for a share-live scope ("last seen HEAD"). */
+  shareLastSeenRemoteHeadSha: (scopeKey: string) => `dagnet:share:staleness:lastSeenRemoteHeadSha:${scopeKey}`,
+  /** Tracks the last remote SHA dismissed for a share-live scope. */
+  shareDismissedRemoteSha: (scopeKey: string) => `dagnet:share:staleness:dismissedRemoteSha:${scopeKey}`,
 };
 
 export interface RemoteAheadStatus {
@@ -112,6 +120,12 @@ export interface WorkspaceScope {
   branch: string;
 }
 
+export interface ShareLiveScope {
+  repository: string;
+  branch: string;
+  graph: string;
+}
+
 export interface PendingStalenessPlan {
   createdAtMs: number;
   repository?: string;
@@ -133,19 +147,6 @@ class StalenessNudgeService {
 
   recordPageLoad(nowMs: number = safeNow(), storage: StorageLike = defaultStorage()): void {
     safeSetNumber(storage, LS.lastPageLoadAtMs, nowMs);
-  }
-
-  /**
-   * UI-only helper: "last done" timestamps shown in the staleness update modal.
-   * These must not affect behaviour (only display).
-   */
-  recordDone(kind: NudgeKind, nowMs: number = safeNow(), scope?: string, storage: StorageLike = defaultStorage()): void {
-    safeSetNumber(storage, LS.lastDoneAtMs(kind, scope), nowMs);
-  }
-
-  /** UI-only helper: read "last done" timestamp (ms). */
-  getLastDoneAtMs(kind: NudgeKind, scope?: string, storage: StorageLike = defaultStorage()): number | undefined {
-    return safeGetNumber(storage, LS.lastDoneAtMs(kind, scope));
   }
 
   /** UI-only helper: last page load timestamp used as "Reload last done". */
@@ -243,6 +244,75 @@ class StalenessNudgeService {
   ): void {
     const repoBranch = `${repository}-${branch}`;
     safeSetNumber(storage, LS.lastRemoteCheckAtMs(repoBranch), nowMs);
+  }
+
+  private shareScopeKey(scope: ShareLiveScope): string {
+    // Keep key stable and readable; localStorage keys are per-origin.
+    // Avoid secrets; repo/branch/graph are safe and already in the URL.
+    return `${scope.repository}-${scope.branch}-${scope.graph}`;
+  }
+
+  shouldCheckShareRemoteHead(
+    scope: ShareLiveScope,
+    nowMs: number = safeNow(),
+    storage: StorageLike = defaultStorage()
+  ): boolean {
+    const key = this.shareScopeKey(scope);
+    const lastCheck = safeGetNumber(storage, LS.shareLastRemoteCheckAtMs(key));
+    if (lastCheck === undefined) return true;
+    return nowMs - lastCheck > STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS;
+  }
+
+  markShareRemoteHeadChecked(
+    scope: ShareLiveScope,
+    nowMs: number = safeNow(),
+    storage: StorageLike = defaultStorage()
+  ): void {
+    const key = this.shareScopeKey(scope);
+    safeSetNumber(storage, LS.shareLastRemoteCheckAtMs(key), nowMs);
+  }
+
+  getShareLastSeenRemoteHeadSha(scope: ShareLiveScope, storage: StorageLike = defaultStorage()): string | undefined {
+    const key = this.shareScopeKey(scope);
+    try {
+      const v = storage.getItem(LS.shareLastSeenRemoteHeadSha(key));
+      return v || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  recordShareLastSeenRemoteHeadSha(scope: ShareLiveScope, remoteHeadSha: string, storage: StorageLike = defaultStorage()): void {
+    const key = this.shareScopeKey(scope);
+    try {
+      storage.setItem(LS.shareLastSeenRemoteHeadSha(key), remoteHeadSha);
+    } catch {
+      // ignore
+    }
+  }
+
+  isShareRemoteShaDismissed(scope: ShareLiveScope, remoteSha: string, storage: StorageLike = defaultStorage()): boolean {
+    const key = this.shareScopeKey(scope);
+    try {
+      const dismissed = storage.getItem(LS.shareDismissedRemoteSha(key));
+      return dismissed === remoteSha;
+    } catch {
+      return false;
+    }
+  }
+
+  dismissShareRemoteSha(scope: ShareLiveScope, remoteSha: string, storage: StorageLike = defaultStorage()): void {
+    const key = this.shareScopeKey(scope);
+    try {
+      storage.setItem(LS.shareDismissedRemoteSha(key), remoteSha);
+    } catch {
+      // ignore
+    }
+  }
+
+  clearDismissedShareRemoteSha(scope: ShareLiveScope, storage: StorageLike = defaultStorage()): void {
+    const key = this.shareScopeKey(scope);
+    safeRemove(storage, LS.shareDismissedRemoteSha(key));
   }
 
   /**
@@ -348,6 +418,66 @@ class StalenessNudgeService {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       sessionLogService.endOperation(logOpId, 'warning', `Remote-ahead check failed: ${message}`);
+      return { isRemoteAhead: false };
+    }
+  }
+
+  /**
+   * Lightweight remote-ahead check for share-live sessions (no workspace clone/pull).
+   *
+   * IMPORTANT:
+   * - Share sessions must NOT depend on db.workspaces.commitSHA.
+   * - We track "last seen remote HEAD SHA" per share identity (repo/branch/graph) in localStorage.
+   *
+   * Semantics:
+   * - If we have never recorded a last-seen SHA for this share scope, we treat remote as "ahead"
+   *   so we refresh once and establish the baseline.
+   */
+  async getShareRemoteAheadStatus(
+    scope: ShareLiveScope,
+    storage: StorageLike = defaultStorage()
+  ): Promise<RemoteAheadStatus> {
+    const { repository, branch, graph } = scope;
+    const logOpId = sessionLogService.startOperation(
+      'info',
+      'git',
+      'GIT_SHARE_REMOTE_AHEAD_CHECK',
+      `Checking remote HEAD for share: ${repository}/${branch}/${graph}`,
+      { repository, branch, graph }
+    );
+
+    this.markShareRemoteHeadChecked(scope, safeNow(), storage);
+
+    try {
+      const credsResult = await credentialsManager.loadCredentials();
+      if (!credsResult.success || !credsResult.credentials) {
+        sessionLogService.endOperation(logOpId, 'warning', 'Share remote-ahead check skipped: no credentials');
+        return { isRemoteAhead: false };
+      }
+
+      const gitCreds = credsResult.credentials.git.find((cred: any) => cred.name === repository);
+      if (!gitCreds) {
+        sessionLogService.endOperation(logOpId, 'warning', `Share remote-ahead check skipped: no credentials for ${repository}`);
+        return { isRemoteAhead: false };
+      }
+
+      gitService.setCredentials({ ...credsResult.credentials, defaultGitRepo: repository });
+
+      const remoteHeadSha = await gitService.getRemoteHeadSha(branch);
+      const localSha = this.getShareLastSeenRemoteHeadSha(scope, storage);
+      const isRemoteAhead = !!(remoteHeadSha && (!localSha || remoteHeadSha !== localSha));
+
+      sessionLogService.endOperation(
+        logOpId,
+        'success',
+        isRemoteAhead ? 'Remote is ahead (share)' : 'Remote matches last-seen (share)',
+        { repository, branch, graph, localSha, remoteHeadSha, isRemoteAhead }
+      );
+
+      return { localSha, remoteHeadSha, isRemoteAhead };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      sessionLogService.endOperation(logOpId, 'warning', `Share remote-ahead check failed: ${message}`);
       return { isRemoteAhead: false };
     }
   }

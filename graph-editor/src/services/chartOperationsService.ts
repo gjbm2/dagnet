@@ -33,10 +33,12 @@ class ChartOperationsService {
     title?: string;
     source?: ChartFileDataV1['source'];
     scenarioDslSubtitleById?: Record<string, string>;
+    /** Optional: override the chart fileId (for share-scoped cached chart artefacts). */
+    fileId?: string;
   }): Promise<{ fileId: string; tabId: string } | null> {
     try {
       const timestamp = Date.now();
-      const fileId = `chart-${timestamp}`;
+      const fileId = args.fileId || `chart-${timestamp}`;
       const tabId = `tab-chart-${timestamp}`;
 
       const title = args.title?.trim() || args.analysisResult.analysis_name || 'Chart';
@@ -63,14 +65,11 @@ class ChartOperationsService {
         },
       };
 
-      await fileRegistry.getOrCreateFile(
+      // Charts are derived/cached artefacts. Always seed/update them as "clean" data.
+      await (fileRegistry as any).upsertFileClean(
         fileId,
         'chart' as any,
-        {
-          repository: 'local',
-          branch: 'main',
-          path: `charts/${fileId}.json`,
-        },
+        { repository: 'local', branch: 'main', path: `charts/${fileId}.json` },
         chartData
       );
 
@@ -108,6 +107,38 @@ class ChartOperationsService {
         `Failed to open chart tab: ${error?.message || String(error)}`,
         undefined
       );
+      return null;
+    }
+  }
+
+  async openExistingChartTab(args: { fileId: string; title?: string }): Promise<{ fileId: string; tabId: string } | null> {
+    try {
+      const timestamp = Date.now();
+      const fileId = args.fileId;
+      const tabId = `tab-chart-${timestamp}`;
+
+      const title = args.title?.trim() || 'Chart';
+
+      await fileRegistry.addViewTab(fileId, tabId);
+
+      const newTab: TabState = {
+        id: tabId,
+        fileId,
+        viewMode: 'interactive',
+        title,
+        icon: '',
+        closable: true,
+        group: 'main-content',
+      };
+
+      window.dispatchEvent(
+        new CustomEvent('dagnet:openTemporaryTab', {
+          detail: { tab: newTab },
+        })
+      );
+
+      return { fileId, tabId };
+    } catch {
       return null;
     }
   }

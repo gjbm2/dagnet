@@ -51,6 +51,12 @@ vi.mock('../../services/sessionLogService', () => ({
   },
 }));
 
+vi.mock('../../db/appDatabase', () => ({
+  db: {
+    workspaces: { get: vi.fn(async () => ({ lastSynced: Date.now() })) },
+  },
+}));
+
 vi.mock('../../contexts/NavigatorContext', () => ({
   useNavigatorContext: () => ({ state: { selectedRepo: 'r', selectedBranch: 'main' } }),
 }));
@@ -58,6 +64,26 @@ vi.mock('../../contexts/NavigatorContext', () => ({
 vi.mock('../../contexts/TabContext', () => ({
   useTabContext: () => ({ activeTabId: null, tabs: [], operations: {} }),
   useFileRegistry: () => ({ getFile: () => null, subscribe: () => () => {} }),
+}));
+
+vi.mock('../../contexts/ShareModeContext', () => ({
+  useShareModeOptional: () => null,
+}));
+
+vi.mock('../../contexts/DashboardModeContext', () => ({
+  useDashboardMode: () => ({ isDashboardMode: false, setDashboardMode: vi.fn(), toggleDashboardMode: vi.fn() }),
+}));
+
+vi.mock('../../services/liveShareSyncService', () => ({
+  liveShareSyncService: { refreshToLatest: vi.fn(async () => ({ success: true })) },
+}));
+
+vi.mock('react-hot-toast', () => ({
+  default: {
+    success: vi.fn(),
+    error: vi.fn(),
+    loading: vi.fn(),
+  },
 }));
 
 import { useStalenessNudges } from '../useStalenessNudges';
