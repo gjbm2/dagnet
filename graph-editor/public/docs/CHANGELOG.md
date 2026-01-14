@@ -1,5 +1,5 @@
 # DagNet Release Notes
-## Version 1.2.1b
+## Version 1.2.6b
 **Released:** 14-Jan-26
 
 Minor fixes
