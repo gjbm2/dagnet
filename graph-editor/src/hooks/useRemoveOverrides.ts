@@ -265,9 +265,11 @@ function clearEdgeOverrides(edge: GraphEdge): void {
   // Direct edge overrides
   delete edge.description_overridden;
   delete edge.query_overridden;
-  // `n_query` presence is treated as a query override in the UI, so "remove overrides" must clear it too.
+  // If n_query was manually edited, clear it so it can be regenerated.
+  if ((edge as any).n_query_overridden === true) {
+    delete (edge as any).n_query;
+  }
   delete (edge as any).n_query_overridden;
-  delete (edge as any).n_query;
   
   // Base probability overrides
   clearProbabilityParamOverrides(edge.p);

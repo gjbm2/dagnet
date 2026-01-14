@@ -8,10 +8,12 @@ import { render, screen, waitFor } from '@testing-library/react';
 
 const hoisted = vi.hoisted(() => ({
   pullAll: vi.fn(),
+  pullLatestRemoteWins: vi.fn(),
   requestRetrieveAllSlices: vi.fn(),
   retrieveAllSlicesExecute: vi.fn(),
   getFile: vi.fn(),
   updateTabData: vi.fn(),
+  isDashboardMode: false,
 
   // stalenessNudgeService fakes
   recordPageLoad: vi.fn(),
@@ -87,11 +89,21 @@ vi.mock('../../contexts/ShareModeContext', () => ({
 }));
 
 vi.mock('../../contexts/DashboardModeContext', () => ({
-  useDashboardMode: () => ({ isDashboardMode: false, setDashboardMode: vi.fn(), toggleDashboardMode: vi.fn() }),
+  useDashboardMode: () => ({
+    isDashboardMode: hoisted.isDashboardMode,
+    setDashboardMode: vi.fn(),
+    toggleDashboardMode: vi.fn(),
+  }),
 }));
 
 vi.mock('../../services/liveShareSyncService', () => ({
   liveShareSyncService: { refreshToLatest: vi.fn(async () => ({ success: true })) },
+}));
+
+vi.mock('../../services/repositoryOperationsService', () => ({
+  repositoryOperationsService: {
+    pullLatestRemoteWins: hoisted.pullLatestRemoteWins,
+  },
 }));
 
 vi.mock('react-hot-toast', () => ({
@@ -161,6 +173,7 @@ describe('useStalenessNudges', () => {
       if (typeof fn === 'function' && 'mockReset' in fn) (fn as any).mockReset();
     }
 
+    hoisted.isDashboardMode = false;
     hoisted.isSnoozed.mockReturnValue(false);
     hoisted.canPrompt.mockReturnValue(true);
     hoisted.getLastDoneAtMs.mockReturnValue(undefined);
@@ -351,6 +364,35 @@ describe('useStalenessNudges', () => {
     expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
     expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
     expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
+    vi.useRealTimers();
+  });
+
+  it('should use remote-wins pull in dashboard mode after countdown', async () => {
+    vi.useFakeTimers();
+    hoisted.isDashboardMode = true;
+    hoisted.shouldPromptReload.mockReturnValue(false);
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+    hoisted.isRemoteShaDismissed.mockReturnValue(false);
+
+    render(<Harness />);
+
+    for (let i = 0; i < 200; i++) {
+      if (screen.queryByText('Updates recommended')) break;
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.resolve();
+    }
+    expect(screen.getByText('Updates recommended')).toBeTruthy();
+
+    for (let i = 0; i < 40; i++) {
+      if (hoisted.pullLatestRemoteWins.mock.calls.length > 0) break;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    expect(hoisted.pullLatestRemoteWins).toHaveBeenCalledTimes(1);
+    expect(hoisted.pullAll).toHaveBeenCalledTimes(0);
     vi.useRealTimers();
   });
 

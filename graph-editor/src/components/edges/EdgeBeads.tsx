@@ -170,7 +170,6 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     edge.conditional_p?.length, // Conditional probabilities count
     JSON.stringify(edge.conditional_p ?? []), // Conditional entries (override flags / query overrides)
     edge.query_overridden, // Override flag for query
-    (edge as any).n_query, // n_query presence is treated as an override indicator
     (edge as any).n_query_overridden, // Override flag for n_query
     // IMPORTANT: Some override flags live on fields we don't explicitly list here (e.g. connection_overridden).
     // Include a compact override signature so EdgeBeads re-renders for ANY override changes.
@@ -817,7 +816,6 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.edge?.p?.latency?.t95_overridden === nextProps.edge?.p?.latency?.t95_overridden &&
     prevProps.edge?.p?.latency?.path_t95_overridden === nextProps.edge?.p?.latency?.path_t95_overridden &&
     prevProps.edge?.query_overridden === nextProps.edge?.query_overridden &&
-    (prevProps.edge as any)?.n_query === (nextProps.edge as any)?.n_query &&
     (prevProps.edge as any)?.n_query_overridden === (nextProps.edge as any)?.n_query_overridden &&
     prevProps.edge?.cost_gbp?.mean === nextProps.edge?.cost_gbp?.mean &&
     prevProps.edge?.cost_gbp?.mean_overridden === nextProps.edge?.cost_gbp?.mean_overridden &&

@@ -23,6 +23,12 @@ export const STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30m
 export const STALENESS_NUDGE_SNOOZE_MS = 60 * 60 * 1000; // 1h
 
 /**
+ * Visible-tab polling interval for unattended terminals.
+ * We still gate on "due" checks so this does not cause repeated pulls.
+ */
+export const STALENESS_NUDGE_VISIBLE_POLL_MS = 5 * 60 * 1000; // 5m
+
+/**
  * Guardrail: even if conditions persist, don't re-prompt immediately after a user action.
  * This is separate from snooze, and helps avoid spam if checks run on focus + visibility.
  */

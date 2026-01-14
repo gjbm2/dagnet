@@ -313,6 +313,54 @@ describe('useRemoveOverrides', () => {
     expect(onUpdateGraph.mock.calls[0][2]).toBe('edge-1');
   });
 
+  it('does not clear n_query unless n_query_overridden is true', () => {
+    const edge: GraphEdge = {
+      uuid: 'edge-1',
+      from: 'node-a',
+      to: 'node-b',
+      description_overridden: true,
+      n_query: 'from(a).to(b)',
+      n_query_overridden: false,
+    };
+    const graph = createTestGraph([], [edge]);
+    const onUpdateGraph = vi.fn();
+
+    const { result } = renderHook(() => useRemoveOverrides(graph, onUpdateGraph, null, 'edge-1'));
+
+    act(() => {
+      result.current.removeOverrides();
+    });
+
+    const updatedGraph = onUpdateGraph.mock.calls[0][0];
+    expect(updatedGraph.edges[0].description_overridden).toBeUndefined();
+    expect(updatedGraph.edges[0].n_query).toBe('from(a).to(b)');
+    expect((updatedGraph.edges[0] as any).n_query_overridden).toBeUndefined();
+  });
+
+  it('clears n_query when n_query_overridden is true', () => {
+    const edge: GraphEdge = {
+      uuid: 'edge-1',
+      from: 'node-a',
+      to: 'node-b',
+      description_overridden: true,
+      n_query: 'from(a).to(b)',
+      n_query_overridden: true,
+    };
+    const graph = createTestGraph([], [edge]);
+    const onUpdateGraph = vi.fn();
+
+    const { result } = renderHook(() => useRemoveOverrides(graph, onUpdateGraph, null, 'edge-1'));
+
+    act(() => {
+      result.current.removeOverrides();
+    });
+
+    const updatedGraph = onUpdateGraph.mock.calls[0][0];
+    expect(updatedGraph.edges[0].description_overridden).toBeUndefined();
+    expect((updatedGraph.edges[0] as any).n_query).toBeUndefined();
+    expect((updatedGraph.edges[0] as any).n_query_overridden).toBeUndefined();
+  });
+
   it('removes variant overrides', () => {
     const node: GraphNode = {
       uuid: 'node-1',

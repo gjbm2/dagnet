@@ -273,7 +273,7 @@ describe('EdgeBeads - buildBeadDefinitions', () => {
       expect(probBead?.isOverridden).toBe(true);
     });
     
-    it('should set isOverridden=true when n_query is present', () => {
+    it('should set isOverridden=false when n_query is present', () => {
       const edge = createTestEdge({ 
         p: { mean: 0.5 },
         n_query: 'from(A).to(B)'
@@ -294,7 +294,7 @@ describe('EdgeBeads - buildBeadDefinitions', () => {
       );
       
       const probBead = beads.find(b => b.type === 'probability');
-      expect(probBead?.isOverridden).toBe(true);
+      expect(probBead?.isOverridden).toBe(false);
     });
     
     it('should set isOverridden=true when n_query_overridden is true', () => {
