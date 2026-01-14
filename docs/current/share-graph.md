@@ -1,7 +1,108 @@
 # Share Graph Links (Static + Live Mode)
 
 **Status**: Design + implementation plan  
-**Last updated**: 13-Jan-26  
+**Last updated**: 14-Jan-26  
+
+## Implementation status (as of 14-Jan-26)
+
+This document contains both:
+- a specification + implementation plan, and
+- a description of work that has already landed in the codebase.
+
+To remove ambiguity, this section explicitly states what is implemented vs not.
+
+### Implemented (present in codebase)
+
+- **Share mode signal + boot resolver**: URL is inspected early and share mode is derivable centrally (static vs live), enabling share-scoped behaviour.
+- **Hard IndexedDB isolation**: share sessions use share-scoped DB names (static and live) to avoid overwriting workspace data.
+- **Static share boot**: `?data=` decoding, tab open, and “do not rewrite URL in share mode” behaviour (keeps `data` stable for reloadability).
+- **Read-only enforcement (static share)**: editors and key UI controls are disabled/hidden appropriately (read-only propagation).
+- **Share link UX entry points**:
+  - `File → Share link…` modal exists.
+  - per-tab context menu and navigator context menu have static/live share options via a central hook.
+  - a share icon button exists in the menu bar (non-dashboard mode) to open the modal.
+- **Live link generation UX** exists (but the semantics are not yet complete; see below).
+- **Navigator workspace init is skipped in share mode** (prevents full repo clone/pull in embed/share flows).
+- **Nonudge URL rewriting**: share flows do not strip `nonudge` from the URL after load.
+- **Secret/credential material is not logged** in share boot/credentials paths (redaction/no-logging).
+
+### Partially implemented (present, but missing required correctness behaviour)
+
+- **Live share boot**: minimal GitHub fetch path exists (graph + minimal parameter dependency set), but:
+  - cache-first vs refresh-on-staleness semantics are not fully implemented end-to-end
+  - seeding semantics still allow “stale reuse” via get-or-create behaviour in some paths
+  - live scenario URL application is not guaranteed correct until fileId/target contracts are finalised for live boot
+- **Share bundle payloads**: static bundle decoding/opening exists for `data=` bundles, but the full target/recipe model (analysis/chart targets) is Phase 3 work.
+
+### Not implemented yet (planned in this doc)
+
+- **Live-share refresh correctness** (Phase 3):
+  - share-scoped remote-ahead tracking (“last seen HEAD SHA”) and rate limiting
+  - dashboard-mode specialised refresh UX (countdown → refresh → toast)
+  - minimal refresh pipeline (refresh inputs → regenerate scenarios → recompute chart/analysis artefacts)
+- **Live chart share as a first-class target** (recipe payload, recompute, gating on live scenarios only).
+- **Scenario-level share** (scenario context menu entry points and single-scenario payloads).
+
+## Remaining implementation work (fully scoped; what is left to build)
+
+This is the authoritative “what still needs doing” list. Each item has a clear definition of done and the intended code surfaces.
+
+### A) Live links: refresh policy (dashboard-specialised; no `nonudge`)
+
+- **Scope**:
+  - Live share URLs must not include `nonudge`.
+  - Live share must be cache-first (IndexedDB) and refresh only when remote is ahead / stale policy indicates refresh.
+  - In `dashboard=1`, refresh UX is specialised: pending countdown → refresh → toast (no blocking modal).
+- **Definition of done**:
+  - Opening the same live link on day N+1 loads instantly from IndexedDB (when available) and then refreshes only if the repo advanced.
+  - When the repo advanced:
+    - the embed shows a pending countdown indicator, refreshes, and then shows a non-modal “Updated to latest” toast.
+    - the graph data and dependency cache reflect the new repo state after refresh.
+- **Code surfaces**:
+  - `graph-editor/src/services/shareLinkService.ts` (live URLs omit `nonudge`; static URLs include it)
+  - `graph-editor/src/services/stalenessNudgeService.ts` (share-scoped remote-ahead tracking; do not depend on `db.workspaces.commitSHA` in share mode)
+  - `graph-editor/src/hooks/useStalenessNudges.ts` or a dedicated share-live hook (dashboard-specialised behaviour)
+  - `graph-editor/src/lib/shareBootResolver.ts` (share identity scope used for refresh tracking)
+
+### B) Live share boot correctness (cache-first + no stale reuse)
+
+- **Scope**:
+  - Live boot must load from share-scoped IndexedDB when present.
+  - When a refresh fetch occurs, seeding must overwrite cached files that are known stale (not “get or create” semantics).
+  - Live boot must use a canonical graph file identity consistent with existing URL-driven behaviour (so downstream hooks like URL scenarios can target it deterministically).
+- **Definition of done**:
+  - A live share refresh cannot silently keep yesterday’s graph/parameter data after a fetch.
+  - URL scenario application and other fileId-keyed logic works for live share.
+- **Code surfaces**:
+  - `graph-editor/src/contexts/TabContext.tsx` (live boot path and fileId conventions)
+  - `graph-editor/src/services/liveShareBootService.ts` (fetch/seeding semantics)
+  - `graph-editor/src/contexts/TabContext.tsx` `FileRegistry` helpers (a deliberate “overwrite seed” operation for share refresh)
+
+### C) Live chart share (recipe) + recompute pipeline (live scenarios only)
+
+- **Scope**:
+  - Live chart share is supported only when all non-Base/non-Current scenarios are DSL-backed live scenarios.
+  - Share payload includes: graph identity + ordered live scenario DSL definitions (+ per-scenario visibility modes + display metadata) + analysis recipe (+ optional `whatIfDSL`).
+  - Refresh pipeline is: refresh inputs → regenerate scenarios → recompute analysis/chart artefact → update display.
+- **Definition of done**:
+  - A Notion embed of a live chart link loads from cache quickly, then updates correctly after a repo advance without requiring a full workspace clone.
+  - If a non-live scenario is present, live chart share is refused with a clear message and an alternative offer (static chart if small enough, otherwise live graph share).
+- **Code surfaces**:
+  - `graph-editor/src/services/shareLinkService.ts` (encode/decode chart recipe payload)
+  - `graph-editor/src/components/modals/ShareLinkModal.tsx` (gating + UX messaging)
+  - `graph-editor/src/services/chartOperationsService.ts` and `graph-editor/src/components/editors/ChartViewer.tsx` (recipe vs baked artefact handling)
+  - `graph-editor/src/contexts/ScenariosContext.tsx` (apply scenario definitions, regenerate on refresh)
+
+### D) Scenario-level share (single-scenario links)
+
+- **Scope**:
+  - Scenario context menu entries for static and live scenario share.
+  - Only DSL-backed live scenarios are shareable for live links (non-live overlays are out of scope).
+- **Definition of done**:
+  - A scenario share link opens a graph view with exactly that scenario visible and selected.
+- **Code surfaces**:
+  - scenario UI components + a dedicated hook/service entry point (no business logic in menu/UI files)
+  - `graph-editor/src/hooks/useURLScenarios.ts` (apply single-scenario payload deterministically)
 
 ## Problem statement
 
@@ -9,7 +110,7 @@ We need a shareable link that renders correctly when embedded in Notion. The cur
 
 - It is currently “static”: it does not load the latest graph from GitHub.
 - It initially had bugs where the Current layer was not visible and where safety/staleness nudges appeared in share flows.
-- A “live” variant must not do a full workspace clone/pull on each view; Notion’s embed context is not durable across app restarts, so we cannot depend on long-lived IndexedDB caches.
+- A “live” variant must not do a full workspace clone/pull on each view; Notion’s embed context is not durable across app restarts, so we must be correct under cold cache. When IndexedDB is available, we should still benefit from it (cache-first), but correctness must not depend on it.
 
 We require a design that supports:
 
@@ -40,6 +141,49 @@ We require a design that supports:
 - Add an option to enter **“Live mode”** from a static view, using the same underlying mechanism as (C), without requiring a fresh copy/paste of a different link.
 
 - Keep UI entry points as access points only: URL building and live-load logic must live in centralised services/utility modules, not menu files.
+
+## Key workflow requirement (must be explicitly supported and verified)
+
+This is the primary workflow that motivated the Phase 3 “live chart” work. It must be supported end-to-end and explicitly checked post-implementation.
+
+### Workflow: Notion daily “live chart” embed (bridge analysis between two live scenarios)
+
+- **Authoring (normal app)**:
+  - User creates a chart showing a bridge comparison between two **live scenarios** (e.g. `window(-2w:-1w)` vs `window(-3w:-2w)`).
+  - The chart is built from:
+    - graph identity (repo/branch/graph),
+    - ordered live scenario DSL definitions + per-scenario visibility modes,
+    - analysis recipe (analysis type + analysis query DSL),
+    - optional `whatIfDSL` if it was active.
+  - User generates a **live share link** in dashboard presentation for that chart.
+
+- **Consumption (Notion embed)**:
+  - The live share link is embedded into a Notion page (iframe embed).
+  - The team opens the Notion page daily.
+
+- **External change**:
+  - A cron (or human) updates the repository behind the scenes (graph and/or dependencies, potentially affecting scenario regeneration and analysis results).
+
+### Pass/fail criteria for this workflow
+
+- **Cache-first**:
+  - A daily view should load quickly from the share-scoped IndexedDB cache when available (not re-fetch everything on every load).
+  - Correctness must still hold under cold cache (e.g. Notion app restart).
+
+- **Freshness under live mode**:
+  - Live links must remain eligible for remote-ahead checks and refresh (live links do not include `nonudge`).
+  - In dashboard mode, the refresh is non-blocking:
+    - show an “update pending” indicator with a short countdown,
+    - perform the minimal refresh (no workspace clone),
+    - show a minimal toast (“Updated to latest”) on completion.
+
+- **Scenario correctness**:
+  - The live scenarios defined in the link must be rehydrated from DSL definitions (not scenario IDs) and displayed correctly.
+  - After a repo refresh, live scenarios must regenerate, and the chart must reflect the updated scenario graphs.
+
+- **Chart correctness**:
+  - After a repo refresh, the chart recomputes from the recipe and updates in-place (no manual user action required in dashboard embeds).
+  - If any scenario in the chart is a non-live overlay, live chart share must be refused (with a clear alternative offer), rather than producing a link that cannot rehydrate.
 
 ## Phasing (implementation order — all features remain planned)
 
@@ -129,7 +273,8 @@ These items are explicitly **not** part of the share feature roadmap:
   - `TabContext` recognises `?data=` and opens a temporary graph tab.
 
 - **Staleness nudge suppression**:
-  - `?nonudge` suppresses nudges for the session and is removed from the URL after processing.
+  - `?nonudge` suppresses nudges for the session.
+  - In share/embed flows we do **not** rewrite the URL to remove `nonudge` (URL must remain stable for Notion reloadability).
 
 - **Credentials unlock**:
   - `?secret=<value>` can unlock credentials from environment (`SHARE_JSON`) when the secret matches `SHARE_SECRET`.
@@ -180,7 +325,9 @@ The intended interaction pattern is:
 ### 2) Share live mode link (new)
 
 - **Menu**: `File → Export → Copy Shareable URL (Live mode)`
-- Behaviour: builds a URL that indicates “live mode” and includes `secret`, `repo`, `branch`, `graph`, and `nonudge=1`.
+- Behaviour: builds a URL that indicates “live mode” and includes `secret`, `repo`, `branch`, and `graph`.
+  - Live links must NOT include `nonudge`.
+  - Instead, live links rely on the specialised live-mode refresh/nudge behaviour (see “Live share staleness policy” below), especially in dashboard embeds.
 
 ### 3) Enter live mode from a static share (new)
 
@@ -282,7 +429,7 @@ Provide a modal that allows explicit selection of which tabs are included in the
 
 - Parameters:
   - `data`: compressed graph JSON payload
-  - `nonudge=1`: suppress nudges for share flows 
+  - `nonudge=1`: suppress nudges for static snapshot share flows
   - `mode=static`: v1 explicit mode marker for newly-generated links
   - `repo`, `branch`, `graph`: v1 identity metadata (included when sharing from a workspace graph to enable deterministic upgrade-to-live)
 
@@ -294,7 +441,7 @@ Provide a modal that allows explicit selection of which tabs are included in the
   - `branch`: branch name (**required in v1**)
   - `graph`: graph identifier (same meaning as existing `?graph=` usage)
   - `secret`: required to unlock credentials for private repos in embed environments
-  - `nonudge=1`: suppress nudges for share flows
+- (no `nonudge`): live links must remain eligible for staleness checks and refresh behaviour
 
 - Optional parameters (conditional in v1; not always required):
   - `scenarios`: scenario DSL list (for live scenarios)
@@ -308,7 +455,8 @@ Provide a modal that allows explicit selection of which tabs are included in the
 
 - Ensure the URL-loaded tab is initialised with a well-formed graph `editorState`, including:
   - Current layer visible by default (`visibleScenarioIds` contains `current`).
-- Ensure `nonudge` is set for share URLs and respected by boot.
+- Ensure `nonudge=1` is set for **static** share URLs and respected by boot.
+  - Live share URLs must NOT include `nonudge`; see “Live share staleness policy”.
   - v1 decision: in share mode, do **not** remove `data` from the address bar after processing, so static links remain reloadable under cold-cache conditions (Notion embed).
 
 ### C) Live mode path (`mode=live`)
@@ -323,7 +471,7 @@ Implement a new branch in the URL boot flow that:
 6. Seeds the fetched files into IndexedDB and FileRegistry using normal `FileState` shapes so downstream services behave consistently.
 7. Opens the graph tab from the seeded graph file with a well-formed `editorState` (Current visible, etc.).
 8. URL clean-up policy (v1):
-   - Remove `nonudge` after persisting session suppression (as today).
+   - Remove `nonudge` after persisting session suppression (static mode only).
    - Keep `mode`, `repo`, `branch`, `graph` stable in the address bar so the link remains meaningful and debuggable.
    - Keep `secret` in the URL in v1 so reloads under cold-cache conditions can re-auth. This is a deliberate security trade-off; mitigation is operational (short-lived secrets, rotation, avoid sharing secrets broadly).
 
@@ -428,7 +576,7 @@ Note: GitHub’s contents API exposes file SHA; we can treat “unchanged SHA”
   - It can leak via screenshots, referrers, logs, and Notion itself.
   - v1 mitigation: keep `secret` short-lived and rotate it. We intentionally keep it in the URL for reloadability under cold-cache conditions.
 
-- `nonudge=1` should be present for share flows to avoid UI interruptions.
+- `nonudge=1` should be present for static snapshot share flows to avoid UI interruptions.
 
 ## Testing plan (prose only)
 
@@ -489,6 +637,38 @@ Note: GitHub’s contents API exposes file SHA; we can treat “unchanged SHA”
 
 - **Scenario-level share**:
   - Share single scenario from context menu; open in fresh profile; verify only that scenario is visible.
+
+- **Key workflow (Notion daily live chart embed)**:
+  - Validate the exact workflow described in “Key workflow requirement” above, including:
+    - initial embed load under cold cache,
+    - second-day load under warm cache,
+    - simulated repo advance and automatic refresh in dashboard mode,
+    - scenario regeneration and chart recompute after refresh.
+
+### Automated “E2E-style” testing approach (within the repo’s current test strategy)
+
+We should treat this as a multi-layer verification problem and test the core correctness in deterministic integration tests, then do a small manual Notion smoke test for real embed constraints.
+
+- **Deterministic integration tests (recommended; stable and fast)**:
+  - Add integration tests that simulate:
+    - a live chart share boot from a URL (dashboard mode),
+    - a share-scoped IndexedDB cache already populated (warm cache),
+    - a remote-ahead condition (branch HEAD SHA changes),
+    - the minimal refresh pipeline (graph/deps refresh → scenario regeneration → analysis recompute → chart artefact update).
+  - Mock external boundaries:
+    - GitHub API calls (remote HEAD + file contents/shas)
+    - compute client calls (analysis execution) so results are deterministic
+  - Assert post-refresh invariants:
+    - chart artefact updated (result differs / timestamp differs / “computed against” marker differs)
+    - scenarios regenerated (versions increment / derived scenario graphs updated)
+    - dashboard refresh UX path executed (pending countdown + completion toast), without blocking modals.
+
+- **Manual Notion smoke test (small but necessary)**:
+  - Embed a live chart link.
+  - Confirm the UX behaviour in:
+    - a fresh Notion load (cold cache),
+    - a second view within the same Notion session (warm cache),
+    - after a repo update (refresh occurs and the chart updates).
 
 
 
@@ -573,13 +753,39 @@ Charts are already modelled as a file with a schema that includes:
 - `chart_kind` (currently `analysis_funnel` / `analysis_bridge`)
 - `source.query_dsl` and `source.analysis_type`
 - baked `payload.analysis_result`
-- `payload.scenario_ids`
+- `payload.scenario_ids` (note: these are *not* a stable cross-session identity; see below)
 - optional `payload.scenario_dsl_subtitle_by_id`
 
 Therefore, a share link that targets a chart should include either:
 
-- **chart recipe only** (live mode): chart kind + analysis recipe + scenario IDs, and then recompute on load, or
+- **chart recipe only** (live mode): chart kind + analysis recipe + scenario *definitions*, and then recompute on load, or
 - **baked chart artefact** (static mode): enough to materialise the chart file payload directly.
+
+Critical clarification (Phase 3 requirement):
+- There should not be “chart files” as repo artefacts; chart artefacts are local (IndexedDB-only) and are safe to treat as cacheable derived state.
+- `scenario_ids` should not be treated as stable identifiers for share links:
+  - scenarios are not persisted into graph JSON as first-class, stable IDs
+  - a link must be able to rehydrate the intended scenario set without relying on prior IndexedDB state
+- Therefore, the *share payload* must carry scenario identity as **scenario DSL definitions**, not scenario IDs.
+
+Proposed “chart recipe” fields (conceptual, prose-only):
+- graph identity: repo/branch/graph (live mode) or the embedded graph snapshot reference (static mode)
+- chart kind: funnel vs bridge (and any future chart kinds)
+- analysis recipe:
+  - analysis type identifier
+  - query DSL string used to generate the result
+  - any selection-derived inputs required for determinism (e.g. which node(s) were selected if the analysis depends on selection)
+- scenario set definition (ordered):
+  - “Current” and “Base” are implicit slots
+  - additional scenarios defined by DSL fragments (for windows, contexts, compound DSL)
+  - per-scenario display metadata (label/colour/subtitle) so the legend is stable in Notion embeds
+
+Minimal persistence model principle:
+- We do not need to extend the repo persistence model to support live charts.
+- We treat the chart artefact as a cached computed view in IndexedDB:
+  - store recipe + latest computed result + “computed against” markers (e.g. last remote HEAD SHA we refreshed against)
+  - refresh policy decides when to recompute
+  - recompute pipeline is: refresh inputs → regenerate scenarios → rerun analysis → update cached chart artefact.
 
 ### Encoding strategy (URL)
 
@@ -787,7 +993,11 @@ This is the exhaustive list of code files that will be modified or created for P
 | `graph-editor/src/lib/shareUrl.ts` | Update `encodeStateToUrl()` to add `mode=static`, `repo`, `branch`, `graph` identity metadata |
 | `graph-editor/src/contexts/TabContext.tsx` | Update `loadFromURLData()` to detect `mode=live` and dispatch to live boot; pass read-only signal; skip workspace tab restore in share mode |
 | `graph-editor/src/lib/credentials.ts` | Possibly minor updates to clarify share mode credential flow (already handles `?secret=`) |
-| `graph-editor/src/hooks/useStalenessNudges.ts` | Already handles `?nonudge`; verify no changes needed |
+| `graph-editor/src/hooks/useStalenessNudges.ts` | Handles static `?nonudge`; live-mode refresh policy must be specialised by dashboard/live rules (see “Live share staleness policy”) |
+Implementation requirement (live vs static URL contract):
+- `graph-editor/src/services/shareLinkService.ts` must:
+  - include `nonudge=1` for static share URLs
+  - NOT include `nonudge` for live share URLs
 | `graph-editor/src/services/gitService.ts` | Already has `getFileContent()`; verify it works for minimal fetch use case |
 | `graph-editor/src/services/graphGitService.ts` | Already has `getGraph()`; may need minor updates for share boot |
 | `graph-editor/src/components/editors/GraphEditor.tsx` | Already accepts `readonly` prop; wire to share mode context |
@@ -841,7 +1051,7 @@ This section provides the step-by-step implementation plan for Phase 1. It is pr
 
 - Continue to use `data=` as the source of truth for content.
 - Add `mode=static` to all newly generated static share links.
-- Continue to include `nonudge=1` in share links.
+- Continue to include `nonudge=1` in static share links.
 - Include identity metadata (`repo`, `branch`, `graph`) in static links generated from a real workspace graph so "Enter live mode" can be deterministic.
   - This identity metadata is *not* used to load static content; it exists to enable upgrade-to-live.
 
@@ -897,7 +1107,7 @@ Proposal:
 
 v1 decision:
 - Use the scoped DB for **live shares**.
-- For **static shares**, keep content in-memory (no persistence) until we have a clear reason to persist static share state; static shares already embed their full source of truth in `data=`.
+- For **static shares**, also use an isolated share DB name. This keeps behaviour consistent (no writes to the workspace DB) and allows Notion embeds to rely on IndexedDB caching of derived state (tabs, scenario state) without risk of cross-contamination.
 
 Garbage collection policy (v1):
 - Keep it simple: no automatic deletion in v1 unless we observe runaway storage.
@@ -924,16 +1134,21 @@ Steps:
 - Apply URL scenario params (`scenarios`, `hidecurrent`) if present, using the existing scenario URL processing pattern.
 
 URL clean-up policy (static):
-- Always remove `nonudge` after persisting session suppression (as today).
-- Do **not** automatically remove `data` in share mode, because Notion embeds often face cold-cache conditions and must remain reloadable from the URL.
+- Do **not** rewrite the URL to remove `nonudge` or `data` in share mode.
+  - Notion embeds often rely on the URL being stable across reloads.
+  - Rewriting can make embed behaviour appear brittle (a cold-start reload loses the parameter-driven behaviour).
 
 ### 6) Live share boot (mode=live) — minimal fetch + cache seeding
 
 Steps:
 - Validate required params: `graph`, `secret`, and enough identity to resolve repository/branch.
 - Unlock credentials and configure `gitService`.
-- Fetch the latest graph file using a single-file GitHub fetch (no workspace clone).
-- Compute dependency closure from the fetched graph (see §7).
+- Prefer IndexedDB cache first (share-scoped DB):
+  - If the share-scoped DB already contains the required boot artefacts (graph file, required dependencies, tab state), load from IndexedDB without contacting GitHub.
+  - GitHub is contacted only when staleness policy indicates the cache is stale (see “Live share staleness policy” below).
+- When a refresh is needed:
+  - Fetch the graph file (single-file fetch; no workspace clone).
+  - Compute dependency closure from the fetched graph (see §7).
 - Resolve dependency file paths:
   - v1 recommendation: fetch the relevant root index files (at least `parameters-index.yaml`) unfiltered, and use them to map IDs to file paths where present.
   - If an index file does not exist, fall back to conventional paths (e.g. `parameters/<id>.yaml`).
@@ -943,9 +1158,20 @@ Steps:
 - Seed the fetched files into share session storage as normal `FileState` records so downstream services behave consistently.
 - Open the graph tab from the seeded live graph file with a well-formed editor state (Current visible).
 
-Caching behaviour (within a session):
-- Use GitHub file SHA to avoid re-downloading unchanged files during the same share session.
-- Do not attempt cross-session caching in Notion beyond what IndexedDB provides; treat cold-cache as the default.
+Caching behaviour (Notion embed, multi-day):
+- The primary caching mechanism is the share-scoped IndexedDB database for that link identity.
+- Boot must be “cache-first”: fast load from IndexedDB on day N+1, then a staleness check decides whether to refresh from GitHub.
+
+Live share staleness policy (required for correctness; this is the missing piece that must complete Phase 3):
+- Live links must not use `nonudge` as a control surface.
+  - `nonudge` is reserved for static snapshot explore flows where we explicitly want to suppress interruptions.
+  - Live links must stay eligible for staleness checks, remote-ahead detection, and refresh.
+- Instead, specialise nudge handling in live mode based on presentation:
+  - In dashboard mode (`dashboard=1`), default behaviour is **non-blocking auto-refresh** when remote is ahead, then rehydrate dependent view state (scenarios/charts):
+    - indicate that an update is pending (short countdown timer)
+    - perform the minimal refresh (no workspace clone)
+    - show a minimal non-modal toast (“Updated to latest”)
+  - In non-dashboard mode, allow a banner or modal UX as appropriate; but this is a live-mode policy decision, not a `nonudge`-gated behaviour.
 
 ### 7) Dependency closure implementation (production code, script as reference)
 
@@ -1048,6 +1274,12 @@ Phase 2 builds on the Phase 1 infrastructure to add more UX entry points and mul
 
 Phase 3 extends sharing to chart tabs and adds scenario-level granularity.
 
+Status note (14-Jan-26):
+- Phase 3 was previously declared complete, but key behaviours are not yet implemented end-to-end for Notion live embeds:
+  - Live mode caching + refresh policy is incomplete (current behaviour risks stale IndexedDB without a safe refresh path).
+  - Live scenarios do not reliably rehydrate/apply in live share (fileId gating + missing re-sync triggers).
+  - Live chart share is not implemented as a first-class share target (chart viewer is baked; live recompute is missing).
+
 ### Prerequisites (Phase 2 must be complete)
 
 - Tab bundle payload structure working.
@@ -1055,17 +1287,67 @@ Phase 3 extends sharing to chart tabs and adds scenario-level granularity.
 
 ### 14) Chart share (static and live)
 
+This must support the critical “Notion daily embed” workflow:
+- A chart tab may be built on **live scenarios** (e.g. window(-2w:-1w) vs window(-3w:-2w)).
+- The live share link must open the chart in dashboard mode, rehydrate scenarios, and keep it in sync with repo updates over time.
+
+Design constraints:
+- Live mode must remain cache-first (IndexedDB) and must NOT force a Git fetch on every load.
+- When the repo advances, we must refresh only when needed, and then ensure:
+  - scenarios are regenerated, and
+  - the chart recomputes from the latest scenario graphs.
+
+Implementation tasks (Phase 3 completion):
+
+- Define “share target” explicitly:
+  - Extend the URL contract to include a target descriptor so a link can open a **chart** as the primary view (not just a graph).
+  - The chart target payload must be a deterministic “chart recipe” that does not rely on internal scenario IDs.
+
+- Define the live chart recipe payload precisely (this is the critical missing “first principles” definition):
+  - graph identity (live): repo, branch, graph (path/name)
+  - chart kind: funnel vs bridge (future-proof for other chart kinds)
+  - analysis recipe:
+    - analysis type identifier
+    - analysis query DSL string
+    - any other deterministic inputs required to reproduce the same analysis (for example, if the analysis depends on selection, encode the selection target in a stable form)
+    - optional: `whatIfDSL` that was active when the chart was generated (Analytics uses it for the “current” layer)
+  - scenario set definition (ordered; replaces unstable scenario IDs):
+    - implicit slots: Base + Current
+    - explicit slots: ordered list of live scenario definitions, each containing:
+      - scenario DSL fragment (the definition)
+      - per-scenario visibility mode (forecast / evidence / both)
+      - per-scenario display metadata (label/colour/subtitle) so the legend is stable in embeds
+    - selected scenario intent (if required for display parity)
+
+- Add explicit eligibility rules (so we do not generate broken live links):
+  - A “live chart share” is only permitted when all included non-Base/non-Current scenarios are DSL-backed live scenarios.
+  - If any visible scenario is a non-live overlay (snapshot/diff/param pack), then:
+    - refuse live chart share for that tab, and
+    - offer static baked chart share (subject to URL size policy), or live graph share (no chart) as fallback.
+
 - Static chart share:
-  - Capture baked chart artefact (matches chart file schema: `chart_kind`, `payload.analysis_result`, `payload.scenario_ids`, etc.).
-  - Encode in the tab descriptor payload.
-  - On boot, materialise a temporary chart file from the baked payload and open the chart tab.
+  - The static link can embed the baked chart artefact (existing internal chart schema already contains analysis results).
+  - Ensure single-chart static shares are supported (not just bundle payloads).
+
 - Live chart share:
-  - Capture chart recipe (chart kind, analysis recipe, scenario IDs).
-  - On boot, load graph + dependencies, recreate scenarios, compute analysis, materialise chart, open tab.
+  - The live link embeds the live chart recipe (not baked results), including scenario DSL definitions and per-scenario visibility modes.
+  - Boot flow (cache-first, Notion-friendly):
+    - Open the share-scoped IndexedDB database for that link identity.
+    - If a cached chart artefact exists, display it immediately for fast embed UX.
+    - Apply scenario definitions from the recipe:
+      - create/rehydrate live scenarios from DSL definitions (do not depend on scenario IDs)
+      - apply scenario view state (order/visibility/selected + per-scenario visibility modes)
+    - Decide whether refresh is needed (remote-ahead check). If refresh is needed, run the refresh pipeline below; otherwise stop.
+  - Refresh pipeline (when repo advances, without breaking caching):
+    - indicate that an update is pending (short countdown timer)
+    - refresh graph + minimal dependencies (no workspace clone)
+    - regenerate live scenarios from DSL definitions (so scenario versions increment and recompute triggers fire)
+    - recompute analysis for the chart recipe
+    - update the cached chart artefact and show a minimal non-modal toast (“Updated to latest”)
+
 - URL size policy enforcement:
-  - Define a threshold for baked payload size.
-  - If exceeded, refuse static chart share and offer live share (or static graph-only) instead.
-  - Surface a clear user-facing message explaining the limitation.
+  - Define and enforce a threshold for baked payload size.
+  - If exceeded, refuse static chart share and offer live chart share (or static graph-only) instead, with a clear user-facing explanation.
 
 ### 15) Scenario-level share (scenario context menu)
 
@@ -1075,3 +1357,51 @@ Phase 3 extends sharing to chart tabs and adds scenario-level granularity.
   - single scenario DSL (plus label/colour metadata for charts).
 - On boot, open graph view with only that scenario visible and selected.
 - Restriction: only DSL-backed live scenarios are shareable in Phase 3; non-live scenario overlays remain out of scope until we define a repo-backed representation.
+
+### 16) Live-share refresh correctness (staleness + rehydration) — required for Phase 3 completion
+
+This section is the missing “keep in sync without breaking caching” behaviour for Notion embeds.
+
+Observed implementation gaps (must be fixed):
+- Live share boot currently creates a graph fileId that does not match the normal `graph-<name>` convention, which breaks URL-scenario application and other logic keyed to fileId.
+- Live share boot currently uses “get or create” semantics for seeding, which can reuse stale cached files without overwriting them, even if a remote fetch occurred.
+- Staleness nudges are currently suppressed by `nonudge`, but in live mode we still need a refresh mechanism.
+- The general “pull latest” machinery (`workspaceService.pullLatest`) clones or syncs the entire workspace and must not be used in share mode (it violates the minimal-fetch constraint).
+- There is no mechanism today that triggers live scenario regeneration and chart recomputation after a live-share refresh.
+
+Proposed implementation approach:
+
+- Introduce a dedicated share-live synchronisation service that is cache-aware and does not rely on workspace clone/pull semantics:
+  - Persist a share-scoped “last seen remote HEAD SHA” keyed by share identity (repo/branch/graph) so we can compare across daily loads.
+  - Perform rate-limited remote-ahead checks (branch HEAD SHA) in live mode (live links do not include `nonudge`).
+  - When remote is ahead, refresh only the minimal required artefacts (graph + dependency closure + required supporting files) and update the cached versions in the share-scoped IndexedDB DB.
+  - Never clone/pull the entire repository in share mode.
+  - Do not depend on `db.workspaces.commitSHA` in share mode; share mode must store its own “last seen HEAD” marker scoped to the share link.
+
+- Introduce a share-live staleness hook that runs in live share mode (including in dashboard embeds):
+  - In dashboard mode, default to silent auto-refresh when remote is ahead:
+    - indicate that an update is pending (short countdown)
+    - run the refresh pipeline
+    - show a non-modal toast on completion
+  - In non-dashboard mode, allow either a prompt or a small banner; `nonudge` suppresses prompts but not the remote-ahead check or refresh capability.
+
+- Define explicit rehydration + recompute triggers for correctness:
+  - After refresh, live scenarios must be regenerated from their DSL definitions (versions increment) so analysis recomputation keys change.
+  - After scenario regeneration, any live-share analysis/chart target must recompute and update its cached artefact.
+
+Impacted code surfaces (Phase 3 completion work):
+- Boot and caching:
+  - `graph-editor/src/contexts/TabContext.tsx`
+  - `graph-editor/src/services/liveShareBootService.ts`
+  - `graph-editor/src/lib/shareBootResolver.ts`
+- Staleness / refresh policy:
+  - `graph-editor/src/hooks/useStalenessNudges.ts` (or a new share-live hook, depending on how we separate responsibilities)
+  - `graph-editor/src/services/stalenessNudgeService.ts` (remote-ahead primitives may be reused, but share mode needs share-scoped state)
+- Scenario rehydration:
+  - `graph-editor/src/hooks/useURLScenarios.ts`
+  - `graph-editor/src/contexts/ScenariosContext.tsx`
+- Chart share:
+  - `graph-editor/src/services/chartOperationsService.ts`
+  - `graph-editor/src/components/editors/ChartViewer.tsx`
+  - `graph-editor/src/services/shareLinkService.ts`
+  - `graph-editor/src/hooks/useShareLink.ts`

@@ -15,6 +15,9 @@ const hoisted = vi.hoisted(() => ({
 
   // stalenessNudgeService fakes
   recordPageLoad: vi.fn(),
+  recordDone: vi.fn(),
+  getLastDoneAtMs: vi.fn(),
+  getLastPageLoadAtMs: vi.fn(),
   shouldPromptReload: vi.fn(),
   isSnoozed: vi.fn(),
   canPrompt: vi.fn(),
@@ -79,6 +82,9 @@ vi.mock('../../services/retrieveAllSlicesService', () => ({
 vi.mock('../../services/stalenessNudgeService', () => ({
   stalenessNudgeService: {
     recordPageLoad: hoisted.recordPageLoad,
+    recordDone: hoisted.recordDone,
+    getLastDoneAtMs: hoisted.getLastDoneAtMs,
+    getLastPageLoadAtMs: hoisted.getLastPageLoadAtMs,
     shouldPromptReload: hoisted.shouldPromptReload,
     isSnoozed: hoisted.isSnoozed,
     canPrompt: hoisted.canPrompt,
@@ -107,6 +113,19 @@ function Harness() {
   return <div>{modals}</div>;
 }
 
+function clickActionCheckboxByRowTitle(title: string): HTMLInputElement {
+  // Our modal action rows are <label> wrappers that include extra "Due/Last" metadata,
+  // so getByLabelText exact matching is brittle. Instead: locate the row title text,
+  // then click the nested checkbox input.
+  const el = screen.getByText(title);
+  const label = el.closest('label');
+  if (!label) throw new Error(`Expected to find <label> ancestor for action row: ${title}`);
+  const input = label.querySelector('input[type=\"checkbox\"]') as HTMLInputElement | null;
+  if (!input) throw new Error(`Expected checkbox input for action row: ${title}`);
+  input.click();
+  return input;
+}
+
 describe('useStalenessNudges', () => {
   beforeEach(() => {
     for (const fn of Object.values(hoisted)) {
@@ -115,6 +134,8 @@ describe('useStalenessNudges', () => {
 
     hoisted.isSnoozed.mockReturnValue(false);
     hoisted.canPrompt.mockReturnValue(true);
+    hoisted.getLastDoneAtMs.mockReturnValue(undefined);
+    hoisted.getLastPageLoadAtMs.mockReturnValue(undefined);
     hoisted.shouldCheckRemoteHead.mockReturnValue(false);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: false });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);
@@ -162,6 +183,11 @@ describe('useStalenessNudges', () => {
     expect(await screen.findByText('Updates recommended')).toBeTruthy();
     expect(screen.getByText('Retrieve all slices (active graph)')).toBeTruthy();
 
+    // SAFETY: retrieve-all is never pre-selected, even if due.
+    const retrieveCheckbox = clickActionCheckboxByRowTitle('Retrieve all slices (active graph)');
+    // Click toggles it on; we don't rely on label text matching.
+    expect(retrieveCheckbox.checked).toBe(true);
+
     screen.getByRole('button', { name: 'Run selected' }).click();
     expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(1);
   });
@@ -181,6 +207,9 @@ describe('useStalenessNudges', () => {
     expect(await screen.findByText('Updates recommended')).toBeTruthy();
     expect(screen.getByText('Reload page')).toBeTruthy();
     expect(screen.getByText('Retrieve all slices (active graph)')).toBeTruthy();
+
+    // SAFETY: retrieve-all is never pre-selected; user must explicitly tick it.
+    clickActionCheckboxByRowTitle('Retrieve all slices (active graph)');
 
     screen.getByText('Run selected').click();
 

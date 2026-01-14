@@ -79,6 +79,17 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         ss.setItem('dagnet:nonudge', '1');
         return true;
       }
+
+      // Autonomous / scheduler-driven runs:
+      // If the app is explicitly directed to run daily automation via ?retrieveall=...,
+      // it must never be blocked by interactive staleness nudges.
+      //
+      // IMPORTANT: Persist suppression for this session (even if other code later cleans the URL),
+      // so the automation cannot be interrupted mid-run.
+      if (url.searchParams.has('retrieveall')) {
+        ss.setItem('dagnet:nonudge', '1');
+        return true;
+      }
     } catch {
       // ignore
     }
@@ -143,6 +154,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
     if (wantsPull) {
       await pullAll();
+      if (repo) {
+        stalenessNudgeService.recordDone('git-pull', Date.now(), `${repo}-${branch}`, storage);
+      }
       // Clear dismissed SHA after successful pull so future changes are detected
       if (repo) {
         stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
@@ -150,6 +164,10 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     }
 
     if (wantsRetrieve) {
+      // SAFETY: never default retrieve-all to selected; record when the user explicitly triggers it.
+      if (activeFileId) {
+        stalenessNudgeService.recordDone('retrieve-all-slices', Date.now(), activeFileId, storage);
+      }
       const mustCompleteBeforeReload = wantsReload;
       if (wantsPull && activeFileId) {
         // Intended behaviour for READ-ONLY users:
@@ -293,6 +311,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
     // Execute git-pull only (not retrieve-all)
     await pullAll();
+    if (repo) {
+      stalenessNudgeService.recordDone('git-pull', Date.now(), `${repo}-${branch}`, storage);
+    }
 
     // Clear dismissed SHA after successful pull (so future changes are detected)
     if (repo) {
@@ -375,6 +396,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         due: boolean;
         checked: boolean;
         disabled?: boolean;
+        lastDoneAtMs?: number;
       }> = [
         {
           key: 'reload',
@@ -382,6 +404,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
           description: 'Ensures you’re on the latest client version and clears stale in-memory state.',
           due: reloadDue,
           checked: reloadDue,
+          lastDoneAtMs: stalenessNudgeService.getLastPageLoadAtMs(storage),
         },
         {
           key: 'git-pull',
@@ -390,14 +413,16 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
           due: gitPullDue,
           checked: gitPullDue,
           disabled: !repository,
+          lastDoneAtMs: repository ? stalenessNudgeService.getLastDoneAtMs('git-pull', `${repository}-${branch}`, storage) : undefined,
         },
         {
           key: 'retrieve-all-slices',
           label: 'Retrieve all slices (active graph)',
           description: 'Runs the Retrieve All Slices flow for the currently focused graph. Usually handled by daily cron; only due if >24h stale.',
           due: retrieveDue,
-          checked: retrieveDue,
+          checked: false,
           disabled: !activeFileId,
+          lastDoneAtMs: activeFileId ? stalenessNudgeService.getLastDoneAtMs('retrieve-all-slices', activeFileId, storage) : undefined,
         },
       ];
 
