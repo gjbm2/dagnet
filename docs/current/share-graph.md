@@ -1,6 +1,6 @@
 # Share Graph Links (Static + Live Mode)
 
-**Status**: Design + implementation plan  
+**Status**: Implemented (Phases 1–3) + E2E implemented (Playwright passing locally)  
 **Last updated**: 14-Jan-26  
 
 ## Implementation status (as of 14-Jan-26)
@@ -21,31 +21,41 @@ To remove ambiguity, this section explicitly states what is implemented vs not.
   - `File → Share link…` modal exists.
   - per-tab context menu and navigator context menu have static/live share options via a central hook.
   - a share icon button exists in the menu bar (non-dashboard mode) to open the modal.
-- **Live link generation UX** exists (but the semantics are not yet complete; see below).
+- **Live link generation semantics**:
+  - live links are eligible for refresh (live links do **not** include `nonudge`)
+  - live chart links embed a recipe payload (not baked results)
 - **Navigator workspace init is skipped in share mode** (prevents full repo clone/pull in embed/share flows).
-- **Nonudge URL rewriting**: share flows do not strip `nonudge` from the URL after load.
+- **Nonudge URL rewriting**: share flows do not strip `nonudge` from the URL after load (where present).
 - **Secret/credential material is not logged** in share boot/credentials paths (redaction/no-logging).
-
-### Partially implemented (present, but missing required correctness behaviour)
-
-- **Live share boot**: minimal GitHub fetch path exists (graph + minimal parameter dependency set), but:
-  - cache-first vs refresh-on-staleness semantics are not fully implemented end-to-end
-  - seeding semantics still allow “stale reuse” via get-or-create behaviour in some paths
-  - live scenario URL application is not guaranteed correct until fileId/target contracts are finalised for live boot
-- **Share bundle payloads**: static bundle decoding/opening exists for `data=` bundles, but the full target/recipe model (analysis/chart targets) is Phase 3 work.
-
-### Not implemented yet (planned in this doc)
-
-- **Live-share refresh correctness** (Phase 3):
-  - share-scoped remote-ahead tracking (“last seen HEAD SHA”) and rate limiting
+- **Live share boot correctness**:
+  - canonical live graph fileId is used (`graph-<graph>`)
+  - live boot seeding uses overwrite semantics (prevents “stale reuse”)
+- **Live-share refresh correctness (Phase 3)**:
+  - share-scoped remote-ahead tracking (“last seen remote HEAD SHA”) and rate limiting
   - dashboard-mode specialised refresh UX (countdown → refresh → toast)
-  - minimal refresh pipeline (refresh inputs → regenerate scenarios → recompute chart/analysis artefacts)
-- **Live chart share as a first-class target** (recipe payload, recompute, gating on live scenarios only).
-- **Scenario-level share** (scenario context menu entry points and single-scenario payloads).
+  - minimal refresh pipeline that overwrites cached graph/deps and triggers rehydration
+- **Live chart share as a first-class target (Phase 3)**:
+  - chart recipe payload in `share=` (graph identity + scenario DSL definitions + per-scenario visibility modes + analysis recipe)
+  - cache-first boot (show cached artefact when present)
+  - recompute path on refresh (scenario regen + chart recompute)
+  - **chart-only live share boot**: chart links seed the graph cache but do **not** open a visible graph tab
+  - **scenario correctness**: scenarios are rehydrated from DSL (including colours) and regenerated before analysis, preventing “duplicate scenario” results
+- **Scenario-level share (Phase 3)**:
+  - scenario context menu share links (static + live)
+  - `selectedscenario` URL behaviour supported
+- **Cohort DSL support in regeneration plumbing**:
+  - open-ended `cohort(-1w:)` style ranges are supported (no “Invalid date format” failures in regeneration/coverage checks)
 
-## Remaining implementation work (fully scoped; what is left to build)
+### Partially implemented / still outstanding
 
-This is the authoritative “what still needs doing” list. Each item has a clear definition of done and the intended code surfaces.
+- **Manual Notion smoke test** is still required as the final confirmation step (even after Playwright), due to Notion embed constraints.
+- **Multi-tab bundle reconstruction** is **in scope**. It is complete only when verified by dedicated Playwright E2E tests (static + live bundles, active tab selection, and deduplication).
+
+## Remaining implementation work (as of 14-Jan-26)
+
+The Phase 2–3 feature work is implemented, and the Playwright E2E suite (including multi-tab bundles) is implemented and passing locally. The remaining work is **manual Notion verification**:
+
+- run the manual Notion smoke test described in **Addendum A**
 
 ### A) Live links: refresh policy (dashboard-specialised; no `nonudge`)
 
@@ -149,10 +159,11 @@ This is the primary workflow that motivated the Phase 3 “live chart” work. I
 ### Workflow: Notion daily “live chart” embed (bridge analysis between two live scenarios)
 
 - **Authoring (normal app)**:
-  - User creates a chart showing a bridge comparison between two **live scenarios** (e.g. `window(-2w:-1w)` vs `window(-3w:-2w)`).
+  - User creates a chart showing a bridge comparison between two **live scenarios** (e.g. `cohort(-1w:)` vs `cohort(-2m:-1m)`).
   - The chart is built from:
     - graph identity (repo/branch/graph),
     - ordered live scenario DSL definitions + per-scenario visibility modes,
+    - per-scenario display metadata (**name + colour**),
     - analysis recipe (analysis type + analysis query DSL),
     - optional `whatIfDSL` if it was active.
   - User generates a **live share link** in dashboard presentation for that chart.
@@ -179,6 +190,7 @@ This is the primary workflow that motivated the Phase 3 “live chart” work. I
 
 - **Scenario correctness**:
   - The live scenarios defined in the link must be rehydrated from DSL definitions (not scenario IDs) and displayed correctly.
+  - Scenario colours should be preserved (the shared view should not silently re-palette scenarios).
   - After a repo refresh, live scenarios must regenerate, and the chart must reflect the updated scenario graphs.
 
 - **Chart correctness**:
@@ -188,6 +200,38 @@ This is the primary workflow that motivated the Phase 3 “live chart” work. I
 ## Addendum A — Real browser E2E tests for live share (Playwright OSS; persistence-first; GitHub not tested)
 
 This addendum defines a **proper, implementation-grade E2E test plan** for the Phase 3 workflow: *Notion daily “live chart” embed*. The emphasis is deliberately on **DagNet’s** correctness (URL boot, share-scoped IndexedDB, cache-first behaviour, refresh pipeline, and recomputation), while treating GitHub and compute as **stubbed external boundaries**.
+
+### A.0 Implementation note (as of 14-Jan-26)
+
+The Playwright suite described in this addendum is now implemented and passing locally.
+
+- **Config**: `graph-editor/playwright.config.ts`
+- **Test specs**:
+  - `graph-editor/e2e/shareLiveChart.spec.ts` (chart-only live share boot, cache-first warm boot, refresh overwrite + recompute, share isolation)
+  - `graph-editor/e2e/shareScenario.spec.ts` (scenario URL params)
+- **Network stubs**: `graph-editor/e2e/support/shareLiveStubs.ts`
+- **Dev-only determinism hook** (used only by tests): `graph-editor/src/dev/e2eHooks.ts` (gated behind `?e2e=1`)
+- **Chart-only boot host**: `graph-editor/src/components/share/ShareChartBootstrapper.tsx`
+
+#### A.0.1 Running the suite locally (Ubuntu/WSL)
+
+If Chromium fails to launch due to missing system libraries, install the OS deps first:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libnspr4 libnss3
+```
+
+Then run:
+
+```bash
+cd graph-editor
+export NVM_DIR="$HOME/.nvm"
+if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi
+nvm use "$(cat .nvmrc)"
+
+npm run e2e
+```
 
 ### A.1 Why E2E here (and what “E2E” means in this repo)
 
@@ -928,30 +972,16 @@ Note: GitHub’s contents API exposes file SHA; we can treat “unchanged SHA”
     - simulated repo advance and automatic refresh in dashboard mode,
     - scenario regeneration and chart recompute after refresh.
 
-### Automated “E2E-style” testing approach (within the repo’s current test strategy)
+### Automated testing status (as of 14-Jan-26)
 
-We should treat this as a multi-layer verification problem and test the core correctness in deterministic integration tests, then do a small manual Notion smoke test for real embed constraints.
+- **Unit/integration coverage added**:
+  - share URL generation and staleness tracking behaviour is covered in unit tests
+  - the live chart URL boot/recompute orchestration is covered in hook tests
+- **Still required**:
+  - the real browser E2E suite in **Addendum A** (Playwright OSS, persistence-first)
+  - the manual Notion smoke test in **Addendum A**
 
-- **Deterministic integration tests (recommended; stable and fast)**:
-  - Add integration tests that simulate:
-    - a live chart share boot from a URL (dashboard mode),
-    - a share-scoped IndexedDB cache already populated (warm cache),
-    - a remote-ahead condition (branch HEAD SHA changes),
-    - the minimal refresh pipeline (graph/deps refresh → scenario regeneration → analysis recompute → chart artefact update).
-  - Mock external boundaries:
-    - GitHub API calls (remote HEAD + file contents/shas)
-    - compute client calls (analysis execution) so results are deterministic
-  - Assert post-refresh invariants:
-    - chart artefact updated (result differs / timestamp differs / “computed against” marker differs)
-    - scenarios regenerated (versions increment / derived scenario graphs updated)
-    - dashboard refresh UX path executed (pending countdown + completion toast), without blocking modals.
-
-- **Manual Notion smoke test (small but necessary)**:
-  - Embed a live chart link.
-  - Confirm the UX behaviour in:
-    - a fresh Notion load (cold cache),
-    - a second view within the same Notion session (warm cache),
-    - after a repo update (refresh occurs and the chart updates).
+We keep the checklist above as the acceptance criteria, but the **authoritative** and more detailed E2E plan is in **Addendum A**.
 
 
 
@@ -1263,6 +1293,11 @@ The policy should be:
 
 The threshold is an implementation detail but must exist so share links are predictable rather than flaky.
 
+Additionally, we apply a **soft warning** for any share link (static or live) whose URL exceeds **1,800 characters**:
+
+- Rationale: Notion documents a **2,000 character** limit for “Any URL” and `text.link.url` in its request/property value limits. While this is documented for API requests, treating ~2,000 chars as a practical ceiling is the safest assumption for Notion embeds.
+- Source: [Notion API request limits](https://developers.notion.com/reference/request-limits).
+
 ## Impacted code files (Phase 1)
 
 This is the exhaustive list of code files that will be modified or created for Phase 1.
@@ -1558,10 +1593,14 @@ Phase 2 builds on the Phase 1 infrastructure to add more UX entry points and mul
 Phase 3 extends sharing to chart tabs and adds scenario-level granularity.
 
 Status note (14-Jan-26):
-- Phase 3 was previously declared complete, but key behaviours are not yet implemented end-to-end for Notion live embeds:
-  - Live mode caching + refresh policy is incomplete (current behaviour risks stale IndexedDB without a safe refresh path).
-  - Live scenarios do not reliably rehydrate/apply in live share (fileId gating + missing re-sync triggers).
-  - Live chart share is not implemented as a first-class share target (chart viewer is baked; live recompute is missing).
+- Phase 3 implementation work is complete in the codebase for the “Notion daily live chart embed” workflow:
+  - Live mode caching + refresh policy is implemented (cache-first + share-scoped remote-ahead + dashboard countdown + toast).
+  - Live scenarios rehydrate from DSL and are regenerated on share refresh.
+  - Live chart share is implemented as a first-class target (recipe payload + recompute pipeline).
+  - Scenario-level share is implemented (static + live, DSL-backed live scenarios only).
+- Remaining work is verification hardening:
+- implement the Playwright OSS E2E suite described in **Addendum A** (including multi-tab bundles)
+  - run the manual Notion smoke test described in **Addendum A**
 
 ### Prerequisites (Phase 2 must be complete)
 

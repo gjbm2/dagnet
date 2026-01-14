@@ -5,6 +5,7 @@ import App from './App';
 import { createDASRunner } from './lib/das';
 import { consoleMirrorService } from './services/consoleMirrorService';
 import { sessionLogMirrorService } from './services/sessionLogMirrorService';
+import { installE2eHooks } from './dev/e2eHooks';
 
 // Make DAS Runner available globally for console testing
 if (typeof window !== 'undefined') {
@@ -15,6 +16,7 @@ if (typeof window !== 'undefined') {
 if (import.meta.env.DEV) {
   consoleMirrorService.install();
   sessionLogMirrorService.install();
+  installE2eHooks();
 
   // If console mirroring was already enabled via localStorage, ensure the session log mirror
   // is enabled too (so both streams stay in sync after reloads).

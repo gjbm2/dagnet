@@ -28,6 +28,7 @@ import {
   buildStaticSingleTabShareUrl,
   buildLiveShareUrl,
   extractIdentityFromFileSource,
+  getShareUrlSoftWarning,
 } from '../shareLinkService';
 
 // Mock sessionLogService
@@ -92,6 +93,20 @@ describe('shareLinkService', () => {
       });
 
       expect(url).not.toContain('dashboard=1');
+    });
+  });
+
+  describe('getShareUrlSoftWarning', () => {
+    it('returns null for short URLs', () => {
+      expect(getShareUrlSoftWarning('https://example.com/a')).toBeNull();
+    });
+
+    it('returns a warning for long URLs (Notion safety)', () => {
+      const long = 'https://example.com/' + 'a'.repeat(2000);
+      const warning = getShareUrlSoftWarning(long);
+      expect(warning).toBeTruthy();
+      expect(String(warning)).toContain('Notion');
+      expect(String(warning)).toContain('characters');
     });
   });
 

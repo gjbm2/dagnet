@@ -292,6 +292,28 @@ describe('Live Scenarios Integration Tests', () => {
       expect(effectiveDSL).toContain('context(channel:google)');
       expect(effectiveDSL).not.toContain('context(channel:meta)');
     });
+
+    it('should clear inherited window() when scenario introduces cohort() (date mode exclusivity)', () => {
+      const inheritedDSL = 'window(1-Nov-25:10-Nov-25).context(region:uk)';
+      const scenarioQueryDSL = 'cohort(-1w:)';
+
+      const effectiveDSL = computeEffectiveFetchDSL(inheritedDSL, scenarioQueryDSL);
+
+      expect(effectiveDSL).toContain('cohort(-1w:)');
+      expect(effectiveDSL).not.toContain('window(1-Nov-25:10-Nov-25)');
+      expect(effectiveDSL).toContain('context(region:uk)');
+    });
+
+    it('should clear inherited cohort() when scenario introduces window() (date mode exclusivity)', () => {
+      const inheritedDSL = 'cohort(1-Nov-25:14-Nov-25).context(region:uk)';
+      const scenarioQueryDSL = 'window(1-Nov-25:10-Nov-25)';
+
+      const effectiveDSL = computeEffectiveFetchDSL(inheritedDSL, scenarioQueryDSL);
+
+      expect(effectiveDSL).toContain('window(1-Nov-25:10-Nov-25)');
+      expect(effectiveDSL).not.toContain('cohort(1-Nov-25:14-Nov-25)');
+      expect(effectiveDSL).toContain('context(region:uk)');
+    });
   });
 
   // ==========================================================================

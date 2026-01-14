@@ -1,5 +1,7 @@
 # TODO
 
+- Share linkes should carry Sankey status
+
 - Work on case files:
   docs/current/case-lag-updates.md
 
@@ -19,11 +21,6 @@
 
 See `investigate/investigation-delegation-vs-registration-1-Nov-25.md`.
 
-**Remaining work to complete (new follow-ons):**
-- ✅ (Completed; see `docs/current/project-lag/implemented/status.md`) MSMDC should apply/populate cohort anchors (`anchor_node_id`) for **all** edges (latency and non-latency alike), and cascade to parameter files as appropriate.
-- ✅ (Completed; see `docs/current/project-lag/implemented/status.md`) In `cohort(...)` mode, build **3-step** funnels everywhere (**A → from → to**), except when **anchor == from** (then 2-step is sufficient).
-
-- Investigate Forecast calcs (now that we think evidence is semi-stable)
 - More testing of conditional_p logic under what-if scenarios
 - Let's make Current scenario visible at all times
 

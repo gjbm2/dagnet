@@ -14,7 +14,8 @@ import {
   parseDSL,
   getVisitedNodeIds,
   evaluateConstraint,
-  normalizeConstraintString
+  normalizeConstraintString,
+  augmentDSLWithConstraint
 } from '../queryDSL';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -687,6 +688,35 @@ describe('DSL Parsing Functions', () => {
       const normalised = normalizeConstraintString(input);
       expect(normalised).toContain('cohort(15-Nov-25:-7d)');
       expect(normalised).toContain('context(channel:google)');
+    });
+  });
+
+  // ============================================================
+  // TEST SUITE 9: DSL Augmentation - Date Mode Exclusivity
+  // ============================================================
+  describe('augmentDSLWithConstraint - date mode exclusivity', () => {
+    it('should clear inherited window() when new constraint introduces cohort()', () => {
+      const existing = 'window(1-Nov-25:10-Nov-25).context(region:uk)';
+      const next = 'cohort(-1w:).context(channel:paid-search)';
+
+      const out = augmentDSLWithConstraint(existing, next);
+
+      expect(out).toContain('cohort(-1w:)');
+      expect(out).not.toContain('window(1-Nov-25:10-Nov-25)');
+      expect(out).toContain('context(region:uk)');
+      expect(out).toContain('context(channel:paid-search)');
+    });
+
+    it('should clear inherited cohort() when new constraint introduces window()', () => {
+      const existing = 'cohort(1-Nov-25:14-Nov-25).context(region:uk)';
+      const next = 'window(1-Nov-25:10-Nov-25).context(channel:paid-search)';
+
+      const out = augmentDSLWithConstraint(existing, next);
+
+      expect(out).toContain('window(1-Nov-25:10-Nov-25)');
+      expect(out).not.toContain('cohort(1-Nov-25:14-Nov-25)');
+      expect(out).toContain('context(region:uk)');
+      expect(out).toContain('context(channel:paid-search)');
     });
   });
 

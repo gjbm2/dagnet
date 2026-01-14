@@ -60,6 +60,7 @@ import { dataOperationsService } from '../dataOperationsService';
 import { fileRegistry } from '../../contexts/TabContext';
 import type { Graph } from '../../types';
 import toast from 'react-hot-toast';
+import { setBatchMode } from '../dataOperationsService';
 
 // Mock file storage for tests
 const mockFiles = new Map<string, any>();
@@ -412,6 +413,15 @@ describe('batchGetFromSource', () => {
       expect(failedItem?.success).toBe(false);
       expect(failedItem?.error).toContain('Connection timeout');
     });
+  });
+});
+
+describe('dataOperationsService batch mode toast hygiene', () => {
+  it('dismisses the das-fetch spinner toast when ending batch mode', () => {
+    setBatchMode(true);
+    (toast as any).loading('Fetching data from source...', { id: 'das-fetch' });
+    setBatchMode(false);
+    expect((toast as any).dismiss).toHaveBeenCalledWith('das-fetch');
   });
 });
 

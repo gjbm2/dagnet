@@ -1,13 +1,11 @@
 {
   "name": "graph-editor",
   "private": true,
-  "version": "1.2.5-beta",
+  "version": "1.1.29-beta",
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
   "scripts": {
     "dev": "npm run generate-docs && vite",
+    "dev:e2e": "vite --host 127.0.0.1 --port 4173 --strictPort",
     "generate-docs": "node scripts/generate-docs-index.js",
     "prebuild": "npm run generate-docs",
     "build": "tsc -b && vite build",
@@ -23,7 +21,10 @@
     "test:coverage": "NODE_OPTIONS='--max-old-space-size=8192' vitest run --coverage tests/",
     "ci:check": "npm ci && npx tsc --noEmit",
     "ci:lint": "npx tsc --noEmit",
-    "ci:test": "npm run test:p0 && npm run test:run"
+    "ci:test": "npm run test:p0 && npm run test:run",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -69,6 +70,7 @@
     "zustand": "^4.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.50.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
