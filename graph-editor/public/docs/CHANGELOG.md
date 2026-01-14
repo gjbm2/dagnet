@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.1.31b
+**Released:** January 14, 2026
+
+Completed implementation of chart sharing and added Playwright e2e tests to confirm proper operation
+
+---
+
 ## Version 1.1.30b
 **Released:** January 14, 2026
 
