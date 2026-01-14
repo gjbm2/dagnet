@@ -317,6 +317,7 @@ DagNet can fetch live data from external sources:
 - **API Access**: Use the API for programmatic access
 
 ### Automation
-- **Batch Operations**: Process multiple files at once
-- **Scripting**: Use the API to automate common tasks
-- **Templates**: Create reusable graph templates
+
+DagNet supports **scheduled “headless automation”** for overnight refreshes (pull latest → retrieve all slices → commit).
+
+See: [Automation and Scheduled Updates](automation-and-scheduling.md)
