@@ -69,6 +69,37 @@ function safeSetJson(storage: StorageLike, key: string, value: unknown): void {
   }
 }
 
+type ParsedSemver = { major: number; minor: number; patch: number; prerelease?: string };
+
+function parseSemverLoose(v: string): ParsedSemver | null {
+  // Accept: "1.2.6-beta", "v1.2.6-beta", "1.2.6", "1.2.6b" (legacy display), etc.
+  const cleaned = String(v || '').trim().replace(/^v/i, '');
+  // Convert legacy "1.2.6b" → "1.2.6-beta" for comparison
+  const normalised = cleaned.replace(/(\d+\.\d+\.\d+)\s*b$/i, '$1-beta');
+
+  const m = normalised.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  if (!m) return null;
+
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  const patch = Number(m[3]);
+  if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) return null;
+
+  return { major, minor, patch, prerelease: m[4] };
+}
+
+function isRemoteSemverNewer(remote: string, local: string): boolean {
+  const r = parseSemverLoose(remote);
+  const l = parseSemverLoose(local);
+  if (!r || !l) return false;
+  if (r.major !== l.major) return r.major > l.major;
+  if (r.minor !== l.minor) return r.minor > l.minor;
+  if (r.patch !== l.patch) return r.patch > l.patch;
+
+  // Same base version; treat prerelease as not newer for our purposes.
+  return false;
+}
+
 function defaultStorage(): StorageLike {
   return window.localStorage;
 }
@@ -219,6 +250,12 @@ class StalenessNudgeService {
     return remote !== localVersion;
   }
 
+  isRemoteAppVersionNewerThanLocal(localVersion: string, storage: StorageLike = defaultStorage()): boolean {
+    const remote = this.getCachedRemoteAppVersion(storage);
+    if (!remote) return false;
+    return isRemoteSemverNewer(remote, localVersion);
+  }
+
   private getLastAutoReloadedRemoteAppVersion(storage: StorageLike): string | undefined {
     try {
       const v = storage.getItem(LS.lastAutoReloadedRemoteAppVersion);
@@ -247,7 +284,8 @@ class StalenessNudgeService {
   ): boolean {
     const remoteVersion = this.getCachedRemoteAppVersion(storage);
     if (!remoteVersion) return false;
-    if (remoteVersion === localVersion) return false;
+    // Only auto-reload when the deployed client is newer than us.
+    if (!isRemoteSemverNewer(remoteVersion, localVersion)) return false;
 
     const lastAuto = this.getLastAutoReloadedRemoteAppVersion(storage);
     if (lastAuto === remoteVersion) return false;
