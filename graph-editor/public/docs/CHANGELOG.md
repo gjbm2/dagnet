@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.2.3b
+**Released:** January 14, 2026
+
+Chron fixes
+
+---
+
 ## Version 1.2.2b
 **Released:** January 13, 2026
 
