@@ -2,9 +2,7 @@ import React, { useState, useEffect } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { ChevronRight } from 'lucide-react';
 import { useTabContext } from '../../contexts/TabContext';
-import packageJson from '../../../package.json';
-
-const APP_VERSION = packageJson.version;
+import { APP_VERSION } from '../../version';
 
 interface DocFile {
   id: string;

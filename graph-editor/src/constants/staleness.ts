@@ -19,6 +19,13 @@ export const STALENESS_NUDGE_GIT_PULL_LAST_DONE_RED_AFTER_MS = 24 * 60 * 60 * 10
  */
 export const STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30m
 
+/**
+ * How often to check if a newer client has been deployed (for reload nudge).
+ * The actual reload nudge is triggered by version mismatch, not by time elapsed.
+ * This just gates how frequently we fetch version.json.
+ */
+export const STALENESS_NUDGE_APP_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10m
+
 /** User snooze duration for nudges. */
 export const STALENESS_NUDGE_SNOOZE_MS = 60 * 60 * 1000; // 1h
 

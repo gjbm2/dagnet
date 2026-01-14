@@ -12,6 +12,7 @@
  */
 
 import { liveShareSyncService } from '../services/liveShareSyncService';
+import { shareLinkService } from '../services/shareLinkService';
 
 export function installE2eHooks(): void {
   if (!import.meta.env.DEV) return;
@@ -30,6 +31,17 @@ export function installE2eHooks(): void {
        */
       refreshLiveShareToLatest: async () => {
         return await liveShareSyncService.refreshToLatest();
+      },
+      /**
+       * Generate a live chart share URL from an existing chart fileId.
+       * Used by Playwright to exercise the real share-link generation path.
+       */
+      buildLiveChartShareUrlFromChartFile: async (args: { chartFileId: string; secretOverride: string; dashboardMode?: boolean }) => {
+        return await shareLinkService.buildLiveChartShareUrlFromChartFile({
+          chartFileId: args.chartFileId,
+          secretOverride: args.secretOverride,
+          dashboardMode: args.dashboardMode,
+        });
       },
     };
   } catch {
