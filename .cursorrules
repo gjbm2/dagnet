@@ -16,6 +16,15 @@
 - In terminal tool calls, prefix Python steps with: `. graph-editor/venv/bin/activate`
 - Use the venv executables (`python`, `python3`, `pip`, etc.) from `graph-editor/venv` (i.e. `which python3` must resolve inside the venv), not the system interpreter.
 
+### Node / npm (repo-pinned via nvm)
+- Node major version is pinned in `graph-editor/.nvmrc` (currently `22`).
+- In some environments `npm` is not on PATH until **nvm is sourced**.
+- **Technique (no repo scripts required)**:
+  - `export NVM_DIR="$HOME/.nvm"`
+  - `. "$NVM_DIR/nvm.sh"` (only if it exists)
+  - `cd graph-editor && nvm use "$(cat .nvmrc)"`
+  - After this, `node` and `npm` should be available for `npm test`, etc.
+
 ## Core Principles
 
 ### 0. SYSTEMATIC CAUTION UNTIL FULL CONTEXT IS UNDERSTOOD
@@ -39,6 +48,34 @@ This repo is large and subtle; over-confidence causes regressions. The assistant
 - Make the **smallest** change that accomplishes the intent.
 - Re-check assumptions after reading each key module (e.g. where the query payload is constructed, where signatures are computed, where caches are consumed).
 - After changes, **run only the relevant tests** and do not claim success until they pass.
+
+### 0.5 APPROVAL + RISK DISCIPLINE (NO “CODE FIRST, ASK LATER”)
+**CRITICAL**: Shift judgement away from “code first, ask questions later”.
+
+This section is about **behavioural/source-code changes** and other changes with meaningful blast radius. It is **not** intended to add bureaucracy to routine documentation edits.
+
+**Default posture**:
+- Prefer **explicit agreement** before making behavioural/source-code changes.
+- If agreement is not yet clear, **pause** and ask clarifying questions first.
+
+**When it is OK to write code**:
+- **Explicit approval**: the user says “yes/go ahead/approved”, etc.
+- **Agreed plan**: you wrote a prose implementation plan, the user agreed, and you stay strictly in-scope.
+- **High-confidence, fully-understood change**: you have traced the relevant end-to-end code path, identified call sites and invariants, considered unintended consequences, and stated a brief **risk assessment** (why it is low/medium/high risk). If risk is not low, get explicit approval.
+
+**What this discipline applies to**:
+- **Behavioural changes** in `.ts/.tsx/.js/.py/.ps1/.sh/.yaml/.json` that affect runtime logic, persistence, caches, data shape, git/file ops, scheduling, credentials, or external calls
+- Terminal commands that **modify state** (installs, migrations, checkouts/resets, codegen, etc.)
+- “Small UI copy tweaks” that actually change behaviour (e.g. default actions, automatic execution, safety prompts)
+
+**What it does NOT apply to (by default)**:
+- Routine edits to `.md` docs and notes that do not change behaviour or operational safety.
+  - If a doc change is effectively a design/behaviour decision, treat it like a behavioural change: write a plan and get agreement.
+
+**If you realise you started coding without sufficient agreement**:
+- Stop immediately.
+- Show exactly what changed (`git diff` / precise regions).
+- Ask the user how they want it reverted; do not do broad resets without consent.
 
 ### 1. NO LOGIC IN UI/MENU FILES
 **CRITICAL**: Menu files, context menus, and UI components are ACCESS POINTS ONLY.
@@ -118,9 +155,11 @@ Before creating ANY new functionality:
 When modifying functionality:
 
 1. **Update existing tests** - Don't leave tests broken or outdated
-2. **CRITICAL: Updating existing tests is permitted ONLY with user EXPRESS authorisation**
-   - This includes “small” edits like expectation tweaks, thresholds, renames, or snapshot updates.
-   - If a change requires updating an existing test, the assistant MUST batch the proposed diffs and wait for explicit approval before editing.
+2. **CRITICAL: Do not weaken tests without explicit approval**
+   - Updating tests **as part of an agreed scope/design change** is allowed and expected.
+   - However, any test change that could **soften coverage** or reduce safety requires **explicit approval**.
+   - Examples that require explicit approval: loosening assertions, widening tolerances, removing/weakening scenarios, snapshot updates that remove important signal.
+   - Non-softening updates (e.g. aligning expectations with an explicitly agreed behaviour change, adding assertions, fixing deterministic failures) do not require a separate approval step beyond the approved change scope.
 3. **Prefer editing existing test files over creating new ones**
    - The intent of the authorisation rule is to prevent silent weakening of test coverage, **not** to force test-file proliferation.
    - If a change needs new assertions, the assistant should normally add them to the most relevant existing test file/suite.
