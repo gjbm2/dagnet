@@ -164,7 +164,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         analysisType
       );
 
-      if (!response?.success) {
+      if (!response?.success || !response.result) {
         throw new Error(response?.error?.message || 'Analysis failed');
       }
 

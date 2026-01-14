@@ -75,6 +75,7 @@ function defaultStorage(): StorageLike {
 const LS = {
   lastPageLoadAtMs: 'dagnet:staleness:lastPageLoadAtMs',
   lastPromptedAtMs: (kind: NudgeKind) => `dagnet:staleness:lastPromptedAtMs:${kind}`,
+  lastDoneAtMs: (kind: NudgeKind) => `dagnet:staleness:lastDoneAtMs:${kind}`,
   snoozedUntilMs: (kind: NudgeKind, scope?: string) =>
     `dagnet:staleness:snoozedUntilMs:${kind}${scope ? `:${scope}` : ''}`,
   pendingPlan: 'dagnet:staleness:pendingPlan',
