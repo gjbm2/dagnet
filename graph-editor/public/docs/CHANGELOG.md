@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.2.1b
+**Released:** 14-Jan-26
+
+Minor fixes
+
+---
+
 
 ## Version 1.2.x Series (13-Jan-26 to 14-Jan-26)
 **Share links & live charts**
