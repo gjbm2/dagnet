@@ -39,10 +39,12 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
   // Modal state
   const [selectedTabIds, setSelectedTabIds] = useState<Set<string>>(new Set());
   const [dashboardMode, setDashboardMode] = useState(true);
-  const [liveMode, setLiveMode] = useState(false);
+  // Live share is the default: it’s usually what users want (small links + always-fresh).
+  const [liveMode, setLiveMode] = useState(true);
   const [includeScenarios, setIncludeScenarios] = useState(true);
   const [activeBundleTabId, setActiveBundleTabId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const wasOpenRef = React.useRef(false);
   
   // Get shareable tabs (graphs and charts only for now)
   const shareableTabs = useMemo<ShareableTab[]>(() => {
@@ -60,14 +62,23 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
   
   // Initialize selection with active tab when modal opens
   React.useEffect(() => {
-    if (isOpen && activeTabId) {
-      const activeIsShareable = shareableTabs.some(t => t.id === activeTabId);
-      if (activeIsShareable) {
-        setSelectedTabIds(new Set([activeTabId]));
-        setActiveBundleTabId(activeTabId);
-      }
-    }
-  }, [isOpen, activeTabId, shareableTabs]);
+    const wasOpen = wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+    // Only run initialisation on the open transition.
+    if (!isOpen || wasOpen) return;
+
+    if (!activeTabId) return;
+
+    // IMPORTANT: Do NOT depend on shareableTabs here (it depends on selectedTabIds),
+    // otherwise this effect can create an update loop when selection changes.
+    const activeIsShareable = tabs.some(tab =>
+      tab.id === activeTabId && (tab.fileId.startsWith('graph-') || tab.fileId.startsWith('chart-'))
+    );
+    if (!activeIsShareable) return;
+
+    setSelectedTabIds(new Set([activeTabId]));
+    setActiveBundleTabId(activeTabId);
+  }, [isOpen, activeTabId, tabs]);
 
   // Keep bundle active tab consistent with selection
   React.useEffect(() => {
@@ -145,17 +156,19 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
             }
             url = res.url;
           } else {
-            if (!identity?.repo || !identity.branch || !identity.graph) {
-              toast.error('Live mode requires repo/branch/graph identity');
+            // For live graph shares, prefer a bundle payload so we can carry scenario DSLs + colours.
+            const res = await shareLinkService.buildLiveBundleShareUrlFromTabs({
+              tabIds: [selectedTab.id],
+              dashboardMode,
+              includeScenarios,
+              activeTabId: selectedTab.id,
+              secretOverride: secret,
+            });
+            if (!res.success || !res.url) {
+              toast.error(res.error || 'Failed to create live graph share link');
               return;
             }
-            url = shareLinkService.buildLiveShareUrl({
-              repo: identity.repo,
-              branch: identity.branch,
-              graph: identity.graph,
-              secret,
-              dashboardMode,
-            });
+            url = res.url;
           }
         } else {
           if (selectedTab.type === 'chart') {
@@ -343,7 +356,6 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
                 type="checkbox"
                 checked={liveMode}
                 onChange={e => setLiveMode(e.target.checked)}
-                disabled={selectedTabIds.size !== 1}
               />
               <Zap size={16} />
               <span>Live mode (fetch latest from GitHub)</span>

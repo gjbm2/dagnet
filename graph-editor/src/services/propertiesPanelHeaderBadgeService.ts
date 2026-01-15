@@ -9,7 +9,7 @@
  */
 
 import type { Graph, GraphEdge, GraphNode } from '../types';
-import { hasAnyEdgeQueryOverride, listOverriddenFlagPaths } from '../utils/overrideFlags';
+import { listOverriddenFlagPaths } from '../utils/overrideFlags';
 
 export interface HeaderBadgeInfo {
   visible: boolean;
@@ -106,10 +106,7 @@ export function getPropertiesPanelHeaderBadges(
   const overridePaths = node
     ? listOverriddenFlagPaths(node)
     : edge
-      ? [
-          ...listOverriddenFlagPaths(edge),
-          ...(hasAnyEdgeQueryOverride(edge) ? ['query'] : []),
-        ]
+      ? listOverriddenFlagPaths(edge)
       : [];
 
   const overrideCount = uniq(overridePaths).length;

@@ -168,7 +168,6 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         currentDSL={currentDSL}
         mode="dropdown"
         showConnectionSettings={true}
-        showSyncStatus={true}
         onClose={() => setIsOpen(false)}
       />
     </div>
