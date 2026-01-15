@@ -29,6 +29,42 @@
     - **Current DSL authority**
       - If `GraphStoreContext.currentDSL` is empty at the wrong moment, code can fall back to `graph.currentQueryDSL` (historic record), changing query semantics.
       - Also watch for mismatched “Current DSL” sources: chart payload vs graph store state vs graph file field.
+      - **Assurance (rule-out drift cause)**:
+        - Add a single “DSL authority snapshot” mark in both normal + live share runs, captured immediately before any Stage‑2 or analysis compute:
+          - Assert equality of: payload current DSL (if share), GraphStore `currentDSL`, graph file `currentQueryDSL`, and the effective DSL passed into `fetchItems()` / analysis.
+        - Add an outcome-oriented parity test that fails if the effective DSL differs between normal and live share when given the same intended DSL (treat as a hard defect, not a warning).
+
+    - **Relative / open-ended DSL date resolution (clock/timezone)**
+      - Relative/open-ended DSLs (e.g. `-60d:` or missing `.end`) resolve against “today”; if normal vs live share resolve differently (clock skew, TZ boundary), the effective query window differs.
+      - **Assurance (rule-out drift cause)**:
+        - During parity runs, log a single “resolved DSL window” snapshot (start/end, plus the derived “today” in `d-MMM-yy`) at the same mark point in both modes; assert exact equality.
+        - In parity tests, prefer explicit windows (no relative/open-ended) unless the test is explicitly about relative-date semantics; if testing relative semantics, freeze the reference date (single injected “as-of day”) and assert both pathways use it.
+
+    - **Context + settings hydration timing (MECE + slice-family selection)**
+      - Even with identical param files, results can diverge if context definitions or repo settings are not hydrated into FileRegistry/IDB before slice selection and MECE implicit-uncontexted resolution.
+      - **Assurance (rule-out drift cause)**:
+        - Add a “deps ready” barrier assertion that must pass before scenario regeneration / Stage‑2 / analysis:
+          - contexts file(s) present and parsed; settings file present; connection capabilities present.
+        - Add a parity test that records and compares the “slice universe” used for the compute:
+          - which sliceDSL entries were selected for each edge (including whether implicit MECE was used, and which key/value universe).
+
+    - **Scenario regeneration ordering / stale scenario state**
+      - Live share has explicit “hydrate Current → regenerate scenarios → compute analysis”; normal mode may rely on React/store sequencing.
+      - **Assurance (rule-out drift cause)**:
+        - Introduce a deterministic “sequencing contract” trace (single log op with ordered child steps) and assert the step order is identical across normal/live share for the same scenario set.
+        - Add a parity test that asserts scenario graphs are byte-equivalent (or structurally equivalent) immediately before analysis compute (same scenario IDs, same DSL subtitles, same composed param packs).
+
+    - **Fetch permissions / mode differences (from-file-only vs network-permitted)**
+      - Live share commonly forbids source fetches; normal mode may fetch gaps/refresh stale slices, which mutates caches and changes results.
+      - **Assurance (rule-out drift cause)**:
+        - During parity runs, enforce the same policy in both modes (“cache-only”) and assert no network fetch occurred (planner outcome must be “covered” and execution must not call source boundaries).
+        - Add a parity test that fails if either run performs any write to parameter files during the “compute-only” window (treat as drift contamination).
+
+    - **Analysis graph construction inputs (visibility mode, scenario list/order)**
+      - The analysis runner can vary based on scenario order/visibility state (e.g. F/E/F+E mode), and on whether What‑If is applied.
+      - **Assurance (rule-out drift cause)**:
+        - At analysis entry, log and compare: visibility mode, active scenario IDs + order, hide_current state, colours, and any What‑If DSL applied.
+        - Add a parity test that builds the analysis graph in both modes and asserts equivalence of the serialised graph payload sent to the compute client (not just the final rendered chart).
     - **Contexts availability / slice selection**
       - Observed divergence patterns include `context(channel:other)` showing up in one run but not another.
       - Context presence must be stable across boot vs reload; context definitions affect MECE partitioning + “otherPolicy” behaviour.
