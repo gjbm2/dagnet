@@ -1,0 +1,5172 @@
+[
+  {
+    "at": "2026-01-15T15:20:23.831Z",
+    "type": "debug",
+    "text": "[vite] connecting...",
+    "location": {
+      "url": "http://127.0.0.1:4173/@vite/client",
+      "lineNumber": 494,
+      "columnNumber": 8
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:23.841Z",
+    "type": "debug",
+    "text": "[vite] connected.",
+    "location": {
+      "url": "http://127.0.0.1:4173/@vite/client",
+      "lineNumber": 617,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.437Z",
+    "type": "info",
+    "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "location": {
+      "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-FQHYCYVK.js?v=de6b2874",
+      "lineNumber": 21550,
+      "columnNumber": 24
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.454Z",
+    "type": "log",
+    "text": "[ShareBootResolver] Resolved boot config: {mode: live, dbName: DagNetGraphEditorShare:repo1-yrl1t9, repo: repo-1, branch: main, graph: test-graph}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/shareBootResolver.ts",
+      "lineNumber": 101,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.454Z",
+    "type": "log",
+    "text": "[AppDatabase] Initialising with DB name: DagNetGraphEditorShare:repo1-yrl1t9",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/db/appDatabase.ts",
+      "lineNumber": 6,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.460Z",
+    "type": "log",
+    "text": "Git Configuration: {repoOwner: , repoName: , branch: main, graphsPath: graphs, paramsPath: parameters}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/config/gitConfig.ts",
+      "lineNumber": 23,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.462Z",
+    "type": "log",
+    "text": "GitService.setCurrentRepo: No credentials or git repos available",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 30,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.665Z",
+    "type": "log",
+    "text": "GraphStoreProvider: Creating new store for file graph-test-graph",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/GraphStoreContext.tsx",
+      "lineNumber": 187,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.713Z",
+    "type": "log",
+    "text": "useFileState: Setting up for graph-test-graph",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 1885,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.713Z",
+    "type": "log",
+    "text": "useFileState: No initial file for graph-test-graph, waiting for notification",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 1891,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.715Z",
+    "type": "log",
+    "text": "GraphStoreProvider: Instance mounted for graph-test-graph (count: 1)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/GraphStoreContext.tsx",
+      "lineNumber": 370,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.715Z",
+    "type": "log",
+    "text": "[VisibleTabs] extractVisibleTabs: Found 0 visible tabs: []",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/VisibleTabsContext.tsx",
+      "lineNumber": 61,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.716Z",
+    "type": "log",
+    "text": "[NavigatorContext] Share mode detected - skipping workspace initialisation",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/NavigatorContext.tsx",
+      "lineNumber": 69,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.729Z",
+    "type": "log",
+    "text": "[TabContext] Share mode detected - skipping workspace tab restoration",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 727,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.737Z",
+    "type": "log",
+    "text": "🔧 CredentialsManager: Found credentials in URL...",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 161,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.737Z",
+    "type": "log",
+    "text": "CredentialsManager: Loaded credentials from URL",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 33,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.738Z",
+    "type": "log",
+    "text": "TabContext: Credentials loaded from URL, skipping file creation",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 811,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.788Z",
+    "type": "log",
+    "text": "ScenariosContext: Loaded 0 scenarios for file graph-test-graph",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 95,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.793Z",
+    "type": "log",
+    "text": "ScenariosContext: Saved 0 scenarios for file graph-test-graph",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 132,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.804Z",
+    "type": "log",
+    "text": "[seedConnections] Creating connections.yaml from defaults (4 connections)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/init/seedConnections.ts",
+      "lineNumber": 29,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.807Z",
+    "type": "log",
+    "text": "[seedConnections] ✅ connections.yaml created with 4 default connections",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/init/seedConnections.ts",
+      "lineNumber": 42,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.816Z",
+    "type": "log",
+    "text": "[seedSettings] Creating settings.yaml from defaults",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/init/seedSettings.ts",
+      "lineNumber": 25,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.817Z",
+    "type": "log",
+    "text": "[seedSettings] ✅ settings.yaml created from defaults",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/init/seedSettings.ts",
+      "lineNumber": 39,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.818Z",
+    "type": "log",
+    "text": "[TabContext] Live share mode detected",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 834,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.821Z",
+    "type": "log",
+    "text": "GitService.setCurrentRepo: Set to owner-1/repo-1 (branch: main, basePath: none)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 35,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.821Z",
+    "type": "log",
+    "text": "✅ GitService: Octokit reinitialized with new credentials",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 58,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.831Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Fetching graphs/test-graph.json from branch main, repo: owner-1/repo-1, basePath: ",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 144,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.831Z",
+    "type": "log",
+    "text": "GitService config: {repoOwner: , repoName: , branch: main, graphsPath: graphs, paramsPath: parameters}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 77,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.831Z",
+    "type": "log",
+    "text": "GitService githubToken: NOT SET",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 78,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.831Z",
+    "type": "log",
+    "text": "GitService: Using token for authentication",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 82,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.836Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Got graphs/test-graph.json, size: 288, SHA: graph_sh",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 147,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.836Z",
+    "type": "log",
+    "text": "🔵 graphGitService.getGraph: Loaded test-graph from GitHub with 2 nodes, SHA: graph_sh",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/graphGitService.ts",
+      "lineNumber": 59,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.838Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Fetching parameters-index.yaml from branch main, repo: owner-1/repo-1, basePath: ",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 144,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.838Z",
+    "type": "log",
+    "text": "GitService config: {repoOwner: , repoName: , branch: main, graphsPath: graphs, paramsPath: parameters}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 77,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.838Z",
+    "type": "log",
+    "text": "GitService githubToken: NOT SET",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 78,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.838Z",
+    "type": "log",
+    "text": "GitService: Using token for authentication",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 82,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.843Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Got parameters-index.yaml, size: 67, SHA: pindex_s",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 147,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.848Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Fetching parameters/param-1.yaml from branch main, repo: owner-1/repo-1, basePath: ",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 144,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.849Z",
+    "type": "log",
+    "text": "GitService config: {repoOwner: , repoName: , branch: main, graphsPath: graphs, paramsPath: parameters}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 77,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.849Z",
+    "type": "log",
+    "text": "GitService githubToken: NOT SET",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 78,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.849Z",
+    "type": "log",
+    "text": "GitService: Using token for authentication",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 82,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.855Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Got parameters/param-1.yaml, size: 6704, SHA: param_sh",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 147,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.863Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Fetching contexts-index.yaml from branch main, repo: owner-1/repo-1, basePath: ",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 144,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.863Z",
+    "type": "log",
+    "text": "GitService config: {repoOwner: , repoName: , branch: main, graphsPath: graphs, paramsPath: parameters}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 77,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.863Z",
+    "type": "log",
+    "text": "GitService githubToken: NOT SET",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 78,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.863Z",
+    "type": "log",
+    "text": "GitService: Using token for authentication",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 82,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.868Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Got contexts-index.yaml, size: 63, SHA: cindex_s",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 147,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.869Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Fetching contexts/channel.yaml from branch main, repo: owner-1/repo-1, basePath: ",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 144,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.869Z",
+    "type": "log",
+    "text": "GitService config: {repoOwner: , repoName: , branch: main, graphsPath: graphs, paramsPath: parameters}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 77,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.869Z",
+    "type": "log",
+    "text": "GitService githubToken: NOT SET",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 78,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.870Z",
+    "type": "log",
+    "text": "GitService: Using token for authentication",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 82,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.874Z",
+    "type": "log",
+    "text": "🔵 GitService.getFile: Got contexts/channel.yaml, size: 187, SHA: ctx_chan",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 147,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.884Z",
+    "type": "log",
+    "text": "FileRegistry: Notifying 1 listeners for graph-test-graph",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 534,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.884Z",
+    "type": "log",
+    "text": "FileRegistry: Calling 1 callbacks with NEW data object",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 540,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.884Z",
+    "type": "log",
+    "text": "useFileState[graph-test-graph]: Received update notification, updating local state",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 1898,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.889Z",
+    "type": "log",
+    "text": "[TabContext] Live share: non-graph target payload detected; skipping graph tab creation {shareTarget: chart}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.891Z",
+    "type": "log",
+    "text": "createLiveScenario: Setting baseDSL to \"window(1-Jan-26:2-Jan-26)\" (was empty)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 300,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.904Z",
+    "type": "log",
+    "text": "createLiveScenario: Setting baseDSL to \"window(1-Jan-26:2-Jan-26)\" (was empty)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 300,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.907Z",
+    "type": "log",
+    "text": "Regenerating scenario scenario-1768490424891-7808j6m: {queryDSL: cohort(1-Dec-25:31-Dec-25).context(channel:influencer), inheritedDSL: context(channel:paid-search).cohort(1-Dec-25:31-Dec-25), effectiveFetchDSL: context(channel:influencer).cohort(1-Dec-25:31-Dec-25), whatIfDSL: }",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 367,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.907Z",
+    "type": "log",
+    "text": "All data cached for scenario scenario-1768490424891-7808j6m, loading from files...",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 398,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.912Z",
+    "type": "log",
+    "text": "[DataOperationsService] Parsed cohort window from DSL: {start: 1-Dec-25, end: 31-Dec-25}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 509,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.912Z",
+    "type": "log",
+    "text": "[DataOperationsService] TARGET EDGE AT START: {edge.uuid: e1, edge.p: {\"id\":\"param-1\",\"mean\":0.5}, window: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 564,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.912Z",
+    "type": "log",
+    "text": "[DataOperationsService] Exact sliceDSL match for targetSlice {targetSlice: context(channel:influencer).cohort(1-Dec-25:31-Dec-25), matchCount: 1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 599,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.912Z",
+    "type": "log",
+    "text": "[DataOperationsService] Filtered to slice: {targetSlice: context(channel:influencer).cohort(1-Dec-25:31-Dec-25), originalCount: 7, filteredCount: 1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 671,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.913Z",
+    "type": "log",
+    "text": "[DataOperationsService] Exact cohort time slice match - skipping aggregation and using stored slice stats {targetSlice: context(channel:influencer).cohort(1-Dec-25:31-Dec-25)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 719,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.916Z",
+    "type": "log",
+    "text": "[UpdateManager] update:start {direction: file_to_graph, operation: UPDATE, subDest: parameter}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 513,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.916Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: p.mean, sourceValue: 0.2, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.916Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.mean, oldValue: 0.5, newValue: 0.2}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.916Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: p.stdev, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.916Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: p.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].n, targetField: p.evidence.n, sourceValue: 100, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.n, oldValue: undefined, newValue: 100}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].k, targetField: p.evidence.k, sourceValue: 20, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.k, oldValue: undefined, newValue: 20}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: p.evidence.window_from, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: p.evidence.window_to, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source, targetField: p.data_source, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.917Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.retrieved_at, targetField: p.evidence.retrieved_at, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.type, targetField: p.evidence.source, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.full_query, targetField: p.evidence.full_query, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.debug_trace, targetField: p.evidence.debug_trace, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].evidence.mean, targetField: p.evidence.mean, sourceValue: 0.2, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.mean, oldValue: undefined, newValue: 0.2}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.918Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].evidence.stdev, targetField: p.evidence.stdev, sourceValue: 0.04, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.919Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.stdev, oldValue: undefined, newValue: 0.04}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.919Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.latency_parameter, targetField: p.latency.latency_parameter, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.919Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.919Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.latency_parameter_overridden, targetField: p.latency.latency_parameter_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.919Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.919Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.t95, targetField: p.latency.t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.919Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.t95_overridden, targetField: p.latency.t95_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.path_t95, targetField: p.latency.path_t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.path_t95_overridden, targetField: p.latency.path_t95_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.median_lag_days, targetField: p.latency.median_lag_days, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.completeness, targetField: p.latency.completeness, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.920Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.t95, targetField: p.latency.t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.path_t95, targetField: p.latency.path_t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].forecast, targetField: p.forecast.mean, sourceValue: 0.19999999999999998, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.forecast.mean, oldValue: undefined, newValue: 0.19999999999999998}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: cost_gbp.mean, sourceValue: 0.2, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: cost_gbp.stdev, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.921Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.922Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: cost_gbp.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.922Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.922Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: cost_gbp.evidence.window_from, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.922Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.922Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: cost_gbp.evidence.window_to, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.922Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.922Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: labour_cost.mean, sourceValue: 0.2, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.922Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.923Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: labour_cost.stdev, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.923Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.923Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: labour_cost.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.923Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.923Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: labour_cost.evidence.window_from, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.923Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: labour_cost.evidence.window_to, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source, targetField: labour_cost.data_source, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.retrieved_at, targetField: labour_cost.evidence.retrieved_at, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.type, targetField: labour_cost.evidence.source, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.full_query, targetField: labour_cost.evidence.full_query, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.924Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.debug_trace, targetField: labour_cost.evidence.debug_trace, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: p.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: p.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: cost_gbp.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: cost_gbp.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: labour_cost.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: labour_cost.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.925Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.928Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] FINAL RESULT: {success: true, changesCount: 6, errorsCount: 0, errors: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 961,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.928Z",
+    "type": "log",
+    "text": "[DataOperationsService] BEFORE applyChanges: {edgeId: e1, edgeIndex: 0, edge.p: {\"id\":\"param-1\",\"mean\":0.5}, changes: [{\"field\":\"p.mean\",\"oldValue\":0.5,\"newValue\":0.2,\"…999999999998,\"source\":\"auto\",\"overridden\":false}], conditionalIndex: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1336,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.928Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.mean, newValue: 0.2, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.928Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.2}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.929Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.n, newValue: 100, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.2}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.929Z",
+    "type": "log",
+    "text": "[applyChanges] Creating new object at evidence",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 446,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.929Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.929Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.k, newValue: 20, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.929Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100,\"k\":20}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.929Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.mean, newValue: 0.2, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100,\"k\":20}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.929Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100,\"k\":20,\"mean\":0.2}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.stdev, newValue: 0.04, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100,\"k\":20,\"mean\":0.2}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100,\"k\":20,\"mean\":0.2,\"stdev\":0.04}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.forecast.mean, newValue: 0.19999999999999998, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100,\"k\":20,\"mean\":0.2,\"stdev\":0.04}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "[applyChanges] Creating new object at forecast",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 446,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100,\"k\"…v\":0.04},\"forecast\":{\"mean\":0.19999999999999998}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "[DataOperationsService] AFTER applyChanges: {edge.p: {\"id\":\"param-1\",\"mean\":0.2,\"evidence\":{\"n\":100,\"k\"…v\":0.04},\"forecast\":{\"mean\":0.19999999999999998}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1443,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "[DataOperationsService] PRESERVE param id after update: {slot: p, paramId: param-1, paramType: probability, edge.slot.id: param-1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1466,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "warning",
+    "text": "[UpdateManager] No siblings found for rebalance",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2910,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "Current edge ID: e1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2911,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "Source node ID: n1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2912,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "Subtype: p",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2913,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "Found 1 edges from source node",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2914,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "\n=== Edge 1 ===",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2922,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  UUID: e1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2924,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  ID: edge-1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2925,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  From->To: n1->n2",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2926,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  Edge ID: e1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2927,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  Matches current: true",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2928,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  Has subtype (p.mean): true",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2929,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  Has conditional_p: false",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2930,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  Conditional_p count: 0",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2931,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  Has p: true",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2932,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  p.mean: 0.2",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2933,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  p.mean type: number",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2934,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  Would be sibling: false",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2935,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "  Full p object: {id: param-1, mean: 0.2, evidence: Object, forecast: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2936,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.930Z",
+    "type": "log",
+    "text": "[TIMING] getParameterFromFile param-1: 18.3ms | parse=1.8ms, file=1.9ms, edge=1.9ms, sliceFilter=2.7ms, sigValid=?ms, aggregate=2.9ms, updateMgr=13.8ms, setGraph=18.3ms",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1498,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.931Z",
+    "type": "log",
+    "text": "[fetchDataService] Latency items check: {hasLatencyItems: false, details: Array(1)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 788,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.931Z",
+    "type": "log",
+    "text": "[fetchDataService] LAG_DEBUG finalGraph before inbound-n: {edgeCount: 1, latencyEdgeCount: 0, latencyEdges: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 1087,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.931Z",
+    "type": "log",
+    "text": "[fetchDataService] About to compute inbound-n {hasFinalGraph: true, batchLogId: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 1102,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.931Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN called {hasGraph: true, edgeCount: 1, whatIfDSL: context(channel:influencer).cohort(1-Dec-25:31-Dec-25), logOpId: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 488,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.931Z",
+    "type": "log",
+    "text": "[LAG_TOPO_001] getActiveEdges: {totalEdges: 1, activeCount: 1, hasScenario: false, edges: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 527,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.931Z",
+    "type": "log",
+    "text": "[fetchDataService] Active edges for inbound-n: {activeCount: 1, totalEdges: 1, edgeMeans: Array(1)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 540,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.931Z",
+    "type": "log",
+    "text": "[LAG_TOPO_002] buildAdjacencyList: {activeEdgesInput: 1, addedToAdjacency: 1, skipped: 0, uuidMappings: 0, adjacencyKeys: n1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 558,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.932Z",
+    "type": "log",
+    "text": "[computeInboundN] Setup: {nodeCount: 2, edgeCount: 1, activeEdgeCount: 1, startNodes: Array(1), nodesWithEntry: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 1315,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.932Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN INPUT graph: {latencyEdgeCount: 0, sample: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 564,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.932Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN OUTPUT graph (calling setGraph): {latencyEdgeCount: 0, sample: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 595,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.932Z",
+    "type": "log",
+    "text": "[fetchDataService] Computed inbound-n for 1 edges: {e1: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 605,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.932Z",
+    "type": "log",
+    "text": "[TIMING] fetchItems batch: 24.3ms total, 24.3ms avg per item (1 items)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 712,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.933Z",
+    "type": "log",
+    "text": "Scenario scenario-1768490424891-7808j6m regenerated successfully",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 462,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.933Z",
+    "type": "log",
+    "text": "Regenerating scenario scenario-1768490424903-pz9o5e3: {queryDSL: cohort(1-Dec-25:31-Dec-25).context(channel:paid-search), inheritedDSL: window(1-Jan-26:2-Jan-26), effectiveFetchDSL: context(channel:paid-search).cohort(1-Dec-25:31-Dec-25), whatIfDSL: }",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 367,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.933Z",
+    "type": "log",
+    "text": "All data cached for scenario scenario-1768490424903-pz9o5e3, loading from files...",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 398,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.933Z",
+    "type": "log",
+    "text": "[DataOperationsService] Parsed cohort window from DSL: {start: 1-Dec-25, end: 31-Dec-25}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 509,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.934Z",
+    "type": "log",
+    "text": "[DataOperationsService] TARGET EDGE AT START: {edge.uuid: e1, edge.p: {\"id\":\"param-1\",\"mean\":0.5}, window: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 564,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.934Z",
+    "type": "log",
+    "text": "[DataOperationsService] Exact sliceDSL match for targetSlice {targetSlice: context(channel:paid-search).cohort(1-Dec-25:31-Dec-25), matchCount: 1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 599,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.934Z",
+    "type": "log",
+    "text": "[DataOperationsService] Filtered to slice: {targetSlice: context(channel:paid-search).cohort(1-Dec-25:31-Dec-25), originalCount: 7, filteredCount: 1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 671,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.934Z",
+    "type": "log",
+    "text": "[DataOperationsService] Exact cohort time slice match - skipping aggregation and using stored slice stats {targetSlice: context(channel:paid-search).cohort(1-Dec-25:31-Dec-25)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 719,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.934Z",
+    "type": "log",
+    "text": "ScenariosContext: Saved 2 scenarios for file graph-test-graph",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 132,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.946Z",
+    "type": "log",
+    "text": "[UpdateManager] update:start {direction: file_to_graph, operation: UPDATE, subDest: parameter}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 513,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: p.mean, sourceValue: 0.8, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.mean, oldValue: 0.5, newValue: 0.8}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: p.stdev, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: p.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].n, targetField: p.evidence.n, sourceValue: 100, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.n, oldValue: undefined, newValue: 100}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].k, targetField: p.evidence.k, sourceValue: 80, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.k, oldValue: undefined, newValue: 80}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: p.evidence.window_from, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: p.evidence.window_to, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.947Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source, targetField: p.data_source, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.retrieved_at, targetField: p.evidence.retrieved_at, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.type, targetField: p.evidence.source, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.full_query, targetField: p.evidence.full_query, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.debug_trace, targetField: p.evidence.debug_trace, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.948Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].evidence.mean, targetField: p.evidence.mean, sourceValue: 0.8, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.mean, oldValue: undefined, newValue: 0.8}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].evidence.stdev, targetField: p.evidence.stdev, sourceValue: 0.04, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.stdev, oldValue: undefined, newValue: 0.04}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.latency_parameter, targetField: p.latency.latency_parameter, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.latency_parameter_overridden, targetField: p.latency.latency_parameter_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.t95, targetField: p.latency.t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.t95_overridden, targetField: p.latency.t95_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.949Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.path_t95, targetField: p.latency.path_t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.path_t95_overridden, targetField: p.latency.path_t95_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.median_lag_days, targetField: p.latency.median_lag_days, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.completeness, targetField: p.latency.completeness, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.t95, targetField: p.latency.t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.path_t95, targetField: p.latency.path_t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].forecast, targetField: p.forecast.mean, sourceValue: 0.7999999999999999, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.950Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.forecast.mean, oldValue: undefined, newValue: 0.7999999999999999}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: cost_gbp.mean, sourceValue: 0.8, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: cost_gbp.stdev, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: cost_gbp.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: cost_gbp.evidence.window_from, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: cost_gbp.evidence.window_to, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: labour_cost.mean, sourceValue: 0.8, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: labour_cost.stdev, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.951Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: labour_cost.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: labour_cost.evidence.window_from, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: labour_cost.evidence.window_to, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source, targetField: labour_cost.data_source, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.retrieved_at, targetField: labour_cost.evidence.retrieved_at, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.type, targetField: labour_cost.evidence.source, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.full_query, targetField: labour_cost.evidence.full_query, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.debug_trace, targetField: labour_cost.evidence.debug_trace, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.952Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: p.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: p.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: cost_gbp.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: cost_gbp.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: labour_cost.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: labour_cost.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.953Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] FINAL RESULT: {success: true, changesCount: 6, errorsCount: 0, errors: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 961,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.954Z",
+    "type": "log",
+    "text": "[DataOperationsService] BEFORE applyChanges: {edgeId: e1, edgeIndex: 0, edge.p: {\"id\":\"param-1\",\"mean\":0.5}, changes: [{\"field\":\"p.mean\",\"oldValue\":0.5,\"newValue\":0.8,\"…999999999999,\"source\":\"auto\",\"overridden\":false}], conditionalIndex: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1336,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.954Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.mean, newValue: 0.8, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.954Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.8}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.954Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.n, newValue: 100, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.8}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.954Z",
+    "type": "log",
+    "text": "[applyChanges] Creating new object at evidence",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 446,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.954Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.954Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.k, newValue: 80, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.954Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100,\"k\":80}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.955Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.mean, newValue: 0.8, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100,\"k\":80}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.955Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100,\"k\":80,\"mean\":0.8}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.955Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.stdev, newValue: 0.04, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100,\"k\":80,\"mean\":0.8}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.955Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100,\"k\":80,\"mean\":0.8,\"stdev\":0.04}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.955Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.forecast.mean, newValue: 0.7999999999999999, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100,\"k\":80,\"mean\":0.8,\"stdev\":0.04}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.955Z",
+    "type": "log",
+    "text": "[applyChanges] Creating new object at forecast",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 446,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.955Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100,\"k\"…ev\":0.04},\"forecast\":{\"mean\":0.7999999999999999}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.956Z",
+    "type": "log",
+    "text": "[DataOperationsService] AFTER applyChanges: {edge.p: {\"id\":\"param-1\",\"mean\":0.8,\"evidence\":{\"n\":100,\"k\"…ev\":0.04},\"forecast\":{\"mean\":0.7999999999999999}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1443,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.956Z",
+    "type": "log",
+    "text": "[DataOperationsService] PRESERVE param id after update: {slot: p, paramId: param-1, paramType: probability, edge.slot.id: param-1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1466,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.963Z",
+    "type": "warning",
+    "text": "[UpdateManager] No siblings found for rebalance",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2910,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.963Z",
+    "type": "log",
+    "text": "Current edge ID: e1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2911,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.963Z",
+    "type": "log",
+    "text": "Source node ID: n1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2912,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "Subtype: p",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2913,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "Found 1 edges from source node",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2914,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "\n=== Edge 1 ===",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2922,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  UUID: e1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2924,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  ID: edge-1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2925,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  From->To: n1->n2",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2926,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  Edge ID: e1",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2927,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  Matches current: true",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2928,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  Has subtype (p.mean): true",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2929,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  Has conditional_p: false",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2930,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  Conditional_p count: 0",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2931,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  Has p: true",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2932,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.964Z",
+    "type": "log",
+    "text": "  p.mean: 0.8",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2933,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "  p.mean type: number",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2934,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "  Would be sibling: false",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2935,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "  Full p object: {id: param-1, mean: 0.8, evidence: Object, forecast: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 2936,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[TIMING] getParameterFromFile param-1: 30.7ms | parse=0.2ms, file=0.2ms, edge=0.2ms, sliceFilter=0.7ms, sigValid=?ms, aggregate=0.8ms, updateMgr=20.2ms, setGraph=30.7ms",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1498,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[fetchDataService] Latency items check: {hasLatencyItems: false, details: Array(1)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 788,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[fetchDataService] LAG_DEBUG finalGraph before inbound-n: {edgeCount: 1, latencyEdgeCount: 0, latencyEdges: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 1087,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[fetchDataService] About to compute inbound-n {hasFinalGraph: true, batchLogId: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 1102,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN called {hasGraph: true, edgeCount: 1, whatIfDSL: context(channel:paid-search).cohort(1-Dec-25:31-Dec-25), logOpId: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 488,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[LAG_TOPO_001] getActiveEdges: {totalEdges: 1, activeCount: 1, hasScenario: false, edges: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 527,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[fetchDataService] Active edges for inbound-n: {activeCount: 1, totalEdges: 1, edgeMeans: Array(1)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 540,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[LAG_TOPO_002] buildAdjacencyList: {activeEdgesInput: 1, addedToAdjacency: 1, skipped: 0, uuidMappings: 0, adjacencyKeys: n1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 558,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.965Z",
+    "type": "log",
+    "text": "[computeInboundN] Setup: {nodeCount: 2, edgeCount: 1, activeEdgeCount: 1, startNodes: Array(1), nodesWithEntry: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 1315,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.966Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN INPUT graph: {latencyEdgeCount: 0, sample: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 564,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.966Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN OUTPUT graph (calling setGraph): {latencyEdgeCount: 0, sample: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 595,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.966Z",
+    "type": "log",
+    "text": "[fetchDataService] Computed inbound-n for 1 edges: {e1: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 605,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.966Z",
+    "type": "log",
+    "text": "[TIMING] fetchItems batch: 32.7ms total, 32.7ms avg per item (1 items)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 712,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.966Z",
+    "type": "log",
+    "text": "Scenario scenario-1768490424903-pz9o5e3 regenerated successfully",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 462,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.967Z",
+    "type": "log",
+    "text": "[DataOperationsService] TARGET EDGE AT START: {edge.uuid: e1, edge.p: {\"id\":\"param-1\",\"mean\":0.5}, window: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 564,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.967Z",
+    "type": "log",
+    "text": "[DataOperationsService] Exact sliceDSL match for targetSlice {targetSlice: window(1-Jan-26:2-Jan-26), matchCount: 1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 599,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.968Z",
+    "type": "log",
+    "text": "[DataOperationsService] Filtered to slice: {targetSlice: window(1-Jan-26:2-Jan-26), originalCount: 7, filteredCount: 1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 671,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.968Z",
+    "type": "log",
+    "text": "[DataOps:getParameterFromFile] Merged constraints: {targetSlice: window(1-Jan-26:2-Jan-26), graphDSL: window(1-Jan-26:2-Jan-26), edgeQuery: undefined, merged: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 785,
+      "columnNumber": 28
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.969Z",
+    "type": "warning",
+    "text": "[DataOperationsService] Failed to validate query signature: Error: Edge missing query string: n1 → n2\n\nTo fix:\n1. Ensure edge.query is defined\n2. Query should be string like: \"from(nodeA).to(nodeB)\"\n    at buildDslFromEdge (http://127.0.0.1:4173/src/lib/das/buildDslFromEdge.ts:21:11)\n    at DataOperationsService.getParameterFromFile (http://127.0.0.1:4173/src/services/dataOperationsService.ts:796:44)\n    at fetchSingleItemInternal (http://127.0.0.1:4173/src/services/fetchDataService.ts:286:52)\n    at Object.fetchItems (http://127.0.0.1:4173/src/services/fetchDataService.ts:668:28)\n    at http://127.0.0.1:4173/src/hooks/useShareChartFromUrl.ts:163:36\n    at http://127.0.0.1:4173/src/hooks/useShareChartFromUrl.ts:351:13",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 860,
+      "columnNumber": 26
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.969Z",
+    "type": "log",
+    "text": "[DataOperationsService] Aggregating with date filter: {isCohortQuery: false, cohortWindow: null, window: Object, effectiveFilter: Object, entriesWithDaily: 1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 870,
+      "columnNumber": 22
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.969Z",
+    "type": "log",
+    "text": "[LAG_DEBUG] READ_VALUE entry 0: {datesCount: 2, hasMedianLagArray: false, medianLagArrayLength: undefined, medianLagSample: undefined, hasMeanLagArray: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 903,
+      "columnNumber": 26
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.969Z",
+    "type": "log",
+    "text": "[DataOperationsService] Entry 0 [window(1-Jan-26:2-Jan-26)]: Added 1-Jan-26 (n: 100, lag: N/A)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 970,
+      "columnNumber": 32
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.970Z",
+    "type": "log",
+    "text": "[DataOperationsService] Entry 0 [window(1-Jan-26:2-Jan-26)]: Added 2-Jan-26 (n: 100, lag: N/A)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 970,
+      "columnNumber": 32
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.970Z",
+    "type": "log",
+    "text": "[DataOperationsService] Entry 0 [window(1-Jan-26:2-Jan-26)]: window=1-Jan-26 to 2-Jan-26, datesInWindow=2/2",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 974,
+      "columnNumber": 26
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.970Z",
+    "type": "log",
+    "text": "[DataOperationsService] Combined time series: {totalPoints: 2, dates: Array(2), nValues: Array(2), totalN: 200, totalK: 100}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 984,
+      "columnNumber": 22
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.971Z",
+    "type": "log",
+    "text": "[DataOperationsService] Window aggregation result: {window: Object, aggregation: Object, enhanced: Object, evidence: Object, stored: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1077,
+      "columnNumber": 22
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.978Z",
+    "type": "log",
+    "text": "[UpdateManager] update:start {direction: file_to_graph, operation: UPDATE, subDest: parameter}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 513,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.978Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: p.mean, sourceValue: 0.5, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.978Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - no change (same value)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 939,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: p.stdev, sourceValue: 0.035355339059327376, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.stdev, oldValue: undefined, newValue: 0.035355339059327376}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: p.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].n, targetField: p.evidence.n, sourceValue: 100, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.n, oldValue: undefined, newValue: 100}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].k, targetField: p.evidence.k, sourceValue: 50, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.k, oldValue: undefined, newValue: 50}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: p.evidence.window_from, sourceValue: 1-Jan-26, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.window_from, oldValue: undefined, newValue: 1-Jan-26}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: p.evidence.window_to, sourceValue: 2-Jan-26, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.979Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.window_to, oldValue: undefined, newValue: 2-Jan-26}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source, targetField: p.data_source, sourceValue: Object, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.data_source, oldValue: undefined, newValue: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.retrieved_at, targetField: p.evidence.retrieved_at, sourceValue: 2026-01-15T15:20:24.970Z, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.retrieved_at, oldValue: undefined, newValue: 2026-01-15T15:20:24.970Z}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.type, targetField: p.evidence.source, sourceValue: file, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.source, oldValue: undefined, newValue: file}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.full_query, targetField: p.evidence.full_query, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.debug_trace, targetField: p.evidence.debug_trace, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].evidence.mean, targetField: p.evidence.mean, sourceValue: 0.5, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.mean, oldValue: undefined, newValue: 0.5}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].evidence.stdev, targetField: p.evidence.stdev, sourceValue: 0.05, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.evidence.stdev, oldValue: undefined, newValue: 0.05}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.latency_parameter, targetField: p.latency.latency_parameter, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.latency_parameter_overridden, targetField: p.latency.latency_parameter_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.980Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.t95, targetField: p.latency.t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.t95_overridden, targetField: p.latency.t95_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.path_t95, targetField: p.latency.path_t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - newValue is undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 919,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: latency.path_t95_overridden, targetField: p.latency.path_t95_overridden, sourceValue: undefined, hasCondition: false, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - requiresIgnoreOverrideFlags (permission copy not enabled)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 900,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.median_lag_days, targetField: p.latency.median_lag_days, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.completeness, targetField: p.latency.completeness, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.t95, targetField: p.latency.t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].latency.path_t95, targetField: p.latency.path_t95, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].forecast, targetField: p.forecast.mean, sourceValue: 0.5, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.981Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] APPLYING change: {targetField: p.forecast.mean, oldValue: undefined, newValue: 0.5}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 923,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: cost_gbp.mean, sourceValue: 0.5, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: cost_gbp.stdev, sourceValue: 0.035355339059327376, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: cost_gbp.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: cost_gbp.evidence.window_from, sourceValue: 1-Jan-26, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: cost_gbp.evidence.window_to, sourceValue: 2-Jan-26, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].mean, targetField: labour_cost.mean, sourceValue: 0.5, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].stdev, targetField: labour_cost.stdev, sourceValue: 0.035355339059327376, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].distribution, targetField: labour_cost.distribution, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.982Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_from, targetField: labour_cost.evidence.window_from, sourceValue: 1-Jan-26, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].window_to, targetField: labour_cost.evidence.window_to, sourceValue: 2-Jan-26, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source, targetField: labour_cost.data_source, sourceValue: Object, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.retrieved_at, targetField: labour_cost.evidence.retrieved_at, sourceValue: 2026-01-15T15:20:24.970Z, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.type, targetField: labour_cost.evidence.source, sourceValue: file, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.full_query, targetField: labour_cost.evidence.full_query, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: values[latest].data_source.debug_trace, targetField: labour_cost.evidence.debug_trace, sourceValue: undefined, hasCondition: true, hasOverrideFlag: false}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: p.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.983Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: p.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: cost_gbp.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: cost_gbp.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection, targetField: labour_cost.connection, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] Processing mapping: {sourceField: connection_string, targetField: labour_cost.connection_string, sourceValue: undefined, hasCondition: true, hasOverrideFlag: true}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 887,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] SKIPPED - condition failed",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 895,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[UpdateManager.applyMappings] FINAL RESULT: {success: true, changesCount: 11, errorsCount: 0, errors: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+      "lineNumber": 961,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[DataOperationsService] BEFORE applyChanges: {edgeId: e1, edgeIndex: 0, edge.p: {\"id\":\"param-1\",\"mean\":0.5}, changes: [{\"field\":\"p.stdev\",\"newValue\":0.03535533905932737…ewValue\":0.5,\"source\":\"auto\",\"overridden\":false}], conditionalIndex: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1336,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.stdev, newValue: 0.035355339059327376, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.984Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.n, newValue: 100, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] Creating new object at evidence",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 446,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.k, newValue: 50, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100,\"k\":50}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.window_from, newValue: 1-Jan-26, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100,\"k\":50}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…dence\":{\"n\":100,\"k\":50,\"window_from\":\"1-Jan-26\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.window_to, newValue: 2-Jan-26, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…dence\":{\"n\":100,\"k\":50,\"window_from\":\"1-Jan-26\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…\"window_from\":\"1-Jan-26\",\"window_to\":\"2-Jan-26\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.data_source, newValue: Object, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…\"window_from\":\"1-Jan-26\",\"window_to\":\"2-Jan-26\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.retrieved_at, newValue: 2026-01-15T15:20:24.970Z, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.985Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.source, newValue: file, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.mean, newValue: 0.5, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.evidence.stdev, newValue: 0.05, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] Applying change: {field: p.forecast.mean, newValue: 0.5, target.p BEFORE: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…file\",\"retrieved_at\":\"2026-01-15T15:20:24.970Z\"}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 419,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] Creating new object at forecast",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 446,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[applyChanges] After change: {target.p AFTER: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…26-01-15T15:20:24.970Z\"},\"forecast\":{\"mean\":0.5}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 471,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[DataOperationsService] AFTER applyChanges: {edge.p: {\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.0353553390593…26-01-15T15:20:24.970Z\"},\"forecast\":{\"mean\":0.5}}}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1443,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[DataOperationsService] PRESERVE param id after update: {slot: p, paramId: param-1, paramType: probability, edge.slot.id: param-1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1466,
+      "columnNumber": 20
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.986Z",
+    "type": "log",
+    "text": "[TIMING] getParameterFromFile param-1: 19.7ms | parse=0.1ms, file=0.1ms, edge=0.1ms, sliceFilter=0.9ms, sigValid=2.4ms, aggregate=3.8ms, updateMgr=17.3ms, setGraph=19.7ms",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+      "lineNumber": 1498,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[fetchDataService] Latency items check: {hasLatencyItems: false, details: Array(1)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 788,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[fetchDataService] LAG_DEBUG finalGraph before inbound-n: {edgeCount: 1, latencyEdgeCount: 0, latencyEdges: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 1087,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[fetchDataService] About to compute inbound-n {hasFinalGraph: true, batchLogId: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 1102,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN called {hasGraph: true, edgeCount: 1, whatIfDSL: window(1-Jan-26:2-Jan-26), logOpId: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 488,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[LAG_TOPO_001] getActiveEdges: {totalEdges: 1, activeCount: 1, hasScenario: false, edges: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 527,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[fetchDataService] Active edges for inbound-n: {activeCount: 1, totalEdges: 1, edgeMeans: Array(1)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 540,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[LAG_TOPO_002] buildAdjacencyList: {activeEdgesInput: 1, addedToAdjacency: 1, skipped: 0, uuidMappings: 0, adjacencyKeys: n1}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 558,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[computeInboundN] Setup: {nodeCount: 2, edgeCount: 1, activeEdgeCount: 1, startNodes: Array(1), nodesWithEntry: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+      "lineNumber": 1315,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.988Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN INPUT graph: {latencyEdgeCount: 0, sample: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 564,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.989Z",
+    "type": "log",
+    "text": "[fetchDataService] computeAndApplyInboundN OUTPUT graph (calling setGraph): {latencyEdgeCount: 0, sample: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 595,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.989Z",
+    "type": "log",
+    "text": "[fetchDataService] Computed inbound-n for 1 edges: {e1: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 605,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.989Z",
+    "type": "log",
+    "text": "[TIMING] fetchItems batch: 22.8ms total, 22.8ms avg per item (1 items)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+      "lineNumber": 712,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.991Z",
+    "type": "log",
+    "text": "[DagNet][Compute] /api/runner/analyze request payload (copy window.__dagnetLastAnalyzeRequest): {scenarios: Array(2), query_dsl: to(to), analysis_type: bridge_view}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/graphComputeClient.ts",
+      "lineNumber": 337,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.997Z",
+    "type": "log",
+    "text": "ScenariosContext: Saved 2 scenarios for file graph-test-graph",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 132,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.999Z",
+    "type": "log",
+    "text": "[DagNet][Compute] /api/runner/analyze response payload (copy window.__dagnetLastAnalyzeResponse): {success: true, result: Object}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/graphComputeClient.ts",
+      "lineNumber": 355,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:24.999Z",
+    "type": "log",
+    "text": "[GraphComputeClient] Cached analyzeMultipleScenarios result",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/graphComputeClient.ts",
+      "lineNumber": 360,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:25.001Z",
+    "type": "log",
+    "text": "ScenariosContext: Saved 2 scenarios for file graph-test-graph",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+      "lineNumber": 132,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:25.024Z",
+    "type": "log",
+    "text": "[VisibleTabs] Panel has activeId=tab-chart-1768490424999, all tabs: [tab-chart-1768490424999]",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/VisibleTabsContext.tsx",
+      "lineNumber": 33,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:25.024Z",
+    "type": "log",
+    "text": "[VisibleTabs] extractVisibleTabs: Found 1 visible tabs: [tab-chart-1768490424999]",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/VisibleTabsContext.tsx",
+      "lineNumber": 61,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:25.024Z",
+    "type": "log",
+    "text": "[VisibleTabs] Visibility changed: 0 -> 1 tabs",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/VisibleTabsContext.tsx",
+      "lineNumber": 71,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:25.026Z",
+    "type": "log",
+    "text": "useFileState: Setting up for chart-share-egtdos",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 1885,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:25.026Z",
+    "type": "log",
+    "text": "useFileState: Found initial file for chart-share-egtdos {version: 1.0.0, chart_kind: analysis_bridge, title: E2E Bridge (context), created_at_uk: 15-Jan-26, created_at_ms: 1768490424999}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+      "lineNumber": 1888,
+      "columnNumber": 14
+    }
+  }
+]

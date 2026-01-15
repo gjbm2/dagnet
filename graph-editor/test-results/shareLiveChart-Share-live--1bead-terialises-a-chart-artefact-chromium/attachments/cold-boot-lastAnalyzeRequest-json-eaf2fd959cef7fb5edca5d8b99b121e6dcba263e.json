@@ -1,0 +1,177 @@
+{
+  "scenarios": [
+    {
+      "scenario_id": "current",
+      "name": "Current",
+      "colour": "#3B82F6",
+      "visibility_mode": "f+e",
+      "graph": {
+        "nodes": [
+          {
+            "uuid": "n1",
+            "id": "from"
+          },
+          {
+            "uuid": "n2",
+            "id": "to"
+          }
+        ],
+        "edges": [
+          {
+            "uuid": "e1",
+            "id": "edge-1",
+            "from": "n1",
+            "to": "n2",
+            "p": {
+              "id": "param-1",
+              "mean": 0.5,
+              "stdev": 0.035355339059327376,
+              "evidence": {
+                "n": 100,
+                "k": 50,
+                "window_from": "1-Jan-26",
+                "window_to": "2-Jan-26",
+                "retrieved_at": "2026-01-15T15:20:03.420Z",
+                "source": "file",
+                "mean": 0.5,
+                "stdev": 0.05
+              },
+              "data_source": {
+                "type": "file",
+                "retrieved_at": "2026-01-15T15:20:03.420Z"
+              },
+              "forecast": {
+                "mean": 0.5,
+                "k": 50
+              },
+              "n": 100
+            }
+          }
+        ],
+        "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+        "baseDSL": "window(1-Jan-26:2-Jan-26)",
+        "metadata": {
+          "name": "test-graph",
+          "e2e_marker": "v1",
+          "updated_at": "2026-01-15T15:20:03.458Z"
+        }
+      }
+    },
+    {
+      "scenario_id": "scenario-1768490403282-hotjmqi",
+      "name": "A",
+      "colour": "#111",
+      "visibility_mode": "f+e",
+      "graph": {
+        "nodes": [
+          {
+            "uuid": "n1",
+            "id": "from"
+          },
+          {
+            "uuid": "n2",
+            "id": "to"
+          }
+        ],
+        "edges": [
+          {
+            "uuid": "e1",
+            "id": "edge-1",
+            "from": "n1",
+            "to": "n2",
+            "p": {
+              "id": "param-1",
+              "mean": 0.5,
+              "stdev": 0.035355339059327376,
+              "evidence": {
+                "n": 100,
+                "k": 50,
+                "window_from": "1-Jan-26",
+                "window_to": "2-Jan-26",
+                "retrieved_at": "2026-01-15T15:20:03.420Z",
+                "source": "file",
+                "mean": 0.5,
+                "stdev": 0.05
+              },
+              "data_source": {
+                "type": "file",
+                "retrieved_at": "2026-01-15T15:20:03.420Z"
+              },
+              "forecast": {
+                "mean": 0.5,
+                "k": 50
+              },
+              "n": 100
+            }
+          }
+        ],
+        "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+        "baseDSL": "window(1-Jan-26:2-Jan-26)",
+        "metadata": {
+          "name": "test-graph",
+          "e2e_marker": "v1",
+          "updated_at": "2026-01-15T15:20:03.458Z"
+        }
+      }
+    },
+    {
+      "scenario_id": "scenario-1768490403297-uh9eyld",
+      "name": "B",
+      "colour": "#222",
+      "visibility_mode": "f",
+      "graph": {
+        "nodes": [
+          {
+            "uuid": "n1",
+            "id": "from"
+          },
+          {
+            "uuid": "n2",
+            "id": "to"
+          }
+        ],
+        "edges": [
+          {
+            "uuid": "e1",
+            "id": "edge-1",
+            "from": "n1",
+            "to": "n2",
+            "p": {
+              "id": "param-1",
+              "mean": 0.5,
+              "stdev": 0.035355339059327376,
+              "evidence": {
+                "n": 100,
+                "k": 50,
+                "window_from": "1-Jan-26",
+                "window_to": "2-Jan-26",
+                "retrieved_at": "2026-01-15T15:20:03.420Z",
+                "source": "file",
+                "mean": 0.5,
+                "stdev": 0.05
+              },
+              "data_source": {
+                "type": "file",
+                "retrieved_at": "2026-01-15T15:20:03.420Z"
+              },
+              "forecast": {
+                "mean": 0.5,
+                "k": 50
+              },
+              "n": 100
+            }
+          }
+        ],
+        "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+        "baseDSL": "window(1-Jan-26:2-Jan-26)",
+        "metadata": {
+          "name": "test-graph",
+          "e2e_marker": "v1",
+          "updated_at": "2026-01-15T15:20:03.458Z"
+        }
+      }
+    }
+  ],
+  "query_dsl": "from(from).to(to)",
+  "analysis_type": "graph_overview"
+}

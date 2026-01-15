@@ -9,6 +9,9 @@ import { chartOperationsService } from '../services/chartOperationsService';
 import { graphComputeClient } from '../lib/graphComputeClient';
 import { buildGraphForAnalysisLayer } from '../services/CompositionService';
 import { db } from '../db/appDatabase';
+import { waitForLiveShareGraphDeps } from '../services/liveShareHydrationService';
+import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
+import { fetchDataService } from '../services/fetchDataService';
 
 /**
  * Share-live: multi-tab bundle boot.
@@ -27,6 +30,7 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
   const shareMode = useShareModeOptional();
   const scenariosContext = useScenariosContextOptional();
   const { operations } = useTabContext();
+  const graphStore = useGraphStoreOptional();
 
   const payload = useMemo(() => decodeSharePayloadFromUrl(), []);
   const processedRef = useRef(false);
@@ -67,7 +71,8 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
         continue;
       }
 
-      const scenario = await scenariosContext.createLiveScenario(dsl, wantName, undefined, wantColour);
+      const idOverride = typeof (def as any)?.id === 'string' ? String((def as any).id) : undefined;
+      const scenario = await scenariosContext.createLiveScenario(dsl, wantName, undefined, wantColour, idOverride);
       usedScenarioIds.add(scenario.id);
       created.push({ idx, id: scenario.id, dsl, scenario });
     }
@@ -76,7 +81,10 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
     const liveIds = created.map(c => c.id);
     const allScenariosOverride = created.map(c => c.scenario).filter(Boolean);
     for (const c of created) {
-      await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds);
+      await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds, {
+        skipStage2: false,
+        allowFetchFromSource: false,
+      });
     }
 
     // CRITICAL: Persist scenarios synchronously before opening tabs.
@@ -113,6 +121,14 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
       for (const s of created as any[]) {
         if (s?.id && s?.scenario) scenarioOverrideById.set(s.id, s.scenario);
       }
+      const scenariosForLayer = (() => {
+        const base = Array.isArray(scenariosContext.scenarios) ? scenariosContext.scenarios : [];
+        const mapped = base.map(s => scenarioOverrideById.get(s.id) ?? s);
+        for (const [id, s] of scenarioOverrideById.entries()) {
+          if (!mapped.some((x: any) => x?.id === id)) mapped.push(s);
+        }
+        return mapped;
+      })();
       const createdByIdx = new Map<number, { id: string; scenario?: any }>(created.map(c => [c.idx, { id: c.id, scenario: c.scenario }]));
       const itemIdxByScenarioId = new Map<string, number>();
       for (const [idx, v] of createdByIdx.entries()) itemIdxByScenarioId.set(v.id, idx);
@@ -190,6 +206,13 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
             .map((_it: any, idx: number) => createdByIdx.get(idx)?.id)
             .filter((id: any) => Boolean(id));
           const visibleScenarioIds2 = (() => {
+            // Ordering rule: only "bridge_view" analysis uses the special "Current last" ordering.
+            // Do NOT infer bridge semantics from chart kind alone (bundle tabs can request graph_overview with an analysis_bridge renderer).
+            const isBridge = t.analysis?.analysis_type === 'bridge_view';
+            if (isBridge) {
+              const base = hideCurrent ? [...orderedScenarioIds2] : [...orderedScenarioIds2, 'current'];
+              return base.length > 0 ? base : ['current'];
+            }
             const base = hideCurrent ? [...orderedScenarioIds2] : ['current', ...orderedScenarioIds2];
             return base.length > 0 ? base : ['current'];
           })();
@@ -201,10 +224,41 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
             if (!id) continue;
             scenarioDslSubtitleById[id] = (it.subtitle || it.dsl || '').trim();
           }
+          const currentDslFromPayload = (payload as any)?.graph_state?.current_query_dsl;
+          if (typeof currentDslFromPayload === 'string' && currentDslFromPayload.trim()) {
+            scenarioDslSubtitleById['current'] = currentDslFromPayload.trim();
+          }
+
+          // Ensure Current is hydrated for the requested Current DSL before computing chart tabs.
+          try {
+            const currentDsl =
+              (typeof currentDslFromPayload === 'string' && currentDslFromPayload.trim())
+                ? currentDslFromPayload.trim()
+                : (typeof (scenariosContext.graph as any)?.currentQueryDSL === 'string' ? String((scenariosContext.graph as any).currentQueryDSL) : '');
+            if (graphStore && currentDsl && currentDsl.trim()) {
+              const itemsForCurrent = fetchDataService.getItemsForFromFileLoad(graphStore.getState().graph as any);
+              if (itemsForCurrent.length > 0) {
+                await fetchDataService.fetchItems(
+                  itemsForCurrent,
+                  { mode: 'from-file', skipStage2: false, allowFetchFromSource: false, suppressBatchToast: true } as any,
+                  graphStore.getState().graph as any,
+                  (g) => graphStore.getState().setGraph(g as any),
+                  currentDsl,
+                  () => (graphStore.getState().graph as any) || null
+                );
+              }
+            }
+          } catch {
+            // best-effort
+          }
 
           const scenarioGraphs = visibleScenarioIds2.map((scenarioId: string) => {
             const visibilityMode = (() => {
-              if (scenarioId === 'current' || scenarioId === 'base') return 'f+e' as const;
+              if (scenarioId === 'base') return 'f+e' as const;
+              if (scenarioId === 'current') {
+                const cur = (payload as any)?.scenarios?.current;
+                return (cur?.visibility_mode as any) || 'f+e';
+              }
               const idx = itemIdxByScenarioId.get(scenarioId);
               const def = typeof idx === 'number' ? items[idx] : null;
               return (def?.visibility_mode as any) || 'f+e';
@@ -212,10 +266,23 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
 
             const scenarioGraph = buildGraphForAnalysisLayer(
               scenarioId,
-              scenariosContext.graph as any,
+              (() => {
+                const base0 = ((graphStore?.getState().graph as any) || scenariosContext.graph) as any;
+                try {
+                  const cloned = JSON.parse(JSON.stringify(base0 || null));
+                  const gs: any = (payload as any)?.graph_state || null;
+                  if (cloned && gs) {
+                    if (typeof gs.base_dsl === 'string' && gs.base_dsl.trim()) cloned.baseDSL = gs.base_dsl.trim();
+                    if (typeof gs.current_query_dsl === 'string' && gs.current_query_dsl.trim()) cloned.currentQueryDSL = gs.current_query_dsl.trim();
+                  }
+                  return cloned || base0;
+                } catch {
+                  return base0;
+                }
+              })(),
               scenariosContext.baseParams,
               scenariosContext.currentParams,
-              scenariosContext.scenarios,
+            scenariosForLayer as any,
               scenarioId === 'current' ? (t.analysis?.what_if_dsl || undefined) : undefined,
               visibilityMode
             );
@@ -230,7 +297,10 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
             })();
 
             const colour = (() => {
-              if (scenarioId === 'current') return scenariosContext.currentColour;
+              if (scenarioId === 'current') {
+                const cur = (payload as any)?.scenarios?.current;
+                return cur?.colour || scenariosContext.currentColour;
+              }
               const idx = itemIdxByScenarioId.get(scenarioId);
               const def = typeof idx === 'number' ? items[idx] : null;
               const override = scenarioOverrideById.get(scenarioId);
@@ -289,6 +359,19 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
 
     processedRef.current = true;
     try {
+      // Deterministic barrier: ensure all dependent files are present in IndexedDB and hydrated
+      // into FileRegistry BEFORE scenario regeneration / analysis / tab materialisation.
+      const identity = shareMode?.identity;
+      if (identity?.repo && identity?.branch) {
+        const depRes = await waitForLiveShareGraphDeps({
+          graph: scenariosContext.graph as any,
+          identity: { repo: identity.repo, branch: identity.branch },
+        });
+        if (!depRes.success) {
+          throw new Error(`Live share cache not ready (missing ${depRes.missing.length} file(s))`);
+        }
+      }
+
       const created = await ensureScenarios();
       await openBundle(created);
     } catch (e: any) {

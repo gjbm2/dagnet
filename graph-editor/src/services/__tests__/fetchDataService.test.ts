@@ -485,6 +485,56 @@ describe('FetchDataService', () => {
       expect(edgeXY.p.n).toBeCloseTo(1000 * 0.5);
       expect(edgeXY.p.forecast?.k).toBeCloseTo((1000 * 0.5) * 0.8);
     });
+
+    it('should compute inbound-n when edges use node UUID endpoints (real graph shape)', () => {
+      const graph: Graph = {
+        nodes: [
+          { id: 'start', uuid: 'start-uuid', type: 'normal', entry: { is_start: true } } as any,
+          { id: 'x', uuid: 'x-uuid', type: 'normal' } as any,
+          { id: 'y', uuid: 'y-uuid', type: 'normal' } as any,
+        ],
+        edges: [
+          {
+            id: 'start-to-x',
+            uuid: 'start-to-x',
+            from: 'start-uuid',
+            to: 'x-uuid',
+            p: {
+              mean: 0.5,
+              evidence: { n: 1000, k: 500 },
+              latency: { latency_parameter: true, t95: 30 },
+            },
+          },
+          {
+            id: 'x-to-y',
+            uuid: 'x-to-y',
+            from: 'x-uuid',
+            to: 'y-uuid',
+            p: {
+              mean: 0.8,
+              evidence: { n: 400, k: 320 },
+              latency: { latency_parameter: true, t95: 30 },
+            },
+          },
+        ],
+        policies: {} as any,
+        metadata: { version: '1.1.0', created_at: '1-Jan-25' },
+      } as Graph;
+
+      const setGraph = vi.fn();
+      computeAndApplyInboundN(graph, setGraph, null, 'TEST_LOG_ID');
+
+      expect(setGraph).toHaveBeenCalledTimes(1);
+      const updatedGraph = (setGraph as ReturnType<typeof vi.fn>).mock.calls[0][0] as Graph;
+
+      const edgeAX = updatedGraph.edges!.find(e => e.id === 'start-to-x') as any;
+      const edgeXY = updatedGraph.edges!.find(e => e.id === 'x-to-y') as any;
+
+      expect(edgeAX.p.n).toBeCloseTo(1000);
+      expect(edgeAX.p.forecast?.k).toBeCloseTo(1000 * 0.5);
+      expect(edgeXY.p.n).toBeCloseTo(1000 * 0.5);
+      expect(edgeXY.p.forecast?.k).toBeCloseTo((1000 * 0.5) * 0.8);
+    });
   });
 
   // ==========================================================================

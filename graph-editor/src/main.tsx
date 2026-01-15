@@ -5,12 +5,17 @@ import App from './App';
 import { createDASRunner } from './lib/das';
 import { consoleMirrorService } from './services/consoleMirrorService';
 import { sessionLogMirrorService } from './services/sessionLogMirrorService';
+import { sessionLogService } from './services/sessionLogService';
 import { installE2eHooks } from './dev/e2eHooks';
 
 // Make DAS Runner available globally for console testing
 if (typeof window !== 'undefined') {
   (window as any).createDASRunner = createDASRunner;
 }
+
+// Initialise session logging BEFORE React effects run.
+// Without this, early share boot effects can emit logs which are then wiped when AppShell initialises.
+void sessionLogService.initialize();
 
 // Dev-only: install console mirroring hook (off by default; opt-in via localStorage).
 if (import.meta.env.DEV) {

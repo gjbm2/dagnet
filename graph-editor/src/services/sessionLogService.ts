@@ -134,9 +134,19 @@ class SessionLogService {
     if (this.isInitialized) return;
     
     this.isInitialized = true;
-    this.entries = [];
-    this.entriesById.clear();
-    this.activeOperations.clear();
+    // IMPORTANT:
+    // In React, child useEffect() hooks can run before parent useEffect() hooks.
+    // Live share boot (and other early flows) can legitimately emit session logs before
+    // AppShell has a chance to call initialize(). We must NEVER wipe those pre-init logs.
+    //
+    // If there are no pre-init entries, we start with a clean slate.
+    const hasPreInitEntries =
+      this.entries.length > 0 || this.entriesById.size > 0 || this.activeOperations.size > 0;
+    if (!hasPreInitEntries) {
+      this.entries = [];
+      this.entriesById.clear();
+      this.activeOperations.clear();
+    }
     
     // Log initialization
     this.log('info', 'session', 'SESSION_START', 'Session started', 

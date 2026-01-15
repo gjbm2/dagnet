@@ -166,8 +166,8 @@ When modifying functionality:
    - Only create a brand-new test file when there is no sensible existing home (e.g. no suite exists for that module/behaviour).
    - **NO NEW TEST FILES** unless there is **manifestly no better place** for the test. Default to extending the most relevant existing suite.
 4. **Add new tests** - For new functionality or bug fixes
-3. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
-4. **Check integration tests** - Only if changes affect integration points
+5. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
+6. **Check integration tests** - Only if changes affect integration points
 
 Test files are in:
 - `graph-editor/src/services/__tests__/` - Service integration tests
@@ -296,7 +296,7 @@ await repositoryOperationsService.commitFiles(
 6. **Don't skip updating tests when changing functionality**
    - Update existing tests
    - Add new tests for bug fixes
-   - Run full test suite
+   - Run relevant tests (not full suite)
 
 7. **Don't create helper scripts for testing**
    - Use proper Vitest integration tests
@@ -403,7 +403,7 @@ Before submitting changes:
 3. **Test thoroughly**
    - Update existing tests
    - Add new tests for changes
-   - Run full test suite
+   - Run relevant tests only
    - Verify no regressions
 
 4. **Verify consistency**
@@ -471,7 +471,9 @@ Then ensure `new_field` follows the SAME patterns in ALL the same places.
   - Use `npm test -- --run path/to/specific.test.ts` for specific file(s)
   - Multiple files: `npm test -- --run file1.test.ts file2.test.ts`
   - **NEVER use --testNamePattern** - it scans all files and is prohibitively slow
-- **Full suite**: Only run when user explicitly asks OR when changes are pervasive (e.g., core type changes)
+- **Full suite**: Only run when:
+  1. User explicitly requests it, OR
+  2. Major new functionality is demonstrably stable and confirmed working
 - **Never run all tests** just to "verify" - it wastes time
 
 When asked to "run tests":
@@ -531,11 +533,6 @@ sed -n 'N,$p' debug/tmp.session-log.jsonl
 If you need a narrower slice, find the previous mark too and restrict to `N,M`.
 
 Reference: `graph-editor/docs/CURSOR_CONSOLE_MIRRORING.md`
-
-### Test Updates Are Mandatory
-- **ALWAYS** update tests when changing functionality
-- **NEVER** leave tests broken
-- **ALWAYS** run relevant tests after changes
 
 ## Code Surface Area
 

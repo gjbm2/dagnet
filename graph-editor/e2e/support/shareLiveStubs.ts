@@ -1,6 +1,11 @@
 import type { Page, Route } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 
-export type RemoteStateVersion = 'v1' | 'v2';
+export type RemoteStateVersion = 'v1' | 'v2' | 'conserve-mass';
+
+// E2E TS config does not include Node typings; Buffer exists at runtime.
+declare const Buffer: any;
 
 export interface ShareLiveStubState {
   version: RemoteStateVersion;
@@ -13,6 +18,29 @@ export interface ShareLiveStubState {
 
 function inc(state: ShareLiveStubState, key: string) {
   state.counts[key] = (state.counts[key] || 0) + 1;
+}
+
+function formatDateUK(d: Date): string {
+  const day = d.getUTCDate();
+  const month = d.getUTCMonth();
+  const year = d.getUTCFullYear() % 100;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const yy = year.toString().padStart(2, '0');
+  return `${day}-${months[month]}-${yy}`;
+}
+
+function buildUKDateRangeInclusive(startUtcYmd: string, endUtcYmd: string): string[] {
+  const [sy, sm, sd] = startUtcYmd.split('-').map(n => Number(n));
+  const [ey, em, ed] = endUtcYmd.split('-').map(n => Number(n));
+  const start = new Date(Date.UTC(sy, sm - 1, sd));
+  const end = new Date(Date.UTC(ey, em - 1, ed));
+  const dates: string[] = [];
+  const cur = new Date(start);
+  while (cur.getTime() <= end.getTime()) {
+    dates.push(formatDateUK(cur));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return dates;
 }
 
 function base64(s: string): string {
@@ -40,6 +68,33 @@ function githubFileResponse(args: {
   };
 }
 
+let conserveMassCache:
+  | {
+      baseDir: string;
+      readText: (relPath: string) => string | null;
+    }
+  | null = null;
+
+function getConserveMassFixtures(): { readText: (relPath: string) => string | null } {
+  if (conserveMassCache) return conserveMassCache;
+
+  // Playwright runs from graph-editor/, fixtures live in repo-level docs/.
+  const baseDir = path.join(process.cwd(), '..', 'docs', 'current', 'project-conserve-mass');
+
+  const readText = (relPath: string): string | null => {
+    try {
+      const p = path.join(baseDir, relPath);
+      if (!fs.existsSync(p)) return null;
+      return fs.readFileSync(p, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+
+  conserveMassCache = { baseDir, readText };
+  return conserveMassCache;
+}
+
 export async function installShareLiveStubs(page: Page, state: ShareLiveStubState) {
   // GitHub API (fetch-based requests in gitService, and Octokit requests).
   await page.route('https://api.github.com/**', async (route: Route) => {
@@ -52,7 +107,12 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
     if (url.includes('/git/ref/heads/') || url.includes('/git/ref/heads%2F')) {
       inc(state, 'github:getRef');
       inc(state, `github:getRef:${state.version}`);
-      const sha = state.version === 'v1' ? 'sha_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' : 'sha_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      const sha =
+        state.version === 'v1'
+          ? 'sha_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+          : state.version === 'v2'
+            ? 'sha_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            : 'sha_conserve_mass_cccccccccccccccccccccccccccccc';
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -70,6 +130,107 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
       const path = m?.[1] ? decodeURIComponent(m[1]) : '';
       inc(state, `github:contents:${path}`);
 
+      // Shared repo settings (forecasting knobs)
+      if (path === 'settings/settings.yaml') {
+        const content = [
+          'version: 1.0.0',
+          'forecasting:',
+          '  # Company-wide defaults for analytics behaviour',
+          `  RECENCY_HALF_LIFE_DAYS: 30`,
+          '',
+        ].join('\n');
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(
+            githubFileResponse({
+              path,
+              sha: `sha_${state.version}_settings_settings_yaml`.slice(0, 40),
+              contentUtf8: content,
+            })
+          ),
+        });
+      }
+
+      // Conserve-mass fixture repo: serve a realistic graph + indices + params/nodes/events/contexts.
+      if (state.version === 'conserve-mass') {
+        const fx = getConserveMassFixtures();
+
+        const content =
+          path === 'graphs/conversion-flow-v2-recs-collapsed.json'
+            ? (() => {
+                const raw = fx.readText('graphs/conversion-flow-v2-recs-collapsed.json');
+                if (!raw) return null;
+                // E2E normalisation: prefer a window() base so from-file loads have a stable targetSlice
+                // that exists across all parameters (avoids fixture cohort sparsity).
+                try {
+                  const g = JSON.parse(raw);
+                  if (typeof g?.currentQueryDSL === 'string' && g.currentQueryDSL.trim()) {
+                    g.baseDSL = g.currentQueryDSL;
+                  }
+                  return JSON.stringify(g);
+                } catch {
+                  return raw;
+                }
+              })()
+            : path === 'parameters-index.yaml'
+              ? fx.readText('parameters-index.yaml')
+              : path === 'nodes-index.yaml'
+                ? fx.readText('nodes-index.yaml')
+                : path === 'events-index.yaml'
+                  ? fx.readText('events-index.yaml')
+                  : path === 'contexts-index.yaml'
+                    ? [
+                        'contexts:',
+                        '  - id: channel',
+                        '    file_path: contexts/channel.yaml',
+                        '',
+                      ].join('\n')
+                    : path.startsWith('parameters/')
+                      ? fx.readText(path)
+                      : path.startsWith('nodes/')
+                        ? fx.readText(path)
+                        : path.startsWith('events/')
+                          ? fx.readText(path)
+                          : path === 'contexts/channel.yaml'
+                            ? [
+                                'id: channel',
+                                'name: Channel',
+                                'description: Channel context',
+                                'type: categorical',
+                                'otherPolicy: computed',
+                                'values:',
+                                '  - id: influencer',
+                                '    label: Influencer',
+                                '  - id: paid-search',
+                                '    label: Paid search',
+                                '  - id: paid-social',
+                                '    label: Paid social',
+                                '  - id: other',
+                                '    label: Other',
+                                '',
+                              ].join('\n')
+                            : null;
+
+        if (content) {
+          if (path === 'graphs/conversion-flow-v2-recs-collapsed.json') {
+            inc(state, 'github:graph:conserve-mass');
+            state.lastServedGraphVersion = state.version;
+          }
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(
+              githubFileResponse({
+                path,
+                sha: `sha_${state.version}_${path.replace(/[^a-zA-Z0-9]/g, '_')}`.slice(0, 40),
+                contentUtf8: content,
+              })
+            ),
+          });
+        }
+      }
+
       // Graph JSON
       if (path === 'graphs/test-graph.json') {
         inc(state, `github:graph:${state.version}`);
@@ -78,11 +239,15 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
             ? {
                 nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
                 edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.5 } }],
+                currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
+                baseDSL: 'window(1-Jan-26:2-Jan-26)',
                 metadata: { name: 'test-graph', e2e_marker: 'v1' },
               }
             : {
                 nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
                 edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.9 } }],
+                currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
+                baseDSL: 'window(1-Jan-26:2-Jan-26)',
                 metadata: { name: 'test-graph', e2e_marker: 'v2' },
               };
 
@@ -126,10 +291,126 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
       // parameters/param-1.yaml
       if (path === 'parameters/param-1.yaml') {
         inc(state, `github:param-1:${state.version}`);
-        const yaml =
-          state.version === 'v1'
-            ? ['id: param-1', 'type: probability', 'query: from(from).to(to)', 'values:', '  - date: 1-Jan-26', '    mean: 0.5', ''].join('\n')
-            : ['id: param-1', 'type: probability', 'query: from(from).to(to)', 'values:', '  - date: 1-Jan-26', '    mean: 0.9', ''].join('\n');
+        // Include contexted slices so share-boot scenario regeneration can differentiate
+        // context(channel:influencer) vs context(channel:paid-search) using from-file aggregation.
+        const meanInfluencer = state.version === 'v1' ? 0.2 : 0.3;
+        const meanPaid = state.version === 'v1' ? 0.8 : 0.7;
+        const n = 100;
+        const kInfluencer = Math.round(meanInfluencer * n);
+        const kPaid = Math.round(meanPaid * n);
+        const meanUncontexted = state.version === 'v1' ? 0.5 : 0.6;
+        const kUncontexted = Math.round(meanUncontexted * n);
+        const cohortDates = buildUKDateRangeInclusive('2025-11-15', '2026-01-15');
+        const cohortDecDates = buildUKDateRangeInclusive('2025-12-01', '2025-12-31');
+        const yaml = [
+          'id: param-1',
+          'name: Param 1',
+          'type: probability',
+          'query: from(from).to(to)',
+          'values:',
+          // Uncontexted WINDOW slice (supports window() and also acts as a backstop for some cohort flows).
+          `  - mean: ${meanUncontexted}`,
+          `    n: ${n}`,
+          `    k: ${kUncontexted}`,
+          '    window_from: 1-Jan-26',
+          '    window_to: 2-Jan-26',
+          '    dates:',
+          '      - 1-Jan-26',
+          '      - 2-Jan-26',
+          '    n_daily:',
+          `      - ${n}`,
+          `      - ${n}`,
+          '    k_daily:',
+          `      - ${kUncontexted}`,
+          `      - ${kUncontexted}`,
+          '    sliceDSL: window(1-Jan-26:2-Jan-26)',
+          // Uncontexted WINDOW slice for a December range (used by bridge rehydration-equality tests).
+          `  - mean: ${meanUncontexted}`,
+          `    n: ${n}`,
+          `    k: ${kUncontexted}`,
+          '    window_from: 1-Dec-25',
+          '    window_to: 17-Dec-25',
+          '    dates:',
+          '      - 1-Dec-25',
+          '      - 17-Dec-25',
+          '    n_daily:',
+          `      - ${n}`,
+          `      - ${n}`,
+          '    k_daily:',
+          `      - ${kUncontexted}`,
+          `      - ${kUncontexted}`,
+          '    sliceDSL: window(1-Dec-25:17-Dec-25)',
+          // Uncontexted COHORT slice (supports cohort() scenarios like cohort(-1m:)).
+          `  - mean: ${meanUncontexted}`,
+          `    n: ${n}`,
+          `    k: ${kUncontexted}`,
+          '    cohort_from: 15-Nov-25',
+          '    cohort_to: 15-Jan-26',
+          '    dates:',
+          ...cohortDates.map(d => `      - ${d}`),
+          '    n_daily:',
+          ...cohortDates.map(() => `      - ${n}`),
+          '    k_daily:',
+          ...cohortDates.map(() => `      - ${kUncontexted}`),
+          '    sliceDSL: cohort(15-Nov-25:15-Jan-26)',
+          // Contexted COHORT slices (needed when the target DSL includes BOTH context() and cohort()).
+          // Note ordering: dataOperationsService logs targetSlice as "context(...).cohort(...)" in this flow.
+          `  - mean: ${meanInfluencer}`,
+          `    n: ${n}`,
+          `    k: ${kInfluencer}`,
+          '    cohort_from: 1-Dec-25',
+          '    cohort_to: 31-Dec-25',
+          '    dates:',
+          ...cohortDecDates.map(d => `      - ${d}`),
+          '    n_daily:',
+          ...cohortDecDates.map(() => `      - ${n}`),
+          '    k_daily:',
+          ...cohortDecDates.map(() => `      - ${kInfluencer}`),
+          '    sliceDSL: context(channel:influencer).cohort(1-Dec-25:31-Dec-25)',
+          `  - mean: ${meanPaid}`,
+          `    n: ${n}`,
+          `    k: ${kPaid}`,
+          '    cohort_from: 1-Dec-25',
+          '    cohort_to: 31-Dec-25',
+          '    dates:',
+          ...cohortDecDates.map(d => `      - ${d}`),
+          '    n_daily:',
+          ...cohortDecDates.map(() => `      - ${n}`),
+          '    k_daily:',
+          ...cohortDecDates.map(() => `      - ${kPaid}`),
+          '    sliceDSL: context(channel:paid-search).cohort(1-Dec-25:31-Dec-25)',
+          `  - mean: ${meanInfluencer}`,
+          `    n: ${n}`,
+          `    k: ${kInfluencer}`,
+          '    window_from: 1-Jan-26',
+          '    window_to: 2-Jan-26',
+          '    dates:',
+          '      - 1-Jan-26',
+          '      - 2-Jan-26',
+          '    n_daily:',
+          `      - ${n}`,
+          `      - ${n}`,
+          '    k_daily:',
+          `      - ${kInfluencer}`,
+          `      - ${kInfluencer}`,
+          '    sliceDSL: window(1-Jan-26:2-Jan-26).context(channel:influencer)',
+          `  - mean: ${meanPaid}`,
+          `    n: ${n}`,
+          `    k: ${kPaid}`,
+          '    window_from: 1-Jan-26',
+          '    window_to: 2-Jan-26',
+          '    dates:',
+          '      - 1-Jan-26',
+          '      - 2-Jan-26',
+          '    n_daily:',
+          `      - ${n}`,
+          `      - ${n}`,
+          '    k_daily:',
+          `      - ${kPaid}`,
+          `      - ${kPaid}`,
+          '    sliceDSL: window(1-Jan-26:2-Jan-26).context(channel:paid-search)',
+          '',
+        ].join('\n');
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -137,6 +418,55 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
             githubFileResponse({
               path,
               sha: state.version === 'v1' ? 'param_sha_v1' : 'param_sha_v2',
+              contentUtf8: yaml,
+            })
+          ),
+        });
+      }
+
+      // contexts-index.yaml (used for context definitions / MECE policies)
+      if (path === 'contexts-index.yaml') {
+        const yaml = [
+          'contexts:',
+          '  - id: channel',
+          '    file_path: contexts/channel.yaml',
+          '',
+        ].join('\n');
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(
+            githubFileResponse({
+              path,
+              sha: state.version === 'v1' ? 'cindex_sha_v1' : 'cindex_sha_v2',
+              contentUtf8: yaml,
+            })
+          ),
+        });
+      }
+
+      // contexts/channel.yaml
+      if (path === 'contexts/channel.yaml') {
+        const yaml = [
+          'id: channel',
+          'name: Channel',
+          'description: Channel context',
+          'type: categorical',
+          'otherPolicy: computed',
+          'values:',
+          '  - id: influencer',
+          '    label: Influencer',
+          '  - id: paid-search',
+          '    label: Paid search',
+          '',
+        ].join('\n');
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(
+            githubFileResponse({
+              path,
+              sha: state.version === 'v1' ? 'ctx_channel_sha_v1' : 'ctx_channel_sha_v2',
               contentUtf8: yaml,
             })
           ),

@@ -28,6 +28,7 @@ vi.mock('../../services/fetchDataService', () => ({
     checkDSLNeedsFetch: vi.fn().mockReturnValue({ needsFetch: false, items: [] }),
     checkMultipleDSLsNeedFetch: vi.fn().mockReturnValue([]),
     getItemsNeedingFetch: vi.fn().mockReturnValue([]),
+    getItemsForFromFileLoad: vi.fn().mockReturnValue([]),
     fetchItems: vi.fn().mockResolvedValue([]),
     extractWindowFromDSL: vi.fn().mockReturnValue({ start: '1-Nov-25', end: '7-Nov-25' }),
   },

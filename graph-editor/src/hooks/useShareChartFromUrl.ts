@@ -11,6 +11,10 @@ import { buildGraphForAnalysisLayer } from '../services/CompositionService';
 import { fileRegistry } from '../contexts/TabContext';
 import { formatDateUK } from '../lib/dateFormat';
 import { db } from '../db/appDatabase';
+import { waitForLiveShareGraphDeps } from '../services/liveShareHydrationService';
+import { sessionLogService } from '../services/sessionLogService';
+import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
+import { fetchDataService } from '../services/fetchDataService';
 
 /**
  * Phase 3: Live chart share boot + refresh recompute pipeline.
@@ -23,6 +27,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
   const shareMode = useShareModeOptional();
   const scenariosContext = useScenariosContextOptional();
   const { operations, tabs } = useTabContext();
+  const graphStore = useGraphStoreOptional();
 
   const payload = useMemo(() => decodeSharePayloadFromUrl(), []);
   const chartPayload = useMemo(
@@ -108,7 +113,8 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         continue;
       }
 
-      const scenario = await scenariosContext.createLiveScenario(dsl, wantName, tabId, wantColour);
+      const idOverride = typeof (item as any)?.id === 'string' ? String((item as any).id) : undefined;
+      const scenario = await scenariosContext.createLiveScenario(dsl, wantName, tabId, wantColour, idOverride);
       usedScenarioIds.add(scenario.id);
       created.push({ idx, id: scenario.id, dsl, scenario });
     }
@@ -160,11 +166,83 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     [chartPayload, tabId, operations]
   );
 
+  const hydrateCurrentFromFilesForShare = useCallback(
+    async (args: { currentDslFromPayload?: string | null; parentLogId?: string }) => {
+      const { currentDslFromPayload, parentLogId } = args;
+      try {
+        const currentDsl =
+          (typeof currentDslFromPayload === 'string' && currentDslFromPayload.trim())
+            ? currentDslFromPayload.trim()
+            : (typeof (scenariosContext?.graph as any)?.currentQueryDSL === 'string'
+                ? String((scenariosContext?.graph as any).currentQueryDSL)
+                : '');
+
+        if (!currentDsl || !currentDsl.trim()) {
+          if (parentLogId) {
+            sessionLogService.addChild(parentLogId, 'warning', 'LIVE_SHARE_CURRENT_NO_DSL', 'Cannot hydrate Current: missing current DSL');
+          }
+          return;
+        }
+
+        if (!graphStore) {
+          if (parentLogId) {
+            sessionLogService.addChild(parentLogId, 'warning', 'LIVE_SHARE_CURRENT_NO_GRAPHSTORE', 'Cannot hydrate Current: graphStore not available');
+          }
+          return;
+        }
+
+        const g0 = graphStore.getState().graph as any;
+        if (!g0) {
+          if (parentLogId) {
+            sessionLogService.addChild(parentLogId, 'warning', 'LIVE_SHARE_CURRENT_NO_GRAPH', 'Cannot hydrate Current: graph is not available yet');
+          }
+          return;
+        }
+
+        if (parentLogId) {
+          sessionLogService.addChild(parentLogId, 'info', 'LIVE_SHARE_CURRENT_HYDRATE', `Hydrating Current from files for ${currentDsl}…`);
+        }
+
+        const itemsForCurrent = fetchDataService.getItemsForFromFileLoad(g0 as any);
+        if (itemsForCurrent.length === 0) {
+          if (parentLogId) {
+            sessionLogService.addChild(parentLogId, 'warning', 'LIVE_SHARE_CURRENT_NO_ITEMS', 'No items to hydrate for Current');
+          }
+          return;
+        }
+
+        await fetchDataService.fetchItems(
+          itemsForCurrent,
+          {
+            mode: 'from-file',
+            skipStage2: false,
+            allowFetchFromSource: false,
+            suppressBatchToast: true,
+            parentLogId,
+          } as any,
+          g0 as any,
+          (g) => graphStore.getState().setGraph(g as any),
+          currentDsl,
+          () => (graphStore.getState().graph as any) || null
+        );
+
+        if (parentLogId) {
+          sessionLogService.addChild(parentLogId, 'success', 'LIVE_SHARE_CURRENT_HYDRATE_OK', 'Hydrated Current from files');
+        }
+      } catch (e: any) {
+        if (parentLogId) {
+          sessionLogService.addChild(parentLogId, 'warning', 'LIVE_SHARE_CURRENT_HYDRATE_ERROR', e?.message || String(e));
+        }
+      }
+    },
+    [graphStore, scenariosContext?.graph]
+  );
+
   const recomputeChart = useCallback(
     async (created: Array<{ idx: number; id: string; dsl: string; scenario?: any }>) => {
       if (!scenariosContext || !chartFileId) return;
-      const graph = scenariosContext.graph;
-      if (!graph) return;
+      const graph0 = scenariosContext.graph;
+      if (!graph0) return;
 
       if (!chartPayload?.analysis) return;
       const queryDsl = chartPayload.analysis.query_dsl;
@@ -183,7 +261,19 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         .filter((id): id is string => Boolean(id));
 
       // IMPORTANT: analyze requires at least one scenario.
+      //
+      // Bridge View compares two scenarios. In the authoring app, the convention is:
+      // - scenario_a = selected/explicit scenario
+      // - scenario_b = Current
+      // i.e. Current is LAST (not first).
       const visibleScenarioIds = (() => {
+        // Ordering rule: only "bridge_view" analysis uses the special "Current last" ordering.
+        // Do NOT infer bridge semantics from chart kind alone.
+        const isBridge = analysisType === 'bridge_view';
+        if (isBridge) {
+          const base = hideCurrent ? [...orderedScenarioIds] : [...orderedScenarioIds, 'current'];
+          return base.length > 0 ? base : ['current'];
+        }
         const base = hideCurrent ? [...orderedScenarioIds] : ['current', ...orderedScenarioIds];
         return base.length > 0 ? base : ['current'];
       })();
@@ -194,6 +284,11 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         const id = createdByIdx.get(idx)?.id;
         if (!id) continue;
         scenarioDslSubtitleById[id] = (item.subtitle || item.dsl || '').trim();
+      }
+      // Also record the DSL used for Current during chart materialisation (required for debugging + share replay parity).
+      const currentDslFromPayload = (chartPayload as any)?.graph_state?.current_query_dsl;
+      if (typeof currentDslFromPayload === 'string' && currentDslFromPayload.trim()) {
+        scenarioDslSubtitleById['current'] = currentDslFromPayload.trim();
       }
 
       // Build scenario graphs for analysis (same semantics as AnalyticsPanel).
@@ -207,9 +302,42 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         if (c?.id && c?.scenario) scenarioOverrideById.set(c.id, c.scenario);
       }
 
+      // Build an authoritative scenario list for CompositionService:
+      // use the created scenario objects (which we pass through regeneration) to avoid racing
+      // React state updates (a common share-boot failure mode).
+      const scenariosForLayer = (() => {
+        const base = Array.isArray(scenariosContext.scenarios) ? scenariosContext.scenarios : [];
+        const mapped = base.map(s => scenarioOverrideById.get(s.id) ?? s);
+        for (const [id, s] of scenarioOverrideById.entries()) {
+          if (!mapped.some((x: any) => x?.id === id)) mapped.push(s);
+        }
+        return mapped;
+      })();
+
+      // Ensure the graph object we send to the runner carries the AUTHORING DSL state from the share payload.
+      // Do NOT rely on the repo graph file’s persisted baseDSL/currentQueryDSL (it may differ from authoring),
+      // and do NOT rely on boot-time mutation to always win race conditions.
+      const baseGraphForAnalysis0 = (graphStore?.getState().graph as any) || (scenariosContext.graph as any);
+      const baseGraphForAnalysis: any = (() => {
+        try {
+          const cloned = JSON.parse(JSON.stringify(baseGraphForAnalysis0 || null));
+          const gs: any = (chartPayload as any)?.graph_state || null;
+          if (cloned && gs) {
+            if (typeof gs.base_dsl === 'string' && gs.base_dsl.trim()) cloned.baseDSL = gs.base_dsl.trim();
+            if (typeof gs.current_query_dsl === 'string' && gs.current_query_dsl.trim()) cloned.currentQueryDSL = gs.current_query_dsl.trim();
+          }
+          return cloned || baseGraphForAnalysis0;
+        } catch {
+          return baseGraphForAnalysis0;
+        }
+      })();
       const scenarioGraphs = visibleScenarioIds.map(scenarioId => {
         const visibilityMode = (() => {
-          if (scenarioId === 'current' || scenarioId === 'base') return 'f+e' as const;
+          if (scenarioId === 'base') return 'f+e' as const;
+          if (scenarioId === 'current') {
+            const cur = (chartPayload as any)?.scenarios?.current;
+            return (cur?.visibility_mode as any) || 'f+e';
+          }
           const idx = itemIdxByScenarioId.get(scenarioId);
           const def = typeof idx === 'number' ? items[idx] : null;
           return (def?.visibility_mode as any) || 'f+e';
@@ -217,10 +345,10 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
 
         const scenarioGraph = buildGraphForAnalysisLayer(
           scenarioId,
-          graph as any,
+          baseGraphForAnalysis as any,
           scenariosContext.baseParams,
           scenariosContext.currentParams,
-          scenariosContext.scenarios,
+          scenariosForLayer as any,
           scenarioId === 'current' ? whatIfDsl : undefined,
           visibilityMode
         );
@@ -236,7 +364,10 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
           return def?.name || scenario?.name || scenarioId;
         })();
         const colour = (() => {
-          if (scenarioId === 'current') return scenariosContext.currentColour;
+          if (scenarioId === 'current') {
+            const cur = (chartPayload as any)?.scenarios?.current;
+            return cur?.colour || scenariosContext.currentColour;
+          }
           const idx = itemIdxByScenarioId.get(scenarioId);
           const def = typeof idx === 'number' ? items[idx] : null;
           return def?.colour || scenario?.colour;
@@ -287,21 +418,90 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     if (!scenariosContext?.scenariosReady) return;
     if (processedRef.current) return;
 
-    // Fast path: show cached chart immediately if present.
-    await openCachedChartIfPresent();
+    const forceRefetchFromFiles = (() => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('refetchfiles') === '1';
+      } catch {
+        return false;
+      }
+    })();
 
-    // If we already have a cached chart artefact, do not recompute on boot.
+    const identity = shareMode?.identity;
+    const opId = sessionLogService.startOperation(
+      'info',
+      'session',
+      'LIVE_SHARE_BOOT',
+      'Live share: boot (chart)',
+      {
+        repository: identity?.repo,
+        branch: identity?.branch,
+        graph: identity?.graph,
+        chartFileId,
+      } as any
+    );
+
+    // Fast path: show cached chart immediately if present.
+    const openedCached = await openCachedChartIfPresent();
+    if (openedCached) {
+      sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_CACHE_OPENED', 'Opened cached chart artefact');
+    }
+
+    // If we already have a cached chart artefact, we may show it immediately as a placeholder,
+    // but we STILL recompute on boot.
+    //
+    // Rationale: live share is a replay environment. Skipping recompute based on a local cached
+    // artefact introduces a major divergence source (stale/partial chart results) and makes
+    // first-load vs post-refresh comparisons meaningless.
     const cachedChart = chartFileId ? await fileRegistry.restoreFile(chartFileId) : null;
     const hasCachedResult = Boolean((cachedChart as any)?.data?.payload?.analysis_result);
-    if (hasCachedResult) {
-      processedRef.current = true;
-      return;
+    if (hasCachedResult && !forceRefetchFromFiles) {
+      sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_CACHE_HIT', 'Cached chart artefact present (will recompute)');
     }
 
     // Wait until the graph is actually available in ScenariosContext.
     // In chart-only share boot, scenariosReady can become true before graphStore is hydrated.
     // If we proceed without a graph, recomputeChart will no-op and we'd never retry.
-    if (!scenariosContext.graph) return;
+    if (!scenariosContext.graph) {
+      sessionLogService.addChild(opId, 'warning', 'LIVE_SHARE_BOOT_NO_GRAPH', 'ScenariosContext.graph not ready yet; boot will retry on next render');
+      sessionLogService.endOperation(opId, 'warning', 'Live share boot deferred (graph not ready)');
+      return;
+    }
+
+    // Deterministic barrier: ensure all dependent files are present in IndexedDB and hydrated
+    // into FileRegistry BEFORE scenario regeneration / analysis / chart materialisation.
+    try {
+      const identity = shareMode?.identity;
+      if (identity?.repo && identity?.branch) {
+        sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_HYDRATE', 'Waiting for live share graph dependencies…');
+        const depRes = await waitForLiveShareGraphDeps({
+          graph: scenariosContext.graph as any,
+          identity: { repo: identity.repo, branch: identity.branch },
+        });
+        if (!depRes.success) {
+          throw new Error(`Live share cache not ready (missing ${depRes.missing.length} file(s))`);
+        }
+        sessionLogService.addChild(opId, 'success', 'LIVE_SHARE_BOOT_HYDRATE_OK', 'Live share graph dependencies ready');
+      }
+    } catch (e) {
+      // Surface as in-tab error (handled by the catch block below).
+      throw e;
+    }
+
+    // Guard against React StrictMode double-mount (Playwright runs in dev-like mode).
+    // processedRef alone is per-hook-instance; a global guard prevents duplicate chart tabs.
+    if (typeof window !== 'undefined') {
+      try {
+        const keyBase = chartFileId || `${fileId}:${(chartPayload as any)?.chart?.kind || 'chart'}`;
+        const key = forceRefetchFromFiles ? `${keyBase}:refetchfiles` : keyBase;
+        const g = (window as any);
+        if (!g.__dagnetShareChartProcessedKeys) g.__dagnetShareChartProcessedKeys = new Set<string>();
+        if (key && g.__dagnetShareChartProcessedKeys.has(key)) return;
+        if (key) g.__dagnetShareChartProcessedKeys.add(key);
+      } catch {
+        // ignore
+      }
+    }
 
     // Ensure we only process once per session (after prerequisites are satisfied).
     processedRef.current = true;
@@ -316,8 +516,17 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     }
 
     try {
+      sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_ENSURE_SCENARIOS', 'Ensuring scenarios…');
       const created = await ensureScenarios();
+      sessionLogService.addChild(opId, 'success', 'LIVE_SHARE_BOOT_ENSURE_SCENARIOS_OK', `Ensured ${created.length} scenario(s)`);
       await applyScenarioViewState(created);
+
+      // Deterministic ordering: hydrate Current first (for the chart's Current DSL), then regenerate live scenarios,
+      // then run analysis. This avoids order-dependent drift between boot vs refresh.
+      await hydrateCurrentFromFilesForShare({
+        currentDslFromPayload: (chartPayload as any)?.graph_state?.current_query_dsl,
+        parentLogId: opId,
+      });
 
       // CRITICAL: live scenarios must be regenerated before analysis,
       // otherwise they are just "copies of Current" and will yield identical results.
@@ -327,7 +536,11 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         // React state having already incorporated newly-created scenarios.
         const allScenariosOverride = created.map(c => c.scenario).filter(Boolean);
         for (const c of created) {
-          await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds);
+          sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_REGEN_SCENARIO', `Regenerating scenario ${c.id}…`, undefined, { scenarioId: c.id } as any);
+          await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds, {
+            skipStage2: false,
+            allowFetchFromSource: false,
+          });
         }
       }
 
@@ -340,7 +553,9 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         }
       }
 
+      sessionLogService.addChild(opId, 'info', 'LIVE_SHARE_BOOT_RECOMPUTE', 'Recomputing chart…');
       await recomputeChart(created);
+      sessionLogService.endOperation(opId, 'success', 'Live share boot complete');
 
       if (import.meta.env.DEV) {
         try {
@@ -351,7 +566,11 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         }
       }
     } catch (e: any) {
-      processedRef.current = false;
+      sessionLogService.addChild(opId, 'error', 'LIVE_SHARE_BOOT_ERROR', e?.message || String(e));
+      sessionLogService.endOperation(opId, 'error', 'Live share boot failed');
+      // IMPORTANT: Do not reset processedRef on boot failure.
+      // In dev/StrictMode or when errors are persistent (e.g. missing data), resetting this
+      // causes repeated boot attempts and duplicate chart tabs/error panes.
       // Persist an in-tab error state so dashboard mode never looks "blank" when recompute fails.
       // This is especially important for share links, where toasts may be missed.
       try {
@@ -407,6 +626,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     chartFileId,
     ensureScenarios,
     applyScenarioViewState,
+    hydrateCurrentFromFilesForShare,
     recomputeChart,
     scenariosContext,
   ]);
@@ -428,23 +648,63 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       if (detail.branch !== shareMode.identity.branch) return;
       if (detail.graph !== shareMode.identity.graph) return;
 
+      const opId = sessionLogService.startOperation(
+        'info',
+        'session',
+        'LIVE_SHARE_REFETCH_FROM_FILES',
+        'Live share: refetch from files (recompute chart)',
+        {
+          repository: shareMode.identity.repo,
+          branch: shareMode.identity.branch,
+          graph: shareMode.identity.graph,
+          reason: detail.reason,
+        } as any
+      );
+
       try {
+        sessionLogService.addChild(opId, 'info', 'ENSURE_SCENARIOS', 'Ensuring scenarios…');
         const created = await ensureScenarios();
+        sessionLogService.addChild(opId, 'success', 'ENSURE_SCENARIOS_OK', `Ensured ${created.length} scenario(s)`);
         await applyScenarioViewState(created);
+
+        // Match boot ordering: hydrate Current first, then regenerate scenarios, then analyse.
+        await hydrateCurrentFromFilesForShare({
+          currentDslFromPayload: (chartPayload as any)?.graph_state?.current_query_dsl,
+          parentLogId: opId,
+        });
+
         // Regenerate live scenarios (with overrides) so this works even when scenarios were just created.
         const liveIds = created.map(c => c.id);
         const allScenariosOverride = created.map(c => c.scenario).filter(Boolean);
         for (const c of created) {
-          await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds);
+          sessionLogService.addChild(opId, 'info', 'REGEN_SCENARIO', `Regenerating scenario ${c.id}…`, undefined, { scenarioId: c.id } as any);
+          await scenariosContext.regenerateScenario(c.id, c.scenario, undefined, allScenariosOverride, liveIds, {
+            skipStage2: false,
+            allowFetchFromSource: false,
+          });
         }
+        sessionLogService.addChild(opId, 'info', 'RECOMPUTE_CHART', 'Recomputing chart…');
         await recomputeChart(created);
+
+        try {
+          const chartFile = chartFileId ? fileRegistry.getFile(chartFileId) : null;
+          const createdUk = (chartFile as any)?.data?.created_at_uk;
+          const createdMs = (chartFile as any)?.data?.created_at_ms;
+          sessionLogService.addChild(opId, 'success', 'CHART_UPDATED', 'Chart updated', undefined, { chartFileId, created_at_uk: createdUk, created_at_ms: createdMs } as any);
+        } catch {
+          sessionLogService.addChild(opId, 'success', 'CHART_UPDATED', 'Chart updated');
+        }
+
+        sessionLogService.endOperation(opId, 'success', 'Live share recompute complete');
       } catch (e: any) {
+        sessionLogService.addChild(opId, 'error', 'LIVE_SHARE_REFETCH_ERROR', e?.message || String(e));
+        sessionLogService.endOperation(opId, 'error', 'Live share recompute failed');
         toast.error(e?.message || 'Failed to refresh live chart');
       }
     };
 
     window.addEventListener('dagnet:liveShareRefreshed', onRefreshed as any);
     return () => window.removeEventListener('dagnet:liveShareRefreshed', onRefreshed as any);
-  }, [isEligible, chartPayload, shareMode, scenariosContext, ensureScenarios, applyScenarioViewState, recomputeChart]);
+  }, [isEligible, chartPayload, shareMode, scenariosContext, ensureScenarios, applyScenarioViewState, hydrateCurrentFromFilesForShare, recomputeChart]);
 }
 

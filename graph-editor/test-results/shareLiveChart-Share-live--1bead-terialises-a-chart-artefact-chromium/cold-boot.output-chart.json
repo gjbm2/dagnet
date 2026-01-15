@@ -1,0 +1,69 @@
+{
+  "version": "1.0.0",
+  "chart_kind": "analysis_bridge",
+  "title": "E2E Live Chart",
+  "created_at_uk": "15-Jan-26",
+  "created_at_ms": 1768490403471,
+  "source": {
+    "parent_file_id": "graph-test-graph",
+    "query_dsl": "from(from).to(to)",
+    "analysis_type": "graph_overview"
+  },
+  "payload": {
+    "analysis_result": {
+      "analysis_type": "graph_overview",
+      "analysis_name": "E2E Analysis v1",
+      "analysis_description": "E2E stubbed analysis result",
+      "metadata": {
+        "scenario_a": {
+          "scenario_id": "current",
+          "name": "Current",
+          "colour": "#3B82F6",
+          "visibility_mode": "f+e"
+        },
+        "scenario_b": {
+          "scenario_id": "scenario-1768490403282-hotjmqi",
+          "name": "A",
+          "colour": "#111",
+          "visibility_mode": "f+e",
+          "dsl": "cohort(-1w:)"
+        }
+      },
+      "dimension_values": {
+        "scenario_id": {
+          "current": {
+            "name": "Current",
+            "colour": "#3B82F6",
+            "visibility_mode": "f+e"
+          },
+          "scenario-1768490403282-hotjmqi": {
+            "name": "A",
+            "colour": "#111",
+            "visibility_mode": "f+e",
+            "dsl": "cohort(-1w:)"
+          },
+          "scenario-1768490403297-uh9eyld": {
+            "name": "B",
+            "colour": "#222",
+            "visibility_mode": "f",
+            "dsl": "cohort(-2m:-1m)"
+          }
+        }
+      },
+      "data": [
+        {
+          "marker": "v1"
+        }
+      ]
+    },
+    "scenario_ids": [
+      "current",
+      "scenario-1768490403282-hotjmqi",
+      "scenario-1768490403297-uh9eyld"
+    ],
+    "scenario_dsl_subtitle_by_id": {
+      "scenario-1768490403282-hotjmqi": "cohort(-1w:)",
+      "scenario-1768490403297-uh9eyld": "cohort(-2m:-1m)"
+    }
+  }
+}

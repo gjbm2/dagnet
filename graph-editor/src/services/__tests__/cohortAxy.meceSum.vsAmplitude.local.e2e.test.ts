@@ -422,6 +422,91 @@ async function amplitudeBaselineCurl(args: {
   return { n, k, raw: body };
 }
 
+async function amplitudeBaselineCurlWithSegments(args: {
+  creds: AmpCreds;
+  cohortStartYyyymmdd: string;
+  cohortEndYyyymmdd: string;
+  conversionWindowDays: number;
+  excludedCohorts: string[];
+  segments: any[];
+  fromStepIndex?: number;
+  toStepIndex?: number;
+}): Promise<{ n: number; k: number; raw: any }> {
+  const {
+    creds,
+    cohortStartYyyymmdd,
+    cohortEndYyyymmdd,
+    conversionWindowDays,
+    excludedCohorts,
+    segments,
+    fromStepIndex = 1,
+    toStepIndex = 2,
+  } = args;
+
+  const baseUrl = 'https://amplitude.com/api/2/funnels';
+
+  // Funnel steps: A → X → Y (same as amplitudeBaselineCurl)
+  const steps: any[] = [
+    { event_type: 'Household Created' },
+    {
+      event_type: 'Blueprint CheckpointReached',
+      filters: [
+        { subprop_type: 'event', subprop_key: 'checkpoint', subprop_op: 'is', subprop_value: ['RecommendationOffered'] },
+        { subprop_type: 'event', subprop_key: 'category', subprop_op: 'is', subprop_value: ['Energy'] },
+      ],
+    },
+    {
+      event_type: 'Blueprint CheckpointReached',
+      filters: [{ subprop_type: 'event', subprop_key: 'checkpoint', subprop_op: 'is', subprop_value: ['SwitchRegistered'] }],
+    },
+  ];
+
+  const mergedSegments: any[] = [];
+  for (const cohortId of excludedCohorts) {
+    mergedSegments.push({ prop: 'userdata_cohort', op: 'is not', values: [cohortId] });
+  }
+  if (Array.isArray(segments) && segments.length > 0) {
+    mergedSegments.push(...segments);
+  }
+
+  const csSeconds = conversionWindowDays * 24 * 60 * 60;
+  const qsParts: string[] = [];
+  for (const s of steps) qsParts.push(`e=${encodeURIComponent(JSON.stringify(s))}`);
+  qsParts.push(`start=${encodeURIComponent(cohortStartYyyymmdd)}`);
+  qsParts.push(`end=${encodeURIComponent(cohortEndYyyymmdd)}`);
+  qsParts.push('i=1');
+  if (mergedSegments.length > 0) {
+    qsParts.push(`s=${encodeURIComponent(JSON.stringify(mergedSegments))}`);
+  }
+  qsParts.push(`cs=${encodeURIComponent(String(csSeconds))}`);
+
+  const url = `${baseUrl}?${qsParts.join('&')}`;
+  const auth = `Basic ${b64(`${creds.apiKey}:${creds.secretKey}`)}`;
+  const resp = await undiciFetch(url, { method: 'GET', headers: { Authorization: auth } });
+  const rawText = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`Amplitude baseline+segments HTTP ${resp.status}: ${rawText}`);
+  }
+  let body: any;
+  try {
+    body = JSON.parse(rawText);
+  } catch {
+    throw new Error(`Amplitude baseline+segments returned non-JSON: ${rawText}`);
+  }
+
+  const cumulativeRaw: any[] | undefined = body?.data?.[0]?.cumulativeRaw;
+  if (!Array.isArray(cumulativeRaw) || cumulativeRaw.length < 3) {
+    throw new Error(`Unexpected Amplitude response shape (missing cumulativeRaw[0..2]): ${rawText}`);
+  }
+
+  const n = Number(cumulativeRaw[fromStepIndex]);
+  const k = Number(cumulativeRaw[toStepIndex]);
+  if (!Number.isFinite(n) || !Number.isFinite(k)) {
+    throw new Error(`Amplitude cumulativeRaw counts are not numeric: ${JSON.stringify(cumulativeRaw)}`);
+  }
+  return { n, k, raw: body };
+}
+
 const creds = getAmplitudeCredsFromEnvFile();
 const isCi = !!process.env.CI;
 // This suite is intentionally expensive (real external HTTP, many slices).
@@ -492,6 +577,9 @@ describeLocal('LOCAL e2e: cohort(A,-20d:-18d) MECE Σ(channel) == uncontexted Am
     // Register fixtures into the workspace registry (ContextRegistry loads from FileRegistry in vitest)
     const channelContext = loadYamlFixture('param-registry/test/contexts/channel-mece-local.yaml');
     await registerFileForTest('context-channel', 'context', channelContext);
+
+    const gateContext = loadYamlFixture('param-registry/test/contexts/activegate-new-whatsapp-journey.local.yaml');
+    await registerFileForTest('context-whatsapp-journey', 'context', gateContext);
 
     const evA = loadYamlFixture('param-registry/test/events/household-created.yaml');
     const evX = loadYamlFixture('param-registry/test/events/energy-rec.yaml');
@@ -631,6 +719,22 @@ describeLocal('LOCAL e2e: cohort(A,-20d:-18d) MECE Σ(channel) == uncontexted Am
       // Step 2: Compute uncontexted forecast.mean from MECE slices (file-only)
       // ---------------------------------------------------------------------
       const r2 = await fetchItem(item, { mode: 'from-file' }, currentGraph as Graph, setGraph, 'window(-50d:-43d)');
+      if (!r2.success) {
+        const paramFile = fileRegistry.getFile(`parameter-${paramId}` as any) as any;
+        const values: any[] = Array.isArray(paramFile?.data?.values) ? paramFile.data.values : [];
+        const slices = values.map((v: any) => ({
+          sliceDSL: v?.sliceDSL,
+          query_signature: v?.query_signature ?? null,
+          retrieved_at: v?.data_source?.retrieved_at ?? v?.retrieved_at ?? null,
+        }));
+        const sigs = Array.from(new Set(slices.map((s) => String(s.query_signature))));
+        throw new Error(
+          `[debug] from-file implicit-uncontexted read failed for window(-50d:-43d). ` +
+          `error=${r2.error instanceof Error ? r2.error.message : String(r2.error)} ` +
+          `distinct_query_signatures=${JSON.stringify(sigs)} ` +
+          `slices=${JSON.stringify(slices)}`
+        );
+      }
       expect(r2.success).toBe(true);
 
       const pack = flattenParams(extractParamsFromGraph(currentGraph));
@@ -751,6 +855,61 @@ describeLocal('LOCAL e2e: cohort(A,-20d:-18d) MECE Σ(channel) == uncontexted Am
           `mece=${expectedFromSlices.toFixed(6)} uncontexted=${expected.toFixed(6)} diff=${diff.toFixed(6)}`
         );
       }
+    },
+    180_000
+  );
+
+  it(
+    'context(whatsapp-journey:on) uses Amplitude gp:activeGates.* segmentation and matches manual baseline with the same segment',
+    async () => {
+      if (!creds) throw new Error('Missing Amplitude creds');
+
+      const graph = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+      let currentGraph: Graph | null = structuredClone(graph);
+      const setGraph = (g: Graph | null) => {
+        currentGraph = g;
+      };
+
+      const edgeId = 'X-Y';
+      const paramId = 'energy-rec-to-switch-registered-latency';
+      const item: FetchItem = createFetchItem('parameter', paramId, edgeId);
+
+      // DagNet pipeline: fetch the contexted cohort slice using the context file we registered above.
+      const dsl = 'cohort(A,-20d:-18d).context(whatsapp-journey:on)';
+      const r = await fetchItem(item, { mode: 'versioned' }, currentGraph as Graph, setGraph, dsl);
+      expect(r.success).toBe(true);
+
+      const pack = flattenParams(extractParamsFromGraph(currentGraph));
+      const n = pack[`e.${edgeId}.p.evidence.n`];
+      const k = pack[`e.${edgeId}.p.evidence.k`];
+      expect(typeof n).toBe('number');
+      expect(typeof k).toBe('number');
+      expect(Number.isFinite(n)).toBe(true);
+      expect(Number.isFinite(k)).toBe(true);
+
+      const excludedCohorts = await loadAmplitudeExcludedCohortsFromConnectionsYaml();
+      const { start: cohortStart, end: cohortEnd } = cohortRangeYyyymmddFromRelativeOffsets(new Date(), -20, -18);
+
+      // Manual baseline: use the confirmed Amplitude segment key for this gate (gp: prefix).
+      const baseline = await amplitudeBaselineCurlWithSegments({
+        creds,
+        cohortStartYyyymmdd: cohortStart,
+        cohortEndYyyymmdd: cohortEnd,
+        conversionWindowDays: 30,
+        excludedCohorts,
+        segments: [
+          {
+            prop: 'gp:activeGates.experiment_new_whatsapp_journey',
+            op: 'is',
+            values: ['true'],
+          },
+        ],
+        fromStepIndex: 1,
+        toStepIndex: 2,
+      });
+
+      expect(n).toBe(baseline.n);
+      expect(k).toBe(baseline.k);
     },
     180_000
   );

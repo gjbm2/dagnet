@@ -37,20 +37,36 @@ export function AnalysisChartContainer(props: {
 }): JSX.Element | null {
   const { result, visibleScenarioIds, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, source } = props;
 
+  const inferredChartKind = useMemo((): ChartKind | null => {
+    const t = (result as any)?.analysis_type;
+    if (t === 'conversion_funnel') return 'funnel';
+    if (typeof t === 'string' && t.includes('bridge')) return 'bridge';
+    // Default to bridge so we never render an empty chart area for valid analysis results
+    // that don't include `semantics.chart` (common in share/live flows).
+    return 'bridge';
+  }, [result]);
+
   const availableChartKinds = useMemo((): ChartKind[] => {
     const spec: any = result?.semantics?.chart;
     const rec = normaliseChartKind(spec?.recommended);
     const alts = Array.isArray(spec?.alternatives) ? spec.alternatives : [];
     const altKinds = alts.map(normaliseChartKind).filter(Boolean) as ChartKind[];
     const all = [rec, ...altKinds].filter(Boolean) as ChartKind[];
+    if (all.length === 0 && inferredChartKind) return [inferredChartKind];
     // Unique, preserve order
     return Array.from(new Set(all));
-  }, [result]);
+  }, [result, inferredChartKind]);
 
   const [selectedKind, setSelectedKind] = useState<ChartKind | null>(null);
 
   const kind = selectedKind ?? availableChartKinds[0] ?? null;
-  if (!kind) return null;
+  if (!kind) {
+    return (
+      <div style={{ padding: 12, color: '#6b7280' }}>
+        No chart available for this analysis.
+      </div>
+    );
+  }
 
   const showChooser = availableChartKinds.length > 1;
 
@@ -140,6 +156,7 @@ export function AnalysisChartContainer(props: {
           fillHeight={fillHeight}
           showToolbox={false}
           compactControls={compactControls}
+          scenarioDslSubtitleById={scenarioDslSubtitleById}
           source={source}
           orientation={kind === 'bridge_horizontal' ? 'horizontal' : 'vertical'}
         />

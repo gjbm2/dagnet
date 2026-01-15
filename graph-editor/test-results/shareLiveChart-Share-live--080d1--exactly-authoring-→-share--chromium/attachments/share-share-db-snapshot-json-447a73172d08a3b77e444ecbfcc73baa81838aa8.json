@@ -1,0 +1,74 @@
+{
+  "ok": true,
+  "dbName": "DagNetGraphEditorShare:repo1-11mupj2",
+  "files": [
+    {
+      "fileId": "chart-share-1d4dfk2",
+      "type": "chart",
+      "title": "Chart — Bridge View"
+    },
+    {
+      "fileId": "connections-connections",
+      "type": "connections"
+    },
+    {
+      "fileId": "credentials-credentials",
+      "type": "credentials"
+    },
+    {
+      "fileId": "graph-test-graph",
+      "type": "graph"
+    },
+    {
+      "fileId": "local-main-chart-share-1d4dfk2",
+      "type": "chart",
+      "title": "Chart — Bridge View"
+    },
+    {
+      "fileId": "local-main-credentials-credentials",
+      "type": "credentials"
+    },
+    {
+      "fileId": "parameter-param-1",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-graph-test-graph",
+      "type": "graph"
+    },
+    {
+      "fileId": "repo-1-main-parameter-param-1",
+      "type": "parameter"
+    },
+    {
+      "fileId": "settings-settings",
+      "type": "settings"
+    }
+  ],
+  "tabs": [
+    {
+      "id": "tab-chart-1768490396307",
+      "fileId": "chart-share-1d4dfk2",
+      "title": "Chart — Bridge View",
+      "viewMode": "interactive"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "scenario-a",
+      "fileId": "graph-test-graph",
+      "name": "new month",
+      "colour": "#06B6D4",
+      "dsl": "cohort(-1m:)",
+      "version": 3
+    },
+    {
+      "id": "scenario-b",
+      "fileId": "graph-test-graph",
+      "name": "old month",
+      "colour": "#F97316",
+      "dsl": "cohort(-2m:-1m)",
+      "version": 3
+    }
+  ]
+}
