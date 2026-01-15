@@ -4,6 +4,50 @@ The DagNet Graph Editor supports several URL parameters for configuration and da
 
 ## Supported Parameters
 
+## Share links (static + live)
+
+DagNet supports share links that can either embed data directly in the URL (**static**) or fetch content from a git repository on open (**live**).
+
+### `?mode=live&repo=<repo>&branch=<branch>&graph=<graph>`
+
+Enables **live share mode**. Live share mode uses an isolated IndexedDB database scoped by `repo/branch/graph` so it won’t interfere with your normal workspace.
+
+Common companions:
+- `&secret=<secret>`: unlocks system credentials (dev/prod). See `?secret` below.
+- `&creds=<json>`: injects credentials directly (testing/dev only). See `?creds` below.
+- `&dashboard=1`: enables dashboard mode (multiple panes visible at once).
+- `&share=<payload>`: optional “share payload” (chart or bundle) used to open tabs and scenarios on boot.
+- `&shareid=<id>`: optional identifier used only for share-link caching/debugging (does not affect semantics).
+
+**Important note about URL stability:** share URLs are intentionally treated as **stable inputs**. DagNet does **not** aggressively strip share parameters from the address bar (unlike non-share one-shot params such as `graph`, `parameter`, etc.).
+
+### `?mode=static`
+
+Forces **static share mode** (isolated IndexedDB) even if you’re not using `?data=`.
+
+### `?share=<payload>`
+
+Boot payload used by live/static shares to open charts and/or multiple tabs.
+
+Current payload targets (v1):
+- `target: "chart"`: boot a chart (live recompute + materialise a chart artefact).
+- `target: "bundle"`: boot multiple tabs (e.g. graph + chart) and optional scenarios.
+
+This is the same payload produced by the Share modal (compressed with lz-string).
+
+### `?dashboard` / `?dashboard=1`
+
+Enables dashboard mode (multiple tabs/panes can render simultaneously). This is commonly used in live shares.
+
+### Scenario URL helpers (legacy + share-adjacent)
+
+These parameters are used to preconfigure scenario visibility on a graph tab:
+- `?scenarios=<dsl>`: one or more scenario DSL fragments (semicolon-separated).
+- `&hidecurrent`: hides the Current layer in the scenario legend.
+- `&selectedscenario=<dsl>`: selects a scenario by DSL.
+
+Note: live/bundle shares usually carry scenarios via the `share=` payload instead of these legacy params.
+
 ### `?data=<json_data>`
 
 Loads graph data directly from a JSON object in the URL. Supports both compressed and uncompressed formats.
@@ -31,7 +75,7 @@ https://dagnet.vercel.app/?data=%7B%22nodes%22%3A%5B%7B%22id%22%3A%22a%22%2C%22d
 - The app attempts to decompress the data using multiple methods
 - If successful, the graph data is loaded into a new tab as "Shared Graph"
 - If decompression fails, an error is shown
-- URL parameter is cleaned up after loading
+- In normal (non-share) usage, the URL parameter is cleaned up after loading.
 
 ### `?graph=<graph_name>`
 
@@ -380,7 +424,8 @@ https://dagnet.vercel.app/?creds=<url_encoded_json>
 1. Credentials JSON is decoded from URL
 2. Validated against credentials schema
 3. Stored in IndexedDB for the session
-4. URL parameter is cleaned up after loading
+
+**Note:** DagNet does not currently strip `creds` from the URL automatically. Treat any URL containing `creds` as sensitive.
 
 **Supported formats:**
 - Plain JSON (URL-encoded)
@@ -425,7 +470,7 @@ https://dagnet.vercel.app/?creds=<url_encoded_json>&nonudge&graph=conversion-fun
 
 **How it works:**
 - If `nonudge` is present, DagNet suppresses staleness nudges for that browser session.
-- The parameter is removed from the URL after load (to avoid lingering in copied URLs/screenshots).
+- DagNet does **not** reliably remove `nonudge` from the URL (share URLs are intended to remain stable).
 
 ### `?sheet=<sheet_id>&tab=<tab_name>&row=<row_number>`
 
