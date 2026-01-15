@@ -25,26 +25,10 @@
             "p": {
               "id": "param-1",
               "mean": 0.5,
-              "stdev": 0.035355339059327376,
-              "evidence": {
-                "n": 100,
-                "k": 50,
-                "window_from": "1-Jan-26",
-                "window_to": "2-Jan-26",
-                "retrieved_at": "2026-01-15T15:20:03.420Z",
-                "source": "file",
-                "mean": 0.5,
-                "stdev": 0.05
-              },
-              "data_source": {
-                "type": "file",
-                "retrieved_at": "2026-01-15T15:20:03.420Z"
-              },
+              "n": 0,
               "forecast": {
-                "mean": 0.5,
-                "k": 50
-              },
-              "n": 100
+                "k": 0
+              }
             }
           }
         ],
@@ -53,12 +37,12 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T15:20:03.458Z"
+          "updated_at": "2026-01-15T20:27:20.503Z"
         }
       }
     },
     {
-      "scenario_id": "scenario-1768490403282-hotjmqi",
+      "scenario_id": "scenario-1768508840458-5xvcyji",
       "name": "A",
       "colour": "#111",
       "visibility_mode": "f+e",
@@ -81,27 +65,11 @@
             "to": "n2",
             "p": {
               "id": "param-1",
-              "mean": 0.5,
-              "stdev": 0.035355339059327376,
-              "evidence": {
-                "n": 100,
-                "k": 50,
-                "window_from": "1-Jan-26",
-                "window_to": "2-Jan-26",
-                "retrieved_at": "2026-01-15T15:20:03.420Z",
-                "source": "file",
-                "mean": 0.5,
-                "stdev": 0.05
-              },
-              "data_source": {
-                "type": "file",
-                "retrieved_at": "2026-01-15T15:20:03.420Z"
-              },
+              "mean": 0.2,
+              "n": 0,
               "forecast": {
-                "mean": 0.5,
-                "k": 50
-              },
-              "n": 100
+                "k": 0
+              }
             }
           }
         ],
@@ -110,12 +78,12 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T15:20:03.458Z"
+          "updated_at": "2026-01-15T20:27:20.503Z"
         }
       }
     },
     {
-      "scenario_id": "scenario-1768490403297-uh9eyld",
+      "scenario_id": "scenario-1768508840472-jy7fygt",
       "name": "B",
       "colour": "#222",
       "visibility_mode": "f",
@@ -138,27 +106,11 @@
             "to": "n2",
             "p": {
               "id": "param-1",
-              "mean": 0.5,
-              "stdev": 0.035355339059327376,
-              "evidence": {
-                "n": 100,
-                "k": 50,
-                "window_from": "1-Jan-26",
-                "window_to": "2-Jan-26",
-                "retrieved_at": "2026-01-15T15:20:03.420Z",
-                "source": "file",
-                "mean": 0.5,
-                "stdev": 0.05
-              },
-              "data_source": {
-                "type": "file",
-                "retrieved_at": "2026-01-15T15:20:03.420Z"
-              },
+              "mean": 0.2,
+              "n": 0,
               "forecast": {
-                "mean": 0.5,
-                "k": 50
-              },
-              "n": 100
+                "k": 0
+              }
             }
           }
         ],
@@ -167,7 +119,7 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T15:20:03.458Z"
+          "updated_at": "2026-01-15T20:27:20.503Z"
         }
       }
     }

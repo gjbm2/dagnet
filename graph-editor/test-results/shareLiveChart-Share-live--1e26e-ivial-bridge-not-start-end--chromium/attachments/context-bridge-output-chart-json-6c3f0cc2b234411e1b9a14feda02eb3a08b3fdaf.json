@@ -3,7 +3,7 @@
   "chart_kind": "analysis_bridge",
   "title": "E2E Bridge (context)",
   "created_at_uk": "15-Jan-26",
-  "created_at_ms": 1768490424999,
+  "created_at_ms": 1768508867167,
   "source": {
     "parent_file_id": "graph-test-graph",
     "query_dsl": "to(to)",
@@ -16,14 +16,14 @@
       "analysis_description": "E2E stubbed analysis result",
       "metadata": {
         "scenario_a": {
-          "scenario_id": "scenario-1768490424891-7808j6m",
+          "scenario_id": "scenario-1768508867027-yzy8ay8",
           "name": "Channel: Influencer",
           "colour": "#F59E0B",
           "visibility_mode": "f+e",
           "dsl": "cohort(1-Dec-25:31-Dec-25).context(channel:influencer)"
         },
         "scenario_b": {
-          "scenario_id": "scenario-1768490424903-pz9o5e3",
+          "scenario_id": "scenario-1768508867051-7raqqbi",
           "name": "Channel: Paid search",
           "colour": "#EC4899",
           "visibility_mode": "f+e",
@@ -32,13 +32,13 @@
       },
       "dimension_values": {
         "scenario_id": {
-          "scenario-1768490424891-7808j6m": {
+          "scenario-1768508867027-yzy8ay8": {
             "name": "Channel: Influencer",
             "colour": "#F59E0B",
             "visibility_mode": "f+e",
             "dsl": "cohort(1-Dec-25:31-Dec-25).context(channel:influencer)"
           },
-          "scenario-1768490424903-pz9o5e3": {
+          "scenario-1768508867051-7raqqbi": {
             "name": "Channel: Paid search",
             "colour": "#EC4899",
             "visibility_mode": "f+e",
@@ -53,12 +53,12 @@
       ]
     },
     "scenario_ids": [
-      "scenario-1768490424891-7808j6m",
-      "scenario-1768490424903-pz9o5e3"
+      "scenario-1768508867027-yzy8ay8",
+      "scenario-1768508867051-7raqqbi"
     ],
     "scenario_dsl_subtitle_by_id": {
-      "scenario-1768490424891-7808j6m": "cohort(1-Dec-25:31-Dec-25).context(channel:influencer)",
-      "scenario-1768490424903-pz9o5e3": "cohort(1-Dec-25:31-Dec-25).context(channel:paid-search)"
+      "scenario-1768508867027-yzy8ay8": "cohort(1-Dec-25:31-Dec-25).context(channel:influencer)",
+      "scenario-1768508867051-7raqqbi": "cohort(1-Dec-25:31-Dec-25).context(channel:paid-search)"
     }
   }
 }

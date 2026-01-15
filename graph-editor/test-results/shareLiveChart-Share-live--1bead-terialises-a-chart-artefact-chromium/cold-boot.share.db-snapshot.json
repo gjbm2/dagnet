@@ -33,13 +33,17 @@
       "type": "parameter"
     },
     {
+      "fileId": "repo-1-main-settings-settings",
+      "type": "settings"
+    },
+    {
       "fileId": "settings-settings",
       "type": "settings"
     }
   ],
   "tabs": [
     {
-      "id": "tab-chart-1768490403471",
+      "id": "tab-chart-1768508840617",
       "fileId": "chart-share-1892at6",
       "title": "E2E Live Chart",
       "viewMode": "interactive"
@@ -47,7 +51,7 @@
   ],
   "scenarios": [
     {
-      "id": "scenario-1768490403282-hotjmqi",
+      "id": "scenario-1768508840458-5xvcyji",
       "fileId": "graph-test-graph",
       "name": "A",
       "colour": "#111",
@@ -55,7 +59,7 @@
       "version": 3
     },
     {
-      "id": "scenario-1768490403297-uh9eyld",
+      "id": "scenario-1768508840472-jy7fygt",
       "fileId": "graph-test-graph",
       "name": "B",
       "colour": "#222",

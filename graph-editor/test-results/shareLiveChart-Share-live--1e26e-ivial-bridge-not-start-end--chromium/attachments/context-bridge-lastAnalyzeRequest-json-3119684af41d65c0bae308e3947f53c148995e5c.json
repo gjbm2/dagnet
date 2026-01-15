@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "scenario_id": "scenario-1768490424891-7808j6m",
+      "scenario_id": "scenario-1768508867027-yzy8ay8",
       "name": "Channel: Influencer",
       "colour": "#F59E0B",
       "visibility_mode": "f+e",
@@ -25,26 +25,10 @@
             "p": {
               "id": "param-1",
               "mean": 0.2,
-              "stdev": 0.035355339059327376,
-              "evidence": {
-                "n": 100,
-                "k": 20,
-                "window_from": "1-Jan-26",
-                "window_to": "2-Jan-26",
-                "retrieved_at": "2026-01-15T15:20:24.970Z",
-                "source": "file",
-                "mean": 0.2,
-                "stdev": 0.04
-              },
-              "data_source": {
-                "type": "file",
-                "retrieved_at": "2026-01-15T15:20:24.970Z"
-              },
+              "n": 0,
               "forecast": {
-                "mean": 0.19999999999999998,
-                "k": 50
-              },
-              "n": 100
+                "k": 0
+              }
             }
           }
         ],
@@ -53,12 +37,12 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T15:20:24.986Z"
+          "updated_at": "2026-01-15T20:27:47.082Z"
         }
       }
     },
     {
-      "scenario_id": "scenario-1768490424903-pz9o5e3",
+      "scenario_id": "scenario-1768508867051-7raqqbi",
       "name": "Channel: Paid search",
       "colour": "#EC4899",
       "visibility_mode": "f+e",
@@ -82,26 +66,10 @@
             "p": {
               "id": "param-1",
               "mean": 0.8,
-              "stdev": 0.035355339059327376,
-              "evidence": {
-                "n": 100,
-                "k": 80,
-                "window_from": "1-Jan-26",
-                "window_to": "2-Jan-26",
-                "retrieved_at": "2026-01-15T15:20:24.970Z",
-                "source": "file",
-                "mean": 0.8,
-                "stdev": 0.04
-              },
-              "data_source": {
-                "type": "file",
-                "retrieved_at": "2026-01-15T15:20:24.970Z"
-              },
+              "n": 0,
               "forecast": {
-                "mean": 0.7999999999999999,
-                "k": 50
-              },
-              "n": 100
+                "k": 0
+              }
             }
           }
         ],
@@ -110,7 +78,7 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T15:20:24.986Z"
+          "updated_at": "2026-01-15T20:27:47.082Z"
         }
       }
     }

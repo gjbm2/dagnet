@@ -75,6 +75,38 @@ export async function refreshLiveShareToLatest(): Promise<LiveShareRefreshResult
     }
   }
 
+  // Also overwrite-seed contexts + shared settings when present (share boot parity).
+  if (bundle.contexts) {
+    for (const [contextId, ctx] of bundle.contexts) {
+      const ctxFileId = `context-${contextId}`;
+      await fileRegistry.upsertFileClean(
+        ctxFileId,
+        'context',
+        {
+          repository: bundle.identity.repo,
+          path: ctx.path,
+          branch: bundle.identity.branch,
+        },
+        ctx.data,
+        { sha: ctx.sha, lastSynced: Date.now() }
+      );
+    }
+  }
+
+  if (bundle.settings) {
+    await fileRegistry.upsertFileClean(
+      'settings-settings',
+      'settings',
+      {
+        repository: bundle.identity.repo,
+        path: bundle.settings.path,
+        branch: bundle.identity.branch,
+      },
+      bundle.settings.data,
+      { sha: bundle.settings.sha, lastSynced: Date.now() }
+    );
+  }
+
   // Record last-seen remote HEAD SHA for share-scoped remote-ahead tracking.
   if (typeof window !== 'undefined' && bundle.remoteHeadSha) {
     stalenessNudgeService.recordShareLastSeenRemoteHeadSha(

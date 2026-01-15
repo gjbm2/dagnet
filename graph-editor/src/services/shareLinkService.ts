@@ -639,7 +639,6 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
           };
         }
         liveScenarioItems.push({
-          id: scenarioId,
           dsl,
           name: s?.name,
           colour: s?.colour,

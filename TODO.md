@@ -1,5 +1,101 @@
 # TODO
 
+## Outstanding issues (sequencing + live share parity) — updated 15-Jan-26
+
+- **Normal vs live share: material analysis deltas (suspected sequencing defect)**
+  - POSS: need a far more thorough e2e approach here with deep business data and do serious TDD to ensure conformance
+  - **Symptom**: The *same* chart/scenario DSLs can yield materially different outputs between authoring (normal app) and live share.
+    - Example: **Bridge chart** reach differs materially (e.g. ~2.1% vs ~2.7%) even when DSL windows and (apparently) param YAML match.
+    - Secondary symptom: Bridge steps differ (e.g. `household-created` present vs absent) due to thresholding interacting with the reach delta.
+  - **Belief (per session-log investigation)**: Differences are most plausibly driven by **ordering/sequencing** in the hydrate → stage‑2 (LAG/inbound‑n) → scenario regen → analysis pipeline, causing different slices to be selected/merged and different enhancements to be attached.
+      - analysis method has been to compare session logs between "normal" and "live share" modes
+  - **Primary invariants (must hold)**
+    - Given **identical repo inputs** (graph + params + contexts + settings) and identical scenario DSLs, the analysis output must converge between:
+      - authoring app (normal mode)
+      - live share first-load boot
+      - live share F5 reload (cache-hit)
+      - live share explicit refetch/recompute
+  - **Concrete repro (current workflow)**
+    - In normal mode, run: `await window.dagnetDebug.refetchFromFiles('param read repro')`
+      - Expected: refresh Current-from-files and recompute open chart artefacts (mirror live share).
+    - In live share, compare:
+      - first load (“boot”)
+      - then F5 (“cache-hit” load)
+      - then any dev refetch/recompute path (if used)
+    - Capture session logs and compare for first divergence (look for DSL, contexts, stage‑2):
+      - `tmp.log` (boot)
+      - `tmp2.log` (F5)
+  - **Known high-risk surfaces / likely root causes**
+    - **Current DSL authority**
+      - If `GraphStoreContext.currentDSL` is empty at the wrong moment, code can fall back to `graph.currentQueryDSL` (historic record), changing query semantics.
+      - Also watch for mismatched “Current DSL” sources: chart payload vs graph store state vs graph file field.
+    - **Contexts availability / slice selection**
+      - Observed divergence patterns include `context(channel:other)` showing up in one run but not another.
+      - Context presence must be stable across boot vs reload; context definitions affect MECE partitioning + “otherPolicy” behaviour.
+      - Verify contexts are present BOTH in IndexedDB and in FileRegistry at compute time (some registry paths only consult FileRegistry).
+    - **Stage‑2 determinism**
+      - Stage‑2 enhancements (LAG topo pass + inbound‑n) must run identically regardless of environment and UI toast/batch presentation flags.
+      - If stage‑2 runs a different number of times, `t95Days`/`maturityDays` and downstream `forecastMean`/`blendedMean` can diverge materially.
+    - **Repo settings parity (forecast basis)**
+      - Live share must source forecasting knobs from repo `settings/settings.yaml`, not defaults (already implemented, but confirm it is consistently applied on cache-hit reload as well).
+  - **Where to look in code (entrypoints)**
+    - Live share boot/cache: `graph-editor/src/contexts/TabContext.tsx` (`loadFromURLData` live-mode path)
+    - Live chart orchestration: `graph-editor/src/hooks/useShareChartFromUrl.ts`
+    - Live bundle orchestration: `graph-editor/src/hooks/useShareBundleFromUrl.ts`
+    - Repo boot fetch: `graph-editor/src/services/liveShareBootService.ts`
+    - Refresh fetch/seed: `graph-editor/src/services/liveShareSyncService.ts`
+    - Dependency barrier: `graph-editor/src/services/liveShareHydrationService.ts` (`waitForLiveShareGraphDeps`)
+    - Fetch/stage‑2: `graph-editor/src/services/fetchDataService.ts`
+    - Context resolution: `graph-editor/src/services/contextRegistry.ts` (+ `graph-editor/src/lib/das/buildDslFromEdge.ts`)
+    - Scenario regen + recompute: `graph-editor/src/contexts/ScenariosContext.tsx`
+    - Graph store DSL bootstrap logic: `graph-editor/src/contexts/GraphStoreContext.tsx`
+  - **Next concrete work items (handoff-ready)**
+    - Build a “deep business data” **parity e2e** that computes the same named chart in:
+      - authoring mode (seed repo-like files into workspace DB)
+      - live share mode (boot from the same fixture repo boundary)
+      - Assert **analysis_result equality** (not just “chart opened”).
+    - Add a deterministic “sequencing contract” test:
+      - Ensure ordering is: deps seeded → Current hydrated → stage‑2 → scenarios regenerated → analysis computed → chart persisted.
+      - Fail loudly if step ordering changes (this is the suspected root of material deltas).
+    - Identify and remove any remaining implicit fallbacks to `graph.currentQueryDSL` where `currentDSL` should be authoritative.
+    - Confirm stage‑2 execution is not coupled to `suppressBatchToast` / UI batch mode.
+  - **Known risk surface**:
+    - **Current DSL authority**: If `currentDSL` is empty at the wrong moment, code can fall back to `graph.currentQueryDSL` (historic record), changing query semantics.
+    - **Context leakage**: Unexpected `context(channel:other)` / MECE(channel) behaviour can appear when contexts are not correctly hydrated/available at evaluation time, or when cached state leaks across reloads.
+    - **Stage‑2 coupling**: Ensure stage‑2 execution is not accidentally gated by UI batching/toast concerns (must be deterministic and identical across environments).
+  - **Required outcome**: One deterministic “view of truth” — given identical repo inputs + DSLs, normal and live share must converge to identical analysis results.
+
+- **Live share: multi-tab/bundle mode still defective (tests pass, app doesn’t behave)**
+  - **Symptom**: Multi-tab share/bundle URLs can fail to open/restore the correct set of tabs (graph + charts), or end up blank/partial despite automated tests passing.
+  - **Likely causes**: ordering/race issues in bundle bootstrap (GraphStore/Scenarios readiness vs tab materialisation), and gaps in test coverage (tests assert internal hooks/events but do not reflect real multi-tab user behaviour).
+  - **Required outcome**: Multi-tab live share works reliably under real browser conditions; tests must reproduce the actual failure modes (not just unit expectations).
+  - **Concrete repro / debugging checklist**
+    - Use a bundle link that should open graph + chart(s) in dashboard mode and check:
+      - tabs materialise reliably on first load
+      - F5 reload preserves/open tabs correctly
+      - scenario colours/IDs/visibility are stable
+    - When it fails, capture:
+      - browser console mirroring stream + marks (`debug/tmp.browser-console.jsonl`)
+      - session log mirroring stream + marks (`debug/tmp.session-log.jsonl`)
+      - and the share-scoped DB name in console (`DagNetGraphEditorShare:*`)
+  - **Where to look in code**
+    - UI bootstrap: `graph-editor/src/components/share/ShareBundleBootstrapper.tsx`
+    - Hook orchestration: `graph-editor/src/hooks/useShareBundleFromUrl.ts`
+    - Live-mode file seeding: `graph-editor/src/contexts/TabContext.tsx` (live path)
+    - Chart share boot: `graph-editor/src/components/share/ShareChartBootstrapper.tsx` + `graph-editor/src/hooks/useShareChartFromUrl.ts`
+  - **Next concrete work items (handoff-ready)**
+    - Make a single “multi-tab truth” E2E that asserts the real user-visible outcomes:
+      - correct number of tabs
+      - correct active tab
+      - chart(s) render and are not blank
+      - scenario view state is correct (hide_current, colours, order)
+    - Identify any remaining bootstrap races where the chart/bundle runner can fire before:
+      - graph is seeded into share DB
+      - dependent files are hydrated into FileRegistry
+      - ScenariosContext is ready with correct graph
+
+- **Performance (not critical path; likely debug-heavy)**: In live share, route all GitHub API calls through a **same-origin proxy** (e.g. `/api/github-proxy/...`) so the browser never calls `api.github.com` directly. This should eliminate most CORS preflight (OPTIONS) overhead and materially speed up boot/refresh, but will require careful debugging across dev/prod and test stubs.
+
 - Investigate Forecast calcs (now that we think evidence is semi-stable; not at all sure forecast is behaving itself when blending...)
 - Forecast mode appears misleading/broken in two ways:
   - Forecasts often come from persisted `edge.p.forecast.mean`, so recency half-life / related knobs may not take effect unless forecasts are recomputed.

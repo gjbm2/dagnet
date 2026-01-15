@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "dbName": "DagNetGraphEditorShare:repo1-11mupj2",
+  "dbName": "DagNetGraphEditorShare:repo1-tzftso",
   "files": [
     {
       "fileId": "chart-share-1d4dfk2",
@@ -41,13 +41,17 @@
       "type": "parameter"
     },
     {
+      "fileId": "repo-1-main-settings-settings",
+      "type": "settings"
+    },
+    {
       "fileId": "settings-settings",
       "type": "settings"
     }
   ],
   "tabs": [
     {
-      "id": "tab-chart-1768490396307",
+      "id": "tab-chart-1768508834827",
       "fileId": "chart-share-1d4dfk2",
       "title": "Chart — Bridge View",
       "viewMode": "interactive"

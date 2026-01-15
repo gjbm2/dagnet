@@ -1,4 +1,4 @@
-import type { Graph } from '../types/graph';
+import type { Graph } from '../types';
 import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
 import { getItemsForFromFileLoad } from './fetchDataService';
