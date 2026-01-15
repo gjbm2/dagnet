@@ -1185,6 +1185,70 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
         // Cache-first: if we already have the graph in the share-scoped DB, load instantly.
         const cached = await fileRegistry.restoreFile(fileId);
+        if (cached?.data) {
+          // Even on cache-hit, the share URL payload is authoritative for base/current DSL.
+          // Otherwise, a previous session's persisted graph.currentQueryDSL can "leak" into F5
+          // and change query semantics (e.g. unexpected context(...) constraints).
+          try {
+            const gs: any = (sharePayload as any)?.graph_state || null;
+            if (gs && typeof cached.data === 'object' && cached.data) {
+              const nextGraph: any = { ...(cached.data as any) };
+              let changed = false;
+              if (typeof gs.base_dsl === 'string' && gs.base_dsl.trim() && nextGraph.baseDSL !== gs.base_dsl) {
+                nextGraph.baseDSL = gs.base_dsl;
+                changed = true;
+              }
+              if (
+                typeof gs.current_query_dsl === 'string' &&
+                gs.current_query_dsl.trim() &&
+                nextGraph.currentQueryDSL !== gs.current_query_dsl
+              ) {
+                nextGraph.currentQueryDSL = gs.current_query_dsl;
+                changed = true;
+              }
+              if (changed) {
+                await fileRegistry.upsertFileClean(
+                  fileId,
+                  'graph',
+                  cached.source || {
+                    repository: repo,
+                    branch,
+                    path: `graphs/${graphName}.json`,
+                  },
+                  nextGraph,
+                  { sha: (cached as any).sha, lastSynced: (cached as any).lastSynced }
+                );
+              }
+            }
+          } catch {
+            // best-effort
+          }
+
+          // On cache-hit, we also need dependency files (especially contexts/settings) restored into FileRegistry.
+          // Many registry/UI surfaces intentionally read ONLY from FileRegistry (not IndexedDB) to avoid stale loads.
+          // In live-share, IndexedDB *is* the source of truth on reload, so we rehydrate these files explicitly.
+          try {
+            await fileRegistry.restoreFile('settings-settings');
+          } catch {
+            // best-effort: settings defaults are still seeded during TabProvider initialisation
+          }
+          try {
+            const ctxFiles = await db.files.where('type').equals('context' as any).toArray();
+            for (const f of ctxFiles) {
+              if (!f?.fileId || typeof f.fileId !== 'string') continue;
+              // Prefer unprefixed runtime IDs; prefixed variants are written for workspace compatibility.
+              if (f.fileId.startsWith('context-')) {
+                try {
+                  await fileRegistry.restoreFile(f.fileId);
+                } catch {
+                  // ignore per-file failures
+                }
+              }
+            }
+          } catch {
+            // best-effort
+          }
+        }
         if (!cached || !cached.data) {
           const result = await liveShareBootService.performBoot();
 

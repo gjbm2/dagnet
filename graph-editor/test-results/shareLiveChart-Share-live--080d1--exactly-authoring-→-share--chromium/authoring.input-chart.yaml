@@ -2,7 +2,7 @@ version: 1.0.0
 chart_kind: analysis_bridge
 title: Chart — Bridge View
 created_at_uk: 14-Jan-26
-created_at_ms: 1768490394507
+created_at_ms: 1768508832297
 source:
   parent_tab_id: tab-graph-author-1
   parent_file_id: graph-test-graph

@@ -1,8 +1,8 @@
 {
   "phase": "conserve-mass",
   "testTitle": "live share (conserve-mass fixture) produces distinct scenario graphs + non-empty inbound-n (regression)",
-  "startAt": "2026-01-15T15:20:25.259Z",
-  "endAt": "2026-01-15T15:20:28.396Z",
+  "startAt": "2026-01-15T20:27:47.840Z",
+  "endAt": "2026-01-15T20:27:50.765Z",
   "finalUrl": "http://127.0.0.1:4173/?mode=live&e2e=1&repo=repo-1&branch=main&graph=conversion-flow-v2-recs-collapsed&creds=%7B%22defaultGitRepo%22%3A%22repo-1%22%2C%22git%22%3A%5B%7B%22name%22%3A%22repo-1%22%2C%22owner%22%3A%22owner-1%22%2C%22repo%22%3A%22repo-1%22%2C%22token%22%3A%22test-token%22%2C%22branch%22%3A%22main%22%2C%22basePath%22%3A%22%22%7D%2C%7B%22name%22%3A%22repo-2%22%2C%22owner%22%3A%22owner-1%22%2C%22repo%22%3A%22repo-2%22%2C%22token%22%3A%22test-token%22%2C%22branch%22%3A%22main%22%2C%22basePath%22%3A%22%22%7D%5D%7D&dashboard=1&share=N4IgbgpgTgzglgewHYgFwgIwDoAMuQA0IALgIZQDmExaIAxgBbk1GPNqgDWcSAJraSSkANgE94MAPoAjKHF5VCJOMWERaAUQBMGgAQBhZDGiQAtAFtSMGLoAUdZMQgAPYrqgQKH64iQBKEABfIkERcTgYDhAARwBXaFFJXhhhWmIEWxgAdxVGUxhYujoIawCQoTEJSWJRAAd1dFl5KkkwOAgspSymYkk4ADMklLQkWOFhYJAYYqE5BEjUUBUIcwWAbVBk1PQcvgQs2wxTADkEMFMtAFZUDBwTs4vLspAhcwaQDTbeCCRipQdhAhYlBaABiHAaACClw0AE4lG14NI4MIVIlzAhvrR1MFNsMdjxePtDvdzlcbndTmSnkpXu8AGIIDx0KwsegIQHAsH02EAdgAzBgAGwIiJwZGomqSDFY9D9IIAXSIDHkEEkdGBHiQNFQxCg8SIxjUdCcvEk0x%2B5EQQ22o3GgUCQA",
   "status": "passed"
 }

@@ -14,6 +14,11 @@ export interface ShareLiveStubState {
   lastServedGraphVersion?: RemoteStateVersion;
   lastAnalyzeRequest?: any;
   forceAnalyzeStatus?: number;
+  /**
+   * Best-effort mapping of minted blob SHAs → repo paths for request counting.
+   * Populated by our /git/trees stub and consulted by /git/blobs.
+   */
+  shaToPath?: Record<string, string>;
 }
 
 function inc(state: ShareLiveStubState, key: string) {
@@ -119,6 +124,461 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
         body: JSON.stringify({
           ref: 'refs/heads/main',
           object: { sha, type: 'commit', url: 'https://api.github.com/repos/owner-1/repo-1/git/commits/' + sha },
+        }),
+      });
+    }
+
+    // 1.5) Commit lookup (Octokit git.getCommit → /git/commits/<sha>)
+    if (url.includes('/git/commits/')) {
+      inc(state, 'github:getCommit');
+      const commitSha = url.split('/git/commits/')[1]?.split('?')[0] || 'sha_unknown_commit';
+      const treeSha =
+        state.version === 'conserve-mass'
+          ? 'tree_conserve_mass_tttttttttttttttttttttttttttttttt'
+          : state.version === 'v1'
+            ? 'tree_v1_tttttttttttttttttttttttttttttttttttttttt'
+            : 'tree_v2_tttttttttttttttttttttttttttttttttttttttt';
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sha: commitSha,
+          tree: { sha: treeSha, url: 'https://api.github.com/repos/owner-1/repo-1/git/trees/' + treeSha },
+        }),
+      });
+    }
+
+    // 1.6) Tree fetch (Octokit git.getTree → /git/trees/<sha>?recursive=true)
+    if (url.includes('/git/trees/')) {
+      inc(state, 'github:getTree');
+      const treeSha = url.split('/git/trees/')[1]?.split('?')[0] || 'tree_unknown';
+
+      // Build a minimal in-memory tree for the requested version.
+      const entries: Array<{ path: string; mode: string; type: 'blob'; sha: string; size: number; url: string }> = [];
+      const add = (p: string, contentUtf8: string) => {
+        const sha = `sha_${state.version}_${p.replace(/[^a-zA-Z0-9]/g, '_')}`.slice(0, 40);
+        if (!state.shaToPath) state.shaToPath = {};
+        state.shaToPath[sha] = p;
+        entries.push({
+          path: p,
+          mode: '100644',
+          type: 'blob',
+          sha,
+          size: contentUtf8.length,
+          url: `https://api.github.com/repos/owner-1/repo-1/git/blobs/${sha}`,
+        });
+      };
+
+      // Conserve-mass fixture: include only the common boot-time paths; blob handler will serve by sha-derived path.
+      if (state.version === 'conserve-mass') {
+        const fx = getConserveMassFixtures();
+
+        const graphRaw = fx.readText('graphs/conversion-flow-v2-recs-collapsed.json') || '';
+        const paramsIndex = fx.readText('parameters-index.yaml') || '';
+        const nodesIndex = fx.readText('nodes-index.yaml') || '';
+        const eventsIndex = fx.readText('events-index.yaml') || '';
+        const paramIds = [
+          'bds-to-energy-rec',
+          'coffee-to-bds',
+          'delegated-to-coffee',
+          'delegated-to-non-energy-rec',
+          'delegation-straight-to-energy-rec',
+          'household-delegation-rate',
+          'no-bdos-to-rec',
+          'non-energy-rec-to-reg',
+          'rec-with-bdos-to-registration',
+          'registration-to-success',
+        ];
+        const contextsIndex = [
+          'contexts:',
+          '  - id: channel',
+          '    file_path: contexts/channel.yaml',
+          '',
+        ].join('\n');
+        const channelCtx = [
+          'id: channel',
+          'name: Channel',
+          'description: Channel context',
+          'type: categorical',
+          'otherPolicy: computed',
+          'values:',
+          '  - id: influencer',
+          '    label: Influencer',
+          '  - id: paid-search',
+          '    label: Paid search',
+          '  - id: paid-social',
+          '    label: Paid social',
+          '  - id: other',
+          '    label: Other',
+          '',
+        ].join('\n');
+        const settings = [
+          'version: 1.0.0',
+          'forecasting:',
+          '  # Company-wide defaults for analytics behaviour',
+          `  RECENCY_HALF_LIFE_DAYS: 30`,
+          '',
+        ].join('\n');
+
+        // Same normalisation as /contents path (keep baseDSL aligned)
+        const graphContent = (() => {
+          try {
+            const g = JSON.parse(graphRaw || '{}');
+            if (typeof g?.currentQueryDSL === 'string' && g.currentQueryDSL.trim()) {
+              g.baseDSL = g.currentQueryDSL;
+            }
+            return JSON.stringify(g);
+          } catch {
+            return graphRaw;
+          }
+        })();
+
+        add('graphs/conversion-flow-v2-recs-collapsed.json', graphContent);
+        add('parameters-index.yaml', paramsIndex);
+        add('nodes-index.yaml', nodesIndex);
+        add('events-index.yaml', eventsIndex);
+        for (const id of paramIds) {
+          const content = fx.readText(`parameters/${id}.yaml`) || '';
+          add(`parameters/${id}.yaml`, content);
+        }
+        add('contexts-index.yaml', contextsIndex);
+        add('contexts/channel.yaml', channelCtx);
+        add('settings/settings.yaml', settings);
+      } else {
+        // Lightweight v1/v2: include the shared boot-time fixtures used by tests.
+        const settings = [
+          'version: 1.0.0',
+          'forecasting:',
+          '  # Company-wide defaults for analytics behaviour',
+          `  RECENCY_HALF_LIFE_DAYS: 30`,
+          '',
+        ].join('\n');
+        add('settings/settings.yaml', settings);
+
+        // Graph JSON (test-graph)
+        const graphObj =
+          state.version === 'v1'
+            ? {
+                nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
+                edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.5 } }],
+                currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
+                baseDSL: 'window(1-Jan-26:2-Jan-26)',
+                metadata: { name: 'test-graph', e2e_marker: 'v1' },
+              }
+            : {
+                nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
+                edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.9 } }],
+                currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
+                baseDSL: 'window(1-Jan-26:2-Jan-26)',
+                metadata: { name: 'test-graph', e2e_marker: 'v2' },
+              };
+        add('graphs/test-graph.json', JSON.stringify(graphObj));
+
+        // parameters-index.yaml minimal
+        add(
+          'parameters-index.yaml',
+          [
+            'parameters:',
+            '  - id: param-1',
+            '    file_path: parameters/param-1.yaml',
+            '',
+          ].join('\n')
+        );
+        add(
+          'parameters/param-1.yaml',
+          [
+            'id: param-1',
+            'name: Param 1',
+            'type: probability',
+            'query_overridden: true',
+            'values:',
+            // Uncontexted fallback
+            '  - mean: 0.5',
+            // Contexted slices used by the context() share regression test
+            "  - sliceDSL: 'cohort(1-Dec-25:31-Dec-25).context(channel:influencer)'",
+            '    mean: 0.2',
+            "  - sliceDSL: 'cohort(1-Dec-25:31-Dec-25).context(channel:paid-search)'",
+            '    mean: 0.8',
+            '',
+          ].join('\n')
+        );
+        add(
+          'contexts-index.yaml',
+          [
+            'contexts:',
+            '  - id: channel',
+            '    file_path: contexts/channel.yaml',
+            '',
+          ].join('\n')
+        );
+        add(
+          'contexts/channel.yaml',
+          [
+            'id: channel',
+            'name: Channel',
+            'otherPolicy: computed',
+            'type: categorical',
+            'values:',
+            '  - id: influencer',
+            '    label: Influencer',
+            '  - id: paid-search',
+            '    label: Paid search',
+            '  - id: other',
+            '    label: Other',
+            '',
+          ].join('\n')
+        );
+      }
+
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sha: treeSha,
+          truncated: false,
+          tree: entries,
+        }),
+      });
+    }
+
+    // 1.7) Blob fetch (Octokit git.getBlob → /git/blobs/<sha>)
+    if (url.includes('/git/blobs/')) {
+      inc(state, 'github:getBlob');
+      const sha = url.split('/git/blobs/')[1]?.split('?')[0] || '';
+      try {
+        const p = state.shaToPath?.[sha];
+        if (p) inc(state, `github:blob:${p}`);
+        // Preserve older /contents-based counters so tests can assert "graph v2 was fetched"
+        // regardless of whether the app uses Contents API or Git Data API.
+        if (p === 'graphs/test-graph.json') {
+          inc(state, `github:graph:${state.version}`);
+          state.lastServedGraphVersion = state.version;
+          try {
+            const contentUtf8 = ((): string | null => {
+              // This will be set later via lookup; do a best-effort parse by reconstructing from known fixtures.
+              return null;
+            })();
+            // no-op: mean is set below when we build the actual lookup content
+            void contentUtf8;
+          } catch {
+            // ignore
+          }
+        }
+        if (p === 'graphs/conversion-flow-v2-recs-collapsed.json') {
+          inc(state, 'github:graph:conserve-mass');
+          state.lastServedGraphVersion = state.version;
+        }
+      } catch {
+        // best-effort only
+      }
+
+      const decodePathFromSha = (): string | null => {
+        // We minted shas as `sha_${version}_${path_sanitised}`; recover the sanitised tail.
+        const prefix = `sha_${state.version}_`;
+        if (!sha.startsWith(prefix)) return null;
+        const tail = sha.substring(prefix.length);
+        // We cannot perfectly invert sanitisation; instead, serve via a best-effort lookup table for known files.
+        // For conserve-mass, we only add a small fixed set of paths above.
+        return tail;
+      };
+
+      // Build a small lookup of sha→content for the same paths we included in getTree.
+      const lookup: Record<string, string> = {};
+      const addKnown = (p: string, contentUtf8: string) => {
+        const s = `sha_${state.version}_${p.replace(/[^a-zA-Z0-9]/g, '_')}`.slice(0, 40);
+        lookup[s] = contentUtf8;
+      };
+
+      if (state.version === 'conserve-mass') {
+        const fx = getConserveMassFixtures();
+        const graphRaw = fx.readText('graphs/conversion-flow-v2-recs-collapsed.json') || '';
+        const graphContent = (() => {
+          try {
+            const g = JSON.parse(graphRaw || '{}');
+            if (typeof g?.currentQueryDSL === 'string' && g.currentQueryDSL.trim()) {
+              g.baseDSL = g.currentQueryDSL;
+            }
+            return JSON.stringify(g);
+          } catch {
+            return graphRaw;
+          }
+        })();
+        addKnown('graphs/conversion-flow-v2-recs-collapsed.json', graphContent);
+        addKnown('parameters-index.yaml', fx.readText('parameters-index.yaml') || '');
+        addKnown('nodes-index.yaml', fx.readText('nodes-index.yaml') || '');
+        addKnown('events-index.yaml', fx.readText('events-index.yaml') || '');
+        for (const id of [
+          'bds-to-energy-rec',
+          'coffee-to-bds',
+          'delegated-to-coffee',
+          'delegated-to-non-energy-rec',
+          'delegation-straight-to-energy-rec',
+          'household-delegation-rate',
+          'no-bdos-to-rec',
+          'non-energy-rec-to-reg',
+          'rec-with-bdos-to-registration',
+          'registration-to-success',
+        ]) {
+          addKnown(`parameters/${id}.yaml`, fx.readText(`parameters/${id}.yaml`) || '');
+        }
+        addKnown(
+          'contexts-index.yaml',
+          [
+            'contexts:',
+            '  - id: channel',
+            '    file_path: contexts/channel.yaml',
+            '',
+          ].join('\n')
+        );
+        addKnown(
+          'contexts/channel.yaml',
+          [
+            'id: channel',
+            'name: Channel',
+            'description: Channel context',
+            'type: categorical',
+            'otherPolicy: computed',
+            'values:',
+            '  - id: influencer',
+            '    label: Influencer',
+            '  - id: paid-search',
+            '    label: Paid search',
+            '  - id: paid-social',
+            '    label: Paid social',
+            '  - id: other',
+            '    label: Other',
+            '',
+          ].join('\n')
+        );
+        addKnown(
+          'settings/settings.yaml',
+          [
+            'version: 1.0.0',
+            'forecasting:',
+            '  # Company-wide defaults for analytics behaviour',
+            `  RECENCY_HALF_LIFE_DAYS: 30`,
+            '',
+          ].join('\n')
+        );
+      } else {
+        addKnown(
+          'settings/settings.yaml',
+          [
+            'version: 1.0.0',
+            'forecasting:',
+            '  # Company-wide defaults for analytics behaviour',
+            `  RECENCY_HALF_LIFE_DAYS: 30`,
+            '',
+          ].join('\n')
+        );
+        const graphObj =
+          state.version === 'v1'
+            ? {
+                nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
+                edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.5 } }],
+                currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
+                baseDSL: 'window(1-Jan-26:2-Jan-26)',
+                metadata: { name: 'test-graph', e2e_marker: 'v1' },
+              }
+            : {
+                nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
+                edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.9 } }],
+                currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
+                baseDSL: 'window(1-Jan-26:2-Jan-26)',
+                metadata: { name: 'test-graph', e2e_marker: 'v2' },
+              };
+        addKnown('graphs/test-graph.json', JSON.stringify(graphObj));
+        addKnown(
+          'parameters-index.yaml',
+          [
+            'parameters:',
+            '  - id: param-1',
+            '    file_path: parameters/param-1.yaml',
+            '',
+          ].join('\n')
+        );
+        addKnown(
+          'parameters/param-1.yaml',
+          [
+            'id: param-1',
+            'name: Param 1',
+            'type: probability',
+            'query_overridden: true',
+            'values:',
+            // Uncontexted fallback
+            '  - mean: 0.5',
+            // Contexted slices used by the context() share regression test
+            "  - sliceDSL: 'cohort(1-Dec-25:31-Dec-25).context(channel:influencer)'",
+            '    mean: 0.2',
+            "  - sliceDSL: 'cohort(1-Dec-25:31-Dec-25).context(channel:paid-search)'",
+            '    mean: 0.8',
+            '',
+          ].join('\n')
+        );
+        addKnown(
+          'contexts-index.yaml',
+          [
+            'contexts:',
+            '  - id: channel',
+            '    file_path: contexts/channel.yaml',
+            '',
+          ].join('\n')
+        );
+        addKnown(
+          'contexts/channel.yaml',
+          [
+            'id: channel',
+            'name: Channel',
+            'otherPolicy: computed',
+            'type: categorical',
+            'values:',
+            '  - id: influencer',
+            '    label: Influencer',
+            '  - id: paid-search',
+            '    label: Paid search',
+            '  - id: other',
+            '    label: Other',
+            '',
+          ].join('\n')
+        );
+      }
+
+      const contentUtf8 = lookup[sha];
+      if (typeof contentUtf8 !== 'string') {
+        return route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ message: `Blob not found: ${sha}`, sha, hint: decodePathFromSha() }),
+        });
+      }
+
+      // Update last-served graph metadata for tests when serving a graph blob.
+      try {
+        const p = state.shaToPath?.[sha];
+        if (p === 'graphs/test-graph.json') {
+          try {
+            const g = JSON.parse(contentUtf8);
+            const mean = g?.edges?.[0]?.p?.mean;
+            if (typeof mean === 'number') state.lastServedGraphMean = mean;
+          } catch {
+            // ignore parse failures
+          }
+        }
+        if (p === 'graphs/conversion-flow-v2-recs-collapsed.json') {
+          // We don't parse mean for this fixture; tests assert version only.
+        }
+      } catch {
+        // best-effort only
+      }
+
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sha,
+          size: contentUtf8.length,
+          encoding: 'base64',
+          content: base64(contentUtf8),
         }),
       });
     }

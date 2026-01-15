@@ -37,13 +37,17 @@
       "type": "parameter"
     },
     {
+      "fileId": "repo-1-main-settings-settings",
+      "type": "settings"
+    },
+    {
       "fileId": "settings-settings",
       "type": "settings"
     }
   ],
   "tabs": [
     {
-      "id": "tab-chart-1768490401432",
+      "id": "tab-chart-1768508839927",
       "fileId": "chart-share-1p41gve",
       "title": "Chart — Bridge View",
       "viewMode": "interactive"

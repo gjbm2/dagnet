@@ -15,7 +15,6 @@
  */
 
 import { gitService } from './gitService';
-import { graphGitService } from './graphGitService';
 import { credentialsManager } from '../lib/credentials';
 import { sessionLogService } from './sessionLogService';
 import { collectGraphDependencies, getMinimalParameterIds } from '../lib/dependencyClosure';
@@ -25,6 +24,30 @@ import { parseConstraints } from '../lib/queryDSL';
 import YAML from 'yaml';
 
 type ParameterIndexEntry = { id: string; file_path?: string };
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, idx: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const limit = Math.max(1, Math.floor(concurrency || 1));
+
+  const results: R[] = new Array(items.length);
+  let nextIdx = 0;
+
+  const workers = new Array(Math.min(limit, items.length)).fill(null).map(async () => {
+    while (true) {
+      const idx = nextIdx;
+      nextIdx += 1;
+      if (idx >= items.length) return;
+      results[idx] = await mapper(items[idx], idx);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
 
 function resolveParamPathFromIndex(
   paramId: string,
@@ -136,27 +159,94 @@ export async function fetchLiveShareBundle(
       defaultGitRepo: repo,
     });
 
+    // Helper: apply basePath (if present) to repo-relative paths.
+    // IMPORTANT: treat all paths as repo-root relative (same as WorkspaceService tree filtering).
+    const basePath = (gitCreds as any)?.basePath ? String((gitCreds as any).basePath) : '';
+    const toRepoPath = (p: string): string => {
+      const raw = (p || '').replace(/^\/+/, '');
+      if (!basePath) return raw;
+      const prefix = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
+      return raw.startsWith(prefix + '/') ? raw : `${prefix}/${raw}`;
+    };
+
+    // Step 2.8: Fetch repo tree once (Git Data API) so we can fetch required files by blob SHA.
+    // Rationale: GitHub Contents API (`/contents/*`) has become flaky for authenticated CORS preflights.
+    sessionLogService.addChild(logOpId, 'info', 'TREE_FETCH', 'Fetching repo tree (recursive)…');
+    const treeResult = await gitService.getRepositoryTree(branch, true);
+    if (!treeResult.success || !treeResult.data?.tree) {
+      sessionLogService.endOperation(logOpId, 'error', `Tree fetch failed: ${treeResult.error || 'unknown error'}`);
+      return { success: false, error: `Failed to fetch repo tree: ${treeResult.error || 'unknown error'}` };
+    }
+    const tree: any[] = treeResult.data.tree;
+    const pathToBlob = new Map<string, { sha: string; size?: number }>();
+    for (const item of tree) {
+      if (item?.type !== 'blob') continue;
+      const p = typeof item?.path === 'string' ? item.path : '';
+      const sha = typeof item?.sha === 'string' ? item.sha : '';
+      if (!p || !sha) continue;
+      const size = typeof item?.size === 'number' ? item.size : undefined;
+      pathToBlob.set(p, { sha, size });
+    }
+    sessionLogService.addChild(logOpId, 'success', 'TREE_FETCH_SUCCESS', `Fetched repo tree (${pathToBlob.size} blobs)`);
+
+    // In-call memoisation by blob SHA to avoid duplicate network fetches/decodes
+    // if the same blob is referenced via multiple paths (rare but cheap to handle).
+    const blobTextBySha = new Map<string, Promise<{ content: string; sha: string }>>();
+
+    const readTextFileFromTree = async (repoPath: string): Promise<{ content: string; sha: string; path: string; size?: number }> => {
+      const p = toRepoPath(repoPath);
+      const hit = pathToBlob.get(p);
+      if (!hit?.sha) throw new Error(`File not found in repo tree: ${p}`);
+      const sha = hit.sha;
+      const pBlobPromise =
+        blobTextBySha.get(sha) ||
+        (async () => {
+          const blobRes = await gitService.getBlobContent(sha, false);
+          if (!blobRes.success || !blobRes.data?.content) {
+            throw new Error(blobRes.error || `Failed to fetch blob for ${sha}`);
+          }
+          return { content: String(blobRes.data.content), sha: String(blobRes.data.sha || sha) };
+        })();
+      blobTextBySha.set(sha, pBlobPromise);
+      const blob = await pBlobPromise;
+      return { content: blob.content, sha: blob.sha, path: p, size: hit.size };
+    };
+
     // Step 2.5: Fetch remote HEAD SHA (commit) for staleness tracking
-    let remoteHeadSha: string | null = null;
-    try {
-      remoteHeadSha = await gitService.getRemoteHeadSha(branch);
-    } catch {
-      // Best-effort only; do not fail boot/refresh on HEAD lookup.
-      remoteHeadSha = null;
-    }
+    const remoteHeadShaPromise = (async () => {
+      try {
+        return await gitService.getRemoteHeadSha(branch);
+      } catch {
+        // Best-effort only; do not fail boot/refresh on HEAD lookup.
+        return null;
+      }
+    })();
     
-    // Step 3: Fetch graph
+    // Step 3: Fetch graph (via Git Data API: tree+blob, not Contents API)
     sessionLogService.addChild(logOpId, 'info', 'GRAPH_FETCH', `Fetching graph: ${graph}`);
-    
-    const graphResult = await graphGitService.getGraph(graph, branch);
-    if (!graphResult.success || !graphResult.data) {
-      sessionLogService.endOperation(logOpId, 'error', `Graph fetch failed: ${graphResult.error}`);
-      return { success: false, error: `Failed to fetch graph: ${graphResult.error}` };
+
+    const graphsDir = (gitCreds as any)?.graphsPath ? String((gitCreds as any).graphsPath) : 'graphs';
+    const graphFileName = graph.endsWith('.json') ? graph : `${graph}.json`;
+    const graphRepoPath = `${graphsDir}/${graphFileName}`;
+
+    let graphText: { content: string; sha: string; path: string };
+    try {
+      graphText = await readTextFileFromTree(graphRepoPath);
+    } catch (e: any) {
+      sessionLogService.endOperation(logOpId, 'error', `Graph fetch failed: ${e?.message || String(e)}`);
+      return { success: false, error: `Failed to fetch graph: ${e?.message || String(e)}` };
     }
-    
-    const graphData = graphResult.data.content;
-    const graphSha = graphResult.data.sha;
-    const graphPath = graphResult.data.path;
+
+    let graphData: any;
+    try {
+      graphData = JSON.parse(graphText.content);
+    } catch (e: any) {
+      sessionLogService.endOperation(logOpId, 'error', `Graph parse failed: ${e?.message || String(e)}`);
+      return { success: false, error: `Failed to parse graph JSON: ${e?.message || String(e)}` };
+    }
+
+    const graphSha = graphText.sha;
+    const graphPath = graphText.path;
     
     sessionLogService.addChild(logOpId, 'success', 'GRAPH_FETCH_SUCCESS', 
       `Fetched graph: ${graphData?.nodes?.length || 0} nodes, SHA: ${graphSha?.substring(0, 8)}`);
@@ -194,83 +284,66 @@ export async function fetchLiveShareBundle(
     sessionLogService.addChild(logOpId, 'info', 'DEPENDENCY_CLOSURE', 
       `Dependency closure: ${parameterIds.length} parameters, ${contextKeys.length} contexts`);
 
-    // Step 4.5: Fetch parameters-index.yaml for path resolution (v1 correctness)
-    let parametersIndex: any | null = null;
-    try {
-      sessionLogService.addChild(logOpId, 'info', 'INDEX_FETCH', 'Fetching parameters-index.yaml...');
-      const indexRes = await gitService.getFileContent('parameters-index.yaml', branch);
-      if (indexRes.success && indexRes.data?.content) {
-        parametersIndex = YAML.parse(indexRes.data.content);
-        sessionLogService.addChild(logOpId, 'success', 'INDEX_FETCH_SUCCESS', 'Fetched parameters-index.yaml');
-      } else {
-        sessionLogService.addChild(logOpId, 'warning', 'INDEX_FETCH_MISSING', 'No parameters-index.yaml (falling back to conventional paths)');
+    // Step 4.5+: Fetch supporting files. These are independent and safe to parallelise.
+    // NOTE: This doesn't reduce blob *count*, but it materially reduces wall-clock time.
+
+    const CONCURRENCY_FILES = 10;
+
+    const fetchParameters = async () => {
+      // Fetch parameters-index.yaml for path resolution (v1 correctness)
+      let parametersIndex: any | null = null;
+      try {
+        const indexPath = toRepoPath('parameters-index.yaml');
+        if (pathToBlob.has(indexPath)) {
+          sessionLogService.addChild(logOpId, 'info', 'INDEX_FETCH', 'Fetching parameters-index.yaml...');
+          const indexRes = await readTextFileFromTree('parameters-index.yaml');
+          parametersIndex = YAML.parse(indexRes.content);
+          sessionLogService.addChild(logOpId, 'success', 'INDEX_FETCH_SUCCESS', 'Fetched parameters-index.yaml');
+        } else {
+          sessionLogService.addChild(logOpId, 'warning', 'INDEX_FETCH_MISSING', 'No parameters-index.yaml (falling back to conventional paths)');
+        }
+      } catch {
+        sessionLogService.addChild(logOpId, 'warning', 'INDEX_FETCH_ERROR', 'Failed to fetch parameters-index.yaml (falling back to conventional paths)');
       }
-    } catch (e) {
-      sessionLogService.addChild(logOpId, 'warning', 'INDEX_FETCH_ERROR', 'Failed to fetch parameters-index.yaml (falling back to conventional paths)');
-    }
-    
-    // Step 5: Fetch parameters (minimal set for v1)
-    const parameters = new Map<string, { data: any; sha?: string; path: string }>();
-    
-    if (parameterIds.length > 0) {
-      sessionLogService.addChild(logOpId, 'info', 'PARAMETER_FETCH', 
-        `Fetching ${parameterIds.length} parameters...`);
-      
-      // Fetch parameters in parallel with concurrency limit
-      const CONCURRENCY = 5;
-      const fetchParam = async (paramId: string) => {
-        const fallbackPath = `parameters/${paramId}.yaml`;
-        const paramPath = resolveParamPathFromIndex(paramId, parametersIndex, fallbackPath);
+
+      const parameters = new Map<string, { data: any; sha?: string; path: string }>();
+      if (parameterIds.length === 0) return parameters;
+
+      sessionLogService.addChild(logOpId, 'info', 'PARAMETER_FETCH', `Fetching ${parameterIds.length} parameters...`);
+      await mapWithConcurrency(parameterIds, CONCURRENCY_FILES, async (paramId) => {
+        const paramsDir = (gitCreds as any)?.paramsPath ? String((gitCreds as any).paramsPath) : 'parameters';
+        const fallbackPath = `${paramsDir}/${paramId}.yaml`;
+        const rawParamPath = resolveParamPathFromIndex(paramId, parametersIndex, fallbackPath);
+        const repoParamPath = toRepoPath(rawParamPath);
         try {
-          const result = await gitService.getFileContent(paramPath, branch);
-          if (result.success && result.data?.content) {
-            const data = YAML.parse(result.data.content);
-            parameters.set(paramId, {
-              data,
-              sha: result.data.sha,
-              path: paramPath,
-            });
-          } else if (paramPath !== fallbackPath) {
-            // Try conventional path as fallback when index path fails
-            const fallbackRes = await gitService.getFileContent(fallbackPath, branch);
-            if (fallbackRes.success && fallbackRes.data?.content) {
-              const data = YAML.parse(fallbackRes.data.content);
-              parameters.set(paramId, {
-                data,
-                sha: fallbackRes.data.sha,
-                path: fallbackPath,
-              });
-            }
-          }
+          const result = await readTextFileFromTree(repoParamPath);
+          const data = YAML.parse(result.content);
+          parameters.set(paramId, { data, sha: result.sha, path: result.path });
         } catch (e) {
           console.warn(`[LiveShareBoot] Failed to fetch parameter ${paramId}:`, e);
         }
-      };
-      
-      // Process in batches
-      for (let i = 0; i < parameterIds.length; i += CONCURRENCY) {
-        const batch = parameterIds.slice(i, i + CONCURRENCY);
-        await Promise.all(batch.map(fetchParam));
-      }
-      
-      sessionLogService.addChild(logOpId, 'success', 'PARAMETER_FETCH_SUCCESS', 
-        `Fetched ${parameters.size}/${parameterIds.length} parameters`);
-    }
+      });
 
-    // Step 6: Fetch contexts (needed for MECE policies / context value sets in share mode)
-    const contexts = new Map<string, { data: any; sha?: string; path: string }>();
-    if (contextKeys.length > 0) {
+      sessionLogService.addChild(logOpId, 'success', 'PARAMETER_FETCH_SUCCESS', `Fetched ${parameters.size}/${parameterIds.length} parameters`);
+      return parameters;
+    };
+
+    const fetchContexts = async () => {
+      const contexts = new Map<string, { data: any; sha?: string; path: string }>();
+      if (contextKeys.length === 0) return contexts;
+
       let contextsIndex: any | null = null;
       try {
-        sessionLogService.addChild(logOpId, 'info', 'CONTEXT_INDEX_FETCH', 'Fetching contexts-index.yaml...');
-        const indexRes = await gitService.getFileContent('contexts-index.yaml', branch);
-        if (indexRes.success && indexRes.data?.content) {
-          contextsIndex = YAML.parse(indexRes.data.content);
+        const indexPath = toRepoPath('contexts-index.yaml');
+        if (pathToBlob.has(indexPath)) {
+          sessionLogService.addChild(logOpId, 'info', 'CONTEXT_INDEX_FETCH', 'Fetching contexts-index.yaml...');
+          const indexRes = await readTextFileFromTree('contexts-index.yaml');
+          contextsIndex = YAML.parse(indexRes.content);
           sessionLogService.addChild(logOpId, 'success', 'CONTEXT_INDEX_FETCH_SUCCESS', 'Fetched contexts-index.yaml');
         } else {
           sessionLogService.addChild(logOpId, 'warning', 'CONTEXT_INDEX_FETCH_MISSING', 'No contexts-index.yaml (falling back to conventional paths)');
         }
-      } catch (e) {
+      } catch {
         sessionLogService.addChild(logOpId, 'warning', 'CONTEXT_INDEX_FETCH_ERROR', 'Failed to fetch contexts-index.yaml (falling back to conventional paths)');
       }
 
@@ -283,52 +356,51 @@ export async function fetchLiveShareBundle(
       };
 
       sessionLogService.addChild(logOpId, 'info', 'CONTEXT_FETCH', `Fetching ${contextKeys.length} contexts...`);
-      const CONCURRENCY_CTX = 5;
-      const fetchCtx = async (contextId: string) => {
-        const fallbackPath = `contexts/${contextId}.yaml`;
-        const ctxPath = resolveContextPathFromIndex(contextId, contextsIndex, fallbackPath);
+      await mapWithConcurrency(contextKeys, CONCURRENCY_FILES, async (contextId) => {
+        const contextsDir = (gitCreds as any)?.contextsPath ? String((gitCreds as any).contextsPath) : 'contexts';
+        const fallbackPath = `${contextsDir}/${contextId}.yaml`;
+        const rawCtxPath = resolveContextPathFromIndex(contextId, contextsIndex, fallbackPath);
+        const repoCtxPath = toRepoPath(rawCtxPath);
         try {
-          const result = await gitService.getFileContent(ctxPath, branch);
-          if (result.success && result.data?.content) {
-            const data = YAML.parse(result.data.content);
-            contexts.set(contextId, { data, sha: result.data.sha, path: ctxPath });
-          } else if (ctxPath !== fallbackPath) {
-            const fallbackRes = await gitService.getFileContent(fallbackPath, branch);
-            if (fallbackRes.success && fallbackRes.data?.content) {
-              const data = YAML.parse(fallbackRes.data.content);
-              contexts.set(contextId, { data, sha: fallbackRes.data.sha, path: fallbackPath });
-            }
-          }
+          const result = await readTextFileFromTree(repoCtxPath);
+          const data = YAML.parse(result.content);
+          contexts.set(contextId, { data, sha: result.sha, path: result.path });
         } catch (e) {
           console.warn(`[LiveShareBoot] Failed to fetch context ${contextId}:`, e);
         }
-      };
-
-      for (let i = 0; i < contextKeys.length; i += CONCURRENCY_CTX) {
-        const batch = contextKeys.slice(i, i + CONCURRENCY_CTX);
-        await Promise.all(batch.map(fetchCtx));
-      }
+      });
 
       sessionLogService.addChild(logOpId, 'success', 'CONTEXT_FETCH_SUCCESS', `Fetched ${contexts.size}/${contextKeys.length} contexts`);
-    }
+      return contexts;
+    };
 
-    // Step 7: Fetch shared forecasting settings (repo-committed: settings/settings.yaml)
-    // This is required so live share analytics match authoring (e.g. RECENCY_HALF_LIFE_DAYS).
-    let settings: { data: any; sha?: string; path: string } | undefined;
-    try {
-      const settingsPath = 'settings/settings.yaml';
-      sessionLogService.addChild(logOpId, 'info', 'SETTINGS_FETCH', 'Fetching settings/settings.yaml...');
-      const res = await gitService.getFileContent(settingsPath, branch);
-      if (res.success && res.data?.content) {
-        const data = YAML.parse(res.data.content);
-        settings = { data, sha: res.data.sha, path: settingsPath };
-        sessionLogService.addChild(logOpId, 'success', 'SETTINGS_FETCH_SUCCESS', 'Fetched settings/settings.yaml');
-      } else {
-        sessionLogService.addChild(logOpId, 'warning', 'SETTINGS_FETCH_MISSING', 'No settings/settings.yaml found (falling back to defaults)');
+    const fetchSettings = async () => {
+      // Fetch shared forecasting settings (repo-committed: settings/settings.yaml)
+      // This is required so live share analytics match authoring (e.g. RECENCY_HALF_LIFE_DAYS).
+      let settings: { data: any; sha?: string; path: string } | undefined;
+      try {
+        const settingsRepoPath = toRepoPath('settings/settings.yaml');
+        if (pathToBlob.has(settingsRepoPath)) {
+          sessionLogService.addChild(logOpId, 'info', 'SETTINGS_FETCH', 'Fetching settings/settings.yaml...');
+          const res = await readTextFileFromTree('settings/settings.yaml');
+          const data = YAML.parse(res.content);
+          settings = { data, sha: res.sha, path: res.path };
+          sessionLogService.addChild(logOpId, 'success', 'SETTINGS_FETCH_SUCCESS', 'Fetched settings/settings.yaml');
+        } else {
+          sessionLogService.addChild(logOpId, 'warning', 'SETTINGS_FETCH_MISSING', 'No settings/settings.yaml found (falling back to defaults)');
+        }
+      } catch {
+        sessionLogService.addChild(logOpId, 'warning', 'SETTINGS_FETCH_ERROR', 'Failed to fetch settings/settings.yaml (falling back to defaults)');
       }
-    } catch {
-      sessionLogService.addChild(logOpId, 'warning', 'SETTINGS_FETCH_ERROR', 'Failed to fetch settings/settings.yaml (falling back to defaults)');
-    }
+      return settings;
+    };
+
+    const [parameters, contexts, settings, remoteHeadSha] = await Promise.all([
+      fetchParameters(),
+      fetchContexts(),
+      fetchSettings(),
+      remoteHeadShaPromise,
+    ]);
     
     sessionLogService.endOperation(logOpId, 'success', 
       `Live boot complete: graph + ${parameters.size} parameters + ${contexts.size} contexts`);

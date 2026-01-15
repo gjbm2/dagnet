@@ -24,27 +24,11 @@
             "to": "n2",
             "p": {
               "id": "param-1",
-              "mean": 0.5,
-              "stdev": 0.035355339059327376,
-              "evidence": {
-                "n": 100,
-                "k": 50,
-                "window_from": "1-Jan-26",
-                "window_to": "2-Jan-26",
-                "retrieved_at": "2026-01-15T15:19:56.259Z",
-                "source": "file",
-                "mean": 0.5,
-                "stdev": 0.05
-              },
-              "data_source": {
-                "type": "file",
-                "retrieved_at": "2026-01-15T15:19:56.259Z"
-              },
+              "mean": 0.2,
+              "n": 0,
               "forecast": {
-                "mean": 0.5,
-                "k": 50
-              },
-              "n": 100
+                "k": 0
+              }
             }
           }
         ],
@@ -53,7 +37,7 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T15:19:56.294Z"
+          "updated_at": "2026-01-15T20:27:14.686Z"
         }
       }
     },
@@ -81,27 +65,11 @@
             "to": "n2",
             "p": {
               "id": "param-1",
-              "mean": 0.5,
-              "stdev": 0.035355339059327376,
-              "evidence": {
-                "n": 100,
-                "k": 50,
-                "window_from": "1-Jan-26",
-                "window_to": "2-Jan-26",
-                "retrieved_at": "2026-01-15T15:19:56.259Z",
-                "source": "file",
-                "mean": 0.5,
-                "stdev": 0.05
-              },
-              "data_source": {
-                "type": "file",
-                "retrieved_at": "2026-01-15T15:19:56.259Z"
-              },
+              "mean": 0.2,
+              "n": 0,
               "forecast": {
-                "mean": 0.5,
-                "k": 50
-              },
-              "n": 100
+                "k": 0
+              }
             }
           }
         ],
@@ -110,7 +78,7 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T15:19:56.294Z"
+          "updated_at": "2026-01-15T20:27:14.686Z"
         }
       }
     }
