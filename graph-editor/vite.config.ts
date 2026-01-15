@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { handleProxyRequest } from './server/proxy';
+import { handleGithubProxyRequest } from './server/githubProxy';
 import { execSync } from 'child_process';
 import fs from 'fs';
 
@@ -48,6 +49,8 @@ export default defineConfig(({ mode }) => {
           server.middlewares.use(async (req, res, next) => {
             if (req.url?.startsWith('/api/das-proxy')) {
               await handleProxyRequest(req, res);
+            } else if (req.url?.startsWith('/api/github-proxy')) {
+              await handleGithubProxyRequest(req, res);
             } else {
               next();
             }

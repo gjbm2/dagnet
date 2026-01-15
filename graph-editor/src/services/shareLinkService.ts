@@ -12,6 +12,7 @@ import { sessionLogService } from './sessionLogService';
 import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
 import { encodeSharePayloadToParam, stableShortHash, type SharePayloadV1 } from '../lib/sharePayload';
+import { prepareScenariosForBatch } from './scenarioRegenerationService';
 
 /**
  * Share URL length policy (soft warning only).
@@ -351,6 +352,32 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
         ? orderedScenarioIdsFromAnalysis
         : visibleScenarioIds.filter((id: string) => id !== 'base' && id !== 'current');
 
+    // Build COMPOSED effective fetch DSLs for visible scenarios.
+    // The raw scenario meta.queryDSL is often a diff (e.g. context-only) and is not meaningful
+    // without baseDSL + inheritance from lower visible live scenarios.
+    const graph_state = (() => {
+      const g: any = parentGraphFile?.data;
+      const base_dsl = typeof g?.baseDSL === 'string' && g.baseDSL.trim() ? g.baseDSL : undefined;
+      const current_query_dsl =
+        typeof g?.currentQueryDSL === 'string' && g.currentQueryDSL.trim() ? g.currentQueryDSL : undefined;
+      if (!base_dsl && !current_query_dsl) return undefined;
+      return { base_dsl, current_query_dsl };
+    })();
+
+    const effectiveDslById: Map<string, string> = (() => {
+      try {
+        const baseDSLForCompose = (graph_state?.base_dsl || '') as string;
+        const prepared = prepareScenariosForBatch(
+          (scenarios || []).map((s: any) => ({ id: s.id, meta: s.meta })),
+          visibleScenarioIds,
+          baseDSLForCompose
+        );
+        return new Map(prepared.map(p => [p.id, p.effectiveFetchDSL]));
+      } catch {
+        return new Map<string, string>();
+      }
+    })();
+
     const liveScenarioItems: ShareChartPayload['scenarios']['items'] = [];
     let droppedMissingDslCount = 0;
     for (const scenarioId of orderedScenarioIds) {
@@ -358,6 +385,8 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
       const s = byId.get(scenarioId);
       const subtitle = chartData?.payload?.scenario_dsl_subtitle_by_id?.[scenarioId];
       const dsl: string | undefined =
+        effectiveDslById.get(scenarioId) ||
+        (s?.meta?.lastEffectiveDSL as string | undefined) ||
         (s?.meta?.queryDSL as string | undefined) ||
         (typeof subtitle === 'string' && subtitle.trim() ? subtitle : undefined);
 
@@ -375,6 +404,7 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
 
       const meta = metaA?.scenario_id === scenarioId ? metaA : metaB?.scenario_id === scenarioId ? metaB : null;
       liveScenarioItems.push({
+        id: scenarioId,
         dsl,
         name: (typeof meta?.name === 'string' && meta.name.trim()) ? meta.name : s?.name,
         colour: (typeof meta?.colour === 'string' && meta.colour.trim()) ? meta.colour : s?.colour,
@@ -393,7 +423,10 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     const selectedScenarioId: string | undefined = scenarioState.selectedScenarioId;
     const selectedScenarioDsl =
       selectedScenarioId && selectedScenarioId !== 'base' && selectedScenarioId !== 'current'
-        ? (byId.get(selectedScenarioId)?.meta?.queryDSL as string | undefined) || null
+        ? (effectiveDslById.get(selectedScenarioId) ||
+            (byId.get(selectedScenarioId)?.meta?.lastEffectiveDSL as string | undefined) ||
+            (byId.get(selectedScenarioId)?.meta?.queryDSL as string | undefined) ||
+            null)
         : null;
 
     const queryDsl: string | undefined = chartData?.source?.query_dsl;
@@ -404,9 +437,31 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     const analysisType: string | null | undefined = chartData?.source?.analysis_type ?? null;
     const whatIfDsl: string | null | undefined = parentTab?.editorState?.whatIfDSL ?? null;
 
+    const currentMetaFromAnalysis = (() => {
+      try {
+        const mA = metaA;
+        const mB = metaB;
+        const cur = mA?.scenario_id === 'current' ? mA : mB?.scenario_id === 'current' ? mB : null;
+        const dsl =
+          (typeof cur?.dsl === 'string' && cur.dsl.trim())
+            ? cur.dsl.trim()
+            : (typeof (graph_state as any)?.current_query_dsl === 'string' && (graph_state as any).current_query_dsl.trim())
+              ? String((graph_state as any).current_query_dsl).trim()
+              : undefined;
+        const colour = (typeof cur?.colour === 'string' && cur.colour.trim()) ? cur.colour : undefined;
+        const visibility_mode = (cur?.visibility_mode as any) || undefined;
+        const name = (typeof cur?.name === 'string' && cur.name.trim()) ? cur.name : 'Current';
+        if (!dsl && !colour && !visibility_mode) return undefined;
+        return { dsl, colour, visibility_mode, name };
+      } catch {
+        return undefined;
+      }
+    })();
+
     const payload: SharePayloadV1 = {
       version: '1.0.0',
       target: 'chart',
+      graph_state,
       chart: {
         kind: chartData.chart_kind,
         title: chartData.title,
@@ -418,6 +473,7 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
       },
       scenarios: {
         items: liveScenarioItems,
+        current: currentMetaFromAnalysis,
         hide_current: hideCurrent,
         selected_scenario_dsl: selectedScenarioDsl,
       },
@@ -522,6 +578,43 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
     const scenarios: any[] = preferredFileId ? await db.scenarios.where('fileId').equals(preferredFileId).toArray() : [];
     const byId = new Map(scenarios.map(s => [s.id, s]));
 
+    // Use the preferred tab's graph file (or chart parent graph) to capture authoring DSL state.
+    const graph_state = (() => {
+      const preferredTabId = activeTabId && tabIds.includes(activeTabId) ? activeTabId : tabIds[0];
+      const preferredTab = tabs.find(x => x?.id === preferredTabId) || tabs[0];
+      const preferredFileId = preferredTab?.fileId;
+      const preferredFile: any = preferredFileId ? (fileRegistry.getFile(preferredFileId) || null) : null;
+      const graphFile: any =
+        preferredFile?.type === 'graph'
+          ? preferredFile
+          : preferredFile?.type === 'chart'
+            ? (() => {
+                const parentFileId = preferredFile?.data?.source?.parent_file_id;
+                return typeof parentFileId === 'string' ? fileRegistry.getFile(parentFileId) : null;
+              })()
+            : null;
+      const g: any = graphFile?.data;
+      const base_dsl = typeof g?.baseDSL === 'string' && g.baseDSL.trim() ? g.baseDSL : undefined;
+      const current_query_dsl =
+        typeof g?.currentQueryDSL === 'string' && g.currentQueryDSL.trim() ? g.currentQueryDSL : undefined;
+      if (!base_dsl && !current_query_dsl) return undefined;
+      return { base_dsl, current_query_dsl };
+    })();
+
+    const effectiveDslById: Map<string, string> = (() => {
+      try {
+        const baseDSLForCompose = (graph_state?.base_dsl || '') as string;
+        const prepared = prepareScenariosForBatch(
+          (scenarios || []).map((s: any) => ({ id: s.id, meta: s.meta })),
+          visibleScenarioIds,
+          baseDSLForCompose
+        );
+        return new Map(prepared.map(p => [p.id, p.effectiveFetchDSL]));
+      } catch {
+        return new Map<string, string>();
+      }
+    })();
+
     const liveScenarioItems: Array<{
       dsl: string;
       name?: string;
@@ -533,7 +626,10 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
       for (const scenarioId of visibleScenarioIds) {
         if (scenarioId === 'base' || scenarioId === 'current') continue;
         const s = byId.get(scenarioId);
-        const dsl: string | undefined = s?.meta?.queryDSL;
+        const dsl: string | undefined =
+          effectiveDslById.get(scenarioId) ||
+          (s?.meta?.lastEffectiveDSL as string | undefined) ||
+          (s?.meta?.queryDSL as string | undefined);
         const isLive: boolean = Boolean(s?.meta?.isLive);
         if (!isLive || !dsl || !dsl.trim()) {
           return {
@@ -543,6 +639,7 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
           };
         }
         liveScenarioItems.push({
+          id: scenarioId,
           dsl,
           name: s?.name,
           colour: s?.colour,
@@ -556,7 +653,10 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
     const selectedScenarioId: string | undefined = scenarioState.selectedScenarioId;
     const selectedScenarioDsl =
       includeScenarios && selectedScenarioId && selectedScenarioId !== 'base' && selectedScenarioId !== 'current'
-        ? (byId.get(selectedScenarioId)?.meta?.queryDSL as string | undefined) || null
+        ? (effectiveDslById.get(selectedScenarioId) ||
+            (byId.get(selectedScenarioId)?.meta?.lastEffectiveDSL as string | undefined) ||
+            (byId.get(selectedScenarioId)?.meta?.queryDSL as string | undefined) ||
+            null)
         : null;
 
     const bundleTabs: any[] = [];
@@ -595,6 +695,7 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
     const payload: SharePayloadV1 = {
       version: '1.0.0',
       target: 'bundle',
+      graph_state,
       presentation: {
         dashboardMode: dashboardMode !== false,
         activeTabIndex: (() => {

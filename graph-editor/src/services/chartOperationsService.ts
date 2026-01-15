@@ -26,6 +26,87 @@ type ChartFileDataV1 = {
   };
 };
 
+async function deriveScenarioDslFromDb(args: {
+  analysisResult: AnalysisResult;
+  parentFileId?: string;
+}): Promise<Record<string, string>> {
+  const parentFileId = args.parentFileId;
+  if (!parentFileId) return {};
+
+  const result: Record<string, string> = {};
+  const analysis: any = args.analysisResult as any;
+  const idsFromMetadata = [
+    analysis?.metadata?.scenario_a?.scenario_id,
+    analysis?.metadata?.scenario_b?.scenario_id,
+  ].filter((x: any) => typeof x === 'string' && x.trim()) as string[];
+
+  if (idsFromMetadata.length === 0) return {};
+
+  try {
+    // Prefer canonical fileId; if graph source implies a prefixed variant, also try that.
+    const parentGraph: any = fileRegistry.getFile(parentFileId) || (await db.files.get(parentFileId));
+    const repo = parentGraph?.source?.repository;
+    const branch = parentGraph?.source?.branch;
+
+    const canonical = await db.scenarios.where('fileId').equals(parentFileId).toArray();
+    const prefixed =
+      typeof repo === 'string' && typeof branch === 'string'
+        ? await db.scenarios.where('fileId').equals(`${repo}-${branch}-${parentFileId}`).toArray()
+        : [];
+    const all = [...prefixed, ...canonical];
+    const byId = new Map(all.map((s: any) => [String(s?.id), s]));
+
+    for (const id of idsFromMetadata) {
+      const s: any = byId.get(id);
+      const isLive = Boolean(s?.meta?.isLive);
+      const dsl: string | undefined = (s?.meta?.lastEffectiveDSL as string | undefined) || (s?.meta?.queryDSL as string | undefined);
+      if (isLive && typeof dsl === 'string' && dsl.trim()) {
+        result[id] = dsl.trim();
+      }
+    }
+  } catch {
+    // Best-effort only; if DB is unavailable, we just won't inject DSL.
+    return {};
+  }
+
+  return result;
+}
+
+function injectScenarioDslIntoAnalysisResult(args: {
+  analysisResult: AnalysisResult;
+  scenarioDslSubtitleById?: Record<string, string>;
+}): AnalysisResult {
+  const { analysisResult, scenarioDslSubtitleById } = args;
+  if (!scenarioDslSubtitleById || Object.keys(scenarioDslSubtitleById).length === 0) return analysisResult;
+
+  // AnalysisResult is JSON-shaped; deep-clone to avoid mutating shared cached objects.
+  const cloned: any = JSON.parse(JSON.stringify(analysisResult));
+  const dslById = scenarioDslSubtitleById;
+
+  // 1) Attach DSL to dimension_values.scenario_id (covers funnel-style results).
+  if (!cloned.dimension_values) cloned.dimension_values = {};
+  if (!cloned.dimension_values.scenario_id) cloned.dimension_values.scenario_id = {};
+  for (const [scenarioId, dsl] of Object.entries(dslById)) {
+    if (typeof dsl !== 'string' || !dsl.trim()) continue;
+    if (!cloned.dimension_values.scenario_id[scenarioId]) cloned.dimension_values.scenario_id[scenarioId] = {};
+    cloned.dimension_values.scenario_id[scenarioId].dsl = dsl;
+  }
+
+  // 2) Attach DSL to bridge-style metadata scenario_a / scenario_b when present.
+  const meta = cloned.metadata || {};
+  const a = meta.scenario_a;
+  const b = meta.scenario_b;
+  if (a?.scenario_id && typeof dslById[a.scenario_id] === 'string') {
+    a.dsl = dslById[a.scenario_id];
+  }
+  if (b?.scenario_id && typeof dslById[b.scenario_id] === 'string') {
+    b.dsl = dslById[b.scenario_id];
+  }
+  cloned.metadata = meta;
+
+  return cloned as AnalysisResult;
+}
+
 class ChartOperationsService {
   async openAnalysisChartTabFromAnalysis(args: {
     chartKind: ChartKind;
@@ -91,6 +172,21 @@ class ChartOperationsService {
         { fileId, tabId, chartKind: args.chartKind }
       );
 
+      const derivedDslById = await deriveScenarioDslFromDb({
+        analysisResult: args.analysisResult,
+        parentFileId: args.source?.parent_file_id,
+      });
+      const scenarioDslSubtitleById: Record<string, string> | undefined = (() => {
+        const passed = args.scenarioDslSubtitleById || {};
+        const merged = { ...derivedDslById, ...passed };
+        return Object.keys(merged).length > 0 ? merged : undefined;
+      })();
+
+      const analysisResultWithDsl = injectScenarioDslIntoAnalysisResult({
+        analysisResult: args.analysisResult,
+        scenarioDslSubtitleById,
+      });
+
       const chartData: ChartFileDataV1 = {
         version: '1.0.0',
         chart_kind: args.chartKind,
@@ -99,9 +195,9 @@ class ChartOperationsService {
         created_at_ms: timestamp,
         source: args.source,
         payload: {
-          analysis_result: args.analysisResult,
+          analysis_result: analysisResultWithDsl,
           scenario_ids: args.scenarioIds,
-          scenario_dsl_subtitle_by_id: args.scenarioDslSubtitleById,
+          scenario_dsl_subtitle_by_id: scenarioDslSubtitleById,
         },
       };
 

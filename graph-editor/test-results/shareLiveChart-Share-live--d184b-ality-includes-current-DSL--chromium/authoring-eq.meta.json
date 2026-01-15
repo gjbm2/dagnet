@@ -1,0 +1,8 @@
+{
+  "phase": "authoring-eq",
+  "testTitle": "live share rehydrates bridge chart artefact exactly (analysis_result equality; includes current DSL)",
+  "startAt": "2026-01-15T15:19:58.019Z",
+  "endAt": "2026-01-15T15:19:59.599Z",
+  "finalUrl": "http://127.0.0.1:4173/?e2e=1",
+  "status": "passed"
+}

@@ -4,8 +4,10 @@
 - Forecast mode appears misleading/broken in two ways:
   - Forecasts often come from persisted `edge.p.forecast.mean`, so recency half-life / related knobs may not take effect unless forecasts are recomputed.
   - Outgoing sibling forecast values can sum > 1; residual edges then get 0 in F mode (R=max(0,1-S)), making residual pathways appear to have no flow.
+- Think about a DB server for data blobs inside slices -- would make it possible to store e.g. daily snapshots without killing git (for histograms, etc.); also more portable/less client-side datawang...
 - Share linkes should carry Sankey status
 - idiotic choice of mini icons for graphs (look like charts!!! also why not lucide??)
+- check that live share includes dependent image files in repo scope
  
 - Work on case files:
   docs/current/case-lag-updates.md

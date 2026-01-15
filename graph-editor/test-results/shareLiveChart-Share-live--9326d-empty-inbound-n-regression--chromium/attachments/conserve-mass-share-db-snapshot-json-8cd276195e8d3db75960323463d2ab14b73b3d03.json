@@ -1,0 +1,138 @@
+{
+  "ok": true,
+  "dbName": "DagNetGraphEditorShare:repo1-1hj3tuk",
+  "files": [
+    {
+      "fileId": "chart-share-zvn13z",
+      "type": "chart",
+      "title": "E2E Conserve-mass (context regression)"
+    },
+    {
+      "fileId": "connections-connections",
+      "type": "connections"
+    },
+    {
+      "fileId": "graph-conversion-flow-v2-recs-collapsed",
+      "type": "graph"
+    },
+    {
+      "fileId": "local-main-chart-share-zvn13z",
+      "type": "chart",
+      "title": "E2E Conserve-mass (context regression)"
+    },
+    {
+      "fileId": "parameter-bds-to-energy-rec",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-coffee-to-bds",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-delegated-to-coffee",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-delegated-to-non-energy-rec",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-delegation-straight-to-energy-rec",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-household-delegation-rate",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-no-bdos-to-rec",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-non-energy-rec-to-reg",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-rec-with-bdos-to-registration",
+      "type": "parameter"
+    },
+    {
+      "fileId": "parameter-registration-to-success",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-graph-conversion-flow-v2-recs-collapsed",
+      "type": "graph"
+    },
+    {
+      "fileId": "repo-1-main-parameter-bds-to-energy-rec",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-coffee-to-bds",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-delegated-to-coffee",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-delegated-to-non-energy-rec",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-delegation-straight-to-energy-rec",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-household-delegation-rate",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-no-bdos-to-rec",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-non-energy-rec-to-reg",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-rec-with-bdos-to-registration",
+      "type": "parameter"
+    },
+    {
+      "fileId": "repo-1-main-parameter-registration-to-success",
+      "type": "parameter"
+    },
+    {
+      "fileId": "settings-settings",
+      "type": "settings"
+    }
+  ],
+  "tabs": [
+    {
+      "id": "tab-chart-1768490428110",
+      "fileId": "chart-share-zvn13z",
+      "title": "E2E Conserve-mass (context regression)",
+      "viewMode": "interactive"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "scenario-1768490426985-4z8quo8",
+      "fileId": "graph-conversion-flow-v2-recs-collapsed",
+      "name": "Evidence",
+      "colour": "#0EA5E9",
+      "dsl": "window(1-Nov-25:10-Nov-25)",
+      "version": 3
+    },
+    {
+      "id": "scenario-1768490426998-q1jib9k",
+      "fileId": "graph-conversion-flow-v2-recs-collapsed",
+      "name": "Forecast",
+      "colour": "#F97316",
+      "dsl": "window(1-Nov-25:10-Nov-25)",
+      "version": 3
+    }
+  ]
+}

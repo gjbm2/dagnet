@@ -346,6 +346,22 @@ export class GraphComputeClient {
     analysisType?: string,
     visibilityMode: 'f+e' | 'f' | 'e' = 'f+e'
   ): Promise<AnalysisResponse> {
+    const bypassCache = (() => {
+      try {
+        if (typeof window === 'undefined') return false;
+        const g: any = window as any;
+        if (g.__dagnetComputeNoCacheOnce === true) {
+          g.__dagnetComputeNoCacheOnce = false;
+          return true;
+        }
+        if (g.__dagnetComputeNoCache === true) return true;
+        const params = new URLSearchParams(window.location.search);
+        return params.get('nocache') === '1' || params.get('compute_nocache') === '1';
+      } catch {
+        return false;
+      }
+    })();
+
     // Check cache first.
     //
     // IMPORTANT:
@@ -358,10 +374,14 @@ export class GraphComputeClient {
     // - the requested visibility mode (for labelling and runner metadata)
     const cacheKey =
       this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId]) + `|vis:${visibilityMode}`;
-    const cached = this.analysisCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
-      console.log('[GraphComputeClient] Cache hit for analyzeSelection');
-      return cached.data;
+    if (!bypassCache) {
+      const cached = this.analysisCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+        console.log('[GraphComputeClient] Cache hit for analyzeSelection');
+        return cached.data;
+      }
+    } else {
+      console.log('[GraphComputeClient] Cache bypass for analyzeSelection (nocache=1)');
     }
     
     if (this.useMock) {
@@ -377,7 +397,9 @@ export class GraphComputeClient {
         },
         query_dsl: queryDsl,
       };
-      this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      if (!bypassCache) {
+        this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      }
       return result;
     }
 
@@ -411,10 +433,14 @@ export class GraphComputeClient {
 
     const result = await response.json();
     
-    // Cache the result
-    this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
-    this.pruneCache(this.analysisCache);
-    console.log('[GraphComputeClient] Cached analyzeSelection result');
+    // Cache the result unless bypassed.
+    if (!bypassCache) {
+      this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      this.pruneCache(this.analysisCache);
+      console.log('[GraphComputeClient] Cached analyzeSelection result');
+    } else {
+      console.log('[GraphComputeClient] Skipped caching analyzeSelection result (nocache=1)');
+    }
     
     return result;
   }
@@ -435,6 +461,22 @@ export class GraphComputeClient {
     queryDsl?: string,
     analysisType?: string
   ): Promise<AnalysisResponse> {
+    const bypassCache = (() => {
+      try {
+        if (typeof window === 'undefined') return false;
+        const g: any = window as any;
+        if (g.__dagnetComputeNoCacheOnce === true) {
+          g.__dagnetComputeNoCacheOnce = false;
+          return true;
+        }
+        if (g.__dagnetComputeNoCache === true) return true;
+        const params = new URLSearchParams(window.location.search);
+        return params.get('nocache') === '1' || params.get('compute_nocache') === '1';
+      } catch {
+        return false;
+      }
+    })();
+
     // Generate cache key that includes ALL scenarios' data (not just first)
     // This ensures cache invalidates when any scenario's data changes
     const scenarioIds = scenarios.map(s => s.scenario_id);
@@ -452,11 +494,15 @@ export class GraphComputeClient {
       `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`;
     
-    // Check cache first
-    const cached = this.analysisCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
-      console.log('[GraphComputeClient] Cache hit for analyzeMultipleScenarios');
-      return cached.data;
+    // Check cache first (unless explicitly bypassed via URL params for debugging).
+    if (!bypassCache) {
+      const cached = this.analysisCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+        console.log('[GraphComputeClient] Cache hit for analyzeMultipleScenarios');
+        return cached.data;
+      }
+    } else {
+      console.log('[GraphComputeClient] Cache bypass for analyzeMultipleScenarios (nocache=1)');
     }
     
     if (this.useMock) {
@@ -493,6 +539,25 @@ export class GraphComputeClient {
       analysis_type: analysisType,
     };
 
+    // DEV/forensics: make the exact compute boundary payload easy to copy without
+    // using the Network tab (useful for diagnosing share-link discrepancies).
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      try {
+        const g: any = window as any;
+        g.__dagnetLastAnalyzeRequest = request;
+        g.__dagnetLastAnalyzeAt = Date.now();
+        g.__dagnetLastAnalyzeCacheKey = cacheKey;
+        // Keep a small rolling history for quick comparisons.
+        if (!Array.isArray(g.__dagnetAnalyzeHistory)) g.__dagnetAnalyzeHistory = [];
+        g.__dagnetAnalyzeHistory.push({ at: g.__dagnetLastAnalyzeAt, cacheKey, request });
+        if (g.__dagnetAnalyzeHistory.length > 10) g.__dagnetAnalyzeHistory.shift();
+      } catch {
+        // ignore
+      }
+      // Console log as an object so DevTools can copy it directly.
+      console.log('[DagNet][Compute] /api/runner/analyze request payload (copy window.__dagnetLastAnalyzeRequest):', request);
+    }
+
     const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -505,11 +570,25 @@ export class GraphComputeClient {
     }
 
     const result = await response.json();
+
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      try {
+        const g: any = window as any;
+        g.__dagnetLastAnalyzeResponse = result;
+      } catch {
+        // ignore
+      }
+      console.log('[DagNet][Compute] /api/runner/analyze response payload (copy window.__dagnetLastAnalyzeResponse):', result);
+    }
     
-    // Cache the result
-    this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
-    this.pruneCache(this.analysisCache);
-    console.log('[GraphComputeClient] Cached analyzeMultipleScenarios result');
+    // Cache the result unless bypassed.
+    if (!bypassCache) {
+      this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+      this.pruneCache(this.analysisCache);
+      console.log('[GraphComputeClient] Cached analyzeMultipleScenarios result');
+    } else {
+      console.log('[GraphComputeClient] Skipped caching analyzeMultipleScenarios result (nocache=1)');
+    }
     
     return result;
   }

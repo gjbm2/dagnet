@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "chart_kind": "analysis_bridge",
+  "title": "Chart — Bridge View",
+  "created_at_uk": "15-Jan-26",
+  "created_at_ms": 1768490399550,
+  "source": {
+    "parent_tab_id": "tab-graph-author-current-1",
+    "parent_file_id": "graph-test-graph",
+    "query_dsl": "to(switch-success)",
+    "analysis_type": "bridge_view"
+  },
+  "payload": {
+    "analysis_result": {
+      "analysis_type": "bridge_view",
+      "analysis_name": "E2E Analysis v1",
+      "analysis_description": "E2E stubbed analysis result",
+      "metadata": {
+        "scenario_a": {
+          "scenario_id": "scenario-1",
+          "name": "1-Dec – 17-Dec",
+          "colour": "#EC4899",
+          "visibility_mode": "f+e",
+          "dsl": "window(1-Dec-25:17-Dec-25)"
+        },
+        "scenario_b": {
+          "scenario_id": "current",
+          "name": "Current",
+          "colour": "#3B82F6",
+          "visibility_mode": "f+e",
+          "dsl": "window(8-Jan-26:13-Jan-26)"
+        }
+      },
+      "dimension_values": {
+        "scenario_id": {
+          "scenario-1": {
+            "name": "1-Dec – 17-Dec",
+            "colour": "#EC4899",
+            "visibility_mode": "f+e",
+            "dsl": "window(1-Dec-25:17-Dec-25)"
+          },
+          "current": {
+            "name": "Current",
+            "colour": "#3B82F6",
+            "visibility_mode": "f+e",
+            "dsl": "window(8-Jan-26:13-Jan-26)"
+          }
+        }
+      },
+      "data": [
+        {
+          "marker": "v1"
+        }
+      ]
+    },
+    "scenario_ids": [],
+    "scenario_dsl_subtitle_by_id": {
+      "current": "window(8-Jan-26:13-Jan-26)",
+      "scenario-1": "window(1-Dec-25:17-Dec-25)"
+    }
+  }
+}

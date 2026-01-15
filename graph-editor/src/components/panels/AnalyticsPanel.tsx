@@ -35,7 +35,7 @@ interface AnalyticsPanelProps {
 
 export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsPanelProps) {
   // Get store state directly using the hook (same pattern as PropertiesPanel)
-  const { graph } = useGraphStore();
+  const { graph, currentDSL } = useGraphStore();
   
   // Get scenario context for multi-scenario analysis
   const scenariosContext = useScenariosContextOptional();
@@ -566,10 +566,12 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const scenarioDslSubtitleById = useMemo(() => {
     const map = new Map<string, string>();
     // Special layers
-    const currentDsl = graph?.currentQueryDSL;
-    if (typeof currentDsl === 'string' && currentDsl.trim()) {
-      map.set('current', currentDsl);
-    }
+    // AUTHORITATIVE: GraphStore.currentDSL (WindowSelector-owned). graph.currentQueryDSL is historic record only.
+    const currentDsl =
+      (typeof currentDSL === 'string' && currentDSL.trim())
+        ? currentDSL
+        : graph?.currentQueryDSL;
+    if (typeof currentDsl === 'string' && currentDsl.trim()) map.set('current', currentDsl);
 
     const baseDsl = scenariosContext?.baseDSL || graph?.baseDSL;
     if (typeof baseDsl === 'string' && baseDsl.trim()) {
@@ -588,7 +590,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     }
 
     return map;
-  }, [graph?.currentQueryDSL, graph?.baseDSL, scenariosContext?.baseDSL, scenariosContext?.scenarios]);
+  }, [currentDSL, graph?.currentQueryDSL, graph?.baseDSL, scenariosContext?.baseDSL, scenariosContext?.scenarios]);
 
   // Add a context suffix to the analysis name when the backend provides metadata,
   // e.g. "Reach Probability — Switch success".
