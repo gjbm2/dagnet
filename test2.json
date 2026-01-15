@@ -1,291 +1,646 @@
 nodes:
-  - uuid: 4bdf1510-0cb8-4b4e-a566-f8eb349b0b83
+  - uuid: 86469c9f-2f83-49ca-a154-589231be5511
     id: household-created
     label: Household created
     absorbing: false
-    layout:
-      x: -164
-      'y': 440
-    description: ''
-    event_id: household-created
-    images:
-      - image_id: household-created-img
-        caption: Dagnet time
-        file_extension: png
-        caption_overridden: false
     entry:
       is_start: true
-  - uuid: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
+      entry_weight: 1
+    layout:
+      x: -1222
+      'y': -166
+    description: ''
+    event_id: household-created
+  - uuid: addb99b6-5773-482c-a437-4661c8433ff7
+    id: abandonned-before-delegation
+    label: abandonned-before-delegation
+    absorbing: true
+    layout:
+      x: -947
+      'y': 71
+    description: ''
+    outcome_type: failure
+    outcome_type_overridden: false
+  - uuid: 16974652-b532-41ee-b4d5-a3ef5381591d
     id: household-delegated
     label: household-delegated
     absorbing: false
     layout:
-      x: 9
-      'y': 380
+      x: -968
+      'y': -170
     description: ''
+    tags: []
     event_id: household-delegated
+    event_id_overridden: false
+  - uuid: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    id: gave-bds-in-onboarding
+    label: Gave bds in onboarding
+    absorbing: false
+    layout:
+      x: -191
+      'y': -216
     images: []
-  - uuid: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
+    event_id: gave-bds-in-onboarding
+    event_id_overridden: false
+  - uuid: 5788d308-a7a9-49ce-a755-07491315a603
+    id: viewed-coffee-screen
+    label: Viewed coffee screen
+    absorbing: false
+    layout:
+      x: -528
+      'y': -191
+    event_id: viewed-coffee-screen
+    event_id_overridden: false
+  - uuid: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
     id: switch-registered
     label: Switch registered
     absorbing: false
     layout:
-      x: 446
-      'y': 233
+      x: 410
+      'y': -66
     event_id: switch-registered
-    images: []
-  - uuid: 04332060-3c28-4465-920e-17949934b7d4
+    event_id_overridden: false
+  - uuid: 30aabc44-e448-4359-b0d0-338a231edb92
     id: switch-success
     label: Switch success
-    absorbing: false
+    absorbing: true
     layout:
-      x: 664
-      'y': 111
+      x: 778
+      'y': -191
     event_id: switch-success
-    images: []
-  - uuid: 5326970e-e45d-4666-953c-53905fac56ab
-    id: gm-abandonned-delegation
-    label: Gm abandonned delegation
+    event_id_overridden: false
+    label_overridden: false
+    outcome_type: success
+    outcome_type_overridden: false
+  - uuid: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    id: post-recommendation-failure
+    label: Post recommendation failure
+    absorbing: true
+    layout:
+      x: 393
+      'y': 81
+    outcome_type: failure
+    outcome_type_overridden: false
+  - uuid: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
+    id: post-registration-failure
+    label: Post registration failure
+    absorbing: true
+    layout:
+      x: 741
+      'y': -6
+    outcome_type: failure
+    outcome_type_overridden: false
+  - uuid: 7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f
+    id: no-recommendation-sent
+    label: No recommendation sent
+    absorbing: true
+    layout:
+      x: 47
+      'y': -413
+    outcome_type: failure
+    outcome_type_overridden: false
+  - uuid: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
+    id: mobile-or-broadband-first-rec
+    label: Mobile or broadband first rec
     absorbing: false
     layout:
-      x: 37
-      'y': 522
-  - uuid: c4f82230-7da3-4b74-ab96-bc576cb08417
-    id: gm-abandonned-after-delegation
-    label: Gm abandonned after delegation
+      x: -544
+      'y': 4
+    event_id: non-energy-rec
+    event_id_overridden: false
+  - uuid: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    id: energy-rec
+    label: Energy rec
     absorbing: false
     layout:
-      x: 293
-      'y': 533
-  - uuid: 87e20915-cc26-417c-b0f0-4d6ea467e834
-    id: gm-abandoned-after-registration
-    label: Gm abandoned after registration
-    absorbing: false
-    layout:
-      x: 670
-      'y': 407
-  - uuid: b7cfc075-16bf-4f39-93dd-b6a20add59e8
-    id: recommendation-offered
-    label: Recommendation offered
-    absorbing: false
-    layout:
-      x: 185
-      'y': 318
-    event_id: recommendation-offered
-    images: []
-  - uuid: 8d5d0623-407f-44be-bc82-2dc85c62ca43
-    id: gm-abandonned-after-reco
-    label: Gm abandonned after reco
-    absorbing: false
-    layout:
-      x: 392
-      'y': 459
+      x: 42
+      'y': -89
+    event_id: energy-rec
+    event_id_overridden: false
 edges:
-  - uuid: c64ddc4d-c369-4ae8-a44a-398a63a46ab1
-    id: household-created-to-household-delegated
-    from: 4bdf1510-0cb8-4b4e-a566-f8eb349b0b83
-    to: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
+  - uuid: 532a304a-c435-4ea5-aa6a-44714b40adab
+    id: switch-registered-to-post-registration-failure
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 386e6cf6-ccc7-412a-81b3-ee730b8bf775
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.5573414422241529
-      id: gm-create-to-delegated
-      connection: amplitude-prod
-      connection_overridden: false
+      mean: 0.369
       latency:
         anchor_node_id: household-created
-      stdev: 0.01035253298392808
+    query: from(switch-registered).to(post-registration-failure)
+    description: ''
+  - uuid: 76e0e0f8-133d-4065-9fab-56480063d9c9
+    id: viewed-coffee-screen-to-gave-bds-in-onboarding
+    from: 5788d308-a7a9-49ce-a755-07491315a603
+    to: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.3812
+      stdev: 0.00609922140359766
+      id: coffee-to-bds
+      connection: amplitude-prod
       evidence:
-        'n': 2302
-        k: 1283
-        window_from: 1-Nov-25
-        window_to: 10-Nov-25
-        retrieved_at: '2026-01-07T15:21:32.152Z'
+        'n': 6358
+        k: 2441
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.819Z'
         source: amplitude
-        full_query: from(household-created).to(household-delegated)
-        mean: 0.5573414422241529
-        stdev: 0.010352433304657946
+        full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
+        mean: 0.3839257628184964
+        stdev: 0.006099298525855854
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-07T15:21:32.152Z'
-        full_query: from(household-created).to(household-delegated)
-      forecast:
-        mean: 0.5328260276638915
-    description: ''
-    query: from(household-created).to(household-delegated)
-  - uuid: 2d5ca246-b4d2-478f-bed6-487b76989b4c
-    id: household-created-to-gm-abandonned-delegation
-    from: 4bdf1510-0cb8-4b4e-a566-f8eb349b0b83
-    to: 5326970e-e45d-4666-953c-53905fac56ab
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.4427
+        retrieved_at: '2026-01-14T23:10:46.819Z'
+        full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
       latency:
         anchor_node_id: household-created
-    query: from(household-created).to(gm-abandonned-delegation)
-    description: ''
-  - uuid: 5f1aa0dd-613f-46e1-868e-69fc002fe45b
-    id: household-delegated-to-gm-gm-abandonned-delegation-after-delegation
-    from: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
-    to: c4f82230-7da3-4b74-ab96-bc576cb08417
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.2774
-      latency:
-        anchor_node_id: household-created
-    query: from(household-delegated).to(gm-abandonned-after-delegation)
-    description: ''
-  - uuid: a90c8a08-8437-4796-afd8-fa3c186ef316
-    id: switch-registered-to-gm-abandoned-after-registration
-    from: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
-    to: 87e20915-cc26-417c-b0f0-4d6ea467e834
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.209
-      latency:
-        anchor_node_id: household-created
-    query: from(switch-registered).to(gm-abandoned-after-registration)
-    description: ''
-  - uuid: 97b11265-1242-4fa8-a097-359f2384665a
-    id: switch-registered-to-switch-success
-    from: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
-    to: 04332060-3c28-4465-920e-17949934b7d4
-    fromHandle: right-out
-    toHandle: left-out
-    p:
-      mean: 0.791
-      id: gm-registered-to-success
-      connection: amplitude-prod
-      latency:
-        latency_parameter: true
-        median_lag_days: 6.555877676365882
-        mean_lag_days: 7.628800701296054
-        t95: 15.4
-        completeness: 0.9984279625313404
-        path_t95: 38.51
-        anchor_node_id_overridden: false
-        latency_parameter_overridden: false
-        anchor_node_id: household-created
-      stdev: 0.03336669680529079
-      evidence:
-        'n': 158
-        k: 122
-        window_from: 1-Nov-25
-        window_to: 10-Nov-25
-        retrieved_at: '2026-01-07T15:21:32.286Z'
-        source: amplitude
-        full_query: from(switch-registered).to(switch-success)
-        mean: 0.7721518987341772
-        stdev: 0.033369180051546744
-      data_source:
-        type: amplitude
-        retrieved_at: '2026-01-07T15:21:32.286Z'
-        full_query: from(switch-registered).to(switch-success)
-      forecast:
-        mean: 0.809637841113196
-    description: ''
-    query: from(switch-registered).to(switch-success)
-  - uuid: 44779055-a157-4cb3-91a8-37db766c044a
-    id: household-delegated-to-recommendation-offered
-    from: 9766ad2c-aca6-4537-b8d7-eb4d426515d6
-    to: b7cfc075-16bf-4f39-93dd-b6a20add59e8
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.7226107226107226
-      latency:
-        anchor_node_id: household-created
-        latency_parameter: true
-        latency_parameter_overridden: false
-        median_lag_days: 2.002072918624562
-        mean_lag_days: 2.1622415181110535
-        t95: 3.82
+        median_lag_days: 0.0008546016607074589
         completeness: 1
-        path_t95: 3.82
-      stdev: 0.012479952533131496
-      id: gm-delegated-to-reco
-      connection: amplitude-prod
-      connection_overridden: false
+        t95: 5
+        mean_lag_days: 0.003773115267096179
+        path_t95: 5
+        latency_parameter: false
+        latency_parameter_overridden: false
+      forecast:
+        mean: 0.36885116391842876
+    query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
+    description: ''
+    cost_gbp:
+      mean: 5
+      mean_overridden: true
+      query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
+  - uuid: 82ed2719-a8a5-4e28-84a6-21d476334a28
+    id: household-created-to-abandonned-before-delegation
+    from: 86469c9f-2f83-49ca-a154-589231be5511
+    to: addb99b6-5773-482c-a437-4661c8433ff7
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.4675
+      latency:
+        anchor_node_id: household-created
+    query: from(household-created).to(abandonned-before-delegation)
+    description: ''
+  - uuid: 370dce1d-3a36-4109-9711-204c301478c8
+    id: switch-registered-to-switch-success
+    from: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    to: 30aabc44-e448-4359-b0d0-338a231edb92
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.631
+      stdev: 0.010494693897394054
+      id: registration-to-success
       evidence:
-        'n': 1287
-        k: 930
-        window_from: 1-Nov-25
-        window_to: 10-Nov-25
-        retrieved_at: '2026-01-07T15:21:32.427Z'
+        window_from: 15-Oct-25
         source: amplitude
-        full_query: from(household-delegated).to(recommendation-offered)
-        mean: 0.7226107226107226
-        stdev: 0.012479803923394818
+        'n': 2150
+        k: 1322
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.978Z'
+        full_query: from(switch-registered).to(switch-success)
+        mean: 0.6148837209302326
+        stdev: 0.010494776788683524
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-07T15:21:32.427Z'
-        full_query: from(household-delegated).to(recommendation-offered)
-      forecast:
-        mean: 0.702612763991631
-    query: from(household-delegated).to(recommendation-offered)
-    description: ''
-  - uuid: a9ee0cea-414c-4b51-8e40-31104d14fa5b
-    id: recommendation-offered-to-gm-abandonned-after-reco
-    from: b7cfc075-16bf-4f39-93dd-b6a20add59e8
-    to: 8d5d0623-407f-44be-bc82-2dc85c62ca43
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.8351
+        retrieved_at: '2026-01-14T23:10:46.978Z'
+        full_query: from(switch-registered).to(switch-success)
+      connection: amplitude-prod
       latency:
         anchor_node_id: household-created
-    query: from(recommendation-offered).to(gm-abandonned-after-reco)
-    description: ''
-  - uuid: 1b37d7e7-69e9-4f71-b3b2-8eeed659326e
-    id: recommendation-offered-to-switch-registered
-    from: b7cfc075-16bf-4f39-93dd-b6a20add59e8
-    to: c57ab84f-91e2-43bb-be3b-6e504ef8b6f3
-    fromHandle: right-out
-    toHandle: left
-    p:
-      mean: 0.1649
-      latency:
-        anchor_node_id: household-created
+        median_lag_days: 6.397812283446865
+        completeness: 0.7720903271935516
+        t95: 19.33
+        path_t95: 50.23
+        mean_lag_days: 6.809086584597634
         latency_parameter: true
         latency_parameter_overridden: false
-        median_lag_days: 10.183614895692376
-        mean_lag_days: 10.616887415175665
-        t95: 16.37
-        completeness: 0.9999999995491538
-        path_t95: 19.13
-      stdev: 0.012314603185360998
-      id: gm-reco-to-registered
+        path_t95_overridden: false
+        t95_overridden: false
+      forecast:
+        mean: 0.7572262796861011
+    query: from(switch-registered).to(switch-success)
+    description: ''
+  - uuid: 3d0a0757-8224-4cf0-a841-4ad17cd48d91
+    id: household-created-to-household-delegated
+    from: 86469c9f-2f83-49ca-a154-589231be5511
+    to: 16974652-b532-41ee-b4d5-a3ef5381591d
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.5324568316973561
+      id: household-delegation-rate
       connection: amplitude-prod
-      connection_overridden: false
+      stdev: 0.002986342236127488
       evidence:
-        'n': 930
-        k: 158
-        window_from: 1-Nov-25
-        window_to: 10-Nov-25
-        retrieved_at: '2026-01-07T15:21:32.570Z'
+        'n': 27914
+        k: 14863
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.685Z'
         source: amplitude
-        full_query: from(recommendation-offered).to(switch-registered)
-        mean: 0.16989247311827957
-        stdev: 0.012314386232180051
+        full_query: from(household-created).to(household-delegated)
+        mean: 0.5324568316973561
+        stdev: 0.0029863590550022697
       data_source:
         type: amplitude
-        retrieved_at: '2026-01-07T15:21:32.570Z'
-        full_query: from(recommendation-offered).to(switch-registered)
+        retrieved_at: '2026-01-14T23:10:46.685Z'
+        full_query: from(household-created).to(household-delegated)
+      latency:
+        anchor_node_id: household-created
+      mean_overridden: false
       forecast:
-        mean: 0.13390013145504182
-    query: from(recommendation-offered).to(switch-registered)
+        mean: 0.5339887616314472
+    query: from(household-created).to(household-delegated)
     description: ''
+  - uuid: 9d2ebbef-d009-4043-80b1-b4ec43b728d0
+    id: gave-bds-in-onboarding-to-no-recommendation-sent
+    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    to: 7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.2175
+      latency:
+        anchor_node_id: household-created
+    description: ''
+    query: from(gave-bds-in-onboarding).to(no-recommendation-sent)
+  - uuid: 1531873e-c92b-49e7-bdfc-a7d375bd8eab
+    id: mobile-or-broadband-first-rec-to-post-recommendation-failure
+    from: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
+    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.9354
+      latency:
+        anchor_node_id: household-created
+    description: ''
+    query: from(mobile-or-broadband-first-rec).to(post-recommendation-failure)
+  - uuid: 10e37cc7-0d37-4cd9-844b-653148025a51
+    id: household-delegated-to-mobile-or-broadband-first-rec
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.2097
+      id: delegated-to-non-energy-rec
+      stdev: 0.003187436927801106
+      connection: amplitude-prod
+      evidence:
+        'n': 16312
+        k: 3420
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.834Z'
+        source: amplitude
+        full_query: from(household-delegated).to(mobile-or-broadband-first-rec)
+        mean: 0.20966159882295243
+        stdev: 0.0031872224975315415
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-14T23:10:46.834Z'
+        full_query: from(household-delegated).to(mobile-or-broadband-first-rec)
+      latency:
+        anchor_node_id: household-created
+        median_lag_days: 2.5
+        completeness: 0.9884654713069726
+        t95: 8.94
+        path_t95: 8.94
+        latency_parameter: true
+        latency_parameter_overridden: false
+      forecast:
+        mean: 0.21164326274674397
+    query: from(household-delegated).to(mobile-or-broadband-first-rec)
+    description: ''
+  - uuid: 259da2be-8149-40f2-ad9e-e2bea18bb1fb
+    id: household-delegated-to-no-recommendation-sent
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: 7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.1654
+      latency:
+        anchor_node_id: household-created
+    query: from(household-delegated).to(no-recommendation-sent).minus(viewed-coffee-screen)
+    description: ''
+    n_query: to(household-delegated)
+  - uuid: 77d0a69e-3c75-4722-932b-7f54d317d0ce
+    id: gave-bds-in-onboarding-to-energy-rec
+    from: a2ae8ea8-30a3-43db-b12c-43ad71bdaead
+    to: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.7825
+      id: bds-to-energy-rec
+      connection: amplitude-prod
+      stdev: 0.008001922032091725
+      evidence:
+        'n': 2658
+        k: 2080
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.878Z'
+        source: amplitude
+        full_query: from(gave-bds-in-onboarding).to(energy-rec)
+        mean: 0.782543265613243
+        stdev: 0.00800134730605045
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-14T23:10:46.878Z'
+        full_query: from(gave-bds-in-onboarding).to(energy-rec)
+      latency:
+        anchor_node_id: household-created
+        median_lag_days: 2.003889944856854
+        completeness: 0.9832924065147857
+        t95: 4.92
+        mean_lag_days: 2.2091492587354327
+        path_t95: 4.92
+        latency_parameter: true
+        latency_parameter_overridden: false
+      forecast:
+        mean: 0.7785044054273937
+    query: from(gave-bds-in-onboarding).to(energy-rec)
+    description: ''
+  - uuid: 64f4529c-62b8-4e7e-8479-c5289d925e58
+    id: household-delegated-to-viewed-coffee-screen
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: 5788d308-a7a9-49ce-a755-07491315a603
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.3581
+      id: delegated-to-coffee
+      stdev: 0.003789568385718542
+      connection: amplitude-prod
+      evidence:
+        'n': 16028
+        k: 5757
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.782Z'
+        source: amplitude
+        full_query: from(household-delegated).to(viewed-coffee-screen)
+        mean: 0.35918392812577987
+        stdev: 0.003789531127076839
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-14T23:10:46.782Z'
+        full_query: from(household-delegated).to(viewed-coffee-screen)
+      latency:
+        anchor_node_id: household-created
+      forecast:
+        mean: 0.36390722693238203
+    query: from(household-delegated).to(viewed-coffee-screen)
+    description: ''
+  - uuid: 13b5397f-9feb-453a-8e86-500c0693b4af
+    id: viewed-coffee-screen-to-energy-rec
+    from: 5788d308-a7a9-49ce-a755-07491315a603
+    to: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.5008
+      id: no-bdos-to-rec
+      connection: amplitude-prod
+      stdev: 0.006217449145975345
+      evidence:
+        'n': 6467
+        k: 3216
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.909Z'
+        source: amplitude
+        full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+        mean: 0.49729395391990106
+        stdev: 0.006217448739524009
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-14T23:10:46.909Z'
+        full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+      latency:
+        anchor_node_id: household-created
+        median_lag_days: 2.5
+        completeness: 0.973942848773523
+        t95: 10.17
+        path_t95: 10.17
+        latency_parameter: true
+      forecast:
+        mean: 0.8860624763260774
+    query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
+    description: ''
+    n_query: to(viewed-coffee-screen)
+  - uuid: 46ceb603-d6d1-421a-9658-083d4797b76a
+    id: viewed-coffee-screen-to-no-recommendation-sent
+    from: 5788d308-a7a9-49ce-a755-07491315a603
+    to: 7115e4a9-d4c2-4f24-b5b0-8b224b7bea2f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.118
+      latency:
+        anchor_node_id: household-created
+    query: from(viewed-coffee-screen).to(no-recommendation-sent).minus(gave-bds-in-onboarding)
+    description: ''
+    n_query: to(viewed-coffee-screen)
+  - uuid: 8c23ea34-9c7e-40b3-ade3-291590774bfc
+    id: household-delegated-to-energy-rec
+    from: 16974652-b532-41ee-b4d5-a3ef5381591d
+    to: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.2668
+      id: delegation-straight-to-energy-rec
+      stdev: 0.0034567664523413163
+      connection: amplitude-prod
+      evidence:
+        'n': 16312
+        k: 4327
+        retrieved_at: '2026-01-14T23:10:46.939Z'
+        source: amplitude
+        full_query: from(household-delegated).to(energy-rec).exclude(gave-bds-in-onboarding,viewed-coffee-screen)
+        mean: 0.26526483570377635
+        stdev: 0.003456620073098358
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-14T23:10:46.939Z'
+        full_query: from(household-delegated).to(energy-rec).exclude(gave-bds-in-onboarding,viewed-coffee-screen)
+      latency:
+        anchor_node_id: household-created
+        median_lag_days: 2.5
+        completeness: 0.98093202956114
+        t95: 8.99
+        path_t95: 8.99
+        latency_parameter: true
+      forecast:
+        mean: 0.5782686767712988
+    query: from(household-delegated).to(energy-rec).exclude(gave-bds-in-onboarding,viewed-coffee-screen)
+    description: ''
+    n_query: to(household-delegated)
+  - uuid: 9624cce1-21f3-4085-9388-c155b5b657fd
+    id: mobile-or-broadband-first-rec-to-switch-registered
+    from: 78f954c9-c9db-4b8f-8e91-7b746d5c6533
+    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.0646
+      id: non-energy-rec-to-reg
+      stdev: 0.0032352970596095563
+      connection: amplitude-prod
+      evidence:
+        'n': 5773
+        k: 373
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.856Z'
+        source: amplitude
+        full_query: from(mobile-or-broadband-first-rec).to(switch-registered)
+        mean: 0.06461112073445349
+        stdev: 0.0032355562883978465
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-14T23:10:46.856Z'
+        full_query: from(mobile-or-broadband-first-rec).to(switch-registered)
+      latency:
+        anchor_node_id: household-created
+        median_lag_days: 7.109118964174457
+        completeness: 0.8853679977723081
+        t95: 19.63
+        mean_lag_days: 7.818133111478886
+        path_t95: 28.57
+        latency_parameter: true
+        latency_parameter_overridden: false
+        path_t95_overridden: false
+        anchor_node_id_overridden: false
+      forecast:
+        mean: 0.06351651758921578
+    description: ''
+    query: from(mobile-or-broadband-first-rec).to(switch-registered)
+  - uuid: b00b2e14-f795-46e6-96c5-f46bfedf458d
+    id: energy-rec-to-post-recommendation-failure
+    from: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    to: 940fd8cc-f7f6-4ec5-a973-fb4cc037fa64
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.8936
+      latency:
+        anchor_node_id: household-created
+    query: from(energy-rec).to(post-recommendation-failure)
+    conditional_p:
+      - condition: visited(gave-bds-in-onboarding)
+        query: from(energy-rec).to(post-recommendation-failure).visited(gave-bds-in-onboarding)
+        query_overridden: false
+        p:
+          mean: 0.637
+          latency:
+            latency_parameter: true
+            latency_parameter_overridden: false
+            anchor_node_id: household-created
+        colour: '#16a34a'
+      - condition: exclude(gave-gave-bds-in-onboarding)
+        query: from(energy-rec).to(post-recommendation-failure)
+        query_overridden: false
+        p:
+          mean: 0.804
+          latency:
+            latency_parameter: true
+            latency_parameter_overridden: false
+            anchor_node_id: household-created
+    description: ''
+  - uuid: d45debd8-939b-4abb-b0d0-c5ef62412add
+    id: energy-rec-to-switch-registered
+    from: 61415aa1-5a0c-472c-9626-51d0c0d38cdb
+    to: 22ffa9c1-efaa-4fab-8c15-80ea2b397e0f
+    fromHandle: right-out
+    toHandle: left
+    p:
+      mean: 0.1064
+      id: rec-with-bdos-to-registration
+      connection: amplitude-prod
+      stdev: 0.0024311371896797197
+      evidence:
+        'n': 15980
+        k: 1687
+        window_from: 15-Oct-25
+        window_to: 13-Jan-26
+        retrieved_at: '2026-01-14T23:10:46.954Z'
+        source: amplitude
+        full_query: from(energy-rec).to(switch-registered)
+        mean: 0.1055694618272841
+        stdev: 0.002430827135050841
+      data_source:
+        type: amplitude
+        retrieved_at: '2026-01-14T23:10:46.954Z'
+        full_query: from(energy-rec).to(switch-registered)
+      latency:
+        anchor_node_id: household-created
+        median_lag_days: 8.304757248066533
+        completeness: 0.8769706723449012
+        t95: 20.72
+        mean_lag_days: 8.43778733145331
+        path_t95: 30.9
+        latency_parameter: true
+        latency_parameter_overridden: false
+        t95_overridden: false
+      stdev_overridden: false
+      forecast:
+        mean: 0.12250090442007482
+    description: ''
+    query: from(energy-rec).to(switch-registered)
+    query_overridden: false
+    conditional_p:
+      - condition: visited(gave-bds-in-onboarding)
+        query: from(energy-rec).to(switch-registered).visited(gave-bds-in-onboarding)
+        query_overridden: false
+        p:
+          mean: 0.36257309941520466
+          stdev: 0.03676333723816272
+          latency:
+            latency_parameter: true
+            latency_parameter_overridden: false
+            anchor_node_id: household-created
+        colour: '#16a34a'
+      - condition: exclude(gave-gave-bds-in-onboarding)
+        query: from(energy-rec).to(switch-registered).exclude(gave-gave-bds-in-onboarding)
+        query_overridden: false
+        p:
+          mean: 0.1964573268921095
+          stdev: 0.015943834875444898
+          connection: amplitude-prod
+          evidence:
+            'n': 621
+            k: 122
+            retrieved_at: '2025-12-05T09:13:17.801Z'
+            source: amplitude
+          data_source:
+            type: amplitude
+            retrieved_at: '2025-12-05T09:13:17.801Z'
+            full_query: >-
+              {"from":"energy-rec","to":"switch-registered","context":[],"case":[],"start":"2025-11-09T00:00:00.000Z","end":"2025-11-15T00:00:00.000Z","query_params":"e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22RecommendationOffered%22%5D%7D%2C%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22category%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22Energy%22%5D%7D%5D%7D&e=%7B%22event_type%22%3A%22Blueprint%20CheckpointReached%22%2C%22filters%22%3A%5B%7B%22subprop_type%22%3A%22event%22%2C%22subprop_key%22%3A%22checkpoint%22%2C%22subprop_op%22%3A%22is%22%2C%22subprop_value%22%3A%5B%22SwitchRegistered%22%5D%7D%5D%7D&start=20251109&end=20251115&i=1&s=%5B%7B%22prop%22%3A%22userdata_cohort%22%2C%22op%22%3A%22is%20not%22%2C%22values%22%3A%5B%229z057h6i%22%5D%7D%5D","from_step_index":0,"to_step_index":1}
+          latency:
+            latency_parameter: true
+            latency_parameter_overridden: false
+            anchor_node_id: household-created
 policies:
   default_outcome: success
 metadata:
-  name: gm-rebuild-jan-25
+  name: conversion-flow-v0-ezra
   description: ''
-  created_at: '2026-01-05T12:49:08.196Z'
-  updated_at: '2026-01-07T15:21:32.791Z'
+  created_at: '2025-11-20T16:28:04.980Z'
+  updated_at: '2026-01-14T23:10:47.001Z'
   version: 1.0.0
-dataInterestsDSL: window(1-Nov-25:30-Nov-25);cohort(1-Nov-25:30-Nov-25)
-currentQueryDSL: cohort(1-Nov-25:10-Nov-25)
+currentQueryDSL: window(15-Oct-25:13-Jan-26)
+dataInterestsDSL: (window(-90d:);cohort(-90d:)).context(channel)
+baseDSL: window(1-Nov-25:10-Nov-25)
 debugging: true

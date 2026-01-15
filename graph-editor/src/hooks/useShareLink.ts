@@ -177,23 +177,46 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
         }
         url = res.url;
       } else {
-        if (!fileInfo?.identity) {
-          toast.error('No repository identity available');
-          return;
-        }
+        // Prefer bundle-style live share for graphs so we can carry scenario DSLs/colours/modes.
+        // We only have a fileId here (no explicit tabId), so best-effort select the first tab
+        // currently viewing this graph file.
+        const tabId = (() => {
+          try {
+            const registryAny: any = fileRegistry as any;
+            const viewTabs: string[] | undefined = registryAny?.files?.get?.(fileId)?.viewTabs;
+            if (Array.isArray(viewTabs) && viewTabs.length > 0) return viewTabs[0];
+          } catch {
+            // ignore
+          }
+          return undefined;
+        })();
 
-        const { repo, branch, graph } = fileInfo.identity;
-        if (!repo || !branch || !graph) {
-          toast.error('Missing repository identity');
-          return;
+        if (!tabId) {
+          // Fallback: old behaviour (identity-only link) if we cannot resolve a tab.
+          if (!fileInfo?.identity) {
+            toast.error('No repository identity available');
+            return;
+          }
+          const { repo, branch, graph } = fileInfo.identity;
+          if (!repo || !branch || !graph) {
+            toast.error('Missing repository identity');
+            return;
+          }
+          url = shareLinkService.buildLiveShareUrl({ repo, branch, graph, secret });
+        } else {
+          const res = await shareLinkService.buildLiveBundleShareUrlFromTabs({
+            tabIds: [tabId],
+            dashboardMode: true,
+            includeScenarios: true,
+            activeTabId: tabId,
+            secretOverride: secret,
+          });
+          if (!res.success || !res.url) {
+            toast.error(res.error || 'Failed to create live graph share link');
+            return;
+          }
+          url = res.url;
         }
-
-        url = shareLinkService.buildLiveShareUrl({
-          repo,
-          branch,
-          graph,
-          secret,
-        });
       }
       
       await navigator.clipboard.writeText(url);

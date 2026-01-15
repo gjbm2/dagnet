@@ -30,6 +30,39 @@ type SharePayloadV1 =
       };
     };
 
+function attachShareBootConsoleGuards(page: any) {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  page.on('pageerror', (err: any) => {
+    errors.push(String(err?.message || err));
+  });
+
+  page.on('console', (msg: any) => {
+    const type = msg.type?.() || '';
+    const text = msg.text?.() || '';
+
+    if (type === 'error') {
+      errors.push(text);
+      return;
+    }
+
+    if (type === 'warning') {
+      // Only fail on known stability regressions (React update loops, repeated 4xx boot failures).
+      if (/Maximum update depth exceeded/i.test(text)) warnings.push(text);
+      if (/Failed to load resource.*\b400\b/i.test(text)) warnings.push(text);
+      if (/\bPOST\b.*\/api\/runner\/analyze\b.*\b400\b/i.test(text)) warnings.push(text);
+    }
+  });
+
+  return {
+    assertNoStabilityErrors: async () => {
+      expect(errors, `Console errors during share boot:\n${errors.join('\n')}`).toEqual([]);
+      expect(warnings, `Console stability warnings during share boot:\n${warnings.join('\n')}`).toEqual([]);
+    },
+  };
+}
+
 function encodeSharePayloadToParam(payload: SharePayloadV1): string {
   // IMPORTANT: Use the same algorithm as the app (lz-string compressToEncodedURIComponent).
   // In Playwright node runtime, lz-string is treated as a CJS default export.
@@ -357,6 +390,134 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     await context.close();
   });
 
+  test('live chart share supports Current-only charts (no user scenarios) and still materialises a chart', async ({ browser, baseURL }) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+
+    // 1) Authoring page: seed a graph + a parent tab with Current visible only + a chart file, then generate share URL.
+    const authoringContext = await browser.newContext();
+    const authoringPage = await authoringContext.newPage();
+    await installShareLiveStubs(authoringPage, state);
+    await authoringPage.goto(new URL('/?e2e=1', baseURL).toString(), { waitUntil: 'domcontentloaded' });
+
+    const chartFileId = 'chart-author-current-only-1';
+    const graphFileId = 'graph-test-graph';
+    const parentTabId = 'tab-graph-author-current-only-1';
+
+    await authoringPage.evaluate(
+      async ({ chartFileId, graphFileId, parentTabId }) => {
+        const w: any = window as any;
+        const db = w.db;
+        if (!db) throw new Error('db missing');
+        if (!w.dagnetE2e?.buildLiveChartShareUrlFromChartFile) throw new Error('dagnetE2e hooks missing');
+
+        await db.files.put({
+          fileId: graphFileId,
+          type: 'graph',
+          viewTabs: [],
+          data: { nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }], edges: [] },
+          source: { repository: 'repo-1', branch: 'main', path: 'graphs/test-graph.json' },
+        });
+
+        // Parent tab with Current visible (and no user scenarios).
+        await db.tabs.put({
+          id: parentTabId,
+          fileId: graphFileId,
+          viewMode: 'interactive',
+          title: 'Graph',
+          editorState: {
+            scenarioState: {
+              visibleScenarioIds: ['current'],
+              visibilityMode: {},
+              selectedScenarioId: 'current',
+            },
+          },
+        });
+
+        // Chart file (bridge-style metadata shape is fine; analyze is stubbed anyway).
+        await db.files.put({
+          fileId: chartFileId,
+          type: 'chart',
+          viewTabs: [],
+          data: {
+            version: '1.0.0',
+            chart_kind: 'analysis_bridge',
+            title: 'Chart — Current only',
+            created_at_uk: '14-Jan-26',
+            created_at_ms: Date.now(),
+            source: {
+              parent_tab_id: parentTabId,
+              parent_file_id: graphFileId,
+              query_dsl: 'from(from).to(to)',
+              analysis_type: 'graph_overview',
+            },
+            payload: {
+              analysis_result: {
+                analysis_type: 'graph_overview',
+                analysis_name: 'E2E Analysis v1',
+                analysis_description: 'E2E stubbed analysis result',
+                metadata: {},
+                dimension_values: {},
+                data: [],
+              },
+              scenario_ids: [],
+            },
+          },
+        });
+      },
+      { chartFileId, graphFileId, parentTabId }
+    );
+
+    const shareUrl = await authoringPage.evaluate(async ({ chartFileId }) => {
+      const w: any = window as any;
+      const res = await w.dagnetE2e.buildLiveChartShareUrlFromChartFile({ chartFileId, secretOverride: 'test-secret', dashboardMode: true });
+      if (!res?.success || !res?.url) throw new Error(res?.error || 'Failed to build share URL');
+      return res.url as string;
+    }, { chartFileId });
+
+    await authoringContext.close();
+
+    // 2) Share page: open and assert chart content materialises (and compute was called with at least one scenario).
+    const shareContext = await browser.newContext();
+    const sharePage = await shareContext.newPage();
+    await installShareLiveStubs(sharePage, state);
+
+    await sharePage.goto(new URL(shareUrl, baseURL).toString(), { waitUntil: 'domcontentloaded' });
+    await expect(sharePage.getByText('Live view')).toBeVisible();
+    await expect(sharePage.getByText('Chart — Current only')).toBeVisible();
+    await expect(sharePage.getByRole('button', { name: 'Download CSV' })).toBeVisible();
+
+    await expect
+      .poll(async () => (state.lastAnalyzeRequest?.scenarios || []).length, { timeout: 20_000 })
+      .toBeGreaterThan(0);
+
+    await shareContext.close();
+  });
+
+  test('live chart share shows an in-tab error (not a blank page) when analysis fails', async ({ browser, baseURL }) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {}, forceAnalyzeStatus: 500 };
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await installShareLiveStubs(page, state);
+
+    const payload: SharePayloadV1 = {
+      version: '1.0.0',
+      target: 'chart',
+      chart: { kind: 'analysis_bridge', title: 'E2E Live Chart (forced failure)' },
+      analysis: { query_dsl: 'from(from).to(to)', analysis_type: 'graph_overview', what_if_dsl: null },
+      scenarios: { items: [{ dsl: 'cohort(-1w:)', name: 'A', colour: '#111', visibility_mode: 'f+e' }], hide_current: false, selected_scenario_dsl: null },
+    };
+
+    const url = new URL(buildLiveChartShareUrl(payload), baseURL).toString();
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByText('Live view')).toBeVisible();
+
+    // Must not be "blank": show a persistent in-tab error state.
+    await expect(page.getByText('Chart failed to load')).toBeVisible();
+
+    await context.close();
+  });
+
   test('warm boot uses IndexedDB cache (no content refetch) and refresh to v2 overwrites + recomputes', async ({ browser, baseURL }) => {
     const state: ShareLiveStubState = { version: 'v1', counts: {} };
     const context = await browser.newContext();
@@ -496,6 +657,7 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     const state: ShareLiveStubState = { version: 'v1', counts: {} };
     const context = await browser.newContext();
     const page = await context.newPage();
+    const guards = attachShareBootConsoleGuards(page);
     await installShareLiveStubs(page, state);
 
     const bundlePayload: any = {
@@ -555,7 +717,335 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     // - Chart surface includes chart title.
     await expect(page.getByRole('link', { name: 'React Flow' })).toBeVisible();
     await expect(page.getByText('Chart — Bridge View')).toBeVisible();
+    // Stronger assertion: ChartViewer controls must be present (ensures chart CONTENT rendered, not just hidden tab metadata).
+    await expect(page.getByRole('button', { name: 'Download CSV' })).toBeVisible();
 
+    // Stability: analyze must have received at least one scenario, and the app must not spam tabs/renders.
+    await expect
+      .poll(async () => (state.lastAnalyzeRequest?.scenarios || []).length, { timeout: 20_000 })
+      .toBeGreaterThan(0);
+
+    // Integrity: scenario labels/colours/modes should be replayed exactly into the compute boundary.
+    await expect
+      .poll(async () => {
+        return (state.lastAnalyzeRequest?.scenarios || []).map((s: any) => ({
+          name: s.name,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+        }));
+      })
+      .toEqual([
+        { name: 'Current', colour: expect.any(String), visibility_mode: 'f+e' },
+        { name: 'A', colour: '#111', visibility_mode: 'f+e' },
+        { name: 'B', colour: '#222', visibility_mode: 'f' },
+      ]);
+
+    // Stability: tab strip should not explode (regression: repeated openTemporaryTab with Date.now()).
+    // In dashboard mode, rc-dock tab strip may be hidden. Use IndexedDB tab state instead.
+    await expect
+      .poll(async () => {
+        return await page.evaluate(async () => {
+          const db: any = (window as any).db;
+          if (!db?.tabs) return [];
+          const all = await db.tabs.toArray();
+          return all.map((t: any) => ({ id: t.id, fileId: t.fileId, title: t.title, viewMode: t.viewMode }));
+        });
+      })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ title: 'Graph' }),
+          expect.objectContaining({ title: 'Chart — Bridge View' }),
+        ])
+      );
+
+    const tabCount1 = await page.evaluate(async () => {
+      const db: any = (window as any).db;
+      const all = await db.tabs.toArray();
+      return all.length;
+    });
+    await page.waitForTimeout(1000);
+    const tabCount2 = await page.evaluate(async () => {
+      const db: any = (window as any).db;
+      const all = await db.tabs.toArray();
+      return all.length;
+    });
+    expect(tabCount2).toBe(tabCount1);
+
+    await guards.assertNoStabilityErrors();
+    await context.close();
+  });
+
+  test('live bundle preserves duplicate DSL scenarios (distinct colours) in compute request', async ({ browser, baseURL }) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const guards = attachShareBootConsoleGuards(page);
+    await installShareLiveStubs(page, state);
+
+    // Two scenarios can legitimately share the same DSL but must remain distinct in the share payload/boot.
+    // Regression: we previously keyed scenarios by DSL during boot, collapsing duplicates and dropping colours.
+    const bundlePayload: any = {
+      version: '1.0.0',
+      target: 'bundle',
+      presentation: { dashboardMode: true, activeTabIndex: 0 },
+      scenarios: {
+        items: [
+          { dsl: 'cohort(1-Dec-25:31-Dec-25)', name: 'A', colour: '#F97316', visibility_mode: 'f+e' },
+          { dsl: 'cohort(1-Dec-25:31-Dec-25)', name: 'B', colour: '#06B6D4', visibility_mode: 'f+e' },
+        ],
+        hide_current: true,
+        selected_scenario_dsl: null,
+      },
+      tabs: [
+        {
+          type: 'chart',
+          title: 'Chart — Duplicate DSL',
+          chart: { kind: 'analysis_bridge' },
+          analysis: { query_dsl: 'from(from).to(to)', analysis_type: 'graph_overview', what_if_dsl: null },
+        },
+      ],
+    };
+
+    const params = new URLSearchParams();
+    params.set('mode', 'live');
+    params.set('e2e', '1');
+    params.set('dashboard', '1');
+    params.set('repo', 'repo-1');
+    params.set('branch', 'main');
+    params.set('graph', 'test-graph');
+    params.set(
+      'creds',
+      JSON.stringify({
+        defaultGitRepo: 'repo-1',
+        git: [
+          {
+            name: 'repo-1',
+            owner: 'owner-1',
+            repo: 'repo-1',
+            token: 'test-token',
+            branch: 'main',
+            basePath: '',
+          },
+        ],
+      })
+    );
+    params.set('share', (LZString as any).compressToEncodedURIComponent(JSON.stringify(bundlePayload)));
+
+    const url = new URL(`/?${params.toString()}`, baseURL).toString();
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByText('Live view')).toBeVisible();
+    await expect(page.getByText('Chart — Duplicate DSL')).toBeVisible();
+
+    // Integrity: the compute boundary must receive *two* scenarios with the distinct colours/names.
+    await expect
+      .poll(async () => {
+        return (state.lastAnalyzeRequest?.scenarios || []).map((s: any) => ({
+          name: s?.name,
+          colour: s?.colour,
+          visibility_mode: s?.visibility_mode,
+        }));
+      })
+      .toEqual([
+        { name: 'A', colour: '#F97316', visibility_mode: 'f+e' },
+        { name: 'B', colour: '#06B6D4', visibility_mode: 'f+e' },
+      ]);
+
+    await guards.assertNoStabilityErrors();
+    await context.close();
+  });
+
+  test('live bundle (graph-only) preserves visible scenarios exactly (hide_current + colours) in tab state + IndexedDB', async ({ browser, baseURL }) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const guards = attachShareBootConsoleGuards(page);
+    await installShareLiveStubs(page, state);
+
+    const bundlePayload: any = {
+      version: '1.0.0',
+      target: 'bundle',
+      presentation: { dashboardMode: true, activeTabIndex: 0 },
+      scenarios: {
+        items: [
+          { dsl: 'cohort(1-Dec-25:31-Dec-25)', name: 'A', colour: '#F97316', visibility_mode: 'f+e' },
+          { dsl: 'cohort(1-Dec-25:31-Dec-25)', name: 'B', colour: '#06B6D4', visibility_mode: 'f+e' },
+        ],
+        hide_current: true,
+        selected_scenario_dsl: null,
+      },
+      tabs: [{ type: 'graph', title: 'Graph Only' }],
+    };
+
+    const params = new URLSearchParams();
+    params.set('mode', 'live');
+    params.set('e2e', '1');
+    params.set('dashboard', '1');
+    params.set('repo', 'repo-1');
+    params.set('branch', 'main');
+    params.set('graph', 'test-graph');
+    params.set(
+      'creds',
+      JSON.stringify({
+        defaultGitRepo: 'repo-1',
+        git: [
+          {
+            name: 'repo-1',
+            owner: 'owner-1',
+            repo: 'repo-1',
+            token: 'test-token',
+            branch: 'main',
+            basePath: '',
+          },
+        ],
+      })
+    );
+    params.set('share', (LZString as any).compressToEncodedURIComponent(JSON.stringify(bundlePayload)));
+
+    const url = new URL(`/?${params.toString()}`, baseURL).toString();
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByText('Live view')).toBeVisible();
+
+    // Assert tab scenarioState mirrors payload semantics: Current hidden, two scenarios visible.
+    // (poll because share boot creates the tab asynchronously)
+    await expect
+      .poll(async () => {
+        return await page.evaluate(async () => {
+          const db: any = (window as any).db;
+          const tabs = await db.tabs.toArray();
+          const graphTab = tabs.find((t: any) => t?.title === 'Graph Only') || null;
+          const ids = graphTab?.editorState?.scenarioState?.visibleScenarioIds;
+          if (!Array.isArray(ids)) return 'missing';
+          return ids.includes('current') ? 'has-current' : 'ok';
+        });
+      })
+      .toBe('ok');
+
+    await expect
+      .poll(async () => {
+        return await page.evaluate(async () => {
+          const db: any = (window as any).db;
+          const tabs = await db.tabs.toArray();
+          const graphTab = tabs.find((t: any) => t?.title === 'Graph Only') || null;
+          const ids = graphTab?.editorState?.scenarioState?.visibleScenarioIds;
+          return Array.isArray(ids) ? ids.length : -1;
+        });
+      })
+      .toBe(2);
+
+    // Assert scenarios were actually persisted for the graph fileId, with colours preserved.
+    await expect
+      .poll(async () => {
+        return await page.evaluate(async () => {
+          const db: any = (window as any).db;
+          const files = await db.files.toArray();
+          const graphFile = files.find((f: any) => f?.type === 'graph') || files[0];
+          const fileId = graphFile?.fileId;
+          const scenarios = await db.scenarios.where('fileId').equals(fileId).toArray();
+          return scenarios.map((s: any) => ({ name: s?.name, colour: s?.colour, dsl: s?.meta?.queryDSL }));
+        });
+      })
+      .toEqual([
+        { name: 'A', colour: '#F97316', dsl: 'cohort(1-Dec-25:31-Dec-25)' },
+        { name: 'B', colour: '#06B6D4', dsl: 'cohort(1-Dec-25:31-Dec-25)' },
+      ]);
+
+    await guards.assertNoStabilityErrors();
+    await context.close();
+  });
+
+  test('live bundle boot is stable when hide_current=true and scenario list is empty (falls back to Current)', async ({ browser, baseURL }) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const guards = attachShareBootConsoleGuards(page);
+    await installShareLiveStubs(page, state);
+
+    const bundlePayload: any = {
+      version: '1.0.0',
+      target: 'bundle',
+      presentation: { dashboardMode: true, activeTabIndex: 0 },
+      scenarios: {
+        items: [],
+        hide_current: true,
+        selected_scenario_dsl: null,
+      },
+      tabs: [
+        { type: 'graph', title: 'Graph' },
+        {
+          type: 'chart',
+          title: 'Chart — Empty scenarios',
+          chart: { kind: 'analysis_bridge' },
+          analysis: { query_dsl: 'from(from).to(to)', analysis_type: 'graph_overview', what_if_dsl: null },
+        },
+      ],
+    };
+
+    const params = new URLSearchParams();
+    params.set('mode', 'live');
+    params.set('e2e', '1');
+    params.set('dashboard', '1');
+    params.set('repo', 'repo-1');
+    params.set('branch', 'main');
+    params.set('graph', 'test-graph');
+    params.set(
+      'creds',
+      JSON.stringify({
+        defaultGitRepo: 'repo-1',
+        git: [
+          {
+            name: 'repo-1',
+            owner: 'owner-1',
+            repo: 'repo-1',
+            token: 'test-token',
+            branch: 'main',
+            basePath: '',
+          },
+        ],
+      })
+    );
+    params.set('share', (LZString as any).compressToEncodedURIComponent(JSON.stringify(bundlePayload)));
+
+    const url = new URL(`/?${params.toString()}`, baseURL).toString();
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByText('Live view')).toBeVisible();
+    await expect(page.getByText('Chart — Empty scenarios')).toBeVisible();
+
+    // The compute boundary must never be invoked with 0 scenarios (stub returns 400 if it is).
+    await expect
+      .poll(async () => (state.lastAnalyzeRequest?.scenarios || []).map((s: any) => s.scenario_id), { timeout: 20_000 })
+      .toEqual(['current']);
+
+    // In dashboard mode, rc-dock tab strip may be hidden. Use IndexedDB tab state instead.
+    await expect
+      .poll(async () => {
+        return await page.evaluate(async () => {
+          const db: any = (window as any).db;
+          if (!db?.tabs) return [];
+          const all = await db.tabs.toArray();
+          return all.map((t: any) => ({ id: t.id, fileId: t.fileId, title: t.title, viewMode: t.viewMode }));
+        });
+      })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ title: 'Graph' }),
+          expect.objectContaining({ title: 'Chart — Empty scenarios' }),
+        ])
+      );
+
+    const tabCount1 = await page.evaluate(async () => {
+      const db: any = (window as any).db;
+      const all = await db.tabs.toArray();
+      return all.length;
+    });
+    await page.waitForTimeout(1000);
+    const tabCount2 = await page.evaluate(async () => {
+      const db: any = (window as any).db;
+      const all = await db.tabs.toArray();
+      return all.length;
+    });
+    expect(tabCount2).toBe(tabCount1);
+
+    await guards.assertNoStabilityErrors();
     await context.close();
   });
 

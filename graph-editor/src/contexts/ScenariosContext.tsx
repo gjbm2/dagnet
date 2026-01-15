@@ -176,9 +176,15 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
 
   // Load scenarios from IndexedDB on mount or file change
   useEffect(() => {
+    if (!fileId) return;
+
+    // IMPORTANT:
+    // scenariosLoaded / scenariosReady must be treated as *per-file*, otherwise callers may create scenarios
+    // while an async DB load for the new fileId is still in-flight, and then that late load overwrites
+    // the newly created in-memory scenarios (observed in live share boot).
+    setScenariosLoaded(false);
+
     const loadScenarios = async () => {
-      if (!fileId) return;
-      
       try {
         const savedScenarios = await db.scenarios
           .where('fileId')
