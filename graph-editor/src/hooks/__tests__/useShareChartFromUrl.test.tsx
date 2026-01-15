@@ -116,9 +116,16 @@ describe('useShareChartFromUrl', () => {
     hoisted.createLiveScenario.mockClear();
     hoisted.regenerateScenario.mockClear();
     hoisted.scenarios.length = 0;
+    // The hook uses a global guard to avoid duplicate boot in dev/StrictMode.
+    // Reset between tests so earlier runs don't suppress later ones.
+    try {
+      (window as any).__dagnetShareChartProcessedKeys = new Set<string>();
+    } catch {
+      // ignore
+    }
   });
 
-  it('shows cached chart immediately and does not recompute when cached artefact exists', async () => {
+  it('shows cached chart immediately (placeholder) and still recomputes on boot when cached artefact exists', async () => {
     hoisted.restoreFile.mockResolvedValue({
       data: { payload: { analysis_result: {} } },
     });
@@ -129,8 +136,11 @@ describe('useShareChartFromUrl', () => {
       expect(hoisted.openExistingChartTab).toHaveBeenCalled();
     });
 
-    expect(hoisted.analyzeMultipleScenarios).not.toHaveBeenCalled();
-    expect(hoisted.createLiveScenario).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(hoisted.analyzeMultipleScenarios).toHaveBeenCalled();
+      expect(hoisted.openAnalysisChartTabFromAnalysis).toHaveBeenCalled();
+    });
+    expect(hoisted.createLiveScenario).toHaveBeenCalledTimes(2);
   });
 
   it('creates scenarios and computes chart when no cached artefact exists', async () => {

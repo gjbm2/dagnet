@@ -22,3 +22,11 @@ contexts:
     status: active
     category: business
 
+  # Local Statsig/Amplitude gate context fixture (used by local e2e tests)
+  # NOTE: ID is the file-stem for registry synchronisation tests.
+  - id: activegate-new-whatsapp-journey.local
+    file_path: contexts/activegate-new-whatsapp-journey.local.yaml
+    type: categorical
+    status: active
+    category: behavioral
+
