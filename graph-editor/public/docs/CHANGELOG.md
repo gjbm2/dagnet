@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.2.9b
+**Released:** 15-Jan-26
+
+Further fixes to tab sharing
+
+---
+
 ## Version 1.2.6b
 **Released:** 14-Jan-26
 
