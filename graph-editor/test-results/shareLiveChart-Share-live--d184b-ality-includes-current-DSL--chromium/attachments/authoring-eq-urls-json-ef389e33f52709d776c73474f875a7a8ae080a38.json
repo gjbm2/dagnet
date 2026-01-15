@@ -1,0 +1,12 @@
+[
+  {
+    "at": "2026-01-15T15:19:59.208Z",
+    "label": "authoringPage.url",
+    "url": "http://127.0.0.1:4173/?e2e=1"
+  },
+  {
+    "at": "2026-01-15T15:19:59.591Z",
+    "label": "constructedShareUrl",
+    "url": "http://127.0.0.1:4173/?mode=live&repo=repo-1&branch=main&graph=test-graph&secret=test-secret&dashboard=1&share=N4IgbgpgTgzglgewHYgFwgIwDoAMuQA0IALgIZQDmExaIAxgBbk1EVSkAODA%2BjGcRDSgARqRgRuAExgAbWgHc4SSQnkAKDAFoAcgjCaATAFZUGHDr2GjASkL0ArlCgQkxbgEd70AJ5TZCpRV1AA5NAClSJEMANlMAZnDImNsAXyJGZiEQAGtA2kjSGW94GG5hKDhJKjtiOGIZQXQAYSYoYgACQBQCdoAhCqqIdoA1OAh5EDSQAqKSrM8fPzl0YgQ1GEViRk0Yezo6CBgYWyJp4rhS4m8ORpByyqpuMFHxonkmNzgAM0W0JHsZGSTGD7JDkRAwLJ1CAAWwhqAA2qBKrRgS4wQhNBg7NIliBFMpVBpNAARCB0KymADsJLJVmOIFB0JuWlJdHagGQCdoYamsux0BAyBCOWgAYgAok0ACzBACcMrsT3gwjgMjqvmhCEkN0%2BAGpBEQdsJavUbvigkTWRTuTTycZUgBddKOZyuLI4gIEkKJKIGWIYBIRH3Ren8wXC9AiuI9YIGABi0QV5zgytVl24Gq1tF1%2BoZpCZtCazpcNEmDEqEjoRddqE%2BhXEBogDToAkkvBB6J%2B6DNhJZtOMVJtdImKSAA&shareid=1p41gve"
+  }
+]

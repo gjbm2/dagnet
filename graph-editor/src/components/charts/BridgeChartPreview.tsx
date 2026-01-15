@@ -15,6 +15,7 @@ export function BridgeChartPreview(props: {
   compactControls?: boolean;
   showToolbox?: boolean;
   orientation?: 'vertical' | 'horizontal';
+  scenarioDslSubtitleById?: Record<string, string>;
   source?: {
     parent_file_id?: string;
     parent_tab_id?: string;
@@ -23,7 +24,7 @@ export function BridgeChartPreview(props: {
   };
   hideOpenAsTab?: boolean;
 }): JSX.Element | null {
-  const { result, height = 360, fillHeight = false, compactControls = false, showToolbox = true, orientation = 'vertical', source, hideOpenAsTab = false } = props;
+  const { result, height = 360, fillHeight = false, compactControls = false, showToolbox = true, orientation = 'vertical', source, hideOpenAsTab = false, scenarioDslSubtitleById } = props;
 
   const { ref: containerRef, height: containerHeight } = useElementSize<HTMLDivElement>();
   const { ref: controlsRef, height: controlsHeight } = useElementSize<HTMLDivElement>();
@@ -52,6 +53,7 @@ export function BridgeChartPreview(props: {
                   scenarioIds: [], // bridge steps already embed scenario context in the result
                   title: result.analysis_name ? `Chart — ${result.analysis_name}` : 'Chart',
                   source,
+                  scenarioDslSubtitleById,
                 });
               }}
               style={{

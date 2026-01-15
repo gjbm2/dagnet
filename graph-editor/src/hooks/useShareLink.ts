@@ -193,15 +193,15 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
 
         if (!tabId) {
           // Fallback: old behaviour (identity-only link) if we cannot resolve a tab.
-          if (!fileInfo?.identity) {
-            toast.error('No repository identity available');
-            return;
-          }
-          const { repo, branch, graph } = fileInfo.identity;
-          if (!repo || !branch || !graph) {
-            toast.error('Missing repository identity');
-            return;
-          }
+        if (!fileInfo?.identity) {
+          toast.error('No repository identity available');
+          return;
+        }
+        const { repo, branch, graph } = fileInfo.identity;
+        if (!repo || !branch || !graph) {
+          toast.error('Missing repository identity');
+          return;
+        }
           url = shareLinkService.buildLiveShareUrl({ repo, branch, graph, secret });
         } else {
           const res = await shareLinkService.buildLiveBundleShareUrlFromTabs({
@@ -210,7 +210,7 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
             includeScenarios: true,
             activeTabId: tabId,
             secretOverride: secret,
-          });
+        });
           if (!res.success || !res.url) {
             toast.error(res.error || 'Failed to create live graph share link');
             return;

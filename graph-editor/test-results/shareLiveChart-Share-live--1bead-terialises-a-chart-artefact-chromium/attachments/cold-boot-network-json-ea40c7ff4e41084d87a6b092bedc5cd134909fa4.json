@@ -1,0 +1,5761 @@
+[
+  {
+    "at": "2026-01-15T15:20:01.680Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/?mode=live&e2e=1&repo=repo-1&branch=main&graph=test-graph&creds=%7B%22defaultGitRepo%22%3A%22repo-1%22%2C%22git%22%3A%5B%7B%22name%22%3A%22repo-1%22%2C%22owner%22%3A%22owner-1%22%2C%22repo%22%3A%22repo-1%22%2C%22token%22%3A%22test-token%22%2C%22branch%22%3A%22main%22%2C%22basePath%22%3A%22%22%7D%2C%7B%22name%22%3A%22repo-2%22%2C%22owner%22%3A%22owner-1%22%2C%22repo%22%3A%22repo-2%22%2C%22token%22%3A%22test-token%22%2C%22branch%22%3A%22main%22%2C%22basePath%22%3A%22%22%7D%5D%7D&dashboard=1&share=N4IgbgpgTgzglgewHYgFwgIwDoAMuQA0IALgIZQDmExaIAxgBbk1GPNqgDWcSAJraSSkANgE94MAPoAjKHF5VCJOMWERaAUQBMGgAQAZOJF0BhJlBoBfIoJHi4MDiACOAV2ijJvGMNoAzKAQAWwAKAOCASixiBBCYiKVbMQlJYlEAB3V0CihSdIZJBEgoMDgIAHclcqZiSTg-Lx80JFdhYWsQGDoIITkER1RQFQgggYBtUG9fdDoEBgQLEIBaDHLUBKIhIKyQAEElWeEEVyhaAGIMS6VS%2BGk4YRVPIIReHb8AanUiGFdpYhU1LRZvNFis1glrJMmjM5gtiMstEFUCsghsQFsdgAhA4II4nc5aQnXBxwO4PNKSZ6vfxKH5-AE7YFwhFIlEQgC6RAY8ggkjoJygPRoqD8IhgEG%2BEDUdGIEF4ki6PXIiEa0xabUsliAA",
+    "resourceType": "document"
+  },
+  {
+    "at": "2026-01-15T15:20:01.685Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/?mode=live&e2e=1&repo=repo-1&branch=main&graph=test-graph&creds=%7B%22defaultGitRepo%22%3A%22repo-1%22%2C%22git%22%3A%5B%7B%22name%22%3A%22repo-1%22%2C%22owner%22%3A%22owner-1%22%2C%22repo%22%3A%22repo-1%22%2C%22token%22%3A%22test-token%22%2C%22branch%22%3A%22main%22%2C%22basePath%22%3A%22%22%7D%2C%7B%22name%22%3A%22repo-2%22%2C%22owner%22%3A%22owner-1%22%2C%22repo%22%3A%22repo-2%22%2C%22token%22%3A%22test-token%22%2C%22branch%22%3A%22main%22%2C%22basePath%22%3A%22%22%7D%5D%7D&dashboard=1&share=N4IgbgpgTgzglgewHYgFwgIwDoAMuQA0IALgIZQDmExaIAxgBbk1GPNqgDWcSAJraSSkANgE94MAPoAjKHF5VCJOMWERaAUQBMGgAQAZOJF0BhJlBoBfIoJHi4MDiACOAV2ijJvGMNoAzKAQAWwAKAOCASixiBBCYiKVbMQlJYlEAB3V0CihSdIZJBEgoMDgIAHclcqZiSTg-Lx80JFdhYWsQGDoIITkER1RQFQgggYBtUG9fdDoEBgQLEIBaDHLUBKIhIKyQAEElWeEEVyhaAGIMS6VS%2BGk4YRVPIIReHb8AanUiGFdpYhU1LRZvNFis1glrJMmjM5gtiMstEFUCsghsQFsdgAhA4II4nc5aQnXBxwO4PNKSZ6vfxKH5-AE7YFwhFIlEQgC6RAY8ggkjoJygPRoqD8IhgEG%2BEDUdGIEF4ki6PXIiEa0xabUsliAA",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.694Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/@vite/client",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.695Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap",
+    "resourceType": "stylesheet"
+  },
+  {
+    "at": "2026-01-15T15:20:01.695Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "https://fonts.googleapis.com/icon?family=Material+Icons",
+    "resourceType": "stylesheet"
+  },
+  {
+    "at": "2026-01-15T15:20:01.695Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/main.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.696Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/@react-refresh",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.701Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/main.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.703Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.705Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-dom_client.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.705Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-router-dom.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.705Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/App.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.705Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/index.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.705Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/consoleMirrorService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.705Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/@vite/client",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.707Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/sessionLogMirrorService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.707Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/dev/e2eHooks.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.707Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/vite/dist/client/env.mjs",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.707Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/@react-refresh",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.710Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-dom_client.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.711Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-FQHYCYVK.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.711Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-2ZPWT7WS.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.712Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.712Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-5IKWDFCZ.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.718Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/index.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.719Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/DASRunnerFactory.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.719Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/App.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.721Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/DASRunner.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.721Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/errors.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.721Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/AppShell.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.723Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/pages/Base64Encoder.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.724Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/consoleMirrorService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.725Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/sessionLogMirrorService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.725Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/dev/e2eHooks.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.726Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/graphSnapshotService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.726Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/sessionLogService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.728Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/liveShareSyncService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.728Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/shareLinkService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.729Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/shareBootResolver.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.729Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/graphComputeClient.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.729Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/db/appDatabase.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.732Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/vite/dist/client/env.mjs",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.737Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-router-dom.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.742Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-5IKWDFCZ.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.742Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/DASRunnerFactory.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.743Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/errors.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.746Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.746Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/BrowserHttpExecutor.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.746Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/ServerHttpExecutor.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.746Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/IndexedDBConnectionProvider.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.746Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/FileSystemConnectionProvider.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.749Z",
+    "kind": "response",
+    "url": "https://fonts.googleapis.com/icon?family=Material+Icons",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.749Z",
+    "kind": "response",
+    "url": "https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.755Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-2ZPWT7WS.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.764Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/DASRunner.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.764Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/graphSnapshotService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.765Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/pages/Base64Encoder.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.766Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/mustache.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.767Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/sessionLogService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.767Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/jmespath.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.769Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/jsonata.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.769Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/caseVariantHelpers.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.769Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/sheetsHrnResolver.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.770Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/liveShareSyncService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.771Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/AppShell.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.777Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/activeGraphTrackerService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.777Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.778Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@mui_material.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.778Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.779Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/constants/latency.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.779Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/liveShareBootService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.780Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/stalenessNudgeService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.780Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/rc-dock.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.780Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-hot-toast.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.781Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/NavigatorContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.781Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/DialogContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.781Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/ValidationContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.784Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/VisibleTabsContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.784Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ErrorBoundary.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.784Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/fileOperationsService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.784Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/repositoryOperationsService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.784Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/index.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.784Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/index.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.784Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/TabContextMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.784Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-FQHYCYVK.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.787Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/CommitModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.787Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/index.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.787Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useKeyboardShortcuts.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.787Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useCommitHandler.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.787Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useCopyPaste.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.787Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useStalenessNudges.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.787Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useURLDailyRetrieveAllQueue.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.787Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/AutomationBanner.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.790Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/layoutService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.790Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/layouts/defaultLayout.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.790Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/theme/objectTypeTheme.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.790Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/DashboardModeContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.790Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/ShareModeContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.790Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useDashboardMode.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.793Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Dashboard/DashboardShell.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.793Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ShareModeBanner.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.793Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/share/ShareChartBootstrapper.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.793Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/share/ShareBundleBootstrapper.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.793Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/rc-dock/dist/rc-dock.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.793Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/styles/dock-theme.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.793Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/styles/active-tab-highlight.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.793Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/styles/file-state-indicators.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.794Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/shareBootResolver.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.796Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/graphComputeClient.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.796Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/db/appDatabase.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.797Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/shareLinkService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.797Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.798Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/BrowserHttpExecutor.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.801Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/dexie.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.801Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/lz-string.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.801Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/sharePayload.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.801Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/scenarioRegenerationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.802Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/ServerHttpExecutor.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.804Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/IndexedDBConnectionProvider.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.806Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/FileSystemConnectionProvider.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.807Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/mustache.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.807Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/jmespath.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.810Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/activeGraphTrackerService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.811Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.812Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/jsonata.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.812Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/sheetsHrnResolver.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.813Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/caseVariantHelpers.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.825Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/constants/latency.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.825Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/liveShareBootService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.828Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.828Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/graphGitService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.829Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/dependencyClosure.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.829Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/queryDSL.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.829Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/yaml.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.829Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/stalenessNudgeService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.832Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/constants/staleness.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.832Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/retrieveAllSlicesPlannerService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.835Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.835Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-hot-toast.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.842Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/DialogContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.843Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-dom.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.843Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/NavigatorContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.844Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/ValidationContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.844Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/workspaceService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.845Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/VisibleTabsContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.845Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ErrorBoundary.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.846Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ErrorBoundary.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.850Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@mui_material.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.853Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-CQSZGIQD.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.853Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-HOEOAMAU.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.854Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/index.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.854Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-VC6B5PX5.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.854Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-5WETWMHD.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.854Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-D7O2GSVL.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.854Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-3TMAJTNJ.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.855Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/rc-dock.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.855Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/index.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.856Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/fileOperationsService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.858Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/MenuBar.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.858Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/FileMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.858Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/EditMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.860Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/ViewMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.860Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/HelpMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.860Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-LVSJR4FL.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.860Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-M6QGRGB4.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.860Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-NV3XFIF6.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.860Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/NavigatorContent.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.860Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/NavigatorHeader.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.860Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/ObjectTypeSection.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.861Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/config/fileTypeRegistry.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.861Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/TabContextMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.862Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ContextMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.862Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/NewFileModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.863Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/HistoryModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.863Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useViewHistory.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.863Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useShareLink.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.864Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/repositoryOperationsService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.865Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/conflictResolutionService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.869Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/index.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.870Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/CommitModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.871Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/GraphEditor.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.871Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/FormEditor.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.872Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/RawView.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.872Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/EditorRegistry.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.872Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useKeyboardShortcuts.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.872Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useCommitHandler.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.874Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useCopyPaste.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.879Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useStalenessNudges.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.882Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useRetrieveAllSlicesRequestListener.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.882Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/usePullAll.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.882Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/StalenessUpdateModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.884Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useURLDailyRetrieveAllQueue.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.884Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/retrieveAllSlicesService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.884Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/version.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.885Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/dailyRetrieveAllAutomationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.885Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/AutomationBanner.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.885Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/automationRunService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.885Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/layoutService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.885Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/layouts/defaultLayout.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.885Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useAutomationRunState.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.886Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/theme/objectTypeTheme.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.887Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/lucide-react.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.891Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/DashboardModeContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.891Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useDashboardMode.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.892Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/ShareModeContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.894Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Dashboard/DashboardShell.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.895Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ShareModeBanner.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.895Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/layouts/dashboardDockLayout.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.896Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/styles/dashboard-mode.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.898Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useEnterLiveMode.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.898Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ShareModeBanner.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.898Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/share/ShareChartBootstrapper.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.900Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/GraphStoreContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.900Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.900Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useShareChartFromUrl.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.903Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/share/ShareBundleBootstrapper.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.903Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/rc-dock/dist/rc-dock.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.904Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useShareBundleFromUrl.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.904Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/styles/active-tab-highlight.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.905Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/styles/dock-theme.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.906Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/styles/file-state-indicators.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.912Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/lz-string.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.912Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/sharePayload.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.913Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/scenarioRegenerationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.915Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/graphGitService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.915Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/whatIf.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.916Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.917Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/config/gitConfig.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.918Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@octokit_rest.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.918Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/dexie.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.918Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@octokit_plugin-throttling.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.920Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/dependencyClosure.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.922Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/queryDSL.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.923Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/dateFormat.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.924Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-dom.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.925Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/constants/staleness.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.925Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/retrieveAllSlicesPlannerService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.929Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/yaml.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.929Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ErrorBoundary.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.931Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/workspaceService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.932Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/mergeService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.932Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-HOEOAMAU.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.941Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-D7O2GSVL.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.950Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-3TMAJTNJ.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.950Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-5WETWMHD.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.950Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/MenuBar.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.954Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/FileMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.956Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/EditMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.958Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@radix-ui_react-menubar.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.958Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/ObjectsMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.958Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/DataMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.960Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/RepositoryMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.960Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/AppUpdateBadge.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.960Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/DevConsoleMirrorControls.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.960Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/ShareLinkModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.960Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/MenuBar.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.966Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/copyVarsService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.966Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useSelectAll.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.966Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/subgraphExtractor.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.966Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-VC6B5PX5.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.966Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/ViewMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.968Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.968Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/HelpMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/graphMutationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/usePullFile.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useRenameFile.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useIntegrityCheck.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useFileAudit.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useWhereUsed.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-CQSZGIQD.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/RenameModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/indexRebuildService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/EdgeScalingControl.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/ViewPreferencesContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useSankeyView.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.973Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/graphIssuesService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.974Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-LVSJR4FL.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.974Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-M6QGRGB4.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.974Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-NV3XFIF6.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.976Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/NavigatorContent.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.978Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/NavigatorControls.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.980Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/NavigatorHeader.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.980Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/NavigatorItemContextMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.980Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/NavigatorSectionContextMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.980Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/registryService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.981Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/Navigator.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.981Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/ObjectTypeSection.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.981Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/config/fileTypeRegistry.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.981Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ContextMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.981Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/NewFileModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.983Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/whereUsedService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.986Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/HistoryModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.988Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useViewHistory.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.989Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@monaco-editor_react.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.989Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/Modal.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.989Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/MergeConflictModal.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.990Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useShareLink.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.990Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/conflictResolutionService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.993Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/FormEditor.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:01.998Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@rjsf_mui.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.998Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@rjsf_validator-ajv8.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.998Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/GuardedOperationModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.999Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/widgets/index.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:01.999Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/CredsShareLinkModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.002Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/GraphEditor.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.002Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useRetrieveAllSlicesRequestListener.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.002Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/RawView.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.003Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/EditorRegistry.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.005Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/usePullAll.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.005Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/StalenessUpdateModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.008Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/GraphEditor.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.008Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/GraphCanvas.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.009Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/SidebarIconBar.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.009Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/SidebarHoverPreview.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.009Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/WhatIfPanel.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.010Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/PropertiesPanelWrapper.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.010Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/ToolsPanel.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.010Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/AnalyticsPanel.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.011Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useSidebarState.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.011Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/layouts/graphSidebarLayout.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.011Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useURLScenarios.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.012Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/usePutToBaseRequestListener.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.012Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/uiConstants.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.013Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/SelectorModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.014Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/WindowSelector.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.014Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ScenarioLegend.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.015Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useActiveGraphTracking.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.015Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/js-yaml.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.015Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/retrieveAllSlicesService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.015Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/RawView.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.016Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/rawViewWritebackGuard.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.016Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/MarkdownViewer.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.017Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/SessionLogViewer.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.017Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useAutomationRunState.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.017Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/GraphIssuesViewer.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.017Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/ChartViewer.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.017Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/version.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.017Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/MergeConflictModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.018Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/dslExplosion.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.019Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.019Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/dailyRetrieveAllAutomationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.020Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/automationRunService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.021Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/package.json?import",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.027Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/styles/dashboard-mode.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.028Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ShareModeBanner.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.029Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/layouts/dashboardDockLayout.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.029Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useEnterLiveMode.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.032Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/GraphStoreContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.034Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/zustand.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.035Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/windowAggregationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.040Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useShareBundleFromUrl.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.041Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/config/gitConfig.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.041Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/whatIf.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.042Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/chartOperationsService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.044Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/CompositionService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.044Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/liveShareHydrationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.044Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useShareChartFromUrl.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.044Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.045Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/ScenariosContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.047Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/DiffService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.047Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/ParamPackDSLService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.047Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/ScenarioValidator.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.048Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/GraphParamExtractor.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.055Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/dateFormat.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.055Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@octokit_plugin-throttling.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.055Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/mergeService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.058Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@octokit_rest.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.062Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@radix-ui_react-menubar.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.063Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/ObjectsMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.064Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/RepositoryMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.065Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-OKOUEKDN.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.066Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/AppUpdateBadge.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.067Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/SyncIndexModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.067Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useRollbackRepository.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.068Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/SwitchRepositoryModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.069Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/SwitchBranchModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.069Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/RepositoryHistoryModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.069Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/DataMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.069Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useAppUpdateAvailable.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.070Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/BatchOperationsModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.071Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/AllSlicesModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.072Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/DataOperationsSections.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.072Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useOpenFile.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.072Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/RemoveOverridesMenuItem.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.072Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useClearDataFile.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.073Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useFetchData.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.074Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useRetrieveAllSlices.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.074Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/PinnedQueryModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.074Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/DevConsoleMirrorControls.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.076Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/ShareLinkModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.079Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useConsoleMirrorControls.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.079Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/ShareLinkModal.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.081Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/MenuBar/MenuBar.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.082Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/copyVarsService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.084Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useSelectAll.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.084Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/subgraphExtractor.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.087Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/lucide-react.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.094Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/usePullFile.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.094Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useRenameFile.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.094Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useIntegrityCheck.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.095Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useFileAudit.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.096Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/integrityCheckService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.097Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/logFileService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.097Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/graphMutationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.098Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/UpdateManager.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.099Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/queryRegenerationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.100Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useWhereUsed.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.103Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/idUtils.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.103Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/conditionalColours.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.105Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/utils/rounding.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.105Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useSankeyView.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.108Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/RenameModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.108Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/indexRebuildService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.108Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/EdgeScalingControl.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.109Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/ViewPreferencesContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.109Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/EdgeScalingControl.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.116Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/graphIssuesService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.118Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/NavigatorControls.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.119Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/NavigatorItemContextMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.119Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/graphIssuesClipboardExport.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.121Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/NavigatorSectionContextMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.121Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/NavigatorControls.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.121Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/registryService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.122Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/Navigator.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.122Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/DeleteModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.123Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/whereUsedService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.124Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@monaco-editor_react.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.136Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/widgets/index.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.137Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/Modal.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.138Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/MergeConflictModal.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.140Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/widgets/MonacoWidget.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.140Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/widgets/TabbedArrayWidget.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.140Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/widgets/AccordionObjectFieldTemplate.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.140Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/widgets/ThreeColumnFieldTemplate.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.140Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/GuardedOperationModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.145Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@rjsf_mui.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.146Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/CredsShareLinkModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.147Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/GraphEditor.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.148Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@rjsf_validator-ajv8.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.149Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-GIQYTQQA.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.149Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-QINYLYJA.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.149Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-A7M2ZXRE.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.150Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-C6WWHQR7.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.150Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useCopyCredsShareLink.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.150Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-VWW745RX.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.157Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/WhatIfPanel.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.157Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/SidebarIconBar.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.158Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/ScenariosPanel.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.158Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/WhatIfPanel.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.160Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/SidebarHoverPreview.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.160Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/PropertiesPanelWrapper.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.160Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/SidebarIconBar.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.160Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/ToolsPanel.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.162Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/PropertiesPanel.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.162Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/SidebarHoverPreview.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.162Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/propertiesPanelHeaderBadgeService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.162Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useRemoveOverrides.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.166Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/PropertiesPanelWrapper.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.167Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/CollapsibleSection.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.167Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/ToolsPanel.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.171Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/usePutToBaseRequestListener.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.173Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useSidebarState.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.173Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/layouts/graphSidebarLayout.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.173Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useURLScenarios.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.174Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/AnalyticsPanel.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.178Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/dslConstruction.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.178Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/charts/AnalysisChartContainer.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.178Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/AutomatableField.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.180Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/QueryExpressionEditor.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.180Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/analysisTypes.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.180Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/analytics/AnalysisResultCards.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.180Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/AnalyticsPanel.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.180Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/uiConstants.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.184Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/SelectorModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.186Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useItemFiltering.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.186Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/SelectorModal.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.187Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/GraphCanvas.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.187Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ScenarioLegend.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.187Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useActiveGraphTracking.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.189Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useSnapToSlider.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.192Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/reactflow.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.192Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/reactflow/dist/style.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.192Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/custom-reactflow.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.192Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/dagre.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.193Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/d3-sankey.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.193Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/nodes/ConversionNode.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.193Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/edges/ConversionEdge.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.193Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/NodeContextMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.194Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/WindowSelector.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.194Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/EdgeContextMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.195Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/transform.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.195Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/faceSelection.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.195Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/canvas/buildScenarioRenderEdges.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.198Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/edges/edgeLabelHelpers.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.199Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/nodeEdgeConstants.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.203Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/issues/issueIcons.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.204Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ScenarioLegend.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.204Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/DateRangePicker.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.204Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/slicePlanValidationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.204Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/WindowSelector.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.204Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ContextValueSelector.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.204Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/contextRegistry.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.205Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/BulkScenarioCreationModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.205Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useBulkScenarioCreation.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.205Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/windowFetchPlannerService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.206Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/rawViewWritebackGuard.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.206Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/RawView.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.207Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/js-yaml.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.207Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/MarkdownViewer.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.209Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/SessionLogViewer.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.210Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-markdown.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.210Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/remark-gfm.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.211Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/MarkdownViewer.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.211Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/SessionLogViewer.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.214Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/ChartViewer.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.216Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/MergeConflictModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.216Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useElementSize.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.218Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/analysisExportService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.218Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/GraphIssuesViewer.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.218Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/downloadService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.218Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/dslExplosion.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.219Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/editors/GraphIssuesViewer.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.227Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/package.json?import",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.228Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/zustand.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.231Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-DLAKQP2K.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.234Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/chartOperationsService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.235Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/CompositionService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.237Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/liveShareHydrationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.238Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/efBasisResolver.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.243Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/windowAggregationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.247Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/sliceIsolation.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.247Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/lagMixtureAggregationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.247Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/meceSliceService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.248Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/DiffService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.249Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/ScenarioValidator.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.250Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/HRNResolver.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.251Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/ParamPackDSLService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.252Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/fetchDataService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.255Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ProgressToast.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.256Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.256Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/forecastingSettingsService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.256Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/GraphParamExtractor.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.261Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-OKOUEKDN.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.262Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useRollbackRepository.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.262Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/SwitchRepositoryModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.264Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/SyncIndexModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.267Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/SwitchBranchModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.273Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/dataOperationsService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.273Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/RepositoryHistoryModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.273Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useAppUpdateAvailable.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.276Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/BatchOperationsModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.280Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/fetchRefetchPolicy.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.288Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/cohortRetrievalHorizon.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.289Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/rateLimiter.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.289Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/das/buildDslFromEdge.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.292Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/DataOperationsSections.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.295Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useOpenFile.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.303Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/AllSlicesModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.303Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useClearDataFile.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.303Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useFetchData.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.311Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/RemoveOverridesMenuItem.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.312Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useConsoleMirrorControls.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.312Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/PinnedQueryModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.312Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useRetrieveAllSlices.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.313Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/ShareLinkModal.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.313Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/idUtils.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.313Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/logFileService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.313Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/utils/rounding.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.313Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/conditionalColours.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.313Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/queryRegenerationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.313Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/integrityCheckService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.326Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/EdgeScalingControl.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.326Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Navigator/NavigatorControls.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.327Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/graphIssuesClipboardExport.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.329Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/DeleteModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.329Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/widgets/MonacoWidget.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.329Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/widgets/TabbedArrayWidget.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.336Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@mui_icons-material_Add.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.336Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@mui_icons-material_Delete.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.343Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-A7M2ZXRE.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.343Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/widgets/ThreeColumnFieldTemplate.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.343Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-QINYLYJA.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.346Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/widgets/AccordionObjectFieldTemplate.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.346Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-C6WWHQR7.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.346Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-GIQYTQQA.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.347Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useCopyCredsShareLink.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.347Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-VWW745RX.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.348Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@mui_icons-material_ExpandMore.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.351Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/credentialsShareLinkService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.352Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/WhatIfPanel.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.352Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/SidebarIconBar.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.353Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/ScenariosPanel.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.358Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/ScenarioEditorModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.359Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/ScenarioQueryEditModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.359Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/ToBaseConfirmModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.359Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ColourSelector.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.360Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/WhatIfAnalysisControl.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.361Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useCopyAllScenarioParamPacks.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.362Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useScenarioShareLink.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.362Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/PropertiesPanelWrapper.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.365Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/panels/ScenariosPanel.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.365Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/SidebarHoverPreview.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.371Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/propertiesPanelHeaderBadgeService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.371Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useRemoveOverrides.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.371Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/CollapsibleSection.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.372Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/PropertiesPanel.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.380Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/utils/overrideFlags.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.381Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useQuerySelectionUuids.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.381Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/CollapsibleSection.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.381Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/ToolsPanel.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.381Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/dslConstruction.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.382Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/charts/AnalysisChartContainer.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.382Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/AutomatableField.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.388Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/AnalyticsPanel.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.388Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useItemFiltering.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.388Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ParameterEditor.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.389Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/SelectorModal.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.389Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/analysisTypes.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.390Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/analytics/AnalysisResultCards.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.390Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/VariantWeightInput.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.390Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/QueryExpressionEditor.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.392Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/EnhancedSelector.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.392Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ConditionalProbabilityEditor.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.393Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ParameterSection.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.393Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionControl.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.393Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ImageThumbnail.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.394Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ImageUploadModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.395Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ImageLoupeView.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.395Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/imageOperationsService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.395Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/utils/rebalanceUtils.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.397Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/PropertiesPanel.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.397Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/charts/FunnelChartPreview.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.397Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/charts/BridgeChartPreview.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.397Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/charts/FunnelBridgeChartPreview.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.397Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/AutomatableField.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.400Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useSnapToSlider.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.400Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/QueryExpressionEditor.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.416Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/custom-reactflow.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.417Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/reactflow/dist/style.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.417Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/d3-sankey.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.417Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/dagre.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.428Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/nodes/ConversionNode.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.429Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/NodeContextMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.433Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/reactflow.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.433Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/DataSectionSubmenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.433Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/faceSelection.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.433Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/transform.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.433Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/EdgeContextMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.434Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/lib/conditionalValidation.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.434Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/Tooltip.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.435Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ImageStackIndicator.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.435Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ImageHoverPreview.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.435Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/hooks/useCtrlKeyState.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.436Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/edges/ConversionEdge.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.437Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/edges/edgeLabelHelpers.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.437Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/canvas/buildScenarioRenderEdges.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.446Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/utils/confidenceIntervals.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.446Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/edges/EdgeBeads.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.449Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/issues/issueIcons.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.449Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/nodeEdgeConstants.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.451Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ScenarioLegend.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.452Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/DateRangePicker.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.453Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/slicePlanValidationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.454Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/WindowSelector.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.457Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-date-range.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.457Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/date-fns.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.460Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/react-date-range/dist/styles.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.460Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/react-date-range/dist/theme/default.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.460Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/DateRangePicker.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.461Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ContextValueSelector.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.461Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/contextRegistry.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.465Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ContextValueSelector.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.465Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/BulkScenarioCreationModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.467Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useBulkScenarioCreation.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.467Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/windowFetchPlannerService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.472Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/MarkdownViewer.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.480Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/SessionLogViewer.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.480Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useElementSize.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.481Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/remark-gfm.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.481Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/analysisExportService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.481Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-markdown.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.483Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-TVWFCQOR.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.484Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/downloadService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.492Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/editors/GraphIssuesViewer.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.494Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-DLAKQP2K.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.494Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/lagMixtureAggregationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.494Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/sliceIsolation.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.494Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/efBasisResolver.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.496Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/meceSliceService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.496Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/lagDistributionUtils.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.496Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/HRNResolver.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.497Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ProgressToast.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.498Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ProgressToast.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.498Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/forecastingSettingsService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.499Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/fetchRefetchPolicy.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.499Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/cohortRetrievalHorizon.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.500Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/rateLimiter.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.507Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/statisticalEnhancementService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.508Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@mui_icons-material_Add.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.508Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@mui_icons-material_Delete.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.509Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/das/buildDslFromEdge.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.509Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/@mui_icons-material_ExpandMore.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.509Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/credentialsShareLinkService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.514Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/ScenarioEditorModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.515Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/modals/ScenarioEditorModal.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.516Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/ScenarioQueryEditModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.517Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/ToBaseConfirmModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.518Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ColourSelector.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.519Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useCopyAllScenarioParamPacks.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.520Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ColourSelector.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.521Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/WhatIfAnalysisControl.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.522Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/scenarioParamPacksClipboardExport.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.523Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/contexts/WhatIfContext.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.526Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useScenarioShareLink.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.533Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/panels/ScenariosPanel.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.533Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/utils/overrideFlags.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.533Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useQuerySelectionUuids.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.533Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/CollapsibleSection.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.534Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ParameterEditor.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.535Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ProbabilityInput.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.535Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/VariantWeightInput.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.541Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ConditionalProbabilityEditor.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.541Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionControl.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.542Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ImageThumbnail.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.542Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/EnhancedSelector.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.543Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ParameterSection.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.544Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ImageUploadModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.544Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ConditionalProbabilityEditor.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.546Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/LightningMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.546Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/EnhancedSelector.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.546Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionSelector.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.546Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionSettingsModal.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.548Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/imageService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.548Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/utils/imageCompression.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.548Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/anchorRegenerationService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.548Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ParameterSection.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.549Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ImageLoupeView.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.550Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/imageOperationsService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.550Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/utils/rebalanceUtils.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.551Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/PropertiesPanel.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.551Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/charts/FunnelChartPreview.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.552Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/charts/BridgeChartPreview.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.557Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/charts/AnalysisFunnelBarEChart.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.557Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/charts/AnalysisBridgeEChart.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.559Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/AutomatableField.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.560Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/QueryExpressionEditor.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.562Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/charts/FunnelBridgeChartPreview.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.562Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/DataSectionSubmenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.563Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/charts/AnalysisFunnelBridgeEChart.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.564Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/lib/conditionalValidation.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.564Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/Tooltip.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.568Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ImageStackIndicator.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.568Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ImageHoverPreview.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.569Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/hooks/useCtrlKeyState.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.570Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/utils/confidenceIntervals.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.571Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/edges/EdgeBeads.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.573Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/edges/edgeBeadHelpers.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.579Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/react-date-range/dist/styles.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.579Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/DateRangePicker.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.580Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/react-date-range/dist/theme/default.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.580Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ContextValueSelector.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.583Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/date-fns.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.586Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/react-date-range.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.586Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ProgressToast.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.587Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ColourSelector.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.588Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/lagDistributionUtils.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.588Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/scenarioParamPacksClipboardExport.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.588Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/modals/ScenarioEditorModal.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.590Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-TVWFCQOR.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.596Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/contexts/WhatIfContext.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.596Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ProbabilityInput.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.597Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ConditionalProbabilityEditor.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.597Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/LightningMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.597Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/EnhancedSelector.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.598Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionSelector.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.599Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/DataOperationsMenu.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.599Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/LightningMenu.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.599Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionSelector.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.605Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/anchorRegenerationService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.605Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ParameterSection.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.605Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/imageService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.606Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionSettingsModal.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.606Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/utils/imageCompression.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.607Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/charts/AnalysisFunnelBarEChart.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.607Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionSettingsModal.css",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.609Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/echarts-for-react.js?v=de6b2874",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.610Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/services/analysisEChartsService.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.614Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/charts/AnalysisBridgeEChart.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.615Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/LightningMenu.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.615Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionSelector.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.615Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/charts/AnalysisFunnelBridgeEChart.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.617Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/DataOperationsMenu.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.617Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/edges/edgeBeadHelpers.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.618Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/components/edges/BeadLabelBuilder.tsx",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.619Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/ConnectionSettingsModal.css",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.640Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/components/edges/BeadLabelBuilder.tsx",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.640Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/services/analysisEChartsService.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.642Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/constants/edgeDisplay.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:02.647Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/constants/edgeDisplay.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:02.708Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/node_modules/.vite/deps/echarts-for-react.js?v=de6b2874",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.053Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/dagnet-icon.png",
+    "resourceType": "image"
+  },
+  {
+    "at": "2026-01-15T15:20:03.057Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/dagnet-icon.png",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.092Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "https://fonts.gstatic.com/s/roboto/v50/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMa3yUBA.woff2",
+    "resourceType": "font"
+  },
+  {
+    "at": "2026-01-15T15:20:03.118Z",
+    "kind": "response",
+    "url": "https://fonts.gstatic.com/s/roboto/v50/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMa3yUBA.woff2",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.130Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/init/seedConnections.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:03.150Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/init/seedConnections.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.191Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/defaults/connections.yaml",
+    "resourceType": "fetch"
+  },
+  {
+    "at": "2026-01-15T15:20:03.194Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/defaults/connections.yaml",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.206Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/src/init/seedSettings.ts",
+    "resourceType": "script"
+  },
+  {
+    "at": "2026-01-15T15:20:03.210Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/src/init/seedSettings.ts",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.212Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "http://127.0.0.1:4173/defaults/settings.yaml",
+    "resourceType": "fetch"
+  },
+  {
+    "at": "2026-01-15T15:20:03.215Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:4173/defaults/settings.yaml",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.227Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "https://api.github.com/repos/owner-1/repo-1/git/ref/heads%2Fmain",
+    "resourceType": "fetch"
+  },
+  {
+    "at": "2026-01-15T15:20:03.231Z",
+    "kind": "response",
+    "url": "https://api.github.com/repos/owner-1/repo-1/git/ref/heads%2Fmain",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.235Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "https://api.github.com/repos/owner-1/repo-1/contents/graphs/test-graph.json?ref=main",
+    "resourceType": "fetch"
+  },
+  {
+    "at": "2026-01-15T15:20:03.239Z",
+    "kind": "response",
+    "url": "https://api.github.com/repos/owner-1/repo-1/contents/graphs/test-graph.json?ref=main",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.243Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "https://api.github.com/repos/owner-1/repo-1/contents/parameters-index.yaml?ref=main",
+    "resourceType": "fetch"
+  },
+  {
+    "at": "2026-01-15T15:20:03.247Z",
+    "kind": "response",
+    "url": "https://api.github.com/repos/owner-1/repo-1/contents/parameters-index.yaml?ref=main",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.254Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "https://api.github.com/repos/owner-1/repo-1/contents/parameters/param-1.yaml?ref=main",
+    "resourceType": "fetch"
+  },
+  {
+    "at": "2026-01-15T15:20:03.258Z",
+    "kind": "response",
+    "url": "https://api.github.com/repos/owner-1/repo-1/contents/parameters/param-1.yaml?ref=main",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.384Z",
+    "kind": "request",
+    "method": "GET",
+    "url": "https://fonts.gstatic.com/s/roboto/v50/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMaxKUBGEe.woff2",
+    "resourceType": "font"
+  },
+  {
+    "at": "2026-01-15T15:20:03.422Z",
+    "kind": "response",
+    "url": "https://fonts.gstatic.com/s/roboto/v50/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMaxKUBGEe.woff2",
+    "status": 200
+  },
+  {
+    "at": "2026-01-15T15:20:03.466Z",
+    "kind": "request",
+    "method": "POST",
+    "url": "http://127.0.0.1:9000/api/runner/analyze",
+    "resourceType": "fetch",
+    "requestBodyText": "{\"scenarios\":[{\"scenario_id\":\"current\",\"name\":\"Current\",\"colour\":\"#3B82F6\",\"visibility_mode\":\"f+e\",\"graph\":{\"nodes\":[{\"uuid\":\"n1\",\"id\":\"from\"},{\"uuid\":\"n2\",\"id\":\"to\"}],\"edges\":[{\"uuid\":\"e1\",\"id\":\"edge-1\",\"from\":\"n1\",\"to\":\"n2\",\"p\":{\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100,\"k\":50,\"window_from\":\"1-Jan-26\",\"window_to\":\"2-Jan-26\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\",\"source\":\"file\",\"mean\":0.5,\"stdev\":0.05},\"data_source\":{\"type\":\"file\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\"},\"forecast\":{\"mean\":0.5,\"k\":50},\"n\":100}}],\"currentQueryDSL\":\"window(1-Jan-26:2-Jan-26)\",\"baseDSL\":\"window(1-Jan-26:2-Jan-26)\",\"metadata\":{\"name\":\"test-graph\",\"e2e_marker\":\"v1\",\"updated_at\":\"2026-01-15T15:20:03.458Z\"}}},{\"scenario_id\":\"scenario-1768490403282-hotjmqi\",\"name\":\"A\",\"colour\":\"#111\",\"visibility_mode\":\"f+e\",\"graph\":{\"nodes\":[{\"uuid\":\"n1\",\"id\":\"from\"},{\"uuid\":\"n2\",\"id\":\"to\"}],\"edges\":[{\"uuid\":\"e1\",\"id\":\"edge-1\",\"from\":\"n1\",\"to\":\"n2\",\"p\":{\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100,\"k\":50,\"window_from\":\"1-Jan-26\",\"window_to\":\"2-Jan-26\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\",\"source\":\"file\",\"mean\":0.5,\"stdev\":0.05},\"data_source\":{\"type\":\"file\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\"},\"forecast\":{\"mean\":0.5,\"k\":50},\"n\":100}}],\"currentQueryDSL\":\"window(1-Jan-26:2-Jan-26)\",\"baseDSL\":\"window(1-Jan-26:2-Jan-26)\",\"metadata\":{\"name\":\"test-graph\",\"e2e_marker\":\"v1\",\"updated_at\":\"2026-01-15T15:20:03.458Z\"}}},{\"scenario_id\":\"scenario-1768490403297-uh9eyld\",\"name\":\"B\",\"colour\":\"#222\",\"visibility_mode\":\"f\",\"graph\":{\"nodes\":[{\"uuid\":\"n1\",\"id\":\"from\"},{\"uuid\":\"n2\",\"id\":\"to\"}],\"edges\":[{\"uuid\":\"e1\",\"id\":\"edge-1\",\"from\":\"n1\",\"to\":\"n2\",\"p\":{\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100,\"k\":50,\"window_from\":\"1-Jan-26\",\"window_to\":\"2-Jan-26\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\",\"source\":\"file\",\"mean\":0.5,\"stdev\":0.05},\"data_source\":{\"type\":\"file\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\"},\"forecast\":{\"mean\":0.5,\"k\":50},\"n\":100}}],\"currentQueryDSL\":\"window(1-Jan-26:2-Jan-26)\",\"baseDSL\":\"window(1-Jan-26:2-Jan-26)\",\"metadata\":{\"name\":\"test-graph\",\"e2e_marker\":\"v1\",\"updated_at\":\"2026-01-15T15:20:03.458Z\"}}}],\"query_dsl\":\"from(from).to(to)\",\"analysis_type\":\"graph_overview\"}",
+    "requestBodyJson": {
+      "scenarios": [
+        {
+          "scenario_id": "current",
+          "name": "Current",
+          "colour": "#3B82F6",
+          "visibility_mode": "f+e",
+          "graph": {
+            "nodes": [
+              {
+                "uuid": "n1",
+                "id": "from"
+              },
+              {
+                "uuid": "n2",
+                "id": "to"
+              }
+            ],
+            "edges": [
+              {
+                "uuid": "e1",
+                "id": "edge-1",
+                "from": "n1",
+                "to": "n2",
+                "p": {
+                  "id": "param-1",
+                  "mean": 0.5,
+                  "stdev": 0.035355339059327376,
+                  "evidence": {
+                    "n": 100,
+                    "k": 50,
+                    "window_from": "1-Jan-26",
+                    "window_to": "2-Jan-26",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z",
+                    "source": "file",
+                    "mean": 0.5,
+                    "stdev": 0.05
+                  },
+                  "data_source": {
+                    "type": "file",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z"
+                  },
+                  "forecast": {
+                    "mean": 0.5,
+                    "k": 50
+                  },
+                  "n": 100
+                }
+              }
+            ],
+            "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+            "baseDSL": "window(1-Jan-26:2-Jan-26)",
+            "metadata": {
+              "name": "test-graph",
+              "e2e_marker": "v1",
+              "updated_at": "2026-01-15T15:20:03.458Z"
+            }
+          }
+        },
+        {
+          "scenario_id": "scenario-1768490403282-hotjmqi",
+          "name": "A",
+          "colour": "#111",
+          "visibility_mode": "f+e",
+          "graph": {
+            "nodes": [
+              {
+                "uuid": "n1",
+                "id": "from"
+              },
+              {
+                "uuid": "n2",
+                "id": "to"
+              }
+            ],
+            "edges": [
+              {
+                "uuid": "e1",
+                "id": "edge-1",
+                "from": "n1",
+                "to": "n2",
+                "p": {
+                  "id": "param-1",
+                  "mean": 0.5,
+                  "stdev": 0.035355339059327376,
+                  "evidence": {
+                    "n": 100,
+                    "k": 50,
+                    "window_from": "1-Jan-26",
+                    "window_to": "2-Jan-26",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z",
+                    "source": "file",
+                    "mean": 0.5,
+                    "stdev": 0.05
+                  },
+                  "data_source": {
+                    "type": "file",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z"
+                  },
+                  "forecast": {
+                    "mean": 0.5,
+                    "k": 50
+                  },
+                  "n": 100
+                }
+              }
+            ],
+            "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+            "baseDSL": "window(1-Jan-26:2-Jan-26)",
+            "metadata": {
+              "name": "test-graph",
+              "e2e_marker": "v1",
+              "updated_at": "2026-01-15T15:20:03.458Z"
+            }
+          }
+        },
+        {
+          "scenario_id": "scenario-1768490403297-uh9eyld",
+          "name": "B",
+          "colour": "#222",
+          "visibility_mode": "f",
+          "graph": {
+            "nodes": [
+              {
+                "uuid": "n1",
+                "id": "from"
+              },
+              {
+                "uuid": "n2",
+                "id": "to"
+              }
+            ],
+            "edges": [
+              {
+                "uuid": "e1",
+                "id": "edge-1",
+                "from": "n1",
+                "to": "n2",
+                "p": {
+                  "id": "param-1",
+                  "mean": 0.5,
+                  "stdev": 0.035355339059327376,
+                  "evidence": {
+                    "n": 100,
+                    "k": 50,
+                    "window_from": "1-Jan-26",
+                    "window_to": "2-Jan-26",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z",
+                    "source": "file",
+                    "mean": 0.5,
+                    "stdev": 0.05
+                  },
+                  "data_source": {
+                    "type": "file",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z"
+                  },
+                  "forecast": {
+                    "mean": 0.5,
+                    "k": 50
+                  },
+                  "n": 100
+                }
+              }
+            ],
+            "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+            "baseDSL": "window(1-Jan-26:2-Jan-26)",
+            "metadata": {
+              "name": "test-graph",
+              "e2e_marker": "v1",
+              "updated_at": "2026-01-15T15:20:03.458Z"
+            }
+          }
+        }
+      ],
+      "query_dsl": "from(from).to(to)",
+      "analysis_type": "graph_overview"
+    }
+  },
+  {
+    "at": "2026-01-15T15:20:03.473Z",
+    "kind": "response",
+    "url": "http://127.0.0.1:9000/api/runner/analyze",
+    "status": 200,
+    "requestBodyText": "{\"scenarios\":[{\"scenario_id\":\"current\",\"name\":\"Current\",\"colour\":\"#3B82F6\",\"visibility_mode\":\"f+e\",\"graph\":{\"nodes\":[{\"uuid\":\"n1\",\"id\":\"from\"},{\"uuid\":\"n2\",\"id\":\"to\"}],\"edges\":[{\"uuid\":\"e1\",\"id\":\"edge-1\",\"from\":\"n1\",\"to\":\"n2\",\"p\":{\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100,\"k\":50,\"window_from\":\"1-Jan-26\",\"window_to\":\"2-Jan-26\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\",\"source\":\"file\",\"mean\":0.5,\"stdev\":0.05},\"data_source\":{\"type\":\"file\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\"},\"forecast\":{\"mean\":0.5,\"k\":50},\"n\":100}}],\"currentQueryDSL\":\"window(1-Jan-26:2-Jan-26)\",\"baseDSL\":\"window(1-Jan-26:2-Jan-26)\",\"metadata\":{\"name\":\"test-graph\",\"e2e_marker\":\"v1\",\"updated_at\":\"2026-01-15T15:20:03.458Z\"}}},{\"scenario_id\":\"scenario-1768490403282-hotjmqi\",\"name\":\"A\",\"colour\":\"#111\",\"visibility_mode\":\"f+e\",\"graph\":{\"nodes\":[{\"uuid\":\"n1\",\"id\":\"from\"},{\"uuid\":\"n2\",\"id\":\"to\"}],\"edges\":[{\"uuid\":\"e1\",\"id\":\"edge-1\",\"from\":\"n1\",\"to\":\"n2\",\"p\":{\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100,\"k\":50,\"window_from\":\"1-Jan-26\",\"window_to\":\"2-Jan-26\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\",\"source\":\"file\",\"mean\":0.5,\"stdev\":0.05},\"data_source\":{\"type\":\"file\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\"},\"forecast\":{\"mean\":0.5,\"k\":50},\"n\":100}}],\"currentQueryDSL\":\"window(1-Jan-26:2-Jan-26)\",\"baseDSL\":\"window(1-Jan-26:2-Jan-26)\",\"metadata\":{\"name\":\"test-graph\",\"e2e_marker\":\"v1\",\"updated_at\":\"2026-01-15T15:20:03.458Z\"}}},{\"scenario_id\":\"scenario-1768490403297-uh9eyld\",\"name\":\"B\",\"colour\":\"#222\",\"visibility_mode\":\"f\",\"graph\":{\"nodes\":[{\"uuid\":\"n1\",\"id\":\"from\"},{\"uuid\":\"n2\",\"id\":\"to\"}],\"edges\":[{\"uuid\":\"e1\",\"id\":\"edge-1\",\"from\":\"n1\",\"to\":\"n2\",\"p\":{\"id\":\"param-1\",\"mean\":0.5,\"stdev\":0.035355339059327376,\"evidence\":{\"n\":100,\"k\":50,\"window_from\":\"1-Jan-26\",\"window_to\":\"2-Jan-26\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\",\"source\":\"file\",\"mean\":0.5,\"stdev\":0.05},\"data_source\":{\"type\":\"file\",\"retrieved_at\":\"2026-01-15T15:20:03.420Z\"},\"forecast\":{\"mean\":0.5,\"k\":50},\"n\":100}}],\"currentQueryDSL\":\"window(1-Jan-26:2-Jan-26)\",\"baseDSL\":\"window(1-Jan-26:2-Jan-26)\",\"metadata\":{\"name\":\"test-graph\",\"e2e_marker\":\"v1\",\"updated_at\":\"2026-01-15T15:20:03.458Z\"}}}],\"query_dsl\":\"from(from).to(to)\",\"analysis_type\":\"graph_overview\"}",
+    "requestBodyJson": {
+      "scenarios": [
+        {
+          "scenario_id": "current",
+          "name": "Current",
+          "colour": "#3B82F6",
+          "visibility_mode": "f+e",
+          "graph": {
+            "nodes": [
+              {
+                "uuid": "n1",
+                "id": "from"
+              },
+              {
+                "uuid": "n2",
+                "id": "to"
+              }
+            ],
+            "edges": [
+              {
+                "uuid": "e1",
+                "id": "edge-1",
+                "from": "n1",
+                "to": "n2",
+                "p": {
+                  "id": "param-1",
+                  "mean": 0.5,
+                  "stdev": 0.035355339059327376,
+                  "evidence": {
+                    "n": 100,
+                    "k": 50,
+                    "window_from": "1-Jan-26",
+                    "window_to": "2-Jan-26",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z",
+                    "source": "file",
+                    "mean": 0.5,
+                    "stdev": 0.05
+                  },
+                  "data_source": {
+                    "type": "file",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z"
+                  },
+                  "forecast": {
+                    "mean": 0.5,
+                    "k": 50
+                  },
+                  "n": 100
+                }
+              }
+            ],
+            "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+            "baseDSL": "window(1-Jan-26:2-Jan-26)",
+            "metadata": {
+              "name": "test-graph",
+              "e2e_marker": "v1",
+              "updated_at": "2026-01-15T15:20:03.458Z"
+            }
+          }
+        },
+        {
+          "scenario_id": "scenario-1768490403282-hotjmqi",
+          "name": "A",
+          "colour": "#111",
+          "visibility_mode": "f+e",
+          "graph": {
+            "nodes": [
+              {
+                "uuid": "n1",
+                "id": "from"
+              },
+              {
+                "uuid": "n2",
+                "id": "to"
+              }
+            ],
+            "edges": [
+              {
+                "uuid": "e1",
+                "id": "edge-1",
+                "from": "n1",
+                "to": "n2",
+                "p": {
+                  "id": "param-1",
+                  "mean": 0.5,
+                  "stdev": 0.035355339059327376,
+                  "evidence": {
+                    "n": 100,
+                    "k": 50,
+                    "window_from": "1-Jan-26",
+                    "window_to": "2-Jan-26",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z",
+                    "source": "file",
+                    "mean": 0.5,
+                    "stdev": 0.05
+                  },
+                  "data_source": {
+                    "type": "file",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z"
+                  },
+                  "forecast": {
+                    "mean": 0.5,
+                    "k": 50
+                  },
+                  "n": 100
+                }
+              }
+            ],
+            "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+            "baseDSL": "window(1-Jan-26:2-Jan-26)",
+            "metadata": {
+              "name": "test-graph",
+              "e2e_marker": "v1",
+              "updated_at": "2026-01-15T15:20:03.458Z"
+            }
+          }
+        },
+        {
+          "scenario_id": "scenario-1768490403297-uh9eyld",
+          "name": "B",
+          "colour": "#222",
+          "visibility_mode": "f",
+          "graph": {
+            "nodes": [
+              {
+                "uuid": "n1",
+                "id": "from"
+              },
+              {
+                "uuid": "n2",
+                "id": "to"
+              }
+            ],
+            "edges": [
+              {
+                "uuid": "e1",
+                "id": "edge-1",
+                "from": "n1",
+                "to": "n2",
+                "p": {
+                  "id": "param-1",
+                  "mean": 0.5,
+                  "stdev": 0.035355339059327376,
+                  "evidence": {
+                    "n": 100,
+                    "k": 50,
+                    "window_from": "1-Jan-26",
+                    "window_to": "2-Jan-26",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z",
+                    "source": "file",
+                    "mean": 0.5,
+                    "stdev": 0.05
+                  },
+                  "data_source": {
+                    "type": "file",
+                    "retrieved_at": "2026-01-15T15:20:03.420Z"
+                  },
+                  "forecast": {
+                    "mean": 0.5,
+                    "k": 50
+                  },
+                  "n": 100
+                }
+              }
+            ],
+            "currentQueryDSL": "window(1-Jan-26:2-Jan-26)",
+            "baseDSL": "window(1-Jan-26:2-Jan-26)",
+            "metadata": {
+              "name": "test-graph",
+              "e2e_marker": "v1",
+              "updated_at": "2026-01-15T15:20:03.458Z"
+            }
+          }
+        }
+      ],
+      "query_dsl": "from(from).to(to)",
+      "analysis_type": "graph_overview"
+    },
+    "responseBodyText": "{\"success\":true,\"result\":{\"analysis_type\":\"graph_overview\",\"analysis_name\":\"E2E Analysis v1\",\"analysis_description\":\"E2E stubbed analysis result\",\"metadata\":{\"scenario_a\":{\"scenario_id\":\"current\",\"name\":\"Current\",\"colour\":\"#3B82F6\",\"visibility_mode\":\"f+e\"},\"scenario_b\":{\"scenario_id\":\"scenario-1768490403282-hotjmqi\",\"name\":\"A\",\"colour\":\"#111\",\"visibility_mode\":\"f+e\"}},\"dimension_values\":{\"scenario_id\":{\"current\":{\"name\":\"Current\",\"colour\":\"#3B82F6\",\"visibility_mode\":\"f+e\"},\"scenario-1768490403282-hotjmqi\":{\"name\":\"A\",\"colour\":\"#111\",\"visibility_mode\":\"f+e\"},\"scenario-1768490403297-uh9eyld\":{\"name\":\"B\",\"colour\":\"#222\",\"visibility_mode\":\"f\"}}},\"data\":[{\"marker\":\"v1\"}]}}",
+    "responseBodyJson": {
+      "success": true,
+      "result": {
+        "analysis_type": "graph_overview",
+        "analysis_name": "E2E Analysis v1",
+        "analysis_description": "E2E stubbed analysis result",
+        "metadata": {
+          "scenario_a": {
+            "scenario_id": "current",
+            "name": "Current",
+            "colour": "#3B82F6",
+            "visibility_mode": "f+e"
+          },
+          "scenario_b": {
+            "scenario_id": "scenario-1768490403282-hotjmqi",
+            "name": "A",
+            "colour": "#111",
+            "visibility_mode": "f+e"
+          }
+        },
+        "dimension_values": {
+          "scenario_id": {
+            "current": {
+              "name": "Current",
+              "colour": "#3B82F6",
+              "visibility_mode": "f+e"
+            },
+            "scenario-1768490403282-hotjmqi": {
+              "name": "A",
+              "colour": "#111",
+              "visibility_mode": "f+e"
+            },
+            "scenario-1768490403297-uh9eyld": {
+              "name": "B",
+              "colour": "#222",
+              "visibility_mode": "f"
+            }
+          }
+        },
+        "data": [
+          {
+            "marker": "v1"
+          }
+        ]
+      }
+    }
+  }
+]

@@ -20,6 +20,8 @@ import { credentialsManager } from '../lib/credentials';
 import { sessionLogService } from './sessionLogService';
 import { collectGraphDependencies, getMinimalParameterIds } from '../lib/dependencyClosure';
 import { getShareBootConfig, ShareBootConfig } from '../lib/shareBootResolver';
+import { decodeSharePayloadFromUrl } from '../lib/sharePayload';
+import { parseConstraints } from '../lib/queryDSL';
 import YAML from 'yaml';
 
 type ParameterIndexEntry = { id: string; file_path?: string };
@@ -49,6 +51,12 @@ export interface LiveBootResult {
   
   // Fetched parameter files (on success)
   parameters?: Map<string, { data: any; sha?: string; path: string }>;
+
+  // Fetched context files (on success)
+  contexts?: Map<string, { data: any; sha?: string; path: string }>;
+
+  // Fetched shared settings file (on success)
+  settings?: { data: any; sha?: string; path: string };
   
   // Identity info for tab creation
   identity?: {
@@ -154,9 +162,37 @@ export async function fetchLiveShareBundle(
       `Fetched graph: ${graphData?.nodes?.length || 0} nodes, SHA: ${graphSha?.substring(0, 8)}`);
     
     // Step 4: Compute dependency closure
-    const parameterIds = getMinimalParameterIds(graphData);
+    const deps = collectGraphDependencies(graphData);
+    const parameterIds = Array.from(deps.parameterIds);
+    const contextKeysFromGraph = Array.from(deps.contextKeys);
+
+    // Share payload can introduce additional context() requirements that are not detectable
+    // from the base graph alone (e.g. scenario DSLs like context(channel:paid-search)).
+    // If we don't pre-seed these context definitions, query compilation/signature validation
+    // and slice selection can silently diverge between authoring and share boot.
+    const contextKeysFromShare = (() => {
+      try {
+        const payload: any = decodeSharePayloadFromUrl();
+        const items: any[] = payload?.scenarios?.items || payload?.scenarios?.items || [];
+        const keys = new Set<string>();
+        for (const it of items) {
+          const dsl = (it?.dsl || '').toString();
+          if (!dsl.trim()) continue;
+          const parsed = parseConstraints(dsl);
+          for (const c of parsed.context || []) keys.add(c.key);
+          for (const any of parsed.contextAny || []) {
+            for (const p of any.pairs || []) keys.add(p.key);
+          }
+        }
+        return Array.from(keys);
+      } catch {
+        return [];
+      }
+    })();
+
+    const contextKeys = Array.from(new Set([...contextKeysFromGraph, ...contextKeysFromShare]));
     sessionLogService.addChild(logOpId, 'info', 'DEPENDENCY_CLOSURE', 
-      `Dependency closure: ${parameterIds.length} parameters`);
+      `Dependency closure: ${parameterIds.length} parameters, ${contextKeys.length} contexts`);
 
     // Step 4.5: Fetch parameters-index.yaml for path resolution (v1 correctness)
     let parametersIndex: any | null = null;
@@ -220,9 +256,82 @@ export async function fetchLiveShareBundle(
       sessionLogService.addChild(logOpId, 'success', 'PARAMETER_FETCH_SUCCESS', 
         `Fetched ${parameters.size}/${parameterIds.length} parameters`);
     }
+
+    // Step 6: Fetch contexts (needed for MECE policies / context value sets in share mode)
+    const contexts = new Map<string, { data: any; sha?: string; path: string }>();
+    if (contextKeys.length > 0) {
+      let contextsIndex: any | null = null;
+      try {
+        sessionLogService.addChild(logOpId, 'info', 'CONTEXT_INDEX_FETCH', 'Fetching contexts-index.yaml...');
+        const indexRes = await gitService.getFileContent('contexts-index.yaml', branch);
+        if (indexRes.success && indexRes.data?.content) {
+          contextsIndex = YAML.parse(indexRes.data.content);
+          sessionLogService.addChild(logOpId, 'success', 'CONTEXT_INDEX_FETCH_SUCCESS', 'Fetched contexts-index.yaml');
+        } else {
+          sessionLogService.addChild(logOpId, 'warning', 'CONTEXT_INDEX_FETCH_MISSING', 'No contexts-index.yaml (falling back to conventional paths)');
+        }
+      } catch (e) {
+        sessionLogService.addChild(logOpId, 'warning', 'CONTEXT_INDEX_FETCH_ERROR', 'Failed to fetch contexts-index.yaml (falling back to conventional paths)');
+      }
+
+      const resolveContextPathFromIndex = (contextId: string, index: any | null | undefined, fallback: string): string => {
+        const entries = (index && Array.isArray((index as any).contexts)) ? (index as any).contexts : [];
+        const match = entries.find((e: any) => e?.id === contextId);
+        const p = match?.file_path;
+        if (typeof p === 'string' && p.trim()) return p.trim();
+        return fallback;
+      };
+
+      sessionLogService.addChild(logOpId, 'info', 'CONTEXT_FETCH', `Fetching ${contextKeys.length} contexts...`);
+      const CONCURRENCY_CTX = 5;
+      const fetchCtx = async (contextId: string) => {
+        const fallbackPath = `contexts/${contextId}.yaml`;
+        const ctxPath = resolveContextPathFromIndex(contextId, contextsIndex, fallbackPath);
+        try {
+          const result = await gitService.getFileContent(ctxPath, branch);
+          if (result.success && result.data?.content) {
+            const data = YAML.parse(result.data.content);
+            contexts.set(contextId, { data, sha: result.data.sha, path: ctxPath });
+          } else if (ctxPath !== fallbackPath) {
+            const fallbackRes = await gitService.getFileContent(fallbackPath, branch);
+            if (fallbackRes.success && fallbackRes.data?.content) {
+              const data = YAML.parse(fallbackRes.data.content);
+              contexts.set(contextId, { data, sha: fallbackRes.data.sha, path: fallbackPath });
+            }
+          }
+        } catch (e) {
+          console.warn(`[LiveShareBoot] Failed to fetch context ${contextId}:`, e);
+        }
+      };
+
+      for (let i = 0; i < contextKeys.length; i += CONCURRENCY_CTX) {
+        const batch = contextKeys.slice(i, i + CONCURRENCY_CTX);
+        await Promise.all(batch.map(fetchCtx));
+      }
+
+      sessionLogService.addChild(logOpId, 'success', 'CONTEXT_FETCH_SUCCESS', `Fetched ${contexts.size}/${contextKeys.length} contexts`);
+    }
+
+    // Step 7: Fetch shared forecasting settings (repo-committed: settings/settings.yaml)
+    // This is required so live share analytics match authoring (e.g. RECENCY_HALF_LIFE_DAYS).
+    let settings: { data: any; sha?: string; path: string } | undefined;
+    try {
+      const settingsPath = 'settings/settings.yaml';
+      sessionLogService.addChild(logOpId, 'info', 'SETTINGS_FETCH', 'Fetching settings/settings.yaml...');
+      const res = await gitService.getFileContent(settingsPath, branch);
+      if (res.success && res.data?.content) {
+        const data = YAML.parse(res.data.content);
+        settings = { data, sha: res.data.sha, path: settingsPath };
+        sessionLogService.addChild(logOpId, 'success', 'SETTINGS_FETCH_SUCCESS', 'Fetched settings/settings.yaml');
+      } else {
+        sessionLogService.addChild(logOpId, 'warning', 'SETTINGS_FETCH_MISSING', 'No settings/settings.yaml found (falling back to defaults)');
+      }
+    } catch {
+      sessionLogService.addChild(logOpId, 'warning', 'SETTINGS_FETCH_ERROR', 'Failed to fetch settings/settings.yaml (falling back to defaults)');
+    }
     
     sessionLogService.endOperation(logOpId, 'success', 
-      `Live boot complete: graph + ${parameters.size} parameters`);
+      `Live boot complete: graph + ${parameters.size} parameters + ${contexts.size} contexts`);
     
     return {
       success: true,
@@ -231,6 +340,8 @@ export async function fetchLiveShareBundle(
       graphPath,
       remoteHeadSha,
       parameters,
+      contexts,
+      settings,
       identity: { repo, branch, graph },
     };
     

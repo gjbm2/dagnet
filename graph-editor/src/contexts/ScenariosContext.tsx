@@ -45,6 +45,10 @@ import {
   fetchDataService,
   type FetchItem 
 } from '../services/fetchDataService';
+import { sessionLogService } from '../services/sessionLogService';
+import { graphComputeClient } from '../lib/graphComputeClient';
+import { chartOperationsService } from '../services/chartOperationsService';
+import { buildGraphForAnalysisLayer } from '../services/CompositionService';
 
 // Scenario colour palette (user scenarios cycle through these)
 // Using more saturated, vibrant colours for better visibility
@@ -71,7 +75,7 @@ export const SCENARIO_PALETTE = [
 // Maximum number of user scenarios allowed (plus Current and Base = 17 total layers max)
 const MAX_SCENARIOS = 15;
 
-interface ScenariosContextValue {
+export interface ScenariosContextValue {
   // State
   scenarios: Scenario[];
   baseParams: ScenarioParams;
@@ -113,9 +117,17 @@ interface ScenariosContextValue {
     queryDSL: string,
     name?: string,
     tabId?: string,
-    colour?: string
+    colour?: string,
+    idOverride?: string
   ) => Promise<Scenario>;
-  regenerateScenario: (id: string, scenarioOverride?: Scenario, baseDSLOverride?: string, allScenariosOverride?: Scenario[], visibleOrder?: string[]) => Promise<void>;
+  regenerateScenario: (
+    id: string,
+    scenarioOverride?: Scenario,
+    baseDSLOverride?: string,
+    allScenariosOverride?: Scenario[],
+    visibleOrder?: string[],
+    options?: { skipStage2?: boolean; allowFetchFromSource?: boolean }
+  ) => Promise<void>;
   regenerateAllLive: (baseDSLOverride?: string, visibleOrder?: string[]) => Promise<void>;
   updateScenarioQueryDSL: (id: string, queryDSL: string) => Promise<void>;
   
@@ -530,7 +542,8 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     queryDSL: string,
     name?: string,
     tabId?: string,
-    colour?: string
+    colour?: string,
+    idOverride?: string
   ): Promise<Scenario> => {
     // Check scenario limit
     if (scenarios.length >= MAX_SCENARIOS) {
@@ -559,8 +572,13 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         : SCENARIO_PALETTE[scenarios.length % SCENARIO_PALETTE.length];
     }
     
+    const forcedId = typeof idOverride === 'string' && idOverride.trim() ? idOverride.trim() : undefined;
+    if (forcedId && scenarios.some(s => s.id === forcedId)) {
+      throw new Error(`Scenario id already exists: ${forcedId}`);
+    }
+
     const scenario: Scenario = {
-      id: generateId(),
+      id: forcedId || generateId(),
       name: name || generateSmartLabel(queryDSL) || 'Live scenario', // Default name is smart label from DSL
       colour: assignedColour,
       createdAt: now,
@@ -600,7 +618,14 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
    * @param allScenariosOverride - Optional: pass full scenarios list to ensure correct inheritance during bulk creation
    * @param visibleOrder - Optional: pass VISIBLE scenario IDs in visual order for correct inheritance
    */
-  const regenerateScenario = useCallback(async (id: string, scenarioOverride?: Scenario, baseDSLOverride?: string, allScenariosOverride?: Scenario[], visibleOrder?: string[]): Promise<void> => {
+  const regenerateScenario = useCallback(async (
+    id: string,
+    scenarioOverride?: Scenario,
+    baseDSLOverride?: string,
+    allScenariosOverride?: Scenario[],
+    visibleOrder?: string[],
+    options?: { skipStage2?: boolean; allowFetchFromSource?: boolean }
+  ): Promise<void> => {
     // Use provided scenario or look up from state
     const scenario = scenarioOverride || scenarios.find(s => s.id === id);
     if (!scenario?.meta?.isLive) {
@@ -678,8 +703,19 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       const baselineParams = composeParams(baseParams, overlaysBelow);
       const baselineGraph = applyComposedParamsToGraph(graph, baselineParams);
 
-      // Check if we need to fetch data using fetchDataService
-      const cacheCheck = fetchDataService.checkDSLNeedsFetch(effectiveFetchDSL, baselineGraph);
+      // Check if we need to fetch data using fetchDataService.
+      //
+      // IMPORTANT: In share/live-link contexts we explicitly disallow fetching from source
+      // (allowFetchFromSource=false). In that case we must NOT "fail fast" based on the
+      // fetch-planner cache check, because it is a conservative heuristic based on slice
+      // headers and may be stricter than what `getParameterFromFile` can legitimately load.
+      //
+      // Instead, we always follow the from-file path and let missing files/values surface
+      // as explicit "Failed to load X/Y items from file cache" errors.
+      const allowFetchFromSource = options?.allowFetchFromSource ?? true;
+      const cacheCheck = allowFetchFromSource
+        ? fetchDataService.checkDSLNeedsFetch(effectiveFetchDSL, baselineGraph)
+        : { needsFetch: false, items: [] };
       
       // CRITICAL: Create a DEEP COPY of the graph for scenario-specific fetching.
       // This ensures that fetching data for a scenario doesn't modify the main graph.
@@ -692,13 +728,13 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         // Scenarios store their params as overlays, not by modifying the base graph.
       };
       
-      if (cacheCheck.needsFetch && cacheCheck.items.length > 0) {
+      if (cacheCheck.needsFetch && cacheCheck.items.length > 0 && allowFetchFromSource) {
         console.log(`Fetching ${cacheCheck.items.length} items for scenario ${id}...`);
         
         // Fetch items using versioned mode (writes to file cache)
         const fetchResults = await fetchDataService.fetchItems(
           cacheCheck.items,
-          { mode: 'versioned' },
+          { mode: 'versioned', skipStage2: options?.skipStage2 ?? true },
           scenarioGraph,
           setScenarioGraph,
           effectiveFetchDSL,
@@ -719,22 +755,33 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         const fallbackWindow = graphStore?.getState().window;
         const windowForFetch = windowFromDSL || fallbackWindow || { start: '', end: '' };
         
-        const allItems = fetchDataService.getItemsNeedingFetch(
-          windowForFetch,
-          scenarioGraph,
-          effectiveFetchDSL, // Use effective DSL for loading
-          false // Force collection (skip cache check) since we know we want to load from files
-        );
+        const allItems = fetchDataService.getItemsForFromFileLoad(scenarioGraph);
         
         if (allItems.length > 0) {
-          await fetchDataService.fetchItems(
-            allItems,
-            { mode: 'from-file' },
-            scenarioGraph,
-            setScenarioGraph,
-            effectiveFetchDSL,
-            () => scenarioGraph
-          );
+          // Share/live boot can race: graph is present before all dependency files have been seeded/restored.
+          // Retry briefly before failing so we don't produce "silent identical graphs" (start=end charts).
+          const MAX_ATTEMPTS = 6;
+          let lastFailures = 0;
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            const results = await fetchDataService.fetchItems(
+              allItems,
+              { mode: 'from-file', skipStage2: options?.skipStage2 ?? true },
+              scenarioGraph,
+              setScenarioGraph,
+              effectiveFetchDSL,
+              () => scenarioGraph
+            );
+            const failures = results.filter(r => !r.success);
+            lastFailures = failures.length;
+            if (failures.length === 0) break;
+            if (attempt < MAX_ATTEMPTS) {
+              await new Promise(resolve => setTimeout(resolve, 75));
+              continue;
+            }
+          }
+          if (lastFailures > 0) {
+            throw new Error(`Failed to load ${lastFailures}/${allItems.length} items from file cache`);
+          }
         }
       }
       
@@ -755,6 +802,27 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       
       // Update the scenario with new params
       const now = new Date().toISOString();
+
+      // IMPORTANT:
+      // If caller provided an explicit scenarioOverride (common in share/live boot to avoid stale closures),
+      // update it in-place so downstream code can immediately use the regenerated params without racing
+      // React state propagation. We still call setScenarios below to update the canonical state.
+      try {
+        const target = scenarioOverride || null;
+        if (target && typeof target === 'object') {
+          (target as any).params = effectiveParams;
+          (target as any).updatedAt = now;
+          (target as any).version = (typeof (target as any).version === 'number' ? (target as any).version : 1) + 1;
+          (target as any).meta = {
+            ...(target as any).meta,
+            lastRegeneratedAt: now,
+            lastEffectiveDSL: effectiveFetchDSL,
+          };
+        }
+      } catch {
+        // Best-effort only
+      }
+
       setScenarios(prev => prev.map(s => 
         s.id === id
           ? {
@@ -777,6 +845,232 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       throw error;
     }
   }, [scenarios, graph, baseDSL, graphStore]);
+
+  // Dev-only: allow an in-session "refetch from files" cycle (no reload) so users can keep
+  // the Session Log panel open while reproducing cache / ordering issues.
+  //
+  // IMPORTANT: this must be declared AFTER regenerateScenario is initialised, otherwise
+  // the dependency array would reference a TDZ variable and crash the app at render time.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (!fileId) return;
+
+    const handler = async (ev: any) => {
+      const detail = ev?.detail || {};
+      const targetGraphFileId = detail.graphFileId;
+      if (typeof targetGraphFileId === 'string' && targetGraphFileId && targetGraphFileId !== fileId) return;
+
+      const opId = sessionLogService.startOperation(
+        'info',
+        'session',
+        'DEV_REFETCH_FROM_FILES',
+        'Dev: refetch from files (scenario regeneration + chart recompute)',
+        {
+          fileId,
+          tabId,
+          reason: detail.reason,
+          requestedBy: detail.requestedBy,
+        }
+      );
+
+      try {
+        // Pull VISIBLE scenario IDs from the graph tab state.
+        // This is the set of scenarios actually composing the on-screen graph, and is what we want to debug.
+        let visibleOrder: string[] | null = null;
+        try {
+          const effectiveTabId =
+            (typeof detail.activeTabId === 'string' && detail.activeTabId.trim())
+              ? detail.activeTabId.trim()
+              : tabId;
+          const t = effectiveTabId ? await db.tabs.get(effectiveTabId) : null;
+          const vs = (t as any)?.editorState?.scenarioState?.visibleScenarioIds;
+          if (Array.isArray(vs) && vs.length > 0) visibleOrder = vs;
+        } catch {
+          // handled below
+        }
+
+        if (!visibleOrder || visibleOrder.length === 0) {
+          // Do NOT silently fall back to "all live scenarios" here — that produces unrelated fetches
+          // and makes it impossible to debug the scenario set that is actually composing the graph.
+          sessionLogService.addChild(
+            opId,
+            'error',
+            'DEV_REFETCH_MISSING_VISIBLE_SCENARIOS',
+            'Cannot refetch-from-files: no visibleScenarioIds found for the target graph tab. Focus the graph tab (not Session Log) and retry.',
+            undefined,
+            { fileId, tabId, activeTabId: detail.activeTabId }
+          );
+          sessionLogService.endOperation(opId, 'error', 'Dev refetch-from-files aborted (no visible scenarios)');
+          return;
+        }
+
+        const effectiveBase = baseDSL || graphStore?.getState().currentDSL || '';
+
+        // 0) Refresh Current from file cache so comparisons match live-share behaviour.
+        // This is the piece missing in tmp.log: it regenerated the scenario, but did not
+        // ensure Current (graphStore/current layer) was rebuilt for the active Current DSL.
+        try {
+          const currentDsl = graphStore?.getState().currentDSL || '';
+          const g = graphStore?.getState().graph as any;
+          if (currentDsl && g) {
+            sessionLogService.addChild(opId, 'info', 'DEV_REFETCH_CURRENT', 'Refreshing Current from file cache…', undefined, {
+              currentDsl,
+            } as any);
+            const itemsForCurrent = fetchDataService.getItemsForFromFileLoad(g as any);
+            if (itemsForCurrent.length > 0) {
+              const results = await fetchDataService.fetchItems(
+                itemsForCurrent,
+                { mode: 'from-file', skipStage2: false, allowFetchFromSource: false } as any,
+                g as any,
+                (next: any) => {
+                  try {
+                    graphStore?.getState().setGraph(next);
+                  } catch {
+                    // best effort
+                  }
+                },
+                currentDsl,
+                () => (graphStore?.getState().graph as any) || null
+              );
+              const ok = results.every((r: any) => r?.success);
+              if (!ok) {
+                sessionLogService.addChild(opId, 'warning', 'DEV_REFETCH_CURRENT_PARTIAL', 'Current refresh had failures (see console)', undefined);
+              } else {
+                sessionLogService.addChild(opId, 'success', 'DEV_REFETCH_CURRENT_OK', 'Current refreshed from file cache');
+              }
+            }
+          }
+        } catch (e: any) {
+          sessionLogService.addChild(opId, 'warning', 'DEV_REFETCH_CURRENT_ERROR', e?.message || String(e));
+        }
+
+        // Only regenerate VISIBLE live scenarios (static snapshots do not fetch).
+        const idsToRegen = visibleOrder
+          .filter((id) => id !== 'base' && id !== 'current')
+          .filter((id) => scenarios.some((s) => s.id === id && s.meta?.isLive === true));
+
+        sessionLogService.addChild(
+          opId,
+          'info',
+          'DEV_REFETCH_PLAN',
+          `Regenerating ${idsToRegen.length} visible live scenario(s) from file cache…`,
+          undefined,
+          { visibleScenarioCount: visibleOrder.length, visibleLiveScenarioCount: idsToRegen.length }
+        );
+
+        for (const id of idsToRegen) {
+          const s = scenarios.find((x) => x.id === id);
+          if (!s || s.meta?.isLive !== true) continue;
+          sessionLogService.addChild(opId, 'info', 'DEV_REFETCH_SCENARIO', `Regenerating ${id}…`, undefined, {
+            scenarioId: id,
+            queryDSL: s.meta?.queryDSL,
+            lastEffectiveDSL: s.meta?.lastEffectiveDSL,
+          });
+          await regenerateScenario(id, s, effectiveBase, scenarios, visibleOrder, {
+            // Force the full from-file path and log-rich stage2 enhancements, but forbid source fetches.
+            skipStage2: false,
+            allowFetchFromSource: false,
+          });
+        }
+
+        // 2) Recompute any open chart artefacts that depend on this graph (mirror live share).
+        // We keep this best-effort: scenario regeneration is the primary debugging intent.
+        try {
+          sessionLogService.addChild(opId, 'info', 'DEV_RECOMPUTE_CHARTS', 'Recomputing open chart(s)…');
+          const graphFileId = fileId;
+          const relatedTabs = await db.tabs.toArray();
+          const chartTabs = relatedTabs.filter((t: any) => String(t?.fileId || '').startsWith('chart-'));
+          const chartFileIds: string[] = [];
+          for (const t of chartTabs) {
+            try {
+              const f = await db.files.get(t.fileId);
+              const parent = (f as any)?.data?.source?.parent_file_id;
+              if (parent === graphFileId) chartFileIds.push(t.fileId);
+            } catch {
+              // ignore
+            }
+          }
+
+          // Dedup to avoid double compute.
+          const uniqueChartFileIds = Array.from(new Set(chartFileIds));
+          for (const chartFileId of uniqueChartFileIds) {
+            const chartFile = await db.files.get(chartFileId);
+            const chartData: any = (chartFile as any)?.data || null;
+            if (!chartData?.payload?.analysis_result) continue;
+
+            const analysisType = chartData?.source?.analysis_type || chartData?.payload?.analysis_result?.analysis_type || undefined;
+            const queryDsl = chartData?.source?.query_dsl || undefined;
+
+            // Determine scenario order for compute based on the chart artefact metadata.
+            const m = chartData?.payload?.analysis_result?.metadata || {};
+            const a = m?.scenario_a;
+            const b = m?.scenario_b;
+            const scenarioAId = typeof a?.scenario_id === 'string' ? a.scenario_id : null;
+            const scenarioBId = typeof b?.scenario_id === 'string' ? b.scenario_id : null;
+            const scenarioIds: string[] = [];
+            if (scenarioAId) scenarioIds.push(scenarioAId);
+            if (scenarioBId && scenarioBId !== scenarioAId) scenarioIds.push(scenarioBId);
+
+            const effectiveGraph = (graphStore?.getState().graph as any) || (graph as any);
+            if (!effectiveGraph) continue;
+
+            const scenarioGraphs = scenarioIds.map((sid: string) => {
+              const visibilityMode = (sid === 'current' || sid === 'base') ? 'f+e' : 'f+e';
+              const colour =
+                sid === 'current'
+                  ? currentColour
+                  : sid === 'base'
+                    ? baseColour
+                    : (scenarios.find((s) => s.id === sid)?.colour || '#999');
+              const name =
+                sid === 'current'
+                  ? 'Current'
+                  : sid === 'base'
+                    ? 'Base'
+                    : (scenarios.find((s) => s.id === sid)?.name || sid);
+
+              const scenarioGraph = buildGraphForAnalysisLayer(
+                sid,
+                JSON.parse(JSON.stringify(effectiveGraph)),
+                baseParams,
+                currentParams,
+                scenarios as any,
+                undefined,
+                visibilityMode as any
+              );
+
+              return { scenario_id: sid, name, colour, visibility_mode: visibilityMode, graph: scenarioGraph };
+            });
+
+            const resp = await graphComputeClient.analyzeMultipleScenarios(scenarioGraphs as any, queryDsl, analysisType);
+            if (!resp?.success || !resp?.result) continue;
+
+            await chartOperationsService.openAnalysisChartTabFromAnalysis({
+              chartKind: chartData?.chart_kind,
+              analysisResult: resp.result,
+              scenarioIds: scenarioIds,
+              title: chartData?.title,
+              source: chartData?.source,
+              fileId: chartFileId,
+              scenarioDslSubtitleById: chartData?.payload?.scenario_dsl_subtitle_by_id || undefined,
+            } as any);
+          }
+
+          sessionLogService.addChild(opId, 'success', 'DEV_RECOMPUTE_CHARTS_OK', `Recomputed ${uniqueChartFileIds.length} chart(s)`);
+        } catch (e: any) {
+          sessionLogService.addChild(opId, 'warning', 'DEV_RECOMPUTE_CHARTS_ERROR', e?.message || String(e));
+        }
+
+        sessionLogService.endOperation(opId, 'success', 'Dev refetch-from-files complete');
+      } catch (e: any) {
+        sessionLogService.addChild(opId, 'error', 'DEV_REFETCH_ERROR', e?.message || String(e));
+        sessionLogService.endOperation(opId, 'error', 'Dev refetch-from-files failed');
+      }
+    };
+
+    window.addEventListener('dagnet:debugRefetchFromFiles', handler as any);
+    return () => window.removeEventListener('dagnet:debugRefetchFromFiles', handler as any);
+  }, [fileId, tabId, baseDSL, graphStore, scenarios, regenerateScenario]);
 
   /**
    * Regenerate all live scenarios.

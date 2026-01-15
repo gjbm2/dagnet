@@ -875,8 +875,18 @@ class DataOperationsService {
       }
       
       // Check if file exists
-      const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+      let paramFile = fileRegistry.getFile(`parameter-${paramId}`);
       markTime('getFile');
+      if (!paramFile) {
+        // Share/live boot can seed IndexedDB before FileRegistry is hydrated.
+        // Since IndexedDB is the source of truth, attempt to restore the file from IDB on-demand.
+        try {
+          await fileRegistry.restoreFile(`parameter-${paramId}`);
+          paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+        } catch {
+          // ignore
+        }
+      }
       if (!paramFile) {
         toast.error(`Parameter file not found: ${paramId}`);
         sessionLogService.endOperation(logOpId, 'error', `Parameter file not found: ${paramId}`);

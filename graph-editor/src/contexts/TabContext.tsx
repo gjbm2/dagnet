@@ -1005,8 +1005,13 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       // Share sessions are isolated and don't use the user's workspace state
       if (isShareMode()) {
         console.log('[TabContext] Share mode detected - skipping workspace tab restoration');
-        // Still initialize credentials (needed for live mode) but skip connections/settings
+        // Still initialise credentials + defaults-backed files that affect query semantics.
+        // In share mode we do NOT restore workspace tabs/state, but we *do* need:
+        // - connections.yaml (capabilities like supports_native_exclude, provider mappings)
+        // - settings.yaml (forecasting knobs) so computed results match authoring.
         await initializeCredentials();
+        await initializeConnections();
+        await initializeSettings();
       } else {
         // Normal workspace boot
         await loadTabsFromDB();
@@ -1191,7 +1196,83 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
           const { identity, graphData, graphSha, graphPath } = result;
 
-          // Overwrite-seed graph and dependencies (no stale reuse).
+          // Apply authoring DSL state from the share payload (if present) so share replay
+          // uses the same base/current DSL that the author had when generating the link.
+          try {
+            const gs: any = (sharePayload as any)?.graph_state || null;
+            if (gs && typeof graphData === 'object' && graphData) {
+              if (typeof gs.base_dsl === 'string' && gs.base_dsl.trim()) {
+                (graphData as any).baseDSL = gs.base_dsl;
+              }
+              if (typeof gs.current_query_dsl === 'string' && gs.current_query_dsl.trim()) {
+                (graphData as any).currentQueryDSL = gs.current_query_dsl;
+              }
+            }
+          } catch {
+            // best-effort
+          }
+
+          // CRITICAL ORDERING (share boot determinism):
+          // Upserting the graph file triggers listeners and can kick off scenario regeneration
+          // immediately (e.g. share chart bootstrap). We must ensure dependent files
+          // (parameters + contexts) are seeded first, otherwise regeneration can race and
+          // fail to resolve contexts or read parameter caches.
+          if (result.parameters) {
+            for (const [paramId, paramData] of result.parameters) {
+              const paramFileId = `parameter-${paramId}`;
+              await fileRegistry.upsertFileClean(
+                paramFileId,
+                'parameter',
+                {
+                  repository: identity.repo,
+                  path: paramData.path,
+                  branch: identity.branch,
+                },
+                paramData.data,
+                { sha: paramData.sha, lastSynced: Date.now() }
+              );
+            }
+          }
+
+          if ((result as any).contexts) {
+            for (const [contextId, ctxData] of (result as any).contexts) {
+              const contextFileId = `context-${contextId}`;
+              await fileRegistry.upsertFileClean(
+                contextFileId,
+                'context' as any,
+                {
+                  repository: identity.repo,
+                  path: ctxData.path,
+                  branch: identity.branch,
+                },
+                ctxData.data,
+                { sha: ctxData.sha, lastSynced: Date.now() }
+              );
+            }
+          }
+
+          // Overwrite-seed shared repo settings BEFORE the graph (settings affect analytics semantics).
+          // This ensures forecasting knobs (e.g. RECENCY_HALF_LIFE_DAYS) match authoring during live share.
+          if ((result as any).settings?.data) {
+            try {
+              const s = (result as any).settings;
+              await fileRegistry.upsertFileClean(
+                'settings-settings',
+                'settings' as any,
+                {
+                  repository: identity.repo,
+                  path: s.path || 'settings/settings.yaml',
+                  branch: identity.branch,
+                },
+                s.data,
+                { sha: s.sha, lastSynced: Date.now() }
+              );
+            } catch (e) {
+              console.warn('[TabContext] Live share: failed to seed settings/settings.yaml from repo (falling back to defaults)', e);
+            }
+          }
+
+          // Overwrite-seed graph LAST (no stale reuse), after deps.
           await fileRegistry.upsertFileClean(
             fileId,
             'graph',
@@ -1212,23 +1293,6 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
               result.remoteHeadSha,
               window.localStorage
             );
-          }
-
-          if (result.parameters) {
-            for (const [paramId, paramData] of result.parameters) {
-              const paramFileId = `parameter-${paramId}`;
-              await fileRegistry.upsertFileClean(
-                paramFileId,
-                'parameter',
-                {
-                  repository: identity.repo,
-                  path: paramData.path,
-                  branch: identity.branch,
-                },
-                paramData.data,
-                { sha: paramData.sha, lastSynced: Date.now() }
-              );
-            }
           }
         }
 

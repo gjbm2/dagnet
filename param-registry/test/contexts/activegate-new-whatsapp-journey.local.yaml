@@ -1,0 +1,21 @@
+id: whatsapp-journey
+name: New WhatsApp journey
+description: Whether the Statsig gate is on for the user (via Amplitude user property activeGates.*)
+type: categorical
+otherPolicy: computed
+values:
+  - id: on
+    label: On
+    sources:
+      amplitude:
+        # IMPORTANT: specify the raw property name (no gp: prefix).
+        # The Amplitude adapter will normalise to gp:<field> for custom user properties.
+        filter: "activeGates.experiment_new_whatsapp_journey == 'true'"
+metadata:
+  category: behavioral
+  data_source: statsig
+  created_at: "2026-01-15T00:00:00.000Z"
+  version: "1.0.0"
+  status: active
+
+

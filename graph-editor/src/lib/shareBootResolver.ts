@@ -25,6 +25,16 @@ export interface ShareBootConfig {
   
   // Static data (for static mode)
   hasDataParam: boolean;
+
+  /**
+   * Optional cache-buster for share-scoped IndexedDB.
+   *
+   * Rationale:
+   * - When debugging share boot / cache races, we need a cheap way to force a brand-new DB
+   *   without changing repo/branch/graph.
+   * - This is opt-in via URL param and does not affect stable share links by default.
+   */
+  dbnonce?: string;
 }
 
 /** Default workspace DB name */
@@ -51,8 +61,8 @@ function hashScopeKey(input: string): string {
  * Compute the scoped DB name for a live share session.
  * Uses repo/branch/graph to ensure different live shares don't collide.
  */
-function computeLiveShareDbName(repo: string, branch: string, graph: string): string {
-  const normalised = `${repo}/${branch}/${graph}`.toLowerCase();
+function computeLiveShareDbName(repo: string, branch: string, graph: string, dbnonce?: string): string {
+  const normalised = `${repo}/${branch}/${graph}${dbnonce ? `|${dbnonce}` : ''}`.toLowerCase();
   const hash = hashScopeKey(normalised);
   // Include a readable prefix for debugging
   const prefix = repo.substring(0, 8).replace(/[^a-zA-Z0-9]/g, '');
@@ -102,6 +112,7 @@ export function resolveShareBootConfig(): ShareBootConfig {
   const branch = params.get('branch') || undefined;
   const graph = params.get('graph') || undefined;
   const secret = params.get('secret') || undefined;
+  const dbnonce = params.get('dbnonce') || undefined;
   
   // Explicit live mode
   if (modeParam === 'live') {
@@ -109,12 +120,13 @@ export function resolveShareBootConfig(): ShareBootConfig {
     if (repo && branch && graph) {
       return {
         mode: 'live',
-        dbName: computeLiveShareDbName(repo, branch, graph),
+        dbName: computeLiveShareDbName(repo, branch, graph, dbnonce),
         repo,
         branch,
         graph,
         secret,
         hasDataParam: !!dataParam,
+        dbnonce,
       };
     }
     // Live mode without identity - fall back to static if data present, else workspace
@@ -128,12 +140,14 @@ export function resolveShareBootConfig(): ShareBootConfig {
         graph,
         secret,
         hasDataParam: true,
+        dbnonce,
       };
     }
     return {
       mode: 'none',
       dbName: WORKSPACE_DB_NAME,
       hasDataParam: false,
+      dbnonce,
     };
   }
   
@@ -147,6 +161,7 @@ export function resolveShareBootConfig(): ShareBootConfig {
       graph,
       secret,
       hasDataParam: !!dataParam,
+      dbnonce,
     };
   }
   
@@ -155,6 +170,7 @@ export function resolveShareBootConfig(): ShareBootConfig {
     mode: 'none',
     dbName: WORKSPACE_DB_NAME,
     hasDataParam: false,
+    dbnonce,
   };
 }
 

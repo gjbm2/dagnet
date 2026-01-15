@@ -133,11 +133,22 @@ class GitService {
     const baseUrl = this.getBaseUrl(repoOwner, repoName);
     const url = `${baseUrl}${endpoint}`;
     
+    const method = (options.method || 'GET').toUpperCase();
     const headers: HeadersInit = {
-      'Accept': 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json',
-      ...options.headers,
+      Accept: 'application/vnd.github.v3+json',
+      ...(options.headers || {}),
     };
+
+    // CRITICAL (CORS):
+    // Do NOT set Content-Type on GET/HEAD requests.
+    // Some GitHub endpoints do not respond to OPTIONS preflights with permissive CORS headers,
+    // and forcing a preflight makes browser fetches fail intermittently/hard.
+    //
+    // Only set JSON Content-Type when we actually send a body (PUT/POST/DELETE etc).
+    const hasBody = typeof (options as any)?.body !== 'undefined' && (options as any).body !== null;
+    if (hasBody && method !== 'GET' && method !== 'HEAD') {
+      (headers as any)['Content-Type'] = (headers as any)['Content-Type'] || 'application/json';
+    }
 
     console.log('GitService config:', this.config);
     console.log('GitService githubToken:', this.config.githubToken ? 'SET' : 'NOT SET');
@@ -155,17 +166,42 @@ class GitService {
       console.log(`Git API Request: ${options.method || 'GET'} ${url}`);
     }
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    });
+    // Avoid indefinite hangs (observed as minute+ stalls in live share boot when a request
+    // gets stuck on the network/CORS preflight). Fail fast so callers can surface a real error.
+    const timeoutMs = (this.config as any)?.requestTimeoutMs ?? 30_000;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout =
+      controller
+        ? setTimeout(() => {
+            try {
+              controller.abort();
+            } catch {
+              // ignore
+            }
+          }, timeoutMs)
+        : null;
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        signal: controller?.signal,
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Git API Error: ${response.status} ${response.statusText} - ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Git API Error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      return response;
+    } catch (e: any) {
+      // Normalise abort errors to something readable for session logs.
+      if (e?.name === 'AbortError') {
+        throw new Error(`Git API Error: request timed out after ${timeoutMs}ms`);
+      }
+      throw e;
+    } finally {
+      if (timeout) clearTimeout(timeout as any);
     }
-
-    return response;
   }
 
   // Get all branches

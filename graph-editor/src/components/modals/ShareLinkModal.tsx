@@ -76,8 +76,8 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
     );
     if (!activeIsShareable) return;
 
-    setSelectedTabIds(new Set([activeTabId]));
-    setActiveBundleTabId(activeTabId);
+        setSelectedTabIds(new Set([activeTabId]));
+        setActiveBundleTabId(activeTabId);
   }, [isOpen, activeTabId, tabs]);
 
   // Keep bundle active tab consistent with selection

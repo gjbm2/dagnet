@@ -109,6 +109,15 @@ export interface FetchOptions {
    * but still need to reuse the exact fetchItems() pipeline (including logging and Stage-2 passes).
    */
   suppressBatchToast?: boolean;
+
+  /**
+   * When true, skip Stage-2 graph-level enhancements (LAG topo pass + inbound-n).
+   *
+   * Intended for ephemeral/analysis-only fetches (e.g. share-link scenario regeneration) where we
+   * want the direct file/edge values without a subsequent graph-wide recompute potentially
+   * overriding them.
+   */
+  skipStage2?: boolean;
 }
 
 export interface FetchResult {
@@ -371,90 +380,88 @@ export function getItemsNeedingFetch(
 ): FetchItem[] {
   if (!graph) return [];
 
+  const allItems = collectAllFetchItems(graph);
+  const items = allItems.filter(item => itemNeedsFetch(item, window, graph, dsl, checkCache));
+  return sortFetchItemsTopologically(items, graph);
+}
+
+/**
+ * Collect ALL fetch items for a graph, without any cache/file/connection gating.
+ *
+ * This is used for "from-file" refresh/regeneration flows where we *must* attempt to
+ * load all referenced params/cases from the local file cache, and missing files should
+ * surface as errors (rather than silently skipping and producing identical scenario graphs).
+ */
+export function getItemsForFromFileLoad(graph: Graph): FetchItem[] {
+  if (!graph) return [];
+  return sortFetchItemsTopologically(collectAllFetchItems(graph), graph);
+}
+
+function collectAllFetchItems(graph: Graph): FetchItem[] {
   const items: FetchItem[] = [];
-  
+
   // Collect parameters
   if (graph.edges) {
     for (const edge of graph.edges) {
       const edgeId = edge.uuid || edge.id || '';
-      
+
       const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'labour_cost'; param: any }> = [];
       if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
       if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
       if (edge.labour_cost) paramSlots.push({ slot: 'labour_cost', param: edge.labour_cost });
-      
+
       for (const { slot, param } of paramSlots) {
         const paramId = param.id;
-        
-        const item: FetchItem = {
-          id: `param-${paramId || 'direct'}-${slot}-${edgeId}`,
+        if (!paramId) continue;
+
+        items.push({
+          id: `param-${paramId}-${slot}-${edgeId}`,
           type: 'parameter',
-          name: `${slot}: ${paramId || 'direct connection'}`,
-          objectId: paramId || '',
+          name: `${slot}: ${paramId}`,
+          objectId: paramId,
           targetId: edgeId,
           paramSlot: slot,
-        };
-
-        if (itemNeedsFetch(item, window, graph, dsl, checkCache)) {
-          items.push(item);
-        }
+        });
       }
 
       // Conditional probabilities (edge.conditional_p[i].p) are first-class fetchable items.
-      // Planner/coverage MUST include them; execution already supports conditionalIndex.
       if (Array.isArray((edge as any).conditional_p)) {
         for (let idx = 0; idx < (edge as any).conditional_p.length; idx++) {
           const cond = (edge as any).conditional_p[idx];
           const condParam = cond?.p;
           const condParamId = condParam?.id;
-          if (!condParam) continue;
+          if (!condParamId) continue;
 
-          const item: FetchItem = {
-            id: `param-${condParamId || 'direct'}-conditional_p[${idx}]-${edgeId}`,
+          items.push({
+            id: `param-${condParamId}-conditional_p[${idx}]-${edgeId}`,
             type: 'parameter',
-            name: `conditional_p[${idx}]: ${condParamId || 'direct connection'}`,
-            objectId: condParamId || '',
+            name: `conditional_p[${idx}]: ${condParamId}`,
+            objectId: condParamId,
             targetId: edgeId,
             paramSlot: 'p',
             conditionalIndex: idx,
-          };
-
-          if (itemNeedsFetch(item, window, graph, dsl, checkCache)) {
-            items.push(item);
-          }
+          });
         }
       }
     }
   }
-  
+
   // Collect cases
   if (graph.nodes) {
     for (const node of graph.nodes) {
-      if (node.case?.id) {
-        const caseId = node.case.id;
-        
-        const item: FetchItem = {
-          id: `case-${caseId}-${node.uuid || node.id}`,
-          type: 'case',
-          name: `case: ${caseId}`,
-          objectId: caseId,
-          targetId: node.uuid || node.id || '',
-        };
-        
-        if (itemNeedsFetch(item, window, graph, dsl, checkCache)) {
-          items.push(item);
-        }
-      }
+      if (!node.case?.id) continue;
+      const caseId = node.case.id;
+      items.push({
+        id: `case-${caseId}-${node.uuid || node.id}`,
+        type: 'case',
+        name: `case: ${caseId}`,
+        objectId: caseId,
+        targetId: node.uuid || node.id || '',
+      });
     }
   }
-  
-  // Sort items in topological order (upstream edges first) for LAG calculation
-  // This ensures that when batch fetching latency edges, upstream t95 values
-  // are computed before they're needed for downstream path_t95 calculations.
-  // See design.md §4.7.2.
-  const sortedItems = sortFetchItemsTopologically(items, graph);
-  
-  return sortedItems;
+
+  return items;
 }
 
 /**
@@ -893,10 +900,32 @@ export function computeAndApplyInboundN(
     return;
   }
   
+  // Build GraphForInboundN representation.
+  //
+  // IMPORTANT: Real graphs typically use node UUIDs for `edge.from`/`edge.to` endpoints.
+  // Some synthetic/unit-test graphs may use node IDs instead. We must canonicalise the
+  // node key to match the edge endpoints, otherwise inbound-n becomes an empty map
+  // (breaking completeness/blend computations downstream).
+  const endpointIds = new Set<string>();
+  for (const e of graph.edges || []) {
+    if (typeof (e as any).from === 'string') endpointIds.add((e as any).from);
+    if (typeof (e as any).to === 'string') endpointIds.add((e as any).to);
+  }
+
+  const nodeKey = (n: any): string => {
+    const uuid = typeof n?.uuid === 'string' ? n.uuid : undefined;
+    const id = typeof n?.id === 'string' ? n.id : undefined;
+    // Prefer whichever identifier is actually referenced by edges.
+    if (uuid && endpointIds.has(uuid)) return uuid;
+    if (id && endpointIds.has(id)) return id;
+    // Fallback: uuid first (most real graphs), then id.
+    return uuid || id || '';
+  };
+
   // Build GraphForInboundN representation
   const graphForInboundN: GraphForInboundN = {
     nodes: (graph.nodes || []).map(n => ({
-      id: n.id || n.uuid || '',
+      id: nodeKey(n),
       type: n.type,
       entry: n.entry, // Include entry.is_start for START node detection
     })),
@@ -1164,7 +1193,7 @@ export async function fetchItems(
       }, 300);
     }
     
-    if (successCount > 0) {
+    if (successCount > 0 && !itemOptions?.skipStage2) {
       const finalGraph = getUpdatedGraph?.() ?? latestGraph ?? graph;
       if (finalGraph) {
         await runStage2EnhancementsAndInboundN(
@@ -1984,6 +2013,7 @@ export const fetchDataService = {
   // Core functions
   itemNeedsFetch,
   getItemsNeedingFetch,
+  getItemsForFromFileLoad,
   fetchItem,
   fetchItems,
   
