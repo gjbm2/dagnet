@@ -1,4 +1,4 @@
-/**
+/** 
  * Data Operations Service
  * 
  * Centralized service for all data sync operations (Get/Put).
@@ -7167,26 +7167,12 @@ class DataOperationsService {
   }
   
   /**
-   * Open sync status modal
-   * 
-   * Should show comparison:
-   * - Current value in graph (with override status)
-   * - Current value in file (latest values[] entry)
-   * - Last retrieved from source (evidence fields: n, k, window_from, window_to)
-   * - Sync/conflict indicators (overridden fields, missing data, etc.)
-   * - Query signature consistency (if query changed since last fetch)
-   * 
-   * STUB for Phase 1 - shows toast notification
+   * (Removed) Sync status modal entry-point.
+   *
+   * This was a Phase-2 stub that only showed a toast, and was wired into the ⚡ menu.
+   * Placeholder menu items should not ship; reintroduce only when the modal is implemented.
    */
-  async openSyncStatus(objectType: 'parameter' | 'case' | 'node', objectId: string): Promise<void> {
-    toast('Sync Status modal coming in Phase 2!', { icon: '📊', duration: 3000 });
-    // TODO Phase 2: Build sync status modal
-    // Show comparison:
-    // - Current value in graph
-    // - Current value in file
-    // - Last retrieved from source
-    // - Sync/conflict indicators
-  }
+  // async openSyncStatus(...) { ... }  // Intentionally removed.
   
   /**
    * Batch get from source - fetches multiple items and updates graph correctly.

@@ -8,6 +8,7 @@ export interface ShareLiveStubState {
   lastServedGraphMean?: number;
   lastServedGraphVersion?: RemoteStateVersion;
   lastAnalyzeRequest?: any;
+  forceAnalyzeStatus?: number;
 }
 
 function inc(state: ShareLiveStubState, key: string) {
@@ -45,7 +46,10 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
     const url = route.request().url();
 
     // 1) Remote HEAD SHA (Octokit git.getRef → /git/ref/heads/<branch>)
-    if (url.includes('/git/ref/heads/')) {
+    //
+    // Octokit may URL-encode the ref (e.g. "heads%2Fmain") depending on the route it uses.
+    // Accept both forms.
+    if (url.includes('/git/ref/heads/') || url.includes('/git/ref/heads%2F')) {
       inc(state, 'github:getRef');
       inc(state, `github:getRef:${state.version}`);
       const sha = state.version === 'v1' ? 'sha_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' : 'sha_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -169,6 +173,24 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
       // so the chart layer can render stable labels.
       const req = state.lastAnalyzeRequest || {};
       const reqScenarios: any[] = Array.isArray(req?.scenarios) ? req.scenarios : [];
+
+      if (typeof state.forceAnalyzeStatus === 'number') {
+        return route.fulfill({
+          status: state.forceAnalyzeStatus,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'E2E forced analyze failure' }),
+        });
+      }
+
+      // IMPORTANT: mirror real API contract.
+      // The runner rejects empty scenario lists with a 400.
+      if (reqScenarios.length === 0) {
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: "Missing 'scenarios' field" }),
+        });
+      }
       const a = reqScenarios[0] || null;
       const b = reqScenarios[1] || null;
 

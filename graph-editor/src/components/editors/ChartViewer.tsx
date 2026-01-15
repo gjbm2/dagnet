@@ -33,6 +33,7 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
 
   const chart = data as ChartFileDataV1 | undefined;
   const analysisResult = chart?.payload?.analysis_result;
+  const errorMessage = (chart as any)?.payload?.error_message as string | undefined;
   const scenarioIds = chart?.payload?.scenario_ids || [];
   const scenarioDslSubtitleById = chart?.payload?.scenario_dsl_subtitle_by_id || undefined;
 
@@ -47,7 +48,14 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
   if (!chart || !analysisResult) {
     return (
       <div style={{ padding: 12, color: '#6b7280' }}>
-        No chart data.
+        {typeof errorMessage === 'string' && errorMessage.trim() ? (
+          <>
+            <div style={{ fontWeight: 700, color: '#111827', marginBottom: 6 }}>Chart failed to load</div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{errorMessage}</div>
+          </>
+        ) : (
+          'No chart data.'
+        )}
       </div>
     );
   }

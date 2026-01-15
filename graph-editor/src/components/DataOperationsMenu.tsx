@@ -45,7 +45,6 @@ interface DataOperationsMenuProps {
   
   // Options
   showConnectionSettings?: boolean; // Default true for LightningMenu, false for context menus
-  showSyncStatus?: boolean; // Default true
   
   // Close handler (for submenu mode)
   onClose?: () => void;
@@ -69,7 +68,6 @@ export function DataOperationsMenu({
   currentDSL,
   mode,
   showConnectionSettings = true,
-  showSyncStatus = true,
   onClose
 }: DataOperationsMenuProps) {
   
@@ -255,15 +253,6 @@ export function DataOperationsMenu({
     }
   };
   
-  const handleSyncStatus = () => {
-    if (onClose) onClose();
-    if (objectType === 'event') {
-      // Events don't support sync status
-      return;
-    }
-    dataOperationsService.openSyncStatus(objectType as 'parameter' | 'case' | 'node', objectId);
-  };
-  
   const handleOpenFile = () => {
     if (onClose) onClose();
     openFile(objectType, objectId);
@@ -392,16 +381,6 @@ export function DataOperationsMenu({
         </button>
       )}
       
-      {/* Sync Status */}
-      {showSyncStatus && (
-        <button
-          className={itemClassName}
-          onClick={handleSyncStatus}
-          title="View sync status"
-        >
-          <span>Sync status...</span>
-        </button>
-      )}
     </div>
   );
 }

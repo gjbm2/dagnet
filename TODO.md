@@ -1,6 +1,11 @@
 # TODO
 
+- Investigate Forecast calcs (now that we think evidence is semi-stable; not at all sure forecast is behaving itself when blending...)
+- Forecast mode appears misleading/broken in two ways:
+  - Forecasts often come from persisted `edge.p.forecast.mean`, so recency half-life / related knobs may not take effect unless forecasts are recomputed.
+  - Outgoing sibling forecast values can sum > 1; residual edges then get 0 in F mode (R=max(0,1-S)), making residual pathways appear to have no flow.
 - Share linkes should carry Sankey status
+- idiotic choice of mini icons for graphs (look like charts!!! also why not lucide??)
  
 - Work on case files:
   docs/current/case-lag-updates.md

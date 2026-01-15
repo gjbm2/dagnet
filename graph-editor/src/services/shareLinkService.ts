@@ -315,7 +315,26 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     const visibilityMode: Record<string, 'f+e' | 'f' | 'e'> = scenarioState.visibilityMode || {};
 
     // Load scenarios from IndexedDB (source of truth in share/workspace flows).
-    const scenarios: any[] = await db.scenarios.where('fileId').equals(parentFileId).toArray();
+    //
+    // IMPORTANT: IndexedDB may store scenarios keyed by either:
+    // - canonical fileId: `graph-...`
+    // - workspace-prefixed fileId: `${repo}-${branch}-graph-...`
+    //
+    // Prefer canonical, but fall back to prefixed when missing to avoid false negatives
+    // (especially in share/boot flows where FileRegistry uses canonical IDs).
+    const canonicalScenarios: any[] = await db.scenarios.where('fileId').equals(parentFileId).toArray();
+    const prefixedScenarios: any[] =
+      identity?.repo && identity?.branch
+        ? await db.scenarios.where('fileId').equals(`${identity.repo}-${identity.branch}-${parentFileId}`).toArray()
+        : [];
+
+    // Merge (prefer canonical when both exist).
+    const scenarios: any[] = (() => {
+      const byId = new Map<string, any>();
+      for (const s of prefixedScenarios) if (s?.id) byId.set(String(s.id), s);
+      for (const s of canonicalScenarios) if (s?.id) byId.set(String(s.id), s);
+      return Array.from(byId.values());
+    })();
     const byId = new Map(scenarios.map(s => [s.id, s]));
 
     // For bridge charts, scenario_ids are intentionally empty (the result embeds scenario context).
@@ -333,17 +352,28 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
         : visibleScenarioIds.filter((id: string) => id !== 'base' && id !== 'current');
 
     const liveScenarioItems: ShareChartPayload['scenarios']['items'] = [];
+    let droppedMissingDslCount = 0;
     for (const scenarioId of orderedScenarioIds) {
       if (scenarioId === 'base' || scenarioId === 'current') continue;
       const s = byId.get(scenarioId);
-      const dsl: string | undefined = s?.meta?.queryDSL;
+      const subtitle = chartData?.payload?.scenario_dsl_subtitle_by_id?.[scenarioId];
+      const dsl: string | undefined =
+        (s?.meta?.queryDSL as string | undefined) ||
+        (typeof subtitle === 'string' && subtitle.trim() ? subtitle : undefined);
+
       const isLive: boolean = Boolean(s?.meta?.isLive);
-      if (!isLive || !dsl || !dsl.trim()) {
+      // If the scenario exists in IDB and is not live, we cannot rebuild it from DSL deterministically.
+      if (s && !isLive) {
         return { success: false, error: 'Live chart share is only supported for DSL-backed live scenarios' };
+      }
+      if (!dsl || !dsl.trim()) {
+        // Do not hard-fail: allow sharing Current-only (Current is live by definition).
+        // This also tolerates cases where scenario metadata isn't persisted yet / fileId prefixes mismatch.
+        droppedMissingDslCount++;
+        continue;
       }
 
       const meta = metaA?.scenario_id === scenarioId ? metaA : metaB?.scenario_id === scenarioId ? metaB : null;
-      const subtitle = chartData?.payload?.scenario_dsl_subtitle_by_id?.[scenarioId];
       liveScenarioItems.push({
         dsl,
         name: (typeof meta?.name === 'string' && meta.name.trim()) ? meta.name : s?.name,
@@ -353,7 +383,13 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
       });
     }
 
-    const hideCurrent = true;
+    // Mirror what the user had visible when the chart was created.
+    //
+    // IMPORTANT:
+    // - "Current" is live by definition.
+    // - Never emit a share payload with `hide_current=true` and zero scenario items, because that
+    //   produces a chart share that has no valid scenarios to run (and looks "blank" on boot).
+    const hideCurrent = liveScenarioItems.length === 0 ? false : !visibleScenarioIds.includes('current');
     const selectedScenarioId: string | undefined = scenarioState.selectedScenarioId;
     const selectedScenarioDsl =
       selectedScenarioId && selectedScenarioId !== 'base' && selectedScenarioId !== 'current'
@@ -436,8 +472,8 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
   const { tabIds, dashboardMode, includeScenarios = true, activeTabId, baseUrl, secretOverride } = args;
 
   try {
-    if (!Array.isArray(tabIds) || tabIds.length < 2) {
-      return { success: false, error: 'Live bundle share requires at least 2 tabs' };
+    if (!Array.isArray(tabIds) || tabIds.length < 1) {
+      return { success: false, error: 'Live bundle share requires at least 1 tab' };
     }
 
     const tabs = (await Promise.all(tabIds.map(id => db.tabs.get(id)))).filter(Boolean) as any[];

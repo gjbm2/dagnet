@@ -9,6 +9,8 @@ import { chartOperationsService } from '../services/chartOperationsService';
 import { graphComputeClient } from '../lib/graphComputeClient';
 import { buildGraphForAnalysisLayer } from '../services/CompositionService';
 import { fileRegistry } from '../contexts/TabContext';
+import { formatDateUK } from '../lib/dateFormat';
+import { db } from '../db/appDatabase';
 
 /**
  * Phase 3: Live chart share boot + refresh recompute pipeline.
@@ -78,48 +80,78 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
     return true;
   }, [chartFileId, tabs, chartPayload]);
 
-  const ensureScenarios = useCallback(async (): Promise<Array<{ id: string; dsl: string; scenario?: any }>> => {
+  const ensureScenarios = useCallback(async (): Promise<Array<{ idx: number; id: string; dsl: string; scenario?: any }>> => {
     if (!scenariosContext || !chartPayload) return [];
     const items = chartPayload.scenarios?.items || [];
 
-    const existingByDsl = new Map<string, string>();
-    for (const s of scenariosContext.scenarios || []) {
-      const dsl = s?.meta?.queryDSL;
-      if (dsl) existingByDsl.set(dsl, s.id);
-    }
+    const existing = Array.isArray(scenariosContext.scenarios) ? scenariosContext.scenarios : [];
+    const usedScenarioIds = new Set<string>();
 
-    const created: Array<{ id: string; dsl: string; scenario?: any }> = [];
-    for (const item of items) {
-      const dsl = item.dsl;
+    const created: Array<{ idx: number; id: string; dsl: string; scenario?: any }> = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      const item = items[idx];
+      const dsl = item?.dsl;
       if (!dsl || !dsl.trim()) continue;
-      const existingId = existingByDsl.get(dsl);
-      if (existingId) {
-        const existingScenario = scenariosContext.scenarios?.find(s => s.id === existingId);
-        created.push({ id: existingId, dsl, scenario: existingScenario });
+
+      const wantName = typeof item?.name === 'string' ? item.name : undefined;
+      const wantColour = typeof item?.colour === 'string' ? item.colour : undefined;
+      const match = existing.find(s => {
+        if (!s?.id || usedScenarioIds.has(s.id)) return false;
+        if ((s as any)?.meta?.queryDSL !== dsl) return false;
+        if (wantName && s?.name !== wantName) return false;
+        if (wantColour && s?.colour !== wantColour) return false;
+        return true;
+      });
+      if (match) {
+        usedScenarioIds.add(match.id);
+        created.push({ idx, id: match.id, dsl, scenario: match });
         continue;
       }
-      const scenario = await scenariosContext.createLiveScenario(dsl, item.name, tabId, item.colour);
-      created.push({ id: scenario.id, dsl, scenario });
+
+      const scenario = await scenariosContext.createLiveScenario(dsl, wantName, tabId, wantColour);
+      usedScenarioIds.add(scenario.id);
+      created.push({ idx, id: scenario.id, dsl, scenario });
+    }
+
+    // Best-effort: persist immediately for the same reason as bundle boot.
+    // Chart shares may open/mount chart UI before ScenariosContext's save effect flushes.
+    try {
+      const toPersist = created
+        .map(c => c.scenario)
+        .filter(Boolean)
+        .map((s: any) => ({ ...s, fileId }));
+      if (toPersist.length > 0) {
+        await db.scenarios.bulkPut(toPersist as any);
+      }
+    } catch {
+      // best-effort
     }
 
     return created;
   }, [chartPayload, scenariosContext, tabId]);
 
   const applyScenarioViewState = useCallback(
-    async (scenarioIdsByDsl: Array<{ id: string; dsl: string }>) => {
+    async (created: Array<{ idx: number; id: string; dsl: string }>) => {
     if (!tabId || !chartPayload) return;
     const items = chartPayload.scenarios?.items || [];
     const hideCurrent = Boolean(chartPayload.scenarios?.hide_current);
 
+      const createdByIdx = new Map<number, string>(created.map(c => [c.idx, c.id]));
       const orderedScenarioIds = items
-        .map(i => scenarioIdsByDsl.find(s => s.dsl === i.dsl)?.id)
+        .map((_i, idx) => createdByIdx.get(idx))
         .filter((id): id is string => Boolean(id));
 
-      const visible = hideCurrent ? [...orderedScenarioIds] : ['current', ...orderedScenarioIds];
+      // IMPORTANT: analysis + scenario view state require at least one scenario.
+      // If hide_current is true but we have no scenario items (or mapping failed), fall back to Current.
+      const visible = (() => {
+        const base = hideCurrent ? [...orderedScenarioIds] : ['current', ...orderedScenarioIds];
+        return base.length > 0 ? base : ['current'];
+      })();
       await operations.setVisibleScenarios(tabId, visible);
 
-      for (const item of items) {
-        const id = scenarioIdsByDsl.find(s => s.dsl === item.dsl)?.id;
+      for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx];
+        const id = createdByIdx.get(idx);
         if (!id) continue;
         const mode = item.visibility_mode || 'f+e';
         await operations.setScenarioVisibilityMode(tabId, id, mode);
@@ -129,7 +161,7 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
   );
 
   const recomputeChart = useCallback(
-    async (scenarioIdsByDsl: Array<{ id: string; dsl: string }>) => {
+    async (created: Array<{ idx: number; id: string; dsl: string; scenario?: any }>) => {
       if (!scenariosContext || !chartFileId) return;
       const graph = scenariosContext.graph;
       if (!graph) return;
@@ -142,15 +174,24 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       const items = chartPayload.scenarios?.items || [];
       const hideCurrent = Boolean(chartPayload.scenarios?.hide_current);
 
+      const createdByIdx = new Map<number, { id: string; scenario?: any }>(created.map(c => [c.idx, { id: c.id, scenario: c.scenario }]));
+      const itemIdxByScenarioId = new Map<string, number>();
+      for (const [idx, v] of createdByIdx.entries()) itemIdxByScenarioId.set(v.id, idx);
+
       const orderedScenarioIds = items
-        .map(i => scenarioIdsByDsl.find(s => s.dsl === i.dsl)?.id)
+        .map((_i, idx) => createdByIdx.get(idx)?.id)
         .filter((id): id is string => Boolean(id));
 
-      const visibleScenarioIds = hideCurrent ? [...orderedScenarioIds] : ['current', ...orderedScenarioIds];
+      // IMPORTANT: analyze requires at least one scenario.
+      const visibleScenarioIds = (() => {
+        const base = hideCurrent ? [...orderedScenarioIds] : ['current', ...orderedScenarioIds];
+        return base.length > 0 ? base : ['current'];
+      })();
 
       const scenarioDslSubtitleById: Record<string, string> = {};
-      for (const item of items) {
-        const id = scenarioIdsByDsl.find(s => s.dsl === item.dsl)?.id;
+      for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx];
+        const id = createdByIdx.get(idx)?.id;
         if (!id) continue;
         scenarioDslSubtitleById[id] = (item.subtitle || item.dsl || '').trim();
       }
@@ -162,15 +203,16 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       // Use the passed-in scenarioIdsByDsl set as the authoritative map (created scenarios are included there
       // via ensureScenarios()) so we preserve names/colours deterministically.
       const scenarioOverrideById = new Map<string, any>();
-      for (const s of scenarioIdsByDsl as any[]) {
-        if (s?.id && (s as any).scenario) scenarioOverrideById.set(s.id, (s as any).scenario);
+      for (const c of created as any[]) {
+        if (c?.id && c?.scenario) scenarioOverrideById.set(c.id, c.scenario);
       }
 
       const scenarioGraphs = visibleScenarioIds.map(scenarioId => {
         const visibilityMode = (() => {
           if (scenarioId === 'current' || scenarioId === 'base') return 'f+e' as const;
-          const item = items.find(i => scenarioIdsByDsl.find(s => s.id === scenarioId)?.dsl === i.dsl);
-          return (item?.visibility_mode as any) || 'f+e';
+          const idx = itemIdxByScenarioId.get(scenarioId);
+          const def = typeof idx === 'number' ? items[idx] : null;
+          return (def?.visibility_mode as any) || 'f+e';
         })();
 
         const scenarioGraph = buildGraphForAnalysisLayer(
@@ -187,8 +229,18 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         const scenarioFromState = scenariosContext.scenarios.find(s => s.id === scenarioId);
         const scenario = scenarioOverride || scenarioFromState;
 
-        const name = scenarioId === 'current' ? 'Current' : scenario?.name || scenarioId;
-        const colour = scenarioId === 'current' ? scenariosContext.currentColour : scenario?.colour;
+        const name = (() => {
+          if (scenarioId === 'current') return 'Current';
+          const idx = itemIdxByScenarioId.get(scenarioId);
+          const def = typeof idx === 'number' ? items[idx] : null;
+          return def?.name || scenario?.name || scenarioId;
+        })();
+        const colour = (() => {
+          if (scenarioId === 'current') return scenariosContext.currentColour;
+          const idx = itemIdxByScenarioId.get(scenarioId);
+          const def = typeof idx === 'number' ? items[idx] : null;
+          return def?.colour || scenario?.colour;
+        })();
 
         return {
           scenario_id: scenarioId,
@@ -300,6 +352,43 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
       }
     } catch (e: any) {
       processedRef.current = false;
+      // Persist an in-tab error state so dashboard mode never looks "blank" when recompute fails.
+      // This is especially important for share links, where toasts may be missed.
+      try {
+        if (chartFileId && chartPayload?.chart?.kind) {
+          const now = Date.now();
+          await (fileRegistry as any).upsertFileClean(
+            chartFileId,
+            'chart' as any,
+            { repository: 'local', branch: 'main', path: `charts/${chartFileId}.json` },
+            {
+              version: '1.0.0',
+              chart_kind: chartPayload.chart.kind,
+              title: chartPayload.chart.title || 'Chart',
+              created_at_uk: formatDateUK(new Date(now)),
+              created_at_ms: now,
+              source: {
+                parent_file_id: fileId,
+                parent_tab_id: tabId,
+                query_dsl: chartPayload.analysis?.query_dsl,
+                analysis_type: chartPayload.analysis?.analysis_type || undefined,
+              },
+              payload: {
+                analysis_result: null,
+                scenario_ids: [],
+                scenario_dsl_subtitle_by_id: undefined,
+                error_message: e?.message || String(e),
+              },
+            }
+          );
+          await chartOperationsService.openExistingChartTab({
+            fileId: chartFileId,
+            title: chartPayload.chart.title || 'Chart',
+          });
+        }
+      } catch {
+        // ignore best-effort error surfacing
+      }
       if (import.meta.env.DEV) {
         try {
           (window as any).__dagnetShareChartBootError = e?.message || String(e);
