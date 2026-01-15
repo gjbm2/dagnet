@@ -2,7 +2,7 @@
 
 ## What is DagNet?
 
-DagNet is a visual graph editor for designing and analyzing conversion funnels, decision trees, and probabilistic workflows. It combines the power of visual graph editing with advanced analytics capabilities.
+DagNet is a visual graph editor for designing and analysing conversion funnels, decision trees, and probabilistic workflows. It combines the power of visual graph editing with advanced analytics capabilities, including scenario comparison, sharing, and latency-aware forecasting.
 
 ---
 
@@ -54,29 +54,37 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 
 ## Key Features
 
-### 🎨 Visual Graph Editor
+### Visual Graph Editor
 - **Interactive Node-Based Interface**: Drag and drop to create conversion funnels
-- **Real-Time Visualization**: See your graphs come to life with dynamic rendering
+- **Real-Time Visualisation**: See your graphs come to life with dynamic rendering
 - **Multiple View Modes**: Switch between graph view, raw JSON/YAML, and form editors
-- **Enhanced Cost Modeling**: Model monetary and time costs with distributions (normal, lognormal, gamma, uniform) and standard deviations
+- **Enhanced Cost Modelling**: Model monetary and time costs with distributions (normal, lognormal, gamma, uniform) and standard deviations
 - **Multi-Currency Support**: Work with GBP, USD, EUR, and custom currencies
 
-### 📊 Advanced Analytics
+### Advanced Analytics
 - **What-If Analysis**: Test different scenarios and see their impact
 - **Path Analysis**: Analyze conversion paths and identify bottlenecks
 - **Conditional Probabilities**: Model complex decision trees with conditional logic
 - **Probabilistic Calculations**: Built-in probability mass calculations and normalization
 - **Bayesian Analysis**: Support for Bayesian parameter estimation with n, k, and window_to parameters
 - **Data-Driven Parameters**: Connect parameters to Google Sheets and Amplitude for live data
+- **Bridge View**: Attribute changes in reach to local probability changes across the graph
 
-### 🕐 Latency-Aware Graphs (LAG)
+### Latency-Aware Graphs (LAG)
 - **Temporal Modelling**: Model edges as time-consuming processes, not just probabilities
 - **Cohort Analysis**: Track user cohorts by entry date with `cohort()` DSL
 - **Evidence vs. Forecast**: Distinguish observed conversions from projected completions
 - **Maturity Tracking**: Visual indicators showing cohort completeness and median lag
 - **Time-Series Storage**: Full daily histories for historical analysis and forecasting
+- **Probability Basis Modes**: Render and analyse using evidence-only, forecast-only, or blended views
 
-### 🔧 Developer-Friendly
+### Sharing and Dashboarding
+- **Live Share Links**: Share a graph that loads from a repo/branch/graph identity (small URLs; content pulled on open)
+- **Static Share Links**: Share a self-contained snapshot embedded in the URL (larger URLs; no remote fetch required)
+- **Multi-Tab Bundles**: Share a dashboard containing multiple tabs (e.g. graph + chart) from a single `share=` payload
+- **Scenario Integrity on Share**: Scenario names, colours, and visibility modes are carried into live shares
+
+### Developer-Friendly
 - **Monaco Editor Integration**: Full-featured code editor with syntax highlighting
 - **Schema Validation**: Automatic validation using JSON schemas
 - **Git Integration**: Direct integration with Git repositories for version control
@@ -84,8 +92,9 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 - **Parameter Registry**: Centralized parameter management system with versioning
 - **Multiple Object Types**: Work with graphs, parameters, contexts, cases, nodes, and credentials
 - **Data Connections**: Bidirectional sync between graphs and external data sources
+- **E2E Stability Checks**: Playwright end-to-end coverage for share boot stability and correctness
 
-### 🌐 Modern Web Architecture
+### Modern Web Architecture
 - **React + TypeScript**: Built with modern web technologies
 - **IndexedDB Storage**: Client-side persistence with offline capabilities
 - **Responsive Design**: Works on desktop and tablet devices
@@ -139,8 +148,9 @@ DagNet is a visual graph editor for designing and analyzing conversion funnels, 
 
 ## Version Information
 
-- **Version**: 1.1
-- **Build Date**: December 2025
+- **App version**: 1.2.9b (from `graph-editor/package.json`: `1.2.9-beta`)
+- **Release notes**: See `docs/CHANGELOG.md` (Help → Current Version)
+- **This page last updated**: 15-Jan-26
 - **License**: MIT
 - **Repository**: [github.com/gjbm2/dagnet](https://github.com/gjbm2/dagnet)
 
