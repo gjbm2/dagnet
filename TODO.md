@@ -1,5 +1,44 @@
 # TODO
 
+
+## Charts built on live scenarios must update
+
+### Proposal + plan (triggered by live scenario changes) — updated 16-Jan-26
+- **Goal**: charts must auto-refresh when any live scenario changes in normal mode (not just on git pull) and expose a manual Refresh button on chart tabs.
+- **Scope definition: “live scenario changed” triggers**:
+  - git pull (repo state changes)
+  - put to base (base DSL changes; live scenarios regenerate)
+  - edit live scenario DSL (regeneration)
+  - explicit live scenario regeneration (manual or programmatic)
+- **Core approach**:
+  - Reuse the existing “refetch from files → regenerate → recompute charts” sequencing from the dev-only handler and make it production-capable.
+  - Centralise the recompute in `ScenariosContext` (single source of truth; no duplication in UI/menu files).
+  - Recompute all open chart tabs whose `source.parent_file_id` matches the graph file, ensuring bridge/funnel charts stay consistent without per-chart dependency inference.
+- **Event + routing strategy**:
+  - Introduce a production refresh event (e.g. `dagnet:refreshFromFiles`) that routes through the same internal handler as the dev-only event.
+  - Event payload can include `graphFileId`, optional `preferredTabId` (graph tab), and optional `chartFileId` for fallback resolution if tab state is missing.
+  - The handler resolves visible scenario order from the relevant graph tab in IndexedDB; it will not guess a scenario set if it cannot resolve the tab.
+- **Where triggers will fire (normal mode)**:
+  - `ScenariosContext.regenerateScenario` (after success, only for live scenarios)
+  - `ScenariosContext.regenerateAllLive` (single recompute at the end, not per scenario)
+  - `ScenariosContext.putToBase` (via `regenerateAllLive`, so no extra hook needed)
+  - `RepositoryOperationsService.pullLatest` (dispatch refresh event for open graph tabs)
+- **Manual refresh UX**:
+  - Add a Refresh icon button (lucide refresh) to `ChartViewer`.
+  - Button dispatches the same refresh event with `graphFileId` from chart `source.parent_file_id` and optional `parent_tab_id`.
+  - If no parent graph is known, show a non-blocking toast warning (“Open the parent graph to refresh”).
+- **Session logging**:
+  - Add a dedicated refresh log op (`session` type) including reason, repo/branch (if known), graph fileId, and chart fileIds recomputed.
+  - This is critical for diagnosing sequencing drift during parity investigations.
+- **Share mode guard**:
+  - Normal mode only for the new scenario-change triggers (live share already has a separate refresh pipeline).
+- **Tests**:
+  - Extend existing `ScenariosContext` live-scenario tests to assert chart recompute is triggered by scenario changes.
+  - Extend existing repository operations tests to assert pull triggers refresh dispatch (no new test files unless required).
+- **Known limitation (explicit)**:
+  - This keeps charts aligned with repo changes, but it does not resolve Stage‑2 “floating” `t95/path_t95` drift until determinism work is implemented.
+
+
 ## Outstanding issues (sequencing + live share parity) — updated 15-Jan-26
 
 - **Normal vs live share: material analysis deltas (suspected sequencing defect)**
