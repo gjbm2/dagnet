@@ -28,14 +28,14 @@ This launcher runs PowerShell with an execution-policy bypass and the script wil
 
 3. **Interactive menu**
    - View all scheduled graphs (numbered list)
-   - Add new graphs (one or multiple, automatically serialised)
+   - Add new graphs (single or multiple, run in sequence)
    - Remove specific graphs by number
-   - Clear all schedules
 
 The script will:
-- Remember your settings (URL, browser, timeout)
-- Auto-serialise multiple graphs (e.g., 5-minute gaps)
 - Show status of all scheduled tasks
+- Create one scheduled task per time slot (multiple graphs can run in sequence)
+- Launch the browser directly (no long-running PowerShell wrapper)
+- Optional app-window mode for single-tab runs (avoids session restore tab pile-ups)
 
 ## Script Details
 
@@ -45,13 +45,11 @@ Interactive management tool for DagNet daily scheduled retrievals.
 
 **Features:**
 - ✅ **View all scheduled graphs** - Numbered list with status, start time, last run
-- ✅ **Add new graphs** - Single or multiple, automatically serialised
+- ✅ **Add new graphs** - Single or multiple, run in sequence
 - ✅ **Remove specific graphs** - By number from the list
-- ✅ **Clear all schedules** - Remove everything at once
-- ✅ **Persistent configuration** - Remembers URL, browser, timeout between runs
-- ✅ **Automatic serialisation** - Multiple graphs run in series with configurable gaps
-- ✅ **Auto-detects browser** - Finds Chrome or Edge automatically
-- ✅ **Full task management** - View, add, remove all in one interface
+- ✅ **Browser profile option** - Dedicated scheduler profile to keep credentials stable
+- ✅ **Direct browser launch** - No hidden PowerShell window left running all day
+- ✅ **No pile-ups** - Missed runs do not spawn multiple concurrent instances
 
 **Requirements:**
 - Windows 10/11
@@ -82,28 +80,13 @@ Options:
 
 Choose an option: A
 
-# Adding multiple graphs with serialisation:
+# Adding multiple graphs (run in sequence):
 Graph name(s): funnel-a, funnel-b, journey-map
 Start time (HH:MM): 03:00
-Gap between graphs (minutes, default: 5): 5
 
-Creating scheduled task(s)...
-[1/3] Creating: funnel-a (Start time: 03:00) ✓
-[2/3] Creating: funnel-b (Start time: 03:05) ✓
-[3/3] Creating: journey-map (Start time: 03:10) ✓
-
-Successfully created 3 of 3 task(s)
+Creating scheduled task...
+✓ Task created
 ```
-
-**Configuration File:**
-Settings are saved in `dagnet-schedule-config.json`:
-- DagNet URL
-- Browser path
-- Timeout minutes
-- Missed trigger behavior
-- Serialisation gap
-
-This means you don't have to re-enter settings each time you add graphs.
 
 ### Removal
 
@@ -151,10 +134,10 @@ Removal is built in: use the script menu options **Remove** (by number) or **Cle
 - Permissions issue (task must run as administrator)
 
 ### Browser doesn't close
-The script automatically closes the browser after the timeout period. If it doesn't close:
-- Increase timeout in task properties
-- Check Windows Event Viewer for errors
-- Manually close browser (won't affect next run)
+The scheduled task sets an execution time limit that matches your chosen timeout. If the browser stays open:
+- Check the task's **Stop the task if it runs longer than** setting
+- Confirm the task action launches the browser directly (not PowerShell)
+- Manually close the browser (won't affect next run)
 
 ### Task runs but retrieval fails
 **Check DagNet Session Log:**
@@ -168,68 +151,31 @@ The script automatically closes the browser after the timeout period. If it does
 - Graph name misspelled
 
 ### Multiple browser windows open
-**This is expected behavior when using serialisation.**
+If you run multiple graphs at the same time, they will open multiple windows. This is expected.
 
-Each graph gets its own task with its own browser window, staggered by the gap you specified (default: 5 minutes).
-
-**Example timeline with 5-minute gap:**
-- 02:00 - Browser opens for graph A
-- 02:05 - Browser opens for graph B (A still running)
-- 02:10 - Browser opens for graph C (A and B still running)
-- 02:20 - Browser A closes (20-min timeout)
-- 02:25 - Browser B closes
-- 02:30 - Browser C closes
-
-**If this is a problem:**
-1. Increase the gap between graphs (e.g., 10 or 15 minutes)
-2. Use a shorter timeout (e.g., 15 minutes instead of 20)
-3. Stagger graph groups to different hours (e.g., 02:00, 03:00, 04:00)
-
-**Why serialisation matters:**
-- Prevents overwhelming your computer with simultaneous operations
-- Prevents GitHub API rate limiting
-- Ensures each graph gets full attention
-- Easier to debug issues (clear separation in session logs)
+The scheduler is configured to **ignore overlapping instances**, so missed runs (for example after a weekend offline)
+will not spawn multiple concurrent windows.
 
 ## Advanced Configuration
-
-### Serialisation Gap Adjustment
-When adding multiple graphs, you're prompted for the gap between them. The default is 5 minutes.
-
-**Choosing the right gap:**
-- **Small graphs (< 100 nodes):** 3-5 minutes
-- **Medium graphs (100-500 nodes):** 5-10 minutes
-- **Large graphs (> 500 nodes):** 10-20 minutes
-
-The gap should account for:
-1. Time for browser to open
-2. Time for DagNet to load
-3. Time for retrieve operation to complete
-4. Small buffer for safety
-
-**Adjusting existing schedules:**
-If your graphs are finishing faster or slower than expected:
-1. Remove the affected graphs
-2. Re-add them with a different gap
 
 ### Different Start Times for Different Graph Groups
 You can have multiple groups running at different times:
 
 ```powershell
-# Morning group (serialised)
+# Morning group
 # Add: morning-funnel-a, morning-funnel-b
-# Start: 06:00, Gap: 5
+# Start: 06:00
 
-# Afternoon group (serialised)
+# Afternoon group
 # Add: afternoon-journey-a, afternoon-journey-b
-# Start: 14:00, Gap: 5
+# Start: 14:00
 
-# Overnight group (serialised)
+# Overnight group
 # Add: nightly-sync-a, nightly-sync-b, nightly-sync-c
-# Start: 02:00, Gap: 10
+# Start: 02:00
 ```
 
-Each group runs independently, serialised within itself.
+Each group runs independently.
 
 ### Weekly Instead of Daily
 1. Add graph(s) normally via script
@@ -244,27 +190,6 @@ Each group runs independently, serialised within itself.
 2. **Actions** tab → **New**
 3. Action: "Send an e-mail" (requires SMTP configuration)
 4. Configure email settings with failure details
-
-### Configuration File Management
-Settings are stored in `dagnet-schedule-config.json`:
-
-```json
-{
-  "dagnetUrl": "https://dagnet.vercel.app",
-  "browserPath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "timeoutMinutes": 20,
-  "runAfterMissed": true,
-  "serializationGapMinutes": 5
-}
-```
-
-**To reset configuration:**
-1. Delete `dagnet-schedule-config.json`
-2. Run script again - it will prompt for all settings
-
-**To change a setting:**
-1. Edit the JSON file directly, or
-2. Run script → [A]dd → Script will prompt to change saved settings
 
 ## Security Notes
 
@@ -305,18 +230,18 @@ See `graph-editor/public/docs/dev/URL_PARAMS.md` for full URL parameter document
 # No existing schedules, choose [A] to add
 Choose an option: A
 
-# First time, configure everything:
+# Configure settings:
 DagNet URL: https://dagnet.vercel.app
 Graph name(s): conversion-funnel
 Start time (HH:MM): 02:00
-Browser timeout (minutes): 20
-If PC was off: [1] Run ASAP
-Browser: C:\Program Files\Google\Chrome\Application\chrome.exe
+Minutes to stay open: 20
+If PC was off: [1] Run as soon as PC wakes
+Use dedicated profile? Y
 
 ✓ Created successfully
 ```
 
-### Example 2: Add multiple graphs with serialisation
+### Example 2: Add multiple graphs (run in sequence)
 ```powershell
 .\setup-daily-retrieve.ps1
 
@@ -326,12 +251,11 @@ Scheduled Graphs:
 
 Choose an option: A
 
-# Settings remembered, just enter graphs and time:
+# Enter graphs and time:
 Graph name(s): journey-a, journey-b, journey-c
 Start time (HH:MM): 03:00
-Gap between graphs (minutes): 5
 
-# Creates 3 tasks at 03:00, 03:05, 03:10 (serialised!)
+# Creates one task that runs the graphs in sequence
 ```
 
 ### Example 3: Remove specific graph

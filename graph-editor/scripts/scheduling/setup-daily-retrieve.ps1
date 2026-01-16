@@ -345,18 +345,37 @@ function Add-Graph {
     if ([string]::IsNullOrWhiteSpace($windowChoice)) { $windowChoice = "1" }
     $startMinimised = ($windowChoice -eq "2")
 
-    # Default behaviour: use the system default browser.
-    # If the user opts into a dedicated scheduler profile, we attempt to resolve the default browser EXE
-    # so we can pass profile arguments. If we can't resolve it, we fall back to plain Start-Process <url>.
-    $useDefaultBrowser = $true
-    $browser = $null
+    Write-Host ""
+    Write-Host "Browser launch mode:" -ForegroundColor Gray
+    Write-Host "  [1] Normal tab (restores previous session tabs) - DEFAULT" -ForegroundColor Gray
+    Write-Host "  [2] App window (single tab, avoids session restore)" -ForegroundColor Gray
+    $launchModeChoice = Read-Host "Choice (default: 1)"
+    if ([string]::IsNullOrWhiteSpace($launchModeChoice)) { $launchModeChoice = "1" }
+    $useAppWindow = ($launchModeChoice -eq "2")
+
+    # Run the browser executable directly so the scheduled task owns the process
+    # and Task Scheduler can end it when the execution time limit is reached.
+    $browser = Resolve-DefaultBrowserExe
+    if (-not $browser) {
+        Write-Host ""
+        Write-Host "Could not resolve your default browser executable." -ForegroundColor Yellow
+        Write-Host "Please enter the full path to your browser exe (e.g. C:\Program Files\Google\Chrome\Application\chrome.exe)" -ForegroundColor Gray
+        $browser = Read-Host "Browser exe path (leave blank to cancel)"
+        if ([string]::IsNullOrWhiteSpace($browser)) {
+            Write-Host "Cancelled." -ForegroundColor Yellow
+            return
+        }
+        if (-not (Test-Path $browser)) {
+            Write-Host "Invalid browser path: $browser" -ForegroundColor Red
+            return
+        }
+    }
     
     Write-Host ""
     Write-Host "Creating scheduled task..." -ForegroundColor Yellow
     
     $taskName = "DagNet_DailyRetrieve_$graphName"
     $fullUrl = "$url/?retrieveall=$retrieveAllParam"
-    $timeoutSeconds = [int]$timeout * 60
     
     Write-Host "  Task name: $taskName" -ForegroundColor Gray
     Write-Host "  URL: $fullUrl" -ForegroundColor Gray
@@ -366,68 +385,67 @@ function Add-Graph {
     Write-Host ""
     
     # Optional: dedicated browser profile for scheduled runs (recommended for stable credentials/IndexedDB).
-    # IMPORTANT: For a dedicated profile we need a concrete browser executable to pass CLI flags.
     $profileDir = $null
     $browserArgs = $null
+    $exeName = [System.IO.Path]::GetFileName($browser).ToLower()
+    $isFirefox = ($exeName -like "*firefox*")
+
+    # Base args for normal (non-dedicated) runs
+    if ($isFirefox) {
+        if ($useAppWindow) {
+            Write-Host ""
+            Write-Host "Note: App window mode is not supported in Firefox; using normal tab instead." -ForegroundColor Yellow
+        }
+        $browserArgs = "-new-window `"$fullUrl`""
+    }
+    else {
+        if ($useAppWindow) {
+            $browserArgs = "--app=`"$fullUrl`""
+        }
+        else {
+            $browserArgs = "--new-window `"$fullUrl`""
+        }
+        if ($startMinimised) {
+            $browserArgs = "$browserArgs --start-minimized"
+        }
+    }
+
+    if ($startMinimised -and $isFirefox) {
+        Write-Host ""
+        Write-Host "Note: Firefox does not reliably support start minimised via CLI; it may open normally." -ForegroundColor Yellow
+    }
+
     Write-Host "Use a dedicated DagNet scheduler browser profile? (recommended)" -ForegroundColor Gray
     Write-Host "  This keeps credentials/IndexedDB stable and avoids 'wrong browser profile' failures." -ForegroundColor DarkGray
     $useDedicated = Read-Host "Use dedicated profile? (Y/n)"
     if ([string]::IsNullOrWhiteSpace($useDedicated) -or $useDedicated.ToLower() -eq "y" -or $useDedicated.ToLower() -eq "yes") {
-        $browser = Resolve-DefaultBrowserExe
-        if ($browser) {
-            $useDefaultBrowser = $false
-            Write-Host "Resolved default browser exe: $browser" -ForegroundColor Gray
-            $profileDir = Join-Path $env:LOCALAPPDATA "DagNet\scheduled-browser-profile"
-            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+        Write-Host "Resolved browser exe: $browser" -ForegroundColor Gray
+        $profileDir = Join-Path $env:LOCALAPPDATA "DagNet\scheduled-browser-profile"
+        New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
 
-            $exeName = [System.IO.Path]::GetFileName($browser).ToLower()
-            if ($exeName -like "*firefox*") {
-                $browserArgs = "-profile `"$profileDir`" -new-window `"$fullUrl`""
+        if ($isFirefox) {
+            $browserArgs = "-profile `"$profileDir`" -new-window `"$fullUrl`""
+        }
+        else {
+            # Assume Chromium-family flags (Brave/Chrome/Edge etc.)
+            if ($useAppWindow) {
+                $browserArgs = "--user-data-dir=`"$profileDir`" --app=`"$fullUrl`""
             }
             else {
-                # Assume Chromium-family flags (Brave/Chrome/Edge etc.)
                 $browserArgs = "--user-data-dir=`"$profileDir`" --new-window `"$fullUrl`""
-                if ($startMinimised) {
-                    $browserArgs = "$browserArgs --start-minimized"
-                }
             }
-
-            # Escape any single quotes for PowerShell single-quoted string usage in the encoded command.
-            $browserArgs = $browserArgs -replace "'", "''"
-        }
-        else {
-            Write-Host "WARNING: Could not resolve the default browser exe; will use the default browser without a forced profile." -ForegroundColor Yellow
-            Write-Host "  You can still credentialise it, but it may use a different profile depending on Windows/browser." -ForegroundColor Yellow
+            if ($startMinimised) {
+                $browserArgs = "$browserArgs --start-minimized"
+            }
         }
     }
-
-    # Build the command executed by Task Scheduler (PowerShell -EncodedCommand uses UTF-16LE).
-    # NOTE: Task Scheduler has its own independent execution time limit; we set it below to match your timeout.
-    if ($useDefaultBrowser) {
-        # When launching the default browser via URL, "minimised" is best-effort (Windows/browser may ignore it).
-        if ($startMinimised) {
-            $cmd = "Start-Process -WindowStyle Minimized '$fullUrl'; Start-Sleep -Seconds $timeoutSeconds"
-        }
-        else {
-            $cmd = "Start-Process '$fullUrl'; Start-Sleep -Seconds $timeoutSeconds"
-        }
-    }
-    else {
-        if ($startMinimised) {
-            $cmd = "Start-Process '$browser' -ArgumentList '$browserArgs' -WindowStyle Minimized; Start-Sleep -Seconds $timeoutSeconds"
-        }
-        else {
-            $cmd = "Start-Process '$browser' -ArgumentList '$browserArgs'; Start-Sleep -Seconds $timeoutSeconds"
-        }
-    }
-    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($cmd))
     
     try {
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -EncodedCommand $encoded"
+        $action = New-ScheduledTaskAction -Execute $browser -Argument $browserArgs
         $trigger = New-ScheduledTaskTrigger -Daily -At $startTime
         # Align Task Scheduler's "Stop the task if it runs longer than:" EXACTLY with the chosen minutes.
         $execLimit = New-TimeSpan -Minutes ([int]$timeout)
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable:$startWhenAvailable -ExecutionTimeLimit $execLimit
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable:$startWhenAvailable -ExecutionTimeLimit $execLimit -MultipleInstances IgnoreNew
         $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
         
         # Remove if exists
@@ -463,7 +481,7 @@ function Add-Graph {
             Write-Host "  Location: Task Scheduler > Task Scheduler Library" -ForegroundColor Green
             Write-Host "  (Run 'taskschd.msc' to view)" -ForegroundColor Gray
 
-            if (-not $useDefaultBrowser -and $profileDir) {
+            if ($profileDir) {
                 Write-Host ""
                 Write-Host "Dedicated scheduler profile:" -ForegroundColor Cyan
                 Write-Host "  $profileDir" -ForegroundColor White
@@ -476,12 +494,7 @@ function Add-Graph {
                 try {
                     # For this one-off interactive run, prefer visible window even if the scheduled run is minimised,
                     # so you can complete credential setup easily.
-                    if ($useDefaultBrowser) {
-                        Start-Process $fullUrl
-                    }
-                    else {
-                        Start-Process $browser -ArgumentList $browserArgs
-                    }
+                    Start-Process $browser -ArgumentList $browserArgs
                     Write-Host "Opened browser. Please complete login/authorisation in that window/profile." -ForegroundColor Green
                 }
                 catch {
