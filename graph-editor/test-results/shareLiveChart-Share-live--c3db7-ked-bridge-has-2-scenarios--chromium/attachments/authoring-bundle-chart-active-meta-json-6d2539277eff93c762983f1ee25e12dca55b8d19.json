@@ -1,0 +1,8 @@
+{
+  "phase": "authoring-bundle-chart-active",
+  "testTitle": "bundle share link generation: when chart tab is active, it still includes graph scenario items (graph+chart bundle stays linked; bridge has 2 scenarios)",
+  "startAt": "2026-01-18T22:49:38.486Z",
+  "endAt": "2026-01-18T22:49:40.417Z",
+  "finalUrl": "http://127.0.0.1:4173/?e2e=1",
+  "status": "passed"
+}

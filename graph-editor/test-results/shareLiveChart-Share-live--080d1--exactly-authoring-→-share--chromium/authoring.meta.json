@@ -1,8 +1,8 @@
 {
   "phase": "authoring",
   "testTitle": "generated live chart share link replays scenario labels/colours/modes exactly (authoring → share)",
-  "startAt": "2026-01-15T20:27:04.822Z",
-  "endAt": "2026-01-15T20:27:12.365Z",
+  "startAt": "2026-01-18T22:49:47.817Z",
+  "endAt": "2026-01-18T22:49:49.745Z",
   "finalUrl": "http://127.0.0.1:4173/?e2e=1",
   "status": "passed"
 }

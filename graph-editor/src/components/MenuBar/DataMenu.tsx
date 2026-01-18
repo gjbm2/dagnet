@@ -18,6 +18,7 @@ import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
 import { useRetrieveAllSlicesRequestListener } from '../../hooks/useRetrieveAllSlicesRequestListener';
 import { PinnedQueryModal } from '../modals/PinnedQueryModal';
 import { db } from '../../db/appDatabase';
+import { AutoUpdateChartsMenubarItem } from './AutoUpdateChartsMenubarItem';
 
 /**
  * Data Menu
@@ -833,6 +834,9 @@ export function DataMenu() {
           
           <Menubar.Separator className="menubar-separator" />
           
+          {/* Auto-update charts toggle */}
+          <AutoUpdateChartsMenubarItem />
+
           {/* Exclude test accounts toggle (temporary hack) */}
           <Menubar.Item 
             className="menubar-item" 

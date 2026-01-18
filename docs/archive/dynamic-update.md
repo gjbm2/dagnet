@@ -1,7 +1,55 @@
 # Dynamic update (dependency signatures for scenarios, analysis, and charts)
 
-**Status**: Proposal  
-**Last updated**: 16-Jan-26
+**Status**: Implemented (v1: charts + policy + orchestration + scenario provenance)  
+**Last updated**: 18-Jan-26
+
+## Implementation status (as of 18-Jan-26)
+
+This document contains both:
+- a broader proposal for “dynamic update” across **scenarios → analysis → charts**, and
+- an implementation plan/checklist for the **chart** portion (Option B: dependency signatures / self-invalidating artefacts).
+
+To avoid confusion, here is what is **implemented** vs **not yet implemented**.
+
+### Implemented (in codebase)
+
+- **Chart artefacts are self-invalidating**:
+  - chart file schema includes `recipe`, `deps`, and `deps_signature`
+  - staleness is determined by comparing stored vs current `deps_signature`
+  - recompute updates the existing chart file in place (no migration/backfill)
+- **Linked vs pinned semantics**:
+  - linked when a specific `parent_tab_id` is resolvable (tab-scoped scenario state)
+  - pinned fallback when the parent tab is not resolvable
+  - pinned refresh is blocked unless `recipe.pinned_recompute_eligible === true`
+- **Auto-update policy**:
+  - forced ON in live share/dashboard contexts
+  - ON by default in normal authoring, but user-toggleable (Data menu + Tools panel) via a central service/hook
+- **Orchestration**:
+  - debounced/single-flight chart reconcile after live scenario regeneration and authored graph topology changes
+  - UK day-boundary tick scheduling for charts whose recipe contains dynamic DSLs (reference-day invalidation)
+- **UX**:
+  - chart UI shows Linked/Pinned state
+  - chart UI has Refresh and Disconnect
+  - “Stale” indicator is shown when auto-update is disabled and the deps signature differs
+- **Tests**:
+  - Vitest coverage for stamps/signatures, pinned eligibility, recompute correctness, and ordering invariants
+  - Playwright E2E coverage for workspace authoring refresh and live share (including multi-tab bundles)
+
+### Tier 1 scenario provenance (implemented; best-effort; required for dependency-style invalidation)
+
+- Live scenario regeneration now persists a **scenario deps stamp + signature** onto `Scenario.meta`:
+  - `meta.deps_v1`
+  - `meta.deps_signature_v1`
+- The stamp records:
+  - the effective DSL used for regeneration, and
+  - an “inputs observed” list with **file revision tokens** (SHA when present, else `lastModified`, else `missing`) for:
+    - graph file
+    - settings (`settings/settings.yaml`) when present
+    - graph-referenced parameter files
+    - any context files referenced by `context(...)` / `contextAny(...)` within the effective DSL
+    - relevant index files when present (`parameters-index.yaml`, `contexts-index.yaml`)
+
+---
 
 ## Problem statement
 
@@ -770,40 +818,40 @@ Notes:
 
 **Depends on / see**: `Locked decisions → Canonical revision decisions`, `Locked decisions → Chart semantics and share/bundle behaviour`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → “Current” layer`
 
-- **1.1 (pending)**: Add a small pure module that defines:
+- **1.1 (done)**: Add a small pure module that defines:
   - chart deps stamp type(s)
   - canonicalisation rules (ordering, whitespace, redaction)
   - deps signature function (stable, cheap change detection)
-- **1.2 (pending)**: Add unit tests that lock:
+- **1.2 (done)**: Add unit tests that lock:
   - “same stamp inputs ⇒ same signature”
   - “one input changes ⇒ signature changes”
   - linked-view vs pinned-recipe semantics produce different dependency surfaces
 
 ### Step 2 — Persist chart deps signature on chart artefacts (TDD via existing chart tests)
 
-**Depends on / see**: `Locked decisions → Chart file schema decisions (recipe block)`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → “Current” layer`
+**Depends on / see**: `Locked decisions → Chart file schema decisions (recipe block + no DSL injection)`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → “Current” layer`
 
-- **2.1 (pending)**: Extend `graph-editor/src/services/__tests__/chartOperationsService.bridgeDslInjection.test.ts` to assert:
+- **2.1 (done)**: Extend `graph-editor/src/services/__tests__/chartOperationsService.bridgeDslInjection.test.ts` to assert:
   - `deps_signature` exists on persisted chart artefacts
-  - `deps_signature` changes when recipe-relevant inputs change (e.g. scenario DSL subtitle mapping)
-- **2.2 (pending)**: Update `graph-editor/src/services/chartOperationsService.ts` to write:
+  - `deps_signature` changes when recipe-relevant inputs change (e.g. scenario DSL mapping / Current DSL)
+- **2.2 (done)**: Update `graph-editor/src/services/chartOperationsService.ts` to write:
   - `deps` (stamp) and `deps_signature` alongside existing chart fields
-- **2.2a (pending)**: Ensure the chart artefact always persists both:
+- **2.2a (done)**: Ensure the chart artefact always persists both:
   - **parent linkage**: `source.parent_file_id` (and `source.parent_tab_id` when available)
   - **pinned fallback recipe**: pin the scenario set and display/render inputs required to recompute *without* a graph tab:
     - pinned visible scenario set (ordered IDs)
     - pinned per-scenario visibility mode (`f+e`/`f`/`e`)
     - pinned per-scenario display metadata (name + colour)
-    - flattened per-scenario effective DSL mapping (e.g. `scenario_dsl_subtitle_by_id`)
+    - flattened per-scenario effective DSL mapping (`chart.recipe.scenarios[*].effective_dsl`)
     - analysis recipe fields (analysis type, query DSL, what‑if DSL if applicable)
     - **Current handling**:
-      - persist a pinned Current DSL (`scenario_dsl_subtitle_by_id.current`) when Current participates in the compute (even if `hideCurrent` is true)
+      - persist a pinned Current DSL (`chart.recipe.scenarios[*].effective_dsl` for `scenario_id=current`) when Current participates in the compute (even if `hideCurrent` is true)
       - persist display intent for Current visibility (so the pinned view can match authoring)
   - **eligibility metadata**: record whether pinned recompute is permitted (i.e. all scenarios are live/DSL-backed), so orphaned static-scenario charts can surface a clear “cannot refresh while orphaned” reason.
-- **2.3 (pending)**: Enforce invariant: chart artefacts must always be created with the pinned fallback recipe + deps stamp/signature.
+- **2.3 (done)**: Enforce invariant: chart artefacts must always be created with the pinned fallback recipe + deps stamp/signature.
   - No migration/backfill logic: if required pinned fields are missing, the chart is not eligible for refresh and must be recreated (or recomputed from an active parent tab context using the normal pipeline).
 
-- **2.4 (pending)**: Rationalise chart creation: remove “recipe/DSL injection into analysis outputs”.
+- **2.4 (done)**: Rationalise chart creation: remove “recipe/DSL injection into analysis outputs”.
   - Remove injection of scenario DSL into `payload.analysis_result` fields.
   - Ensure chart legend/tooltip DSL display reads from `chart.recipe` only.
   - Update existing tests that asserted injected analysis DSL to assert recipe fields instead.
@@ -812,25 +860,39 @@ Notes:
 
 **Depends on / see**: `Locked decisions → Chart semantics and share/bundle behaviour`, `Locked decisions → Tab-scoped scenario state`, `Locked decisions → Auto-update policy`
 
-- **3.1 (pending)**: Extract a central service entry point that can:
+- **3.1 (done)**: Extract a central service entry point that can:
   - find open chart tabs for a given parent graph
   - recompute analysis for each chart using existing recipes/metadata
   - update chart files in place (same fileId; no duplicate tabs)
-- **3.2 (pending)**: Add/extend integration tests (prefer existing suites) to assert:
+- **3.2 (done)**: Add/extend integration tests (prefer existing suites) to assert:
   - recompute updates the chart artefact in place
   - recompute is deduplicated per chart fileId
+
+- **3.3 (done)**: Remove duplicate/legacy recompute paths:
+  - consolidate on `recomputeOpenChartsForGraph(...)` as the single recompute primitive
+  - delete `recomputeOpenChartsForGraphFileId(...)` / `chartRecomputeService` wrapper if unused, to avoid duplicate code paths
 
 ### Step 4 — Staleness checking (only recompute when stale)
 
 **Depends on / see**: `Locked decisions → Chart staleness semantics`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → “Current” layer`, `Locked decisions → Tab-scoped scenario state`
 
-- **4.1 (pending)**: Define “current deps stamp” derivation for:
+- **4.1 (done)**: Define “current deps stamp” derivation for:
   - linked-view charts (consult parent tab scenario state / effective scenario DSLs as needed)
   - pinned-recipe charts (consult only stored recipe + observed input revisions)
-- **4.2 (pending)**: Implement `isChartStale(chartFile, currentStamp)` (pure, test-driven).
-- **4.3 (pending)**: Update the recompute pipeline to:
+- **4.2 (done)**: Implement `isChartStale(chartFile, currentStamp)` (pure, test-driven).
+- **4.3 (done)**: Update the recompute pipeline to:
   - skip recompute if not stale
   - assume `deps_signature` exists for all chart artefacts created after Step 2 (no migration/backfill paths)
+
+- **4.4 (done)**: Enforce tab-resolvability semantics for linked charts:
+  - if `parent_tab_id` is not resolvable in `db.tabs`, treat the chart as orphaned and do not treat it as “linked”
+  - do not auto-bind to a reopened graph tab for the same fileId
+
+- **4.5 (done)**: Enforce pinned recompute eligibility:
+  - if chart is operating in pinned mode and `recipe.pinned_recompute_eligible !== true`, do not attempt pinned refresh
+
+- **4.6 (done)**: Enforce “no migration/backfill” refresh eligibility:
+  - if required pinned recipe fields or `deps_signature` are missing, do not refresh (surface “requires regeneration” via UX in Step 7)
 
 Notes:
 
@@ -840,19 +902,20 @@ Notes:
 
 **Depends on / see**: `Locked decisions → Auto-update policy`, `Locked decisions → Chart semantics and share/bundle behaviour`
 
-- **5.1 (pending)**: Implement a single auto-update policy service:
+- **5.1 (done)**: Implement a single auto-update policy service:
   - enabled for live share mode, dashboard mode, or explicit `auto-update=true`
-  - disabled by default for normal authoring unless explicitly enabled
-- **5.1a (pending)**: Persist the workspace-mode preference (source of truth):
+  - **ON by default** for normal authoring (workspace), but user-toggleable via a persisted workspace preference
+- **5.1a (done)**: Persist the workspace-mode preference (source of truth):
   - stored centrally (e.g. app state in IndexedDB) so it applies across tabs and survives reload
   - read/write exclusively via a service/hook used by both UI access points
-- **5.2 (pending)**: Wire orchestration from the service/context layer (not UI):
+- **5.2 (done)**: Wire orchestration from the service/context layer (not UI):
   - when live scenarios regenerate successfully, schedule a debounced reconcile pass for affected charts
   - when authored graph topology edits occur, schedule a debounced reconcile pass for the active graph tab (per the locked “Graph topology edits” decision)
   - ensure single-flight per graph
-- **5.3 (pending)**: Extend `graph-editor/src/contexts/__tests__/ScenariosContext.liveScenarios.test.tsx` to assert:
+- **5.3 (done)**: Extend `graph-editor/src/contexts/__tests__/ScenariosContext.liveScenarios.test.tsx` to assert:
   - in auto-update contexts, regenerating a live scenario triggers chart reconcile for open chart tabs
   - in non-auto contexts, it does not auto-recompute (but staleness is detectable)
+  - topology edits trigger reconcile when auto-update is enabled (and do not when disabled)
 
 Notes:
 
@@ -862,34 +925,193 @@ Notes:
 
 **Depends on / see**: `Locked decisions → Canonical revision decisions`
 
-- **6.1 (pending)**: Introduce an injectable “UK reference day provider” (used by DSL resolution and stamps).
-- **6.2 (pending)**: Add tests that assert:
+- **6.1 (done)**: Introduce an injectable “UK reference day provider” (used by DSL resolution and stamps).
+- **6.2 (done)**: Add tests that assert:
   - dynamic DSL charts become stale on day change
   - fixed-window charts do not churn
-- **6.3 (pending)**: Add a lightweight day-boundary tick scheduler:
+- **6.3 (done)**: Add a lightweight day-boundary tick scheduler:
   - only active when at least one open artefact depends on dynamic DSL
 
 ### Step 7 — UX (staleness indicator + manual refresh; thin UI)
 
 **Depends on / see**: `Locked decisions → Chart semantics and share/bundle behaviour`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → Auto-update policy`
 
-- **7.1 (pending)**: Add a manual Refresh affordance for charts (always available).
-- **7.2 (pending)**: Add a “stale” indicator on chart tabs/views when staleness is detected and auto-update is disabled.
-- **7.3 (pending)**: Ensure live share/dashboard remains non-blocking and fail-safe (keep old artefact visible on recompute failure).
-- **7.4 (pending)**: Expose auto-update toggle in:
+- **7.1 (done)**: Add a manual Refresh affordance for charts (always available).
+- **7.2 (done)**: Add a “stale” indicator on chart tabs/views when staleness is detected and auto-update is disabled.
+- **7.3 (done)**: Ensure live share/dashboard remains non-blocking and fail-safe:
+  - recompute failures do not blank the UI; the previous cached artefact remains visible because we do not overwrite the chart file on failed compute.
+- **7.4 (done)**: Expose auto-update toggle in:
   - Data menu (`Data → Auto-update charts`)
   - Tools panel (mirrors Data menu)
   - Both must call the same central hook/service; UI files remain access points only.
-- **7.5 (pending)**: Surface chart semantic state (`Linked` vs `Pinned`) in the chart UI, and implement `Disconnect`:
+- **7.5 (done)**: Surface chart semantic state (`Linked` vs `Pinned`) in the chart UI, and implement `Disconnect`:
   - Disconnect clears parent-tab linkage and flips the chart to pinned semantics (pinned recipe should already exist via Step 2.2a).
 
 ### Step 8 — Logging and diagnostics (required for parity investigations)
 
 **Depends on / see**: `Locked decisions → Chart staleness semantics`, `Locked decisions → Auto-update policy`
 
-- **8.1 (pending)**: Add session logging for:
+- **8.1 (done)**: Add session logging for:
   - reconcile start/end
   - reasons (file revision, DSL change, day boundary, manual refresh)
   - targets (graph, scenarios, chart fileIds)
   - prev vs next deps signatures
+
+### Step 9 — Systematic test coverage plan (integration confidence for auto-updating charts) (done)
+
+Status note (18-Jan-26): Step 9 is implemented (Vitest + Playwright coverage added; relevant suites passing locally).
+
+Purpose: This feature is subtle and cross-cuts graph state, per-tab scenario state, live vs snapshot scenarios, share modes, and compute boundaries. Step 9 defines a systematic, layered test plan that gives strong confidence that charts auto-update correctly and that we have not introduced regressions.
+
+Principles:
+
+- Tests must cover behaviour end-to-end (graph/scenario changes → staleness detection → recompute decision → chart artefact update) at multiple layers.
+- Prefer extending existing test suites over adding new files.
+- E2E tests must be deterministic: stub external boundaries (GitHub and compute), validate IndexedDB side effects, and avoid timing flake by polling for specific state changes.
+- Coverage must explicitly include the edge cases already discussed (linked vs pinned semantics, tab-scoping, “Current” behaviour, mixed scenario types, auto-update policy gating, topology changes, and day-boundary invalidation).
+
+#### 9.1 Unit tests (pure logic; fast; high signal)
+
+Target: stable canonicalisation and staleness logic, independent of React/IndexedDB.
+
+- **chart deps + signature** (existing home: `graph-editor/src/lib/chartDeps.ts` with unit tests in existing service test suites where already added)
+  - stable signature for semantically identical stamps (ordering, whitespace normalisation)
+  - signature changes when any authoritative input changes:
+    - scenario order changes
+    - scenario visibility mode changes
+    - analysis query DSL changes
+    - what-if DSL changes
+    - “Current” DSL changes (linked mode only)
+    - reference day changes when dynamic DSL is detected
+- **dynamic DSL detection** (`graph-editor/src/lib/dslDynamics.ts`)
+  - dynamic inputs are detected for relative/open-ended date specifications (and do not false-positive for fixed windows)
+- **graph topology signature** (`graph-editor/src/services/graphTopologySignatureService.ts`)
+  - stable under non-topology edits (e.g. colours/labels)
+  - changes under topology edits (nodes/edges added/removed/reconnected)
+
+#### 9.2 Integration tests (Vitest; real IndexedDB via fake-indexeddb; service orchestration)
+
+Targets: “the system does the right thing” without relying on a browser UI. These tests should validate the orchestration and persistence contracts, not cosmetic UI.
+
+- **Scenario regeneration triggers chart reconcile (policy-gated)** (existing home: `graph-editor/src/contexts/__tests__/ScenariosContext.liveScenarios.test.tsx`)
+  - when auto-update is enabled, successful live scenario regeneration schedules and executes a reconcile pass for open charts of the graph
+  - when auto-update is disabled, the reconcile pass is not executed (but staleness can still be detected later)
+  - topology change detection triggers reconciliation when enabled and does not when disabled
+  - ensure debouncing and single-flight behaviour (burst regen results in one reconcile)
+- **Chart recompute primitive correctness** (existing home: `graph-editor/src/services/__tests__/chartOperationsService.bridgeDslInjection.test.ts`)
+  - recompute updates the existing chart artefact in place and updates `deps` / `deps_signature`
+  - recompute deduplicates by chart fileId (multiple tabs referencing same chart file do not trigger duplicate compute)
+  - recompute skips charts when:
+    - `deps_signature` is missing (no migration/backfill; must recreate)
+    - chart’s parent graph does not match the targeted graph
+    - pinned mode and `recipe.pinned_recompute_eligible !== true`
+  - linked vs pinned mode derivation:
+    - linked when `parent_tab_id` resolvable
+    - pinned when `parent_tab_id` missing or not resolvable (closed tab)
+  - “Current” handling:
+    - linked mode uses authoritative Current DSL provided by GraphStore (when available)
+    - pinned mode does not drift (uses pinned recipe DSL only)
+  - scenario set shapes (must be covered):
+    - scenario + Current
+    - just Current
+    - only scenarios (hide Current)
+  - analysis / chart kinds (must be covered):
+    - bridge chart
+    - funnel chart
+- **Auto-update policy service** (add to an existing relevant suite in `graph-editor/src/services/__tests__/` rather than creating a new file)
+  - default is ON in normal authoring when no explicit preference is stored
+  - forced ON behaviour in live share and dashboard modes
+  - URL `auto-update=true` forces enabled in workspace mode
+  - persistence to `db.appState` is respected across reload and shared across access points
+- **Day-boundary invalidation** (extend existing suites in `graph-editor/src/services/__tests__/` where the UK day provider/scheduler is covered)
+  - a chart whose stamp includes `reference_day_uk` becomes stale when the UK reference day changes
+  - a chart that does not depend on reference day does not churn
+
+#### 9.3 E2E tests (Playwright; real browser; validates integration across UI + IndexedDB + network boundaries)
+
+Targets: prove the actual integrated behaviour in a running app: charts update (or do not) when they should, and we do not regress existing share-live behaviours.
+
+- **Share-live regression suite** (existing: `graph-editor/e2e/shareLiveChart.spec.ts`, `graph-editor/e2e/shareScenario.spec.ts`)
+  - maintain these as “must stay green” regressions for the share pipeline
+  - ensure fixtures match the new chart schema (recipe + deps), and ensure tests align with the contract that `payload.analysis_result` is compute output only
+  - multi-tab live share bundles (must be covered):
+    - live share of 2+ tabs containing:
+      - one or more graph tabs
+      - one or more live charts built atop those graphs
+    - charts must remain linked/connected when the parent graph tab is present in the shared bundle
+    - on boot (and after refresh), charts must render using the same scenarios, in the same order, with the same visibility modes as the parent graph tab’s scenario state
+  - scenario set shapes must be exercised here too:
+    - scenario + Current
+    - just Current
+    - only scenarios (hide Current)
+  - analysis / chart kinds must be exercised here too:
+    - bridge chart
+    - funnel chart
+- **NEW: Workspace authoring auto-update (core integration)** (new file: `graph-editor/e2e/autoUpdateCharts.spec.ts`)
+  - setup:
+    - boot `/` with `?e2e=1` so dev hooks exist
+    - seed IndexedDB with:
+      - a graph tab
+      - at least one live scenario
+      - a chart file created with complete recipe + deps signature
+      - an open chart tab for that chart
+    - stub compute boundary (`/api/runner/analyze`) to return a predictable marker that changes per call (so we can assert recompute actually happened)
+  - assertions (minimum set, high signal):
+    - **Auto-update enabled**: after a live scenario change that triggers regeneration, the chart artefact updates (marker changes) without manual refresh
+    - **Auto-update disabled**: the same change does not update the chart until manual refresh is triggered
+    - **Manual refresh**: clicking Refresh on the chart triggers recompute regardless of auto-update toggle state (subject to pinned eligibility rules)
+    - **Pinned eligibility**: a pinned chart that includes any snapshot scenario refuses pinned refresh and surfaces a clear “cannot refresh” state (no compute call)
+    - **Linked vs pinned**:
+      - close the parent graph tab so the chart becomes pinned; verify pinned refresh behaviour follows eligibility rules
+      - reopen the graph tab; verify chart becomes linked again when the specific tab linkage is resolvable (and that scenario order changes in the parent tab affect recompute ordering)
+    - **Topology change**: in an auto-update context, a topology edit triggers the reconcile pipeline and updates open charts for that graph
+    - **Day-boundary**: if the recipe contains a dynamic DSL, advancing the UK reference day triggers staleness and recompute in auto-update contexts
+    - scenario set shapes (must be explicitly exercised in workspace E2E):
+      - scenario + Current
+      - just Current
+      - only scenarios (hide Current)
+    - analysis / chart kinds (must be explicitly exercised in workspace E2E):
+      - bridge chart
+      - funnel chart
+
+- Mode coverage requirement (explicit):
+  - E2E coverage must include “normal app mode” (workspace authoring).
+  - E2E coverage must include live share mode (share-live).
+
+#### 9.4 Edge case checklist (explicit mapping; no silent gaps)
+
+This checklist must be used to confirm we have at least one test (integration or E2E) that covers each case:
+
+- linked chart recompute uses parent tab scenario order/visibility
+- chart becomes pinned when the parent tab is not resolvable (closed)
+- chart reverts to linked when the parent tab is present and resolvable again
+- scenario order change triggers recompute in linked mode
+- pinned refresh is only allowed when all participating scenarios are regenerable (live), including Base/Current when visible
+- mixed live + snapshot scenarios: linked mode is allowed when tab is present; pinned refresh is blocked
+- no migration/backfill: missing `deps_signature` or missing recipe fields prevents refresh (must recreate)
+- auto-update policy gating works in:
+  - normal workspace (default on; user can disable)
+  - dashboard mode (forced on)
+  - live share mode (forced on)
+- day-boundary invalidation only affects charts that actually depend on reference day
+- recompute is single-flight / debounced under bursts
+- failure mode: compute failure does not blank the UI and logs a coherent session record
+- scenario-set coverage (explicit):
+  - scenario + Current
+  - just Current
+  - only scenarios (hide Current)
+- analysis coverage (explicit):
+  - bridge chart
+  - funnel chart
+- mode coverage (explicit):
+  - normal app mode
+  - live share mode
+- live share multi-tab linkage (explicit):
+  - live share of 2+ tabs (graphs + charts) stays linked and preserves scenario order/visibility end-to-end
+
+Exit criteria for Step 9 completion:
+
+- All existing E2E suites remain green.
+- The new workspace auto-update E2E suite is green and stable (no timing flake).
+- For every edge case in 9.4, there is a named test that covers it (with a short note in the test file describing which case it covers).
 

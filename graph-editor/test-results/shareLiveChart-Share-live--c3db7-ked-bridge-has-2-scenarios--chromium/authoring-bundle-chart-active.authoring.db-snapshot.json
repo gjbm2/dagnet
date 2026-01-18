@@ -1,0 +1,47 @@
+{
+  "ok": true,
+  "dbName": "DagNetGraphEditor",
+  "files": [
+    {
+      "fileId": "chart-author-bridge-1",
+      "type": "chart",
+      "title": "Chart — Bridge View"
+    },
+    {
+      "fileId": "connections-connections",
+      "type": "connections"
+    },
+    {
+      "fileId": "credentials-credentials",
+      "type": "credentials"
+    },
+    {
+      "fileId": "graph-test-graph",
+      "type": "graph"
+    }
+  ],
+  "tabs": [
+    {
+      "id": "tab-chart-author-1",
+      "fileId": "chart-author-bridge-1",
+      "title": "Chart — Bridge View",
+      "viewMode": "interactive"
+    },
+    {
+      "id": "tab-graph-author-1",
+      "fileId": "graph-test-graph",
+      "title": "Graph",
+      "viewMode": "interactive"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "scenario-a",
+      "fileId": "graph-test-graph",
+      "name": "A",
+      "colour": "#111",
+      "dsl": "cohort(-1w:)",
+      "version": 1
+    }
+  ]
+}

@@ -2,13 +2,72 @@
   "version": "1.0.0",
   "chart_kind": "analysis_bridge",
   "title": "Chart — Bridge View",
-  "created_at_uk": "15-Jan-26",
-  "created_at_ms": 1768508839927,
+  "created_at_uk": "18-Jan-26",
+  "created_at_ms": 1768776596630,
   "source": {
     "parent_file_id": "graph-test-graph",
     "query_dsl": "to(switch-success)",
     "analysis_type": "bridge_view"
   },
+  "recipe": {
+    "parent": {
+      "parent_file_id": "graph-test-graph"
+    },
+    "analysis": {
+      "analysis_type": "bridge_view",
+      "query_dsl": "to(switch-success)"
+    },
+    "scenarios": [
+      {
+        "scenario_id": "scenario-1",
+        "name": "1-Dec – 17-Dec",
+        "colour": "#EC4899",
+        "visibility_mode": "f+e",
+        "effective_dsl": "window(1-Dec-25:17-Dec-25)",
+        "is_live": true
+      },
+      {
+        "scenario_id": "current",
+        "name": "Current",
+        "colour": "#3B82F6",
+        "visibility_mode": "f+e",
+        "effective_dsl": "window(8-Jan-26:13-Jan-26)",
+        "is_live": true
+      }
+    ],
+    "display": {
+      "hide_current": false
+    },
+    "pinned_recompute_eligible": true
+  },
+  "deps": {
+    "v": 1,
+    "mode": "pinned",
+    "chart_kind": "analysis_bridge",
+    "parent": {
+      "parent_file_id": "graph-test-graph"
+    },
+    "analysis": {
+      "analysis_type": "bridge_view",
+      "query_dsl": "to(switch-success)"
+    },
+    "scenarios": [
+      {
+        "scenario_id": "scenario-1",
+        "effective_dsl": "window(1-Dec-25:17-Dec-25)",
+        "visibility_mode": "f+e",
+        "is_live": true
+      },
+      {
+        "scenario_id": "current",
+        "effective_dsl": "window(8-Jan-26:13-Jan-26)",
+        "visibility_mode": "f+e",
+        "is_live": true
+      }
+    ],
+    "inputs_signature": "v1:03f61a74"
+  },
+  "deps_signature": "v1:2d4f4d94",
   "payload": {
     "analysis_result": {
       "analysis_type": "bridge_view",
@@ -19,15 +78,13 @@
           "scenario_id": "scenario-1",
           "name": "1-Dec – 17-Dec",
           "colour": "#EC4899",
-          "visibility_mode": "f+e",
-          "dsl": "window(1-Dec-25:17-Dec-25)"
+          "visibility_mode": "f+e"
         },
         "scenario_b": {
           "scenario_id": "current",
           "name": "Current",
           "colour": "#3B82F6",
-          "visibility_mode": "f+e",
-          "dsl": "window(8-Jan-26:13-Jan-26)"
+          "visibility_mode": "f+e"
         }
       },
       "dimension_values": {
@@ -35,14 +92,12 @@
           "scenario-1": {
             "name": "1-Dec – 17-Dec",
             "colour": "#EC4899",
-            "visibility_mode": "f+e",
-            "dsl": "window(1-Dec-25:17-Dec-25)"
+            "visibility_mode": "f+e"
           },
           "current": {
             "name": "Current",
             "colour": "#3B82F6",
-            "visibility_mode": "f+e",
-            "dsl": "window(8-Jan-26:13-Jan-26)"
+            "visibility_mode": "f+e"
           }
         }
       },
@@ -55,10 +110,6 @@
     "scenario_ids": [
       "scenario-1",
       "current"
-    ],
-    "scenario_dsl_subtitle_by_id": {
-      "scenario-1": "window(1-Dec-25:17-Dec-25)",
-      "current": "window(8-Jan-26:13-Jan-26)"
-    }
+    ]
   }
 }

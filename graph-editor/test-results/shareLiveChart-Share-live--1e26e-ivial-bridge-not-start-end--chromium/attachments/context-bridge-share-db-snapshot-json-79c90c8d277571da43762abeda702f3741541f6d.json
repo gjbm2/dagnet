@@ -51,7 +51,7 @@
   ],
   "tabs": [
     {
-      "id": "tab-chart-1768508867167",
+      "id": "tab-chart-1768776626795",
       "fileId": "chart-share-egtdos",
       "title": "E2E Bridge (context)",
       "viewMode": "interactive"
@@ -59,19 +59,19 @@
   ],
   "scenarios": [
     {
-      "id": "scenario-1768508867027-yzy8ay8",
-      "fileId": "graph-test-graph",
-      "name": "Channel: Influencer",
-      "colour": "#F59E0B",
-      "dsl": "cohort(1-Dec-25:31-Dec-25).context(channel:influencer)",
-      "version": 3
-    },
-    {
-      "id": "scenario-1768508867051-7raqqbi",
+      "id": "scenario-1768776626647-xp5esca",
       "fileId": "graph-test-graph",
       "name": "Channel: Paid search",
       "colour": "#EC4899",
       "dsl": "cohort(1-Dec-25:31-Dec-25).context(channel:paid-search)",
+      "version": 3
+    },
+    {
+      "id": "scenario-1768776628288-7ne5f3m",
+      "fileId": "graph-test-graph",
+      "name": "Channel: Influencer",
+      "colour": "#F59E0B",
+      "dsl": "cohort(1-Dec-25:31-Dec-25).context(channel:influencer)",
       "version": 3
     }
   ]

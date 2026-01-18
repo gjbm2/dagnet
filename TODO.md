@@ -1,43 +1,5 @@
 # TODO
 
-
-
-
-## Charts built on live scenarios must update
-
-### Proposal + plan (dependency signatures; self-invalidating charts) — updated 18-Jan-26
-
-**Authoritative design + step-by-step plan**: `docs/current/dynamic-update.md`
-
-- **Goal**: charts are derived artefacts that are **self-invalidating** via dependency signatures:
-  - graph changes ⇒ scenarios reconcile
-  - scenarios change ⇒ analysis becomes stale/refreshes
-  - analysis inputs change ⇒ charts refresh
-
-- **Core design**:
-  - Replace scattered “explicit triggers” with a **dependency stamp + signature** model.
-  - Charts operate with explicit semantics:
-    - **Linked (live)** when a specific parent graph tab context is resolvable (scenario state is tab-scoped).
-    - **Pinned** when parent context is not resolvable (or in share contexts); pinned refresh is only possible when all participating scenarios are regenerable from the pinned recipe.
-  - Auto-update is **ON by default** in normal authoring, and **forced ON** in live share/dashboard (user toggle still exists in workspace mode).
-
-- **Implementation shape (high-level)**:
-  - Persist a full chart `recipe` block (scenario set/order, names/colours, visibility modes, flattened effective DSLs including Current when it participates, plus analysis recipe inputs) alongside the cached `payload.analysis_result`.
-  - Persist `deps` + `deps_signature` on chart artefacts (no migration/backfill logic).
-  - Centralise reconcile/orchestration in service/context layer (no business logic in UI/menu files).
-
-- **Rationalisation (in scope)**:
-  - Stop piping recipe/DSL metadata through `analysis_result` (remove DSL injection into analysis outputs); chart UI reads subtitles/metadata from `chart.recipe`.
-
-- **Refresh “when/where” (minimal, structural)**:
-  - Evaluate staleness on chart tab activation/render, and on explicit Refresh.
-  - In auto-update mode, also reconcile after scenario regeneration and after authored graph topology edits (debounced + single-flight + bounded to visible/open tabs).
-
-- **Logging + tests**:
-  - Use `sessionLogService` for structured reconcile logs (reason(s), prev/next signatures, targets, policy).
-  - Tests are defined and tracked in `docs/current/dynamic-update.md` (extend existing suites; avoid new test files).
-
-
 ## Outstanding issues (sequencing + live share parity) — updated 15-Jan-26
 
 - **Normal vs live share: material analysis deltas (suspected sequencing defect)**

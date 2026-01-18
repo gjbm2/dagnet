@@ -1,0 +1,452 @@
+[
+  {
+    "at": "2026-01-18T22:49:38.602Z",
+    "type": "debug",
+    "text": "[vite] connecting...",
+    "location": {
+      "url": "http://127.0.0.1:4173/@vite/client",
+      "lineNumber": 494,
+      "columnNumber": 8
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:38.615Z",
+    "type": "debug",
+    "text": "[vite] connected.",
+    "location": {
+      "url": "http://127.0.0.1:4173/@vite/client",
+      "lineNumber": 617,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:39.645Z",
+    "type": "info",
+    "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "location": {
+      "url": "http://127.0.0.1:4173/node_modules/.vite/deps/chunk-FQHYCYVK.js?v=ab404005",
+      "lineNumber": 21550,
+      "columnNumber": 24
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:39.669Z",
+    "type": "log",
+    "text": "[ShareBootResolver] Resolved boot config: {mode: none, dbName: DagNetGraphEditor, repo: undefined, branch: undefined, graph: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/shareBootResolver.ts",
+      "lineNumber": 101,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:39.670Z",
+    "type": "log",
+    "text": "[AppDatabase] Initialising with DB name: DagNetGraphEditor",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/db/appDatabase.ts",
+      "lineNumber": 6,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:39.678Z",
+    "type": "log",
+    "text": "Git Configuration: {repoOwner: , repoName: , branch: main, graphsPath: graphs, paramsPath: parameters}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/config/gitConfig.ts",
+      "lineNumber": 23,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:39.680Z",
+    "type": "log",
+    "text": "GitService.setCurrentRepo: No credentials or git repos available",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/gitService.ts",
+      "lineNumber": 30,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:39.913Z",
+    "type": "log",
+    "text": "[SessionLogService] Initialized",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/sessionLogService.ts?t=1768776546205",
+      "lineNumber": 41,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.012Z",
+    "type": "log",
+    "text": "📊 RepositoryOperationsService: Getting committable files (SHA-based comparison)...",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/repositoryOperationsService.ts?t=1768776546205",
+      "lineNumber": 481,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.015Z",
+    "type": "log",
+    "text": "EditMenu: useEffect triggered {isGraphEditor: undefined, isFormEditor: undefined, fileId: undefined}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/components/MenuBar/EditMenu.tsx?t=1768776546205",
+      "lineNumber": 62,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.015Z",
+    "type": "log",
+    "text": "EditMenu: Not a graph/form editor, disabling undo/redo",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/components/MenuBar/EditMenu.tsx?t=1768776546205",
+      "lineNumber": 90,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.016Z",
+    "type": "log",
+    "text": "[DataMenu] Setting up event listeners",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/components/MenuBar/DataMenu.tsx?t=1768776546205",
+      "lineNumber": 170,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.016Z",
+    "type": "log",
+    "text": "📊 RepositoryOperationsService: Getting committable files (SHA-based comparison)...",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/repositoryOperationsService.ts?t=1768776546205",
+      "lineNumber": 481,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.021Z",
+    "type": "log",
+    "text": "✅ Services initialized",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 219,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.022Z",
+    "type": "log",
+    "text": "[AppShell useEffect] activeTabId changed to: null, dockLayoutRef exists: false",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 812,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.022Z",
+    "type": "log",
+    "text": "[AppShell useEffect] Skipping - missing dockLayoutRef or activeTabId",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 814,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.241Z",
+    "type": "log",
+    "text": "📊 RepositoryOperationsService: 0 files in IDB, 0 after deduplication",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/repositoryOperationsService.ts?t=1768776546205",
+      "lineNumber": 504,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.241Z",
+    "type": "log",
+    "text": "📊 RepositoryOperationsService: Found 0 committable files",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/repositoryOperationsService.ts?t=1768776546205",
+      "lineNumber": 553,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.241Z",
+    "type": "log",
+    "text": "📊 RepositoryOperationsService: 0 files in IDB, 0 after deduplication",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/repositoryOperationsService.ts?t=1768776546205",
+      "lineNumber": 504,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.241Z",
+    "type": "log",
+    "text": "📊 RepositoryOperationsService: Found 0 committable files",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/services/repositoryOperationsService.ts?t=1768776546205",
+      "lineNumber": 553,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.244Z",
+    "type": "log",
+    "text": "No saved layout, using default",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 883,
+      "columnNumber": 18
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.244Z",
+    "type": "log",
+    "text": "[VisibleTabs] extractVisibleTabs: Found 0 visible tabs: []",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/VisibleTabsContext.tsx",
+      "lineNumber": 61,
+      "columnNumber": 10
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.245Z",
+    "type": "log",
+    "text": "🔧 CredentialsManager: Loading from IndexedDB...",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 283,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.300Z",
+    "type": "log",
+    "text": "[AppShell useEffect] activeTabId changed to: null, dockLayoutRef exists: true",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 812,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.300Z",
+    "type": "log",
+    "text": "[AppShell useEffect] Skipping - missing dockLayoutRef or activeTabId",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 814,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.320Z",
+    "type": "log",
+    "text": "TabContext: Loading 0 tabs from IndexedDB: []",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx?t=1768776546205",
+      "lineNumber": 1259,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.339Z",
+    "type": "log",
+    "text": "🔧 CredentialsManager: Credentials file from IndexedDB: undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 286,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.339Z",
+    "type": "log",
+    "text": "🔧 CredentialsManager: No credentials file found in IndexedDB",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 288,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.339Z",
+    "type": "log",
+    "text": "CredentialsManager: No credentials available, using public access",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 72,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.340Z",
+    "type": "warning",
+    "text": "NavigatorContext: No credentials available: undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/NavigatorContext.tsx?t=1768776546205",
+      "lineNumber": 139,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.354Z",
+    "type": "log",
+    "text": "🔧 CredentialsManager: Loading from IndexedDB...",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 283,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.364Z",
+    "type": "log",
+    "text": "AppShell: Found 1 docked app-level panels",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 1055,
+      "columnNumber": 12
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.365Z",
+    "type": "log",
+    "text": "AppShell: Panel at x=300, y=40, dockid=main-tabs",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 1061,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.365Z",
+    "type": "log",
+    "text": "AppShell: Marked top-left docked panel (dockid=main-tabs) at x=300, y=40",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 1080,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.365Z",
+    "type": "log",
+    "text": "AppShell: app-shell classes=\"app-shell nav-pinned\", computed paddingLeft=4px",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 1081,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.365Z",
+    "type": "log",
+    "text": "AppShell: panel classes=\"dock-panel dock-style-main-content top-left-docked-panel\"",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/AppShell.tsx?t=1768776547488",
+      "lineNumber": 1082,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.372Z",
+    "type": "log",
+    "text": "🔧 CredentialsManager: Credentials file from IndexedDB: undefined",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 286,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.372Z",
+    "type": "log",
+    "text": "🔧 CredentialsManager: No credentials file found in IndexedDB",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 288,
+      "columnNumber": 16
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.372Z",
+    "type": "log",
+    "text": "CredentialsManager: No credentials available, using public access",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/lib/credentials.ts",
+      "lineNumber": 72,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.372Z",
+    "type": "log",
+    "text": "TabContext: Creating credentials file from schema defaults",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx?t=1768776546205",
+      "lineNumber": 814,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.376Z",
+    "type": "log",
+    "text": "FileRegistry: Notifying listeners for credentials-credentials, data: {version: 1.0.0, git: Array(0)}",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/contexts/TabContext.tsx?t=1768776546205",
+      "lineNumber": 109,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.399Z",
+    "type": "log",
+    "text": "[seedConnections] Creating connections.yaml from defaults (4 connections)",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/init/seedConnections.ts",
+      "lineNumber": 29,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.406Z",
+    "type": "log",
+    "text": "[seedConnections] ✅ connections.yaml created with 4 default connections",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/init/seedConnections.ts",
+      "lineNumber": 42,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.420Z",
+    "type": "log",
+    "text": "[seedSettings] Creating settings.yaml from defaults",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/init/seedSettings.ts",
+      "lineNumber": 25,
+      "columnNumber": 14
+    }
+  },
+  {
+    "at": "2026-01-18T22:49:40.421Z",
+    "type": "log",
+    "text": "[seedSettings] ✅ settings.yaml created from defaults",
+    "location": {
+      "url": "http://127.0.0.1:4173/src/init/seedSettings.ts",
+      "lineNumber": 39,
+      "columnNumber": 14
+    }
+  }
+]

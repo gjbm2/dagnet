@@ -1,8 +1,8 @@
 {
   "phase": "context-bridge",
   "testTitle": "live chart share with context() scenarios produces a non-trivial bridge (not start=end)",
-  "startAt": "2026-01-15T20:27:45.434Z",
-  "endAt": "2026-01-15T20:27:47.700Z",
+  "startAt": "2026-01-18T22:50:26.605Z",
+  "endAt": "2026-01-18T22:50:27.320Z",
   "finalUrl": "http://127.0.0.1:4173/?mode=live&e2e=1&repo=repo-1&branch=main&graph=test-graph&creds=%7B%22defaultGitRepo%22%3A%22repo-1%22%2C%22git%22%3A%5B%7B%22name%22%3A%22repo-1%22%2C%22owner%22%3A%22owner-1%22%2C%22repo%22%3A%22repo-1%22%2C%22token%22%3A%22test-token%22%2C%22branch%22%3A%22main%22%2C%22basePath%22%3A%22%22%7D%2C%7B%22name%22%3A%22repo-2%22%2C%22owner%22%3A%22owner-1%22%2C%22repo%22%3A%22repo-2%22%2C%22token%22%3A%22test-token%22%2C%22branch%22%3A%22main%22%2C%22basePath%22%3A%22%22%7D%5D%7D&dashboard=1&share=N4IgbgpgTgzglgewHYgFwgIwDoAMuQA0IALgIZQDmExaIAxgBbk1GPNqgDWcSAJraSSkANgE94MAPoAjKHF5VCJOMWERaAUQBMGgAQAhOQoi6AFHWTEIAD2IBKEAF8igkeLgwOIAI4BXaKKSvDDCtMQIpuEOLkJiEpLEogAO6uiy8lSSYHAQAO5KuUzEknAAZkEhaEi%2BwsLOIDB0EEJyCJ6ooCoQALbtANqgwaHoFgwIUMSmGAC0ACIQdNNaAKyoAMwz84srdlgWSFa25kxISBDCqDylwv5ITVDRIELdqSAAwidnF7oAkkjXt3uSgswgQvigtAAxAAxZYATg0OH0Smy8GkcGEKkC3QQvFepQA1OpnINKiMEGMJlM5gslqsNjTtstdvtDpM2KdzqgkqR5NMYBByIxHs9Xh9BF9ULoAAq83i6AVChjAhCg8FQjRvAAsAA44XCUR44OjMYlJDi8bRCcSALpEBjyCCSOjgqDNGioYhQfxEAVqOhWXiSRrNciICrDaq1RyOIA",
   "status": "passed"
 }

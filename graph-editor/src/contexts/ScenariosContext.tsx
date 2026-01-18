@@ -46,9 +46,11 @@ import {
   type FetchItem 
 } from '../services/fetchDataService';
 import { sessionLogService } from '../services/sessionLogService';
-import { graphComputeClient } from '../lib/graphComputeClient';
-import { chartOperationsService } from '../services/chartOperationsService';
-import { buildGraphForAnalysisLayer } from '../services/CompositionService';
+import { recomputeOpenChartsForGraph } from '../services/chartRecomputeService';
+import { autoUpdatePolicyService } from '../services/autoUpdatePolicyService';
+import { graphTopologySignature } from '../services/graphTopologySignatureService';
+import { ukDayBoundarySchedulerService } from '../services/ukDayBoundarySchedulerService';
+import { computeScenarioDepsStampV1 } from '../services/scenarioProvenanceService';
 
 // Scenario colour palette (user scenarios cycle through these)
 // Using more saturated, vibrant colours for better visibility
@@ -185,6 +187,129 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   const [baseDSL, setBaseDSLState] = useState<string>('');
   const lastFileIdRef = useRef<string | null>(null);
   const [scenariosLoaded, setScenariosLoaded] = useState(false);
+
+  // Auto-update charts policy (defaults ON; forced ON in live share / dashboard).
+  const [autoUpdateChartsEnabled, setAutoUpdateChartsEnabled] = useState<boolean>(true);
+  const autoUpdateChartsEnabledRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    autoUpdatePolicyService
+      .getAutoUpdateChartsPolicy()
+      .then(p => {
+        setAutoUpdateChartsEnabled(p.enabled);
+        autoUpdateChartsEnabledRef.current = p.enabled;
+      })
+      .catch(() => {
+        // Best-effort only; default is ON.
+        setAutoUpdateChartsEnabled(true);
+        autoUpdateChartsEnabledRef.current = true;
+      });
+  }, []);
+
+  useEffect(() => {
+    autoUpdateChartsEnabledRef.current = autoUpdateChartsEnabled;
+  }, [autoUpdateChartsEnabled]);
+
+  const reconcileTimerRef = useRef<number | null>(null);
+  const reconcileInFlightRef = useRef<Promise<any> | null>(null);
+  const topologySigRef = useRef<string | null>(null);
+  const topologyRegenTimerRef = useRef<number | null>(null);
+
+  // Ensure we don't leak timers across unmounts (important for tests and share embeds).
+  useEffect(() => {
+    return () => {
+      try {
+        if (reconcileTimerRef.current) window.clearTimeout(reconcileTimerRef.current);
+        if (topologyRegenTimerRef.current) window.clearTimeout(topologyRegenTimerRef.current);
+      } catch {
+        // best-effort only
+      } finally {
+        reconcileTimerRef.current = null;
+        topologyRegenTimerRef.current = null;
+        reconcileInFlightRef.current = null;
+      }
+    };
+  }, []);
+
+  const scheduleChartReconcile = useCallback(
+    (reason: string, opts?: { bypassPolicy?: boolean }) => {
+      if (!fileId) return;
+      if (!graph) return;
+
+      // Debounce/coalesce bursts (scenario regen loops, topology edits).
+      if (reconcileTimerRef.current) window.clearTimeout(reconcileTimerRef.current);
+      reconcileTimerRef.current = window.setTimeout(async () => {
+        // Re-check policy at execution time to avoid races (e.g. workspace toggle just changed).
+        // IMPORTANT: Manual refresh must bypass policy gating (Refresh should always work).
+        if (!opts?.bypassPolicy) {
+          try {
+            const p = await autoUpdatePolicyService.getAutoUpdateChartsPolicy();
+            if (!p.enabled) return;
+          } catch {
+            // Default is ON; continue.
+          }
+        }
+        if (reconcileInFlightRef.current) return;
+
+        const logOpId = sessionLogService.startOperation(
+          'info',
+          'graph',
+          'CHART_RECONCILE',
+          `Reconciling chart(s) for ${fileId}`,
+          { reason, graphFileId: fileId }
+        );
+
+        const p = recomputeOpenChartsForGraph({
+          graphFileId: fileId,
+          graph,
+          baseParams,
+          currentParams,
+          scenarios: scenarios as any,
+          currentColour,
+          baseColour,
+          authoritativeCurrentDsl: graphStore?.getState().currentDSL || undefined,
+        });
+        reconcileInFlightRef.current = p;
+        try {
+          const res = await p;
+          for (const d of res.updatedDetails || []) {
+            const prev = (d.prevDepsSignature || '').slice(0, 12);
+            const next = (d.nextDepsSignature || '').slice(0, 12);
+            sessionLogService.addChild(logOpId, 'info', 'CHART_STALE', `Chart ${d.chartFileId} stale (${prev}→${next})`, undefined, { chartFileId: d.chartFileId });
+          }
+          sessionLogService.endOperation(logOpId, 'success', `Reconciled charts (updated=${res.updatedChartFileIds.length}, skipped=${res.skippedChartFileIds.length})`);
+        } catch (e: any) {
+          sessionLogService.endOperation(logOpId, 'error', e?.message || String(e));
+        } finally {
+          reconcileInFlightRef.current = null;
+        }
+      }, 250);
+    },
+    [fileId, graph, baseParams, currentParams, scenarios, currentColour, baseColour, graphStore]
+  );
+
+  // Manual chart refresh requests (from chart tabs/menus): reconcile the current graph if it matches.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail: any = (e as any).detail || {};
+      if (!detail?.graphFileId) return;
+      if (detail.graphFileId !== fileId) return;
+      scheduleChartReconcile(`chart-manual-refresh:${String(detail.chartFileId || '')}`, { bypassPolicy: true });
+    };
+    window.addEventListener('dagnet:chartRefreshRequested', handler as EventListener);
+    return () => window.removeEventListener('dagnet:chartRefreshRequested', handler as EventListener);
+  }, [fileId, scheduleChartReconcile]);
+
+  // UK day boundary invalidation (dynamic DSLs): schedule a reconcile pass on day change.
+  // This remains best-effort; charts without dynamic DSL will remain "not stale" and be skipped cheaply.
+  useEffect(() => {
+    const unsubscribe = ukDayBoundarySchedulerService.subscribe(() => {
+      scheduleChartReconcile('uk-day-boundary');
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [scheduleChartReconcile]);
 
   // Load scenarios from IndexedDB on mount or file change
   useEffect(() => {
@@ -802,6 +927,21 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       
       // Update the scenario with new params
       const now = new Date().toISOString();
+      const deps = await (async () => {
+        // Best-effort: scenario deps provenance (dynamic-update.md Tier 1).
+        // If we cannot compute it for any reason, we still persist the regenerated params and DSL.
+        try {
+          if (!fileId) return null;
+          return await computeScenarioDepsStampV1({
+            graphFileId: fileId,
+            graph: baselineGraph as any,
+            baseDsl: effectiveBaseDSL,
+            effectiveDsl: effectiveFetchDSL,
+          });
+        } catch {
+          return null;
+        }
+      })();
 
       // IMPORTANT:
       // If caller provided an explicit scenarioOverride (common in share/live boot to avoid stale closures),
@@ -817,6 +957,8 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
             ...(target as any).meta,
             lastRegeneratedAt: now,
             lastEffectiveDSL: effectiveFetchDSL,
+            deps_v1: deps?.stamp,
+            deps_signature_v1: deps?.signature,
           };
         }
       } catch {
@@ -834,17 +976,20 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
                 ...s.meta,
                 lastRegeneratedAt: now,
                 lastEffectiveDSL: effectiveFetchDSL,
+                deps_v1: deps?.stamp || (s.meta as any)?.deps_v1,
+                deps_signature_v1: deps?.signature || (s.meta as any)?.deps_signature_v1,
               }
             }
           : s
       ));
       
       console.log(`Scenario ${id} regenerated successfully`);
+      scheduleChartReconcile('scenario-regenerated');
     } catch (error) {
       console.error(`Failed to regenerate scenario ${id}:`, error);
       throw error;
     }
-  }, [scenarios, graph, baseDSL, graphStore]);
+  }, [scenarios, graph, baseDSL, graphStore, scheduleChartReconcile]);
 
   // Dev-only: allow an in-session "refetch from files" cycle (no reload) so users can keep
   // the Session Log panel open while reproducing cache / ordering issues.
@@ -977,86 +1122,22 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         // We keep this best-effort: scenario regeneration is the primary debugging intent.
         try {
           sessionLogService.addChild(opId, 'info', 'DEV_RECOMPUTE_CHARTS', 'Recomputing open chart(s)…');
-          const graphFileId = fileId;
-          const relatedTabs = await db.tabs.toArray();
-          const chartTabs = relatedTabs.filter((t: any) => String(t?.fileId || '').startsWith('chart-'));
-          const chartFileIds: string[] = [];
-          for (const t of chartTabs) {
-            try {
-              const f = await db.files.get(t.fileId);
-              const parent = (f as any)?.data?.source?.parent_file_id;
-              if (parent === graphFileId) chartFileIds.push(t.fileId);
-            } catch {
-              // ignore
-            }
-          }
-
-          // Dedup to avoid double compute.
-          const uniqueChartFileIds = Array.from(new Set(chartFileIds));
-          for (const chartFileId of uniqueChartFileIds) {
-            const chartFile = await db.files.get(chartFileId);
-            const chartData: any = (chartFile as any)?.data || null;
-            if (!chartData?.payload?.analysis_result) continue;
-
-            const analysisType = chartData?.source?.analysis_type || chartData?.payload?.analysis_result?.analysis_type || undefined;
-            const queryDsl = chartData?.source?.query_dsl || undefined;
-
-            // Determine scenario order for compute based on the chart artefact metadata.
-            const m = chartData?.payload?.analysis_result?.metadata || {};
-            const a = m?.scenario_a;
-            const b = m?.scenario_b;
-            const scenarioAId = typeof a?.scenario_id === 'string' ? a.scenario_id : null;
-            const scenarioBId = typeof b?.scenario_id === 'string' ? b.scenario_id : null;
-            const scenarioIds: string[] = [];
-            if (scenarioAId) scenarioIds.push(scenarioAId);
-            if (scenarioBId && scenarioBId !== scenarioAId) scenarioIds.push(scenarioBId);
-
-            const effectiveGraph = (graphStore?.getState().graph as any) || (graph as any);
-            if (!effectiveGraph) continue;
-
-            const scenarioGraphs = scenarioIds.map((sid: string) => {
-              const visibilityMode = (sid === 'current' || sid === 'base') ? 'f+e' : 'f+e';
-              const colour =
-                sid === 'current'
-                  ? currentColour
-                  : sid === 'base'
-                    ? baseColour
-                    : (scenarios.find((s) => s.id === sid)?.colour || '#999');
-              const name =
-                sid === 'current'
-                  ? 'Current'
-                  : sid === 'base'
-                    ? 'Base'
-                    : (scenarios.find((s) => s.id === sid)?.name || sid);
-
-              const scenarioGraph = buildGraphForAnalysisLayer(
-                sid,
-                JSON.parse(JSON.stringify(effectiveGraph)),
-                baseParams,
-                currentParams,
-                scenarios as any,
-                undefined,
-                visibilityMode as any
-              );
-
-              return { scenario_id: sid, name, colour, visibility_mode: visibilityMode, graph: scenarioGraph };
+          const effectiveGraph = (graphStore?.getState().graph as any) || (graph as any);
+          if (effectiveGraph) {
+            const res = await recomputeOpenChartsForGraph({
+              graphFileId: fileId,
+              graph: effectiveGraph,
+              baseParams,
+              currentParams,
+              scenarios: scenarios as any,
+              currentColour,
+              baseColour,
+              authoritativeCurrentDsl: graphStore?.getState().currentDSL || undefined,
             });
-
-            const resp = await graphComputeClient.analyzeMultipleScenarios(scenarioGraphs as any, queryDsl, analysisType);
-            if (!resp?.success || !resp?.result) continue;
-
-            await chartOperationsService.openAnalysisChartTabFromAnalysis({
-              chartKind: chartData?.chart_kind,
-              analysisResult: resp.result,
-              scenarioIds: scenarioIds,
-              title: chartData?.title,
-              source: chartData?.source,
-              fileId: chartFileId,
-              scenarioDslSubtitleById: chartData?.payload?.scenario_dsl_subtitle_by_id || undefined,
-            } as any);
+            sessionLogService.addChild(opId, 'success', 'DEV_RECOMPUTE_CHARTS_OK', `Recomputed ${res.updatedChartFileIds.length} chart(s)`);
+          } else {
+            sessionLogService.addChild(opId, 'warning', 'DEV_RECOMPUTE_CHARTS_SKIP', 'No graph available to recompute charts');
           }
-
-          sessionLogService.addChild(opId, 'success', 'DEV_RECOMPUTE_CHARTS_OK', `Recomputed ${uniqueChartFileIds.length} chart(s)`);
         } catch (e: any) {
           sessionLogService.addChild(opId, 'warning', 'DEV_RECOMPUTE_CHARTS_ERROR', e?.message || String(e));
         }
@@ -1159,6 +1240,101 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     
     console.log(`Regenerated ${successCount}/${scenariosToProcess.length} scenarios`);
   }, [scenarios, baseDSL, graphStore, regenerateScenario]);
+
+  // Workspace git pull / file revision changes: in auto-update contexts, reconcile visible live scenarios and charts.
+  //
+  // IMPORTANT: this must be declared AFTER regenerateAllLive is initialised, otherwise
+  // the dependency array would reference a TDZ variable and crash the app at render time.
+  useEffect(() => {
+    if (!fileId) return;
+
+    const handler = async (ev: any) => {
+      try {
+        const detail = ev?.detail || {};
+        const repo = typeof detail.repository === 'string' ? detail.repository : '';
+        const branch = typeof detail.branch === 'string' ? detail.branch : '';
+        if (!repo || !branch) return;
+
+        // Only handle changes for this graph's workspace identity.
+        const graphFile: any = await db.files.get(fileId);
+        const src = graphFile?.source || null;
+        if (!src || src.repository !== repo || src.branch !== branch) return;
+
+        // Policy gate at execution time.
+        try {
+          const p = await autoUpdatePolicyService.getAutoUpdateChartsPolicy();
+          if (!p.enabled) return;
+        } catch {
+          // Default is ON; continue.
+        }
+
+        // Pull visible scenario order from the active graph tab when available (tab-scoped).
+        let visibleOrder: string[] | undefined = undefined;
+        try {
+          const t = tabId ? await db.tabs.get(tabId) : null;
+          const vs = (t as any)?.editorState?.scenarioState?.visibleScenarioIds;
+          if (Array.isArray(vs) && vs.length > 0) visibleOrder = vs;
+        } catch {
+          // ignore best-effort
+        }
+
+        // Best-effort: regenerate visible live scenarios, then reconcile charts.
+        await regenerateAllLive(undefined, visibleOrder);
+        scheduleChartReconcile('workspace-files-changed');
+      } catch {
+        // best-effort only
+      }
+    };
+
+    window.addEventListener('dagnet:workspaceFilesChanged', handler as any);
+    return () => window.removeEventListener('dagnet:workspaceFilesChanged', handler as any);
+  }, [fileId, tabId, regenerateAllLive, scheduleChartReconcile]);
+
+  // Topology edits should trigger refresh: if topology changes, regenerate live scenarios and reconcile charts.
+  // Debounced to avoid thrashing during drag/reconnect interactions.
+  useEffect(() => {
+    if (!fileId) return;
+    if (!graph) return;
+
+    const sig = graphTopologySignature(graph);
+    if (!sig) return;
+
+    if (topologySigRef.current === null) {
+      topologySigRef.current = sig;
+      return;
+    }
+
+    if (topologySigRef.current === sig) return;
+    topologySigRef.current = sig;
+
+    if (topologyRegenTimerRef.current) window.clearTimeout(topologyRegenTimerRef.current);
+    topologyRegenTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        try {
+          try {
+            const p = await autoUpdatePolicyService.getAutoUpdateChartsPolicy();
+            if (!p.enabled) return;
+          } catch {
+            // Default is ON; continue.
+          }
+          // Pull visible scenario order from the active graph tab when available (tab-scoped).
+          let visibleOrder: string[] | undefined = undefined;
+          try {
+            const t = tabId ? await db.tabs.get(tabId) : null;
+            const vs = (t as any)?.editorState?.scenarioState?.visibleScenarioIds;
+            if (Array.isArray(vs) && vs.length > 0) visibleOrder = vs;
+          } catch {
+            // ignore best-effort
+          }
+
+          await regenerateAllLive(undefined, visibleOrder);
+          scheduleChartReconcile('graph-topology-changed');
+        } catch {
+          // best-effort only; failures should not break authoring
+        }
+      })();
+    }, 300);
+  }, [fileId, tabId, graph, regenerateAllLive, scheduleChartReconcile]);
 
   /**
    * Update a scenario's queryDSL and trigger regeneration.

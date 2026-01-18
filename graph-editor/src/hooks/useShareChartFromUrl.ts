@@ -407,6 +407,8 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
           analysis_type: analysisType,
         },
         scenarioDslSubtitleById,
+        hideCurrent: Boolean((chartPayload as any)?.scenarios?.hide_current),
+        whatIfDsl: (chartPayload as any)?.analysis?.what_if_dsl || undefined,
         fileId: chartFileId,
       });
     },
@@ -595,7 +597,6 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
               payload: {
                 analysis_result: null,
                 scenario_ids: [],
-                scenario_dsl_subtitle_by_id: undefined,
                 error_message: e?.message || String(e),
               },
             }
