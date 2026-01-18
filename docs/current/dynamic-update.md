@@ -392,6 +392,77 @@ To prevent runaway recomputation:
 
 ## Proposed implementation plan (prose-only; no code)
 
+### TDD strategy (this workstream’s contract-first approach)
+
+We will treat “dynamic update” as a semantic contract and lock it down with tests before (and throughout) implementation. The tests must encode:
+
+- what constitutes a dependency (stamp contents)
+- what constitutes staleness (signature mismatch rules)
+- what the runtime does when stale (auto-recompute vs manual stale indicator)
+- mode gating (live share / dashboard / explicit toggle)
+- safety properties (batching, single-flight, fail-safe behaviour)
+
+#### Test pyramid (where to prove what)
+
+- **Pure/unit tests (fastest, most deterministic)**:
+  - stamp construction rules and signature equality/inequality semantics
+  - linked-view vs pinned-recipe chart semantics (explicitly)
+  - “dynamic DSL depends on UK reference day” rules
+
+- **Integration tests (Vitest; real services and IndexedDB where appropriate)**:
+  - scenario regeneration updates provenance (stamp fields + observed inputs)
+  - chart artefact staleness detection and in-place recompute behaviour
+  - auto-update policy gating (recompute vs mark stale)
+  - batching/single-flight coalescing (no thundering herd)
+
+- **E2E tests (Playwright; minimal, high-signal)**:
+  - one end-to-end auto-update-context flow that proves the chain: inputs change ⇒ scenarios reconcile ⇒ chart updates without manual action
+
+#### Prefer extending existing test files (avoid new test files)
+
+The intent is to extend the most relevant existing suites (no new test files unless there is manifestly no sensible home):
+
+- **Scenario/live-scenario behaviour**:
+  - `graph-editor/src/contexts/__tests__/ScenariosContext.liveScenarios.test.tsx`
+  - `graph-editor/src/services/__tests__/liveScenarios.integration.test.ts`
+  - `graph-editor/src/services/__tests__/scenarioRegenerationService.test.ts`
+
+- **Chart artefact behaviour (create/update-in-place + deps tracking)**:
+  - `graph-editor/src/services/__tests__/chartOperationsService.bridgeDslInjection.test.ts`
+
+- **Live share / chart refresh orchestration semantics**:
+  - `graph-editor/src/hooks/__tests__/useShareChartFromUrl.test.tsx`
+  - `graph-editor/src/services/__tests__/shareLinkService.test.ts`
+
+- **Repo advance / pull-driven file revision changes** (only if needed to prove revision wiring):
+  - `graph-editor/src/services/__tests__/pullOperations.test.ts`
+  - `graph-editor/src/services/__tests__/workspaceService.integration.test.ts` (use sparingly; prefer higher-level service tests when possible)
+
+#### Contract scenarios (must be encoded as tests)
+
+- **Stamps/signatures**:
+  - Given identical inputs, stamp/signature is stable.
+  - Changing one dependency (file revision, effective DSL, reference day, visibility mode, analysis recipe) changes the signature.
+
+- **Linked view vs pinned recipe**:
+  - Linked-view charts become stale when scenario inheritance inputs change (including order/visibility changes that affect effective DSL).
+  - Pinned-recipe charts do not become stale from unrelated parent-tab state changes (only recipe/inputs change).
+
+- **Auto-update policy**:
+  - In live share and dashboard contexts, stale charts reconcile automatically (non-blocking).
+  - In normal authoring (when auto-update disabled), stale charts do not auto-recompute but do expose staleness and allow manual refresh.
+
+- **Fail-safe behaviour**:
+  - Recompute failures retain the last known artefact and surface an error/stale indicator (no blanking).
+
+- **Dynamic DSL day boundary**:
+  - Artefacts whose dependencies include dynamic DSL become stale on UK day boundary change.
+  - Artefacts based purely on fixed windows do not churn on day boundary.
+
+- **Batching/single-flight**:
+  - Multiple upstream changes coalesce into one reconcile batch per graph.
+  - Reconcile requests deduplicate by (graph, target signature) to prevent repeated compute.
+
 - **Phase 1 — Define stamps and signatures**
   - Specify the exact stamp fields for scenarios, analysis, and charts.
   - Decide the canonical “file revision” token source (prefer SHA; otherwise local revision).
