@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "scenario_id": "scenario-1768508867027-yzy8ay8",
+      "scenario_id": "scenario-1768776628288-7ne5f3m",
       "name": "Channel: Influencer",
       "colour": "#F59E0B",
       "visibility_mode": "f+e",
@@ -37,12 +37,12 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T20:27:47.082Z"
+          "updated_at": "2026-01-18T22:50:26.677Z"
         }
       }
     },
     {
-      "scenario_id": "scenario-1768508867051-7raqqbi",
+      "scenario_id": "scenario-1768776626647-xp5esca",
       "name": "Channel: Paid search",
       "colour": "#EC4899",
       "visibility_mode": "f+e",
@@ -78,7 +78,7 @@
         "metadata": {
           "name": "test-graph",
           "e2e_marker": "v1",
-          "updated_at": "2026-01-15T20:27:47.082Z"
+          "updated_at": "2026-01-18T22:50:26.677Z"
         }
       }
     }

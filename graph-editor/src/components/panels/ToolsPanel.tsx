@@ -1,10 +1,11 @@
 import React from 'react';
 import CollapsibleSection from '../CollapsibleSection';
 import EdgeScalingControl from '../EdgeScalingControl';
-import { Layout, Maximize2, Eye, Wrench } from 'lucide-react';
+import { Layout, Maximize2, Eye, Wrench, TrendingUpDown } from 'lucide-react';
 import './ToolsPanel.css';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useSankeyView } from '../../hooks/useSankeyView';
+import { useAutoUpdateCharts } from '../../hooks/useAutoUpdateCharts';
 
 interface ToolsPanelProps {
   // Layout tools
@@ -35,6 +36,7 @@ export default function ToolsPanel({
   hideHeader = false
 }: ToolsPanelProps) {
   const viewPrefs = useViewPreferencesContext();
+  const { policy: autoUpdatePolicy, setEnabled: setAutoUpdateEnabled } = useAutoUpdateCharts();
   
   // Use centralised hook for Sankey view toggle
   const { useSankeyView: isSankeyView, setUseSankeyView } = useSankeyView();
@@ -66,6 +68,19 @@ export default function ToolsPanel({
         </div>
       )}
       <div className="panel-body">
+        {/* Charts */}
+        <CollapsibleSection title="Charts" defaultOpen={true} icon={TrendingUpDown}>
+          <label className="tool-checkbox" title={autoUpdatePolicy.forced ? `Forced on (${autoUpdatePolicy.reason})` : undefined}>
+            <input
+              type="checkbox"
+              checked={autoUpdatePolicy.enabled}
+              disabled={autoUpdatePolicy.forced}
+              onChange={(e) => void setAutoUpdateEnabled(e.target.checked)}
+            />
+            <span>Auto-update charts</span>
+          </label>
+        </CollapsibleSection>
+
         {/* Layout Tools */}
         <CollapsibleSection title="Layout" defaultOpen={true} icon={Layout}>
           <label className="tool-checkbox">

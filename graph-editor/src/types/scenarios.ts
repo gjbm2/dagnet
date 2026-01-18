@@ -159,6 +159,19 @@ export interface ScenarioMeta {
    *          lastEffectiveDSL might be "window(-30d:).context(channel:google)"
    */
   lastEffectiveDSL?: string;
+
+  // === PROVENANCE / STALENESS (dynamic-update.md Tier 1) ===
+
+  /**
+   * Scenario dependency stamp (v1).
+   * Captures observed inputs + revisions for staleness detection and parity debugging.
+   */
+  deps_v1?: import('../lib/scenarioDeps').ScenarioDepsStampV1;
+
+  /**
+   * Stable signature derived from deps_v1.
+   */
+  deps_signature_v1?: string;
 }
 
 /**

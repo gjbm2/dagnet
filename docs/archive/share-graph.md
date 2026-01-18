@@ -1,7 +1,7 @@
 # Share Graph Links (Static + Live Mode)
 
-**Status**: Implemented (Phases 1–3) + E2E implemented (Playwright passing locally)  
-**Last updated**: 14-Jan-26  
+**Status**: Implemented (Phases 1–3) + E2E implemented (Playwright passing locally); pending manual Notion smoke test  
+**Last updated**: 18-Jan-26  
 
 ## Implementation status (as of 14-Jan-26)
 
@@ -49,7 +49,7 @@ To remove ambiguity, this section explicitly states what is implemented vs not.
 ### Partially implemented / still outstanding
 
 - **Manual Notion smoke test** is still required as the final confirmation step (even after Playwright), due to Notion embed constraints.
-- **Multi-tab bundle reconstruction** is **in scope**. It is complete only when verified by dedicated Playwright E2E tests (static + live bundles, active tab selection, and deduplication).
+- **Multi-tab bundle reconstruction** is now covered by dedicated Playwright E2E tests (static + live bundles, active tab selection, and deduplication) and is treated as implemented.
 
 ## Remaining implementation work (as of 14-Jan-26)
 
@@ -1061,13 +1061,17 @@ Optional:
 
 #### 6) Chart recipe and/or baked artefact (for target=chart)
 
-Charts are already modelled as a file with a schema that includes:
+Charts are already modelled as a file with a schema that includes (current schema; see `chartOperationsService`):
 
 - `chart_kind` (currently `analysis_funnel` / `analysis_bridge`)
 - `source.query_dsl` and `source.analysis_type`
-- baked `payload.analysis_result`
-- `payload.scenario_ids` (note: these are *not* a stable cross-session identity; see below)
-- optional `payload.scenario_dsl_subtitle_by_id`
+- baked `payload.analysis_result` (**compute output only**; no injected recipe/DSL metadata)
+- `recipe` (explicit persisted recipe/fallback):
+  - `recipe.parent` (parent file/tab linkage for linked semantics)
+  - `recipe.analysis` (analysis recipe inputs, including optional what-if DSL)
+  - `recipe.scenarios[]` (ordered participating scenarios, including any of `base`/`current` when they participate), each carrying display metadata + flattened/effective DSL
+  - `recipe.pinned_recompute_eligible` (pinned refresh eligibility)
+- `deps` and `deps_signature` (dependency stamp + signature used for staleness checks)
 
 Therefore, a share link that targets a chart should include either:
 

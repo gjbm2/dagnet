@@ -3,7 +3,7 @@
   "dbName": "DagNetGraphEditorShare:repo1-yrl1t9",
   "files": [
     {
-      "fileId": "chart-share-1p41gve",
+      "fileId": "chart-share-ppl7yw",
       "type": "chart",
       "title": "Chart — Bridge View"
     },
@@ -20,9 +20,13 @@
       "type": "graph"
     },
     {
-      "fileId": "local-main-chart-share-1p41gve",
+      "fileId": "local-main-chart-share-ppl7yw",
       "type": "chart",
       "title": "Chart — Bridge View"
+    },
+    {
+      "fileId": "local-main-credentials-credentials",
+      "type": "credentials"
     },
     {
       "fileId": "parameter-param-1",
@@ -47,8 +51,8 @@
   ],
   "tabs": [
     {
-      "id": "tab-chart-1768508839927",
-      "fileId": "chart-share-1p41gve",
+      "id": "tab-chart-1768776596630",
+      "fileId": "chart-share-ppl7yw",
       "title": "Chart — Bridge View",
       "viewMode": "interactive"
     }

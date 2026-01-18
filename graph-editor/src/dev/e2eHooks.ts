@@ -162,6 +162,26 @@ export function installE2eHooks(): void {
           dashboardMode: args.dashboardMode,
         });
       },
+      /**
+       * Generate a live bundle share URL from a set of tabIds.
+       * Used by Playwright to exercise the real bundle share-link generation path (including
+       * scenario-state sourcing semantics).
+       */
+      buildLiveBundleShareUrlFromTabs: async (args: {
+        tabIds: string[];
+        secretOverride: string;
+        dashboardMode?: boolean;
+        includeScenarios?: boolean;
+        activeTabId?: string;
+      }) => {
+        return await shareLinkService.buildLiveBundleShareUrlFromTabs({
+          tabIds: args.tabIds,
+          dashboardMode: args.dashboardMode,
+          includeScenarios: args.includeScenarios,
+          activeTabId: args.activeTabId,
+          secretOverride: args.secretOverride,
+        });
+      },
     };
   } catch {
     // Best-effort only.

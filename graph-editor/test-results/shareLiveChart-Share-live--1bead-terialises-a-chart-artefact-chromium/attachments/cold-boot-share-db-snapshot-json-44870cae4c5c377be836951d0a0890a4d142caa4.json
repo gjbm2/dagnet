@@ -43,7 +43,7 @@
   ],
   "tabs": [
     {
-      "id": "tab-chart-1768508840617",
+      "id": "tab-chart-1768776599294",
       "fileId": "chart-share-1892at6",
       "title": "E2E Live Chart",
       "viewMode": "interactive"
@@ -51,7 +51,7 @@
   ],
   "scenarios": [
     {
-      "id": "scenario-1768508840458-5xvcyji",
+      "id": "scenario-1768776599102-4g04mtb",
       "fileId": "graph-test-graph",
       "name": "A",
       "colour": "#111",
@@ -59,7 +59,7 @@
       "version": 3
     },
     {
-      "id": "scenario-1768508840472-jy7fygt",
+      "id": "scenario-1768776599120-r77ub9c",
       "fileId": "graph-test-graph",
       "name": "B",
       "colour": "#222",

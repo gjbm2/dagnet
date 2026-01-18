@@ -3,13 +3,75 @@
   "chart_kind": "analysis_bridge",
   "title": "Chart — Bridge View",
   "created_at_uk": "14-Jan-26",
-  "created_at_ms": 1768508832297,
+  "created_at_ms": 1768776589679,
   "source": {
     "parent_tab_id": "tab-graph-author-1",
     "parent_file_id": "graph-test-graph",
     "query_dsl": "to(switch-success)",
     "analysis_type": "bridge_view"
   },
+  "recipe": {
+    "parent": {
+      "parent_file_id": "graph-test-graph",
+      "parent_tab_id": "tab-graph-author-1"
+    },
+    "analysis": {
+      "analysis_type": "bridge_view",
+      "query_dsl": "to(switch-success)",
+      "what_if_dsl": null
+    },
+    "scenarios": [
+      {
+        "scenario_id": "scenario-a",
+        "name": "new month",
+        "colour": "#06B6D4",
+        "visibility_mode": "e",
+        "effective_dsl": "cohort(-1m:)",
+        "is_live": true
+      },
+      {
+        "scenario_id": "scenario-b",
+        "name": "old month",
+        "colour": "#F97316",
+        "visibility_mode": "f",
+        "effective_dsl": "cohort(-2m:-1m)",
+        "is_live": true
+      }
+    ],
+    "display": {
+      "hide_current": true
+    },
+    "pinned_recompute_eligible": true
+  },
+  "deps": {
+    "v": 1,
+    "mode": "linked",
+    "chart_kind": "analysis_bridge",
+    "parent": {
+      "parent_file_id": "graph-test-graph",
+      "parent_tab_id": "tab-graph-author-1"
+    },
+    "analysis": {
+      "analysis_type": "bridge_view",
+      "query_dsl": "to(switch-success)",
+      "what_if_dsl": null
+    },
+    "scenarios": [
+      {
+        "scenario_id": "scenario-a",
+        "effective_dsl": "cohort(-1m:)",
+        "visibility_mode": "e",
+        "is_live": true
+      },
+      {
+        "scenario_id": "scenario-b",
+        "effective_dsl": "cohort(-2m:-1m)",
+        "visibility_mode": "f",
+        "is_live": true
+      }
+    ]
+  },
+  "deps_signature": "e2e-seeded-v1",
   "payload": {
     "analysis_result": {
       "analysis_type": "bridge_view",

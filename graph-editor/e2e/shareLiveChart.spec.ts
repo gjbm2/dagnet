@@ -118,6 +118,255 @@ function buildLiveChartShareUrl(payload: SharePayloadV1): string {
 }
 
 test.describe.serial('Share-live chart (persistence-first)', () => {
+  test('bundle share link generation: when chart tab is active, it still includes graph scenario items (graph+chart bundle stays linked; bridge has 2 scenarios)', async ({ browser, baseURL }, testInfo) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+
+    // 1) Authoring: seed a graph tab + chart tab; set activeTabId to the CHART tab; then generate a live bundle URL.
+    const authoringContext = await browser.newContext();
+    const authoringPage = await authoringContext.newPage();
+    const authorFx = installShareForensics({ page: authoringPage, testInfo, phase: 'authoring-bundle-chart-active' });
+    await installShareLiveStubs(authoringPage, state);
+    await authoringPage.goto(new URL('/?e2e=1', baseURL).toString(), { waitUntil: 'domcontentloaded' });
+
+    const graphFileId = 'graph-test-graph';
+    const graphTabId = 'tab-graph-author-1';
+    const chartFileId = 'chart-author-bridge-1';
+    const chartTabId = 'tab-chart-author-1';
+    const scenarioAId = 'scenario-a';
+
+    const shareUrl0 = await authoringPage.evaluate(
+      async ({ graphFileId, graphTabId, chartFileId, chartTabId, scenarioAId }) => {
+        const w: any = window as any;
+        const db = w.db;
+        if (!db) throw new Error('db missing');
+        if (!w.dagnetE2e?.buildLiveBundleShareUrlFromTabs) throw new Error('dagnetE2e bundle hook missing');
+
+        // Graph file with live identity.
+        await db.files.put({
+          fileId: graphFileId,
+          type: 'graph',
+          viewTabs: [],
+          data: { nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }], edges: [], currentQueryDSL: 'window(1-Dec-25:17-Dec-25)', baseDSL: 'window(1-Nov-25:10-Nov-25)' },
+          source: { repository: 'repo-1', branch: 'main', path: 'graphs/test-graph.json' },
+        });
+
+        // One live scenario + Current visible in the graph tab scenario state.
+        await db.scenarios.put({
+          id: scenarioAId,
+          fileId: graphFileId,
+          name: 'A',
+          colour: '#111',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          version: 1,
+          params: { edges: {}, nodes: {} },
+          meta: { isLive: true, queryDSL: 'cohort(-1w:)', lastEffectiveDSL: 'cohort(-1w:)' },
+        });
+
+        await db.tabs.put({
+          id: graphTabId,
+          fileId: graphFileId,
+          viewMode: 'interactive',
+          title: 'Graph',
+          editorState: {
+            scenarioState: {
+              visibleScenarioIds: ['current', scenarioAId],
+              visibilityMode: { [scenarioAId]: 'e' },
+              selectedScenarioId: scenarioAId,
+            },
+          },
+        });
+
+        // Seed a bridge chart file (authoring artefact) with correct recipe.
+        await db.files.put({
+          fileId: chartFileId,
+          type: 'chart',
+          viewTabs: [],
+          data: {
+            version: '1.0.0',
+            chart_kind: 'analysis_bridge',
+            title: 'Chart — Bridge View',
+            created_at_uk: '18-Jan-26',
+            created_at_ms: Date.now(),
+            source: {
+              parent_tab_id: graphTabId,
+              parent_file_id: graphFileId,
+              query_dsl: 'to(switch-success)',
+              analysis_type: 'bridge_view',
+            },
+            recipe: {
+              parent: { parent_file_id: graphFileId, parent_tab_id: graphTabId },
+              analysis: { analysis_type: 'bridge_view', query_dsl: 'to(switch-success)', what_if_dsl: null },
+              scenarios: [
+                { scenario_id: scenarioAId, name: 'A', colour: '#111', visibility_mode: 'e', effective_dsl: 'cohort(-1w:)', is_live: true },
+                { scenario_id: 'current', name: 'Current', colour: '#3B82F6', visibility_mode: 'f+e', effective_dsl: 'window(1-Dec-25:17-Dec-25)', is_live: true },
+              ],
+              display: { hide_current: false },
+              pinned_recompute_eligible: true,
+            },
+            deps: {
+              v: 1,
+              mode: 'linked',
+              chart_kind: 'analysis_bridge',
+              parent: { parent_file_id: graphFileId, parent_tab_id: graphTabId },
+              analysis: { analysis_type: 'bridge_view', query_dsl: 'to(switch-success)', what_if_dsl: null },
+              scenarios: [
+                { scenario_id: scenarioAId, effective_dsl: 'cohort(-1w:)', visibility_mode: 'e', is_live: true },
+                { scenario_id: 'current', effective_dsl: 'window(1-Dec-25:17-Dec-25)', visibility_mode: 'f+e', is_live: true },
+              ],
+            },
+            deps_signature: 'e2e-seeded-v1',
+            payload: { analysis_result: { analysis_type: 'bridge_view', analysis_name: 'Bridge View', metadata: { scenario_a: { scenario_id: scenarioAId }, scenario_b: { scenario_id: 'current' } }, dimension_values: {}, data: [] }, scenario_ids: [scenarioAId, 'current'] },
+          },
+        });
+
+        await db.tabs.put({
+          id: chartTabId,
+          fileId: chartFileId,
+          viewMode: 'interactive',
+          title: 'Chart — Bridge View',
+          editorState: {},
+        });
+
+        // Make the CHART the active tab (this is the regression case).
+        await db.saveAppState({ activeTabId: chartTabId });
+
+        const res = await w.dagnetE2e.buildLiveBundleShareUrlFromTabs({
+          tabIds: [graphTabId, chartTabId],
+          activeTabId: chartTabId,
+          secretOverride: 'test-secret',
+          dashboardMode: true,
+          includeScenarios: true,
+        });
+        if (!res?.success || !res?.url) throw new Error(res?.error || 'Failed to build bundle share URL');
+        return res.url as string;
+      },
+      { graphFileId, graphTabId, chartFileId, chartTabId, scenarioAId }
+    );
+
+    authorFx.recordUrl('constructedShareUrl', shareUrl0);
+    await authorFx.snapshotDb('authoring');
+    await authorFx.flush();
+    await authoringContext.close();
+
+    // 2) Share page: open the URL and assert the chart stays linked and the compute boundary sees 2 scenarios.
+    const shareContext = await browser.newContext();
+    const sharePage = await shareContext.newPage();
+    const shareFx = installShareForensics({ page: sharePage, testInfo, phase: 'share-bundle-chart-active' });
+    await installShareLiveStubs(sharePage, state);
+
+    await sharePage.goto(new URL(shareUrl0, baseURL).toString(), { waitUntil: 'domcontentloaded' });
+    await expect(sharePage.getByText('Live view')).toBeVisible();
+    await expect(sharePage.getByText('Chart — Bridge View')).toBeVisible();
+    await expect(sharePage.getByText('Linked').first()).toBeVisible();
+
+    // Bridge must compute with exactly two scenarios, in the correct order:
+    // bundle semantics for bridge_view require "Current last".
+    await expect
+      .poll(async () => (state.lastAnalyzeRequest?.scenarios || []).length, { timeout: 20_000 })
+      .toBe(2);
+
+    await expect
+      .poll(async () => {
+        return (state.lastAnalyzeRequest?.scenarios || []).map((s: any) => s?.name);
+      })
+      .toEqual(['A', 'Current']);
+
+    // Persisted artefact contract: chart recipe order must match the compute request order.
+    await expect
+      .poll(async () => {
+        return await sharePage.evaluate(async () => {
+          const db: any = (window as any).db;
+          const files = await db.files.toArray();
+          const chart = files.find((f: any) => f?.type === 'chart' && f?.data?.title === 'Chart — Bridge View') || null;
+          const items = chart?.data?.recipe?.scenarios || [];
+          return items.map((s: any) => s?.name || null);
+        });
+      })
+      .toEqual(['A', 'Current']);
+
+    // Regression guard: clicking Refresh on a LINKED chart must not flip scenario/series ordering.
+    await sharePage.getByRole('button', { name: 'Refresh' }).click();
+    await sharePage.waitForTimeout(800);
+    await expect
+      .poll(async () => {
+        return (state.lastAnalyzeRequest?.scenarios || []).map((s: any) => s?.name);
+      })
+      .toEqual(['A', 'Current']);
+    await expect
+      .poll(async () => {
+        return await sharePage.evaluate(async () => {
+          const db: any = (window as any).db;
+          const files = await db.files.toArray();
+          const chart = files.find((f: any) => f?.type === 'chart' && f?.data?.title === 'Chart — Bridge View') || null;
+          const items = chart?.data?.recipe?.scenarios || [];
+          return items.map((s: any) => s?.name || null);
+        });
+      })
+      .toEqual(['A', 'Current']);
+
+    await shareFx.recordJson('lastAnalyzeRequest.json', state.lastAnalyzeRequest || null);
+    await shareFx.snapshotDb('share');
+    await shareFx.flush();
+    await shareContext.close();
+  });
+
+  test('live share (funnel) preserves scenario order/visibility exactly (no Current; hide_current=true)', async ({ browser, baseURL }) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await installShareLiveStubs(page, state);
+
+    const payload: SharePayloadV1 = {
+      version: '1.0.0',
+      target: 'chart',
+      chart: { kind: 'analysis_funnel', title: 'E2E Live Funnel' },
+      analysis: { query_dsl: 'from(from).to(to)', analysis_type: 'graph_overview', what_if_dsl: null },
+      scenarios: {
+        items: [
+          { dsl: 'cohort(-1w:)', name: 'A', colour: '#111', visibility_mode: 'e' },
+          { dsl: 'cohort(-2m:-1m)', name: 'B', colour: '#222', visibility_mode: 'f' },
+        ],
+        hide_current: true,
+        selected_scenario_dsl: null,
+      },
+    };
+
+    const url = new URL(buildLiveChartShareUrl(payload), baseURL).toString();
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByText('Live view')).toBeVisible();
+    await expect(page.getByText('E2E Live Funnel')).toBeVisible();
+
+    await expect
+      .poll(async () => {
+        return (state.lastAnalyzeRequest?.scenarios || []).map((s: any) => ({
+          name: s.name,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+        }));
+      })
+      .toEqual([
+        { name: 'A', colour: '#111', visibility_mode: 'e' },
+        { name: 'B', colour: '#222', visibility_mode: 'f' },
+      ]);
+
+    // Persisted artefact contract: chart recipe order must match compute request order.
+    await expect
+      .poll(async () => {
+        return await page.evaluate(async () => {
+          const db: any = (window as any).db;
+          const files = await db.files.toArray();
+          const chart = files.find((f: any) => f?.type === 'chart' && f?.data?.title === 'E2E Live Funnel') || null;
+          const items = chart?.data?.recipe?.scenarios || [];
+          return items.map((s: any) => s?.name || null);
+        });
+      })
+      .toEqual(['A', 'B']);
+
+    await context.close();
+  });
+
   test('generated live chart share link replays scenario labels/colours/modes exactly (authoring → share)', async ({ browser, baseURL }, testInfo) => {
     const state: ShareLiveStubState = { version: 'v1', counts: {} };
 
@@ -212,6 +461,44 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
               query_dsl: 'to(switch-success)',
               analysis_type: 'bridge_view',
             },
+            // New schema: charts must include a pinned recipe for deterministic share + pinned fallback.
+            recipe: {
+              parent: { parent_file_id: graphFileId, parent_tab_id: parentTabId },
+              analysis: { analysis_type: 'bridge_view', query_dsl: 'to(switch-success)', what_if_dsl: null },
+              scenarios: [
+                {
+                  scenario_id: scenarioAId,
+                  name: 'new month',
+                  colour: '#06B6D4',
+                  visibility_mode: 'e',
+                  effective_dsl: 'cohort(-1m:)',
+                  is_live: true,
+                },
+                {
+                  scenario_id: scenarioBId,
+                  name: 'old month',
+                  colour: '#F97316',
+                  visibility_mode: 'f',
+                  effective_dsl: 'cohort(-2m:-1m)',
+                  is_live: true,
+                },
+              ],
+              // Parent tab scenarioState does not include Current, so the chart recipe must mirror that.
+              display: { hide_current: true },
+              pinned_recompute_eligible: true,
+            },
+            deps: {
+              v: 1,
+              mode: 'linked',
+              chart_kind: 'analysis_bridge',
+              parent: { parent_file_id: graphFileId, parent_tab_id: parentTabId },
+              analysis: { analysis_type: 'bridge_view', query_dsl: 'to(switch-success)', what_if_dsl: null },
+              scenarios: [
+                { scenario_id: scenarioAId, effective_dsl: 'cohort(-1m:)', visibility_mode: 'e', is_live: true },
+                { scenario_id: scenarioBId, effective_dsl: 'cohort(-2m:-1m)', visibility_mode: 'f', is_live: true },
+              ],
+            },
+            deps_signature: 'e2e-seeded-v1',
             payload: {
               analysis_result: {
                 analysis_type: 'bridge_view',
@@ -430,6 +717,44 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
               query_dsl: 'to(switch-success)',
               analysis_type: 'bridge_view',
             },
+            // New schema: charts must include a pinned recipe for deterministic share + pinned fallback.
+            recipe: {
+              parent: { parent_file_id: graphFileId, parent_tab_id: parentTabId },
+              analysis: { analysis_type: 'bridge_view', query_dsl: 'to(switch-success)', what_if_dsl: null },
+              scenarios: [
+                {
+                  scenario_id: scenarioId,
+                  name: '1-Dec – 17-Dec',
+                  colour: '#EC4899',
+                  visibility_mode: 'f+e',
+                  effective_dsl: scenarioDsl,
+                  is_live: true,
+                },
+                {
+                  scenario_id: 'current',
+                  name: 'Current',
+                  colour: '#3B82F6',
+                  visibility_mode: 'f+e',
+                  effective_dsl: currentDsl,
+                  is_live: true,
+                },
+              ],
+              // Parent tab scenarioState includes Current, so hide_current should be false.
+              display: { hide_current: false },
+              pinned_recompute_eligible: true,
+            },
+            deps: {
+              v: 1,
+              mode: 'linked',
+              chart_kind: 'analysis_bridge',
+              parent: { parent_file_id: graphFileId, parent_tab_id: parentTabId },
+              analysis: { analysis_type: 'bridge_view', query_dsl: 'to(switch-success)', what_if_dsl: null },
+              scenarios: [
+                { scenario_id: scenarioId, effective_dsl: scenarioDsl, visibility_mode: 'f+e', is_live: true },
+                { scenario_id: 'current', effective_dsl: currentDsl, visibility_mode: 'f+e', is_live: true },
+              ],
+            },
+            deps_signature: 'e2e-seeded-v1',
             payload: {
               analysis_result: {
                 analysis_type: 'bridge_view',
@@ -460,10 +785,6 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
                 data: [{ marker: 'v1' }],
               },
               scenario_ids: [],
-              scenario_dsl_subtitle_by_id: {
-                current: currentDsl,
-                [scenarioId]: scenarioDsl,
-              },
             },
           },
         });
@@ -504,12 +825,27 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
       // Ensure a compute happened so the test genuinely covers rehydration, not cached no-op.
       await expect.poll(async () => state.counts['compute:analyze'] || 0, { timeout: 20_000 }).toBeGreaterThan(0);
 
-      const outputChartData = await sharePage.evaluate(async () => {
-        const db: any = (window as any).db;
-        const files = await db.files.toArray();
-        const chart = files.find((f: any) => f?.type === 'chart' && f?.data?.title === 'Chart — Bridge View') || null;
-        return chart?.data || null;
-      });
+      // Wait for the chart artefact to be persisted into IndexedDB (compute can complete slightly
+      // before the final file write is observable in db.files).
+      const outputChartData = await expect
+        .poll(async () => {
+          return await sharePage.evaluate(async () => {
+            const db: any = (window as any).db;
+            const files = await db.files.toArray();
+            const chart = files.find((f: any) => f?.type === 'chart' && f?.data?.title === 'Chart — Bridge View') || null;
+            return chart?.data || null;
+          });
+        })
+        .toBeTruthy()
+        .then(() => {
+          // Re-read once more so we capture the actual object (not just "truthy" status).
+          return sharePage.evaluate(async () => {
+            const db: any = (window as any).db;
+            const files = await db.files.toArray();
+            const chart = files.find((f: any) => f?.type === 'chart' && f?.data?.title === 'Chart — Bridge View') || null;
+            return chart?.data || null;
+          });
+        });
       await shareFx.recordYaml('output-chart.yaml', outputChartData);
       await shareFx.recordJson('output-chart.json', outputChartData);
 
@@ -522,6 +858,12 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
         const meta = clone.metadata || {};
         const a = meta.scenario_a || null;
         const b = meta.scenario_b || null;
+        // IMPORTANT:
+        // As of the dependency-signature chart work, DSL/display metadata MUST NOT be piped through
+        // payload.analysis_result. The analysis result is compute output only.
+        // Therefore, E2E equality must ignore any legacy/seeded `.dsl` decoration.
+        if (a && typeof a === 'object') delete a.dsl;
+        if (b && typeof b === 'object') delete b.dsl;
         // Canonicalise scenario ids to stable labels so we can compare across sessions.
         if (a && a.name) a.scenario_id = `name:${a.name}`;
         if (b && b.name) b.scenario_id = `name:${b.name}`;
@@ -531,7 +873,9 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
         const remapped: any = {};
         for (const [k, v] of Object.entries(byId)) {
           const name = (v as any)?.name || k;
-          remapped[`name:${name}`] = { ...(v as any), scenario_id: `name:${name}` };
+          const next = { ...(v as any), scenario_id: `name:${name}` };
+          if (next && typeof next === 'object') delete (next as any).dsl;
+          remapped[`name:${name}`] = next;
         }
         dv.scenario_id = remapped;
         clone.dimension_values = dv;
@@ -723,6 +1067,31 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
               query_dsl: 'from(from).to(to)',
               analysis_type: 'graph_overview',
             },
+            // New schema: even Current-only charts must have a pinned recipe.
+            recipe: {
+              parent: { parent_file_id: graphFileId, parent_tab_id: parentTabId },
+              analysis: { analysis_type: 'graph_overview', query_dsl: 'from(from).to(to)', what_if_dsl: null },
+              scenarios: [
+                {
+                  scenario_id: 'current',
+                  name: 'Current',
+                  colour: '#3B82F6',
+                  visibility_mode: 'f+e',
+                  is_live: true,
+                },
+              ],
+              display: { hide_current: false },
+              pinned_recompute_eligible: true,
+            },
+            deps: {
+              v: 1,
+              mode: 'linked',
+              chart_kind: 'analysis_bridge',
+              parent: { parent_file_id: graphFileId, parent_tab_id: parentTabId },
+              analysis: { analysis_type: 'graph_overview', query_dsl: 'from(from).to(to)', what_if_dsl: null },
+              scenarios: [{ scenario_id: 'current', visibility_mode: 'f+e', is_live: true }],
+            },
+            deps_signature: 'e2e-seeded-v1',
             payload: {
               analysis_result: {
                 analysis_type: 'graph_overview',
@@ -1058,6 +1427,8 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     // - Chart surface includes chart title.
     await expect(page.getByRole('link', { name: 'React Flow' })).toBeVisible();
     await expect(page.getByText('Chart — Bridge View')).toBeVisible();
+    // Critical semantics: when a parent graph tab is present in the bundle, the chart must be Linked (not pinned).
+    await expect(page.getByText('Linked').first()).toBeVisible();
     // Stronger assertion: ChartViewer controls must be present (ensures chart CONTENT rendered, not just hidden tab metadata).
     await expect(page.getByRole('button', { name: 'Download CSV' }).first()).toBeVisible();
 

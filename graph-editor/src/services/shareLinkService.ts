@@ -293,8 +293,8 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
       return { success: false, error: 'Chart data not found or invalid' };
     }
 
-    const parentFileId: string | undefined = chartData?.source?.parent_file_id;
-    const parentTabId: string | undefined = chartData?.source?.parent_tab_id;
+    const parentFileId: string | undefined = chartData?.recipe?.parent?.parent_file_id ?? chartData?.source?.parent_file_id;
+    const parentTabId: string | undefined = chartData?.recipe?.parent?.parent_tab_id ?? chartData?.source?.parent_tab_id;
     if (!parentFileId || !parentTabId) {
       return { success: false, error: 'Chart is missing parent graph context' };
     }
@@ -338,19 +338,12 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     })();
     const byId = new Map(scenarios.map(s => [s.id, s]));
 
-    // For bridge charts, scenario_ids are intentionally empty (the result embeds scenario context).
-    // Therefore, the canonical "what the user saw" for scenario names/colours/modes is the analysis result metadata.
-    const analysisMeta: any = chartData?.payload?.analysis_result?.metadata || {};
-    const metaA = analysisMeta?.scenario_a || null;
-    const metaB = analysisMeta?.scenario_b || null;
+    const recipeScenarios: any[] = Array.isArray(chartData?.recipe?.scenarios) ? chartData.recipe.scenarios : [];
+    if (recipeScenarios.length === 0) {
+      return { success: false, error: 'Chart is missing recipe scenarios (cannot build live share)' };
+    }
 
-    const orderedScenarioIdsFromAnalysis: string[] =
-      metaA?.scenario_id && metaB?.scenario_id ? [metaA.scenario_id, metaB.scenario_id] : [];
-
-    const orderedScenarioIds: string[] =
-      orderedScenarioIdsFromAnalysis.length > 0
-        ? orderedScenarioIdsFromAnalysis
-        : visibleScenarioIds.filter((id: string) => id !== 'base' && id !== 'current');
+    const orderedScenarioIds: string[] = recipeScenarios.map(s => String(s?.scenario_id || '')).filter((x: string) => x.trim());
 
     // Build COMPOSED effective fetch DSLs for visible scenarios.
     // The raw scenario meta.queryDSL is often a diff (e.g. context-only) and is not meaningful
@@ -382,34 +375,26 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     let droppedMissingDslCount = 0;
     for (const scenarioId of orderedScenarioIds) {
       if (scenarioId === 'base' || scenarioId === 'current') continue;
-      const s = byId.get(scenarioId);
-      const subtitle = chartData?.payload?.scenario_dsl_subtitle_by_id?.[scenarioId];
-      const dsl: string | undefined =
-        effectiveDslById.get(scenarioId) ||
-        (s?.meta?.lastEffectiveDSL as string | undefined) ||
-        (s?.meta?.queryDSL as string | undefined) ||
-        (typeof subtitle === 'string' && subtitle.trim() ? subtitle : undefined);
 
-      const isLive: boolean = Boolean(s?.meta?.isLive);
-      // If the scenario exists in IDB and is not live, we cannot rebuild it from DSL deterministically.
-      if (s && !isLive) {
+      const recipe = recipeScenarios.find(s => s?.scenario_id === scenarioId) || null;
+      const dsl: string | undefined = typeof recipe?.effective_dsl === 'string' && recipe.effective_dsl.trim() ? recipe.effective_dsl.trim() : undefined;
+      const isLive: boolean = Boolean(recipe?.is_live);
+
+      if (!isLive) {
         return { success: false, error: 'Live chart share is only supported for DSL-backed live scenarios' };
       }
-      if (!dsl || !dsl.trim()) {
-        // Do not hard-fail: allow sharing Current-only (Current is live by definition).
-        // This also tolerates cases where scenario metadata isn't persisted yet / fileId prefixes mismatch.
+      if (!dsl) {
         droppedMissingDslCount++;
         continue;
       }
 
-      const meta = metaA?.scenario_id === scenarioId ? metaA : metaB?.scenario_id === scenarioId ? metaB : null;
       liveScenarioItems.push({
         id: scenarioId,
         dsl,
-        name: (typeof meta?.name === 'string' && meta.name.trim()) ? meta.name : s?.name,
-        colour: (typeof meta?.colour === 'string' && meta.colour.trim()) ? meta.colour : s?.colour,
-        visibility_mode: (meta?.visibility_mode as any) || visibilityMode?.[scenarioId] || 'f+e',
-        subtitle: typeof subtitle === 'string' ? subtitle : undefined,
+        name: (typeof recipe?.name === 'string' && recipe.name.trim()) ? recipe.name : (byId.get(scenarioId)?.name || scenarioId),
+        colour: (typeof recipe?.colour === 'string' && recipe.colour.trim()) ? recipe.colour : (byId.get(scenarioId)?.colour || undefined),
+        visibility_mode: (recipe?.visibility_mode as any) || visibilityMode?.[scenarioId] || 'f+e',
+        subtitle: undefined,
       });
     }
 
@@ -419,7 +404,10 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     // - "Current" is live by definition.
     // - Never emit a share payload with `hide_current=true` and zero scenario items, because that
     //   produces a chart share that has no valid scenarios to run (and looks "blank" on boot).
-    const hideCurrent = liveScenarioItems.length === 0 ? false : !visibleScenarioIds.includes('current');
+    const hideCurrent =
+      typeof chartData?.recipe?.display?.hide_current === 'boolean'
+        ? chartData.recipe.display.hide_current
+        : (liveScenarioItems.length === 0 ? false : !visibleScenarioIds.includes('current'));
     const selectedScenarioId: string | undefined = scenarioState.selectedScenarioId;
     const selectedScenarioDsl =
       selectedScenarioId && selectedScenarioId !== 'base' && selectedScenarioId !== 'current'
@@ -437,26 +425,20 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     const analysisType: string | null | undefined = chartData?.source?.analysis_type ?? null;
     const whatIfDsl: string | null | undefined = parentTab?.editorState?.whatIfDSL ?? null;
 
-    const currentMetaFromAnalysis = (() => {
-      try {
-        const mA = metaA;
-        const mB = metaB;
-        const cur = mA?.scenario_id === 'current' ? mA : mB?.scenario_id === 'current' ? mB : null;
-        const dsl =
-          (typeof cur?.dsl === 'string' && cur.dsl.trim())
-            ? cur.dsl.trim()
-            : (typeof (graph_state as any)?.current_query_dsl === 'string' && (graph_state as any).current_query_dsl.trim())
-              ? String((graph_state as any).current_query_dsl).trim()
-              : undefined;
-        const colour = (typeof cur?.colour === 'string' && cur.colour.trim()) ? cur.colour : undefined;
-        const visibility_mode = (cur?.visibility_mode as any) || undefined;
-        const name = (typeof cur?.name === 'string' && cur.name.trim()) ? cur.name : 'Current';
-        if (!dsl && !colour && !visibility_mode) return undefined;
-        return { dsl, colour, visibility_mode, name };
-      } catch {
-        return undefined;
-      }
-    })();
+    const currentFromRecipe = recipeScenarios.find(s => s?.scenario_id === 'current') || null;
+    const currentDsl =
+      typeof currentFromRecipe?.effective_dsl === 'string' && currentFromRecipe.effective_dsl.trim()
+        ? currentFromRecipe.effective_dsl.trim()
+        : undefined;
+    const currentMetaFromRecipe =
+      currentDsl || currentFromRecipe?.colour || currentFromRecipe?.visibility_mode
+        ? {
+            dsl: currentDsl,
+            colour: typeof currentFromRecipe?.colour === 'string' ? currentFromRecipe.colour : undefined,
+            visibility_mode: currentFromRecipe?.visibility_mode as any,
+            name: typeof currentFromRecipe?.name === 'string' && currentFromRecipe.name.trim() ? currentFromRecipe.name.trim() : 'Current',
+          }
+        : undefined;
 
     const payload: SharePayloadV1 = {
       version: '1.0.0',
@@ -473,7 +455,7 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
       },
       scenarios: {
         items: liveScenarioItems,
-        current: currentMetaFromAnalysis,
+        current: currentMetaFromRecipe,
         hide_current: hideCurrent,
         selected_scenario_dsl: selectedScenarioDsl,
       },
@@ -567,8 +549,30 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
       return { success: false, error: 'No share secret available (set SHARE_SECRET or open with ?secret=…)' };
     }
 
+    // Scenario state is tab-scoped (GraphEditor stores it on the *graph tab*).
+    // If a user has a chart tab active when generating a bundle share that includes a graph tab,
+    // we MUST still source scenario state from the graph tab; otherwise we emit empty scenarios
+    // and can break linked charts (e.g. bridge view requires 2 scenarios).
     const preferredTabId = activeTabId && tabIds.includes(activeTabId) ? activeTabId : tabIds[0];
-    const preferredTab: any = await db.tabs.get(preferredTabId);
+    const preferredTabFromArgs: any = await db.tabs.get(preferredTabId);
+
+    const graphTabForScenarioState = (() => {
+      // Prefer an explicit graph tab if one is included.
+      const graphTabs = tabs.filter(t => typeof t?.fileId === 'string' && String(t.fileId).startsWith('graph-'));
+      if (graphTabs.length > 0) {
+        const activeIsGraph = graphTabs.find(t => t?.id === preferredTabId);
+        return activeIsGraph || graphTabs[0];
+      }
+      // Chart-only selection: try to fall back to the chart's parent graph tab (best-effort).
+      const activeChartParentTabId: string | undefined =
+        preferredTabFromArgs?.fileId && String(preferredTabFromArgs.fileId).startsWith('chart-')
+          ? (fileRegistry.getFile(preferredTabFromArgs.fileId) as any)?.data?.source?.parent_tab_id
+          : undefined;
+      const parent = activeChartParentTabId ? tabs.find(t => t?.id === activeChartParentTabId) : null;
+      return parent || preferredTabFromArgs;
+    })();
+
+    const preferredTab: any = graphTabForScenarioState || preferredTabFromArgs;
     const preferredFileId: string | undefined = preferredTab?.fileId;
 
     const scenarioState = preferredTab?.editorState?.scenarioState || {};
@@ -648,7 +652,11 @@ export async function buildLiveBundleShareUrlFromTabs(args: {
       }
     }
 
-    const hideCurrent = includeScenarios ? !visibleScenarioIds.includes('current') : false;
+    // Never emit hide_current=true with zero scenario items (it boots as "no scenarios" and breaks charts).
+    const hideCurrent =
+      includeScenarios
+        ? (liveScenarioItems.length === 0 ? false : !visibleScenarioIds.includes('current'))
+        : false;
     const selectedScenarioId: string | undefined = scenarioState.selectedScenarioId;
     const selectedScenarioDsl =
       includeScenarios && selectedScenarioId && selectedScenarioId !== 'base' && selectedScenarioId !== 'current'

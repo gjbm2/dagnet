@@ -84,6 +84,25 @@ class RepositoryOperationsService {
     // Use workspaceService.pullLatest which does incremental SHA comparison + merge
     const result = await workspaceService.pullLatest(repository, branch, gitCreds);
 
+    // Dynamic update: file revision changes are a first-class staleness cause.
+    // Emit a lightweight event so graph/scenario/chart orchestrators can decide what (if anything) to reconcile.
+    // (No business logic here; this is a signal only.)
+    try {
+      window.dispatchEvent(
+        new CustomEvent('dagnet:workspaceFilesChanged', {
+          detail: {
+            repository,
+            branch,
+            newFiles: (result as any)?.newFiles || [],
+            changedFiles: (result as any)?.changedFiles || [],
+            deletedFiles: (result as any)?.deletedFiles || [],
+          },
+        })
+      );
+    } catch {
+      // best-effort only
+    }
+
     // Reload Navigator to show updated files
     if (this.navigatorOps) {
       await this.navigatorOps.refreshItems();

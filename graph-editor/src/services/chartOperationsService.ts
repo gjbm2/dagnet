@@ -4,6 +4,11 @@ import type { TabState } from '../types';
 import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
 import { db } from '../db/appDatabase';
+import type { ChartDepsStampV1, ChartVisibilityMode } from '../lib/chartDeps';
+import { chartDepsSignatureV1 } from '../lib/chartDeps';
+import { dslDependsOnReferenceDay } from '../lib/dslDynamics';
+import { ukReferenceDayService } from './ukReferenceDayService';
+import { computeGraphInputsSignatureV1 } from './graphInputSignatureService';
 
 export type ChartKind = 'analysis_funnel' | 'analysis_bridge';
 
@@ -19,28 +24,51 @@ type ChartFileDataV1 = {
     query_dsl?: string;
     analysis_type?: string;
   };
+  recipe: {
+    parent?: {
+      parent_file_id?: string;
+      parent_tab_id?: string;
+    };
+    analysis?: {
+      analysis_type?: string;
+      query_dsl?: string;
+      what_if_dsl?: string;
+    };
+    /**
+     * Ordered list of scenarios that participate in the compute.
+     * Includes `current` / `base` when they participate.
+     */
+    scenarios: Array<{
+      scenario_id: string;
+      name?: string;
+      colour?: string;
+      visibility_mode?: ChartVisibilityMode;
+      effective_dsl?: string;
+      is_live?: boolean;
+    }>;
+    display?: {
+      hide_current?: boolean;
+    };
+    pinned_recompute_eligible: boolean;
+  };
+  deps: ChartDepsStampV1;
+  deps_signature: string;
   payload: {
     analysis_result: AnalysisResult;
     scenario_ids: string[];
-    scenario_dsl_subtitle_by_id?: Record<string, string>;
   };
 };
 
 async function deriveScenarioDslFromDb(args: {
-  analysisResult: AnalysisResult;
+  scenarioIds: string[];
   parentFileId?: string;
 }): Promise<Record<string, string>> {
   const parentFileId = args.parentFileId;
   if (!parentFileId) return {};
 
   const result: Record<string, string> = {};
-  const analysis: any = args.analysisResult as any;
-  const idsFromMetadata = [
-    analysis?.metadata?.scenario_a?.scenario_id,
-    analysis?.metadata?.scenario_b?.scenario_id,
-  ].filter((x: any) => typeof x === 'string' && x.trim()) as string[];
-
-  if (idsFromMetadata.length === 0) return {};
+  const ids = (Array.isArray(args.scenarioIds) ? args.scenarioIds : []).filter(Boolean);
+  if (ids.length === 0) return {};
 
   try {
     // Prefer canonical fileId; if graph source implies a prefixed variant, also try that.
@@ -56,7 +84,7 @@ async function deriveScenarioDslFromDb(args: {
     const all = [...prefixed, ...canonical];
     const byId = new Map(all.map((s: any) => [String(s?.id), s]));
 
-    for (const id of idsFromMetadata) {
+    for (const id of ids) {
       const s: any = byId.get(id);
       const isLive = Boolean(s?.meta?.isLive);
       const dsl: string | undefined = (s?.meta?.lastEffectiveDSL as string | undefined) || (s?.meta?.queryDSL as string | undefined);
@@ -65,49 +93,85 @@ async function deriveScenarioDslFromDb(args: {
       }
     }
   } catch {
-    // Best-effort only; if DB is unavailable, we just won't inject DSL.
+    // Best-effort only; if DB is unavailable, we just won't derive DSL.
     return {};
   }
 
   return result;
 }
 
-function injectScenarioDslIntoAnalysisResult(args: {
-  analysisResult: AnalysisResult;
-  scenarioDslSubtitleById?: Record<string, string>;
-}): AnalysisResult {
-  const { analysisResult, scenarioDslSubtitleById } = args;
-  if (!scenarioDslSubtitleById || Object.keys(scenarioDslSubtitleById).length === 0) return analysisResult;
+function inferScenarioIdsForRecipe(args: { analysisResult: AnalysisResult; scenarioIds: string[] }): string[] {
+  const provided = Array.isArray(args.scenarioIds) ? args.scenarioIds.filter(Boolean) : [];
+  if (provided.length > 0) return provided;
 
-  // AnalysisResult is JSON-shaped; deep-clone to avoid mutating shared cached objects.
-  const cloned: any = JSON.parse(JSON.stringify(analysisResult));
-  const dslById = scenarioDslSubtitleById;
-
-  // 1) Attach DSL to dimension_values.scenario_id (covers funnel-style results).
-  if (!cloned.dimension_values) cloned.dimension_values = {};
-  if (!cloned.dimension_values.scenario_id) cloned.dimension_values.scenario_id = {};
-  for (const [scenarioId, dsl] of Object.entries(dslById)) {
-    if (typeof dsl !== 'string' || !dsl.trim()) continue;
-    if (!cloned.dimension_values.scenario_id[scenarioId]) cloned.dimension_values.scenario_id[scenarioId] = {};
-    cloned.dimension_values.scenario_id[scenarioId].dsl = dsl;
-  }
-
-  // 2) Attach DSL to bridge-style metadata scenario_a / scenario_b when present.
-  const meta = cloned.metadata || {};
-  const a = meta.scenario_a;
-  const b = meta.scenario_b;
-  if (a?.scenario_id && typeof dslById[a.scenario_id] === 'string') {
-    a.dsl = dslById[a.scenario_id];
-  }
-  if (b?.scenario_id && typeof dslById[b.scenario_id] === 'string') {
-    b.dsl = dslById[b.scenario_id];
-  }
-  cloned.metadata = meta;
-
-  return cloned as AnalysisResult;
+  const analysis: any = args.analysisResult as any;
+  const a = analysis?.metadata?.scenario_a?.scenario_id;
+  const b = analysis?.metadata?.scenario_b?.scenario_id;
+  const ids: string[] = [];
+  if (typeof a === 'string' && a.trim()) ids.push(a.trim());
+  if (typeof b === 'string' && b.trim() && b.trim() !== a?.trim()) ids.push(b.trim());
+  return ids;
 }
 
 class ChartOperationsService {
+  async disconnectChart(args: { chartFileId: string }): Promise<void> {
+    const chartFileId = args.chartFileId;
+    const opId = sessionLogService.startOperation('info', 'graph', 'CHART_DISCONNECT', `Disconnecting chart ${chartFileId}`);
+    try {
+      const existing: any = await db.files.get(chartFileId);
+      const existingData: any = existing?.data || null;
+      if (!existingData) {
+        sessionLogService.endOperation(opId, 'warning', 'Chart not found');
+        return;
+      }
+
+      const recipe = existingData?.recipe || {};
+      const source = existingData?.source || {};
+
+      const nextRecipe = {
+        ...recipe,
+        parent: {
+          ...(recipe.parent || {}),
+          parent_tab_id: undefined,
+        },
+      };
+
+      const nextSource = {
+        ...source,
+        parent_tab_id: undefined,
+      };
+
+      const nextDeps: ChartDepsStampV1 = {
+        ...(existingData.deps as ChartDepsStampV1),
+        mode: 'pinned',
+        parent: {
+          ...(existingData?.deps?.parent || {}),
+          parent_tab_id: undefined,
+        },
+      };
+      const deps_signature = chartDepsSignatureV1(nextDeps);
+
+      const nextData = {
+        ...existingData,
+        source: nextSource,
+        recipe: nextRecipe,
+        deps: nextDeps,
+        deps_signature,
+      };
+
+      // Persist via fileRegistry to keep tab state consistent (update-in-place).
+      await (fileRegistry as any).upsertFileClean(
+        chartFileId,
+        'chart' as any,
+        existing?.source || { repository: 'local', branch: 'main', path: `charts/${chartFileId}.json` },
+        nextData
+      );
+
+      sessionLogService.endOperation(opId, 'success', 'Chart disconnected (pinned)');
+    } catch (e: any) {
+      sessionLogService.endOperation(opId, 'error', e?.message || String(e));
+    }
+  }
   async openAnalysisChartTabFromAnalysis(args: {
     chartKind: ChartKind;
     analysisResult: AnalysisResult;
@@ -115,6 +179,8 @@ class ChartOperationsService {
     title?: string;
     source?: ChartFileDataV1['source'];
     scenarioDslSubtitleById?: Record<string, string>;
+    hideCurrent?: boolean;
+    whatIfDsl?: string;
     /** Optional: override the chart fileId (for share-scoped cached chart artefacts). */
     fileId?: string;
   }): Promise<{ fileId: string; tabId: string } | null> {
@@ -155,6 +221,8 @@ class ChartOperationsService {
     title?: string;
     source?: ChartFileDataV1['source'];
     scenarioDslSubtitleById?: Record<string, string>;
+    hideCurrent?: boolean;
+    whatIfDsl?: string;
     fileId?: string;
   }): Promise<{ fileId: string; tabId: string } | null> {
     try {
@@ -172,20 +240,136 @@ class ChartOperationsService {
         { fileId, tabId, chartKind: args.chartKind }
       );
 
+      const recipeScenarioIds = inferScenarioIdsForRecipe({ analysisResult: args.analysisResult, scenarioIds: args.scenarioIds });
+
       const derivedDslById = await deriveScenarioDslFromDb({
-        analysisResult: args.analysisResult,
+        scenarioIds: recipeScenarioIds,
         parentFileId: args.source?.parent_file_id,
       });
-      const scenarioDslSubtitleById: Record<string, string> | undefined = (() => {
-        const passed = args.scenarioDslSubtitleById || {};
-        const merged = { ...derivedDslById, ...passed };
-        return Object.keys(merged).length > 0 ? merged : undefined;
+      const dslById: Record<string, string> = { ...(derivedDslById || {}), ...(args.scenarioDslSubtitleById || {}) };
+
+      const analysis: any = args.analysisResult as any;
+      const meta: any = analysis?.metadata || {};
+      const metaA: any = meta?.scenario_a || null;
+      const metaB: any = meta?.scenario_b || null;
+
+      const recipeScenarios = await Promise.all(
+        recipeScenarioIds.map(async (scenarioId: string) => {
+          const scenarioMeta = metaA?.scenario_id === scenarioId ? metaA : metaB?.scenario_id === scenarioId ? metaB : null;
+
+          // Best-effort load of scenario record for name/colour/isLive.
+          const scenarioRecord: any = (() => {
+            try {
+              return db.scenarios.get(scenarioId) as any;
+            } catch {
+              return null;
+            }
+          })();
+
+          const s = await scenarioRecord;
+          const isLive = scenarioId === 'current' || scenarioId === 'base' ? true : Boolean(s?.meta?.isLive);
+          const effectiveDsl = dslById[scenarioId];
+
+          const name =
+            typeof scenarioMeta?.name === 'string' && scenarioMeta.name.trim()
+              ? scenarioMeta.name.trim()
+              : scenarioId === 'current'
+                ? 'Current'
+                : scenarioId === 'base'
+                  ? 'Base'
+                  : typeof s?.name === 'string'
+                    ? s.name
+                    : scenarioId;
+
+          const colour =
+            typeof scenarioMeta?.colour === 'string' && scenarioMeta.colour.trim()
+              ? scenarioMeta.colour.trim()
+              : scenarioId === 'current'
+                ? '#3B82F6'
+                : scenarioId === 'base'
+                  ? '#999999'
+                  : typeof s?.colour === 'string'
+                    ? s.colour
+                    : undefined;
+
+          const visibilityMode: ChartVisibilityMode | undefined =
+            (scenarioMeta?.visibility_mode as ChartVisibilityMode | undefined) || 'f+e';
+
+          return {
+            scenario_id: scenarioId,
+            name,
+            colour,
+            visibility_mode: visibilityMode,
+            effective_dsl: typeof effectiveDsl === 'string' && effectiveDsl.trim() ? effectiveDsl.trim() : undefined,
+            is_live: isLive,
+          };
+        })
+      );
+
+      const pinnedRecomputeEligible = recipeScenarios.every(s => {
+        const id = s.scenario_id;
+        if (id === 'current' || id === 'base') return true;
+        if (s.is_live !== true) return false;
+        return typeof s.effective_dsl === 'string' && s.effective_dsl.trim().length > 0;
+      });
+
+      const reference_day_uk =
+        recipeScenarios.some(s => dslDependsOnReferenceDay(s.effective_dsl))
+          ? ukReferenceDayService.getReferenceDayUK()
+          : undefined;
+
+      const inputs_signature = await (async () => {
+        try {
+          const parentFileId = args.source?.parent_file_id;
+          if (!parentFileId) return undefined;
+          const graphFile: any = await db.files.get(parentFileId);
+          const graph: any = graphFile?.data || null;
+          if (!graph) return undefined;
+          const dsls = recipeScenarios.map(s => (typeof s?.effective_dsl === 'string' ? s.effective_dsl : '')).filter(Boolean);
+          return await computeGraphInputsSignatureV1({ graphFileId: parentFileId, graph, scenarioEffectiveDsls: dsls });
+        } catch {
+          return undefined;
+        }
       })();
 
-      const analysisResultWithDsl = injectScenarioDslIntoAnalysisResult({
-        analysisResult: args.analysisResult,
-        scenarioDslSubtitleById,
-      });
+      const recipe = {
+        parent: {
+          parent_file_id: args.source?.parent_file_id,
+          parent_tab_id: args.source?.parent_tab_id,
+        },
+        analysis: {
+          analysis_type: args.source?.analysis_type || (args.analysisResult as any)?.analysis_type,
+          query_dsl: args.source?.query_dsl,
+          what_if_dsl: typeof args.whatIfDsl === 'string' && args.whatIfDsl.trim() ? args.whatIfDsl.trim() : undefined,
+        },
+        scenarios: recipeScenarios,
+        display: typeof args.hideCurrent === 'boolean' ? { hide_current: args.hideCurrent } : undefined,
+        pinned_recompute_eligible: pinnedRecomputeEligible,
+      } satisfies ChartFileDataV1['recipe'];
+
+      const deps: ChartDepsStampV1 = {
+        v: 1,
+        mode: args.source?.parent_tab_id ? 'linked' : 'pinned',
+        chart_kind: args.chartKind,
+        parent: {
+          parent_file_id: args.source?.parent_file_id,
+          parent_tab_id: args.source?.parent_tab_id,
+        },
+        analysis: {
+          analysis_type: recipe.analysis?.analysis_type,
+          query_dsl: recipe.analysis?.query_dsl,
+          what_if_dsl: recipe.analysis?.what_if_dsl,
+        },
+        scenarios: recipe.scenarios.map(s => ({
+          scenario_id: s.scenario_id,
+          effective_dsl: s.effective_dsl,
+          visibility_mode: s.visibility_mode,
+          is_live: s.is_live,
+        })),
+        inputs_signature,
+        reference_day_uk,
+      };
+      const deps_signature = chartDepsSignatureV1(deps);
 
       const chartData: ChartFileDataV1 = {
         version: '1.0.0',
@@ -194,10 +378,12 @@ class ChartOperationsService {
         created_at_uk: formatDateUK(new Date(timestamp)),
         created_at_ms: timestamp,
         source: args.source,
+        recipe,
+        deps,
+        deps_signature,
         payload: {
-          analysis_result: analysisResultWithDsl,
-          scenario_ids: args.scenarioIds,
-          scenario_dsl_subtitle_by_id: scenarioDslSubtitleById,
+          analysis_result: args.analysisResult,
+          scenario_ids: recipeScenarioIds,
         },
       };
 

@@ -248,6 +248,9 @@ export interface AppState {
   // Last accessed
   lastRepository?: string;
   lastBranch?: string;
+
+  // Auto-update (local-only, not in repo)
+  autoUpdateChartsEnabled?: boolean;
   
   // Timestamp
   updatedAt: number;

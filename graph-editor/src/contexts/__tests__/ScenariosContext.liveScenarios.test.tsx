@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act, waitFor, cleanup } from '@testing-library/react';
 import React from 'react';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
@@ -34,11 +34,21 @@ vi.mock('../../services/fetchDataService', () => ({
   },
 }));
 
+// Force "normal workspace" boot mode for these tests.
+// Share boot config is cached globally, so tests must not depend on ambient URL state.
+vi.mock('../../lib/shareBootResolver', async (importOriginal) => {
+  const actual: any = await importOriginal();
+  return {
+    ...actual,
+    getShareBootConfig: () => ({ ...(actual.getShareBootConfig?.() || {}), mode: 'none' }),
+  };
+});
+
 // DO NOT mock db/appDatabase - use real Dexie with fake-indexeddb
 
 vi.mock('../GraphStoreContext', () => ({
-  useGraphStore: vi.fn().mockReturnValue({
-    getState: vi.fn().mockReturnValue({
+  useGraphStore: vi.fn((() => {
+    const state = {
       graph: {
         nodes: [],
         edges: [],
@@ -47,8 +57,11 @@ vi.mock('../GraphStoreContext', () => ({
       currentDSL: 'window(1-Nov-25:7-Nov-25)',
       currentWindow: { start: '1-Nov-25', end: '7-Nov-25' },
       setGraph: vi.fn(),
-    }),
-  }),
+    };
+    const store: any = (sel?: any) => (typeof sel === 'function' ? sel(state) : undefined);
+    store.getState = () => state;
+    return (selector?: any) => (typeof selector === 'function' ? selector(state) : store);
+  })()),
 }));
 
 vi.mock('../TabContext', () => ({
@@ -68,10 +81,16 @@ vi.mock('../TabContext', () => ({
   },
 }));
 
+vi.mock('../../services/chartRecomputeService', () => ({
+  recomputeOpenChartsForGraph: vi.fn().mockResolvedValue({ updatedChartFileIds: [], skippedChartFileIds: [] }),
+}));
+
 // Import after mocks
 import { ScenariosProvider, useScenariosContext } from '../ScenariosContext';
 import { fetchDataService } from '../../services/fetchDataService';
 import { db } from '../../db/appDatabase';
+import { recomputeOpenChartsForGraph } from '../../services/chartRecomputeService';
+import { autoUpdatePolicyService } from '../../services/autoUpdatePolicyService';
 
 // Helper to create wrapper with provider - fileId is required for context to work correctly
 function createWrapper(fileId = 'test-file') {
@@ -100,12 +119,172 @@ describe('ScenariosContext - Live Scenarios', () => {
     globalThis.indexedDB = new IDBFactory();
     // Re-open the database after resetting
     await db.open();
+    // Ensure default singleton rows exist (app-state/settings), otherwise saveAppState(update) is a no-op.
+    await db.initialize();
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    cleanup();
     // Clean up after each test
     await db.scenarios.clear().catch(() => {});
+  });
+
+  describe('auto-update charts orchestration', () => {
+    it('auto-reconciles charts after live scenario regeneration when auto-update is enabled', async () => {
+      vi.mocked(recomputeOpenChartsForGraph).mockClear();
+
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      await waitForReady(result);
+
+      let scenario: any;
+      await act(async () => {
+        scenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+      });
+
+      await act(async () => {
+        await result.current.regenerateScenario(scenario.id, scenario);
+      });
+
+      // Debounced reconcile (250ms)
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      expect(vi.mocked(recomputeOpenChartsForGraph)).toHaveBeenCalled();
+    });
+
+    it('does not auto-reconcile charts when the workspace toggle is disabled', async () => {
+      await db.saveAppState({ autoUpdateChartsEnabled: false });
+      const policy = await autoUpdatePolicyService.getAutoUpdateChartsPolicy();
+      expect(policy.enabled).toBe(false);
+      vi.mocked(recomputeOpenChartsForGraph).mockClear();
+
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      await waitForReady(result);
+
+      // Allow the policy load effect to run.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      let scenario: any;
+      await act(async () => {
+        scenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+      });
+
+      await act(async () => {
+        await result.current.regenerateScenario(scenario.id, scenario);
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      expect(vi.mocked(recomputeOpenChartsForGraph)).not.toHaveBeenCalled();
+    });
+
+    it('still reconciles charts on manual refresh even when the workspace toggle is disabled', async () => {
+      // Auto-update is disabled…
+      await db.saveAppState({ autoUpdateChartsEnabled: false });
+      const policy = await autoUpdatePolicyService.getAutoUpdateChartsPolicy();
+      expect(policy.enabled).toBe(false);
+
+      vi.mocked(recomputeOpenChartsForGraph).mockClear();
+
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper('graph-test-manual-refresh'),
+      });
+
+      await waitForReady(result);
+
+      // Fire the same event used by linked Refresh (chartRefreshService → ScenariosContext listener).
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('dagnet:chartRefreshRequested', {
+            detail: { graphFileId: 'graph-test-manual-refresh', chartFileId: 'chart-any' },
+          })
+        );
+      });
+
+      // Debounced reconcile (250ms)
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      expect(vi.mocked(recomputeOpenChartsForGraph)).toHaveBeenCalled();
+    });
+
+    it('reconciles charts after workspace file revisions change (e.g. git pull) when auto-update is enabled', async () => {
+      vi.mocked(recomputeOpenChartsForGraph).mockClear();
+      vi.mocked(fetchDataService.checkDSLNeedsFetch).mockClear();
+
+      // Capture the registered handler so we can invoke it deterministically (happy-dom event delivery can be finicky).
+      const realAdd = window.addEventListener;
+      const captured: any[] = [];
+      (window as any).addEventListener = (type: any, listener: any, options?: any) => {
+        if (type === 'dagnet:workspaceFilesChanged') captured.push(listener);
+        return realAdd.call(window, type, listener, options);
+      };
+
+      // Seed the graph file source so the listener can match repo/branch.
+      await db.files.put({
+        fileId: 'test-file',
+        type: 'graph',
+        viewTabs: [],
+        data: { nodes: [], edges: [], baseDSL: '', currentQueryDSL: '' },
+        source: { repository: 'repo-1', branch: 'main', path: 'graphs/test.json' },
+        lastModified: Date.now(),
+        sha: 'graphsha1',
+      } as any);
+      const seeded: any = await db.files.get('test-file');
+      expect(seeded?.source?.repository).toBe('repo-1');
+      expect(seeded?.source?.branch).toBe('main');
+      // Ensure workspace preference is explicitly ON for this test (avoid leakage from other tests).
+      await db.saveAppState({ autoUpdateChartsEnabled: true });
+      const p = await autoUpdatePolicyService.getAutoUpdateChartsPolicy();
+      expect(p.enabled).toBe(true);
+
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper('test-file'),
+      });
+
+      await waitForReady(result);
+
+      // Create at least one live scenario so regenerateAllLive has work to do.
+      let scenario: any;
+      await act(async () => {
+        scenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+      });
+      expect(scenario?.meta?.isLive).toBe(true);
+      await waitFor(() => {
+        expect(result.current.scenarios.some((s: any) => s.id === scenario.id)).toBe(true);
+      });
+
+      await waitFor(() => {
+        expect(captured.length).toBeGreaterThan(0);
+      }, { timeout: 2000 });
+
+      // Invoke the handler directly (equivalent to a pullLatest signal).
+      await act(async () => {
+        await captured[captured.length - 1]({
+          detail: { repository: 'repo-1', branch: 'main', changedFiles: ['parameters/foo.yaml'] },
+        });
+      });
+
+      // Sanity: the handler should attempt regeneration (which calls fetch planning).
+      await waitFor(() => {
+        expect(vi.mocked(fetchDataService.checkDSLNeedsFetch)).toHaveBeenCalled();
+      }, { timeout: 2000 });
+
+      // Reconcile is debounced (250ms) and also waits for regenerateAllLive to complete.
+      await waitFor(() => {
+        expect(vi.mocked(recomputeOpenChartsForGraph)).toHaveBeenCalled();
+      }, { timeout: 2000 });
+
+      // Restore addEventListener for isolation.
+      (window as any).addEventListener = realAdd;
+    });
   });
 
   // ==========================================================================
@@ -304,6 +483,31 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
     });
 
+    it('should persist a deps_signature_v1 provenance stamp after live scenario regeneration', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper('graph-provenance-test'),
+      });
+
+      await waitForReady(result);
+
+      let scenario: any;
+      await act(async () => {
+        scenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+      });
+
+      await act(async () => {
+        await result.current.regenerateScenario(scenario.id, scenario);
+      });
+
+      await waitFor(() => {
+        const updated = result.current.scenarios.find(s => s.id === scenario.id);
+        expect(typeof updated?.meta?.deps_signature_v1).toBe('string');
+        expect(updated?.meta?.deps_signature_v1?.startsWith('v1:')).toBe(true);
+        expect(updated?.meta?.deps_v1?.v).toBe(1);
+        expect(Array.isArray(updated?.meta?.deps_v1?.inputs)).toBe(true);
+      });
+    });
+
     it('should update lastRegeneratedAt timestamp after regeneration', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
@@ -353,7 +557,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       // Create a blank (non-live) scenario
       let scenario: any;
       await act(async () => {
-        scenario = await result.current.createBlank('test-tab');
+        scenario = await result.current.createBlank('Blank', 'test-tab');
       });
 
       // Verify scenario was added to state
@@ -422,7 +626,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       let liveScenario: any, staticScenario: any;
       await act(async () => {
         liveScenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
-        staticScenario = await result.current.createBlank('test-tab'); // Static
+        staticScenario = await result.current.createBlank('Static', 'test-tab'); // Static
       });
 
       // Verify scenarios were added to state
@@ -558,7 +762,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       let liveScenario: any, staticScenario: any;
       await act(async () => {
         liveScenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
-        staticScenario = await result.current.createBlank('test-tab'); // Static
+        staticScenario = await result.current.createBlank('Static', 'test-tab'); // Static
       });
 
       // Verify scenarios were added to state

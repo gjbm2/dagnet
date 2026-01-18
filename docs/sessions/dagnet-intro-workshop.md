@@ -217,7 +217,8 @@ Ask:
 1. **Open the Navigator** (`Ctrl/Cmd + B`)
 2. **Create a new graph** (`File > New Graph`)
 3. **Add nodes**:
-   - Double-click canvas to create
+   - Right-click the canvas → **Add node**
+   - Or use `Objects > Add Node`
    - Or drag node files from Navigator
 4. **Connect nodes**:
    - Drag from one node to another
@@ -246,6 +247,7 @@ Ask:
 2. **Assign events to nodes (conceptual model)**
    - Each conversion node corresponds to a provider event definition (e.g., an Amplitude event + optional property filters).
    - In DagNet, those are stored as **event files** (`events/*.yaml`) and attached/selected in the node’s properties.
+   - Practical: drag an **event file** from Navigator onto a node to set `event_id` (or set `event_id` in the Properties panel).
 
 3. **Pick realistic events**
    - For example:
@@ -424,6 +426,8 @@ Show a case node with:
 ### What Are Scenarios?
 
 Scenarios are **parameter overlays** that let you compare different "what if" states.
+
+Note: In the current UI, scenario creation/editing happens in the **Scenarios panel**. What‑If controls are separate UI controls (not a separate “What‑If panel”).
 
 ### Learning objectives
 

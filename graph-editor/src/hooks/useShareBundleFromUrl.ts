@@ -152,13 +152,24 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
         return base.length > 0 ? base : ['current'];
       })();
 
+      // Bundle linkage: if the shared bundle includes a graph tab, charts must be linked to the
+      // corresponding graph tab context (tab-scoped scenario state).
+      //
+      // IMPORTANT:
+      // - Tabs are created in share-mode IndexedDB with fresh ids. Authoring tab ids are not valid here.
+      // - We must therefore create graph tab(s) first, then materialise charts with source.parent_tab_id
+      //   pointing at the newly created graph tab id.
+      const graphTabIdsByIndex = new Map<number, string>();
+
       let activeTabId: string | null = null;
 
+      // Pass 1: open graph tabs first so chart tabs can link to them deterministically.
       for (let i = 0; i < tabs.length; i++) {
         const t = tabs[i];
-        if (t.type === 'graph') {
+        if (t.type !== 'graph') continue;
           // Create a visible graph tab for the seeded graph file.
-          const tabId = `tab-${graphFileId}-interactive-${Date.now()}-${i}`;
+          const tabId = `tab-share-${stableShortHash(JSON.stringify(payload))}-${graphFileId}-graph-${i}`;
+          graphTabIdsByIndex.set(i, tabId);
           window.dispatchEvent(
             new CustomEvent('dagnet:openTemporaryTab', {
               detail: {
@@ -197,7 +208,21 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
           }
 
           if (i === activeTabIndex) activeTabId = tabId;
-        } else if (t.type === 'chart') {
+      }
+
+      const primaryGraphTabId = (() => {
+        for (let i = 0; i < tabs.length; i++) {
+          if (tabs[i]?.type !== 'graph') continue;
+          const id = graphTabIdsByIndex.get(i);
+          if (id) return id;
+        }
+        return null;
+      })();
+
+      // Pass 2: open charts (linked when graph tab exists).
+      for (let i = 0; i < tabs.length; i++) {
+        const t = tabs[i];
+        if (t.type !== 'chart') continue;
           // Compute + materialise a chart artefact, then open a chart tab.
           const chartRecipeHash = stableShortHash(JSON.stringify(t));
           const chartFileId = `chart-share-${chartRecipeHash}`;
@@ -206,8 +231,13 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
             .map((_it: any, idx: number) => createdByIdx.get(idx)?.id)
             .filter((id: any) => Boolean(id));
           const visibleScenarioIds2 = (() => {
-            // Ordering rule: only "bridge_view" analysis uses the special "Current last" ordering.
-            // Do NOT infer bridge semantics from chart kind alone (bundle tabs can request graph_overview with an analysis_bridge renderer).
+            // Ordering rule:
+            // - Only "bridge_view" analysis uses the special "Current last" ordering.
+            // - This ordering is part of the chart semantics, not the graph tab scenario list ordering.
+            //
+            // IMPORTANT:
+            // Do NOT infer bridge semantics from chart kind alone (bundle tabs can request graph_overview
+            // with an analysis_bridge renderer).
             const isBridge = t.analysis?.analysis_type === 'bridge_view';
             if (isBridge) {
               const base = hideCurrent ? [...orderedScenarioIds2] : [...orderedScenarioIds2, 'current'];
@@ -333,15 +363,17 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
             title: t.title || analysisResult.analysis_name || 'Chart',
             source: {
               parent_file_id: graphFileId,
+              parent_tab_id: primaryGraphTabId || undefined,
               query_dsl: t.analysis?.query_dsl,
               analysis_type: t.analysis?.analysis_type || undefined,
             },
             scenarioDslSubtitleById,
+            hideCurrent,
+            whatIfDsl: t.analysis?.what_if_dsl || undefined,
             fileId: chartFileId,
           });
 
           if (opened && i === activeTabIndex) activeTabId = opened.tabId;
-        }
       }
 
       if (activeTabId) {
