@@ -5,40 +5,37 @@
 
 ## Charts built on live scenarios must update
 
-### Proposal + plan (triggered by live scenario changes) — updated 16-Jan-26
-- **Goal**: charts must auto-refresh when any live scenario changes in normal mode (not just on git pull) and expose a manual Refresh button on chart tabs.
-- **Scope definition: “live scenario changed” triggers**:
-  - git pull (repo state changes)
-  - put to base (base DSL changes; live scenarios regenerate)
-  - edit live scenario DSL (regeneration)
-  - explicit live scenario regeneration (manual or programmatic)
-- **Core approach**:
-  - Reuse the existing “refetch from files → regenerate → recompute charts” sequencing from the dev-only handler and make it production-capable.
-  - Centralise the recompute in `ScenariosContext` (single source of truth; no duplication in UI/menu files).
-  - Recompute all open chart tabs whose `source.parent_file_id` matches the graph file, ensuring bridge/funnel charts stay consistent without per-chart dependency inference.
-- **Event + routing strategy**:
-  - Introduce a production refresh event (e.g. `dagnet:refreshFromFiles`) that routes through the same internal handler as the dev-only event.
-  - Event payload can include `graphFileId`, optional `preferredTabId` (graph tab), and optional `chartFileId` for fallback resolution if tab state is missing.
-  - The handler resolves visible scenario order from the relevant graph tab in IndexedDB; it will not guess a scenario set if it cannot resolve the tab.
-- **Where triggers will fire (normal mode)**:
-  - `ScenariosContext.regenerateScenario` (after success, only for live scenarios)
-  - `ScenariosContext.regenerateAllLive` (single recompute at the end, not per scenario)
-  - `ScenariosContext.putToBase` (via `regenerateAllLive`, so no extra hook needed)
-  - `RepositoryOperationsService.pullLatest` (dispatch refresh event for open graph tabs)
-- **Manual refresh UX**:
-  - Add a Refresh icon button (lucide refresh) to `ChartViewer`.
-  - Button dispatches the same refresh event with `graphFileId` from chart `source.parent_file_id` and optional `parent_tab_id`.
-  - If no parent graph is known, show a non-blocking toast warning (“Open the parent graph to refresh”).
-- **Session logging**:
-  - Add a dedicated refresh log op (`session` type) including reason, repo/branch (if known), graph fileId, and chart fileIds recomputed.
-  - This is critical for diagnosing sequencing drift during parity investigations.
-- **Share mode guard**:
-  - Normal mode only for the new scenario-change triggers (live share already has a separate refresh pipeline).
-- **Tests**:
-  - Extend existing `ScenariosContext` live-scenario tests to assert chart recompute is triggered by scenario changes.
-  - Extend existing repository operations tests to assert pull triggers refresh dispatch (no new test files unless required).
-- **Known limitation (explicit)**:
-  - This keeps charts aligned with repo changes, but it does not resolve Stage‑2 “floating” `t95/path_t95` drift until determinism work is implemented.
+### Proposal + plan (dependency signatures; self-invalidating charts) — updated 18-Jan-26
+
+**Authoritative design + step-by-step plan**: `docs/current/dynamic-update.md`
+
+- **Goal**: charts are derived artefacts that are **self-invalidating** via dependency signatures:
+  - graph changes ⇒ scenarios reconcile
+  - scenarios change ⇒ analysis becomes stale/refreshes
+  - analysis inputs change ⇒ charts refresh
+
+- **Core design**:
+  - Replace scattered “explicit triggers” with a **dependency stamp + signature** model.
+  - Charts operate with explicit semantics:
+    - **Linked (live)** when a specific parent graph tab context is resolvable (scenario state is tab-scoped).
+    - **Pinned** when parent context is not resolvable (or in share contexts); pinned refresh is only possible when all participating scenarios are regenerable from the pinned recipe.
+  - Auto-update is **ON by default** in normal authoring, and **forced ON** in live share/dashboard (user toggle still exists in workspace mode).
+
+- **Implementation shape (high-level)**:
+  - Persist a full chart `recipe` block (scenario set/order, names/colours, visibility modes, flattened effective DSLs including Current when it participates, plus analysis recipe inputs) alongside the cached `payload.analysis_result`.
+  - Persist `deps` + `deps_signature` on chart artefacts (no migration/backfill logic).
+  - Centralise reconcile/orchestration in service/context layer (no business logic in UI/menu files).
+
+- **Rationalisation (in scope)**:
+  - Stop piping recipe/DSL metadata through `analysis_result` (remove DSL injection into analysis outputs); chart UI reads subtitles/metadata from `chart.recipe`.
+
+- **Refresh “when/where” (minimal, structural)**:
+  - Evaluate staleness on chart tab activation/render, and on explicit Refresh.
+  - In auto-update mode, also reconcile after scenario regeneration and after authored graph topology edits (debounced + single-flight + bounded to visible/open tabs).
+
+- **Logging + tests**:
+  - Use `sessionLogService` for structured reconcile logs (reason(s), prev/next signatures, targets, policy).
+  - Tests are defined and tracked in `docs/current/dynamic-update.md` (extend existing suites; avoid new test files).
 
 
 ## Outstanding issues (sequencing + live share parity) — updated 15-Jan-26
