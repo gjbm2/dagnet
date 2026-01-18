@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.0b
+**Released:** 18-Jan-26
+
+Live charts testing & working
+
+---
+
 ## Version 1.2.9b
 **Released:** 15-Jan-26
 
