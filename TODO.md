@@ -1,6 +1,8 @@
 # TODO
 
 
+
+
 ## Charts built on live scenarios must update
 
 ### Proposal + plan (triggered by live scenario changes) — updated 16-Jan-26
@@ -168,6 +170,11 @@
       - graph is seeded into share DB
       - dependent files are hydrated into FileRegistry
       - ScenariosContext is ready with correct graph
+
+
+## Consider a live db server for data blobs (data for each slice) so we can store daily histograms, pass pointers to data etc. into analytics, charting, etc.  and reduce file size
+- i.e. re-architect app data handling so we retain slices headers etc. in git, but move actual data blobs into a dbs.
+
 
 - **Performance (not critical path; likely debug-heavy)**: In live share, route all GitHub API calls through a **same-origin proxy** (e.g. `/api/github-proxy/...`) so the browser never calls `api.github.com` directly. This should eliminate most CORS preflight (OPTIONS) overhead and materially speed up boot/refresh, but will require careful debugging across dev/prod and test stubs.
 
