@@ -111,6 +111,27 @@ This proposal supports two coherent chart semantics:
   - A chart is a *recipe* that carries an explicit ordered scenario definition (DSL fragments + display metadata + visibility modes), and does not consult an external graph tab’s evolving scenario stack.
   - Consequence: scenario order/visibility changes in some other UI session do not affect the chart unless the recipe itself changes.
 
+**Critical requirement (supports linked↔pinned fallback): charts must persist both link + fallback**
+
+To support the rule “linked when parent context is available, pinned when it is not”, a chart artefact must always persist:
+
+- **A parent linkage pointer** (for linked view):
+  - at minimum: parent graph file ID (and optionally parent tab ID if needed to resolve scenario view state)
+- **A pinned fallback recipe** (for orphaned operation):
+  - flattened/effective per-scenario DSL mapping sufficient to rehydrate the intended scenario definitions for compute
+  - plus any recipe inputs that materially affect analysis (analysis type, query DSL, visibility modes, what‑if DSL where applicable)
+
+This lets the runtime choose the best semantic at render/reconcile time without losing correctness when tabs are closed/reopened.
+
+**Important clarification: scenario view state is per tab (not per graph)**
+
+In the current app, scenario visibility/order/modes live under `TabState.editorState.scenarioState` and are therefore **tab-scoped**. Tabs are persisted in IndexedDB (`db.tabs`), but when a tab is closed it is deleted. Reopening a graph creates a new tab with default scenario state (typically just `current` visible).
+
+Therefore:
+
+- A chart cannot safely “re-link” to *any* graph tab for the same graph fileId after its original parent tab was closed.
+- Linked-view semantics must resolve against a **specific parent tab identity** when available, and must fall back to pinned when that tab context is not resolvable.
+
 **Why live share currently flattens/encodes scenario DSL definitions**:
 
 - In chart-only live share boot there may be **no visible parent graph tab**, so there is no authoritative “tab scenario state” to depend on.
@@ -225,6 +246,12 @@ Charts are local derived artefacts. That is correct and desirable, but the artef
 
 This turns “charts are disconnected” into “charts are cached views that can reconcile themselves”.
 
+#### Chart file schema decisions (see Locked decisions)
+
+Chart schema shape and the “do not pipe recipe/DSL through analysis outputs” rationalisation are recorded under:
+
+- `Locked decisions → Chart file schema decisions (recipe block + no DSL injection)`
+
 ## Canonical “revision” sources (what the stamp is allowed to depend on)
 
 To avoid expensive hashing or ambiguous “last modified” behaviour, the stamp should be built from **explicit revision sources**.
@@ -234,7 +261,11 @@ To avoid expensive hashing or ambiguous “last modified” behaviour, the stamp
 Define a stable notion of “file revision” suitable for dependency tracking:
 
 - **Preferred**: repository SHA (when the file is sourced from git and has a SHA).
-- **Otherwise**: a monotonic local revision token that increments on each in-app write (including merges/resolutions), plus an optional lightweight content hash if cross-session stability is required for local-only files.
+- **Otherwise (decision)**: use `lastModified` as the local revision token (treated as “revision” when SHA is unavailable).
+
+Notes:
+
+- Earlier we considered a monotonic local counter and/or lightweight content hash. We are not adopting those for now to minimise surface area; `lastModified` is sufficient as long as all content-changing writes update it.
 
 The important property is:
 
@@ -318,6 +349,17 @@ Recommended check points (cheap, local decisions):
 
 This is not an explicit trigger list of “operations”; it is a small set of structural “revision sources changed” events plus on-demand checks.
 
+**Clarification (addresses “why do we need triggers?”):**
+
+The dependency rules define **what makes a chart stale**. The app still needs **when/where to evaluate** those rules.
+
+Design decision (minimal v1):
+
+- Always evaluate staleness on **chart tab activation/render** (cheap signature comparison).
+- Evaluate on **explicit Refresh**.
+- In auto-update mode, also evaluate when the **parent tab’s scenarioState changes** (order/visibility/modes) *for linked charts*.
+- Day-boundary invalidation is handled by a periodic check only when dynamic DSL is involved (Step 6).
+
 ### What to recompute (bounded scope)
 
 To keep cost controlled:
@@ -346,6 +388,36 @@ The ordering should be logged as a single parent operation with child steps so d
 - **Staleness indicator**: show when the chart’s deps signature does not match current.
 - **Auto-update toggle** (workspace mode): allow disabling if too expensive.
 
+### Auto-update control surfaces (explicit UI requirement)
+
+Auto-update must be user-visible in workspace mode via **two access points**, both calling the same central service/hook (no business logic in menu/UI files):
+
+- **Data menu**: `Data → Auto-update charts` (checkbox / toggle)
+- **Tools panel**: a dedicated toggle (mirrors the Data menu state)
+
+In share-live and dashboard contexts, auto-update remains enabled by default regardless of the workspace toggle (policy override).
+
+### “Live vs pinned” visibility and user control (explicit UX requirement)
+
+It must be visible to the user whether a chart is operating as:
+
+- **Linked (live)**: chart depends on a specific parent graph tab context (scenario order/visibility/modes + authoritative Current DSL).
+- **Pinned**: chart depends only on its persisted recipe + cached artefact (and can operate while orphaned).
+
+**UI requirement:**
+
+- Show a small status indicator on chart tabs/views (e.g. `Linked` / `Pinned`), with a tooltip explaining what it means.
+
+**Disconnect requirement (user-controlled pinning):**
+
+- Provide a `Disconnect` action for linked charts that converts the chart to pinned mode by:
+  - clearing the parent-tab linkage used for linked resolution, and
+  - treating the chart as pinned going forward.
+
+**Important**: if Step 2.2a is implemented correctly, the chart’s pinned fallback recipe is **already persisted and up-to-date at chart creation/update time**, so disconnect is a cheap metadata change (not an additional “snapshotting” step).
+
+This allows a user to intentionally “freeze” a chart even if the parent graph tab remains open and dynamic.
+
 ### Behaviour by context
 
 - **Live share mode**:
@@ -355,7 +427,7 @@ The ordering should be logged as a single parent operation with child steps so d
   - auto-update enabled by default
   - avoid intrusive modals; prefer lightweight indicators/toasts
 - **Normal authoring**:
-  - default may be manual or auto (to be decided), but must be user-controllable
+  - auto-update is enabled by default, but must be user-controllable (Data menu + Tools panel toggle)
   - staleness must be visible so users are not unknowingly reading stale results
 
 ## Session logging requirements
@@ -387,8 +459,191 @@ To prevent runaway recomputation:
 - **R1 — Dependency observation completeness**: if regeneration does not correctly record all consulted inputs, stamps may under-invalidate. This must be tested and logged.
 - **R2 — Stamp churn**: over-broad dependency recording could cause frequent invalidation and expensive recompute. We need to keep stamps compact and intentional.
 - **R3 — Dynamic DSL day-boundary semantics**: deciding the exact UK day boundary and ensuring all subsystems share it is critical (align with determinism work).
-- **R4 — Graph edit semantics**: whether authored topo edits should auto-regenerate scenarios by default is a product decision; the stamp mechanism supports either behaviour.
+- **R4 — Graph edit semantics**: authored topo edits trigger refresh; the risk is only performance/churn, which must be managed by debounce + single-flight + scope limits.
 - **R5 — Share vs workspace parity**: the same stamp concepts must apply in share-scoped DBs; the reconcile orchestrator must not assume a visible graph tab exists.
+
+## Locked decisions (for implementation; no migration/backfill)
+
+This section holds **all design/decision material that the step-by-step plan depends on**. The step-by-step plan should reference this section instead of re-stating decisions inline.
+
+### Chart semantics and share/bundle behaviour (linked vs pinned)
+
+**Step 0.1 decision (share/bundle semantics):**
+
+- **Charts shared without their parent graph present**: use **pinned recipe** semantics.
+  - Meaning: the chart tab is self-sufficient; it rehydrates from its embedded scenario definitions/recipe and does not depend on a graph tab’s evolving scenario stack.
+- **Charts shared with their parent graph present in the same bundle**: use **linked view** semantics (dynamic).
+  - Meaning: the chart’s dependency stamp is allowed to depend on the parent graph tab’s scenario view state (order/visibility) and will reconcile based on that, rather than on a flattened recipe.
+  - Required: the bundle format must include an explicit linkage so the chart can deterministically identify the parent graph tab/fileId.
+  - Fail-safe: if the parent graph cannot be resolved at runtime (missing tab/file), fall back to pinned recipe semantics rather than failing.
+
+### Tab-scoped scenario state (why charts must resolve a specific tabId)
+
+**Important clarification: scenario view state is per tab (not per graph)**
+
+In the current app, scenario visibility/order/modes live under `TabState.editorState.scenarioState` and are therefore **tab-scoped**. Tabs are persisted in IndexedDB (`db.tabs`), but when a tab is closed it is deleted. Reopening a graph creates a new tab with default scenario state (typically just `current` visible).
+
+Therefore:
+
+- A chart cannot safely “re-link” to *any* graph tab for the same graph fileId after its original parent tab was closed.
+- Linked-view semantics must resolve against a **specific parent tab identity** when available, and must fall back to pinned when that tab context is not resolvable.
+
+**Bundle/share resolution rule (linked charts):**
+
+- When generating a multi-tab share/bundle that includes both graph tab(s) and chart tab(s), the bundle must preserve a stable mapping so that a chart can resolve its intended parent **tabId** on boot.
+- Minimal requirement: the chart recipe must carry `recipe.parent.parent_tab_id` equal to the graph tab id created/restored by the bundle boot path.
+
+**No re-link in scope (this workstream):**
+
+- We do not implement an explicit “Re-link” action in this scope. The only requirement is the fail-safe rule: do not auto-bind across reopened tabs.
+
+### Canonical revision decisions
+
+**File revision token (0.2)**:
+
+- `FileState` supports `sha` and `lastSynced` (see `src/types/index.ts`).
+- Share/live seeding and refresh paths overwrite-seed files with SHA (`fileRegistry.upsertFileClean(..., opts.sha)`), so SHA is available in those contexts.
+- Workspace clone also persists `sha` (treeItem SHA) for files.
+- **Decision**: file revision token for stamps is:
+  - `sha` when present
+  - otherwise `lastModified` (treated as a local revision token)
+- Therefore: revision used in stamps is `sha ?? String(lastModified ?? '')`.
+
+**UK reference day source (0.3)**:
+
+- Current code often derives “today” via `formatDateUK(new Date())` and sometimes normalises via `parseUKDate(formatDateUK(new Date()))`.
+- **Decision**:
+  - Canonical “reference day” is the existing UTC-normalised day string: `formatDateUK(new Date())`.
+  - This must be routed through a single injectable provider for tests (Step 6.1), rather than calling `new Date()` ad-hoc inside stamp logic.
+
+### Chart file schema decisions (recipe block + no DSL injection)
+
+We should not “stuff everything through analysis and hope it comes back out”.
+
+- **Analysis** should receive the narrow compute inputs it truly needs (scenario graphs + analysis recipe).
+- **Chart artefacts** should persist any additional supporting information required for:
+  - pinned/orphaned operation (recompute eligibility + pinned recipe), and
+  - linked operation (parent tab resolution), and
+  - UX (names/colours/modes/visibility intent).
+
+**Decision (schema shape)**:
+
+- Extend the chart file with a dedicated, explicit **`recipe`** block (distinct from `payload.analysis_result`):
+  - `recipe.parent`: `parent_file_id`, `parent_tab_id`
+  - `recipe.analysis`: `analysis_type`, `query_dsl`, optional `whatIfDSL` (only if applicable)
+  - `recipe.scenarios`: ordered list of “participating scenarios”, each with:
+    - `scenario_id` (including `current`/`base` when they participate)
+    - `name`, `colour`
+    - `visibility_mode` (`f+e`/`f`/`e`)
+    - `effective_dsl` (flattened/composed DSL; required for pinned recompute)
+    - `is_live` flag (so pinned recompute eligibility is checkable without guessing)
+  - `recipe.display`: intent such as `hideCurrent` (when relevant)
+  - `recipe.pinned_recompute_eligible`: boolean (true iff all participating scenarios are regenerable from the recipe)
+  - `recipe.created_from`: lightweight provenance (optional; for logging only)
+
+The existing `payload.analysis_result` remains the cached output.
+
+**Decision (rationalisation):**
+
+- Treat `payload.analysis_result` as **compute output only**:
+  - no injected scenario DSL fields
+  - no chart-recipe metadata
+- Persist chart recipe and display metadata exclusively in `chart.recipe`, and have chart rendering read from that.
+
+**Implementation consequences (in scope for this workstream):**
+
+- Remove DSL injection from chart creation/update paths (remove the equivalent of `injectScenarioDslIntoAnalysisResult` behaviour).
+- Update chart rendering services to read DSL subtitles from `chart.recipe.scenarios[*].effective_dsl`, not from `analysis_result`.
+- Update tests that currently assert analysis-result DSL injection so they assert recipe fields instead.
+
+### Chart staleness semantics (rules, not steps)
+
+**Step 4.1 explicit requirement (supports graph-tab close / orphaning):**
+
+- Linked-view derivation must use parent graph tab scenario state **when resolvable**.
+- If the parent graph tab context is not resolvable, derivation must fall back to pinned-recipe derivation using the **pinned fallback recipe persisted on the chart artefact** (not by guessing).
+
+**Step 4.1 explicit requirement (tab resolution; do not guess across re-opened tabs):**
+
+- Linked-view derivation must resolve scenario state against a **specific tab**.
+  - Prefer `source.parent_tab_id` when it refers to an existing tab in `db.tabs`.
+  - If the referenced tab does not exist (tab was closed), treat the chart as **orphaned** and use pinned fallback.
+- Do **not** automatically bind the chart to a newly reopened graph tab for the same fileId without an explicit user action, because the scenario state is tab-scoped and the newly opened tab will not have the same scenario configuration.
+
+**Step 4 semantic rule (must hold): “graph tab closed after chart creation”**
+
+- If a chart was created from a graph tab (linked-view eligible) and the user later closes the parent graph tab, the chart must **fail-safe to pinned behaviour** rather than breaking:
+  - The chart remains viewable using its cached artefact.
+  - The chart’s “current deps stamp” derivation must treat the parent context as unavailable and fall back to a pinned-recipe-style stamp derived from the chart’s stored recipe fields.
+  - If/when the parent graph is reopened, the chart must **remain pinned** unless the original parent tab can be resolved (same tabId still exists).
+
+### Scenario types: live vs snapshot (pinned eligibility)
+
+Static scenarios (non-live overlays) are not DSL-backed and therefore cannot be deterministically regenerated from a compact recipe.
+
+Policy:
+
+- **Pinned recompute eligibility**:
+  - A chart is eligible for pinned-mode recompute only if **every scenario that participates in the compute** is represented by a pinned, regenerable recipe.
+  - **Base** and **Current** are treated as live/regenerable for these purposes, but they still need pinned recipe inputs when they participate (notably a pinned Current DSL, and a pinned Base DSL if Base participates).
+  - Any snapshot/non-live overlay scenario is not regenerable from DSL and therefore makes pinned recompute ineligible.
+  - If any involved scenario is static/non-live, pinned-mode recompute is **not permitted** (it would require persisting full overlay param packs, which is out of scope and likely too large).
+- **Linked mode with static scenarios**:
+  - When the parent graph tab is available, linked-mode recompute may include static scenarios because their params exist in IndexedDB and are part of the live tab context.
+- **Orphaning with static scenarios**:
+  - If a chart that depends on any static scenario becomes orphaned (parent tab closed/unresolvable), it must fall back to:
+    - showing the last cached artefact, and
+    - surfacing a clear stale/blocked reason (“Reopen the parent graph tab to refresh; this chart depends on a static scenario overlay”).
+
+### “Current” layer — pinned fallback semantics (must be explicit)
+
+“Current” behaves like a live scenario in that it is DSL-backed and can change as the user edits the window/query, but it is also a **special layer** with unique authority and UX semantics. We must make it explicit to avoid the prior live chart failures.
+
+#### Authority rules
+
+- **Linked view**:
+  - The authoritative Current DSL is the graph tab’s current DSL (the same source used by WindowSelector / GraphStore), not any historic `graph.currentQueryDSL` field.
+  - Therefore, linked-view charts depend on the parent tab’s Current DSL state as part of the parent tab context.
+
+- **Pinned fallback**:
+  - The chart artefact must persist a pinned Current DSL (flattened/effective) at chart creation/update time.
+  - This pinned Current DSL is the single source of truth for recomputing “Current” in pinned mode.
+
+#### Visibility and “hideCurrent”
+
+- Charts may compute using Current even when Current is not visible in the authoring tab (e.g. comparisons where Current is an implicit scenario in the analysis metadata).
+- Therefore:
+  - Pinned fallback must always persist `scenario_dsl_subtitle_by_id.current` when Current participates in the chart compute (even if hidden).
+  - The chart artefact should also persist whether Current was intended to be hidden for display purposes (so the pinned view can match the authoring UI).
+
+#### What‑If and Current
+
+- If the analysis/chart computation includes a what‑if DSL that applies to Current, then the chart recipe must persist it explicitly (pinned mode cannot infer it from a missing parent tab).
+- If what‑if DSL is not part of the chart recipe, pinned recompute must not invent it.
+
+#### Dynamic DSL and reference day
+
+- If the pinned Current DSL is dynamic (open-ended/relative), it is subject to the UK reference-day invalidation rules (Step 6).
+
+### Auto-update policy (precedence + storage)
+
+**Storage decision (workspace toggle):**
+
+- Persist the “Auto-update charts” preference into IndexedDB `appState` (local-only, not in repo), alongside other app-level state.
+
+**Policy precedence (decision):**
+
+- If **live share** (`mode=live`) OR **dashboard mode** (`dashboard=1`) is active: auto-update is **forced ON**.
+- Otherwise (normal workspace): auto-update follows the user preference toggles:
+  - Data → Auto-update charts
+  - Tools panel toggle
+- **Normal authoring default (decision)**: auto-update is **ON by default**.
+- URL `auto-update=true` may force ON in workspace mode (debugging convenience).
+- URL must not force OFF in live share/dashboard (embed correctness guard).
+
+### Graph topology edits (decision)
+
+- Authored graph topology/structure edits **trigger refresh** (scenario regeneration + downstream staleness checks) subject to debounce/single-flight and scope limits.
 
 ## Proposed implementation plan (prose-only; no code)
 
@@ -489,3 +744,152 @@ The intent is to extend the most relevant existing suites (no new test files unl
   - Extend existing scenario tests to assert stamps update and that chart artefacts invalidate/recompute when dependent inputs change.
   - Extend repository pull/refresh tests to assert file revision changes drive reconcile (without relying on per-operation triggers).
   - Add at least one parity test covering “dynamic DSL day boundary” invalidation behaviour (freeze reference day).
+
+---
+
+## Specific implementation plan (step-by-step; this section is the authoritative checklist)
+
+This section is the single source of truth for execution. I will **update the status of each step in this section as I complete it**, and I will not “jump ahead” without updating statuses.
+
+### Step 0 — Baseline and guardrails
+
+**Depends on / see**: `Locked decisions → Chart semantics and share/bundle behaviour`, `Locked decisions → Canonical revision decisions`, `Locked decisions → Auto-update policy`
+
+- **0.1 (done)**: Confirm which chart semantics are the default in workspace authoring:
+  - linked view (depends on parent tab scenario state) vs pinned recipe (depends only on stored recipe)
+- **0.2 (done)**: Identify the minimal “file revision” token we can depend on across:
+  - workspace mode (git SHA when available; otherwise a local revision token)
+  - share mode (share-scoped SHA / overwrite-seed semantics)
+- **0.3 (done)**: Confirm the “UK reference day” source we will use for dynamic DSL invalidation (single provider; testable).
+ 
+Notes:
+
+- Step 0 decisions are recorded in **Locked decisions (for implementation; no migration/backfill)**.
+
+### Step 1 — Introduce dependency stamps and signatures (pure, test-driven)
+
+**Depends on / see**: `Locked decisions → Canonical revision decisions`, `Locked decisions → Chart semantics and share/bundle behaviour`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → “Current” layer`
+
+- **1.1 (pending)**: Add a small pure module that defines:
+  - chart deps stamp type(s)
+  - canonicalisation rules (ordering, whitespace, redaction)
+  - deps signature function (stable, cheap change detection)
+- **1.2 (pending)**: Add unit tests that lock:
+  - “same stamp inputs ⇒ same signature”
+  - “one input changes ⇒ signature changes”
+  - linked-view vs pinned-recipe semantics produce different dependency surfaces
+
+### Step 2 — Persist chart deps signature on chart artefacts (TDD via existing chart tests)
+
+**Depends on / see**: `Locked decisions → Chart file schema decisions (recipe block)`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → “Current” layer`
+
+- **2.1 (pending)**: Extend `graph-editor/src/services/__tests__/chartOperationsService.bridgeDslInjection.test.ts` to assert:
+  - `deps_signature` exists on persisted chart artefacts
+  - `deps_signature` changes when recipe-relevant inputs change (e.g. scenario DSL subtitle mapping)
+- **2.2 (pending)**: Update `graph-editor/src/services/chartOperationsService.ts` to write:
+  - `deps` (stamp) and `deps_signature` alongside existing chart fields
+- **2.2a (pending)**: Ensure the chart artefact always persists both:
+  - **parent linkage**: `source.parent_file_id` (and `source.parent_tab_id` when available)
+  - **pinned fallback recipe**: pin the scenario set and display/render inputs required to recompute *without* a graph tab:
+    - pinned visible scenario set (ordered IDs)
+    - pinned per-scenario visibility mode (`f+e`/`f`/`e`)
+    - pinned per-scenario display metadata (name + colour)
+    - flattened per-scenario effective DSL mapping (e.g. `scenario_dsl_subtitle_by_id`)
+    - analysis recipe fields (analysis type, query DSL, what‑if DSL if applicable)
+    - **Current handling**:
+      - persist a pinned Current DSL (`scenario_dsl_subtitle_by_id.current`) when Current participates in the compute (even if `hideCurrent` is true)
+      - persist display intent for Current visibility (so the pinned view can match authoring)
+  - **eligibility metadata**: record whether pinned recompute is permitted (i.e. all scenarios are live/DSL-backed), so orphaned static-scenario charts can surface a clear “cannot refresh while orphaned” reason.
+- **2.3 (pending)**: Enforce invariant: chart artefacts must always be created with the pinned fallback recipe + deps stamp/signature.
+  - No migration/backfill logic: if required pinned fields are missing, the chart is not eligible for refresh and must be recreated (or recomputed from an active parent tab context using the normal pipeline).
+
+- **2.4 (pending)**: Rationalise chart creation: remove “recipe/DSL injection into analysis outputs”.
+  - Remove injection of scenario DSL into `payload.analysis_result` fields.
+  - Ensure chart legend/tooltip DSL display reads from `chart.recipe` only.
+  - Update existing tests that asserted injected analysis DSL to assert recipe fields instead.
+
+### Step 3 — Central chart recompute primitive (no UI logic; best-effort)
+
+**Depends on / see**: `Locked decisions → Chart semantics and share/bundle behaviour`, `Locked decisions → Tab-scoped scenario state`, `Locked decisions → Auto-update policy`
+
+- **3.1 (pending)**: Extract a central service entry point that can:
+  - find open chart tabs for a given parent graph
+  - recompute analysis for each chart using existing recipes/metadata
+  - update chart files in place (same fileId; no duplicate tabs)
+- **3.2 (pending)**: Add/extend integration tests (prefer existing suites) to assert:
+  - recompute updates the chart artefact in place
+  - recompute is deduplicated per chart fileId
+
+### Step 4 — Staleness checking (only recompute when stale)
+
+**Depends on / see**: `Locked decisions → Chart staleness semantics`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → “Current” layer`, `Locked decisions → Tab-scoped scenario state`
+
+- **4.1 (pending)**: Define “current deps stamp” derivation for:
+  - linked-view charts (consult parent tab scenario state / effective scenario DSLs as needed)
+  - pinned-recipe charts (consult only stored recipe + observed input revisions)
+- **4.2 (pending)**: Implement `isChartStale(chartFile, currentStamp)` (pure, test-driven).
+- **4.3 (pending)**: Update the recompute pipeline to:
+  - skip recompute if not stale
+  - assume `deps_signature` exists for all chart artefacts created after Step 2 (no migration/backfill paths)
+
+Notes:
+
+- Step 4 semantic requirements are recorded in **Locked decisions (for implementation; no migration/backfill)**.
+
+### Step 5 — Auto-update policy gating + orchestration
+
+**Depends on / see**: `Locked decisions → Auto-update policy`, `Locked decisions → Chart semantics and share/bundle behaviour`
+
+- **5.1 (pending)**: Implement a single auto-update policy service:
+  - enabled for live share mode, dashboard mode, or explicit `auto-update=true`
+  - disabled by default for normal authoring unless explicitly enabled
+- **5.1a (pending)**: Persist the workspace-mode preference (source of truth):
+  - stored centrally (e.g. app state in IndexedDB) so it applies across tabs and survives reload
+  - read/write exclusively via a service/hook used by both UI access points
+- **5.2 (pending)**: Wire orchestration from the service/context layer (not UI):
+  - when live scenarios regenerate successfully, schedule a debounced reconcile pass for affected charts
+  - when authored graph topology edits occur, schedule a debounced reconcile pass for the active graph tab (per the locked “Graph topology edits” decision)
+  - ensure single-flight per graph
+- **5.3 (pending)**: Extend `graph-editor/src/contexts/__tests__/ScenariosContext.liveScenarios.test.tsx` to assert:
+  - in auto-update contexts, regenerating a live scenario triggers chart reconcile for open chart tabs
+  - in non-auto contexts, it does not auto-recompute (but staleness is detectable)
+
+Notes:
+
+- Step 5 policy precedence and storage decisions are recorded in **Locked decisions (for implementation; no migration/backfill)**.
+
+### Step 6 — Dynamic DSL day-boundary invalidation (deterministic and testable)
+
+**Depends on / see**: `Locked decisions → Canonical revision decisions`
+
+- **6.1 (pending)**: Introduce an injectable “UK reference day provider” (used by DSL resolution and stamps).
+- **6.2 (pending)**: Add tests that assert:
+  - dynamic DSL charts become stale on day change
+  - fixed-window charts do not churn
+- **6.3 (pending)**: Add a lightweight day-boundary tick scheduler:
+  - only active when at least one open artefact depends on dynamic DSL
+
+### Step 7 — UX (staleness indicator + manual refresh; thin UI)
+
+**Depends on / see**: `Locked decisions → Chart semantics and share/bundle behaviour`, `Locked decisions → Scenario types: live vs snapshot`, `Locked decisions → Auto-update policy`
+
+- **7.1 (pending)**: Add a manual Refresh affordance for charts (always available).
+- **7.2 (pending)**: Add a “stale” indicator on chart tabs/views when staleness is detected and auto-update is disabled.
+- **7.3 (pending)**: Ensure live share/dashboard remains non-blocking and fail-safe (keep old artefact visible on recompute failure).
+- **7.4 (pending)**: Expose auto-update toggle in:
+  - Data menu (`Data → Auto-update charts`)
+  - Tools panel (mirrors Data menu)
+  - Both must call the same central hook/service; UI files remain access points only.
+- **7.5 (pending)**: Surface chart semantic state (`Linked` vs `Pinned`) in the chart UI, and implement `Disconnect`:
+  - Disconnect clears parent-tab linkage and flips the chart to pinned semantics (pinned recipe should already exist via Step 2.2a).
+
+### Step 8 — Logging and diagnostics (required for parity investigations)
+
+**Depends on / see**: `Locked decisions → Chart staleness semantics`, `Locked decisions → Auto-update policy`
+
+- **8.1 (pending)**: Add session logging for:
+  - reconcile start/end
+  - reasons (file revision, DSL change, day boundary, manual refresh)
+  - targets (graph, scenarios, chart fileIds)
+  - prev vs next deps signatures
+
