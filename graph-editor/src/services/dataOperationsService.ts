@@ -691,7 +691,7 @@ export async function computeQuerySignature(
     // - Anchor identity changes the query semantics.
     // - Conversion window days (derived from latency horizon / path) changes provider query parameters.
     //
-    // IMPORTANT: We intentionally do NOT include cohort/window date bounds here.
+    // IMPORTANT: We intentionally do NOT include cohort/`window date bounds here.
     // Those bounds are stored on each cached value entry (window_from/window_to or cohort_from/cohort_to),
     // and including them in the signature would defeat incremental re-use for daily caches.
     const edgeLatency = edge?.p?.latency;

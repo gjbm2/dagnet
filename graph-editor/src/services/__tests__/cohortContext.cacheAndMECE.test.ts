@@ -82,6 +82,33 @@ describe('Cohort + context cache cutting (contextAny + MECE)', () => {
     expect(result.daysAvailable).toBe(3);
     expect(result.daysToFetch).toBe(0);
   });
+
+  it('cohort query must not use window slices as cache coverage', () => {
+    const values: ParameterValue[] = [
+      {
+        sliceDSL: 'context(channel:google)',
+        window_from: '1-Nov-25',
+        window_to: '3-Nov-25',
+        dates: ['1-Nov-25', '2-Nov-25', '3-Nov-25'],
+        n_daily: [10, 10, 10],
+        k_daily: [5, 5, 5],
+        mean: 0.5,
+        n: 30,
+        k: 15,
+      },
+    ];
+
+    const result = calculateIncrementalFetch(
+      { values },
+      { start: '1-Nov-25', end: '3-Nov-25' },
+      undefined,
+      false,
+      'context(channel:google).cohort(anchor,1-Nov-25:3-Nov-25)'
+    );
+
+    expect(result.needsFetch).toBe(true);
+    expect(result.daysToFetch).toBe(3);
+  });
 });
 
 
