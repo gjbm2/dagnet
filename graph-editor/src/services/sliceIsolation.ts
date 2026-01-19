@@ -143,14 +143,17 @@ export function isolateSlice<T extends { sliceDSL?: string }>(
   const matched = values.filter(v => {
     const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
     if (valueSlice !== normalizedTarget) return false;
-    
+
     const valueSliceDSL = v.sliceDSL ?? '';
-    const valueIsWindow = valueSliceDSL.includes('window(');
-    const valueIsCohort = valueSliceDSL.includes('cohort(');
-    
+    const anyValue = v as any;
+    const valueHasCohortFields = !!(anyValue.cohort_from || anyValue.cohort_to);
+    const valueHasWindowFields = !!(anyValue.window_from || anyValue.window_to);
+    const valueIsCohort = valueHasCohortFields || valueSliceDSL.includes('cohort(');
+    const valueIsWindow = valueHasWindowFields || valueSliceDSL.includes('window(');
+
     if (targetIsWindow && valueIsCohort) return false;
     if (targetIsCohort && valueIsWindow) return false;
-    
+
     return true;
   });
   
