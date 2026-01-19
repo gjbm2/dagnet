@@ -4633,6 +4633,34 @@ class DataOperationsService {
       }
       
       let actualFetchWindows: DateRange[] = [];
+
+      const mergeFetchWindows = (windows: DateRange[]): DateRange[] => {
+        if (windows.length <= 1) return windows;
+        const sorted = [...windows].sort((a, b) => {
+          const as = parseDate(a.start).getTime();
+          const bs = parseDate(b.start).getTime();
+          return as - bs;
+        });
+        const merged: DateRange[] = [];
+        for (const w of sorted) {
+          if (merged.length === 0) {
+            merged.push({ start: w.start, end: w.end });
+            continue;
+          }
+          const last = merged[merged.length - 1];
+          const lastEnd = parseDate(last.end).getTime();
+          const nextStart = parseDate(w.start).getTime();
+          if (nextStart <= lastEnd) {
+            const nextEnd = parseDate(w.end).getTime();
+            if (nextEnd > lastEnd) {
+              last.end = w.end;
+            }
+          } else {
+            merged.push({ start: w.start, end: w.end });
+          }
+        }
+        return merged;
+      };
       let querySignature: string | undefined;
       let shouldSkipFetch = false;
       
@@ -5109,10 +5137,11 @@ class DataOperationsService {
                 seen.add(k);
                 return true;
               });
+              actualFetchWindows = mergeFetchWindows(actualFetchWindows);
             } else {
               actualFetchWindows = incrementalResult.fetchWindows;
             }
-            const gapCount = incrementalResult.fetchWindows.length;
+            const gapCount = actualFetchWindows.length || incrementalResult.fetchWindows.length;
             const cacheBustText = bustCache ? ' (busting cache)' : '';
             toast.loading(
               `Fetching ${incrementalResult.daysToFetch} missing days across ${gapCount} gap${gapCount > 1 ? 's' : ''}${bustCache ? ' (busting cache)' : ` (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`}`,
@@ -5132,6 +5161,7 @@ class DataOperationsService {
               } else {
                 actualFetchWindows = [refetch, incrementalResult.fetchWindow];
               }
+              actualFetchWindows = mergeFetchWindows(actualFetchWindows);
             } else {
               actualFetchWindows = [incrementalResult.fetchWindow];
             }

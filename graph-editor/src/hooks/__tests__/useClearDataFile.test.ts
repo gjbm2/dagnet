@@ -259,6 +259,38 @@ describe('useClearDataFile', () => {
     });
   });
 
+  describe('clearDataFiles (batch)', () => {
+    it('clears malformed values keys even when values array is empty', async () => {
+      const paramFile: Partial<FileState> = {
+        fileId: 'parameter-malformed',
+        type: 'parameter',
+        data: {
+          id: 'malformed',
+          name: 'Malformed Parameter',
+          values: [],
+          'values[0]': { n: 1, k: 1, data_source: { type: 'amplitude' } }
+        }
+      };
+
+      vi.mocked(fileRegistry.getFile).mockReturnValue(paramFile as FileState);
+      vi.mocked(fileRegistry.updateFile).mockResolvedValue(undefined);
+
+      const { result } = renderHook(() => useClearDataFile());
+
+      let clearResult: any;
+      await act(async () => {
+        clearResult = await result.current.clearDataFiles(['parameter-malformed'], true);
+      });
+
+      expect(clearResult.success).toBe(true);
+      expect(fileRegistry.updateFile).toHaveBeenCalledWith('parameter-malformed', {
+        id: 'malformed',
+        name: 'Malformed Parameter',
+        values: []
+      });
+    });
+  });
+
   describe('getParameterFileId', () => {
     it('should return parameter file ID from parameter ID', () => {
       const { result } = renderHook(() => useClearDataFile());
