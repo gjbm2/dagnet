@@ -5511,6 +5511,27 @@ class DataOperationsService {
       // Chain requests for each contiguous gap
       for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
         const fetchWindow = actualFetchWindows[gapIndex];
+
+        // =====================================================================
+        // DRY RUN & LIVE EXECUTION MUST SHARE THE SAME DAS CALL SHAPE
+        //
+        // Any fetch “report” generated in dry-run mode must correspond 1:1 with
+        // the actual runner.execute calls we would make in a live run. The ONLY
+        // intentional divergence is the adapter option { dryRun: true }.
+        // =====================================================================
+        const executeDAS = async (payload: any, opts?: { dryRun?: boolean }) => {
+          return await runner.execute(connectionName, payload, {
+            connection_string: connectionString,
+            window: toISOWindowForDAS(fetchWindow),
+            cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
+            context: { mode: contextMode, excludeTestAccounts },
+            edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
+            caseId: objectType === 'case' ? objectId : undefined,
+            nodeId: objectType === 'node' ? (targetId || objectId) : undefined,
+            eventDefinitions,
+            dryRun: opts?.dryRun === true,
+          });
+        };
         
         // Rate limit before making API calls to external providers
         // This centralizes throttling for Amplitude and other rate-limited APIs
@@ -5597,14 +5618,7 @@ class DataOperationsService {
             }
           } else {
             // Simple n_query - direct execution
-            const baseResult = await runner.execute(connectionName, baseQueryPayload, {
-              connection_string: connectionString,
-              window: toISOWindowForDAS(fetchWindow),
-              cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
-              context: { mode: contextMode, excludeTestAccounts },
-              edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
-              eventDefinitions,
-            });
+            const baseResult = await executeDAS(baseQueryPayload);
             
             if (!baseResult.success) {
               console.error('[DataOps:DUAL_QUERY] Base query failed:', baseResult.error);
@@ -5703,17 +5717,7 @@ class DataOperationsService {
         // that would be made for the non-composite pipeline.
         if (dontExecuteHttp) {
           const runDry = async (label: string, payload: any) => {
-            const dry = await runner.execute(connectionName, payload, {
-              connection_string: connectionString,
-              window: toISOWindowForDAS(fetchWindow),
-              cohort: requestedCohort,
-              context: { mode: contextMode, excludeTestAccounts },
-              edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
-              caseId: objectType === 'case' ? objectId : undefined,
-              nodeId: objectType === 'node' ? (targetId || objectId) : undefined,
-              eventDefinitions,
-              dryRun: true,
-            });
+            const dry = await executeDAS(payload, { dryRun: true });
 
             const req = (dry.success ? (dry.raw as any)?.request : undefined) as any;
             sessionLogService.addChild(
@@ -5869,14 +5873,7 @@ class DataOperationsService {
           // DUAL QUERY (simple): Already have base n, now get k from conditioned query
           console.log('[DataOps:DUAL_QUERY] Running conditioned query (for k)...');
           
-          const condResult = await runner.execute(connectionName, queryPayload, {
-            connection_string: connectionString,
-            window: toISOWindowForDAS(fetchWindow),
-            cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
-            context: { mode: contextMode, excludeTestAccounts },
-            edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
-            eventDefinitions,
-          });
+          const condResult = await executeDAS(queryPayload);
           
           if (!condResult.success) {
             console.error('[DataOps:DUAL_QUERY] Conditioned query failed:', condResult.error);
@@ -6009,16 +6006,7 @@ class DataOperationsService {
           
         } else {
           // Simple query: use standard DAS runner (no upstream conditions)
-          const result = await runner.execute(connectionName, queryPayload, {
-            connection_string: connectionString,
-            window: toISOWindowForDAS(fetchWindow),
-            cohort: requestedCohort,  // A-anchored cohort for latency-tracked edges
-            context: { mode: contextMode, excludeTestAccounts }, // Pass mode and test account exclusion to adapter
-            edgeId: objectType === 'parameter' ? (targetId || 'unknown') : undefined,
-            caseId: objectType === 'case' ? objectId : undefined, // Pass caseId for cases
-            nodeId: objectType === 'node' ? (targetId || objectId) : undefined, // Pass nodeId for nodes (future)
-            eventDefinitions,  // Event file data for adapter to resolve provider names + filters
-          });
+          const result = await executeDAS(queryPayload);
           
           // Capture DAS execution history for session logs (request/response details)
           // Only include verbose data when diagnostic logging is enabled to avoid bloating logs.
@@ -7466,7 +7454,7 @@ class DataOperationsService {
     lines.push(`**Bust cache:** ${bustCache ? 'Yes' : 'No'}`);
     lines.push('');
     lines.push('## Important note: what is “real” vs “descriptive” in this report?');
-    lines.push('- **Real (executed code path)**: Slice-family+mode matching, cache cutting (`calculateIncrementalFetch`), refetch policy (`shouldRefetch`), cohort horizon bounding (`computeCohortRetrievalHorizon`), and request construction via `runner.execute(..., dryRun=true)`.');
+    lines.push('- **Real (executed code path)**: Slice-family+mode matching, cache cutting (`calculateIncrementalFetch`), refetch policy (`shouldRefetch`), and request construction via `runner.execute(..., dryRun=true)`.');
     lines.push('- **Dry-run boundary**: The HTTP request is fully constructed (URL + method + payload), then stopped **immediately before network I/O**. No Amplitude call is made.');
     lines.push('- **Descriptive**: The “expected back from provider” section describes the *shape* the downstream merge logic handles, not a real response (because we do not hit the provider in dry-run).');
     lines.push('');
