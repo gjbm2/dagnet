@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.3b
+**Released:** 19-Jan-26
+
+Fixes to slice merge logic
+
+---
+
 ## Version 1.3.2b
 **Released:** 19-Jan-26
 
