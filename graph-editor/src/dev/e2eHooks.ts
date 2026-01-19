@@ -156,11 +156,43 @@ export function installE2eHooks(): void {
        * Used by Playwright to exercise the real share-link generation path.
        */
       buildLiveChartShareUrlFromChartFile: async (args: { chartFileId: string; secretOverride: string; dashboardMode?: boolean }) => {
-        return await shareLinkService.buildLiveChartShareUrlFromChartFile({
+        const res = await shareLinkService.buildLiveChartShareUrlFromChartFile({
           chartFileId: args.chartFileId,
           secretOverride: args.secretOverride,
           dashboardMode: args.dashboardMode,
         });
+        if (!res?.success || !res.url) return res;
+        try {
+          // E2E-only: inject URL creds so live share boot can proceed without env secrets.
+          const u = new URL(res.url);
+          u.searchParams.set(
+            'creds',
+            JSON.stringify({
+              defaultGitRepo: 'repo-1',
+              git: [
+                {
+                  name: 'repo-1',
+                  owner: 'owner-1',
+                  repo: 'repo-1',
+                  token: 'test-token',
+                  branch: 'main',
+                  basePath: '',
+                },
+                {
+                  name: 'repo-2',
+                  owner: 'owner-1',
+                  repo: 'repo-2',
+                  token: 'test-token',
+                  branch: 'main',
+                  basePath: '',
+                },
+              ],
+            })
+          );
+          return { ...res, url: u.toString() };
+        } catch {
+          return res;
+        }
       },
       /**
        * Generate a live bundle share URL from a set of tabIds.
@@ -174,13 +206,45 @@ export function installE2eHooks(): void {
         includeScenarios?: boolean;
         activeTabId?: string;
       }) => {
-        return await shareLinkService.buildLiveBundleShareUrlFromTabs({
+        const res = await shareLinkService.buildLiveBundleShareUrlFromTabs({
           tabIds: args.tabIds,
           dashboardMode: args.dashboardMode,
           includeScenarios: args.includeScenarios,
           activeTabId: args.activeTabId,
           secretOverride: args.secretOverride,
         });
+        if (!res?.success || !res.url) return res;
+        try {
+          // E2E-only: inject URL creds so live share boot can proceed without env secrets.
+          const u = new URL(res.url);
+          u.searchParams.set(
+            'creds',
+            JSON.stringify({
+              defaultGitRepo: 'repo-1',
+              git: [
+                {
+                  name: 'repo-1',
+                  owner: 'owner-1',
+                  repo: 'repo-1',
+                  token: 'test-token',
+                  branch: 'main',
+                  basePath: '',
+                },
+                {
+                  name: 'repo-2',
+                  owner: 'owner-1',
+                  repo: 'repo-2',
+                  token: 'test-token',
+                  branch: 'main',
+                  basePath: '',
+                },
+              ],
+            })
+          );
+          return { ...res, url: u.toString() };
+        } catch {
+          return res;
+        }
       },
     };
   } catch {

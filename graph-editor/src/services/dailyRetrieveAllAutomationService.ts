@@ -2,7 +2,7 @@ import type { GraphData } from '../types';
 import { formatDateUK } from '../lib/dateFormat';
 import { sessionLogService } from './sessionLogService';
 import { repositoryOperationsService } from './repositoryOperationsService';
-import { retrieveAllSlicesService } from './retrieveAllSlicesService';
+import { executeRetrieveAllSlicesWithProgressToast } from './retrieveAllSlicesService';
 
 export interface DailyRetrieveAllAutomationOptions {
   repository: string;
@@ -82,10 +82,12 @@ class DailyRetrieveAllAutomationService {
       }
 
       sessionLogService.addChild(logOpId, 'info', 'STEP_RETRIEVE', 'Running Retrieve All Slices (headless)');
-      const retrieveResult = await retrieveAllSlicesService.execute({
+      const retrieveResult = await executeRetrieveAllSlicesWithProgressToast({
         getGraph,
         setGraph,
         shouldAbort,
+        toastId: `retrieve-all-automation:${graphFileId}`,
+        toastLabel: `Retrieve All (${graphName})`,
       });
       sessionLogService.addChild(
         logOpId,

@@ -74,6 +74,8 @@ describe('useURLDailyRetrieveAllQueue', () => {
       expect(hoisted.run).toHaveBeenCalledTimes(1);
     });
 
+    expect(hoisted.openLogTab).toHaveBeenCalled();
+
     expect(hoisted.run).toHaveBeenCalledWith(
       expect.objectContaining({
         repository: 'repo-1',

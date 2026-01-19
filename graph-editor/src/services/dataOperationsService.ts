@@ -4547,7 +4547,7 @@ class DataOperationsService {
         );
       }
       
-      let actualFetchWindows: DateRange[] = [requestedWindow];
+      let actualFetchWindows: DateRange[] = [];
       let querySignature: string | undefined;
       let shouldSkipFetch = false;
       
@@ -5037,21 +5037,25 @@ class DataOperationsService {
               `Fetching ${incrementalResult.daysToFetch} missing days${bustCache ? ' (busting cache)' : ` (${incrementalResult.daysAvailable}/${incrementalResult.totalDays} cached)`}`,
               { id: 'das-fetch' }
             );
-          } else {
+          } else if (actualFetchWindows.length === 0) {
             // Fallback to requested window
             actualFetchWindows = [requestedWindow];
             const cacheBustText = bustCache ? ' (busting cache)' : '';
             toast.loading(`Fetching data from source${cacheBustText}...`, { id: 'das-fetch' });
           }
         } else {
-          // No parameter file - use requested window
+          // No parameter file - use requested window (unless already set)
+          if (actualFetchWindows.length === 0) {
+            actualFetchWindows = [requestedWindow];
+            toast.loading(`Fetching data from source...`, { id: 'das-fetch' });
+          }
+        }
+      } else {
+        // Not writeToFile mode or no parameter file - use requested window (unless already set)
+        if (actualFetchWindows.length === 0) {
           actualFetchWindows = [requestedWindow];
           toast.loading(`Fetching data from source...`, { id: 'das-fetch' });
         }
-      } else {
-        // Not writeToFile mode or no parameter file - use requested window
-        actualFetchWindows = [requestedWindow];
-        toast.loading(`Fetching data from source...`, { id: 'das-fetch' });
       }
       
       // If all dates are cached, skip fetching and use existing data

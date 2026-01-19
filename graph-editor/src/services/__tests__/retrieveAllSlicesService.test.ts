@@ -10,7 +10,13 @@ vi.mock('../dataOperationsService', () => {
   };
 });
 
-import { retrieveAllSlicesService } from '../retrieveAllSlicesService';
+vi.mock('../../components/ProgressToast', () => ({
+  showProgressToast: vi.fn(),
+  completeProgressToast: vi.fn(),
+}));
+
+import { completeProgressToast, showProgressToast } from '../../components/ProgressToast';
+import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } from '../retrieveAllSlicesService';
 import { dataOperationsService } from '../dataOperationsService';
 
 describe('retrieveAllSlicesService', () => {
@@ -85,6 +91,32 @@ describe('retrieveAllSlicesService', () => {
     expect(setGraph.mock.calls.some(c => (c[0] as any)?.metadata?.last_retrieve_all_slices_success_at_ms)).toBe(false);
 
     vi.useRealTimers();
+  });
+
+  it('shows a progress toast and completes it for automated runs', async () => {
+    const graph: any = {
+      dataInterestsDSL: 'cohort(-90d:)',
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    vi.mocked(dataOperationsService.getFromSource).mockResolvedValueOnce(undefined);
+
+    const res = await executeRetrieveAllSlicesWithProgressToast({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: ['cohort(-90d:)'],
+      toastId: 'retrieve-all-test',
+      toastLabel: 'Retrieve All (test)',
+    });
+
+    expect(res.totalErrors).toBe(0);
+    expect(showProgressToast).toHaveBeenCalled();
+    expect(completeProgressToast).toHaveBeenCalledWith(
+      'retrieve-all-test',
+      'Retrieve All complete (1 succeeded)',
+      false
+    );
   });
 });
 

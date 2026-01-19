@@ -1,5 +1,6 @@
 import { explodeDSL } from '../lib/dslExplosion';
 import type { GraphData } from '../types';
+import { completeProgressToast, showProgressToast } from '../components/ProgressToast';
 import { dataOperationsService, setBatchMode } from './dataOperationsService';
 import { sessionLogService } from './sessionLogService';
 import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerService';
@@ -38,6 +39,11 @@ export interface RetrieveAllSlicesOptions {
 
   /** Optional progress callback (UI can wire progress bars / labels). */
   onProgress?: (p: RetrieveAllSlicesProgress) => void;
+}
+
+export interface RetrieveAllSlicesWithProgressToastOptions extends RetrieveAllSlicesOptions {
+  toastId: string;
+  toastLabel?: string;
 }
 
 class RetrieveAllSlicesService {
@@ -241,5 +247,45 @@ class RetrieveAllSlicesService {
 }
 
 export const retrieveAllSlicesService = RetrieveAllSlicesService.getInstance();
+
+export async function executeRetrieveAllSlicesWithProgressToast(
+  options: RetrieveAllSlicesWithProgressToastOptions
+): Promise<RetrieveAllSlicesResult> {
+  const { toastId, toastLabel, onProgress, ...rest } = options;
+  let toastShown = false;
+
+  const handleProgress = (p: RetrieveAllSlicesProgress) => {
+    if (p.totalSlices > 0) {
+      showProgressToast(toastId, p.currentSlice, p.totalSlices, toastLabel);
+      toastShown = true;
+    }
+    onProgress?.(p);
+  };
+
+  try {
+    const result = await retrieveAllSlicesService.execute({
+      ...rest,
+      onProgress: handleProgress,
+    });
+
+    if (toastShown) {
+      const hasIssues = result.aborted || result.totalErrors > 0;
+      const message = result.aborted
+        ? `Retrieve All aborted (${result.totalSuccess} succeeded, ${result.totalErrors} failed)`
+        : result.totalErrors > 0
+          ? `Retrieve All complete (${result.totalSuccess} succeeded, ${result.totalErrors} failed)`
+          : `Retrieve All complete (${result.totalSuccess} succeeded)`;
+      completeProgressToast(toastId, message, hasIssues);
+    }
+
+    return result;
+  } catch (error) {
+    if (toastShown) {
+      const message = error instanceof Error ? error.message : String(error);
+      completeProgressToast(toastId, `Retrieve All failed: ${message}`, true);
+    }
+    throw error;
+  }
+}
 
 
