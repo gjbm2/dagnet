@@ -276,6 +276,154 @@ describe('dataOperationsService window resolution regressions', () => {
     expect(opts?.window).toEqual(expectedWindow);
   });
 
+  it('collapses overlapping partial refetch windows when cache is empty', async () => {
+    const graph: Graph = {
+      schema_version: '1.0.0',
+      id: 'g-window',
+      name: 'Window Graph',
+      description: '',
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', layout: { x: 0, y: 0 }, event_id: 'event-a' } as any,
+        { id: 'B', uuid: 'B', label: 'B', layout: { x: 1, y: 1 }, event_id: 'event-b' } as any,
+      ],
+      edges: [
+        {
+          id: 'E1',
+          uuid: 'E1',
+          from: 'A',
+          to: 'B',
+          query: 'from(A).to(B)',
+          p: {
+            id: 'p1',
+            connection: 'statsig',
+            mean: 0.1,
+            latency: {
+              latency_parameter: true,
+              t95: 10,
+              path_t95: 10,
+              anchor_node_id: 'A',
+            },
+          },
+        } as any,
+      ],
+    } as any;
+
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      connection: 'statsig',
+      values: [],
+    });
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'E1',
+      graph,
+      setGraph: () => {},
+      writeToFile: true,
+      currentDSL: 'context(channel:paid-search).window(-80d:)',
+      targetSlice: 'context(channel:paid-search).window(-80d:)',
+      dontExecuteHttp: true,
+    });
+
+    // Cache is empty, so the requested window should subsume any partial refetch window.
+    // We should execute exactly once (no duplicated overlapping gaps).
+    expect(executeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps partial refetch windows disjoint when only a mature gap is missing', async () => {
+    const graph: Graph = {
+      schema_version: '1.0.0',
+      id: 'g-window-gap',
+      name: 'Window Gap Graph',
+      description: '',
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', layout: { x: 0, y: 0 }, event_id: 'event-a' } as any,
+        { id: 'B', uuid: 'B', label: 'B', layout: { x: 1, y: 1 }, event_id: 'event-b' } as any,
+      ],
+      edges: [
+        {
+          id: 'E1',
+          uuid: 'E1',
+          from: 'A',
+          to: 'B',
+          query: 'from(A).to(B)',
+          p: {
+            id: 'p1',
+            connection: 'statsig',
+            mean: 0.1,
+            latency: {
+              latency_parameter: true,
+              t95: 10,
+              path_t95: 10,
+              anchor_node_id: 'A',
+            },
+          },
+        } as any,
+      ],
+    } as any;
+
+    // Build cached window data with a single missing mature day.
+    // Reference date is fixed to 17-Dec-25 in beforeEach.
+    const start = parseUKDate('1-Dec-25');
+    const end = parseUKDate('17-Dec-25');
+    const missing = formatDateUK(parseUKDate('4-Dec-25'));
+    const dates: string[] = [];
+    const nDaily: number[] = [];
+    const kDaily: number[] = [];
+    const cursor = new Date(start);
+    while (cursor <= end) {
+      const d = formatDateUK(cursor);
+      if (d !== missing) {
+        dates.push(d);
+        nDaily.push(10);
+        kDaily.push(5);
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      connection: 'statsig',
+      values: [
+        {
+          sliceDSL: 'context(channel:paid-search).window(-80d:)',
+          dates,
+          n_daily: nDaily,
+          k_daily: kDaily,
+          window_from: formatDateUK(start),
+          window_to: formatDateUK(end),
+          data_source: { retrieved_at: '2025-12-01T00:00:00.000Z' },
+        },
+      ],
+    });
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'E1',
+      graph,
+      setGraph: () => {},
+      writeToFile: true,
+      currentDSL: 'context(channel:paid-search).window(-80d:)',
+      targetSlice: 'context(channel:paid-search).window(-80d:)',
+      dontExecuteHttp: true,
+    });
+
+    // Expect two disjoint fetch windows: the immature refetch window and the single-day mature gap.
+    expect(executeSpy).toHaveBeenCalledTimes(2);
+    const w1 = executeSpy.mock.calls[0][2]?.window;
+    const w2 = executeSpy.mock.calls[1][2]?.window;
+    const toMs = (w: any) => ({
+      start: parseDate(w.start).getTime(),
+      end: parseDate(w.end).getTime(),
+    });
+    const a = toMs(w1);
+    const b = toMs(w2);
+    const overlaps = !(a.end < b.start || b.end < a.start);
+    expect(overlaps).toBe(false);
+  });
+
   it('warns when DSL contains an unparseable window() clause and proceeds with explicit fallbacks', async () => {
     const graph = createTestGraph('from(A).to(B)');
 

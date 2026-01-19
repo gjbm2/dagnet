@@ -46,8 +46,25 @@ async function loadFileFromAnywhere(fileId: string): Promise<FileState | null> {
   // 3. Try workspace-prefixed versions in IndexedDB
   // Files from Git are stored as repo-branch-fileId
   const allFiles = await db.files.toArray();
-  const prefixedFile = allFiles.find(f => f.fileId.endsWith(`-${fileId}`));
-  if (prefixedFile) {
+  const matches = allFiles.filter(f => f.fileId.endsWith(`-${fileId}`));
+  if (matches.length > 0) {
+    // Prefer the active workspace if available (avoids clearing the wrong repo)
+    let preferred: FileState | undefined;
+    try {
+      const appState = await db.appState.get('app-state');
+      const selectedRepo = appState?.navigatorState?.selectedRepo;
+      const selectedBranch = appState?.navigatorState?.selectedBranch || 'main';
+      if (selectedRepo && selectedBranch) {
+        const prefixedId = `${selectedRepo}-${selectedBranch}-${fileId}`;
+        preferred =
+          matches.find(f => f.fileId === prefixedId) ||
+          matches.find(f => f.source?.repository === selectedRepo && f.source?.branch === selectedBranch);
+      }
+    } catch {
+      // Best-effort only; fall back to first match.
+    }
+
+    const prefixedFile = preferred ?? matches[0];
     // Load into memory with canonical (unprefixed) ID
     const canonicalFile = { ...prefixedFile, fileId };
     (fileRegistry as any).files.set(fileId, canonicalFile);
@@ -219,9 +236,11 @@ export function useClearDataFile() {
     const filesWithData = loadedFiles.filter(({ file }) => {
       if (file.type === 'parameter') {
         const values = file.data?.values || [];
-        return values.length > 0 && values.some((v: any) => 
+        const hasValues = values.length > 0 && values.some((v: any) => 
           v.n !== undefined || v.k !== undefined || v.data_source || v.n_daily || v.k_daily
         );
+        const malformedKeys = Object.keys(file.data || {}).filter(k => /^values\[\d+\]$/.test(k));
+        return hasValues || malformedKeys.length > 0;
       } else if (file.type === 'case') {
         return (file.data?.case?.schedules?.length || 0) > 0;
       }

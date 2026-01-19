@@ -259,6 +259,9 @@ async function analyzeReachProbabilityViaPython(
   };
 
   let response: Awaited<ReturnType<typeof undiciFetch>>;
+  const controller = new AbortController();
+  const timeoutMs = 2000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     // IMPORTANT: tests/setup.ts stubs globalThis.fetch and intentionally blocks localhost.
     // Use Undici directly so we can hit the real local Uvicorn server.
@@ -266,6 +269,7 @@ async function analyzeReachProbabilityViaPython(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
+      signal: controller.signal,
     });
   } catch (e: any) {
     throw new Error(
@@ -273,6 +277,8 @@ async function analyzeReachProbabilityViaPython(
       `Start it with: cd graph-editor && . venv/bin/activate && python dev-server.py\n\n` +
       `Original error: ${e?.message || String(e)}`
     );
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   const rawText = await response.text();
@@ -303,15 +309,26 @@ async function isPythonGraphComputeReachable(): Promise<boolean> {
   const url = `${baseUrl}/api/runner/analyze`;
   try {
     // Minimal reachability check; we only care whether the socket is reachable.
-    await undiciFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1000);
+    try {
+      await undiciFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
     return true;
   } catch {
     return false;
   }
 }
 
-const PYTHON_GRAPHCOMPUTE_AVAILABLE = process.env.CI ? await isPythonGraphComputeReachable() : true;
-const describePython = (process.env.CI && !PYTHON_GRAPHCOMPUTE_AVAILABLE) ? describe.skip : describe;
+const PYTHON_GRAPHCOMPUTE_AVAILABLE = await isPythonGraphComputeReachable();
+const describePython = PYTHON_GRAPHCOMPUTE_AVAILABLE ? describe : describe.skip;
 
 describePython('E2E: Smooth lag Amplitude responses → param-pack stats', () => {
 
