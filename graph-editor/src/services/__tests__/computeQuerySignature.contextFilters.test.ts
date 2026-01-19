@@ -1,13 +1,40 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { computeQuerySignature } from '../dataOperationsService';
+import { contextRegistry } from '../contextRegistry';
 
 describe('computeQuerySignature - context_filters', () => {
-  it('changes when context_filters predicate changes even if context key/value stays the same', async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    contextRegistry.clearCache();
+  });
+
+  it('does not change when context_filters predicate changes if context definition is unchanged', async () => {
     const basePayload: any = {
       from: 'a',
       to: 'b',
       context: [{ key: 'channel', value: 'other' }],
     };
+    const contextDef = {
+      id: 'channel',
+      name: 'Marketing Channel',
+      description: 'Primary acquisition channel',
+      type: 'categorical',
+      otherPolicy: 'computed',
+      values: [
+        { id: 'paid-search', label: 'Paid Search' },
+        { id: 'influencer', label: 'Influencer' },
+        { id: 'paid-social', label: 'Paid Social' },
+        { id: 'other', label: 'Other' },
+      ],
+      metadata: {
+        category: 'marketing',
+        data_source: 'utm_parameters',
+        created_at: '1-Dec-25',
+        version: '1.0.0',
+        status: 'active',
+      },
+    };
+    vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(contextDef as any);
 
     const sig1 = await computeQuerySignature(
       {
@@ -28,6 +55,56 @@ describe('computeQuerySignature - context_filters', () => {
       },
       'amplitude-prod'
     );
+
+    expect(sig1).toEqual(sig2);
+  });
+
+  it('changes when context definition changes (context hash)', async () => {
+    const basePayload: any = {
+      from: 'a',
+      to: 'b',
+      context: [{ key: 'channel', value: 'other' }],
+    };
+
+    const contextDefV1 = {
+      id: 'channel',
+      name: 'Marketing Channel',
+      description: 'Primary acquisition channel',
+      type: 'categorical',
+      otherPolicy: 'computed',
+      values: [
+        { id: 'paid-search', label: 'Paid Search' },
+        { id: 'influencer', label: 'Influencer' },
+        { id: 'paid-social', label: 'Paid Social' },
+        { id: 'other', label: 'Other' },
+      ],
+      metadata: {
+        category: 'marketing',
+        data_source: 'utm_parameters',
+        created_at: '1-Dec-25',
+        version: '1.0.0',
+        status: 'active',
+      },
+    };
+
+    const contextDefV2 = {
+      ...contextDefV1,
+      values: [
+        ...contextDefV1.values,
+        { id: 'referral', label: 'Referral' },
+      ],
+      metadata: {
+        ...contextDefV1.metadata,
+        version: '1.1.0',
+      },
+    };
+
+    vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(contextDefV1 as any);
+    const sig1 = await computeQuerySignature(basePayload, 'amplitude-prod', undefined, undefined, ['channel']);
+
+    contextRegistry.clearCache();
+    vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(contextDefV2 as any);
+    const sig2 = await computeQuerySignature(basePayload, 'amplitude-prod', undefined, undefined, ['channel']);
 
     expect(sig1).not.toEqual(sig2);
   });
