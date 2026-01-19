@@ -68,6 +68,7 @@ import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImpl
 import { sessionLogService } from './sessionLogService';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
+import { contextRegistry } from './contextRegistry';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
 import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
@@ -539,10 +540,11 @@ export function extractSheetsUpdateData(
  * Includes event_ids from nodes to detect when event definitions change
  */
 export async function computeQuerySignature(
-  queryPayload: any, 
+  queryPayload: any,
   connectionName?: string,
   graph?: Graph | null,
-  edge?: any
+  edge?: any,
+  contextKeys?: string[]
 ): Promise<string> {
   try {
     // Extract event_ids from nodes if graph and edge are provided
@@ -597,33 +599,93 @@ export async function computeQuerySignature(
       }
     }
     
-    // Create a canonical representation of the query
-    // Include both node IDs (for backward compatibility) and event_ids (for change detection)
-    // CRITICAL: Also include the ORIGINAL query string to detect minus()/plus() changes
-    //
-    // IMPORTANT: include context_filters (structured, provider-specific predicates) so that
-    // changes to pinned slice definitions (e.g. regex/pattern changes, computed "other" policy)
-    // invalidate cache even when the high-level context(key:value) label is unchanged.
-    const normalizedContextFilters = (() => {
-      const raw = queryPayload?.context_filters;
-      if (!raw || !Array.isArray(raw)) return [];
-      return raw
-        .map((f: any) => ({
-          field: String(f.field ?? ''),
-          op: String(f.op ?? ''),
-          values: Array.isArray(f.values) ? [...f.values].map((v: any) => String(v)).sort() : [],
-          pattern: f.pattern !== undefined ? String(f.pattern) : undefined,
-          patternFlags: f.patternFlags !== undefined ? String(f.patternFlags) : undefined,
-        }))
-        .sort((a: any, b: any) =>
-          a.field.localeCompare(b.field) ||
-          a.op.localeCompare(b.op) ||
-          String(a.pattern ?? '').localeCompare(String(b.pattern ?? '')) ||
-          String(a.patternFlags ?? '').localeCompare(String(b.patternFlags ?? '')) ||
-          a.values.join(',').localeCompare(b.values.join(','))
-        );
-    })();
+    const sortPrimitiveArray = (items: unknown[]): unknown[] => {
+      if (items.every(v => typeof v === 'string')) {
+        return [...(items as string[])].sort();
+      }
+      if (items.every(v => typeof v === 'number')) {
+        return [...(items as number[])].sort((a, b) => a - b);
+      }
+      return items;
+    };
 
+    const normalizeObjectKeys = (obj: Record<string, any>): Record<string, any> => {
+      const out: Record<string, any> = {};
+      Object.keys(obj).sort().forEach((k) => {
+        const v = obj[k];
+        if (Array.isArray(v)) {
+          out[k] = v.map((item) => (item && typeof item === 'object' ? normalizeObjectKeys(item) : item));
+        } else if (v && typeof v === 'object') {
+          out[k] = normalizeObjectKeys(v);
+        } else {
+          out[k] = v;
+        }
+      });
+      return out;
+    };
+
+    const normalizeContextDefinition = (ctx: any): Record<string, any> => {
+      const values = Array.isArray(ctx?.values) ? [...ctx.values] : [];
+      const normalizedValues = values
+        .map((v: any) => ({
+          id: v.id,
+          label: v.label,
+          description: v.description,
+          order: v.order,
+          aliases: Array.isArray(v.aliases) ? sortPrimitiveArray(v.aliases) : v.aliases,
+          sources: v.sources ? normalizeObjectKeys(v.sources) : v.sources,
+        }))
+        .sort((a: any, b: any) => String(a.id ?? '').localeCompare(String(b.id ?? '')));
+
+      const metadata = ctx?.metadata ? normalizeObjectKeys(ctx.metadata) : ctx?.metadata;
+
+      return normalizeObjectKeys({
+        id: ctx?.id,
+        name: ctx?.name,
+        description: ctx?.description,
+        type: ctx?.type,
+        otherPolicy: ctx?.otherPolicy ?? 'undefined',
+        values: normalizedValues,
+        metadata,
+      });
+    };
+
+    const hashText = async (canonical: string): Promise<string> => {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(canonical);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    };
+
+    const payloadContextKeys = Array.isArray(queryPayload?.context)
+      ? queryPayload.context.map((c: any) => c?.key).filter(Boolean)
+      : [];
+    const allContextKeys = Array.from(new Set([...(contextKeys || []), ...payloadContextKeys]))
+      .map((k) => String(k))
+      .sort();
+
+    const contextHashes = await Promise.all(
+      allContextKeys.map(async (key) => {
+        try {
+          const ctx = await contextRegistry.getContext(key);
+          if (!ctx) {
+            return { key, hash: 'missing', status: 'missing' };
+          }
+          const normalized = normalizeContextDefinition(ctx);
+          const ctxHash = await hashText(JSON.stringify(normalized));
+          return { key, hash: ctxHash, status: 'ok' };
+        } catch (error) {
+          console.warn('[computeQuerySignature] Failed to hash context definition:', { key, error });
+          return { key, hash: 'error', status: 'error' };
+        }
+      })
+    );
+
+    // Create a canonical representation of the query.
+    // Include event_ids and original query string to detect topology changes.
+    // Include context hashes for the ENTIRE context key definition (not per-value filters).
+    //
     // Latency / cohort semantics:
     // - Cohort mode (A-anchored) changes the external query shape.
     // - Anchor identity changes the query semantics.
@@ -646,9 +708,9 @@ export async function computeQuerySignature(
       visited_event_ids: visited_event_ids.sort(),
       exclude_event_ids: exclude_event_ids.sort(),
       event_filters: queryPayload.event_filters || {},
-      context: (queryPayload.context || []).sort(),
+      context_keys: allContextKeys,
+      context_hashes: contextHashes,
       case: (queryPayload.case || []).sort(),
-      context_filters: normalizedContextFilters,
       // Cohort / latency semantics (exclude bounds, include shape + anchor + conversion window)
       cohort_mode: !!queryPayload.cohort,
       cohort_anchor_event_id: queryPayload?.cohort?.anchor_event_id || '',
@@ -661,11 +723,7 @@ export async function computeQuerySignature(
     });
     
     // Compute SHA-256 hash
-    const encoder = new TextEncoder();
-    const data = encoder.encode(canonical);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const hashHex = await hashText(canonical);
     
     // ===== DIAGNOSTIC: Show what went into the signature =====
     console.log('[computeQuerySignature] Signature computed:', {
@@ -683,6 +741,23 @@ export async function computeQuerySignature(
     // Fallback: use simple string hash
     return `fallback-${Date.now()}`;
   }
+}
+
+function extractContextKeysFromConstraints(constraints?: {
+  context?: Array<{ key: string }>;
+  contextAny?: Array<{ pairs: Array<{ key: string }> }>;
+} | null): string[] {
+  if (!constraints) return [];
+  const keys = new Set<string>();
+  for (const ctx of constraints.context || []) {
+    if (ctx?.key) keys.add(ctx.key);
+  }
+  for (const ctxAny of constraints.contextAny || []) {
+    for (const pair of ctxAny?.pairs || []) {
+      if (pair?.key) keys.add(pair.key);
+    }
+  }
+  return Array.from(keys).sort();
 }
 
 /**
@@ -1286,7 +1361,14 @@ class DataOperationsService {
                 const compEventDefs = compResult.eventDefinitions;
                 
                 // Compute expected query signature (include event_ids from nodes)
-                expectedQuerySignature = await computeQuerySignature(compDsl, connectionName, graph, targetEdge);
+                const signatureContextKeys = extractContextKeysFromConstraints(constraints);
+                expectedQuerySignature = await computeQuerySignature(
+                  compDsl,
+                  connectionName,
+                  graph,
+                  targetEdge,
+                  signatureContextKeys
+                );
                 const t5 = performance.now();
                 
                 console.log(`[TIMING:SIG] ${paramId}: getConnection=${(t2-t1).toFixed(1)}ms, buildDsl=${(t4-t3).toFixed(1)}ms, computeSig=${(t5-t4).toFixed(1)}ms, total=${(t5-sigStart).toFixed(1)}ms`);
@@ -3690,6 +3772,7 @@ class DataOperationsService {
       let eventDefinitions: Record<string, any> = {};  // Event file data for adapter
       let connectionProvider: string | undefined;
       let supportsDailyTimeSeries = false; // Capability from connections.yaml
+      let signatureContextKeys: string[] = [];
       // The exact edge-like object used to build the QueryPayload.
       // We re-use it when computing query_signature so latency/anchor semantics match the payload.
       let edgeForQuerySignature: any | undefined;
@@ -3770,6 +3853,7 @@ class DataOperationsService {
                   visited: edgeConstraints?.visited || [],
                   visitedAny: edgeConstraints?.visitedAny || [],
                 };
+                signatureContextKeys = extractContextKeysFromConstraints(constraints);
 
                 // Normalise open-ended ranges (e.g. window(-60d:)) to an explicit end = today.
                 const todayUK = formatDateUK(new Date());
@@ -3851,6 +3935,7 @@ class DataOperationsService {
                   visited: edgeConstraints?.visited || [],
                   visitedAny: edgeConstraints?.visitedAny || []
                 };
+                signatureContextKeys = extractContextKeysFromConstraints(constraints);
 
                 // Open-ended slice windows are valid in DagNet (e.g. window(-60d:), cohort(-60d:)).
                 // Normalise here so downstream DSL building (buildDslFromEdge) doesn't silently fall back to
@@ -4555,7 +4640,24 @@ class DataOperationsService {
       // (we only write for parameter objects in versioned/source-via-file pathway)
       if (objectType === 'parameter' && writeToFile) {
         const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
-        querySignature = await computeQuerySignature(queryPayload, connectionName, graph, edgeForQuerySignature || targetEdge);
+        const fallbackContextKeys = (() => {
+          if (signatureContextKeys.length > 0) return signatureContextKeys;
+          const dsl = targetSlice || currentDSL || '';
+          if (!dsl) return [];
+          try {
+            return extractContextKeysFromConstraints(parseConstraints(dsl));
+          } catch (error) {
+            console.warn('[DataOperationsService] Failed to parse context keys for signature:', error);
+            return [];
+          }
+        })();
+        querySignature = await computeQuerySignature(
+          queryPayload,
+          connectionName,
+          graph,
+          edgeForQuerySignature || targetEdge,
+          fallbackContextKeys
+        );
         console.log('[DataOperationsService] Computed query signature for storage:', {
           signature: querySignature?.substring(0, 16) + '...',
           writeToFile,

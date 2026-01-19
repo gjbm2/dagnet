@@ -134,8 +134,10 @@ vi.mock('../sessionLogService', () => ({
 // IMPORT REAL PRODUCTION CODE (after mocks are set up)
 // ============================================================================
 
-import { dataOperationsService } from '../dataOperationsService';
+import { dataOperationsService, computeQuerySignature } from '../dataOperationsService';
 import { explodeDSL } from '../../lib/dslExplosion';
+import { parseConstraints } from '../../lib/queryDSL';
+import { buildDslFromEdge } from '../../lib/das/buildDslFromEdge';
 import { contextRegistry } from '../contextRegistry';
 import { fileRegistry } from '../../contexts/TabContext';
 import type { Graph, GraphData } from '../../types';
@@ -1218,6 +1220,96 @@ describe('Multi-Slice Retrieval and Caching E2E (Real Production Code)', () => {
         if (edge?.p?.evidence) {
           expect(edge.p.evidence.n).toBe(1190);
           expect(edge.p.evidence.k).toBe(238);
+        }
+      }
+    });
+
+    it('MECE: uncontexted aggregation succeeds when signatures are derived from DSL context filters (context hash)', async () => {
+      const graph = createTestGraph({
+        currentQueryDSL: 'window(1-Oct-25:7-Oct-25)'
+      });
+      graph.nodes = graph.nodes.map((node: any) => ({
+        ...node,
+        event_id: node.event_id || node.data?.event_id || node.id,
+      }));
+      const edge = graph.edges[0] as any;
+
+      const channelContext = {
+        id: 'channel',
+        name: 'Marketing Channel',
+        description: 'Test',
+        type: 'categorical',
+        otherPolicy: 'computed',
+        values: [
+          { id: 'google', label: 'Google', sources: { amplitude: { filter: "utm_source == 'google'" } } },
+          { id: 'facebook', label: 'Facebook', sources: { amplitude: { filter: "utm_source == 'facebook'" } } },
+          { id: 'other', label: 'Other' }
+        ],
+        metadata: { created_at: '1-Dec-25', version: '1.0.0', status: 'active' }
+      } as any;
+
+      vi.mocked(contextRegistry.getContext).mockResolvedValue(channelContext);
+
+      const dates = ['2025-10-01', '2025-10-02', '2025-10-03', '2025-10-04', '2025-10-05', '2025-10-06', '2025-10-07'];
+      const slices = [
+        { id: 'google', n: 70, k: 14 },
+        { id: 'facebook', n: 35, k: 7 },
+        { id: 'other', n: 21, k: 7 },
+      ];
+
+      const signatures: string[] = [];
+      const cachedSlices: any[] = [];
+
+      for (const slice of slices) {
+        const dsl = `context(channel:${slice.id}).window(1-Oct-25:7-Oct-25)`;
+        const constraints = parseConstraints(dsl);
+        const { queryPayload } = await buildDslFromEdge(edge, graph as any, 'amplitude', undefined, constraints);
+
+        const signature = await computeQuerySignature(
+          queryPayload,
+          'amplitude-prod',
+          graph as any,
+          edge,
+          ['channel']
+        );
+        signatures.push(signature);
+
+        cachedSlices.push({
+          window_from: '2025-10-01T00:00:00.000Z',
+          window_to: '2025-10-07T23:59:59.999Z',
+          n: slice.n,
+          k: slice.k,
+          n_daily: Array(7).fill(Math.round(slice.n / 7)),
+          k_daily: Array(7).fill(Math.round(slice.k / 7)),
+          dates,
+          sliceDSL: `context(channel:${slice.id})`,
+          query_signature: signature,
+        });
+      }
+
+      // Signatures should align across context values (MECE generation cohesion).
+      const uniqueSignatures = new Set(signatures);
+      expect(uniqueSignatures.size).toBe(1);
+
+      setupMockFiles('test-conversion-param', cachedSlices);
+
+      let updatedGraph: any = null;
+      const setGraph = vi.fn((g) => { updatedGraph = g; });
+
+      await dataOperationsService.getParameterFromFile({
+        paramId: 'test-conversion-param',
+        edgeId: 'edge-uuid-1',
+        graph: graph as any,
+        setGraph,
+        window: { start: '2025-10-01T00:00:00.000Z', end: '2025-10-07T23:59:59.999Z' },
+        targetSlice: 'window(1-Oct-25:7-Oct-25)',
+      });
+
+      if (updatedGraph) {
+        const updatedEdge = updatedGraph.edges?.find((e: any) => e.uuid === 'edge-uuid-1');
+        if (updatedEdge?.p?.evidence) {
+          expect(updatedEdge.p.evidence.n).toBe(126);
+          expect(updatedEdge.p.evidence.k).toBe(28);
         }
       }
     });
