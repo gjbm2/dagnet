@@ -285,6 +285,50 @@ describe('ScenariosContext - Live Scenarios', () => {
       // Restore addEventListener for isolation.
       (window as any).addEventListener = realAdd;
     });
+
+    it('ignores workspace change events with missing or mismatched repo/branch', async () => {
+      vi.mocked(recomputeOpenChartsForGraph).mockClear();
+      vi.mocked(fetchDataService.checkDSLNeedsFetch).mockClear();
+
+      const realAdd = window.addEventListener;
+      const captured: any[] = [];
+      (window as any).addEventListener = (type: any, listener: any, options?: any) => {
+        if (type === 'dagnet:workspaceFilesChanged') captured.push(listener);
+        return realAdd.call(window, type, listener, options);
+      };
+
+      await db.files.put({
+        fileId: 'test-file',
+        type: 'graph',
+        viewTabs: [],
+        data: { nodes: [], edges: [], baseDSL: '', currentQueryDSL: '' },
+        source: { repository: 'repo-1', branch: 'main', path: 'graphs/test.json' },
+        lastModified: Date.now(),
+        sha: 'graphsha1',
+      } as any);
+      await db.saveAppState({ autoUpdateChartsEnabled: true });
+
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper('test-file'),
+      });
+
+      await waitForReady(result);
+
+      await waitFor(() => {
+        expect(captured.length).toBeGreaterThan(0);
+      }, { timeout: 2000 });
+
+      await act(async () => {
+        await captured[captured.length - 1]({ detail: { repository: 'repo-2', branch: 'main' } });
+        await captured[captured.length - 1]({ detail: { repository: 'repo-1', branch: '' } });
+        await captured[captured.length - 1]({ detail: { repository: '', branch: 'main' } });
+      });
+
+      expect(vi.mocked(fetchDataService.checkDSLNeedsFetch)).not.toHaveBeenCalled();
+      expect(vi.mocked(recomputeOpenChartsForGraph)).not.toHaveBeenCalled();
+
+      (window as any).addEventListener = realAdd;
+    });
   });
 
   // ==========================================================================

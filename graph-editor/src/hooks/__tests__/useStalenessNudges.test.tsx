@@ -82,6 +82,7 @@ vi.mock('../../services/retrieveAllSlicesService', () => ({
   retrieveAllSlicesService: {
     execute: hoisted.retrieveAllSlicesExecute,
   },
+  executeRetrieveAllSlicesWithProgressToast: hoisted.retrieveAllSlicesExecute,
 }));
 
 vi.mock('../../contexts/ShareModeContext', () => ({
@@ -362,6 +363,7 @@ describe('useStalenessNudges', () => {
     }
 
     expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
+    expect(hoisted.clearDismissedRemoteSha).toHaveBeenCalledTimes(1);
     expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
     expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
     vi.useRealTimers();

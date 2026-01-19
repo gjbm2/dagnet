@@ -49,6 +49,10 @@ graph-editor/public/docs/index.json
 # Debug streams & snapshots (dev-only)
 debug/
 
+# Playwright artefacts
+graph-editor/test-results/
+graph-editor/playwright-report/
+
 # IDE files
 .vscode/
 .idea/

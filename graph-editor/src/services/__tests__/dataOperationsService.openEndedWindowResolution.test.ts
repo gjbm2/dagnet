@@ -9,6 +9,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Graph } from '../../types';
+import { computeCohortRetrievalHorizon } from '../cohortRetrievalHorizon';
+import { formatDateUK, parseUKDate, resolveRelativeDate } from '../../lib/dateFormat';
+import { parseDate } from '../windowAggregationService';
 
 vi.mock('react-hot-toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() },
@@ -182,6 +185,95 @@ describe('dataOperationsService window resolution regressions', () => {
     // Ensure we logged the warning (opId, level, code, message, ...)
     const warned = addChildSpy.mock.calls.some((call) => call[1] === 'warning' && call[2] === 'DEFAULT_WINDOW_APPLIED');
     expect(warned).toBe(true);
+  });
+
+  it('uses bounded cohort window for replace_slice refetches', async () => {
+    const graph: Graph = {
+      schema_version: '1.0.0',
+      id: 'g-cohort',
+      name: 'Cohort Graph',
+      description: '',
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', layout: { x: 0, y: 0 }, event_id: 'event-a' } as any,
+        { id: 'B', uuid: 'B', label: 'B', layout: { x: 1, y: 1 }, event_id: 'event-b' } as any,
+      ],
+      edges: [
+        {
+          id: 'E1',
+          uuid: 'E1',
+          from: 'A',
+          to: 'B',
+          query: 'from(A).to(B)',
+          p: {
+            id: 'p1',
+            connection: 'statsig',
+            mean: 0.1,
+            latency: {
+              latency_parameter: true,
+              t95: 10,
+              path_t95: 10,
+              anchor_node_id: 'A',
+            },
+          },
+        } as any,
+      ],
+    } as any;
+
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      connection: 'statsig',
+      latency: {
+        latency_parameter: true,
+        t95: 10,
+        path_t95: 10,
+        anchor_node_id: 'A',
+      },
+      values: [
+        {
+          sliceDSL: 'cohort(A,1-Dec-25:17-Dec-25).context(channel:paid-search)',
+          dates: ['15-Dec-25', '16-Dec-25'],
+          data_source: { retrieved_at: '2025-12-01T00:00:00.000Z' },
+        },
+      ],
+    });
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'E1',
+      graph,
+      setGraph: () => {},
+      writeToFile: true,
+      currentDSL: 'context(channel:paid-search).cohort(-90d:)',
+      targetSlice: 'context(channel:paid-search).cohort(-90d:)',
+      dontExecuteHttp: true,
+    });
+
+    expect(executeSpy).toHaveBeenCalled();
+    const opts = executeSpy.mock.calls[0][2];
+
+    const todayUK = formatDateUK(new Date());
+    const startUK = resolveRelativeDate('-90d');
+    const requestedWindow = {
+      start: parseUKDate(startUK).toISOString(),
+      end: parseUKDate(todayUK).toISOString(),
+    };
+    const horizon = computeCohortRetrievalHorizon({
+      requestedWindow,
+      pathT95: 10,
+      edgeT95: 10,
+      referenceDate: new Date(),
+      existingCoverage: {
+        dates: ['15-Dec-25', '16-Dec-25'],
+        retrievedAt: '2025-12-01T00:00:00.000Z',
+      },
+    });
+    const expectedWindow = {
+      start: parseDate(horizon.boundedWindow.start).toISOString(),
+      end: parseDate(horizon.boundedWindow.end).toISOString(),
+    };
+
+    expect(opts?.window).toEqual(expectedWindow);
   });
 
   it('warns when DSL contains an unparseable window() clause and proceeds with explicit fallbacks', async () => {

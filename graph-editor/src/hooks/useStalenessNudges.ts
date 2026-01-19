@@ -5,7 +5,7 @@ import { stalenessNudgeService } from '../services/stalenessNudgeService';
 import { requestRetrieveAllSlices } from './useRetrieveAllSlicesRequestListener';
 import { usePullAll } from './usePullAll';
 import { StalenessUpdateModal, type StalenessUpdateActionKey } from '../components/modals/StalenessUpdateModal';
-import { retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
+import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
 import { sessionLogService } from '../services/sessionLogService';
 import { STALENESS_NUDGE_COUNTDOWN_SECONDS, STALENESS_NUDGE_VISIBLE_POLL_MS } from '../constants/staleness';
 import { db } from '../db/appDatabase';
@@ -221,9 +221,11 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
           // Headless/automatic retrieve: show Session Log as the primary UX for progress.
           void sessionLogService.openLogTab();
 
-          await retrieveAllSlicesService.execute({
+          await executeRetrieveAllSlicesWithProgressToast({
             getGraph: () => (fileRegistry.getFile(activeFileId) as any)?.data || null,
             setGraph: (g) => tabOperations.updateTabData(activeFileId, g),
+            toastId: `retrieve-all-automatic:${activeFileId}`,
+            toastLabel: 'Retrieve All (automatic)',
           });
         } else {
           requestRetrieveAllSlices();
@@ -237,9 +239,11 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         // Headless/automatic retrieve: show Session Log as the primary UX for progress.
         void sessionLogService.openLogTab();
 
-        await retrieveAllSlicesService.execute({
+        await executeRetrieveAllSlicesWithProgressToast({
           getGraph: () => (fileRegistry.getFile(activeFileId) as any)?.data || null,
           setGraph: (g) => tabOperations.updateTabData(activeFileId, g),
+          toastId: `retrieve-all-automatic:${activeFileId}`,
+          toastLabel: 'Retrieve All (automatic)',
         });
       } else {
         requestRetrieveAllSlices();

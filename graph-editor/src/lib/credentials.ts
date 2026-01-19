@@ -220,13 +220,7 @@ export class CredentialsManager {
       const secret = urlParams.get('secret');
       const creds = urlParams.get('creds');
       
-      // Check for secret key first
-      if (secret) {
-        console.log('🔧 CredentialsManager: Found secret in URL, loading system credentials...');
-        return await this.loadFromSystemSecret(secret);
-      }
-      
-      // Check for direct JSON credentials
+      // Check for direct JSON credentials first (highest URL precedence)
       if (creds) {
         console.log('🔧 CredentialsManager: Found credentials in URL...');
         let credentials: CredentialsData;
@@ -249,6 +243,12 @@ export class CredentialsManager {
           credentials,
           source: 'url'
         };
+      }
+
+      // Check for secret key (system credentials)
+      if (secret) {
+        console.log('🔧 CredentialsManager: Found secret in URL, loading system credentials...');
+        return await this.loadFromSystemSecret(secret);
       }
       
       return { success: false, error: 'No credentials or secret in URL', source: 'url' };

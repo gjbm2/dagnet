@@ -1,5 +1,10 @@
 # TODO
 
+## Pull latest issues
+- clients update their graph files after a fetch
+- this looks like a conflict on next git pull
+- we need to defend against this to prevent lots of conflicts on fetch...
+
 ## Outstanding issues (sequencing + live share parity) — updated 15-Jan-26
 
 - **Normal vs live share: material analysis deltas (suspected sequencing defect)**

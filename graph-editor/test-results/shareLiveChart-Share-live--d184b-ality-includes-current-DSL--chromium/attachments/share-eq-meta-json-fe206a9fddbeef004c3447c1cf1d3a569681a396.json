@@ -1,8 +1,0 @@
-{
-  "phase": "share-eq",
-  "testTitle": "live share rehydrates bridge chart artefact exactly (analysis_result equality; includes current DSL)",
-  "startAt": "2026-01-18T22:49:56.172Z",
-  "endAt": "2026-01-18T22:49:57.168Z",
-  "finalUrl": "http://127.0.0.1:4173/?mode=live&repo=repo-1&branch=main&graph=test-graph&secret=test-secret&dashboard=1&share=N4IgbgpgTgzglgewHYgFwgIwDoAMuQA0IALgIZQDmExaIAxgBbk1EVSkAODA%2BjGcRDSgARqRgRuAExgAbWgHc4SSQnkAKDAFoAcgjCaATAFZUGHDr2GjASkL0ArlCgQkxbgEd70AJ5TZCpRV1AA5NAClSJEMANlMAZnDImNsAXyJGZiEQAGtA2kjSGW94GG5hKDhJKjtiOGIZQXQAYSYoYgACQBQCdoAhCqqIdoA1OAh5EDSQAqKSrM8fPzl0YgQ1GEViRk0Yezo6CBgYWyJp4rhS4m8ORpByyqpuMFHxonkmNzgAM0W0JHsZGSTGD7JDkRAwLJ1CAAWwhqAA2qBKrRgS4wQhNBg7NIliBFMpVBpNAARCB0KymADsJLJVmOIFB0JuWlJdHagGQCdoYamsux0BAyBCOWgAYgAok0ACzBACcMrsT3gwjgMjqvmhCEkN0%2BAGpBCkALrpRzOVxZHEBAkhRJRAyxDAJCK26L0-mC4XoEVxHrBAwAMWiCvOcGVqsu3A1WtousEREZNyaJpcNEmDEqEjoSbNqE%2BhXERHEDToAkkvBB6J%2B6HxQSJrIp3Jp5OMqRSQA&shareid=ppl7yw",
-  "status": "passed"
-}

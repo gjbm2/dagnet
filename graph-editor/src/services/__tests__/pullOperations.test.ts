@@ -4,6 +4,9 @@
  * Tests for single-file and all-files pull operations.
  * These test the service layer that the usePullFile and usePullAll hooks depend on.
  */
+/**
+ * @vitest-environment happy-dom
+ */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { repositoryOperationsService } from '../repositoryOperationsService';
@@ -11,6 +14,8 @@ import { fileRegistry } from '../../contexts/TabContext';
 import { credentialsManager } from '../../lib/credentials';
 import { gitService } from '../gitService';
 import { db } from '../../db/appDatabase';
+import { workspaceService } from '../workspaceService';
+import { sessionLogService } from '../sessionLogService';
 
 // Mock dependencies
 vi.mock('../../lib/credentials', () => ({
@@ -33,6 +38,21 @@ vi.mock('../../db/appDatabase', () => ({
       get: vi.fn()
     }
   }
+}));
+
+vi.mock('../workspaceService', () => ({
+  workspaceService: {
+    pullLatest: vi.fn(),
+  },
+}));
+
+vi.mock('../sessionLogService', () => ({
+  sessionLogService: {
+    info: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 vi.mock('../../contexts/TabContext', () => ({
@@ -261,6 +281,39 @@ value: 0.5`;
       expect(mockFile.isDirty).toBe(false);
       expect(mockFile.isLocal).toBe(false);
       expect(mockFile.sha).toBe('new-sha');
+    });
+  });
+
+  describe('pullLatest', () => {
+    it('dispatches workspaceFilesChanged after a successful pull', async () => {
+      vi.mocked(credentialsManager.loadCredentials).mockResolvedValue({
+        success: true,
+        credentials: {
+          git: [{ name: 'test-repo', owner: 'owner', token: 'token', basePath: '' }],
+        },
+      } as any);
+
+      vi.mocked(workspaceService.pullLatest).mockResolvedValue({
+        newFiles: ['graphs/new.json'],
+        changedFiles: ['parameters/changed.yaml'],
+        deletedFiles: ['parameters/deleted.yaml'],
+        conflicts: [],
+      } as any);
+
+      const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+      await repositoryOperationsService.pullLatest('test-repo', 'main');
+
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      const event = dispatchSpy.mock.calls[0]?.[0] as CustomEvent;
+      expect(event.type).toBe('dagnet:workspaceFilesChanged');
+      expect(event.detail).toEqual({
+        repository: 'test-repo',
+        branch: 'main',
+        newFiles: ['graphs/new.json'],
+        changedFiles: ['parameters/changed.yaml'],
+        deletedFiles: ['parameters/deleted.yaml'],
+      });
     });
   });
 });
