@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.1b
+**Released:** 19-Jan-26
+
+Fixed regression with fetching
+
+---
+
 ## Version 1.3.0b
 **Released:** 18-Jan-26
 
