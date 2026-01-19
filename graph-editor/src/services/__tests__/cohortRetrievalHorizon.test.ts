@@ -17,8 +17,8 @@ describe('cohortRetrievalHorizon', () => {
   const referenceDate = new Date('2025-12-09T12:00:00Z');
   
   describe('computeCohortRetrievalHorizon', () => {
-    describe('basic window bounding', () => {
-      it('should bound a wide cohort window to path_t95 horizon', () => {
+    describe('basic window bounding (disabled)', () => {
+      it('should NOT bound a wide cohort window (start-truncation is disallowed)', () => {
         const input: CohortHorizonInput = {
           requestedWindow: {
             start: '9-Sep-25',  // 91 days ago
@@ -30,11 +30,10 @@ describe('cohortRetrievalHorizon', () => {
         
         const result = computeCohortRetrievalHorizon(input);
         
-        expect(result.wasBounded).toBe(true);
-        expect(result.effectiveT95).toBe(30);
-        expect(result.t95Source).toBe('path_t95');
-        // Should trim ~59 days (91 - 30 - 2 buffer)
-        expect(result.daysTrimmed).toBeGreaterThan(50);
+        expect(result.wasBounded).toBe(false);
+        expect(result.daysTrimmed).toBe(0);
+        expect(result.boundedWindow.start).toBe(result.originalWindow.start);
+        expect(result.boundedWindow.end).toBe(result.originalWindow.end);
       });
       
       it('should NOT bound a narrow window already within horizon', () => {
@@ -222,7 +221,7 @@ describe('cohortRetrievalHorizon', () => {
         expect(result.wasBounded).toBe(false);
       });
       
-      it('should enforce minimum horizon days', () => {
+      it('should keep wide window even when path_t95 is very small (no minimum-horizon bounding)', () => {
         const input: CohortHorizonInput = {
           requestedWindow: { start: '9-Sep-25', end: '9-Dec-25' },
           pathT95: 1,  // Very short maturity
@@ -231,13 +230,9 @@ describe('cohortRetrievalHorizon', () => {
         
         const result = computeCohortRetrievalHorizon(input);
         
-        // Should report actual t95
         expect(result.effectiveT95).toBe(1);
-        // Window was bounded
-        expect(result.wasBounded).toBe(true);
-        // Min horizon is 7 days + 2 buffer = 9 days
-        // So from 91 day window, we trim down to ~9 days, meaning daysTrimmed ~82
-        expect(result.daysTrimmed).toBeGreaterThan(80);
+        expect(result.wasBounded).toBe(false);
+        expect(result.daysTrimmed).toBe(0);
       });
     });
     
