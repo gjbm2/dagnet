@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.4b
+**Released:** 20-Jan-26
+
+Subtle and extensive work on the fetch logic to improve and harden in (with one serious signature regression still outstanding); several important data retrieval fixes.
+
+---
+
 ## Version 1.3.3b
 **Released:** 19-Jan-26
 
