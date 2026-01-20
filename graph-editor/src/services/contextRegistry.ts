@@ -127,6 +127,22 @@ export class ContextRegistry {
       return undefined;
     }
   }
+
+  /**
+   * Ensure the given context IDs are loaded into the in-memory cache.
+   *
+   * This is primarily used to support synchronous MECE/cache-cutting codepaths
+   * that cannot await IndexedDB reads. Callers should prefer passing a workspace
+   * scope to avoid cross-workspace ambiguity.
+   */
+  async ensureContextsCached(
+    ids: string[],
+    options?: { workspace?: { repository: string; branch: string } }
+  ): Promise<void> {
+    const unique = Array.from(new Set(ids.filter((x) => typeof x === 'string' && x.trim()))).sort();
+    if (unique.length === 0) return;
+    await Promise.all(unique.map((id) => this.getContext(id, options)));
+  }
   
   /**
    * Get values for a context, respecting otherPolicy.

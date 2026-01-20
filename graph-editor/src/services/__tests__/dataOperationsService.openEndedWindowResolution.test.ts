@@ -76,7 +76,7 @@ vi.mock('../../lib/das', () => ({
         capabilities: { supports_daily_time_series: false },
       })),
     },
-    execute: (...args: any[]) => executeSpy(...args),
+    execute: (...args: any[]) => (executeSpy as any)(...args),
   }),
 }));
 
@@ -156,6 +156,37 @@ describe('dataOperationsService window resolution regressions', () => {
     expect(opts.window).toEqual({
       start: '2025-10-18T00:00:00.000Z',
       end: '2025-12-17T00:00:00.000Z',
+    });
+  });
+
+  it('executes overrideFetchWindows exactly (plan interpreter mode), regardless of DSL window', async () => {
+    const graph = createTestGraph('from(A).to(B)');
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'E1',
+      graph,
+      setGraph: () => {},
+      // DSL expresses a wide window...
+      currentDSL: 'window(-60d:)',
+      // ...but plan interpreter forces a narrow window.
+      overrideFetchWindows: [{ start: '1-Dec-25', end: '2-Dec-25' }],
+      dontExecuteHttp: true,
+    } as any);
+
+    expect(executeSpy).toHaveBeenCalled();
+
+    const payload = executeSpy.mock.calls[0][1];
+    const opts = executeSpy.mock.calls[0][2];
+    expect(opts?.dryRun).toBe(true);
+
+    // Window MUST match the override, not the DSL.
+    expect(payload?.start).toBe('2025-12-01T00:00:00.000Z');
+    expect(payload?.end).toBe('2025-12-02T00:00:00.000Z');
+    expect(opts.window).toEqual({
+      start: '2025-12-01T00:00:00.000Z',
+      end: '2025-12-02T00:00:00.000Z',
     });
   });
 

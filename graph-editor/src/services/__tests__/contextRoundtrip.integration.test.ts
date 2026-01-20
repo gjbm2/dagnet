@@ -31,6 +31,20 @@ import {
 } from '../windowAggregationService';
 import { isolateSlice, extractSliceDimensions } from '../sliceIsolation';
 import type { ParameterValue } from '../../types/parameterData';
+import { contextRegistry } from '../contextRegistry';
+
+function seedChannel(values: string[]) {
+  contextRegistry.clearCache();
+  (contextRegistry as any).cache.set('channel', {
+    id: 'channel',
+    name: 'channel',
+    description: 'test',
+    type: 'categorical',
+    otherPolicy: 'null',
+    values: values.map((id) => ({ id, label: id })),
+    metadata: { status: 'active', created_at: '1-Dec-25', version: '1.0.0' },
+  });
+}
 
 describe('Context Roundtrip Integration Tests', () => {
   beforeEach(() => {
@@ -326,6 +340,10 @@ describe('Context Roundtrip Integration Tests', () => {
   });
 
   describe('calculateIncrementalFetch with context', () => {
+    beforeEach(() => {
+      seedChannel(['google']);
+    });
+
     // Note: calculateIncrementalFetch signature is:
     // (paramFileData, requestedWindow, querySignature?, bustCache?, targetSlice?)
     

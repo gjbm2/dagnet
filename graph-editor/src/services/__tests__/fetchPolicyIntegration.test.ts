@@ -767,3 +767,563 @@ describe('Bust Cache Override', () => {
   });
 });
 
+// =============================================================================
+// 7. FetchPlan Builder (first-principles redesign)
+// =============================================================================
+
+import {
+  buildFetchPlan,
+  type FileStateAccessor,
+  type ConnectionChecker,
+} from '../fetchPlanBuilderService';
+import {
+  plansEqual,
+  canonicalisePlan,
+  summarisePlan,
+  mergeDatesToWindows,
+} from '../fetchPlanTypes';
+import type { Graph, DateRange } from '../../types';
+
+describe('FetchPlan Builder', () => {
+  // Test helpers
+  function createMockFileState(files: Record<string, { data?: { values?: ParameterValue[] } }>): FileStateAccessor {
+    return {
+      getParameterFile(objectId: string) {
+        return files[`parameter-${objectId}`];
+      },
+      getCaseFile(objectId: string) {
+        return files[`case-${objectId}`];
+      },
+    };
+  }
+  
+  function createMockConnectionChecker(connectedEdges: Set<string>, connectedNodes?: Set<string>): ConnectionChecker {
+    return {
+      hasEdgeConnection(edge: any): boolean {
+        const edgeId = edge?.uuid || edge?.id || '';
+        return connectedEdges.has(edgeId);
+      },
+      hasCaseConnection(node: any): boolean {
+        const nodeId = node?.uuid || node?.id || '';
+        return connectedNodes?.has(nodeId) ?? false;
+      },
+    };
+  }
+  
+  function createSimpleGraph(edges: Array<{ id: string; paramId: string; connection?: string }>): Graph {
+    return {
+      nodes: [],
+      edges: edges.map(e => ({
+        uuid: e.id,
+        id: e.id,
+        from: 'A',
+        to: 'B',
+        // IMPORTANT: production schema: provider connection is on the param slot, not on the edge.
+        p: { id: e.paramId, connection: e.connection },
+      })),
+    };
+  }
+
+  describe('Basic plan building', () => {
+    it('produces empty plan for graph with no edges', () => {
+      const result = buildFetchPlan({
+        graph: { nodes: [], edges: [] },
+        dsl: 'window(1-Dec-25:9-Dec-25)',
+        window: { start: '1-Dec-25', end: '9-Dec-25' },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState: createMockFileState({}),
+        connectionChecker: createMockConnectionChecker(new Set()),
+      });
+      
+      expect(result.plan.items).toHaveLength(0);
+      expect(result.diagnostics.totalItems).toBe(0);
+    });
+    
+    it('classifies item as fetch when no file data and has connection', () => {
+      const graph = createSimpleGraph([
+        { id: 'edge-1', paramId: 'test-param', connection: 'amplitude-prod' },
+      ]);
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: 'window(1-Dec-25:9-Dec-25)',
+        window: { start: '1-Dec-25', end: '9-Dec-25' },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState: createMockFileState({}),
+        connectionChecker: createMockConnectionChecker(new Set(['edge-1'])),
+      });
+      
+      expect(result.plan.items).toHaveLength(1);
+      expect(result.plan.items[0].classification).toBe('fetch');
+      expect(result.plan.items[0].windows).toHaveLength(1);
+      expect(result.plan.items[0].windows[0].reason).toBe('missing');
+    });
+
+    it('regression: production connection detection recognises param-slot connection (no edge.connection)', async () => {
+      // This test would have failed under the bug: createProductionConnectionChecker incorrectly checked edge.connection.
+      const graph = createSimpleGraph([
+        { id: 'edge-1', paramId: 'test-param', connection: 'amplitude-prod' },
+      ]);
+
+      // Use production dependencies (real fileRegistry + production connection checker).
+      // Ensure file is absent so the only question is "is it fetchable?".
+      const { fileRegistry } = await import('../../contexts/TabContext');
+      vi.spyOn(fileRegistry, 'getFile').mockReturnValue(undefined as any);
+
+      const { buildFetchPlanProduction } = await import('../fetchPlanBuilderService');
+      const result = buildFetchPlanProduction(
+        graph,
+        'window(1-Dec-25:9-Dec-25)',
+        { start: '1-Dec-25', end: '9-Dec-25' },
+        { referenceNow: REFERENCE_DATE.toISOString() }
+      );
+
+      expect(result.plan.items).toHaveLength(1);
+      expect(result.plan.items[0].classification).toBe('fetch');
+      expect(result.diagnostics.itemsUnfetchable).toBe(0);
+    });
+    
+    it('classifies item as unfetchable when no file and no connection', () => {
+      const graph = createSimpleGraph([
+        { id: 'edge-1', paramId: 'test-param' }, // no connection
+      ]);
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: 'window(1-Dec-25:9-Dec-25)',
+        window: { start: '1-Dec-25', end: '9-Dec-25' },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState: createMockFileState({}),
+        connectionChecker: createMockConnectionChecker(new Set()),
+      });
+      
+      expect(result.plan.items).toHaveLength(1);
+      expect(result.plan.items[0].classification).toBe('unfetchable');
+      expect(result.plan.items[0].unfetchableReason).toBe('no_connection_and_no_file');
+    });
+    
+    it('classifies item as covered when file has full coverage', () => {
+      const graph = createSimpleGraph([
+        { id: 'edge-1', paramId: 'test-param', connection: 'amplitude-prod' },
+      ]);
+      
+      // File has coverage for the requested window
+      const fileState = createMockFileState({
+        'parameter-test-param': {
+          data: {
+            values: [buildWindowValue({ startDaysAgo: 30, endDaysAgo: 0 })],
+          },
+        },
+      });
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: `window(${daysAgo(30)}:${daysAgo(0)})`,
+        window: { start: daysAgo(30), end: daysAgo(0) },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState,
+        connectionChecker: createMockConnectionChecker(new Set(['edge-1'])),
+      });
+      
+      expect(result.plan.items).toHaveLength(1);
+      expect(result.plan.items[0].classification).toBe('covered');
+      expect(result.plan.items[0].windows).toHaveLength(0);
+    });
+  });
+
+  describe('Gap detection (Invariant A: missing is never skipped)', () => {
+    it('detects gap at start of window', () => {
+      const graph = createSimpleGraph([
+        { id: 'edge-1', paramId: 'test-param', connection: 'amplitude-prod' },
+      ]);
+      
+      // File has coverage for days 20-0, but we request 30-0 (gap at start)
+      const fileState = createMockFileState({
+        'parameter-test-param': {
+          data: {
+            values: [buildWindowValue({ startDaysAgo: 20, endDaysAgo: 0 })],
+          },
+        },
+      });
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: `window(${daysAgo(30)}:${daysAgo(0)})`,
+        window: { start: daysAgo(30), end: daysAgo(0) },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState,
+        connectionChecker: createMockConnectionChecker(new Set(['edge-1'])),
+      });
+      
+      expect(result.plan.items[0].classification).toBe('fetch');
+      expect(result.diagnostics.itemDiagnostics[0].missingDates).toBeGreaterThan(0);
+      
+      // The missing window should cover the gap at start
+      const missingWindows = result.plan.items[0].windows.filter(w => w.reason === 'missing');
+      expect(missingWindows.length).toBeGreaterThan(0);
+    });
+    
+    it('detects gap in middle of window', () => {
+      const graph = createSimpleGraph([
+        { id: 'edge-1', paramId: 'test-param', connection: 'amplitude-prod' },
+      ]);
+      
+      // File has coverage for days 30-20 and 10-0, gap in middle (19-11)
+      const fileState = createMockFileState({
+        'parameter-test-param': {
+          data: {
+            values: [
+              buildWindowValue({ startDaysAgo: 30, endDaysAgo: 20 }),
+              buildWindowValue({ startDaysAgo: 10, endDaysAgo: 0 }),
+            ],
+          },
+        },
+      });
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: `window(${daysAgo(30)}:${daysAgo(0)})`,
+        window: { start: daysAgo(30), end: daysAgo(0) },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState,
+        connectionChecker: createMockConnectionChecker(new Set(['edge-1'])),
+      });
+      
+      expect(result.plan.items[0].classification).toBe('fetch');
+      expect(result.diagnostics.itemDiagnostics[0].missingDates).toBeGreaterThan(0);
+    });
+    
+    it('detects gap at end of window', () => {
+      const graph = createSimpleGraph([
+        { id: 'edge-1', paramId: 'test-param', connection: 'amplitude-prod' },
+      ]);
+      
+      // File has coverage for days 30-10, but we request 30-0 (gap at end)
+      const fileState = createMockFileState({
+        'parameter-test-param': {
+          data: {
+            values: [buildWindowValue({ startDaysAgo: 30, endDaysAgo: 10 })],
+          },
+        },
+      });
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: `window(${daysAgo(30)}:${daysAgo(0)})`,
+        window: { start: daysAgo(30), end: daysAgo(0) },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState,
+        connectionChecker: createMockConnectionChecker(new Set(['edge-1'])),
+      });
+      
+      expect(result.plan.items[0].classification).toBe('fetch');
+      expect(result.diagnostics.itemDiagnostics[0].missingDates).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Plan canonicalisation and equality', () => {
+    it('canonicalises plan with sorted items and windows', () => {
+      const plan = {
+        version: 1 as const,
+        createdAt: '2025-12-09T12:00:00Z',
+        referenceNow: '2025-12-09T12:00:00Z',
+        dsl: 'test',
+        items: [
+          {
+            itemKey: 'parameter:z:e1::',
+            type: 'parameter' as const,
+            objectId: 'z',
+            targetId: 'e1',
+            mode: 'window' as const,
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'fetch' as const,
+            windows: [
+              { start: '5-Dec-25', end: '9-Dec-25', reason: 'missing' as const, dayCount: 5 },
+              { start: '1-Dec-25', end: '3-Dec-25', reason: 'missing' as const, dayCount: 3 },
+            ],
+          },
+          {
+            itemKey: 'parameter:a:e2::',
+            type: 'parameter' as const,
+            objectId: 'a',
+            targetId: 'e2',
+            mode: 'window' as const,
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'covered' as const,
+            windows: [],
+          },
+        ],
+      };
+      
+      const canonical = canonicalisePlan(plan);
+      
+      // Items should be sorted by itemKey
+      expect(canonical.items[0].itemKey).toBe('parameter:a:e2::');
+      expect(canonical.items[1].itemKey).toBe('parameter:z:e1::');
+      
+      // Windows should be sorted by start date
+      expect(canonical.items[1].windows[0].start).toBe('1-Dec-25');
+      expect(canonical.items[1].windows[1].start).toBe('5-Dec-25');
+    });
+    
+    it('plansEqual returns true for equivalent plans', () => {
+      const plan1 = {
+        version: 1 as const,
+        createdAt: '2025-12-09T12:00:00Z',
+        referenceNow: '2025-12-09T12:00:00Z',
+        dsl: 'test',
+        items: [
+          {
+            itemKey: 'parameter:a:e1::',
+            type: 'parameter' as const,
+            objectId: 'a',
+            targetId: 'e1',
+            mode: 'window' as const,
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'covered' as const,
+            windows: [],
+          },
+        ],
+      };
+      
+      const plan2 = { ...plan1 }; // Same plan
+      
+      expect(plansEqual(plan1, plan2)).toBe(true);
+    });
+
+    it('plansEqual returns false when a nested semantic field differs', () => {
+      const plan1 = {
+        version: 1 as const,
+        createdAt: '2025-12-09T12:00:00Z',
+        referenceNow: '2025-12-09T12:00:00Z',
+        dsl: 'test',
+        items: [
+          {
+            itemKey: 'parameter:a:e1::',
+            type: 'parameter' as const,
+            objectId: 'a',
+            targetId: 'e1',
+            mode: 'window' as const,
+            sliceFamily: '',
+            querySignature: 'sig-1',
+            classification: 'fetch' as const,
+            windows: [
+              { start: '1-Dec-25', end: '1-Dec-25', reason: 'missing' as const, dayCount: 1 },
+            ],
+          },
+        ],
+      };
+
+      const plan2 = {
+        ...plan1,
+        items: [
+          {
+            ...plan1.items[0],
+            windows: [
+              // Same window dates, but reason differs => semantic difference
+              { start: '1-Dec-25', end: '1-Dec-25', reason: 'stale' as const, dayCount: 1 },
+            ],
+          },
+        ],
+      };
+
+      expect(plansEqual(plan1, plan2)).toBe(false);
+    });
+
+    it('plansEqual returns true for plans with different insertion order but identical semantics', () => {
+      const planA = {
+        version: 1 as const,
+        createdAt: '2025-12-09T12:00:00Z',
+        referenceNow: '2025-12-09T12:00:00Z',
+        dsl: 'test',
+        items: [
+          {
+            itemKey: 'parameter:z:e2::',
+            type: 'parameter' as const,
+            objectId: 'z',
+            targetId: 'e2',
+            mode: 'window' as const,
+            sliceFamily: '',
+            querySignature: 'sig-z',
+            classification: 'covered' as const,
+            windows: [],
+          },
+          {
+            itemKey: 'parameter:a:e1::',
+            type: 'parameter' as const,
+            objectId: 'a',
+            targetId: 'e1',
+            mode: 'window' as const,
+            sliceFamily: '',
+            querySignature: 'sig-a',
+            classification: 'fetch' as const,
+            windows: [
+              { start: '2-Dec-25', end: '3-Dec-25', reason: 'missing' as const, dayCount: 2 },
+              { start: '1-Dec-25', end: '1-Dec-25', reason: 'missing' as const, dayCount: 1 },
+            ],
+          },
+        ],
+      };
+
+      const planB = {
+        version: 1 as const,
+        createdAt: '2025-12-09T12:00:00Z',
+        referenceNow: '2025-12-09T12:00:00Z',
+        dsl: 'test',
+        items: [
+          // Same semantics, but items/windows are provided in different orders
+          {
+            itemKey: 'parameter:a:e1::',
+            type: 'parameter' as const,
+            objectId: 'a',
+            targetId: 'e1',
+            mode: 'window' as const,
+            sliceFamily: '',
+            querySignature: 'sig-a',
+            classification: 'fetch' as const,
+            windows: [
+              { start: '1-Dec-25', end: '1-Dec-25', reason: 'missing' as const, dayCount: 1 },
+              { start: '2-Dec-25', end: '3-Dec-25', reason: 'missing' as const, dayCount: 2 },
+            ],
+          },
+          {
+            itemKey: 'parameter:z:e2::',
+            type: 'parameter' as const,
+            objectId: 'z',
+            targetId: 'e2',
+            mode: 'window' as const,
+            sliceFamily: '',
+            querySignature: 'sig-z',
+            classification: 'covered' as const,
+            windows: [],
+          },
+        ],
+      };
+
+      expect(plansEqual(planA, planB)).toBe(true);
+    });
+  });
+
+  describe('Case handling', () => {
+    function createGraphWithCase(caseId: string, nodeId: string): Graph {
+      return {
+        nodes: [{
+          uuid: nodeId,
+          id: nodeId,
+          label: nodeId,
+          case: {
+            id: caseId,
+            connection: { type: 'statsig' as const },
+          },
+        }],
+        edges: [],
+      };
+    }
+    
+    it('classifies case with no file data and connection as fetch', () => {
+      const graph = createGraphWithCase('test-case', 'node-1');
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: `window(${daysAgo(7)}:${daysAgo(0)})`,
+        window: { start: daysAgo(7), end: daysAgo(0) },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState: createMockFileState({}),
+        connectionChecker: createMockConnectionChecker(new Set(), new Set(['node-1'])),
+      });
+      
+      expect(result.plan.items).toHaveLength(1);
+      expect(result.plan.items[0].type).toBe('case');
+      expect(result.plan.items[0].classification).toBe('fetch');
+    });
+    
+    it('classifies case with file data as covered', () => {
+      const graph = createGraphWithCase('test-case', 'node-1');
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: `window(${daysAgo(7)}:${daysAgo(0)})`,
+        window: { start: daysAgo(7), end: daysAgo(0) },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState: createMockFileState({
+          'case-test-case': { data: { schedules: [{ retrieved_at: new Date().toISOString() }] } },
+        }),
+        connectionChecker: createMockConnectionChecker(new Set(), new Set(['node-1'])),
+      });
+      
+      expect(result.plan.items).toHaveLength(1);
+      expect(result.plan.items[0].type).toBe('case');
+      expect(result.plan.items[0].classification).toBe('covered');
+    });
+    
+    it('classifies case with no file and no connection as unfetchable', () => {
+      const graph: Graph = {
+        nodes: [{
+          uuid: 'node-1',
+          id: 'node-1',
+          label: 'node-1',
+          case: {
+            id: 'test-case',
+            // No case.connection
+          },
+        }],
+        edges: [],
+      };
+      
+      const result = buildFetchPlan({
+        graph,
+        dsl: `window(${daysAgo(7)}:${daysAgo(0)})`,
+        window: { start: daysAgo(7), end: daysAgo(0) },
+        referenceNow: REFERENCE_DATE.toISOString(),
+        fileState: createMockFileState({}),
+        connectionChecker: createMockConnectionChecker(new Set(), new Set()), // No connections
+      });
+      
+      expect(result.plan.items).toHaveLength(1);
+      expect(result.plan.items[0].type).toBe('case');
+      expect(result.plan.items[0].classification).toBe('unfetchable');
+    });
+  });
+
+  describe('mergeDatesToWindows (minimal contiguous windows)', () => {
+    it('merges consecutive dates into single window', () => {
+      const dates = ['1-Dec-25', '2-Dec-25', '3-Dec-25', '4-Dec-25'];
+      const windows = mergeDatesToWindows(dates, 'missing');
+      
+      expect(windows).toHaveLength(1);
+      expect(windows[0].start).toBe('1-Dec-25');
+      expect(windows[0].end).toBe('4-Dec-25');
+      expect(windows[0].dayCount).toBe(4);
+    });
+    
+    it('produces multiple windows for non-consecutive dates', () => {
+      const dates = ['1-Dec-25', '2-Dec-25', '5-Dec-25', '6-Dec-25'];
+      const windows = mergeDatesToWindows(dates, 'missing');
+      
+      expect(windows).toHaveLength(2);
+      expect(windows[0].start).toBe('1-Dec-25');
+      expect(windows[0].end).toBe('2-Dec-25');
+      expect(windows[1].start).toBe('5-Dec-25');
+      expect(windows[1].end).toBe('6-Dec-25');
+    });
+    
+    it('handles single date', () => {
+      const dates = ['1-Dec-25'];
+      const windows = mergeDatesToWindows(dates, 'missing');
+      
+      expect(windows).toHaveLength(1);
+      expect(windows[0].start).toBe('1-Dec-25');
+      expect(windows[0].end).toBe('1-Dec-25');
+      expect(windows[0].dayCount).toBe(1);
+    });
+    
+    it('returns empty array for no dates', () => {
+      const windows = mergeDatesToWindows([], 'missing');
+      expect(windows).toHaveLength(0);
+    });
+  });
+});
+

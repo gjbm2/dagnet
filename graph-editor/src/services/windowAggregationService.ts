@@ -20,6 +20,7 @@ import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 import type { CohortData } from './statisticalEnhancementService';
 import { mixtureLogNormalMedian } from './lagMixtureAggregationService';
 import { resolveMECEPartitionForImplicitUncontextedSync, findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
+import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
 
 export interface RawAggregation {
   method: 'naive';
@@ -899,6 +900,10 @@ export function calculateIncrementalFetch(
   bustCache: boolean = false,
   targetSlice: string = ''  // NEW: Slice DSL to isolate (default '' = uncontexted)
 ): IncrementalFetchResult {
+  // RELEASE SAFETY: signature checking disabled. Treat all cached entries as valid for
+  // coverage/gap detection, regardless of query_signature.
+  const effectiveQuerySignature = isSignatureCheckingEnabled() ? querySignature : undefined;
+
   // Signature filtering:
   // If a querySignature is provided and the file contains ANY signed entries,
   // only consider entries with a matching signature as "cached".
@@ -908,9 +913,9 @@ export function calculateIncrementalFetch(
   const allValues = (paramFileData.values && Array.isArray(paramFileData.values))
     ? (paramFileData.values as ParameterValue[])
     : [];
-  const hasAnySignedValues = !!querySignature && allValues.some(v => !!v.query_signature);
+  const hasAnySignedValues = !!effectiveQuerySignature && allValues.some(v => !!v.query_signature);
   const signatureFilteredValues = hasAnySignedValues
-    ? allValues.filter(v => v.query_signature === querySignature)
+    ? allValues.filter(v => v.query_signature === effectiveQuerySignature)
     : allValues;
 
   // Normalize requested window dates
@@ -1134,58 +1139,106 @@ export function calculateIncrementalFetch(
           }
           const expandedSlices = Array.from(uniqueSlices).sort();
 
-          // For MECE, a date is "existing" only if it exists in ALL slices
-          const datesPerSlice: Map<string, Set<string>> = new Map();
+          // For MECE, a date is "existing" only if it exists in ALL slices.
+          //
+          // IMPORTANT: Cohort queries (and some window queries) may be cached as AGGREGATE slices
+          // with only `window_from/window_to` or `cohort_from/cohort_to` bounds (no per-day arrays).
+          // In that case, coverage should be proven by those bounds, not by `dates/n_daily/k_daily`.
+          const sliceHasAggregateCoverage = (sliceValues: ParameterValue[]): boolean => {
+            if (!sliceValues || sliceValues.length === 0) return false;
+            for (const v of sliceValues) {
+              const hasAggregate = v.mean !== undefined && v.mean !== null && (v.n !== undefined || (v as any).evidence?.n !== undefined);
+              if (!hasAggregate) continue;
+              const sliceStart = isCohortModeValue(v) ? v.cohort_from : v.window_from;
+              const sliceEnd = isCohortModeValue(v) ? v.cohort_to : v.window_to;
+              if (!sliceStart || !sliceEnd) continue;
+              const reqStart = parseDate(normalizedWindow.start);
+              const reqEnd = parseDate(normalizedWindow.end);
+              const sStart = parseDate(sliceStart);
+              const sEnd = parseDate(sliceEnd);
+              if (sStart <= reqStart && sEnd >= reqEnd) return true;
+            }
+            return false;
+          };
 
+          // If every slice in the MECE partition has aggregate coverage that CONTAINS the requested window,
+          // then the implicit uncontexted query is fully covered.
+          const sliceValuesById: Map<string, ParameterValue[]> = new Map();
           for (const sliceId of expandedSlices) {
-            const sliceDates = new Set<string>();
             const sliceValues = signatureFilteredValues.filter(v => {
               if (!modeMatchesTarget(v)) return false;
               const valueSlice = extractSliceDimensions(v.sliceDSL ?? '');
               return valueSlice === sliceId;
             });
+            sliceValuesById.set(sliceId, sliceValues);
+          }
 
-            for (const value of sliceValues) {
-              if (value.dates && Array.isArray(value.dates)) {
-                for (let i = 0; i < value.dates.length; i++) {
-                  const date = value.dates[i];
-                  const hasValidN = value.n_daily && value.n_daily[i] !== null && value.n_daily[i] !== undefined;
-                  const hasValidK = value.k_daily && value.k_daily[i] !== null && value.k_daily[i] !== undefined;
-                  if (hasValidN || hasValidK) {
-                    sliceDates.add(normalizeDate(date));
+          const allSlicesHaveAggregateCoverage = expandedSlices.every(sliceId => {
+            const sliceValues = sliceValuesById.get(sliceId) ?? [];
+            return sliceHasAggregateCoverage(sliceValues);
+          });
+
+          if (allSlicesHaveAggregateCoverage) {
+            for (const date of allDatesInWindow) existingDates.add(date);
+            console.log(`[calculateIncrementalFetch] Implicit uncontexted MECE coverage proven by aggregate bounds`, {
+              targetSlice,
+              querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
+              meceKey: selection.key,
+              meceQuerySignature: selection.querySignature,
+              expandedSlices,
+              datesWithFullCoverage: existingDates.size,
+              totalDatesRequested: allDatesInWindow.length,
+            });
+          } else {
+            // Fall back to per-day coverage intersection across slices.
+            const datesPerSlice: Map<string, Set<string>> = new Map();
+
+            for (const sliceId of expandedSlices) {
+              const sliceDates = new Set<string>();
+              const sliceValues = sliceValuesById.get(sliceId) ?? [];
+
+              for (const value of sliceValues) {
+                if (value.dates && Array.isArray(value.dates)) {
+                  for (let i = 0; i < value.dates.length; i++) {
+                    const date = value.dates[i];
+                    const hasValidN = value.n_daily && value.n_daily[i] !== null && value.n_daily[i] !== undefined;
+                    const hasValidK = value.k_daily && value.k_daily[i] !== null && value.k_daily[i] !== undefined;
+                    if (hasValidN || hasValidK) {
+                      sliceDates.add(normalizeDate(date));
+                    }
                   }
                 }
               }
+              datesPerSlice.set(sliceId, sliceDates);
             }
-            datesPerSlice.set(sliceId, sliceDates);
-          }
 
-          for (const date of allDatesInWindow) {
-            const allSlicesHaveDate = expandedSlices.every(sliceId => {
-              const sliceDates = datesPerSlice.get(sliceId);
-              return sliceDates && sliceDates.has(date);
+            for (const date of allDatesInWindow) {
+              const allSlicesHaveDate = expandedSlices.every(sliceId => {
+                const sliceDates = datesPerSlice.get(sliceId);
+                return sliceDates && sliceDates.has(date);
+              });
+              if (allSlicesHaveDate) {
+                existingDates.add(date);
+              }
+            }
+
+            console.log(`[calculateIncrementalFetch] Implicit uncontexted coverage chose MECE by recency:`, {
+              targetSlice,
+              querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
+              meceKey: selection.key,
+              meceQuerySignature: selection.querySignature,
+              uncontextedRecencyMs: selection.diagnostics.uncontextedRecencyMs,
+              meceRecencyMs: selection.diagnostics.meceRecencyMs,
+              counts: selection.diagnostics.counts,
+              warnings: selection.diagnostics.warnings,
+              expandedSlices,
+              sliceCoverage: Object.fromEntries(
+                expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
+              ),
+              datesWithFullCoverage: existingDates.size,
+              totalDatesRequested: allDatesInWindow.length,
             });
-            if (allSlicesHaveDate) {
-              existingDates.add(date);
-            }
           }
-
-          console.log(`[calculateIncrementalFetch] Implicit uncontexted coverage chose MECE by recency:`, {
-            targetSlice,
-            querySignatureApplied: hasAnySignedValues ? 'match_only' : 'none_or_legacy',
-            meceKey: selection.key,
-            meceQuerySignature: selection.querySignature,
-            uncontextedRecencyMs: selection.diagnostics.uncontextedRecencyMs,
-            meceRecencyMs: selection.diagnostics.meceRecencyMs,
-            counts: selection.diagnostics.counts,
-            warnings: selection.diagnostics.warnings,
-            expandedSlices,
-            sliceCoverage: Object.fromEntries(
-              expandedSlices.map(s => [s, datesPerSlice.get(s)?.size ?? 0])
-            ),
-            datesWithFullCoverage: existingDates.size,
-            totalDatesRequested: allDatesInWindow.length,
-          });
         } else {
           // No usable explicit slice, no complete MECE.
           console.log('[calculateIncrementalFetch] Implicit uncontexted: no usable explicit slice or complete MECE partition', {
@@ -1615,8 +1668,8 @@ export function mergeTimeSeriesIntoParameter(
       dates: mergedDates,
       cohort_from: cohortFrom,
       cohort_to: cohortTo,
-      query_signature: newQuerySignature,
       sliceDSL: canonicalSliceDSL,
+      ...(isSignatureWritingEnabled() && newQuerySignature ? { query_signature: newQuerySignature } : {}),
       // Include lag data if we have ANY lag data (filter out undefined values for type safety)
       ...(hasAnyLagData && { median_lag_days: mergedMedianLag.map(v => v ?? 0) }),
       ...(hasAnyLagData && { mean_lag_days: mergedMeanLag.map(v => v ?? 0) }),
@@ -1789,7 +1842,7 @@ export function mergeTimeSeriesIntoParameter(
     dates: mergedDates,
     window_from: windowFrom,
     window_to: windowTo,
-    query_signature: newQuerySignature,
+    ...(isSignatureWritingEnabled() && newQuerySignature ? { query_signature: newQuerySignature } : {}),
     ...(mergedMedianLag && { median_lag_days: mergedMedianLag }),
     ...(mergedMeanLag && { mean_lag_days: mergedMeanLag }),
     sliceDSL: canonicalWindowSliceDSL,

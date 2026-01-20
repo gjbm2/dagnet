@@ -995,6 +995,18 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     tabsRef.current = tabs;
   }, [tabs]);
 
+  /**
+   * Open a tab for an already-seeded file without triggering any repo fetch.
+   *
+   * Used by share/live bootstrap and by legacy window event handlers.
+   */
+  const openTemporaryTab = useCallback(async (tab: TabState): Promise<void> => {
+    setTabs(prev => (prev.some(t => t.id === tab.id) ? prev : [...prev, tab]));
+    setActiveTabId(tab.id);
+    await db.tabs.put(tab);
+    await db.saveAppState({ activeTabId: tab.id });
+  }, []);
+
   // Load tabs from IndexedDB on mount, initialize credentials and connections
   useEffect(() => {
     const initializeApp = async () => {
@@ -1038,14 +1050,10 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     };
     initializeApp();
     
-    // Listen for temporary tab creation (for log files)
+    // Listen for temporary tab creation (legacy entrypoint)
     const handleTemporaryTab = async (event: CustomEvent<{ tab: TabState }>) => {
       const { tab } = event.detail;
-      // File already exists in fileRegistry, just create the tab
-      setTabs(prev => [...prev, tab]);
-      setActiveTabId(tab.id);
-      await db.tabs.add(tab);
-      await db.saveAppState({ activeTabId: tab.id });
+      await openTemporaryTab(tab);
     };
     
     // Listen for tab switch requests (e.g., from session log service when tab already exists)
@@ -1106,7 +1114,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener('dagnet:switchToTab', handleSwitchToTab as unknown as EventListener);
       window.removeEventListener('dagnet:workspaceCleared', handleWorkspaceCleared as unknown as EventListener);
     };
-  }, []);
+  }, [openTemporaryTab]);
 
   /**
    * Initialize credentials file from schema defaults if it doesn't exist
@@ -2715,6 +2723,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
 
   const operations: TabOperations = {
     openTab,
+    openTemporaryTab,
     closeTab,
     switchTab,
     updateTabData,

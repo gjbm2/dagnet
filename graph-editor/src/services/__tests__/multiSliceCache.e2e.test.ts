@@ -1270,7 +1270,8 @@ describe('Multi-Slice Retrieval and Caching E2E (Real Production Code)', () => {
           'amplitude-prod',
           graph as any,
           edge,
-          ['channel']
+          ['channel'],
+          undefined
         );
         signatures.push(signature);
 

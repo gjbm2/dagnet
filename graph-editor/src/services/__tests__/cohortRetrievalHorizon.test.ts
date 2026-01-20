@@ -7,7 +7,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   computeCohortRetrievalHorizon,
-  shouldBoundCohortWindow,
   getEffectiveT95ForCohort,
   type CohortHorizonInput,
 } from '../cohortRetrievalHorizon';
@@ -237,7 +236,9 @@ describe('cohortRetrievalHorizon', () => {
     });
     
     describe('summary generation', () => {
-      it('should generate readable summary for bounded window', () => {
+      it('should generate readable summary for wide window (no bounding per first-principles)', () => {
+        // FIRST-PRINCIPLES: Never trim the start of requested windows.
+        // Even wide windows extending far before path_t95 horizon are NOT bounded.
         const input: CohortHorizonInput = {
           requestedWindow: { start: '9-Sep-25', end: '9-Dec-25' },
           pathT95: 30,
@@ -246,7 +247,8 @@ describe('cohortRetrievalHorizon', () => {
         
         const result = computeCohortRetrievalHorizon(input);
         
-        expect(result.summary).toContain('Bounded');
+        // Per first-principles, start-truncation is disallowed, so we expect full window
+        expect(result.summary).toContain('full window');
         expect(result.summary).toContain('path_t95');
         expect(result.summary).toContain('30');
       });
@@ -263,30 +265,6 @@ describe('cohortRetrievalHorizon', () => {
         expect(result.summary).toContain('full window');
         expect(result.summary).toContain('within');
       });
-    });
-  });
-  
-  describe('shouldBoundCohortWindow', () => {
-    it('should return true for windows extending before horizon', () => {
-      const result = shouldBoundCohortWindow(
-        { start: '9-Sep-25', end: '9-Dec-25' },  // 91 days
-        30,  // path_t95
-        undefined,
-        referenceDate
-      );
-      
-      expect(result).toBe(true);
-    });
-    
-    it('should return false for windows within horizon', () => {
-      const result = shouldBoundCohortWindow(
-        { start: '29-Nov-25', end: '9-Dec-25' },  // 10 days
-        30,  // path_t95
-        undefined,
-        referenceDate
-      );
-      
-      expect(result).toBe(false);
     });
   });
   
@@ -337,7 +315,10 @@ describe('implementation plan test scenarios (§8.2)', () => {
   const referenceDate = new Date('2025-12-09T12:00:00Z');
   
   describe('cohort(-90d:) where path_t95 is much shorter', () => {
-    it('should bound retrieval to path_t95 horizon, not full 90 days', () => {
+    it('should NOT bound retrieval - per first-principles, start-truncation is disallowed', () => {
+      // FIRST-PRINCIPLES: Never trim the start of requested windows.
+      // Even when path_t95 is much shorter than the requested window,
+      // we must fetch the full range to ensure no missing data.
       const input: CohortHorizonInput = {
         requestedWindow: {
           start: '10-Sep-25',  // ~90 days ago
@@ -349,9 +330,12 @@ describe('implementation plan test scenarios (§8.2)', () => {
       
       const result = computeCohortRetrievalHorizon(input);
       
-      expect(result.wasBounded).toBe(true);
-      expect(result.daysTrimmed).toBeGreaterThan(60);  // Should trim most of the 90 days
+      // Per first-principles, no bounding should occur
+      expect(result.wasBounded).toBe(false);
+      expect(result.daysTrimmed).toBe(0);
       expect(result.effectiveT95).toBe(21);
+      // Full window should be preserved
+      expect(result.boundedWindow.start).toBe(result.originalWindow.start);
     });
   });
   

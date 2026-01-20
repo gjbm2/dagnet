@@ -1,8 +1,12 @@
 /**
- * Integration tests for Cohort Horizon Bounded Windows
- * 
- * Verifies the full flow from planner analysis to bounded fetch window.
- * Design reference: retrieval-date-logic-implementation-plan.md §6, §8
+ * Integration tests for cohort horizon evaluation (NO start-bounding)
+ *
+ * These tests verify that:
+ * - path_t95 is computed/propagated correctly
+ * - cohort horizon evaluation uses path_t95 as the effective horizon input
+ * - but the requested window is preserved (start-truncation is disallowed)
+ *
+ * Design reference: fetch-planning-first-principles.md (start-truncation disallowed)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -15,7 +19,7 @@ describe('cohort horizon integration', () => {
   const referenceDate = new Date('2025-12-09T12:00:00Z');
   
   describe('end-to-end path_t95 to bounded cohort window', () => {
-    it('should compute path_t95 and use it to bound cohort window', () => {
+    it('should compute path_t95 and use it for horizon evaluation (without bounding)', () => {
       // 1. Create a graph with latency edges
       const graph: GraphForPath = {
         nodes: [
@@ -37,7 +41,7 @@ describe('cohort horizon integration', () => {
       expect(pathT95Map.get('e1')).toBe(15);  // 0 + 15
       expect(pathT95Map.get('e2')).toBe(25);  // 15 + 10
       
-      // 3. Use path_t95 to bound a cohort window for the downstream edge
+      // 3. Use path_t95 for horizon evaluation for the downstream edge
       const requestedWindow = {
         start: '9-Sep-25',  // 91 days before reference
         end: '9-Dec-25',    // reference date
@@ -50,15 +54,16 @@ describe('cohort horizon integration', () => {
         referenceDate,
       });
       
-      // Should bound the window since 91 days >> 25 days path_t95
-      expect(horizonResult.wasBounded).toBe(true);
+      // Start-truncation is disallowed: window should be preserved
+      expect(horizonResult.wasBounded).toBe(false);
       expect(horizonResult.effectiveT95).toBe(25);
       expect(horizonResult.t95Source).toBe('path_t95');
-      // Should trim significantly (91 - ~27 = ~64 days trimmed)
-      expect(horizonResult.daysTrimmed).toBeGreaterThan(60);
+      expect(horizonResult.daysTrimmed).toBe(0);
+      expect(horizonResult.boundedWindow.start).toBe(requestedWindow.start);
+      expect(horizonResult.boundedWindow.end).toBe(requestedWindow.end);
     });
     
-    it('should produce different bounded windows for different edges on same path', () => {
+    it('should produce different effective horizons for different edges on same path (without bounding)', () => {
       // Graph: start → A → B → C with increasing cumulative latency
       const graph: GraphForPath = {
         nodes: [
@@ -102,17 +107,19 @@ describe('cohort horizon integration', () => {
         referenceDate,
       });
       
-      // Edge 1 should trim more than edge 3
-      expect(horizon1.daysTrimmed).toBeGreaterThan(horizon3.daysTrimmed);
-      
-      // Both should be bounded
-      expect(horizon1.wasBounded).toBe(true);
-      expect(horizon3.wasBounded).toBe(true);
+      // Different edges should yield different effective horizon inputs
+      expect(horizon1.effectiveT95).toBe(7);
+      expect(horizon3.effectiveT95).toBe(42);
+      // But neither should bound (start-truncation disallowed)
+      expect(horizon1.wasBounded).toBe(false);
+      expect(horizon3.wasBounded).toBe(false);
+      expect(horizon1.daysTrimmed).toBe(0);
+      expect(horizon3.daysTrimmed).toBe(0);
     });
   });
   
   describe('full graph → bounded window flow', () => {
-    it('should apply path_t95 to graph and use for horizon decisions', () => {
+    it('should apply path_t95 to graph and use for horizon evaluation (without bounding)', () => {
       // Create a full Graph type (not just GraphForPath)
       const graph: Graph = {
         nodes: [
@@ -149,7 +156,7 @@ describe('cohort horizon integration', () => {
       const edge = updatedGraph!.edges.find(e => e.id === 'e1');
       expect(edge?.p?.latency?.path_t95).toBe(20);  // 0 + 20 from start
       
-      // Now use that path_t95 for horizon bounding
+      // Now use that path_t95 for horizon evaluation
       const horizonResult = computeCohortRetrievalHorizon({
         requestedWindow: {
           start: '9-Sep-25',  // ~91 days
@@ -162,7 +169,8 @@ describe('cohort horizon integration', () => {
       
       expect(horizonResult.effectiveT95).toBe(20);
       expect(horizonResult.t95Source).toBe('path_t95');
-      expect(horizonResult.wasBounded).toBe(true);
+      expect(horizonResult.wasBounded).toBe(false);
+      expect(horizonResult.daysTrimmed).toBe(0);
     });
   });
   

@@ -595,7 +595,7 @@ The current pipeline is distributed across several layers:
   - `graph-editor/src/services/windowFetchPlannerService.ts` performs analysis.
   - It delegates “needs fetch” coverage to `fetchDataService.getItemsNeedingFetch(...)`.
   - It adds staleness semantics via `shouldRefetch(...)`.
-  - It computes a cohort “bounded window” (currently via `computeCohortRetrievalHorizon(...)`) for cohort-mode latency edges.
+  - Legacy code had a notion of cohort “bounded windows” (via `computeCohortRetrievalHorizon(...)`), but **start-truncation is disallowed**; planning must be coverage-aware (only skip dates already present in file).
 
 - **Execution**
   - `graph-editor/src/services/fetchDataService.ts` orchestrates multi-item fetch and calls `dataOperationsService`.
@@ -1071,4 +1071,218 @@ The redesign is complete only when:
 - Context/MECE completeness is proven via `ContextRegistry`, not inferred from observed cache (context invariants).
 - The system converges under partial failure + rerun (Invariant G).
 - The strategically comprehensive contract tests pass and serve as a safety gate for future changes.
+
+
+---
+
+## Appendix A — Gap-closure implementation plan (prose-only; tracked deviations 1–5)
+
+Date: 19-Jan-26
+
+This appendix describes the concrete engineering work required to close the remaining gaps between the current code and the first-principles design in this document. It focuses on five key deviation areas identified in review:
+
+- (1) Plan identity / equality (canonicalisation correctness)
+- (2) Signature isolation inside planning
+- (3) Context + MECE semantics (including fail-safe behaviour for unknown completeness)
+- (4) Determinism (purity guarantees required for plan identity and tests)
+- (5) Invariant E (analysis == dry-run == execution consumes the same plan)
+
+This plan is intentionally staged to minimise blast radius and to preserve systematic caution on semantic changes.
+
+### A.0 Scope guardrails (non-negotiable)
+
+- No “planner-only” recomputation of windows is permitted once the plan is in use; the plan is the single artefact.
+- No new signature semantics. The plan builder must reuse an existing, already-authoritative signature mechanism (and must not create a third).
+- Context/MECE correctness must be fail-safe: “not provably complete” must never be treated as complete.
+- Determinism must be enforceable in tests without relying on ambient wall-clock time.
+- Any behavioural changes must be backed by targeted tests that fail on the old behaviour and pass on the new behaviour.
+
+### A.1 Deviation (1): Plan identity / equality is currently unsafe
+
+#### Problem statement
+
+The current plan canonicalisation/equality machinery must support Invariant E verification and contract tests. If equality can return “equal” for materially different plans, it creates a false safety signal and undermines the core assurance mechanism.
+
+#### Required changes
+
+- Update `graph-editor/src/services/fetchPlanTypes.ts` to define a canonical serialisation that:
+  - Preserves all nested fields required to represent plan semantics (item identity, window ranges, reasons, signatures, mode, slice family, unfetchable reasons).
+  - Produces deterministic ordering:
+    - Items sorted by `itemKey`.
+    - Windows sorted by date order.
+    - Object key ordering stable for nested objects.
+- Ensure `plansEqual(a, b)` compares the full canonical representation, not a lossy subset.
+- Ensure canonicalisation is robust to insertion-order differences without masking actual semantic differences.
+
+#### Tests to add/strengthen (existing file preferred)
+
+- Extend the “plan canonicalisation and equality” suite in `graph-editor/src/services/__tests__/fetchPolicyIntegration.test.ts` with scenarios where:
+  - Two plans differ only in a nested field (e.g. window reason, dayCount, querySignature, sliceFamily) and must compare unequal.
+  - Two plans have identical semantics but different insertion orders and must compare equal.
+- Add an explicit “round-trip stability” test: canonical serialisation of an already-canonical plan must be byte-stable across repeated calls under frozen time.
+
+#### Acceptance criteria
+
+- A plan comparison fails if and only if some semantic field differs.
+- Canonical serialisation is stable and deterministic for a fixed input and fixed reference time.
+
+### A.2 Deviation (2): Signature isolation inside the plan builder is missing
+
+#### Problem statement
+
+Invariant D (“signature isolation is absolute”) requires that coverage and gap detection operate against the same adapter-level query identity used by execution. Without signature integration, the plan builder cannot correctly classify coverage when files contain mixed-signature values, and planner vs execution can diverge.
+
+#### Required changes
+
+- Identify and formally select the single authoritative signature mechanism to be used by planning:
+  - Options in current codebase include `graph-editor/src/services/querySignatureService.ts` and the signature logic embedded in `graph-editor/src/services/dataOperationsService.ts`.
+  - The plan builder must reuse an existing mechanism; it must not create a third signature regime.
+- Implement signature computation inside `graph-editor/src/services/fetchPlanBuilderService.ts` for each plan item:
+  - Compute the same signature inputs used by execution for that item + DSL intent + slice family.
+  - Store the signature on each `FetchPlanItem.querySignature`.
+- Ensure gap detection uses that signature consistently:
+  - When using `calculateIncrementalFetch(...)` (or equivalent), the signature provided must match what execution uses to match cache entries.
+  - Ensure signature is included for both window() and cohort() planning.
+- Ensure signature is included in plan identity (so plan equality captures signature changes).
+
+#### Tests to add/strengthen
+
+- Extend `graph-editor/src/services/__tests__/fetchPolicyIntegration.test.ts` (or the most relevant existing suite that already seeds mixed-signature files) with:
+  - A scenario where the file contains full coverage for a different signature: the plan must classify as “needs fetch”.
+  - A scenario where the file contains partial coverage for the matching signature and full coverage for a different signature: missingness must be computed only against the matching signature.
+- Add a “planner == executor signature agreement” test:
+  - For a chosen edge + DSL, assert that the plan builder’s computed `querySignature` matches the signature used by the executor when constructing a request (this may require exposing a pure “compute signature inputs” helper or instrumenting the executor to return the computed signature in dry-run metadata).
+
+#### Acceptance criteria
+
+- Mixed-signature cache never yields false “covered” outcomes.
+- Signature changes produce plan deltas that are visible, testable, and logged.
+
+### A.3 Deviation (3): Context + MECE semantics are not implemented in plan building
+
+#### Problem statement
+
+Invariants C2/C3 require explicit, conservative context semantics:
+
+- A contexted query must never be satisfied by uncontexted cache.
+- An uncontexted query may be satisfied by a complete MECE partition set only if completeness is proven and signatures are compatible across the partition.
+- `contextAny` must be treated as a coverage constraint requiring semantic completeness (unless the intent explicitly allows partial).
+- “Unknown completeness” must be treated as “not provably complete”.
+
+The plan builder must own these rules for per-date coverage classification.
+
+#### Required changes (architecture)
+
+- Define a planning-time interface for “context completeness proofs” that is explicit and testable.
+  - Production implementation must be backed by `ContextRegistry` (source of truth), not by “observed cache contents”.
+  - Tests must be able to inject completeness outcomes deterministically.
+- Update `graph-editor/src/services/fetchPlanBuilderService.ts` coverage evaluation to incorporate:
+  - Intent normalisation for contexted vs uncontexted vs `contextAny`.
+  - Slice selection rules that enforce context isolation for contexted intent.
+  - MECE fulfilment rules for uncontexted intent:
+    - Partition completeness must be proven for the relevant key(s).
+    - Cross-signature MECE is forbidden: a partition is only usable if all contributing context slices share the same signature.
+  - Fail-safe handling:
+    - If `ContextRegistry` cannot prove completeness (missing context definition, “policy=unknown”, any error), treat as “not covered”.
+
+#### Required changes (known divergence hardening)
+
+- Audit the `meceSliceService.ts` fallback behaviour described in this doc (“policy=unknown assumes completeness”).
+  - Planning must not inherit that fallback; it must treat “unknown” as incomplete.
+  - If production code currently uses that fallback for other non-planning behaviours, the plan builder must explicitly override it with fail-safe semantics.
+
+#### Tests to add/strengthen
+
+Use existing suites wherever possible (especially those already exercising MECE/cache-fulfilment):
+
+- Extend:
+  - `graph-editor/src/services/__tests__/pinnedDsl.orContextKeys.cacheFulfilment.test.ts`
+  - `graph-editor/src/services/__tests__/multiSliceCache.e2e.test.ts`
+  - `graph-editor/src/services/__tests__/implicitUncontextedSelection.hardening.test.ts`
+- Add scenarios to cover:
+  - Contexted intent with only uncontexted cache present (must be “not covered”).
+  - Uncontexted intent with an incomplete MECE partition (must be “not covered”).
+  - Uncontexted intent with complete MECE partition but mixed signatures across contexts (must be “not covered”).
+  - `contextAny` intent where only some contexts are present (must be “not covered”).
+  - Missing context definition / “policy=unknown” (must be “not covered” and logged as “not provably complete”).
+
+#### Acceptance criteria
+
+- All context/MECE invariants in this document are enforced by the plan builder.
+- Unknown completeness never yields “covered”.
+
+### A.4 Deviation (4): Determinism and purity are not currently enforceable
+
+#### Problem statement
+
+The plan builder must be deterministic for fixed inputs, including a fixed reference time. This is required both for correctness assurance and for stable tests that enforce Invariant E.
+
+#### Required changes
+
+- Ensure `buildFetchPlan(...)` does not depend on ambient wall-clock time:
+  - Any timestamps included in the plan must be derived from explicit inputs (e.g. `referenceNow`) or omitted from equality-critical representations.
+  - If operational logging needs a created-at timestamp, ensure it is not used for equality and is explicitly supplied by callers in production.
+- Ensure all internal date computations use a consistent UK-date model (or a single normalised day boundary) and do not depend on local time zone behaviour.
+- Ensure any “now” used by staleness decisions is the explicit `referenceNow` passed to the builder.
+
+#### Tests to add/strengthen
+
+- Add a determinism test for `buildFetchPlan(...)`:
+  - For fixed graph, DSL, window, file state, connection state, and referenceNow, repeated calls must produce byte-identical canonical plans.
+- Add DST-boundary sanity tests for date expansion/merging utilities:
+  - These should assert that per-day iteration over UK dates yields exactly one entry per calendar day across boundary periods.
+
+#### Acceptance criteria
+
+- Plan equality is stable without reliance on ambient time.
+- Date iteration behaves consistently and predictably under UK date semantics.
+
+### A.5 Deviation (5): Invariant E is not yet satisfied (execution does not consume the plan)
+
+#### Problem statement
+
+Today, planner analysis can produce a plan, but execution still derives its own windows (even if certain bounding behaviours are skipped). This violates Invariant E: analysis, dry-run, and execution must be derived from the same plan.
+
+#### Required changes (execution architecture)
+
+Stage this deliberately to minimise risk:
+
+- Phase E1: Introduce a plan interpreter path without removing the existing executor logic.
+  - Add a plan-execution entry point in the execution layer (expected home: `graph-editor/src/services/dataOperationsService.ts` or `graph-editor/src/services/fetchDataService.ts`) that:
+    - Accepts a `FetchPlan` and executes exactly the windows specified for each plan item.
+    - Uses existing request construction, rate limiting, error classification, persistence, and session logging.
+    - Supports a dry-run mode that produces a faithful “would call” preview from the same plan windows.
+- Phase E2: Wire the planner’s execution entry point to the plan interpreter.
+  - `graph-editor/src/services/windowFetchPlannerService.ts` should execute the plan it built (or a freshly built plan using the same inputs) via the interpreter, not via legacy window derivation.
+  - Ensure Retrieve All can optionally use the same interpreter where appropriate for “single plan contract” (even if batching/reporting differs).
+- Phase E3: Remove duplicate window derivation from the legacy executor path once parity is proven.
+  - After contract tests pass, remove or hard-disable any remaining executor-side recomputation of windows for the primary pathways covered by this design.
+
+#### Contract tests required to validate Invariant E
+
+Add tests that prove structural equivalence, not just “no errors”:
+
+- Plan vs dry-run:
+  - For a fixed input, dry-run output must enumerate the same item windows as the plan (same start/end dates and reasons, modulo any explicitly documented adapter boundary transformations).
+- Plan vs live execution:
+  - Instrument execution results to record the windows actually executed.
+  - Assert executed windows equal plan windows for the same run.
+- Convergence under partial failure (Invariant G):
+  - Simulate partial failures at the adapter boundary such that only some windows succeed.
+  - Assert a second run’s plan contains only the remaining missing/refresh-worthy dates.
+  - Assert eventual convergence to “covered” (or explicit unfetchable classification) under resolution of transient errors.
+
+These tests should be added to the most relevant existing suites (prefer `fetchPolicyIntegration.test.ts` and/or a retrieve-all service test suite if one exists) unless there is manifestly no sensible existing home.
+
+#### Acceptance criteria
+
+- Analysis, dry-run, and execution are provably using the same plan windows.
+- No second planning logic remains in execution for the covered pathways.
+
+### A.6 Cleanup (optional but strongly recommended): reduce review noise
+
+To keep audits defensible and prevent accidental drift:
+
+- Remove whitespace-only diffs introduced during the remedial work (menu/components/libs/services where only trailing blank lines changed).
+- Keep the “remedial work” commit series semantically tight: one commit for functional changes, one commit for formatting-only cleanup if needed.
 

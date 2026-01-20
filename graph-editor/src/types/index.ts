@@ -286,6 +286,13 @@ export interface SettingsData {
  */
 export interface TabOperations {
   openTab: (item: RepositoryItem, viewMode?: ViewMode, forceNew?: boolean, initialEditorState?: Partial<TabState['editorState']>) => Promise<void>;
+  /**
+   * Open a tab for an already-seeded file without triggering any repo fetch.
+   *
+   * Used by share/live bootstrap codepaths (bundle/chart) where TabContext intentionally skips
+   * restoring workspace tabs and the URL payload drives which tabs should be visible.
+   */
+  openTemporaryTab: (tab: TabState) => Promise<void>;
   closeTab: (tabId: string, force?: boolean) => Promise<boolean>;
   switchTab: (tabId: string) => void;
   updateTabData: (fileId: string, newData: any) => void;

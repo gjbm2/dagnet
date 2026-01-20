@@ -226,13 +226,12 @@ function computeMECEGenerationCandidates(
     }).filter(Boolean)));
     const mockWindows = valuesPresent.map((v) => ({ sliceDSL: `context(${gen.key}:${v})` }));
     const raw = contextRegistry.detectMECEPartitionSync(mockWindows, gen.key);
-    const meceCheck =
-      raw.policy === 'unknown'
-        // Degrade gracefully: if context definition is not loaded, assume the pinned slice set is intended
-        // to be MECE. This matches existing behaviour and allows cache/coverage logic to function in tests
-        // and in environments where the context registry is not hydrated.
-        ? { isMECE: true, isComplete: true, canAggregate: true, missingValues: [] as string[], policy: 'unknown' }
-        : raw;
+    // FIRST-PRINCIPLES: fail-safe on unknown policy (not provably complete => not MECE-usable).
+    // If the context definition is not loaded, we must NOT assume completeness.
+    const meceCheck = raw;
+    if (meceCheck.policy === 'unknown') {
+      continue;
+    }
 
     if (!meceCheck.isMECE) continue;
     if (!meceCheck.canAggregate) continue;
@@ -245,9 +244,6 @@ function computeMECEGenerationCandidates(
         : Number.NEGATIVE_INFINITY;
 
     const genWarnings: string[] = [];
-    if (meceCheck.policy === 'unknown') {
-      genWarnings.push(`Context '${gen.key}' definition not loaded; assuming MECE for implicit uncontexted aggregation`);
-    }
     if (!meceCheck.isComplete && meceCheck.missingValues.length > 0) {
       genWarnings.push(`Incomplete MECE partition for '${gen.key}': missing ${meceCheck.missingValues.join(', ')}`);
     }
@@ -428,13 +424,9 @@ function computeBestMECEPartitionCandidate(
   for (const [key, entry] of byKey.entries()) {
     const mockWindows = Array.from(entry.values).map((v) => ({ sliceDSL: `context(${key}:${v})` }));
     const raw = contextRegistry.detectMECEPartitionSync(mockWindows, key);
-
-    // If the context definition is not available in memory (policy === 'unknown'),
-    // degrade gracefully by assuming the user's pinned slice set is intended to be MECE.
-    const meceCheck =
-      raw.policy === 'unknown'
-        ? { isMECE: true, isComplete: true, canAggregate: true, missingValues: [] as string[], policy: 'unknown' }
-        : raw;
+    // FIRST-PRINCIPLES: fail-safe on unknown policy (not provably complete => not MECE-usable).
+    if (raw.policy === 'unknown') continue;
+    const meceCheck = raw;
 
     if (!meceCheck.isMECE) continue;
     if (!meceCheck.canAggregate) continue;
@@ -460,9 +452,6 @@ function computeBestMECEPartitionCandidate(
 
   if (keysPresent.length > 1) {
     warnings.push(`Multiple context keys present (${keysPresent.join(', ')}); using MECE key '${best.key}' for implicit uncontexted aggregation`);
-  }
-  if (best.mece.policy === 'unknown') {
-    warnings.push(`Context '${best.key}' definition not loaded; assuming MECE for implicit uncontexted aggregation`);
   }
   if (!best.mece.isComplete && best.mece.missingValues.length > 0) {
     warnings.push(`Incomplete MECE partition for '${best.key}': missing ${best.mece.missingValues.join(', ')}`);

@@ -29,6 +29,7 @@ import {
   createFetchItem,
   type FetchItem,
 } from './fetchDataService';
+import { dataOperationsService } from './dataOperationsService';
 import { shouldRefetch, type LatencyConfig } from './fetchRefetchPolicy';
 import { extractSliceDimensions, isolateSlice } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
@@ -38,6 +39,15 @@ import { computeCohortRetrievalHorizon, type CohortHorizonResult } from './cohor
 import type { ParameterValue } from '../types/parameterData';
 import { sessionLogService } from './sessionLogService';
 import type { Graph, DateRange } from '../types';
+import {
+  buildFetchPlan,
+  createProductionFileStateAccessor,
+  createProductionConnectionChecker,
+  type FetchPlanBuilderResult,
+} from './fetchPlanBuilderService';
+import type { FetchPlan, FetchPlanItem } from './fetchPlanTypes';
+import { computePlannerQuerySignaturesForGraph } from './plannerQuerySignatureService';
+import { isSignatureCheckingEnabled } from './signaturePolicyService';
 
 // =============================================================================
 // Types
@@ -218,72 +228,43 @@ class WindowFetchPlannerService {
       }
       
       // ═══════════════════════════════════════════════════════════════════════
-      // CRITICAL: Delegate coverage to existing fetchDataService
-      // This ensures planner's "needs_fetch" view matches execution behaviour.
+      // FIRST-PRINCIPLES PLAN BUILDER (Phase 3)
+      // 
+      // Uses the new FetchPlan builder which guarantees:
+      // - Invariant A: Missing dates are never skipped
+      // - Invariant E: Same plan for analysis and execution
+      // - F = M ∪ S (missing + stale always included)
+      // 
+      // The old path (getItemsNeedingFetch + manual staleness) is removed.
       // ═══════════════════════════════════════════════════════════════════════
-      const fetchableItems = getItemsNeedingFetch(window, graph, dsl, true);  // checkCache=true
-      const allConnectableItems = getItemsNeedingFetch(window, graph, dsl, false); // checkCache=false
+      // Best-effort: compute execution-grade signatures so planner enforces signature isolation
+      // without falling back to the removed sentinel hack.
+      const querySignatures = isSignatureCheckingEnabled()
+        ? await computePlannerQuerySignaturesForGraph({ graph, dsl })
+        : undefined;
+
+      const { plan: fetchPlan, diagnostics: planDiagnostics } = this.buildFetchPlanForAnalysis(
+        graph,
+        dsl,
+        window,
+        timestamp,
+        querySignatures
+      );
       
-      const isCohortQuery = dsl.includes('cohort(');
+      // Convert FetchPlan items to PlannerItems for UI compatibility
+      const items = this.convertFetchPlanToPlannerItems(fetchPlan, graph);
       
-      // Build item classifications
-      const items: PlannerItem[] = [];
-      
-      for (const connectable of allConnectableItems) {
-        const needsFetch = fetchableItems.some(f => f.id === connectable.id);
-        
-        // Determine if file-only (has data but no connection)
-        const isFileOnly = this.isFileOnlyItem(connectable, graph);
-        
-        if (isFileOnly) {
-          // File-only items: check coverage for messaging, but never "needs_fetch"
-          const hasCoverage = this.checkFileOnlyCoverage(connectable, window, dsl);
-          items.push({
-            ...this.toBaseItem(connectable),
-            classification: hasCoverage ? 'covered_stable' : 'file_only_gap',
-          });
-          continue;
+      // Log plan diagnostics
+      sessionLogService.addChild(logOpId, 'info', 'FETCH_PLAN_BUILT',
+        `Plan built: ${planDiagnostics.itemsNeedingFetch} need fetch, ${planDiagnostics.itemsCovered} covered, ${planDiagnostics.itemsUnfetchable} unfetchable`,
+        undefined,
+        {
+          totalItems: planDiagnostics.totalItems,
+          needsFetch: planDiagnostics.itemsNeedingFetch,
+          covered: planDiagnostics.itemsCovered,
+          unfetchable: planDiagnostics.itemsUnfetchable,
         }
-        
-        // For cohort queries on latency edges: compute bounded retrieval window
-        // This uses path_t95 to limit how far back we fetch cohorts
-        let cohortHorizon: CohortHorizonResult | undefined;
-        if (isCohortQuery && connectable.type === 'parameter') {
-          cohortHorizon = this.computeBoundedCohortWindow(connectable, window, graph, dsl);
-        }
-        
-        if (needsFetch) {
-          items.push({
-            ...this.toBaseItem(connectable),
-            classification: 'needs_fetch',
-            missingDates: this.countMissingDates(connectable, window, dsl),
-            // Include bounded window for cohort queries (Phase 3)
-            boundedCohortWindow: cohortHorizon?.boundedWindow,
-            cohortHorizon,
-          });
-          continue;
-        }
-        
-        // Covered: check staleness
-        const staleness = this.checkStaleness(connectable, window, dsl, graph, isCohortQuery);
-        if (staleness.isStale) {
-          items.push({
-            ...this.toBaseItem(connectable),
-            classification: 'stale_candidate',
-            stalenessReason: staleness.reason,
-            retrievedAt: staleness.retrievedAt,
-            effectiveT95: staleness.effectiveT95,
-            // Include bounded window for stale cohort refresh
-            boundedCohortWindow: cohortHorizon?.boundedWindow,
-            cohortHorizon,
-          });
-        } else {
-          items.push({
-            ...this.toBaseItem(connectable),
-            classification: 'covered_stable',
-          });
-        }
-      }
+      );
       
       // Derive outcome
       const outcome = this.deriveOutcome(items);
@@ -463,16 +444,19 @@ class WindowFetchPlannerService {
       // Execute fetch
       const allItemsToFetch = [...fetchItems, ...staleItems];
       if (allItemsToFetch.length > 0) {
-        const fetchItemsList = allItemsToFetch.map(i => createFetchItem(
-          i.type, i.objectId, i.targetId, { 
-            paramSlot: i.paramSlot,
-            boundedCohortWindow: i.boundedCohortWindow 
-          }
-        ));
-        
-        // Extract window for fetch
+        // Extract window for execution
         const window = this.extractWindowFromDSL(dsl);
         if (window) {
+          // Compute signatures again for execution plan building (same logic as analysis).
+          // This keeps plan classification stable between analysis and "fetch now".
+          const querySignatures = isSignatureCheckingEnabled()
+            ? await computePlannerQuerySignaturesForGraph({ graph, dsl })
+            : undefined;
+
+          // Build a fresh plan for execution (single-plan contract).
+          const fetchPlan = this.getFetchPlanForExecution(graph, dsl, window, undefined, querySignatures);
+          const planItemsToExecute = fetchPlan.items.filter((i) => i.classification === 'fetch');
+
           // CRITICAL: Track graph updates across sequential fetches
           // Without this, each item uses the stale original graph and updates are lost
           let currentGraph: Graph | null = graph;
@@ -480,19 +464,42 @@ class WindowFetchPlannerService {
             currentGraph = newGraph;
             setGraph(newGraph);
           };
-          const getUpdatedGraph = () => currentGraph;
-          
-          await fetchDataService.fetchItems(
-            fetchItemsList,
-            { 
-              mode: 'versioned',
-              parentLogId: triageLogId,
-            },
-            graph,
-            trackingSetGraph,
-            dsl,
-            getUpdatedGraph  // Pass graph tracker for sequential updates
-          );
+
+          // Execute the plan windows exactly via DataOperationsService (plan interpreter mode).
+          // This avoids any executor-side re-derivation of windows, satisfying Invariant E for execution windows.
+          for (const item of planItemsToExecute) {
+            const g = currentGraph;
+            if (!g) break;
+
+            if (item.type === 'parameter') {
+              await dataOperationsService.getFromSource({
+                objectType: 'parameter',
+                objectId: item.objectId,
+                targetId: item.targetId,
+                graph: g,
+                setGraph: trackingSetGraph,
+                paramSlot: item.slot,
+                conditionalIndex: item.conditionalIndex,
+                bustCache: false,
+                currentDSL: dsl,
+                targetSlice: dsl,
+                // First-principles: plan already computed correct windows.
+                skipCohortBounding: true,
+                overrideFetchWindows: item.windows.map((w) => ({ start: w.start, end: w.end })),
+              } as any);
+            } else {
+              // Cases: keep existing versioned behaviour (window does not drive schedule snapshot).
+              await dataOperationsService.getFromSource({
+                objectType: 'case',
+                objectId: item.objectId,
+                targetId: item.targetId,
+                graph: g,
+                setGraph: trackingSetGraph,
+                bustCache: false,
+                currentDSL: dsl,
+              } as any);
+            }
+          }
         }
       }
       
@@ -1270,6 +1277,120 @@ class WindowFetchPlannerService {
     const edgeIds = (graph.edges || []).map(e => e.uuid || e.id).sort().join(',');
     const nodeIds = (graph.nodes || []).map(n => n.uuid || n.id).sort().join(',');
     return `${edgeIds}|${nodeIds}`;
+  }
+
+  // =============================================================================
+  // FetchPlan Builder Integration (Phase 3)
+  // =============================================================================
+
+  /**
+   * Build a FetchPlan using the new plan builder.
+   * 
+   * This is the first-principles plan that satisfies:
+   * - Invariant A: Missing dates are never skipped
+   * - Invariant E: Same plan for analysis and execution
+   * - F = M ∪ S (missing + stale)
+   */
+  private buildFetchPlanForAnalysis(
+    graph: Graph,
+    dsl: string,
+    window: DateRange,
+    referenceNow?: string,
+    querySignatures?: Record<string, string>
+  ): FetchPlanBuilderResult {
+    return buildFetchPlan({
+      graph,
+      dsl,
+      window,
+      referenceNow: referenceNow ?? new Date().toISOString(),
+      fileState: createProductionFileStateAccessor(),
+      connectionChecker: createProductionConnectionChecker(),
+      querySignatures,
+    });
+  }
+
+  /**
+   * Convert FetchPlanItems to PlannerItems for backward compatibility.
+   * 
+   * The FetchPlan is the single source of truth; PlannerItems are
+   * a UI-compatible view of the same data.
+   */
+  private convertFetchPlanToPlannerItems(
+    fetchPlan: FetchPlan,
+    graph: Graph
+  ): PlannerItem[] {
+    const items: PlannerItem[] = [];
+    
+    for (const fpItem of fetchPlan.items) {
+      // Find the edge for this item (needed for latency config)
+      const edge = graph.edges?.find(e => 
+        (e.uuid || e.id) === fpItem.targetId
+      );
+      
+      // Map FetchPlanItem classification to PlannerItem classification
+      let classification: PlannerItem['classification'];
+      switch (fpItem.classification) {
+        case 'fetch':
+          // Check if it has only stale windows (no missing)
+          const hasMissing = fpItem.windows.some(w => w.reason === 'missing');
+          const hasStale = fpItem.windows.some(w => w.reason === 'stale');
+          if (hasMissing) {
+            classification = 'needs_fetch';
+          } else if (hasStale) {
+            classification = 'stale_candidate';
+          } else {
+            classification = 'needs_fetch'; // Fallback
+          }
+          break;
+        case 'covered':
+          classification = 'covered_stable';
+          break;
+        case 'unfetchable':
+          classification = 'file_only_gap';
+          break;
+      }
+      
+      // Count missing dates
+      const missingDates = fpItem.windows
+        .filter(w => w.reason === 'missing')
+        .reduce((sum, w) => sum + w.dayCount, 0);
+      
+      // Get effective t95 from edge
+      const latencyConfig = edge?.p?.latency as LatencyConfig | undefined;
+      const effectiveT95 = latencyConfig?.path_t95 ?? latencyConfig?.t95;
+      
+      items.push({
+        id: fpItem.itemKey,
+        type: fpItem.type,
+        objectId: fpItem.objectId,
+        targetId: fpItem.targetId,
+        paramSlot: fpItem.slot,
+        conditionalIndex: fpItem.conditionalIndex,
+        classification,
+        missingDates: classification === 'needs_fetch' ? missingDates : undefined,
+        stalenessReason: classification === 'stale_candidate' ? 'immature_dates' : undefined,
+        effectiveT95,
+        // Note: boundedCohortWindow is no longer produced (first-principles: no start bounding)
+      });
+    }
+    
+    return items;
+  }
+
+  /**
+   * Get the underlying FetchPlan for the current analysis.
+   * 
+   * Exposed for dry-run reporting and execution to use the SAME plan.
+   * This is how we enforce Invariant E (single-plan contract).
+   */
+  getFetchPlanForExecution(
+    graph: Graph,
+    dsl: string,
+    window: DateRange,
+    referenceNow?: string,
+    querySignatures?: Record<string, string>
+  ): FetchPlan {
+    return this.buildFetchPlanForAnalysis(graph, dsl, window, referenceNow, querySignatures).plan;
   }
 
   private summariseItemsForLog(

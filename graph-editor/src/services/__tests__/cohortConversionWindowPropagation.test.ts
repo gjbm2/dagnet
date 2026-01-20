@@ -12,6 +12,7 @@ import { dataOperationsService } from '../dataOperationsService';
 import type { Graph } from '../../types';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { sessionLogService } from '../sessionLogService';
 
 // In node env, DASRunnerFactory defaults to ./config/connections.yaml which doesn't exist in the repo.
 // For this test we want the real Amplitude adapter behaviour, so point DAS at the shipped defaults.
@@ -99,15 +100,28 @@ describe('cohort conversion window propagation (cs)', () => {
       values: [],
     });
 
-    const report = await dataOperationsService.simulateRetrieveAllSlicesToMarkdown({
+    const addChildSpy = vi.spyOn(sessionLogService, 'addChild');
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'e1',
       graph,
-      slices: ['cohort(-7d:)'],
+      // dry-run must not mutate graph
+      setGraph: undefined,
+      writeToFile: true,
       bustCache: true,
+      currentDSL: 'cohort(-7d:)',
+      targetSlice: 'cohort(-7d:)',
+      dontExecuteHttp: true,
     });
 
+    const dryRunEvents = addChildSpy.mock.calls.filter((c) => c[2] === 'DRY_RUN_HTTP');
+    const payload = dryRunEvents.map((c) => c[5] as any).find((m) => m?.httpCommand)?.httpCommand as string | undefined;
+
     // The adapter appends cs=<seconds> for cohort mode when conversion_window_days is present.
-    expect(report).toContain('cohort=yes');
-    expect(report).toContain('cs=');
+    expect(payload).toBeTruthy();
+    expect(payload).toContain('cs=');
   });
 });
 

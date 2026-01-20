@@ -136,32 +136,18 @@ export function computeCohortRetrievalHorizon(input: CohortHorizonInput): Cohort
   const horizonCutoffMs = referenceDate.getTime() - (horizonDays * 24 * 60 * 60 * 1000);
   const horizonCutoffDate = new Date(horizonCutoffMs);
   
-  // Determine bounded start:
-  // - Never earlier than the horizon cutoff (don't fetch ancient mature cohorts)
-  // - Never later than the requested start (don't skip cohorts user asked for)
-  // - Exception: if requested window is entirely within horizon, keep it as-is
-  let boundedStartMs: number;
-  let wasBounded = false;
-  let daysTrimmed = 0;
-  
-  if (requestedStart.getTime() < horizonCutoffMs) {
-    // Requested window extends before horizon - trim it
-    boundedStartMs = horizonCutoffMs;
-    wasBounded = true;
-    daysTrimmed = Math.floor((horizonCutoffMs - requestedStart.getTime()) / (24 * 60 * 60 * 1000));
-  } else {
-    // Requested window is entirely within horizon - keep as-is
-    boundedStartMs = requestedStart.getTime();
-  }
-  
-  // End date is always the requested end (never truncate recent cohorts)
+  // FIRST-PRINCIPLES DESIGN: Never trim the start of the requested window.
+  // 
+  // The old logic tried to skip "mature" cohorts to save API calls, but this
+  // caused missing data when files were cleared or incomplete. The correct
+  // approach is to always fetch the full requested window.
+  //
+  // Staleness detection (for refresh recommendations) is handled separately
+  // by the FetchPlan builder using shouldRefetch().
+  const boundedStartMs = requestedStart.getTime();
   const boundedEndMs = requestedEnd.getTime();
-  
-  // Ensure bounded start doesn't exceed bounded end
-  if (boundedStartMs > boundedEndMs) {
-    boundedStartMs = boundedEndMs;
-    daysTrimmed = Math.floor((requestedEnd.getTime() - requestedStart.getTime()) / (24 * 60 * 60 * 1000));
-  }
+  const wasBounded = false;
+  const daysTrimmed = 0;
   
   // Build bounded window
   const boundedWindow: DateRange = {
@@ -312,36 +298,6 @@ function buildSummary(
   }
   
   return parts.join(' ');
-}
-
-// =============================================================================
-// Convenience: Check if cohort window should be bounded
-// =============================================================================
-
-/**
- * Quick check: would the cohort window be bounded for this edge?
- * 
- * Useful for planner to decide whether to use horizon-bounded fetch.
- * 
- * @param requestedWindow - User's cohort window from DSL
- * @param pathT95 - Path-level t95 for the edge
- * @param edgeT95 - Edge-level t95 fallback
- * @param referenceDate - Reference date (defaults to today)
- * @returns true if the window would be bounded (narrowed)
- */
-export function shouldBoundCohortWindow(
-  requestedWindow: DateRange,
-  pathT95?: number,
-  edgeT95?: number,
-  referenceDate: Date = new Date()
-): boolean {
-  const { effectiveT95 } = selectEffectiveT95(pathT95, edgeT95);
-  const horizonDays = Math.max(effectiveT95 + HORIZON_BUFFER_DAYS, MIN_HORIZON_DAYS);
-  
-  const requestedStart = parseDate(requestedWindow.start);
-  const horizonCutoffMs = referenceDate.getTime() - (horizonDays * 24 * 60 * 60 * 1000);
-  
-  return requestedStart.getTime() < horizonCutoffMs;
 }
 
 // =============================================================================

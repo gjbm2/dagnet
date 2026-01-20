@@ -95,22 +95,19 @@ async function resetFileRegistry(): Promise<void> {
 describe('MECE equivalence: window() and incomplete partitions', () => {
   beforeAll(async () => {
     // Declare the MECE context used by this test (channel) so MECE aggregation is enabled in node env.
-    // This is the "user declaration" of MECE via otherPolicy.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (contextRegistry as any).clearCache?.();
-    vi.spyOn(contextRegistry, 'getContext').mockImplementation(async (id: string) => {
-      if (id !== 'channel') return undefined;
-      return {
-        id: 'channel',
-        label: 'Channel',
-        description: 'Test',
-        type: 'categorical',
-        otherPolicy: 'null',
-        values: [
-          { id: 'google', label: 'Google' },
-          { id: 'meta', label: 'Meta' },
-        ],
-      } as any;
+    // IMPORTANT: sync MECE detection reads ContextRegistry cache/FileRegistry, not getContext(), so we must seed cache.
+    contextRegistry.clearCache();
+    (contextRegistry as any).cache.set('channel', {
+      id: 'channel',
+      name: 'Channel',
+      description: 'Test',
+      type: 'categorical',
+      otherPolicy: 'null',
+      values: [
+        { id: 'google', label: 'Google' },
+        { id: 'meta', label: 'Meta' },
+      ],
+      metadata: { status: 'active', created_at: '1-Dec-25', version: '1.0.0' },
     });
     await resetFileRegistry();
   });
@@ -324,16 +321,15 @@ describe('MECE equivalence: window() and incomplete partitions', () => {
     };
     const itemsB: FetchItem[] = [createFetchItem('parameter', incompleteParamId, edgeId)];
     const resultsB = await fetchDataService.fetchItems(itemsB, { mode: 'from-file' }, graphB as Graph, setGraphB, dsl, () => graphB);
-    expect(resultsB.every((r) => r.success)).toBe(true);
-    const packB = toEdgePack(flattenParams(extractParamsFromGraph(graphB as any)), edgeId);
+    // Incomplete MECE partition must NOT be treated as an implicit uncontexted truth.
+    // In from-file mode there is no external fetch to repair missing partitions, so we should surface a failure.
+    expect(resultsB.every((r) => r.success)).toBe(false);
+    const errMsg = resultsB.map((r) => (r as any).error?.message).filter(Boolean).join('\n');
+    expect(errMsg).toMatch(/MECE|context/i);
 
     // Must be materially different due to missing MECE mass.
     // Evidence.mean should differ because the missing slice has a different mean contribution in the baseline.
-    const aEvidenceMean = packA[`e.${edgeId}.p.evidence.mean`];
-    const bEvidenceMean = packB[`e.${edgeId}.p.evidence.mean`];
-    expect(typeof aEvidenceMean).toBe('number');
-    expect(typeof bEvidenceMean).toBe('number');
-    expect(bEvidenceMean).not.toBeCloseTo(aEvidenceMean, 9);
+    // (We do not compare packs here because we refuse to synthesise an uncontexted result from incomplete MECE.)
   });
 });
 

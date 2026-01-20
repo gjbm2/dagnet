@@ -111,10 +111,13 @@ export function shouldRefetch(input: RefetchPolicyInput): RefetchDecision {
   // ═══════════════════════════════════════════════════════════════════════════
   // EFFECTIVE MATURITY CALCULATION (design.md §5.4, §11.1.I)
   // 
-  // Use t95 (95th percentile lag) when available as the effective maturity threshold.
+  // Window mode uses edge-local t95 as the effective maturity threshold.
+  // Cohort mode prefers path_t95 (cumulative lag) and falls back to t95.
   // If t95 is missing, Phase 2 relies on default injection and uses a conservative fallback.
   // ═══════════════════════════════════════════════════════════════════════════
-  const effectiveT95Days = computeEffectiveMaturity(latencyConfig);
+  const effectiveT95Days = isCohortQuery
+    ? computeEffectiveCohortMaturity(latencyConfig)
+    : computeEffectiveMaturity(latencyConfig);
 
   // COHORT MODE: Check if any cohorts are still immature
   if (isCohortQuery) {
@@ -155,6 +158,27 @@ export function computeEffectiveMaturity(latencyConfig?: LatencyConfig): number 
   // If t95 is missing, the Phase 2 invariant is that default injection has not yet
   // occurred or data is incomplete. Be conservative.
   return 30;
+}
+
+/**
+ * Compute effective maturity threshold for cohort() refetch decisions.
+ *
+ * Cohort maturity is governed by cumulative lag from the anchor, so we prefer
+ * path_t95 where available, and fall back to edge-local t95.
+ */
+export function computeEffectiveCohortMaturity(latencyConfig?: LatencyConfig): number {
+  const pathT95 = latencyConfig?.path_t95;
+  if (pathT95 !== undefined && pathT95 > 0) {
+    const effectiveMaturity = Math.ceil(pathT95);
+    console.log('[fetchRefetchPolicy] Using path_t95 for cohort effective maturity:', {
+      pathT95,
+      effectiveMaturity,
+    });
+    return effectiveMaturity;
+  }
+
+  // Fallback to edge-local t95 (legacy behaviour)
+  return computeEffectiveMaturity(latencyConfig);
 }
 
 // =============================================================================
