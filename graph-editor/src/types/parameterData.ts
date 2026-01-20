@@ -92,6 +92,12 @@ export interface Parameter {
   query_overridden?: boolean;
   n_query?: string;
   n_query_overridden?: boolean;
+  /**
+   * One-shot "force replace" marker for pull operations.
+   * If the remote file has a newer value than the local dirty file, the client may choose
+   * to overwrite local with remote (skip 3-way merge) for this file.
+   */
+  force_replace_at_ms?: number;
   metadata: {
     description: string;
     units?: string;

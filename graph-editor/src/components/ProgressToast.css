@@ -47,6 +47,11 @@
   padding-left: 2px;
 }
 
+/* Cache hit indicator */
+.progress-toast-detail-line:has-text('cached ✓') {
+  color: var(--success-color, #4caf50);
+}
+
 .progress-toast-bar-container {
   height: 6px;
   background: var(--bg-tertiary, #2d2d2d);

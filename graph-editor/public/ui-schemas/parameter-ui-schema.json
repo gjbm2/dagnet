@@ -1,5 +1,5 @@
 {
-  "ui:order": ["id", "name", "type", "query", "query_overridden", "n_query", "n_query_overridden", "connection", "connection_string", "latency", "value", "values", "metadata"],
+  "ui:order": ["id", "name", "type", "query", "query_overridden", "n_query", "n_query_overridden", "connection", "connection_string", "latency", "force_replace_at_ms", "value", "values", "metadata"],
   "id": {
     "ui:description": ""
   },
@@ -54,6 +54,10 @@
     "anchor_node_id": {
       "ui:description": "Anchor node for cohort queries"
     }
+  },
+  "force_replace_at_ms": {
+    "ui:widget": "hidden",
+    "ui:description": ""
   },
   "values": {
     "ui:options": {
