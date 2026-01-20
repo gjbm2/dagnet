@@ -1,298 +1,10 @@
-# DagNet Introduction Workshop
+# DagNet Introduction Workshop -- PART 2 (of 2)
 
 **Audience**: New DagNet users  
 **Duration**: ~90–120 minutes (flexible based on interactivity)  
 **Prerequisites**: Participants should have access to a browser and be able to view the DagNet application  
-**Last updated**: 15-Jan-26
+**Last updated**: 20-Jan-26
 
----
-
-## Facilitator Notes (Read This First)
-
-### Intended tone
-
-- This is a **working session**, not a lecture. Keep the pace brisk and default to hands-on.
-- Encourage participants to ask “what does DagNet believe?” at each stage (probabilities, evidence, forecast, assumptions).
-
-### What you need prepared
-
-- A repository with:
-  - at least one “real” graph that matches your domain
-  - parameter files connected to Amplitude (or a test dataset)
-  - one known Statsig gate that appears in Amplitude as an `activeGates.*` user property
-- A Notion page for the final share/embed step (or a placeholder doc if Notion isn’t available)
-
-### Conventions used in this doc
-
-- **Graph**: DAG structure (nodes/edges/layout) stored in `graphs/*.json`
-- **Parameter**: evidence + forecast inputs stored in `parameters/*.yaml`
-- **Context**: a dimension for slicing evidence via `context(key:value)` in DSL, defined in `contexts/*.yaml`
-- **Case**: experiment allocation modelling and variant branching, defined in `cases/*.yaml`
-
-## Workshop Goals
-
-By the end of this session, participants will:
-1. Understand what a DAG is and why probabilistic graph analysis matters
-2. Know where data lives in DagNet and how the system works
-3. Be able to create and edit graphs
-4. Understand evidence vs. forecast modes
-5. Know how to use cases for A/B test modelling
-6. Be able to create and compare scenarios
-7. Run analyses and create charts
-8. Complete an end-to-end workflow adding a case to a real graph
-
----
-
-## Agenda Overview
-
-| Section | Topic | Duration | Mode |
-|---------|-------|----------|------|
-| 1 | What is a DAG? Why DagNet? | 10 min | Presentation |
-| 2 | Tool Architecture & Data Flow | 15 min | Presentation |
-| 3 | Build a graph: nodes, edges, **events**, first retrieval | 20 min | **Interactive** |
-| 4 | Evidence & Forecasts (LAG) | 15 min | Demo + Discussion |
-| 5 | Cases & A/B Tests | 10 min | Demo |
-| 6 | Scenarios as layers + What‑If + conditional probabilities | 25 min | **Interactive** |
-| 7 | Analysis & Charting | 15 min | **Interactive** |
-| 8 | Putting It Together | 25 min | **Interactive Walkthrough** |
-
----
-
-## Section 1: What is a DAG? Why DagNet?
-
-**Duration**: ~10 minutes  
-**Mode**: Presentation
-
-### Learning objectives
-
-- Understand DAGs as a modelling tool for user journeys and uncertain transitions
-- Understand what DagNet adds beyond standard analytics tools
-- Build an intuition for “probability flow” and “latency-aware conversion”
-
-### What is a DAG?
-
-A **Directed Acyclic Graph** is a network of nodes connected by one-way edges with no cycles. In DagNet's context:
-
-- **Nodes** represent states, events, or decision points in a user journey
-- **Edges** represent probabilistic transitions between nodes
-- **Direction** indicates flow (users move from one state to another)
-- **Acyclic** means no loops — users don't go backwards in the same path
-
-### What DagNet is (in one sentence)
-
-DagNet is a **probabilistic, latency-aware funnel simulator** that lets you model user journeys as graphs, attach evidence from live sources, and compare scenarios in a way that stays shareable and reproducible.
-
-### Why Not Just Use Amplitude/Looker/etc.?
-
-| Capability | Traditional BI | DagNet |
-|------------|----------------|--------|
-| Static conversion rates | ✅ | ✅ |
-| Time-indexed flow (latency) | ❌ | ✅ |
-| Evidence vs. Forecast split | ❌ | ✅ |
-| What-if scenario comparison | Limited | ✅ |
-| A/B test allocation modelling | Manual | ✅ |
-| Conditional probabilities | ❌ | ✅ |
-| Path-aware reach analysis | ❌ | ✅ |
-| Shareable live dashboards | ❌ | ✅ |
-
-**Key insight**: Traditional tools answer "What is the conversion rate?" DagNet answers "When will users convert, and what happens if we change X?"
-
-### The Core Question DagNet Answers
-
-> "Given the current state of the funnel and historical patterns, what is the probability of reaching outcome Y by time T, and how would changes to X affect that?"
-
-### Talking points (script)
-
-- “A funnel in Amplitude is a query; a funnel in DagNet is a **model**.”
-- “Models can be versioned, reviewed, and shared as a first-class artefact.”
-- “DagNet separates: what we **saw** (evidence) vs what we **expect** (forecast) — and forces us to be explicit about uncertainty.”
-- “The moment you have branching, experiments, or time-to-convert effects, a single conversion rate is an incomplete story.”
-
-### Quick check for understanding (1 minute)
-
-Ask:
-- “Where is the uncertainty in your funnel today?”
-- “Which step is most time-delayed (latency)?”
-- “Which decisions are experiment-driven (cases) vs naturally segmented (contexts)?”
-
----
-
-## Section 2: Tool Architecture & Data Flow
-
-**Duration**: ~15 minutes  
-**Mode**: Presentation
-
-### Learning objectives
-
-- Know which files represent which pieces of the model (graph vs parameters vs contexts vs cases)
-- Understand how DagNet stays reproducible (Git as source of truth, IndexedDB as working store)
-- Understand what “fetching evidence” actually does
-
-### Where Does Data Live?
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    GitHub Repository                     │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
-│  │   graphs/   │  │ parameters/ │  │  contexts/  │      │
-│  │  *.json     │  │   *.yaml    │  │   *.yaml    │      │
-│  └─────────────┘  └─────────────┘  └─────────────┘      │
-│                                                         │
-│  ┌─────────────┐  ┌─────────────┐                       │
-│  │   cases/    │  │   nodes/    │                       │
-│  │   *.yaml    │  │   *.yaml    │                       │
-│  └─────────────┘  └─────────────┘                       │
-└─────────────────────────────────────────────────────────┘
-                          │
-                          ▼ Pull / Push
-┌─────────────────────────────────────────────────────────┐
-│                      DagNet App                          │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │                   IndexedDB                      │    │
-│  │  (Local cache, dirty state, workspace state)    │    │
-│  └─────────────────────────────────────────────────┘    │
-│                          │                              │
-│                          ▼                              │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │              FileRegistry (in-memory)            │    │
-│  │      (Fast access for open tabs & editors)       │    │
-│  └─────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────┘
-                          │
-                          ▼ Fetch Evidence
-┌─────────────────────────────────────────────────────────┐
-│              External Data Sources                       │
-│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐       │
-│  │ Amplitude │  │ Google Sheets │  │   Statsig    │       │
-│  │ (Funnels) │  │ (Parameters)  │  │   (Cases)    │       │
-│  └──────────┘  └──────────────┘  └──────────────┘       │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Key Concepts
-
-1. **Graphs** (`.json`) — The visual DAG structure: nodes, edges, layout
-2. **Parameters** (`.yaml`) — Edge probability data, evidence, latency settings
-3. **Contexts** (`.yaml`) — Dimensions for slicing data (e.g., channel, device)
-4. **Cases** (`.yaml`) — A/B test / experiment definitions
-5. **Nodes** (`.yaml`) — Reusable node definitions
-
-### Data Flow Principle
-
-**GitHub is the source of truth** for definitions. **IndexedDB** holds local working state. **External sources** provide evidence (n/k/probability data).
-
-### How to think about “saving” in DagNet
-
-- **Editing** writes to **IndexedDB immediately** (fast iteration, offline-first).
-- **Sharing and collaboration** happens when you **commit** back to the repo.
-- **Fetching evidence** updates parameter/case files (depending on configuration), then the graph reads from those files.
-
-### Mental model: three layers
-
-- **Definition layer (repo)**: what the model is (graph, parameter definitions, context mappings, cases)
-- **Working layer (IndexedDB)**: your local state (open tabs, dirty changes, cached slices)
-- **Evidence layer (external)**: Amplitude/Statsig/Sheets provide the measured or configured values
-
-### Common confusion to pre-empt
-
-- “If I change a graph edge probability in the UI, does that update Amplitude?”
-  - No. DagNet is **one-way** from external sources into your model. Your model can be used for reasoning and planning; you still ship changes via product/engineering systems.
-
----
-
-## Section 3: Creating & Editing Graphs
-
-**Duration**: ~20 minutes  
-**Mode**: Interactive
-
-### Learning objectives
-
-- Create and edit a graph quickly (nodes/edges/layout)
-- Understand how node identity and edge identity matter for evidence attachment
-- Learn the “fast paths”: drag/drop, copy/paste from Navigator
-- Understand the concept of **events** (how nodes map to provider events) and how retrieval works at a high level
-
-### Demo Walkthrough
-
-1. **Open the Navigator** (`Ctrl/Cmd + B`)
-2. **Create a new graph** (`File > New Graph`)
-3. **Add nodes**:
-   - Right-click the canvas → **Add node**
-   - Or use `Objects > Add Node`
-   - Or drag node files from Navigator
-4. **Connect nodes**:
-   - Drag from one node to another
-   - Edge appears with default probability
-5. **Edit edge properties**:
-   - Select edge
-   - Use Properties panel to set mean/stdev
-6. **Attach parameters**:
-   - Drag parameter file from Navigator onto edge
-   - Or right-click edge → Attach parameter
-
-### Hands-On Exercise 1 (core): Build a small graph and run a first retrieval
-
-> **Task**: Create a simple 3-node funnel: Entry → Middle → Exit, then wire it to real provider events and retrieve evidence for one edge.
->
-> - Build the graph on the canvas.
-> - Assign a concrete event to each node (see steps below).
-> - Connect a parameter to one edge and run **Get from source**.
-
-#### Step-by-step (facilitator script)
-
-1. **Create the graph**
-   - Nodes: `entry`, `middle`, `exit`
-   - Edges: `entry → middle`, `middle → exit`
-
-2. **Assign events to nodes (conceptual model)**
-   - Each conversion node corresponds to a provider event definition (e.g., an Amplitude event + optional property filters).
-   - In DagNet, those are stored as **event files** (`events/*.yaml`) and attached/selected in the node’s properties.
-   - Practical: drag an **event file** from Navigator onto a node to set `event_id` (or set `event_id` in the Properties panel).
-
-3. **Pick realistic events**
-   - For example:
-     - Entry: “Signed Up”
-     - Middle: “Viewed Pricing”
-     - Exit: “Purchased”
-
-4. **Attach a parameter to the edge you’ll retrieve**
-   - Attach a parameter file to `middle → exit` (this is where evidence `(n,k)` will land).
-
-5. **Run retrieval**
-   - Right-click `middle → exit` → **Get from source**
-   - Choose a cohort window (or the default window if the graph is window-mode).
-
-#### What retrieval is actually doing (explain in plain English)
-
-- DagNet takes the events on the nodes, plus the edge you asked for, and constructs a provider query (for Amplitude this is typically a funnel).
-- The query produces counts:
-  - \(n\): users who reached the source step
-  - \(k\): users who reached the next step
-- DagNet stores those values (and sometimes daily arrays for LAG) into the **parameter file**, then displays the derived probability on the edge.
-
-#### Expected outcome (for facilitator)
-
-- Participants should see the edge tooltip populated with **evidence** (`n`, `k`) and a corresponding probability.
-- Use this moment to stress: “the graph is a model, but evidence is coming from real tracked events”.
-
-#### Expected outcome (for facilitator)
-
-Participants should compute \(0.6 \times 0.4 = 0.24\) and then confirm DagNet reports ~24% reach.
-
-> Note: this probability is just a toy baseline. After retrieval, the real edge p.mean will be driven by evidence/forecast depending on the edge type and maturity.
-
-### Practical tips (what to emphasise)
-
-- **Naming**: pick stable IDs; renames have downstream impact (queries, contexts, parameter references).
-- **Layout**: keep flow left-to-right where possible; it makes later analysis easier.
-- **Small steps**: build a correct small DAG first, then expand.
-
-### Key Takeaways
-
-- Nodes represent states, edges represent probabilistic transitions
-- Parameters can be attached to edges for live data updates
-- The Properties panel shows and edits all element properties
-- Events are the bridge between a visual node and “what the data source can measure”
 
 ---
 
@@ -358,6 +70,9 @@ Show the same graph with:
 - Use **E-only** for “what actually happened for a defined cohort window”.
 - Use **F+E** for “best estimate of eventual conversion for that cohort”.
 - Use **F-only** when you’re comparing long-run baselines or doing planning independent of current maturity.
+
+
+*** Fair warning: forecast mode needs some debugging partly due to weirdness over xmas and partly to do with some statistical circularities which I have designed a solution for but haven't yet implemented... ***
 
 ---
 
@@ -612,6 +327,99 @@ Bridge charts decompose **why** reach changed between two scenarios:
 
 ---
 
+## Section 7.5: Graph Issues (Integrity Checking)
+
+**Duration**: ~10 minutes  
+**Mode**: Demo + Mini-lab
+
+### Learning objectives
+
+- Understand what “Graph Issues” is (and what it is not)
+- Learn how issues are discovered and kept up to date
+- Learn how to use the Issues viewer to navigate straight to the broken node/edge/file
+- Learn a practical “fix loop”: make a change → check issues → fix → refresh → repeat
+
+### What Graph Issues is
+
+Graph Issues is DagNet’s built-in **integrity checker** — an IDE-style linter for your workspace.
+
+It scans graphs and related files (nodes, parameters, contexts, cases, etc.) and surfaces problems as:
+- **Errors**: things that will likely break analysis/retrieval or make the graph invalid
+- **Warnings**: suspicious or inconsistent states that might still “work” but are risky
+- **Info**: helpful notices and hygiene checks
+
+### Mass conservation (the biggest thing to internalise)
+
+If participants remember only one “graph correctness” concept, it should be **mass conservation**:
+
+- At each node, the outgoing edges represent a partition of what happens next, so the outgoing probabilities/weights should be well-defined and interpretable.
+- In practice, problems show up as:
+  - **Leak**: outgoing probabilities/weights sum to less than expected (missing “exit/other” path, or missing an edge entirely).
+  - **Over-commit**: outgoing probabilities/weights sum to more than expected (double counting, overlapping conditionals, or inconsistent evidence).
+
+Graph Issues is designed to catch the common mass-conservation failures early. Two particularly important messages it can surface:
+
+- **Sibling edges sum over 100% (evidence)**: reported as an **Error** (this should never happen under standard funnel semantics).
+- **Sibling edges sum over 100% (mean)**: reported as **Info** when it’s likely a **forecasting artefact for immature data** (the modelled \(p\) can temporarily look “too high” even when evidence is coherent).
+
+Practical fixes to teach:
+
+- If you see a leak: add or verify an explicit **exit / other** edge so the node’s outcomes are complete.
+- If you see over-commit: look for overlapping edges/conditionals, and ensure sibling edges are mutually exclusive and collectively exhaustive (MECE) at the user level.
+- If conditionals are involved: ensure sibling edges from the same node define the same conditional groups (otherwise interpretation/conservation silently breaks).
+
+### What Graph Issues is not
+
+- It is **not** a data-quality or statistical validity judgement (“this conversion rate is wrong”).
+- It does **not** replace domain review; it focuses on **structure, references, and integrity**.
+
+### Where to find it in the UI
+
+- Open it from **View → Graph Issues**.
+- Optional: when a graph has debugging enabled, you may also see an **issues indicator overlay** on the graph canvas (top-right). Clicking it opens Graph Issues scoped to that graph.
+
+### How it works (simple mental model)
+
+- It runs a workspace integrity scan in the background and updates the viewer as results change.
+- It is **debounced** (changes are grouped) to avoid re-checking on every single keystroke.
+- You can always hit **Refresh** in the Graph Issues viewer to force a re-check.
+
+### How to use it (the “three filters” habit)
+
+When something looks wrong, teach participants to do these three steps first:
+
+1. **Filter to the graph** they care about (Graph dropdown).
+2. Keep **Include refs** on (so you see issues in referenced files, not just the graph YAML).
+3. Start with **Errors only**, then expand to Warnings/Info once errors are cleared.
+
+### Demo (recommended flow)
+
+1. Make a small “controlled mistake”:
+   - Example: rename a node/case/context file (or change an ID) without updating the graph references.
+2. Open **View → Graph Issues**.
+3. Filter to the current graph and show:
+   - The issue grouping by file
+   - The category icon + severity counts
+   - The suggestion/detail text (when present)
+4. Click an issue row to **jump directly** to the affected node/edge in the graph (when deep linking is available).
+5. Fix the issue, refresh, and show the issue disappearing.
+
+### Mini-lab (2–3 minutes)
+
+> **Task**: Each participant should introduce one tiny break and recover using Graph Issues.
+>
+> - Break something small (a missing reference, a naming mismatch, a schema typo).
+> - Find the issue, navigate to it, and fix it.
+> - Confirm Graph Issues returns to “✅ No issues found”.
+
+### Discussion prompts
+
+- “If the issue is on a referenced file, why might the graph still ‘look fine’ until you run retrieval/analysis?”
+- “Which issues would you treat as a ‘hard stop’ before sharing a chart?”
+- “What patterns of edits tend to create issues? (renames, copy/paste, changing IDs, moving files)”
+
+---
+
 ## Section 8: Putting It Together
 
 **Duration**: ~25 minutes  
@@ -772,6 +580,7 @@ Before running this workshop, verify each step works in the current build:
 - [ ] **Context file handling**: Can create/update context files and use in DSL
 - [ ] **Scenario DSL with context**: `context(key:value)` filters work in scenarios
 - [ ] **ActiveGates context**: A context mapping `activeGates.<gate>` works in Amplitude funnels as a user segment (DagNet emits `gp:activeGates.<gate>`)
+- [ ] **Graph Issues**: Can open `View > Graph Issues`, filter to the current graph, and navigate to a deliberately broken reference (then fix it)
 - [ ] **Bridge analysis**: Works with context-based scenario pairs
 - [ ] **Live chart share**: Generates valid URL and loads in dashboard mode
 - [ ] **Notion embed**: Live link loads correctly in Notion iframe
