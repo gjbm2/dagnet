@@ -308,6 +308,13 @@ fi
 print_blue "Proceeding with release..."
 echo ""
 
+# Ensure shipped docs index is up to date (helps keep Help → Workshop etc. in sync)
+print_blue "[0/7] Updating docs index..."
+(
+  cd graph-editor
+  npm run generate-docs
+)
+
 # Update package.json version
 print_blue "[1/7] Updating package.json..."
 (cd graph-editor && npm version "$NEW_VERSION" --no-git-tag-version)
@@ -361,9 +368,9 @@ fi
 # Stage changes
 print_blue "[4/7] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md graph-editor/public/docs/index.json
 else
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/index.json
 fi
 
 # Commit the version bump
