@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.6b
+**Released:** 20-Jan-26
+
+Fixed Ezra's bug
+
+---
+
 ## Version 1.3.5b
 **Released:** 20-Jan-26
 
