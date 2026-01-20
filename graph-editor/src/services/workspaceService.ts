@@ -904,6 +904,7 @@ class WorkspaceService {
         const elapsed = Date.now() - startTime;
         console.log(`⚡ WorkspaceService: Pull complete in ${elapsed}ms - no text changes, ${images.length} images synced`);
         workspace.lastSynced = Date.now();
+        workspace.commitSHA = commitSha; // Track last synced commit for remote-ahead detection
         await db.workspaces.put(workspace);
         return { success: true, conflicts: [], filesUpdated: 0, filesDeleted: 0, newFiles: [], changedFiles: [], deletedFiles: [] };
       }
