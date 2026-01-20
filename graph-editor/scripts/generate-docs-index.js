@@ -18,7 +18,8 @@ const excludedFiles = ['index.json'];
 
 // Category labels for subdirectories
 const categoryLabels = {
-  'dev': 'Developer Documentation'
+  'dev': 'Developer Documentation',
+  'workshops': 'Workshop'
 };
 
 try {
@@ -50,7 +51,8 @@ try {
   const categories = {};
   const subdirs = fs.readdirSync(PUBLIC_DOCS_DIR, { withFileTypes: true })
     .filter(dirent => dirent.isDirectory())
-    .map(dirent => dirent.name);
+    .map(dirent => dirent.name)
+    .sort();
 
   subdirs.forEach(subdir => {
     const subdirPath = path.join(PUBLIC_DOCS_DIR, subdir);
@@ -74,7 +76,34 @@ try {
     generated_at: new Date().toISOString()
   };
 
-  fs.writeFileSync(INDEX_FILE, JSON.stringify(indexData, null, 2));
+  // Avoid churn: only rewrite index.json if the meaningful contents changed.
+  // (generated_at is intentionally ignored for this comparison.)
+  const stableIndexData = {
+    files: indexData.files,
+    categories: indexData.categories,
+    exclude: indexData.exclude
+  };
+
+  let existingStable = null;
+  if (fs.existsSync(INDEX_FILE)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
+      existingStable = {
+        files: existing.files || [],
+        categories: existing.categories || {},
+        exclude: existing.exclude || []
+      };
+    } catch {
+      // If the existing file is malformed, we'll overwrite it below.
+      existingStable = null;
+    }
+  }
+
+  if (existingStable && JSON.stringify(existingStable) === JSON.stringify(stableIndexData)) {
+    console.log('Docs index unchanged; skipping write.');
+  } else {
+    fs.writeFileSync(INDEX_FILE, JSON.stringify(indexData, null, 2));
+  }
 
   const totalFiles = rootFiles.length + Object.values(categories).reduce((sum, cat) => sum + cat.files.length, 0);
   console.log(`Generated ${INDEX_FILE} with ${totalFiles} documentation files:`);
