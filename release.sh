@@ -309,7 +309,8 @@ print_blue "Proceeding with release..."
 echo ""
 
 # Ensure shipped docs index is up to date (helps keep Help → Workshop etc. in sync)
-print_blue "[0/7] Updating docs index..."
+# Note: graph-editor/public/docs/index.json is intentionally gitignored and generated at build time.
+print_blue "[0/7] Updating docs index (build-time)..."
 (
   cd graph-editor
   npm run generate-docs
@@ -368,9 +369,9 @@ fi
 # Stage changes
 print_blue "[4/7] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md graph-editor/public/docs/index.json
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md
 else
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/index.json
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json
 fi
 
 # Commit the version bump
