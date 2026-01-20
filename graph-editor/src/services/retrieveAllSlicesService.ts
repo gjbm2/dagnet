@@ -1,9 +1,21 @@
 import { explodeDSL } from '../lib/dslExplosion';
 import type { GraphData } from '../types';
 import { completeProgressToast, showProgressToast } from '../components/ProgressToast';
-import { dataOperationsService, setBatchMode } from './dataOperationsService';
+import { dataOperationsService, setBatchMode, type CacheAnalysisResult } from './dataOperationsService';
 import { sessionLogService } from './sessionLogService';
 import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerService';
+
+/**
+ * Current item cache status - reported immediately after cache analysis, before API fetch.
+ */
+export interface CurrentItemCacheStatus {
+  /** True if fully cached (no API call needed) */
+  cacheHit: boolean;
+  /** Days to fetch from API (0 if cache hit) */
+  daysToFetch: number;
+  /** Number of gaps to fill */
+  gapCount: number;
+}
 
 export interface RetrieveAllSlicesProgress {
   currentSlice: number;
@@ -11,6 +23,25 @@ export interface RetrieveAllSlicesProgress {
   currentItem: number;
   totalItems: number;
   currentSliceDSL?: string;
+  
+  /** Current item's cache status (set when cache analysis completes) */
+  currentItemStatus?: CurrentItemCacheStatus;
+  
+  /** Running totals across all processed items */
+  runningCacheHits: number;
+  runningApiFetches: number;
+  runningDaysFetched: number;
+  runningTotalProcessed: number;
+}
+
+/** Per-slice statistics */
+export interface SliceStat {
+  slice: string;
+  items: number;
+  cached: number;
+  fetched: number;
+  daysFetched: number;
+  errors: number;
 }
 
 export interface RetrieveAllSlicesResult {
@@ -19,6 +50,17 @@ export interface RetrieveAllSlicesResult {
   totalSuccess: number;
   totalErrors: number;
   aborted: boolean;
+  
+  /** Items fully served from cache (no API call) */
+  totalCacheHits: number;
+  /** Items requiring API calls */
+  totalApiFetches: number;
+  /** Total days fetched from API */
+  totalDaysFetched: number;
+  /** Duration in milliseconds */
+  durationMs: number;
+  /** Per-slice breakdown */
+  sliceStats: SliceStat[];
 }
 
 export interface RetrieveAllSlicesOptions {
@@ -82,9 +124,24 @@ class RetrieveAllSlicesService {
       onProgress,
     } = options;
 
+    const startTime = performance.now();
+    
+    const emptyResult: RetrieveAllSlicesResult = {
+      totalSlices: 0,
+      totalItems: 0,
+      totalSuccess: 0,
+      totalErrors: 0,
+      aborted: false,
+      totalCacheHits: 0,
+      totalApiFetches: 0,
+      totalDaysFetched: 0,
+      durationMs: 0,
+      sliceStats: [],
+    };
+
     const initialGraph = getGraph();
     if (!initialGraph) {
-      return { totalSlices: 0, totalItems: 0, totalSuccess: 0, totalErrors: 0, aborted: false };
+      return { ...emptyResult, durationMs: performance.now() - startTime };
     }
 
     let effectiveSlices: string[] = slices ?? [];
@@ -92,14 +149,14 @@ class RetrieveAllSlicesService {
       const dsl = initialGraph.dataInterestsDSL || '';
       if (!dsl) {
         sessionLogService.warning('data-fetch', 'BATCH_ALL_SLICES_SKIPPED', 'Retrieve All Slices skipped: no pinned query');
-        return { totalSlices: 0, totalItems: 0, totalSuccess: 0, totalErrors: 0, aborted: false };
+        return { ...emptyResult, durationMs: performance.now() - startTime };
       }
       effectiveSlices = await explodeDSL(dsl);
     }
 
     const totalSlices = effectiveSlices.length;
     if (totalSlices === 0) {
-      return { totalSlices: 0, totalItems: 0, totalSuccess: 0, totalErrors: 0, aborted: false };
+      return { ...emptyResult, durationMs: performance.now() - startTime };
     }
 
     // Enable batch mode to suppress individual toasts (service layer should be safe for headless usage).
@@ -116,14 +173,30 @@ class RetrieveAllSlicesService {
     let totalSuccess = 0;
     let totalErrors = 0;
     let totalItems = 0;
+    let totalCacheHits = 0;
+    let totalApiFetches = 0;
+    let totalDaysFetched = 0;
     let aborted = false;
+    const sliceStats: SliceStat[] = [];
+
+    // For progress reporting
+    let runningTotalProcessed = 0;
 
     const reportProgress = (p: RetrieveAllSlicesProgress) => {
       onProgress?.(p);
     };
 
     try {
-      reportProgress({ currentSlice: 0, totalSlices, currentItem: 0, totalItems: 0 });
+      reportProgress({
+        currentSlice: 0,
+        totalSlices,
+        currentItem: 0,
+        totalItems: 0,
+        runningCacheHits: 0,
+        runningApiFetches: 0,
+        runningDaysFetched: 0,
+        runningTotalProcessed: 0,
+      });
 
       for (let sliceIdx = 0; sliceIdx < effectiveSlices.length; sliceIdx++) {
         if (shouldAbort?.()) {
@@ -138,16 +211,24 @@ class RetrieveAllSlicesService {
         const batchItems = retrieveAllSlicesPlannerService.collectTargets(graphForSlice);
         totalItems += batchItems.length;
 
+        // Track per-slice stats
+        let sliceCached = 0;
+        let sliceFetched = 0;
+        let sliceDaysFetched = 0;
+        let sliceSuccess = 0;
+        let sliceErrors = 0;
+
         reportProgress({
           currentSlice: sliceIdx + 1,
           totalSlices,
           currentItem: 0,
           totalItems: batchItems.length,
           currentSliceDSL: sliceDSL,
+          runningCacheHits: totalCacheHits,
+          runningApiFetches: totalApiFetches,
+          runningDaysFetched: totalDaysFetched,
+          runningTotalProcessed,
         });
-
-        let sliceSuccess = 0;
-        let sliceErrors = 0;
 
         for (let itemIdx = 0; itemIdx < batchItems.length; itemIdx++) {
           if (shouldAbort?.()) {
@@ -156,20 +237,39 @@ class RetrieveAllSlicesService {
           }
 
           const item = batchItems[itemIdx];
-          reportProgress({
-            currentSlice: sliceIdx + 1,
-            totalSlices,
-            currentItem: itemIdx + 1,
-            totalItems: batchItems.length,
-            currentSliceDSL: sliceDSL,
-          });
+          
+          // Track current item's cache status (will be set by onCacheAnalysis callback)
+          let currentItemStatus: CurrentItemCacheStatus | undefined;
+          
+          const onCacheAnalysis = (analysis: CacheAnalysisResult) => {
+            currentItemStatus = {
+              cacheHit: analysis.cacheHit,
+              daysToFetch: analysis.daysToFetch,
+              gapCount: analysis.gapCount,
+            };
+            
+            // Report progress with current item status (before fetch starts)
+            reportProgress({
+              currentSlice: sliceIdx + 1,
+              totalSlices,
+              currentItem: itemIdx + 1,
+              totalItems: batchItems.length,
+              currentSliceDSL: sliceDSL,
+              currentItemStatus,
+              runningCacheHits: totalCacheHits,
+              runningApiFetches: totalApiFetches,
+              runningDaysFetched: totalDaysFetched,
+              runningTotalProcessed,
+            });
+          };
 
           try {
             const currentGraph = getGraph();
             if (!currentGraph) continue;
 
+            let result;
             if (item.type === 'parameter') {
-              await dataOperationsService.getFromSource({
+              result = await dataOperationsService.getFromSource({
                 objectType: 'parameter',
                 objectId: item.objectId,
                 targetId: item.targetId,
@@ -181,10 +281,10 @@ class RetrieveAllSlicesService {
                 currentDSL: sliceDSL,
                 targetSlice: sliceDSL,
                 dontExecuteHttp: simulate,
+                onCacheAnalysis,
               });
-              sliceSuccess++;
             } else {
-              await dataOperationsService.getFromSource({
+              result = await dataOperationsService.getFromSource({
                 objectType: 'case',
                 objectId: item.objectId,
                 targetId: item.targetId,
@@ -193,9 +293,37 @@ class RetrieveAllSlicesService {
                 bustCache,
                 currentDSL: sliceDSL,
                 dontExecuteHttp: simulate,
+                onCacheAnalysis,
               });
-              sliceSuccess++;
             }
+            
+            sliceSuccess++;
+            runningTotalProcessed++;
+            
+            // Aggregate stats from result
+            if (result.cacheHit) {
+              sliceCached++;
+              totalCacheHits++;
+            } else {
+              sliceFetched++;
+              totalApiFetches++;
+              sliceDaysFetched += result.daysFetched;
+              totalDaysFetched += result.daysFetched;
+            }
+            
+            // Report progress after item completes
+            reportProgress({
+              currentSlice: sliceIdx + 1,
+              totalSlices,
+              currentItem: itemIdx + 1,
+              totalItems: batchItems.length,
+              currentSliceDSL: sliceDSL,
+              runningCacheHits: totalCacheHits,
+              runningApiFetches: totalApiFetches,
+              runningDaysFetched: totalDaysFetched,
+              runningTotalProcessed,
+            });
+            
           } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             sessionLogService.addChild(
@@ -206,19 +334,30 @@ class RetrieveAllSlicesService {
               errorMessage
             );
             sliceErrors++;
+            runningTotalProcessed++;
           }
         }
 
         totalSuccess += sliceSuccess;
         totalErrors += sliceErrors;
+        
+        // Record slice stats
+        sliceStats.push({
+          slice: sliceDSL,
+          items: batchItems.length,
+          cached: sliceCached,
+          fetched: sliceFetched,
+          daysFetched: sliceDaysFetched,
+          errors: sliceErrors,
+        });
 
         sessionLogService.addChild(
           logOpId,
           sliceErrors > 0 ? 'warning' : 'success',
           'SLICE_COMPLETE',
-          `Slice "${sliceDSL}": ${sliceSuccess} succeeded, ${sliceErrors} failed`,
+          `Slice "${sliceDSL}": ${sliceCached} cached, ${sliceFetched} fetched (${sliceDaysFetched}d), ${sliceErrors} errors`,
           undefined,
-          { added: sliceSuccess, errors: sliceErrors }
+          { cached: sliceCached, fetched: sliceFetched, daysFetched: sliceDaysFetched, errors: sliceErrors }
         );
 
         if (aborted) break;
@@ -229,7 +368,7 @@ class RetrieveAllSlicesService {
       if (!simulate && !aborted && totalErrors === 0) {
         try {
           const g = getGraph();
-          if (g && typeof g === 'object' && (g as any).metadata) {
+          if (g && typeof g === 'object') {
             const next: any = { ...(g as any) };
             next.metadata = { ...(next.metadata || {}), last_retrieve_all_slices_success_at_ms: Date.now() };
             setGraph(next);
@@ -239,16 +378,45 @@ class RetrieveAllSlicesService {
         }
       }
 
+      const durationMs = performance.now() - startTime;
+      
+      // Add summary table to session log
+      this.addSummaryToSessionLog(logOpId, sliceStats, {
+        totalCacheHits,
+        totalApiFetches,
+        totalDaysFetched,
+        totalErrors,
+        durationMs,
+        aborted,
+      });
+
       sessionLogService.endOperation(
         logOpId,
         totalErrors > 0 ? 'warning' : 'success',
         aborted
-          ? `All Slices aborted: ${totalSuccess} succeeded, ${totalErrors} failed`
-          : `All Slices complete: ${totalSuccess} succeeded, ${totalErrors} failed across ${totalSlices} slice(s)`,
-        { added: totalSuccess, errors: totalErrors }
+          ? `Retrieve All aborted: ${totalCacheHits} cached, ${totalApiFetches} fetched (${totalDaysFetched}d), ${totalErrors} errors`
+          : `Retrieve All complete: ${totalCacheHits} cached, ${totalApiFetches} fetched (${totalDaysFetched}d)${totalErrors > 0 ? `, ${totalErrors} errors` : ''}`,
+        { 
+          cached: totalCacheHits, 
+          fetched: totalApiFetches, 
+          daysFetched: totalDaysFetched, 
+          errors: totalErrors,
+          duration: Math.round(durationMs),
+        }
       );
 
-      return { totalSlices, totalItems, totalSuccess, totalErrors, aborted };
+      return {
+        totalSlices,
+        totalItems,
+        totalSuccess,
+        totalErrors,
+        aborted,
+        totalCacheHits,
+        totalApiFetches,
+        totalDaysFetched,
+        durationMs,
+        sliceStats,
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       sessionLogService.endOperation(logOpId, 'error', `All Slices failed: ${errorMessage}`, { errors: totalErrors + 1 });
@@ -256,6 +424,64 @@ class RetrieveAllSlicesService {
     } finally {
       setBatchMode(false);
     }
+  }
+  
+  /**
+   * Add a summary table to the session log
+   */
+  private addSummaryToSessionLog(
+    logOpId: string,
+    sliceStats: SliceStat[],
+    totals: {
+      totalCacheHits: number;
+      totalApiFetches: number;
+      totalDaysFetched: number;
+      totalErrors: number;
+      durationMs: number;
+      aborted: boolean;
+    }
+  ): void {
+    const lines: string[] = [];
+    lines.push('');
+    lines.push('RETRIEVE ALL SUMMARY');
+    lines.push('─'.repeat(70));
+    lines.push('Slice                                    Items  Cached  Fetched  Days  Errors');
+    lines.push('─'.repeat(70));
+    
+    for (const stat of sliceStats) {
+      const sliceName = stat.slice.length > 40 ? stat.slice.slice(0, 37) + '...' : stat.slice.padEnd(40);
+      const items = String(stat.items).padStart(5);
+      const cached = String(stat.cached).padStart(6);
+      const fetched = String(stat.fetched).padStart(7);
+      const days = String(stat.daysFetched).padStart(5);
+      const errors = String(stat.errors).padStart(6);
+      lines.push(`${sliceName} ${items} ${cached} ${fetched} ${days} ${errors}`);
+    }
+    
+    lines.push('─'.repeat(70));
+    const totalItems = sliceStats.reduce((sum, s) => sum + s.items, 0);
+    lines.push(`${'TOTAL'.padEnd(40)} ${String(totalItems).padStart(5)} ${String(totals.totalCacheHits).padStart(6)} ${String(totals.totalApiFetches).padStart(7)} ${String(totals.totalDaysFetched).padStart(5)} ${String(totals.totalErrors).padStart(6)}`);
+    lines.push('─'.repeat(70));
+    lines.push(`Duration: ${(totals.durationMs / 1000).toFixed(1)}s`);
+    if (totals.aborted) {
+      lines.push('⚠️ Operation was aborted');
+    }
+    
+    sessionLogService.addChild(
+      logOpId,
+      totals.totalErrors > 0 ? 'warning' : 'success',
+      'BATCH_SUMMARY',
+      'Retrieve All Summary',
+      lines.join('\n'),
+      {
+        totalItems,
+        cached: totals.totalCacheHits,
+        fetched: totals.totalApiFetches,
+        daysFetched: totals.totalDaysFetched,
+        errors: totals.totalErrors,
+        duration: Math.round(totals.durationMs),
+      }
+    );
   }
 }
 
@@ -266,10 +492,43 @@ export async function executeRetrieveAllSlicesWithProgressToast(
 ): Promise<RetrieveAllSlicesResult> {
   const { toastId, toastLabel, onProgress, ...rest } = options;
   let toastShown = false;
+  let lastProgress: RetrieveAllSlicesProgress | undefined;
 
   const handleProgress = (p: RetrieveAllSlicesProgress) => {
+    lastProgress = p;
+    
     if (p.totalSlices > 0) {
-      showProgressToast(toastId, p.currentSlice, p.totalSlices, toastLabel);
+      // Build detailed progress label
+      let label = toastLabel || 'Retrieve All';
+      
+      // Show current slice info
+      if (p.currentSliceDSL) {
+        // Extract short slice name (e.g., "channel:influencer.window" from full DSL)
+        const shortSlice = p.currentSliceDSL.length > 30 
+          ? p.currentSliceDSL.slice(0, 27) + '...' 
+          : p.currentSliceDSL;
+        label = `Slice ${p.currentSlice}/${p.totalSlices}: ${shortSlice}`;
+      }
+      
+      // Show current item status if available
+      if (p.currentItemStatus) {
+        if (p.currentItemStatus.cacheHit) {
+          label += `\nItem ${p.currentItem}/${p.totalItems}: cached ✓`;
+        } else if (p.currentItemStatus.gapCount > 1) {
+          label += `\nItem ${p.currentItem}/${p.totalItems}: fetching ${p.currentItemStatus.daysToFetch}d across ${p.currentItemStatus.gapCount} gaps`;
+        } else {
+          label += `\nItem ${p.currentItem}/${p.totalItems}: fetching ${p.currentItemStatus.daysToFetch}d`;
+        }
+      } else if (p.currentItem > 0) {
+        label += `\nItem ${p.currentItem}/${p.totalItems}`;
+      }
+      
+      // Show running totals
+      if (p.runningTotalProcessed > 0) {
+        label += `\n${p.runningCacheHits} cached, ${p.runningApiFetches} fetched`;
+      }
+      
+      showProgressToast(toastId, p.currentSlice, p.totalSlices, label);
       toastShown = true;
     }
     onProgress?.(p);
@@ -283,11 +542,17 @@ export async function executeRetrieveAllSlicesWithProgressToast(
 
     if (toastShown) {
       const hasIssues = result.aborted || result.totalErrors > 0;
-      const message = result.aborted
-        ? `Retrieve All aborted (${result.totalSuccess} succeeded, ${result.totalErrors} failed)`
-        : result.totalErrors > 0
-          ? `Retrieve All complete (${result.totalSuccess} succeeded, ${result.totalErrors} failed)`
-          : `Retrieve All complete (${result.totalSuccess} succeeded)`;
+      const durationStr = (result.durationMs / 1000).toFixed(1);
+      
+      let message: string;
+      if (result.aborted) {
+        message = `Retrieve All aborted (${result.totalCacheHits} cached, ${result.totalApiFetches} fetched, ${result.totalErrors} errors)`;
+      } else if (result.totalErrors > 0) {
+        message = `Retrieve All: ${result.totalCacheHits} cached, ${result.totalApiFetches} fetched (${result.totalDaysFetched}d), ${result.totalErrors} failed`;
+      } else {
+        message = `Retrieve All complete (${durationStr}s)\n${result.totalCacheHits} cached, ${result.totalApiFetches} fetched (${result.totalDaysFetched}d new)`;
+      }
+      
       completeProgressToast(toastId, message, hasIssues);
     }
 
@@ -300,5 +565,3 @@ export async function executeRetrieveAllSlicesWithProgressToast(
     throw error;
   }
 }
-
-

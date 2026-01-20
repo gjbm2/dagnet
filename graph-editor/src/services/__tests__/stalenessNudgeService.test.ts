@@ -134,6 +134,30 @@ describe('stalenessNudgeService', () => {
     expect(res.isStale).toBe(false);
   });
 
+  it('should NOT consider retrieve-all-slices stale when connected parameters have never been retrieved (no retrieved_at)', async () => {
+    const now = 2_000_000_000;
+
+    hoisted.mockGetFile.mockImplementation((fileId: string) => {
+      if (fileId === 'parameter-param-1') {
+        return { data: { values: [] } };
+      }
+      return null;
+    });
+
+    const graph = {
+      edges: [
+        { uuid: 'edge-1', id: 'edge-1', p: { id: 'param-1' } },
+      ],
+      nodes: [],
+    } as any;
+
+    const res = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graph, now);
+    expect(res.parameterCount).toBe(1);
+    expect(res.staleParameterCount).toBe(0);
+    expect(res.mostRecentRetrievedAtMs).toBeUndefined();
+    expect(res.isStale).toBe(false);
+  });
+
   it('should report remote-ahead when remote HEAD differs from workspace commitSHA', async () => {
     hoisted.mockDbWorkspacesGet.mockResolvedValue({ commitSHA: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
     hoisted.mockCredentialsLoad.mockResolvedValue({

@@ -104,6 +104,38 @@ export interface GetFromFileCopyOptions {
   permissionsMode?: PermissionCopyMode;
 }
 
+/**
+ * Cache analysis result - reported immediately after cache check, before any API fetch.
+ * Used by retrieve-all to show real-time progress ("fetching 5d across 2 gaps").
+ */
+export interface CacheAnalysisResult {
+  /** True if all requested data is fully cached (no API call needed) */
+  cacheHit: boolean;
+  /** Number of days that need to be fetched from API (0 if cache hit) */
+  daysToFetch: number;
+  /** Number of contiguous gaps in the cache (0 if cache hit) */
+  gapCount: number;
+  /** Number of days already available from cache */
+  daysFromCache: number;
+  /** Total days in the requested window */
+  totalDays: number;
+}
+
+/**
+ * Result from getFromSource/getFromSourceDirect with fetch statistics.
+ * Used by retrieve-all to aggregate stats for summary reporting.
+ */
+export interface GetFromSourceResult {
+  /** Whether the operation completed successfully */
+  success: boolean;
+  /** True if all data was served from cache (no API call made) */
+  cacheHit: boolean;
+  /** Number of days actually fetched from API (0 if cache hit) */
+  daysFetched: number;
+  /** Number of days served from cache */
+  daysFromCache: number;
+}
+
 // Cached DAS runner instance for connection lookups (avoid recreating per-call)
 let cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
 function getCachedDASRunner() {
@@ -3288,8 +3320,13 @@ class DataOperationsService {
      * Plan interpreter mode: execute exactly these windows (bypass cache-cutting window derivation).
      */
     overrideFetchWindows?: DateRange[];
-  }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL, boundedCohortWindow, skipCohortBounding, dontExecuteHttp, overrideFetchWindows } = options;
+    /**
+     * Callback fired immediately after cache analysis, before any API fetch.
+     * Used by retrieve-all to show real-time progress.
+     */
+    onCacheAnalysis?: (result: CacheAnalysisResult) => void;
+  }): Promise<GetFromSourceResult> {
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL, boundedCohortWindow, skipCohortBounding, dontExecuteHttp, overrideFetchWindows, onCacheAnalysis } = options;
     sessionLogService.info('data-fetch', 'DATA_GET_FROM_SOURCE', `Get from Source (versioned): ${objectType} ${objectId}`,
       undefined, { fileId: `${objectType}-${objectId}`, fileType: objectType });
     
@@ -3309,7 +3346,7 @@ class DataOperationsService {
         // - Writes time-series to parameter file
         // - Calls getParameterFromFile internally to update graph
         // No need to call getParameterFromFile again here - that would cause double updates!
-        await this.getFromSourceDirect({
+        const result = await this.getFromSourceDirect({
           objectType: 'parameter',
           objectId, // Parameter file ID
           targetId,
@@ -3325,12 +3362,14 @@ class DataOperationsService {
           skipCohortBounding, // Pass through to skip bounding if set
           dontExecuteHttp,
           overrideFetchWindows,
+          onCacheAnalysis,
         });
         
         // NOTE: getFromSourceDirect already calls getParameterFromFile internally
         // (both for cache hits and after writing new data), so no second call needed
         
         batchableToastSuccess('Fetched from source and updated graph from file');
+        return result;
         
       } else if (objectType === 'case') {
         // Cases: fetch gate config, append to schedules[], update graph nodes
@@ -3339,7 +3378,7 @@ class DataOperationsService {
         // 1. Fetch from source and write to case file
         // For cases, we manually extract variants_update and write to file
         // (Unlike params which have daily time_series, cases have discrete schedule snapshots)
-        await this.getFromSourceDirect({
+        const caseResult = await this.getFromSourceDirect({
           objectType,
           objectId,
           targetId,
@@ -3350,6 +3389,7 @@ class DataOperationsService {
           bustCache: false,
           currentDSL,
           dontExecuteHttp,
+          onCacheAnalysis,
         });
         
         // 2. Update graph nodes from case file (with windowed aggregation)
@@ -3357,7 +3397,7 @@ class DataOperationsService {
         // Use currentGraph which was updated by step 1's setGraph call
         if (dontExecuteHttp) {
           // Dry-run simulation must not mutate graph.
-          return;
+          return caseResult;
         }
         if (currentGraph && trackingSetGraph && targetId) {
           // Find the first case node with this case_id to update from file
@@ -3506,10 +3546,11 @@ class DataOperationsService {
         }
         
         batchableToastSuccess('Fetched from source and updated graph from file');
+        return caseResult;
         
       } else {
         batchableToastError(`Versioned fetching not yet supported for ${objectType}`);
-        return;
+        return { success: false, cacheHit: false, daysFetched: 0, daysFromCache: 0 };
       }
       
     } catch (error) {
@@ -3555,7 +3596,12 @@ class DataOperationsService {
      * Plan interpreter mode: execute exactly these windows (bypass cache-cutting window derivation).
      */
     overrideFetchWindows?: DateRange[];
-  }): Promise<void> {
+    /**
+     * Callback fired immediately after cache analysis, before any API fetch.
+     * Used by retrieve-all to show real-time progress.
+     */
+    onCacheAnalysis?: (result: CacheAnalysisResult) => void;
+  }): Promise<GetFromSourceResult> {
       const {
         objectType,
         objectId,
@@ -3573,7 +3619,18 @@ class DataOperationsService {
         dontExecuteHttp = false,
         skipCohortBounding = false,
         overrideFetchWindows,
+        onCacheAnalysis,
       } = options;
+    
+    // Track fetch statistics for return value
+    let fetchStats = {
+      cacheHit: false,
+      daysFetched: 0,
+      daysFromCache: 0,
+    };
+    
+    // Helper for error returns
+    const errorResult: GetFromSourceResult = { success: false, cacheHit: false, daysFetched: 0, daysFromCache: 0 };
     
     // DEBUG: Log conditionalIndex at entry point
     console.log('[DataOps:getFromSourceDirect] Entry:', {
@@ -3690,7 +3747,7 @@ class DataOperationsService {
           } catch (e) {
             toast.error('Invalid connection_string JSON in persisted parameter config');
             sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON in persisted parameter config');
-            return;
+            return errorResult;
           }
         }
       } else if (objectType === 'case' && targetId && graph) {
@@ -3714,7 +3771,7 @@ class DataOperationsService {
           } catch (e) {
             toast.error('Invalid connection_string JSON in persisted case config');
             sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON in persisted case config');
-            return;
+            return errorResult;
           }
         }
       } else if (objectId) {
@@ -3732,7 +3789,7 @@ class DataOperationsService {
             } catch (e) {
               toast.error('Invalid connection_string JSON in file');
               sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON in file');
-              return;
+              return errorResult;
             }
           }
         }
@@ -3781,7 +3838,7 @@ class DataOperationsService {
                 } catch (e) {
                   toast.error('Invalid connection_string JSON on edge');
                   sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON on edge');
-                  return;
+                  return errorResult;
                 }
               }
             }
@@ -3798,7 +3855,7 @@ class DataOperationsService {
                 } catch (e) {
                   toast.error('Invalid connection_string JSON on case');
                   sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON on case');
-                  return;
+                  return errorResult;
                 }
               }
             }
@@ -3814,7 +3871,7 @@ class DataOperationsService {
               } catch (e) {
                 toast.error('Invalid connection_string JSON');
                 sessionLogService.endOperation(logOpId, 'error', 'Invalid connection_string JSON');
-                return;
+                return errorResult;
               }
             }
           }
@@ -3825,7 +3882,7 @@ class DataOperationsService {
       if (!connectionName) {
         sessionLogService.endOperation(logOpId, 'error', 'No connection configured');
         toast.error(`No connection configured. Please set the 'connection' field.`);
-        return;
+        return errorResult;
       }
       
       // Log connection info
@@ -4225,7 +4282,7 @@ class DataOperationsService {
               console.error('Error building DSL from edge:', error);
               toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
               sessionLogService.endOperation(logOpId, 'error', `Failed to build query: ${error instanceof Error ? error.message : String(error)}`);
-              return;
+              return errorResult;
             }
           }
         }
@@ -5238,10 +5295,27 @@ class DataOperationsService {
             }
           );
           
+          // Report cache analysis to callback (for retrieve-all progress)
+          if (onCacheAnalysis) {
+            const isCacheHit = !incrementalResult.needsFetch && !bustCache;
+            onCacheAnalysis({
+              cacheHit: isCacheHit,
+              daysToFetch: bustCache ? incrementalResult.totalDays : incrementalResult.daysToFetch,
+              gapCount: bustCache ? 1 : incrementalResult.fetchWindows.length,
+              daysFromCache: isCacheHit ? incrementalResult.totalDays : incrementalResult.daysAvailable,
+              totalDays: incrementalResult.totalDays,
+            });
+            // Pre-populate fetchStats with cache analysis (may be updated after actual fetch)
+            fetchStats.daysFromCache = incrementalResult.daysAvailable;
+          }
+          
           // If partial refetch is active, we still fetch the immature portion even if cache is complete.
           if (!incrementalResult.needsFetch && !bustCache && refetchPolicy?.type !== 'partial') {
             // All dates already exist - skip fetching (unless bustCache is true)
             shouldSkipFetch = true;
+            fetchStats.cacheHit = true;
+            fetchStats.daysFromCache = incrementalResult.totalDays;
+            fetchStats.daysFetched = 0;
             batchableToastSuccess(`All ${incrementalResult.totalDays} days already cached`, { id: 'das-fetch' });
             console.log('[DataOperationsService] Skipping fetch - all dates already exist');
           } else if (incrementalResult.fetchWindows.length > 0) {
@@ -5349,7 +5423,7 @@ class DataOperationsService {
         });
         
         sessionLogService.endOperation(logOpId, 'success', `Applied cached data to graph`);
-        return;
+        return { success: true, cacheHit: true, daysFetched: 0, daysFromCache: fetchStats.daysFromCache };
       }
       
       // 6. Execute DAS Runner - chain requests for each contiguous gap
@@ -6047,7 +6121,7 @@ class DataOperationsService {
                   break;
                 }
                 sessionLogService.endOperation(logOpId, 'error', `Composite query returned no daily data for gap ${gapIndex + 1}`);
-                return;
+                return errorResult;
               }
             } else {
               // Non-writeToFile mode: use aggregated results (with potentially overridden n)
@@ -6502,6 +6576,10 @@ class DataOperationsService {
         `${normalizeDate(w.start)} to ${normalizeDate(w.end)}`
       ).join(', ');
       
+      // Update fetch stats with actual results
+      fetchStats.daysFetched = fetchedDays;
+      fetchStats.cacheHit = (fetchedDays === 0 && !bustCache);
+      
       if (writeToFile && objectType === 'parameter') {
         sessionLogService.addChild(logOpId, 
           fetchedDays > 0 ? 'success' : 'info', 
@@ -6898,7 +6976,7 @@ class DataOperationsService {
             console.error('[DataOperationsService] Case file not found for versioned case fetch:', { caseFileId });
             toast.error(`Case file not found: ${objectId}`);
             sessionLogService.endOperation(logOpId, 'error', `Case file not found: ${objectId}`);
-            return;
+            return errorResult;
           }
           
           // Extract variants from transform output
@@ -6907,7 +6985,7 @@ class DataOperationsService {
             console.error('[DataOperationsService] No variants found in transform output');
             toast.error('No variant data returned from Statsig');
             sessionLogService.endOperation(logOpId, 'error', 'No variant data returned from Statsig');
-            return;
+            return errorResult;
           }
           
           // Create new schedule entry
@@ -7015,7 +7093,7 @@ class DataOperationsService {
           });
           toast.error('Cannot apply to graph: missing context');
           sessionLogService.endOperation(logOpId, 'error', 'Cannot apply to graph: missing context');
-          return;
+          return errorResult;
         }
         
         // Find the target edge
@@ -7026,7 +7104,7 @@ class DataOperationsService {
           });
           toast.error('Target edge not found in graph');
           sessionLogService.endOperation(logOpId, 'error', 'Target edge not found in graph');
-          return;
+          return errorResult;
         }
         
         // ===== CONDITIONAL_P HANDLING =====
@@ -7145,7 +7223,7 @@ class DataOperationsService {
         if (!updateResult.success) {
           toast.error('Failed to apply updates to graph');
           sessionLogService.endOperation(logOpId, 'error', 'Failed to apply updates to graph');
-          return;
+          return errorResult;
         }
         
         // Apply the changes to the graph
@@ -7234,7 +7312,7 @@ class DataOperationsService {
           console.error('[DataOperationsService] Case node not found', { targetId });
           toast.error('Case node not found in graph');
           sessionLogService.endOperation(logOpId, 'error', 'Case node not found in graph');
-          return;
+          return errorResult;
         }
         
         // Build payload for UpdateManager: variants + data_source provenance
@@ -7282,7 +7360,7 @@ class DataOperationsService {
           console.error('[DataOperationsService] UpdateManager failed for case', updateResult);
           toast.error('Failed to apply case updates');
           sessionLogService.endOperation(logOpId, 'error', 'Failed to apply case updates');
-          return;
+          return errorResult;
         }
         
         // Apply changes to graph
@@ -7357,6 +7435,8 @@ class DataOperationsService {
       sessionLogService.endOperation(logOpId, 'success', 
         `Completed: ${entityLabel}`,
         { sourceType: connectionName });
+      
+      return { success: true, ...fetchStats };
       
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

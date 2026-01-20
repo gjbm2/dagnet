@@ -690,6 +690,7 @@ class StalenessNudgeService {
 
     let mostRecentRetrievedAtMs: number | undefined;
     let staleCount = 0;
+    let hasAnyRetrievedAt = false;
 
     for (const t of parameterTargets) {
       const logicalFileId = `parameter-${t.objectId}`;
@@ -714,14 +715,14 @@ class StalenessNudgeService {
 
           values = dbFile?.data?.values;
         } catch {
-          // Ignore IDB failures here; fall back to treating as stale below
+          // Ignore IDB failures here; fall back to treating as unknown (do not nudge).
           values = undefined;
         }
       }
 
       if (!Array.isArray(values) || values.length === 0) {
-        // No values: treat as stale (Retrieve all slices will fill it).
-        staleCount++;
+        // No values: unknown/never retrieved. Do NOT treat as stale.
+        // Rationale: brand new graphs/files should not be nagged to retrieve immediately.
         continue;
       }
 
@@ -735,19 +736,20 @@ class StalenessNudgeService {
       }
 
       if (paramMostRecent !== undefined) {
+        hasAnyRetrievedAt = true;
         if (mostRecentRetrievedAtMs === undefined || paramMostRecent > mostRecentRetrievedAtMs) {
           mostRecentRetrievedAtMs = paramMostRecent;
         }
         if (nowMs - paramMostRecent > STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS) {
           staleCount++;
         }
-      } else {
-        staleCount++;
       }
     }
 
     return {
-      isStale: staleCount > 0 && parameterTargets.length > 0,
+      // Only nudge if we have at least one real retrieval timestamp to compare against.
+      // If nothing has ever been retrieved, this is a brand-new/empty state, not "stale".
+      isStale: hasAnyRetrievedAt && staleCount > 0 && parameterTargets.length > 0,
       parameterCount: parameterTargets.length,
       staleParameterCount: staleCount,
       mostRecentRetrievedAtMs,
