@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.7b
+**Released:** 20-Jan-26
+
+Added workshop docs to Help menu
+
+---
+
 ## Version 1.3.6b
 **Released:** 20-Jan-26
 

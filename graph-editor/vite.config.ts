@@ -200,7 +200,9 @@ export default defineConfig(({ mode }) => {
       port: parseInt(process.env.VITE_PORT || '5173'),
       hmr: true,
       watch: {
-        include: ['src/**/*']
+        // Include shipped docs so dev server reliably picks up new/renamed workshop markdown files
+        // under public/docs without requiring manual restarts.
+        include: ['src/**/*', 'public/docs/**/*']
       },
       // Allow serving files from parent directory
       fs: {
