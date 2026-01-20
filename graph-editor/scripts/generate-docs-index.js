@@ -99,14 +99,16 @@ try {
     }
   }
 
-  if (existingStable && JSON.stringify(existingStable) === JSON.stringify(stableIndexData)) {
+  const unchanged = !!(existingStable && JSON.stringify(existingStable) === JSON.stringify(stableIndexData));
+  if (unchanged) {
     console.log('Docs index unchanged; skipping write.');
   } else {
     fs.writeFileSync(INDEX_FILE, JSON.stringify(indexData, null, 2));
+    console.log(`Wrote ${INDEX_FILE}`);
   }
 
   const totalFiles = rootFiles.length + Object.values(categories).reduce((sum, cat) => sum + cat.files.length, 0);
-  console.log(`Generated ${INDEX_FILE} with ${totalFiles} documentation files:`);
+  console.log(`Docs index has ${totalFiles} documentation files:`);
   console.log(`  Root: ${rootFiles.length} files`);
   rootFiles.forEach(file => console.log(`    - ${file}`));
   Object.entries(categories).forEach(([cat, data]) => {
