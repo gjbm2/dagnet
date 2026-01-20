@@ -9,8 +9,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { explodeDSL } from '../../lib/dslExplosion';
-import { dataOperationsService } from '../../services/dataOperationsService';
-import { LogFileService } from '../../services/logFileService';
 import { retrieveAllSlicesService } from '../../services/retrieveAllSlicesService';
 import { useTabContext } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
@@ -133,23 +131,38 @@ export function AllSlicesModal({
   const executeAllSlicesFetch = async () => {
     if (!graph || selectedSlices.length === 0) return;
 
-    // Simulation mode: do NOT hit external providers. Produce a detailed report log only.
+    // Simulation mode: run the REAL Retrieve All codepaths, but:
+    // - no external HTTP (dry-run request construction only)
+    // - no file writes
+    // - no graph mutation
+    //
+    // The artefact is the session log trace (DRY_RUN_HTTP entries).
     if (simulateToLog) {
       setIsProcessing(true);
       try {
-        const report = await dataOperationsService.simulateRetrieveAllSlicesToMarkdown({
-          graph: graph as any,
+        const graphSnapshot = graphRef.current as GraphData | null;
+        if (!graphSnapshot) return;
+
+        await retrieveAllSlicesService.execute({
+          getGraph: () => graphSnapshot,
+          // No graph mutation in simulation mode.
+          setGraph: () => {},
           slices: selectedSlices.map(s => s.dsl),
           bustCache,
+          simulate: true,
+          shouldAbort: () => abortRef.current,
+          onProgress: (p) => {
+            setProgress({
+              currentSlice: p.currentSlice,
+              totalSlices: p.totalSlices,
+              currentItem: p.currentItem,
+              totalItems: p.totalItems,
+            });
+            setCurrentSliceName(p.currentSliceDSL || '');
+          },
         });
-        
-        await LogFileService.createLogFile(
-          report,
-          tabOperations,
-          `Retrieve All Slices (Simulated) (${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })})`
-        );
-        
-        toast.success('Simulation complete (no external requests made)');
+
+        toast.success('Simulation complete (see session log for dry-run HTTP commands)');
       } catch (error) {
         console.error('[AllSlicesModal] Simulation failed:', error);
         toast.error(`Simulation failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -229,12 +242,15 @@ export function AllSlicesModal({
           const topoItems: FetchItem[] = targets
             .filter((t): t is Extract<typeof t, { type: 'parameter' }> => t.type === 'parameter')
             .map((t) => ({
-              id: `param-${t.objectId}-${t.paramSlot ?? 'p'}-${t.targetId}`,
+              id: typeof (t as any).conditionalIndex === 'number'
+                ? `param-${t.objectId}-conditional_p[${(t as any).conditionalIndex}]-${t.targetId}`
+                : `param-${t.objectId}-${t.paramSlot ?? 'p'}-${t.targetId}`,
               type: 'parameter',
               name: t.name,
               objectId: t.objectId,
               targetId: t.targetId,
               paramSlot: t.paramSlot,
+              conditionalIndex: (t as any).conditionalIndex,
             }));
 
           // Refresh the graph's scalar evidence/forecast fields for the CURRENT DSL from cache (no network),

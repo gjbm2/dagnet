@@ -59,6 +59,52 @@ describe('computeQuerySignature - context_filters', () => {
     expect(sig1).toEqual(sig2);
   });
 
+  it('does not change when original_query embeds context(value) (value must not affect signature)', async () => {
+    const basePayload: any = {
+      from: 'a',
+      to: 'b',
+      context: [{ key: 'channel', value: 'paid-search' }],
+    };
+
+    const contextDef = {
+      id: 'channel',
+      name: 'Marketing Channel',
+      description: 'Primary acquisition channel',
+      type: 'categorical',
+      otherPolicy: 'computed',
+      values: [
+        { id: 'paid-search', label: 'Paid Search' },
+        { id: 'influencer', label: 'Influencer' },
+        { id: 'paid-social', label: 'Paid Social' },
+        { id: 'other', label: 'Other' },
+      ],
+      metadata: {
+        category: 'marketing',
+        data_source: 'utm_parameters',
+        created_at: '1-Dec-25',
+        version: '1.0.0',
+        status: 'active',
+      },
+    };
+    vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(contextDef as any);
+
+    const sig1 = await computeQuerySignature(
+      basePayload,
+      'amplitude-prod',
+      undefined,
+      { query: 'from(a).to(b).context(channel:paid-search)' }
+    );
+
+    const sig2 = await computeQuerySignature(
+      basePayload,
+      'amplitude-prod',
+      undefined,
+      { query: 'from(a).to(b).context(channel:other)' }
+    );
+
+    expect(sig1).toEqual(sig2);
+  });
+
   it('changes when context definition changes (context hash)', async () => {
     const basePayload: any = {
       from: 'a',
@@ -100,11 +146,11 @@ describe('computeQuerySignature - context_filters', () => {
     };
 
     vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(contextDefV1 as any);
-    const sig1 = await computeQuerySignature(basePayload, 'amplitude-prod', undefined, undefined, ['channel']);
+    const sig1 = await computeQuerySignature(basePayload, 'amplitude-prod', undefined, undefined, ['channel'], undefined);
 
     contextRegistry.clearCache();
     vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(contextDefV2 as any);
-    const sig2 = await computeQuerySignature(basePayload, 'amplitude-prod', undefined, undefined, ['channel']);
+    const sig2 = await computeQuerySignature(basePayload, 'amplitude-prod', undefined, undefined, ['channel'], undefined);
 
     expect(sig1).not.toEqual(sig2);
   });

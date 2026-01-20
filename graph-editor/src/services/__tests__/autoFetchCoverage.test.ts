@@ -10,10 +10,26 @@
  * - Maturity, sparsity, and daily gaps do NOT affect coverage.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import type { DateRange } from '../../types';
 import type { ParameterValue } from '../../types/parameterData';
 import { hasFullSliceCoverageByHeader } from '../windowAggregationService';
+import { contextRegistry } from '../contextRegistry';
+
+function seedContextKeyValues(key: string, values: string[]) {
+  // These unit tests assert MECE semantics. MECE is defined by context definitions, so we must
+  // seed a context definition (in-memory) for the key used in test fixtures.
+  contextRegistry.clearCache();
+  (contextRegistry as any).cache.set(key, {
+    id: key,
+    name: key,
+    description: 'test',
+    type: 'categorical',
+    otherPolicy: 'null',
+    values: values.map((id) => ({ id, label: id })),
+    metadata: { status: 'active', created_at: '1-Dec-25', version: '1.0.0' },
+  });
+}
 
 function makeWindowSlice(
   sliceDSL: string,
@@ -165,6 +181,12 @@ describe('hasFullSliceCoverageByHeader - context isolation', () => {
 describe('hasFullSliceCoverageByHeader - MECE uncontexted over contexted-only file', () => {
   const requestedWindow: DateRange = { start: '1-Nov-25', end: '7-Nov-25' };
 
+  // In this suite, MECE universe is the declared context definition values.
+  // These tests use two channels: google + organic.
+  beforeEach(() => {
+    seedContextKeyValues('channel', ['google', 'organic']);
+  });
+
   it('returns true only when all MECE component slices cover the window', () => {
     const fullCoverageData = {
       values: [
@@ -277,6 +299,7 @@ describe('hasFullSliceCoverageByHeader - cohort mode', () => {
   });
 
   it('uses cohort_from/cohort_to headers even when sliceDSL is open-ended/relative (e.g. cohort(-60d:))', () => {
+    seedContextKeyValues('channel', ['google', 'meta']);
     const requested: DateRange = { start: '12-Dec-25', end: '18-Dec-25' };
     const paramFileData2 = {
       values: [

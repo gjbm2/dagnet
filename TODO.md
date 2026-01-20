@@ -1,5 +1,60 @@
 # TODO
 
+- ## CRITICAL — Signature gating disabled for release safety (20-Jan-26)
++
+### What happened / why this is here
+- **Business-critical workflow broken**: After a Retrieve All (which writes contexted MECE slices) the WindowSelector planner was frequently reporting `Outcome: not_covered` and `needs_fetch missing=Xd` **even when cache coverage was FULL**.
+  - Session logs repeatedly showed the contradiction:
+    - `IMPLICIT_UNCONTEXTED: using MECE partition (key=channel, complete=true)`
+    - `SLICES: ✓ 1-Nov-25 → 15-Dec-25 (FULL)` (for the MECE component slices)
+    - but planner items still came out as `NEEDS_FETCH (COVERED)` with `missingDates=Xd`.
+- The root cause class is **signature enforcement drift**:
+  - We introduced/strengthened `query_signature` “signature isolation” so stale cache entries don’t satisfy a changed query.
+  - In practice, the planner began **rejecting MECE cache generations** due to mismatched signature computation and/or differing context-definition resolution.
+  - This is subtle because:
+    - “Coverage” logging in `COVERAGE_DETAIL` is **not signature-aware** (it inspects raw file values), while the FetchPlan builder uses signature-filtered values for actual planning.
+    - Different parameters can diverge (`1 covered, 9 need fetch`) if only some happen to match the planner’s computed signature set.
+
+### Timeline / key corrective work attempted (high-signal)
+- **Canonical target enumeration** (fixed): introduced `fetchTargetEnumerationService.ts` so all planners enumerate the same fetchable universe, including `conditional_p`, and canonical case IDs (`node.case.id`).
+- **Planner connection detection** (fixed): corrected production connection checks to look at **param-slot** connections (`edge.p.connection`, etc.), preventing “unfetchable” misclassification.
+- **Header-based FULL coverage alignment** (fixed): planner now treats FULL header coverage as zero missing days (avoids per-day sparsity false negatives).
+- **MECE aggregation correctness** (fixed): MECE coverage for cohort/window now honours aggregate header bounds across MECE slices.
+- **Signature isolation** (partially fixed, but still failing in prod):
+  - Removed sentinel-based signature filtering that rejected everything when any signatures existed.
+  - Added planner signature computation (`plannerQuerySignatureService.ts`) to match executor.
+  - Made signatures **context-value independent** (context definition affects signature, not the selected value).
+  - Added multi-candidate planner signatures for implicit-uncontexted fulfilment (MECE key candidates).
+  - Added workspace-scoped context hashing to avoid cross-workspace context confusion in IndexedDB.
+  - Despite this, production logs still show the “COVERED but needs_fetch” contradiction in real graphs (example logs around `cohort(10-Nov-25:13-Nov-25)` and `cohort(19-Nov-25:20-Nov-25)`).
+
+### Current diagnosis (where we are right now)
+- The system is in a state where **signature enforcement can incorrectly reject valid MECE cache** and thereby **block normal fetch flows** (users see fetch required; fetch behaviour becomes unpredictable).
+- It is unclear whether the remaining production mismatch is due to:
+  - legacy signatures written under older semantics (requiring a full Retrieve All to rewrite), and/or
+  - remaining signature-shape drift (e.g. `edge.query` canonicalisation, composite query normalisation), and/or
+  - subtle context definition resolution differences (workspace scoping, cache priming timing).
+
+### Release decision (explicit)
+- **We are disabling signature checking and signature writing for release** so that:
+  - cached data is used based on slice isolation + MECE + header coverage only, and
+  - fetching is never blocked by signature mismatch.
+- This is implemented via `graph-editor/src/services/signaturePolicyService.ts`:
+  - `SIGNATURE_CHECKING_ENABLED = false`
+  - `SIGNATURE_WRITING_ENABLED = false`
+
+### Follow-up work (to re-enable signatures safely)
+- Re-enable signatures only after:
+  - verifying a single canonical signature definition across planner + executor,
+  - proving MECE implicit-uncontexted fulfilment selects the correct signed generation deterministically,
+  - adding hard integration tests that reproduce the real production workflow using real graph/schema and minimal mocking,
+  - ensuring signature mismatch **never prevents fetching** (at worst triggers refetch), and
+  - adding session-log diagnostics that explicitly report signature matching counts per item (so “COVERED but filtered out” is visible).
+
+
+
+- retrieve all in simulation mode IS writing to param files and/or graph. this is not permitted. 
+
 ## Pull latest issues
 - clients update their graph files after a fetch
 - this looks like a conflict on next git pull

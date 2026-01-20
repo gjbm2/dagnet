@@ -13,6 +13,42 @@ import { waitForLiveShareGraphDeps } from '../services/liveShareHydrationService
 import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
 import { fetchDataService } from '../services/fetchDataService';
 
+async function waitForTabContextInitDone(timeoutMs: number = 10_000): Promise<void> {
+  try {
+    if ((window as any).__dagnetTabContextInitDone) return;
+  } catch {
+    // ignore
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    let done = false;
+    const onDone = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('dagnet:tabContextInitDone', onDone as any);
+      resolve();
+    };
+    const t = window.setTimeout(() => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('dagnet:tabContextInitDone', onDone as any);
+      reject(new Error('Timed out waiting for TabContext init'));
+    }, timeoutMs);
+
+    window.addEventListener('dagnet:tabContextInitDone', onDone as any);
+
+    // If init completes between the initial check and addEventListener, resolve immediately.
+    try {
+      if ((window as any).__dagnetTabContextInitDone) {
+        window.clearTimeout(t);
+        onDone();
+      }
+    } catch {
+      // ignore
+    }
+  });
+}
+
 /**
  * Share-live: multi-tab bundle boot.
  *
@@ -112,6 +148,10 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
       if (!payload || (payload as any).target !== 'bundle') return;
       if (!scenariosContext?.graph) return;
 
+      // IMPORTANT: bundle boot uses a window event to open tabs. TabContext installs the listener in a mount effect,
+      // so we must wait for that signal; otherwise the event can be dropped and the share page boots with zero tabs.
+      await waitForTabContextInitDone();
+
       const items = (payload as any).scenarios?.items || [];
 
       // IMPORTANT:
@@ -170,29 +210,23 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
           // Create a visible graph tab for the seeded graph file.
           const tabId = `tab-share-${stableShortHash(JSON.stringify(payload))}-${graphFileId}-graph-${i}`;
           graphTabIdsByIndex.set(i, tabId);
-          window.dispatchEvent(
-            new CustomEvent('dagnet:openTemporaryTab', {
-              detail: {
-                tab: {
-                  id: tabId,
-                  fileId: graphFileId,
-                  title: t.title || shareMode?.identity.graph || 'Graph',
-                  viewMode: 'interactive',
-                  group: 'main-content',
-                  closable: true,
-                  icon: '📊',
-                  editorState: {
-                    scenarioState: {
-                      scenarioOrder: ['current', ...orderedScenarioIds],
-                      visibleScenarioIds,
-                      visibleColourOrderIds: visibleScenarioIds,
-                      selectedScenarioId: undefined,
-                    },
-                  },
-                },
+          await operations.openTemporaryTab({
+            id: tabId,
+            fileId: graphFileId,
+            title: t.title || shareMode?.identity.graph || 'Graph',
+            viewMode: 'interactive',
+            group: 'main-content',
+            closable: true,
+            icon: '📊',
+            editorState: {
+              scenarioState: {
+                scenarioOrder: ['current', ...orderedScenarioIds],
+                visibleScenarioIds,
+                visibleColourOrderIds: visibleScenarioIds,
+                selectedScenarioId: undefined,
               },
-            })
-          );
+            },
+          } as any);
 
           // Apply per-scenario visibility modes (best-effort).
           try {
@@ -376,9 +410,7 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
           if (opened && i === activeTabIndex) activeTabId = opened.tabId;
       }
 
-      if (activeTabId) {
-        window.dispatchEvent(new CustomEvent('dagnet:switchToTab', { detail: { tabId: activeTabId } }));
-      }
+      if (activeTabId) operations.switchTab(activeTabId);
     },
     [payload, scenariosContext, graphFileId, operations, shareMode?.identity.graph]
   );

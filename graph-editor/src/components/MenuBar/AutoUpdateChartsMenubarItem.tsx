@@ -24,3 +24,7 @@ export function AutoUpdateChartsMenubarItem(): JSX.Element {
 }
 
 
+
+
+
+

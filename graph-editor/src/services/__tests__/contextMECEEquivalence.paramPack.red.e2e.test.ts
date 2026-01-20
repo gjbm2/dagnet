@@ -135,27 +135,23 @@ describe('MECE context slices should be an implicit uncontexted truth (forecast 
     }
 
     // Declare the MECE context used by this test (channel) so MECE aggregation is enabled in node env.
-    // This is the "user declaration" of MECE via otherPolicy.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (contextRegistry as any).clearCache?.();
-    vi.spyOn(contextRegistry, 'getContext').mockImplementation(async (id: string) => {
-      if (id !== 'channel') return undefined;
-      return {
-        id: 'channel',
-        name: 'Channel',
-        description: 'Test',
-        type: 'categorical',
-        otherPolicy: 'null',
-        values: [
-          { id: 'google', label: 'Google' },
-          { id: 'meta', label: 'Meta' },
-        ],
-        metadata: {
-          created_at: '17-Dec-25',
-          version: '1.0.0',
-          status: 'active',
-        },
-      } as any;
+    // IMPORTANT: sync MECE detection reads ContextRegistry cache/FileRegistry, not getContext(), so we must seed cache.
+    contextRegistry.clearCache();
+    (contextRegistry as any).cache.set('channel', {
+      id: 'channel',
+      name: 'Channel',
+      description: 'Test',
+      type: 'categorical',
+      otherPolicy: 'null',
+      values: [
+        { id: 'google', label: 'Google' },
+        { id: 'meta', label: 'Meta' },
+      ],
+      metadata: {
+        created_at: '17-Dec-25',
+        version: '1.0.0',
+        status: 'active',
+      },
     });
   });
 

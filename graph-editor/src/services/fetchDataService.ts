@@ -49,6 +49,7 @@ import { UpdateManager } from './UpdateManager';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
 import { forecastingSettingsService } from './forecastingSettingsService';
+import { enumerateFetchTargets } from './fetchTargetEnumerationService';
 
 // ============================================================================
 // Types (re-exported for consumers)
@@ -73,6 +74,11 @@ export interface FetchItem {
    * "simple" edges (no local latency AND not behind any lagged path).
    */
   targetSliceOverride?: string;
+  /**
+   * If true, skip cohort horizon bounding even when latency is enabled.
+   * Used when the FetchPlan has already computed the correct windows (first-principles).
+   */
+  skipCohortBounding?: boolean;
 }
 
 export interface FetchOptions {
@@ -398,70 +404,32 @@ export function getItemsForFromFileLoad(graph: Graph): FetchItem[] {
 }
 
 function collectAllFetchItems(graph: Graph): FetchItem[] {
-  const items: FetchItem[] = [];
-
-  // Collect parameters
-  if (graph.edges) {
-    for (const edge of graph.edges) {
-      const edgeId = edge.uuid || edge.id || '';
-
-      const paramSlots: Array<{ slot: 'p' | 'cost_gbp' | 'labour_cost'; param: any }> = [];
-      if (edge.p) paramSlots.push({ slot: 'p', param: edge.p });
-      if (edge.cost_gbp) paramSlots.push({ slot: 'cost_gbp', param: edge.cost_gbp });
-      if (edge.labour_cost) paramSlots.push({ slot: 'labour_cost', param: edge.labour_cost });
-
-      for (const { slot, param } of paramSlots) {
-        const paramId = param.id;
-        if (!paramId) continue;
-
-        items.push({
-          id: `param-${paramId}-${slot}-${edgeId}`,
-          type: 'parameter',
-          name: `${slot}: ${paramId}`,
-          objectId: paramId,
-          targetId: edgeId,
-          paramSlot: slot,
-        });
-      }
-
-      // Conditional probabilities (edge.conditional_p[i].p) are first-class fetchable items.
-      if (Array.isArray((edge as any).conditional_p)) {
-        for (let idx = 0; idx < (edge as any).conditional_p.length; idx++) {
-          const cond = (edge as any).conditional_p[idx];
-          const condParam = cond?.p;
-          const condParamId = condParam?.id;
-          if (!condParamId) continue;
-
-          items.push({
-            id: `param-${condParamId}-conditional_p[${idx}]-${edgeId}`,
-            type: 'parameter',
-            name: `conditional_p[${idx}]: ${condParamId}`,
-            objectId: condParamId,
-            targetId: edgeId,
-            paramSlot: 'p',
-            conditionalIndex: idx,
-          });
-        }
-      }
-    }
-  }
-
-  // Collect cases
-  if (graph.nodes) {
-    for (const node of graph.nodes) {
-      if (!node.case?.id) continue;
-      const caseId = node.case.id;
-      items.push({
-        id: `case-${caseId}-${node.uuid || node.id}`,
+  return enumerateFetchTargets(graph).map((t): FetchItem => {
+    if (t.type === 'case') {
+      return {
+        id: `case-${t.objectId}-${t.targetId}`,
         type: 'case',
-        name: `case: ${caseId}`,
-        objectId: caseId,
-        targetId: node.uuid || node.id || '',
-      });
+        name: `case: ${t.objectId}`,
+        objectId: t.objectId,
+        targetId: t.targetId,
+      };
     }
-  }
 
-  return items;
+    // parameter
+    const slot = t.paramSlot || 'p';
+    const isConditional = typeof t.conditionalIndex === 'number';
+    return {
+      id: isConditional
+        ? `param-${t.objectId}-conditional_p[${t.conditionalIndex}]-${t.targetId}`
+        : `param-${t.objectId}-${slot}-${t.targetId}`,
+      type: 'parameter',
+      name: isConditional ? `conditional_p[${t.conditionalIndex}]: ${t.objectId}` : `${slot}: ${t.objectId}`,
+      objectId: t.objectId,
+      targetId: t.targetId,
+      paramSlot: slot,
+      conditionalIndex: t.conditionalIndex,
+    };
+  });
 }
 
 /**
@@ -703,6 +671,8 @@ async function fetchSingleItemInternal(
           targetSlice,
           // Pass through any bounded cohort window calculated by the planner
           boundedCohortWindow: item.boundedCohortWindow,
+          // Skip cohort bounding if the plan builder already computed correct windows
+          skipCohortBounding: item.skipCohortBounding,
         });
       }
       
@@ -1990,6 +1960,7 @@ export function createFetchItem(
     conditionalIndex?: number;
     name?: string;
     boundedCohortWindow?: DateRange;
+    skipCohortBounding?: boolean;
   }
 ): FetchItem {
   const slot = options?.paramSlot || 'p';
@@ -2002,6 +1973,7 @@ export function createFetchItem(
     paramSlot: options?.paramSlot,
     conditionalIndex: options?.conditionalIndex,
     boundedCohortWindow: options?.boundedCohortWindow,
+    skipCohortBounding: options?.skipCohortBounding,
   };
 }
 

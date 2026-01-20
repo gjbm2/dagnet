@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { ParameterValue } from '../../types/parameterData';
 import { calculateIncrementalFetch } from '../windowAggregationService';
+import { isSignatureCheckingEnabled } from '../signaturePolicyService';
 
 describe('calculateIncrementalFetch - query_signature gating', () => {
-  it('treats data as NOT cached when sliceDSL matches but query_signature differs', () => {
+  (isSignatureCheckingEnabled() ? it : it.skip)(
+    'treats data as NOT cached when sliceDSL matches but query_signature differs',
+    () => {
     const values: ParameterValue[] = [
       {
         sliceDSL: 'context(channel:paid-search)',
@@ -28,9 +31,12 @@ describe('calculateIncrementalFetch - query_signature gating', () => {
     expect(result.needsFetch).toBe(true);
     expect(result.daysAvailable).toBe(0);
     expect(result.daysToFetch).toBe(3);
-  });
+    }
+  );
 
-  it('does not force refetch for legacy values with no query_signature', () => {
+  (isSignatureCheckingEnabled() ? it : it.skip)(
+    'does not force refetch for legacy values with no query_signature',
+    () => {
     const values: ParameterValue[] = [
       {
         sliceDSL: 'context(channel:paid-search)',
@@ -55,7 +61,8 @@ describe('calculateIncrementalFetch - query_signature gating', () => {
     expect(result.needsFetch).toBe(false);
     expect(result.daysAvailable).toBe(3);
     expect(result.daysToFetch).toBe(0);
-  });
+    }
+  );
 });
 
 

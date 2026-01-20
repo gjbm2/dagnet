@@ -66,6 +66,7 @@ import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsol
 import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
 import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
+import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
 import { contextRegistry } from './contextRegistry';
@@ -544,7 +545,8 @@ export async function computeQuerySignature(
   connectionName?: string,
   graph?: Graph | null,
   edge?: any,
-  contextKeys?: string[]
+  contextKeys?: string[],
+  workspace?: { repository: string; branch: string }
 ): Promise<string> {
   try {
     // Extract event_ids from nodes if graph and edge are provided
@@ -668,7 +670,7 @@ export async function computeQuerySignature(
     const contextHashes = await Promise.all(
       allContextKeys.map(async (key) => {
         try {
-          const ctx = await contextRegistry.getContext(key);
+          const ctx = await contextRegistry.getContext(key, workspace ? { workspace } : undefined);
           if (!ctx) {
             return { key, hash: 'missing', status: 'missing' };
           }
@@ -681,6 +683,36 @@ export async function computeQuerySignature(
         }
       })
     );
+
+    // Normalize original query string for signature purposes.
+    //
+    // CRITICAL DESIGN RULE:
+    // - Signature MUST include context *definition* hashes (so it changes when the context YAML changes)
+    // - Signature MUST NOT vary by context *value* (e.g. channel:paid-search vs channel:other)
+    //   because slice identity already carries the value and MECE fulfilment relies on stable semantics.
+    //
+    // Therefore we strip `.context(...)` / `.contextAny(...)` and explicit window/cohort bounds from the
+    // original query string before hashing. We still preserve minus()/plus()/visited()/exclude() structure.
+    const normalizeOriginalQueryForSignature = (q: string): string => {
+      if (!q) return '';
+      let out = String(q);
+      // Remove trailing/embedded context constraints.
+      out = out.replace(/\.contextAny\([^)]*\)/g, '');
+      out = out.replace(/\.context\([^)]*\)/g, '');
+      // Remove explicit window/cohort bounds if present on the edge query (rare but possible).
+      // Bounds must not affect signature; cache coverage is proven via header ranges.
+      out = out.replace(/\.window\([^)]*\)/g, '');
+      out = out.replace(/\.cohort\([^)]*\)/g, '');
+      // Collapse whitespace and repeated dots from removals.
+      out = out.replace(/\s+/g, ' ').trim();
+      out = out.replace(/\.\./g, '.');
+      // Remove trailing dot.
+      out = out.replace(/\.$/, '');
+      return out;
+    };
+
+    const rawOriginalQuery = edge?.query || '';
+    const originalQueryForSignature = normalizeOriginalQueryForSignature(rawOriginalQuery);
 
     // Create a canonical representation of the query.
     // Include event_ids and original query string to detect topology changes.
@@ -717,9 +749,10 @@ export async function computeQuerySignature(
       // Edge latency primitives (include anchor node id and enablement as semantic inputs)
       latency_parameter: edgeLatency?.latency_parameter === true,
       anchor_node_id: edgeLatency?.anchor_node_id || '',
-      // IMPORTANT: Include original query string to capture minus()/plus() terms
-      // which are NOT preserved in the DSL object by buildDslFromEdge
-      original_query: edge?.query || '',
+      // IMPORTANT: Include normalized original query string to capture minus()/plus()/visited()/exclude()
+      // terms which are NOT preserved in the DSL object by buildDslFromEdge.
+      // This MUST NOT include context/window/cohort bounds (see normalization above).
+      original_query: originalQueryForSignature,
     });
     
     // Compute SHA-256 hash
@@ -728,9 +761,10 @@ export async function computeQuerySignature(
     // ===== DIAGNOSTIC: Show what went into the signature =====
     console.log('[computeQuerySignature] Signature computed:', {
       signature: hashHex.substring(0, 12) + '...',
-      originalQuery: edge?.query || 'N/A',
-      hasMinus: (edge?.query || '').includes('.minus('),
-      hasPlus: (edge?.query || '').includes('.plus('),
+      originalQuery: rawOriginalQuery || 'N/A',
+      normalizedOriginalQuery: originalQueryForSignature || 'N/A',
+      hasMinus: rawOriginalQuery.includes('.minus('),
+      hasPlus: rawOriginalQuery.includes('.plus('),
       canonicalKeys: Object.keys(JSON.parse(canonical)),
     });
     // =========================================================
@@ -1361,14 +1395,16 @@ class DataOperationsService {
                 const compEventDefs = compResult.eventDefinitions;
                 
                 // Compute expected query signature (include event_ids from nodes)
-                const signatureContextKeys = extractContextKeysFromConstraints(constraints);
-                expectedQuerySignature = await computeQuerySignature(
-                  compDsl,
-                  connectionName,
-                  graph,
-                  targetEdge,
-                  signatureContextKeys
-                );
+                if (isSignatureCheckingEnabled()) {
+                  const signatureContextKeys = extractContextKeysFromConstraints(constraints);
+                  expectedQuerySignature = await computeQuerySignature(
+                    compDsl,
+                    connectionName,
+                    graph,
+                    targetEdge,
+                    signatureContextKeys
+                  );
+                }
                 const t5 = performance.now();
                 
                 console.log(`[TIMING:SIG] ${paramId}: getConnection=${(t2-t1).toFixed(1)}ms, buildDsl=${(t4-t3).toFixed(1)}ms, computeSig=${(t5-t4).toFixed(1)}ms, total=${(t5-sigStart).toFixed(1)}ms`);
@@ -1398,20 +1434,22 @@ class DataOperationsService {
                   }
                 }
                 
-                // Check all value entries for signature consistency
-                for (const value of valuesWithDaily) {
-                  if (value.query_signature && value.query_signature !== expectedQuerySignature) {
-                    querySignatureMismatch = true;
-                    // Use window or cohort dates as available
-                    const rangeStart = value.window_from || value.cohort_from;
-                    const rangeEnd = value.window_to || value.cohort_to;
-                    const windowDesc = rangeStart && rangeEnd 
-                      ? `${normalizeDate(rangeStart)} to ${normalizeDate(rangeEnd)}`
-                      : '(no date range)';
-                    mismatchedEntries.push({
-                      window: windowDesc,
-                      signature: value.query_signature,
-                    });
+                if (isSignatureCheckingEnabled()) {
+                  // Check all value entries for signature consistency
+                  for (const value of valuesWithDaily) {
+                    if (value.query_signature && value.query_signature !== expectedQuerySignature) {
+                      querySignatureMismatch = true;
+                      // Use window or cohort dates as available
+                      const rangeStart = value.window_from || value.cohort_from;
+                      const rangeEnd = value.window_to || value.cohort_to;
+                      const windowDesc = rangeStart && rangeEnd 
+                        ? `${normalizeDate(rangeStart)} to ${normalizeDate(rangeEnd)}`
+                        : '(no date range)';
+                      mismatchedEntries.push({
+                        window: windowDesc,
+                        signature: value.query_signature,
+                      });
+                    }
                   }
                 }
                 
@@ -1419,7 +1457,10 @@ class DataOperationsService {
                 // (This handles the case where event definitions changed)
                 const signatureToUse = latestQuerySignature || expectedQuerySignature;
                 
-                if (querySignatureMismatch || (latestQuerySignature && latestQuerySignature !== expectedQuerySignature)) {
+                if (
+                  isSignatureCheckingEnabled() &&
+                  (querySignatureMismatch || (latestQuerySignature && latestQuerySignature !== expectedQuerySignature))
+                ) {
                   // Log for debugging, but don't toast - file having old signatures is normal
                   // and the system handles it correctly by using latest signature data
                   console.log('[DataOperationsService] Query signature mismatch detected (using latest):', {
@@ -1434,10 +1475,9 @@ class DataOperationsService {
                   // We use the latest signature and the data is still correct
                 }
                 
-                // CRITICAL: Always filter to ONLY signed values matching the signature
                 // Signature validation: check staleness, but don't filter
                 // (Filtering by slice already done via isolateSlice above)
-                if (signatureToUse) {
+                if (isSignatureCheckingEnabled() && signatureToUse) {
                   const staleValues = valuesWithDaily.filter(v => 
                     v.query_signature && v.query_signature !== signatureToUse
                   );
@@ -1481,11 +1521,11 @@ class DataOperationsService {
               entriesWithDaily: valuesWithDaily.length,
             });
             
-            // Process entries in order (newest last) so newer entries overwrite older ones
-            // If query signature validation passed, prefer entries with matching signature
+            // Process entries in order (newest last) so newer entries overwrite older ones.
+            // When signature checking is enabled, prefer entries with matching signature.
             const sortedValues = [...valuesWithDaily].sort((a, b) => {
               // If we have an expected signature, prefer matching entries
-              if (expectedQuerySignature) {
+              if (isSignatureCheckingEnabled() && expectedQuerySignature) {
                 const aMatches = a.query_signature === expectedQuerySignature;
                 const bMatches = b.query_signature === expectedQuerySignature;
                 if (aMatches && !bMatches) return -1;
@@ -3241,8 +3281,15 @@ class DataOperationsService {
     targetSlice?: string; // Optional: DSL for specific slice (default '' = uncontexted)
     currentDSL?: string;  // Explicit DSL for window/context (e.g. from WindowSelector / scenario)
     boundedCohortWindow?: DateRange; // Optional: Pre-calculated bounded window from planner
+    skipCohortBounding?: boolean; // If true, skip cohort horizon bounding
+    /** If true, run the real planning + DAS request construction, but DO NOT execute external HTTP. */
+    dontExecuteHttp?: boolean;
+    /**
+     * Plan interpreter mode: execute exactly these windows (bypass cache-cutting window derivation).
+     */
+    overrideFetchWindows?: DateRange[];
   }): Promise<void> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL, boundedCohortWindow } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL, boundedCohortWindow, skipCohortBounding, dontExecuteHttp, overrideFetchWindows } = options;
     sessionLogService.info('data-fetch', 'DATA_GET_FROM_SOURCE', `Get from Source (versioned): ${objectType} ${objectId}`,
       undefined, { fileId: `${objectType}-${objectId}`, fileType: objectType });
     
@@ -3267,7 +3314,7 @@ class DataOperationsService {
           objectId, // Parameter file ID
           targetId,
           graph: currentGraph,
-          setGraph: trackingSetGraph,
+          setGraph: dontExecuteHttp ? undefined : trackingSetGraph,
           paramSlot,
           conditionalIndex,
           writeToFile: true, // Internal: write daily time-series into file when provider supports it
@@ -3275,6 +3322,9 @@ class DataOperationsService {
           currentDSL,
           targetSlice,
           boundedCohortWindow,
+          skipCohortBounding, // Pass through to skip bounding if set
+          dontExecuteHttp,
+          overrideFetchWindows,
         });
         
         // NOTE: getFromSourceDirect already calls getParameterFromFile internally
@@ -3294,16 +3344,21 @@ class DataOperationsService {
           objectId,
           targetId,
           graph: currentGraph,
-          setGraph: trackingSetGraph,
+          setGraph: dontExecuteHttp ? undefined : trackingSetGraph,
           writeToFile: false, // Cases do not use daily time-series; this is a single snapshot
           versionedCase: true, // Signal to append schedule to case file instead of direct graph apply
           bustCache: false,
           currentDSL,
+          dontExecuteHttp,
         });
         
         // 2. Update graph nodes from case file (with windowed aggregation)
         // Find all nodes with this case_id and update their variant weights from file
         // Use currentGraph which was updated by step 1's setGraph call
+        if (dontExecuteHttp) {
+          // Dry-run simulation must not mutate graph.
+          return;
+        }
         if (currentGraph && trackingSetGraph && targetId) {
           // Find the first case node with this case_id to update from file
           const caseNode = currentGraph.nodes?.find((n: any) => 
@@ -3490,6 +3545,16 @@ class DataOperationsService {
     boundedCohortWindow?: DateRange; // Optional: Pre-calculated bounded window
     /** If true, run the real planning + DAS request construction, but DO NOT execute external HTTP. */
     dontExecuteHttp?: boolean;
+    /**
+     * If true, skip cohort horizon bounding even when latency is enabled.
+     * Used when the FetchPlan has already computed the correct windows.
+     * This ensures the planner's plan is executed exactly as computed.
+     */
+    skipCohortBounding?: boolean;
+    /**
+     * Plan interpreter mode: execute exactly these windows (bypass cache-cutting window derivation).
+     */
+    overrideFetchWindows?: DateRange[];
   }): Promise<void> {
       const {
         objectType,
@@ -3506,6 +3571,8 @@ class DataOperationsService {
         targetSlice = '',
         boundedCohortWindow,
         dontExecuteHttp = false,
+        skipCohortBounding = false,
+        overrideFetchWindows,
       } = options;
     
     // DEBUG: Log conditionalIndex at entry point
@@ -4633,6 +4700,22 @@ class DataOperationsService {
       }
       
       let actualFetchWindows: DateRange[] = [];
+      const hasOverrideWindows = Array.isArray(overrideFetchWindows) && overrideFetchWindows.length > 0;
+      if (hasOverrideWindows) {
+        // Normalise override windows immediately (store as ISO strings for consistent downstream handling).
+        actualFetchWindows = overrideFetchWindows!.map((w) => ({
+          start: parseDate(w.start).toISOString(),
+          end: parseDate(w.end).toISOString(),
+        }));
+        sessionLogService.addChild(
+          logOpId,
+          'info',
+          'FETCH_WINDOWS_OVERRIDDEN',
+          `Executing ${actualFetchWindows.length} plan window(s) exactly (overrideFetchWindows)`,
+          undefined,
+          { windows: actualFetchWindows.map((w) => ({ start: normalizeDate(w.start), end: normalizeDate(w.end) })) }
+        );
+      }
 
       const mergeFetchWindows = (windows: DateRange[]): DateRange[] => {
         if (windows.length <= 1) return windows;
@@ -4666,8 +4749,14 @@ class DataOperationsService {
       
       // CRITICAL: ALWAYS compute query signature when writing to parameter files
       // (we only write for parameter objects in versioned/source-via-file pathway)
-      if (objectType === 'parameter' && writeToFile) {
+      if (isSignatureWritingEnabled() && objectType === 'parameter' && writeToFile) {
         const targetEdge = targetId && graph ? graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId) : undefined;
+        const workspaceForSignature = (() => {
+          const pf = objectId ? fileRegistry.getFile(`parameter-${objectId}`) : undefined;
+          const repo = (pf as any)?.source?.repository;
+          const branch = (pf as any)?.source?.branch;
+          return repo && branch ? { repository: repo, branch } : undefined;
+        })();
         const fallbackContextKeys = (() => {
           if (signatureContextKeys.length > 0) return signatureContextKeys;
           const dsl = targetSlice || currentDSL || '';
@@ -4684,7 +4773,8 @@ class DataOperationsService {
           connectionName,
           graph,
           edgeForQuerySignature || targetEdge,
-          fallbackContextKeys
+          fallbackContextKeys,
+          workspaceForSignature
         );
         console.log('[DataOperationsService] Computed query signature for storage:', {
           signature: querySignature?.substring(0, 16) + '...',
@@ -4695,7 +4785,7 @@ class DataOperationsService {
       
       // IMPORTANT: Only check for incremental fetch if bustCache is NOT set and we are
       // in the versioned parameter pathway (source→file→graph).
-      const shouldCheckIncrementalFetch = writeToFile && !bustCache && objectType === 'parameter' && objectId;
+      const shouldCheckIncrementalFetch = writeToFile && !bustCache && objectType === 'parameter' && objectId && !hasOverrideWindows;
       
       // ═══════════════════════════════════════════════════════════════════════════════
       // MATURITY-AWARE REFETCH POLICY (design.md §4.7.3)
@@ -4803,7 +4893,16 @@ class DataOperationsService {
                 { boundedWindow: fetchWindow }
               );
             }
-            // 2. Fallback: recalculate using edge path_t95 (may be undefined on first load)
+            // 2. Skip bounding if explicitly requested (first-principles plan already computed correct windows)
+            else if (skipCohortBounding) {
+              console.log('[DataOps:COHORT_HORIZON] Skipping bounding: skipCohortBounding=true, using full window:', fetchWindow);
+              sessionLogService.addChild(logOpId, 'info', 'COHORT_HORIZON_SKIPPED',
+                `Bounding skipped: using full requested window`,
+                undefined,
+                { window: fetchWindow, reason: 'skipCohortBounding flag set' }
+              );
+            }
+            // 3. Fallback: recalculate using edge path_t95 (may be undefined on first load)
             else if (isCohortQuery && latencyConfig) {
               // Canonical behaviour (t95/path_t95 refactor intent):
               // - Use the persisted path_t95 from the active source of truth (file for versioned, graph for direct).
@@ -5050,6 +5149,40 @@ class DataOperationsService {
             }
           }
           
+          // Ensure relevant context definitions are cached before any synchronous MECE/cache-cutting logic runs.
+          //
+          // Rationale: MECE selection currently uses ContextRegistry's sync detector, which cannot hit IndexedDB.
+          // We therefore prime the in-memory cache from IndexedDB here, at the start of fetch analysis.
+          try {
+            const keys = new Set<string>();
+            const valuesForKeyScan: ParameterValue[] = Array.isArray((filteredParamData as any)?.values)
+              ? ((filteredParamData as any).values as ParameterValue[])
+              : [];
+            for (const v of valuesForKeyScan) {
+              const dims = extractSliceDimensions(v.sliceDSL ?? '');
+              if (!dims) continue;
+              const parsed = parseConstraints(dims);
+              for (const c of parsed.context) keys.add(c.key);
+              for (const group of parsed.contextAny) {
+                for (const pair of group.pairs) keys.add(pair.key);
+              }
+            }
+            const repo = (paramFile as any)?.source?.repository;
+            const branch = (paramFile as any)?.source?.branch;
+            const workspace = repo && branch ? { repository: repo, branch } : undefined;
+            await contextRegistry.ensureContextsCached(Array.from(keys), workspace ? { workspace } : undefined);
+          } catch (e) {
+            // Best-effort: failure to preload contexts must not prevent fetching; it only affects MECE cache-fulfilment.
+            const msg = e instanceof Error ? e.message : String(e);
+            sessionLogService.addChild(
+              logOpId,
+              'warning',
+              'CONTEXT_PRELOAD_FAILED',
+              'Context preload failed; MECE cache fulfilment may be unavailable',
+              msg
+            );
+          }
+
           // Calculate incremental fetch (pass bustCache flag)
           // Use filtered data so we only consider dates from matching signature
           // CRITICAL: Pass targetSlice (currentDSL) to isolate by context slice
@@ -5191,7 +5324,8 @@ class DataOperationsService {
       }
       
       // If all dates are cached, skip fetching and use existing data
-      if (shouldSkipFetch && objectType === 'parameter' && objectId && targetId && graph && setGraph) {
+      // IMPORTANT: In dry-run mode, never mutate graph (even by applying cache).
+      if (!dontExecuteHttp && shouldSkipFetch && objectType === 'parameter' && objectId && targetId && graph && setGraph) {
         // Use existing data from file
         // CRITICAL: Pass currentDSL as targetSlice to ensure correct window is used
         // NOTE: Suppress signature warnings here too - user is explicitly fetching this edge
@@ -5511,6 +5645,28 @@ class DataOperationsService {
       // Chain requests for each contiguous gap
       for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
         const fetchWindow = actualFetchWindows[gapIndex];
+        
+        // Ensure the payload window reflects the actual window being executed.
+        // This is required for plan-interpreter mode (overrideFetchWindows), and is harmless for
+        // incremental-gap mode (where fetchWindow == derived gap window).
+        const isoWindowForPayload = toISOWindowForDAS(fetchWindow);
+        if (queryPayload && typeof queryPayload === 'object') {
+          // Window-mode payload
+          (queryPayload as any).start = isoWindowForPayload.start;
+          (queryPayload as any).end = isoWindowForPayload.end;
+          // Cohort-mode payload
+          if ((queryPayload as any).cohort && typeof (queryPayload as any).cohort === 'object') {
+            (queryPayload as any).cohort = {
+              ...(queryPayload as any).cohort,
+              start: isoWindowForPayload.start,
+              end: isoWindowForPayload.end,
+            };
+          }
+        }
+        if (requestedCohort && typeof requestedCohort === 'object') {
+          requestedCohort.start = isoWindowForPayload.start;
+          requestedCohort.end = isoWindowForPayload.end;
+        }
 
         // =====================================================================
         // DRY RUN & LIVE EXECUTION MUST SHARE THE SAME DAS CALL SHAPE
@@ -5716,17 +5872,78 @@ class DataOperationsService {
         // because that requires real numerical responses. We only show the exact runner.execute calls
         // that would be made for the non-composite pipeline.
         if (dontExecuteHttp) {
+          const redactUrlForLog = (url: string): string => {
+            try {
+              // Redact common secret-bearing query params.
+              // (We do not attempt perfect coverage; this is a best-effort safety layer.)
+              return url
+                .replace(/([?&]api_key=)[^&]+/gi, '$1<redacted>')
+                .replace(/([?&]apikey=)[^&]+/gi, '$1<redacted>')
+                .replace(/([?&]token=)[^&]+/gi, '$1<redacted>')
+                .replace(/([?&]access_token=)[^&]+/gi, '$1<redacted>');
+            } catch {
+              return url;
+            }
+          };
+
+          const redactRequestForLog = (req: any): any => {
+            if (!req || typeof req !== 'object') return req;
+            const out: any = structuredClone(req);
+            if (typeof out.url === 'string') {
+              out.url = redactUrlForLog(out.url);
+            }
+            if (out.headers && typeof out.headers === 'object') {
+              for (const [k, v] of Object.entries(out.headers)) {
+                const key = String(k);
+                if (/authorization|cookie|x-api-key|api-key|apikey/i.test(key)) {
+                  out.headers[key] = '<redacted>';
+                } else {
+                  out.headers[key] = v;
+                }
+              }
+            }
+            return out;
+          };
+
+          const toCurlCommandForLog = (req: any): string | undefined => {
+            if (!req?.method || !req?.url) return undefined;
+            const method = String(req.method).toUpperCase();
+            const url = String(req.url);
+            const parts: string[] = [`curl -X ${method} '${url}'`];
+            const headers = req.headers && typeof req.headers === 'object' ? req.headers : undefined;
+            if (headers) {
+              for (const [k, v] of Object.entries(headers)) {
+                if (v === undefined || v === null) continue;
+                parts.push(`-H '${String(k)}: ${String(v)}'`);
+              }
+            }
+            // Prefer explicit body fields if present.
+            const body = (req.body ?? req.data ?? req.payload) as unknown;
+            if (body !== undefined && body !== null && method !== 'GET') {
+              const bodyStr =
+                typeof body === 'string'
+                  ? body
+                  : (() => {
+                      try { return JSON.stringify(body); } catch { return String(body); }
+                    })();
+              parts.push(`--data-raw '${bodyStr.replace(/'/g, `'\"'\"'`)}'`);
+            }
+            return parts.join(' ');
+          };
+
           const runDry = async (label: string, payload: any) => {
             const dry = await executeDAS(payload, { dryRun: true });
 
             const req = (dry.success ? (dry.raw as any)?.request : undefined) as any;
+            const reqRedacted = req ? redactRequestForLog(req) : undefined;
+            const curl = reqRedacted ? toCurlCommandForLog(reqRedacted) : undefined;
             sessionLogService.addChild(
               logOpId,
               'info',
               'DRY_RUN_HTTP',
               `DRY RUN: would call HTTP (${label})`,
-              req ? `${req.method} ${req.url}` : undefined,
-              req ? { request: req } : undefined
+              curl ?? (reqRedacted ? `${reqRedacted.method} ${reqRedacted.url}` : undefined),
+              reqRedacted ? { request: reqRedacted, httpCommand: curl } : undefined
             );
           };
 
@@ -7409,715 +7626,15 @@ class DataOperationsService {
   }
 
   // ===========================================================================
-  // DRY RUN / SIMULATION (no external HTTP)
+  // ===========================================================================
+  // DRY RUN / SIMULATION
+  //
+  // Simulation is implemented by running the REAL retrieval codepaths (e.g. Retrieve All)
+  // with dontExecuteHttp=true, which produces DRY_RUN_HTTP session log entries.
+  // There is intentionally no bespoke "markdown narrative" pathway.
   // ===========================================================================
 
-  /**
-   * Simulate "Retrieve All slices" without hitting external providers.
-   *
-   * Produces a detailed markdown report covering:
-   * - Which slices would be retrieved
-   * - Per-parameter: what the file currently contains (sliceDSLs, ranges, retrieved_at)
-   * - Cache cutting / refetch policy decisions (gaps, immature cohorts, bounded horizons)
-   * - The query payload(s) that would be constructed for the provider
-   * - The HTTP calls that would be made (but are NOT executed)
-   * - The merge strategy that would apply if results returned (merge vs replace, no-data markers)
-   *
-   * IMPORTANT: This method must have zero side effects:
-   * - No runner.execute calls
-   * - No file writes
-   * - No graph updates
-   */
-  async simulateRetrieveAllSlicesToMarkdown(options: {
-    graph: Graph;
-    slices: string[];
-    bustCache?: boolean;
-  }): Promise<string> {
-    const { graph, slices, bustCache = false } = options;
 
-    const now = new Date();
-    const startedAt = now.toISOString();
-    const graphName =
-      (graph as any)?.metadata?.name ||
-      (graph as any)?.name ||
-      (graph as any)?.id ||
-      'Graph';
-
-    const lines: string[] = [];
-    lines.push(`# Simulate Retrieve All Slices`);
-    lines.push('');
-    lines.push(`**Started:** ${startedAt}`);
-    lines.push(`**Graph:** ${graphName}`);
-    // Slices must already be expanded via the canonical DSL expander (see explodeDSL).
-    // Do NOT re-implement slice expansion here.
-    lines.push(`**Slices:** ${slices.length}`);
-    lines.push(`**Bust cache:** ${bustCache ? 'Yes' : 'No'}`);
-    lines.push('');
-    lines.push('## Important note: what is “real” vs “descriptive” in this report?');
-    lines.push('- **Real (executed code path)**: Slice-family+mode matching, cache cutting (`calculateIncrementalFetch`), refetch policy (`shouldRefetch`), and request construction via `runner.execute(..., dryRun=true)`.');
-    lines.push('- **Dry-run boundary**: The HTTP request is fully constructed (URL + method + payload), then stopped **immediately before network I/O**. No Amplitude call is made.');
-    lines.push('- **Descriptive**: The “expected back from provider” section describes the *shape* the downstream merge logic handles, not a real response (because we do not hit the provider in dry-run).');
-    lines.push('');
-
-    // Collect the same kinds of items that the AllSlicesModal currently fetches.
-    const items: Array<{
-      type: 'parameter' | 'case';
-      objectId: string;
-      targetId: string;
-      name: string;
-      paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
-    }> = [];
-
-    // Parameters from edges
-    for (const edge of (graph.edges || []) as any[]) {
-      const edgeId = edge.uuid || edge.id || '';
-      if (!edgeId) continue;
-
-      if (edge.p?.id && typeof edge.p.id === 'string') {
-        items.push({
-          type: 'parameter',
-          objectId: edge.p.id,
-          targetId: edgeId,
-          name: `p:${edge.p.id}`,
-          paramSlot: 'p',
-        });
-      }
-      if (edge.cost_gbp?.id && typeof edge.cost_gbp.id === 'string') {
-        items.push({
-          type: 'parameter',
-          objectId: edge.cost_gbp.id,
-          targetId: edgeId,
-          name: `cost_gbp:${edge.cost_gbp.id}`,
-          paramSlot: 'cost_gbp',
-        });
-      }
-      if (edge.labour_cost?.id && typeof edge.labour_cost.id === 'string') {
-        items.push({
-          type: 'parameter',
-          objectId: edge.labour_cost.id,
-          targetId: edgeId,
-          name: `labour_cost:${edge.labour_cost.id}`,
-          paramSlot: 'labour_cost',
-        });
-      }
-    }
-
-    // Cases from nodes
-    for (const node of (graph.nodes || []) as any[]) {
-      if (node.type === 'case' && node.case?.id) {
-        items.push({
-          type: 'case',
-          objectId: node.case.id,
-          targetId: node.uuid || node.id,
-          name: `case:${node.case.id}`,
-        });
-      }
-    }
-
-    lines.push(`## Items in scope`);
-    lines.push('');
-    lines.push(`- Parameters/cases: ${items.length}`);
-    lines.push('');
-
-    // Build a cached runner only to read connection capabilities/provider mapping.
-    // This must not execute any external queries.
-    const tempRunner = getCachedDASRunner();
-
-    for (const sliceDSL of slices) {
-      lines.push(`## Slice: \`${sliceDSL}\``);
-      lines.push('');
-
-      const sliceConstraints = parseConstraints(sliceDSL);
-
-      // Resolve requested dates for this slice (UK date strings).
-      // Mirrors windowFetchPlannerService.extractWindowFromDSL semantics:
-      // - cohort(start:end?): end defaults to today (UK)
-      // - window(start:end?): end defaults to today (UK)
-      const todayUK = formatDateUK(new Date());
-      const isCohortSlice = !!sliceConstraints.cohort?.start;
-      const isWindowSlice = !!sliceConstraints.window?.start && !isCohortSlice;
-
-      const requestedStartUK =
-        isCohortSlice
-          ? resolveRelativeDate(sliceConstraints.cohort!.start!)
-          : isWindowSlice
-          ? resolveRelativeDate(sliceConstraints.window!.start!)
-          : undefined;
-      const requestedEndUK =
-        isCohortSlice
-          ? (sliceConstraints.cohort!.end ? resolveRelativeDate(sliceConstraints.cohort!.end) : todayUK)
-          : isWindowSlice
-          ? (sliceConstraints.window!.end ? resolveRelativeDate(sliceConstraints.window!.end) : todayUK)
-          : undefined;
-
-      const sliceMode = isCohortSlice ? 'cohort()' : isWindowSlice ? 'window()' : 'none';
-      lines.push(`- **Requested mode**: ${sliceMode}`);
-      lines.push(`- **DSL requested range**: ${requestedStartUK ?? '(none)'} → ${requestedEndUK ?? '(none)'}`);
-      if (isCohortSlice) {
-        const anchorId = sliceConstraints.cohort?.anchor;
-        lines.push(`- **Date semantics**: cohort() dates are **anchor-entry dates**${anchorId ? ` (anchor=\`${anchorId}\`)` : ''}`);
-      } else if (isWindowSlice) {
-        lines.push(`- **Date semantics**: window() dates are **step-event dates** (X-event dates, not anchor-entry dates)`);
-      }
-      lines.push('');
-
-      for (const item of items) {
-        if (item.type === 'case') {
-          const caseFile = fileRegistry.getFile(`case-${item.objectId}`);
-          const scheduleCount = caseFile?.data?.schedules?.length ?? caseFile?.data?.case?.schedules?.length ?? 0;
-          const connectionName = caseFile?.data?.connection ?? undefined;
-          lines.push(`### ${item.name}`);
-          lines.push('');
-          lines.push(`- **File**: \`case-${item.objectId}\` (${caseFile ? 'exists' : 'missing'})`);
-          if (caseFile) {
-            lines.push(`- **Schedules in file**: ${scheduleCount}`);
-            lines.push(`- **Connection**: ${connectionName ?? '(none)'}`);
-          }
-          lines.push(`- **Would do**: build provider request for this slice and append a new schedule snapshot (no HTTP in simulation)`);
-          lines.push('');
-          continue;
-        }
-
-        // Parameter simulation
-        const paramFileId = `parameter-${item.objectId}`;
-        const paramFile = fileRegistry.getFile(paramFileId);
-        const values: ParameterValue[] = (paramFile?.data?.values || []) as any;
-        const connectionName: string | undefined =
-          paramFile?.data?.connection ??
-          // fallback: edge slot connection
-          ((graph.edges || []) as any[])?.find((e: any) => (e.uuid || e.id) === item.targetId)?.[item.paramSlot || 'p']?.connection;
-
-        const targetEdge = ((graph.edges || []) as any[]).find((e: any) => (e.uuid === item.targetId || e.id === item.targetId));
-        const slotData = targetEdge?.[item.paramSlot || 'p'];
-        const fileLatencyConfig = (paramFile?.data?.latency as LatencyConfig | undefined) ?? undefined;
-        const graphLatencyConfig = slotData?.latency as LatencyConfig | undefined;
-        // Simulation models the versioned pathway: prefer persisted parameter file latency config when present.
-        const latencyConfig = fileLatencyConfig ?? graphLatencyConfig;
-        const latencyConfigSource: 'file' | 'graph' | 'none' = latencyConfig
-          ? (fileLatencyConfig ? 'file' : 'graph')
-          : 'none';
-
-        lines.push(`### ${item.name}`);
-        lines.push('');
-        lines.push(`- **File**: \`${paramFileId}\` (${paramFile ? 'exists' : 'missing'})`);
-        lines.push(`- **Connection**: ${connectionName ?? '(none)'}`);
-        if (latencyConfig) {
-          const enabled = latencyConfig.latency_parameter === true ? 'true' : 'false';
-          const t95 = latencyConfig.t95 !== undefined ? `${latencyConfig.t95.toFixed(2)}d` : '(none)';
-          const pt95 = latencyConfig.path_t95 !== undefined ? `${latencyConfig.path_t95.toFixed(2)}d` : '(none)';
-          const sourceLabel =
-            latencyConfigSource === 'file'
-              ? 'parameter file'
-              : latencyConfigSource === 'graph'
-                ? 'graph'
-                : 'unknown';
-          lines.push(`- **Latency config**: source=${sourceLabel}; latency_parameter=${enabled}; t95=${t95}; path_t95=${pt95}`);
-        } else {
-          lines.push(`- **Latency config**: (none)`);
-        }
-
-        // File contents summary (sliceDSL coverage)
-        if (!paramFile) {
-          lines.push(`- **Cache**: no file → would fetch full window from source`);
-          lines.push('');
-          continue;
-        }
-
-        const sliceFamilyDims = extractSliceDimensions(sliceDSL);
-        const relevantSameMode = values.filter((v: any) => {
-          const dimsMatch = extractSliceDimensions(v.sliceDSL ?? '') === sliceFamilyDims;
-          if (!dimsMatch) return false;
-          // IMPORTANT: A "slice family" match must also match MODE (window vs cohort).
-          // Otherwise we will incorrectly show window() values while analysing cohort() (and vice versa).
-          return isCohortSlice ? isCohortModeValue(v) : isWindowSlice ? !isCohortModeValue(v) : true;
-        });
-
-        const relevantOtherMode = values.filter((v: any) => {
-          const dimsMatch = extractSliceDimensions(v.sliceDSL ?? '') === sliceFamilyDims;
-          if (!dimsMatch) return false;
-          return isCohortSlice ? !isCohortModeValue(v) : isWindowSlice ? isCohortModeValue(v) : false;
-        });
-
-        lines.push(`- **From file (matching slice family + mode)**: ${relevantSameMode.length}/${values.length}`);
-        if (relevantOtherMode.length > 0) {
-          lines.push(`- **Note**: ${relevantOtherMode.length} value(s) exist for the same slice family but the OTHER mode (ignored for this slice)`);
-        }
-        if (relevantSameMode.length > 0) {
-          const sample = relevantSameMode.slice(0, 12).map((v: any) => {
-            const dsl = v.sliceDSL ?? '(no sliceDSL)';
-            const from = v.cohort_from || v.window_from || '';
-            const to = v.cohort_to || v.window_to || '';
-            const ra = v.data_source?.retrieved_at || '';
-            return `  - \`${dsl}\` (${from}→${to}) retrieved_at=${ra || '(none)'}`;
-          });
-          lines.push(...sample);
-        }
-
-        // Requested window (ISO) for cache/refetch logic helpers.
-        // IMPORTANT: use parseUKDate to avoid any ambiguous Date parsing.
-        // NOTE: This represents an inclusive day range in UI/DSL terms; provider calls
-        // typically use end-of-day timestamps (see normalizeWindow()).
-        const requestedWindowISO: DateRange | undefined =
-          requestedStartUK && requestedEndUK
-            ? {
-                start: parseUKDate(requestedStartUK).toISOString(),
-                end: parseUKDate(requestedEndUK).toISOString(),
-              }
-            : undefined;
-
-        if (!requestedWindowISO) {
-          lines.push(`- **Cache cutting**: no explicit cohort/window in slice → would use service default window`);
-          lines.push('');
-          continue;
-        }
-
-        const isCohortQuery = isCohortSlice;
-        // Determine existing slice matching mode+dims (used for refetch policy)
-        const matching = (values as any[]).filter((v: any) => {
-          const correctMode = isCohortQuery ? isCohortModeValue(v) : !isCohortModeValue(v);
-          if (!correctMode) return false;
-          const vd = extractSliceDimensions(v.sliceDSL || '');
-          return vd === sliceFamilyDims;
-        });
-        const existingSlice = matching.length > 0
-          ? matching.reduce((best: any, cur: any) => {
-              const bestKey = best?.data_source?.retrieved_at || best?.cohort_to || best?.window_to || best?.cohort_from || best?.window_from || '';
-              const curKey = cur?.data_source?.retrieved_at || cur?.cohort_to || cur?.window_to || cur?.cohort_from || cur?.window_from || '';
-              return curKey > bestKey ? cur : best;
-            })
-          : undefined;
-
-        let refetchPolicy: RefetchDecision | undefined;
-        const isLatencyEnabledForReport = latencyConfig?.latency_parameter === true;
-        if (isLatencyEnabledForReport) {
-          refetchPolicy = shouldRefetch({
-            existingSlice,
-            latencyConfig,
-            requestedWindow: requestedWindowISO,
-            isCohortQuery,
-          });
-        }
-
-        // -------------------------------------------------------------------
-        // path_t95 diagnostics
-        // For deep graphs, path_t95 is used to bound cohort() retrieval horizons.
-        // Canonical behaviour: prefer graph.path_t95 for bounding; moment-matched is informational
-        // and only a fallback if graph.path_t95 is missing.
-        // -------------------------------------------------------------------
-        if (isCohortQuery) {
-          lines.push(`- **path_t95 diagnostics**:`);
-          lines.push(`  - graph.edge.latency.t95: ${latencyConfig?.t95 ? latencyConfig.t95.toFixed(2) + 'd' : '(none)'}`);
-          lines.push(`  - graph.edge.latency.path_t95: ${latencyConfig?.path_t95 ? latencyConfig.path_t95.toFixed(2) + 'd' : '(none)'}`);
-
-          // If we can compute the moment-matched estimate from cached cohort data, we will prefer it for bounding.
-          let momentMatchedPathT95Estimate: number | undefined;
-
-          try {
-            // Use cached cohort data (if present) to compute the same Option A estimate:
-            // path_t95 ≈ t95(A→X + X→Y)
-            if (existingSlice && isCohortModeValue(existingSlice) && Array.isArray((existingSlice as any).dates)) {
-              const cohorts = aggregateCohortData(
-                [existingSlice as any],
-                new Date(),
-                undefined
-              );
-
-              const anchorCandidates = cohorts.filter(c =>
-                c.n > 0 &&
-                c.anchor_median_lag_days !== undefined &&
-                Number.isFinite(c.anchor_median_lag_days) &&
-                (c.anchor_median_lag_days ?? 0) > 0
-              );
-
-              if (anchorCandidates.length > 0) {
-                const totalNForAnchor = anchorCandidates.reduce((sum, c) => sum + c.n, 0);
-                const anchorMedian = anchorCandidates.reduce((sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
-                const anchorMean = anchorCandidates.reduce(
-                  (sum, c) => sum + c.n * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
-                  0
-                ) / (totalNForAnchor || 1);
-
-                const edgeLag = aggregateLatencyStats(cohorts);
-                const totalK = cohorts.reduce((sum, c) => sum + (c.k ?? 0), 0);
-
-                if (edgeLag?.median_lag_days && edgeLag.median_lag_days > 0) {
-                  const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
-                  const edgeFit = fitLagDistribution(edgeLag.median_lag_days, edgeLag.mean_lag_days, totalK);
-                  const estimate = approximateLogNormalSumPercentileDays(anchorFit, edgeFit, LATENCY_PATH_T95_PERCENTILE);
-                  if (estimate !== undefined && Number.isFinite(estimate) && estimate > 0) {
-                    momentMatchedPathT95Estimate = estimate;
-                  }
-
-                  lines.push(`  - anchor+edge estimate (moment-matched):`);
-                  lines.push(`    - percentile: ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%`);
-                  lines.push(`    - weights: anchor_n(total arrivals at X)=${totalNForAnchor}, edge_k(total converters on X→Y)=${totalK}`);
-                  lines.push(`    - anchorMedian(A→X): ${anchorMedian.toFixed(2)}d`);
-                  lines.push(`    - anchorMean(A→X): ${anchorMean.toFixed(2)}d`);
-                  lines.push(`    - edgeMedian(X→Y): ${edgeLag.median_lag_days.toFixed(2)}d`);
-                  lines.push(`    - edgeMean(X→Y): ${edgeLag.mean_lag_days.toFixed(2)}d`);
-                  lines.push(`    - fit quality: anchor=${anchorFit.empirical_quality_ok ? 'ok' : 'fallback'} edge=${edgeFit.empirical_quality_ok ? 'ok' : 'fallback'}`);
-                  lines.push(`    - estimated path_t95(A→Y): ${estimate !== undefined ? estimate.toFixed(2) + 'd' : '(unavailable: fit quality gate / missing data)'}`);
-                } else {
-                  lines.push(`  - anchor+edge estimate (moment-matched): (unavailable: no cached edge lag stats in cohort slice)`);
-                }
-              } else {
-                lines.push(`  - anchor+edge estimate (moment-matched): (unavailable: no anchor_* lag arrays in cached cohort slice)`);
-              }
-            } else {
-              lines.push(`  - anchor+edge estimate (moment-matched): (unavailable: no cached cohort slice found for this slice family)`);
-            }
-          } catch (e) {
-            lines.push(`  - anchor+edge estimate (moment-matched): (error computing from cached data: ${e instanceof Error ? e.message : String(e)})`);
-          }
-
-          // Carry forward to bounding section (below) via closure variable.
-          (lines as any)._momentMatchedPathT95Estimate = momentMatchedPathT95Estimate;
-        }
-
-        // Incremental gaps (always computed for reporting)
-        const incremental = calculateIncrementalFetch(
-          paramFile.data,
-          requestedWindowISO,
-          undefined,
-          bustCache,
-          sliceDSL
-        );
-
-        // Helper for consistent formatting in report
-        const formatWindows = (windows: DateRange[]): string[] => {
-          if (windows.length === 0) return ['  - (none)'];
-          return windows.map(w => `  - ${normalizeDate(w.start)} → ${normalizeDate(w.end)}`);
-        };
-
-        // Decide would-fetch windows (mirror getFromSourceDirect behaviour closely)
-        let wouldFetchWindows: DateRange[] = [];
-        let wouldFetchWindowsProviderNormalised: DateRange[] = [];
-        let wouldSkip = false;
-        let horizonSummary: string | undefined;
-        let cohortBoundedWindow: DateRange | undefined;
-        let cohortBoundingPathT95Used:
-          | { value: number; source: 'moment-matched' | 'file.latency.path_t95' | 'graph.latency.path_t95' | 'none' }
-          | undefined;
-
-        if (bustCache) {
-          wouldFetchWindows = [{ ...requestedWindowISO }];
-        } else if (refetchPolicy?.type === 'use_cache') {
-          wouldSkip = true;
-        } else if (
-          refetchPolicy?.reason === 'recent_fetch_cooldown' &&
-          refetchPolicy.cooldownApplied &&
-          !incremental.needsFetch
-        ) {
-          // Mirrors real execution: if cache cutting says “no gaps” and cooldown suppressed
-          // the immaturity refetch, we will skip fetching entirely.
-          wouldSkip = true;
-        } else if (refetchPolicy?.type === 'replace_slice') {
-          // Replacement fetch (cohort horizon bounding is applied in execution path; simulate it here).
-          // For cohort queries, bounding uses path_t95 when available (planner provides it),
-          // otherwise falls back to edge_t95/default.
-          let bounded = requestedWindowISO;
-          if (isCohortQuery && latencyConfig) {
-            const mm = (lines as any)._momentMatchedPathT95Estimate as number | undefined;
-            const effectivePathT95ForBounding =
-              latencyConfig.path_t95 !== undefined ? latencyConfig.path_t95 : mm;
-            cohortBoundingPathT95Used =
-              latencyConfig.path_t95 !== undefined
-                ? {
-                    value: latencyConfig.path_t95,
-                    source: latencyConfigSource === 'file' ? 'file.latency.path_t95' : 'graph.latency.path_t95',
-                  }
-                : mm !== undefined
-                  ? { value: mm, source: 'moment-matched' }
-                  : { value: 0, source: 'none' };
-            const horizon = computeCohortRetrievalHorizon({
-              requestedWindow: requestedWindowISO,
-              pathT95: effectivePathT95ForBounding,
-              edgeT95: latencyConfig.t95,
-            });
-            bounded = horizon.wasBounded ? horizon.boundedWindow : requestedWindowISO;
-            horizonSummary = horizon.summary;
-            cohortBoundedWindow = bounded;
-          }
-          wouldFetchWindows = [bounded];
-        } else if (refetchPolicy?.type === 'partial' && refetchPolicy.refetchWindow) {
-          // Real execution still checks for mature gaps (incremental) in addition to the immature refetchWindow.
-          // Here we include both: the immature refetchWindow plus any missing mature gaps.
-          const windows: DateRange[] = [refetchPolicy.refetchWindow];
-          if (incremental.needsFetch && incremental.fetchWindows.length > 0) {
-            // Avoid redundant windows fully covered by the immature refetch window.
-            const refetch = refetchPolicy.refetchWindow;
-            const rs = new Date(refetch.start).getTime();
-            const re = new Date(refetch.end).getTime();
-            for (const w of incremental.fetchWindows) {
-              const ws = new Date(w.start).getTime();
-              const we = new Date(w.end).getTime();
-              if (ws >= rs && we <= re) continue;
-              windows.push(w);
-            }
-          } else if (incremental.needsFetch && incremental.fetchWindow) {
-            const refetch = refetchPolicy.refetchWindow;
-            const rs = new Date(refetch.start).getTime();
-            const re = new Date(refetch.end).getTime();
-            const ws = new Date(incremental.fetchWindow.start).getTime();
-            const we = new Date(incremental.fetchWindow.end).getTime();
-            if (!(ws >= rs && we <= re)) {
-              windows.push(incremental.fetchWindow);
-            }
-          }
-          // De-dup identical windows (string compare is safe: all are ISO strings)
-          const seen = new Set<string>();
-          wouldFetchWindows = windows.filter(w => {
-            const key = `${w.start}::${w.end}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-        } else if (incremental.needsFetch && incremental.fetchWindows.length > 0) {
-          wouldFetchWindows = incremental.fetchWindows;
-        } else if (incremental.needsFetch && incremental.fetchWindow) {
-          wouldFetchWindows = [incremental.fetchWindow];
-        } else {
-          wouldSkip = true;
-        }
-
-        // Provider-normalised windows (what runner.execute would typically receive):
-        // ensures end-of-day coverage and consistent ISO-with-time semantics.
-        wouldFetchWindowsProviderNormalised = wouldFetchWindows.map(w => normalizeWindow(w));
-
-        // -------------------------------------------------------------------
-        // The key "pipeline" view (what you asked for):
-        // 1) what we have from file
-        // 2) which dates we might need due to missing cache gaps
-        // 3) which dates we might refetch due to immaturity (differs window() vs cohort())
-        // 4) therefore which actual HTTP queries would run
-        // -------------------------------------------------------------------
-
-        // 2) Missing-date gaps (cache cutting)
-        const missingGapWindows: DateRange[] =
-          incremental.needsFetch && incremental.fetchWindows.length > 0
-            ? incremental.fetchWindows
-            : incremental.needsFetch && incremental.fetchWindow
-            ? [incremental.fetchWindow]
-            : [];
-
-        // 3) Immaturity-driven refetch
-        const immatureWindows: DateRange[] = [];
-        let immaturityExplanation: string | undefined;
-
-        if (bustCache) {
-          immaturityExplanation = 'bustCache=true (ignores cache + immaturity; step (3) is not used)';
-        } else if (refetchPolicy?.reason === 'recent_fetch_cooldown' && refetchPolicy.cooldownApplied) {
-          const age = refetchPolicy.lastRetrievedAgeMinutes;
-          const ageText = age !== undefined && Number.isFinite(age) ? `${age.toFixed(1)}m` : '(unknown)';
-          const ra = refetchPolicy.lastRetrievedAt || '(none)';
-          if (isWindowSlice) {
-            immaturityExplanation =
-              `window(): cooldown active — last retrieved_at=${ra} (age ${ageText}); ` +
-              `skipping immature refetch (would have refetched ${refetchPolicy.wouldRefetchWindow ? `${normalizeDate(refetchPolicy.wouldRefetchWindow.start)}→${normalizeDate(refetchPolicy.wouldRefetchWindow.end)}` : '(unknown)'})`;
-          } else if (isCohortSlice) {
-            immaturityExplanation =
-              `cohort(): cooldown active — last retrieved_at=${ra} (age ${ageText}); ` +
-              `skipping replace_slice refetch (will only fill missing cache gaps, if any)`;
-          }
-        } else if (isWindowSlice && refetchPolicy?.type === 'partial' && refetchPolicy.refetchWindow) {
-          const effectiveMaturityDays = computeEffectiveMaturity(latencyConfig);
-          const maturitySource =
-            latencyConfig?.t95 !== undefined && latencyConfig.t95 > 0 ? `t95=${latencyConfig.t95.toFixed(2)}d` : `default`;
-          immatureWindows.push(refetchPolicy.refetchWindow);
-          immaturityExplanation = `window(): latency-aware partial refetch — refresh last ${effectiveMaturityDays + 1}d (effective maturity from ${maturitySource}); cutoff=${refetchPolicy.matureCutoff ?? '(unknown)'}`;
-        } else if (isCohortSlice && refetchPolicy?.type === 'replace_slice') {
-          // For cohort(), we do not “refetch only immature dates” — we replace the cohort slice when any cohorts are immature/stale.
-          // The actual query window may be horizon-bounded.
-          immaturityExplanation = `cohort(): latency-aware replace_slice — replace cohort slice when immature/stale${refetchPolicy.matureCutoff ? `; matureCutoff=${refetchPolicy.matureCutoff}` : ''}`;
-          if (cohortBoundedWindow) {
-            immatureWindows.push(cohortBoundedWindow);
-          } else {
-            immatureWindows.push(requestedWindowISO);
-          }
-        } else {
-          immaturityExplanation = 'no latency-aware refetch applied';
-        }
-
-        // 4) Therefore: actual queries (what we will run)
-        // Note: this is the same selection logic used above to compute wouldFetchWindows.
-        lines.push(`- **2) Dates I might need to get (missing cache gaps)**:`);
-        lines.push(...formatWindows(missingGapWindows));
-
-        lines.push(`- **3) Dates I might refetch because they could have changed (immature)**:`);
-        if (immaturityExplanation) lines.push(`  - rule: ${immaturityExplanation}`);
-        // For window(): show the explicit immature window (if any). For cohort(): show the bounded replacement window (if any).
-        lines.push(...formatWindows(immatureWindows));
-
-        if (isCohortQuery) {
-          lines.push(`- **cohort() bounding**:`);
-          if (refetchPolicy?.type === 'replace_slice') {
-            if (cohortBoundingPathT95Used?.source === 'file.latency.path_t95') {
-              lines.push(`  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: parameter file latency.path_t95)`);
-              if ((lines as any)._momentMatchedPathT95Estimate !== undefined) {
-                const mm = (lines as any)._momentMatchedPathT95Estimate as number;
-                lines.push(
-                  `  - note: moment-matched estimate available (${mm.toFixed(2)}d at ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%), but persisted path_t95 is authoritative for bounding`
-                );
-              }
-            } else if (cohortBoundingPathT95Used?.source === 'graph.latency.path_t95') {
-              lines.push(`  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: graph latency.path_t95)`);
-              if ((lines as any)._momentMatchedPathT95Estimate !== undefined) {
-                const mm = (lines as any)._momentMatchedPathT95Estimate as number;
-                lines.push(
-                  `  - note: moment-matched estimate available (${mm.toFixed(2)}d at ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%), but persisted path_t95 is authoritative for bounding`
-                );
-              }
-            } else if (cohortBoundingPathT95Used?.source === 'moment-matched') {
-              lines.push(
-                `  - effective path_t95 used for bounding: ${cohortBoundingPathT95Used.value.toFixed(2)}d (source: moment-matched from cached anchor_* + edge lag; percentile ${(LATENCY_PATH_T95_PERCENTILE * 100).toFixed(1)}%)`
-              );
-            } else {
-              lines.push(`  - effective path_t95 used for bounding: (none available; horizon uses edge.t95/default fallbacks)`);
-            }
-            lines.push(`  - ${horizonSummary ?? '(no horizon summary available)'}`);
-            if (!latencyConfig?.path_t95) {
-              lines.push(`  - note: \`path_t95\` may be missing on the graph until a prior fetch/topo pass computes it`);
-            }
-          } else {
-            lines.push(`  - (not applicable: policy is not replace_slice)`);
-          }
-        }
-
-        lines.push(`- **4) Therefore: actual HTTP queries we would run**:`);
-        lines.push(...formatWindows(wouldFetchWindows));
-        lines.push('');
-
-        if (wouldSkip) {
-          lines.push(`- **Would fetch**: (none) — use cache / file-only update path`);
-          lines.push(`- **Would do**: apply cached slice to graph, rebalance siblings, then run LAG topo enhancement`);
-          lines.push('');
-          continue;
-        }
-
-        lines.push(`- **Would fetch (date windows)**:`);
-        lines.push(`  - DSL/internal range:`);
-        for (const w of wouldFetchWindows) {
-          lines.push(`    - ${normalizeDate(w.start)} → ${normalizeDate(w.end)}`);
-        }
-        lines.push(`  - Provider (runner.execute) range (end-of-day normalised):`);
-        for (const w of wouldFetchWindowsProviderNormalised) {
-          lines.push(`    - ${normalizeDate(w.start)} → ${normalizeDate(w.end)}`);
-        }
-
-        // Build query payload (provider event mapping) for logging
-        let queryPayload: any = {};
-        let eventDefinitions: Record<string, any> = {};
-        let connectionProvider: string | undefined;
-        let supportsDailyTimeSeries = false;
-
-        if (connectionName && targetEdge?.query) {
-          try {
-            const connection = await (tempRunner as any).connectionProvider.getConnection(connectionName);
-            connectionProvider = connection?.provider;
-            supportsDailyTimeSeries = connection?.capabilities?.supports_daily_time_series === true;
-
-            const requiresEventIds = connection?.requires_event_ids !== false;
-            if (!requiresEventIds) {
-              queryPayload = {};
-            } else {
-              const eventLoader = async (eventId: string) => {
-                const f = fileRegistry.getFile(`event-${eventId}`);
-                return f?.data || { id: eventId, name: eventId, provider_event_names: {} };
-              };
-
-              // Use slice constraints to supply window/cohort/context, and the edge query for from/to.
-              const build = await buildDslFromEdge(
-                { ...targetEdge, query: targetEdge.query },
-                graph,
-                connectionProvider,
-                eventLoader,
-                sliceConstraints
-              );
-              queryPayload = build.queryPayload;
-              eventDefinitions = build.eventDefinitions;
-            }
-          } catch (error) {
-            // Simulation must remain non-fatal even if the local connection registry
-            // cannot be loaded (e.g. tests, or misconfigured dev env).
-            // In that case, we still report the edge query and windows, but omit
-            // provider-specific payload expansion.
-            connectionProvider = connectionProvider ?? undefined;
-            supportsDailyTimeSeries = false;
-            queryPayload = {};
-            eventDefinitions = {};
-            lines.push(`- **Query constructed**:`);
-            lines.push(`  - edge.query: \`${targetEdge?.query || '(none)'}\``);
-            lines.push(`  - provider: \`(unresolved: connection lookup failed)\``);
-            lines.push(`  - supports_daily_time_series: false`);
-            lines.push(`  - note: provider mapping skipped due to error: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
-
-        lines.push(`- **Query constructed**:`);
-        lines.push(`  - edge.query: \`${targetEdge?.query || '(none)'}\``);
-        lines.push(`  - provider: \`${connectionProvider || '(unknown)'}\``);
-        lines.push(`  - supports_daily_time_series: ${supportsDailyTimeSeries ? 'true' : 'false'}`);
-        lines.push(`  - payload keys: ${Object.keys(queryPayload || {}).join(', ') || '(none)'}`);
-
-        // Expected response shape (no actual call)
-        const expectedMode = supportsDailyTimeSeries ? 'daily' : 'aggregate';
-        lines.push(`- **Would call HTTP (NOT executed)**:`);
-        for (const w of wouldFetchWindowsProviderNormalised) {
-          // Run the REAL DAS runner pipeline up to request construction, then stop before HTTP.
-          // This ensures the report reflects actual adapter request templates and pre_request scripts.
-          let dryRequestLine: string | undefined;
-          try {
-            if (connectionName) {
-              const dry = await tempRunner.execute(connectionName, queryPayload || {}, {
-                connection_string: (paramFile?.data as any)?.connection_string,
-                window: w as any,
-                cohort: isCohortQuery ? (queryPayload as any)?.cohort ?? {} : {},
-                context: { mode: expectedMode },
-                edgeId: item.targetId,
-                parameterId: item.objectId,
-                eventDefinitions,
-                dryRun: true,
-              });
-              const req = dry.success ? (dry.raw as any)?.request : undefined;
-              if (req?.method && req?.url) {
-                dryRequestLine = ` [dryRun request: ${req.method} ${req.url}]`;
-              }
-            }
-          } catch (e) {
-            // Non-fatal: still show the runner.execute call even if we couldn't build the request.
-          }
-
-          lines.push(
-            `  - runner.execute(${connectionName}, <payload>, window=${normalizeDate(w.start)}→${normalizeDate(w.end)}, mode=${expectedMode}, cohort=${isCohortQuery ? 'yes' : 'no'})${dryRequestLine ?? ''}`
-          );
-        }
-
-        // What we would expect back (shape only)
-        lines.push(`- **Would expect back (shape)**:`);
-        lines.push(`  - success=true`);
-        lines.push(`  - raw: { n, k, p, ${supportsDailyTimeSeries ? 'time_series: [{date,n,k,p}]' : '(aggregate only)'} }`);
-        if (isCohortQuery) {
-          lines.push(`  - plus cohort latency arrays for 3-step funnels when available: median_lag_days[], mean_lag_days[], anchor_* (if provided)`);
-        }
-
-        // Merge plan
-        lines.push(`- **Would do with response (merge plan)**:`);
-        if (isCohortQuery) {
-          lines.push(`  - cohort mode: merge by cohort-entry date into ONE canonical \`cohort(<anchor>,earliest:latest)\` value for this slice family (preserve existing dates outside fetched range; overwrite fetched dates)`);
-        } else {
-          lines.push(`  - window mode: canonical merge by date into a single \`window(earliest:latest)\` entry for this slice family`);
-        }
-        if (bustCache) {
-          lines.push(`  - bustCache: ignore existing dates, treat all requested dates as missing`);
-        }
-        lines.push(`  - if provider returns NO DATA: write a "no data" marker for the fetched window(s) (zeros) so the UI treats it as cached`);
-        lines.push('');
-      }
-    }
-
-    return lines.join('\n');
-  }
-  
   /**
    * Helper: Ensure evidence/forecast scalars are present on aggregated parameter data.
    * 

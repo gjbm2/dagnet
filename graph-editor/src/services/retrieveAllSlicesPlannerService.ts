@@ -1,4 +1,5 @@
 import type { GraphData } from '../types';
+import { enumerateFetchTargets } from './fetchTargetEnumerationService';
 
 export type RetrieveAllSlicesTarget =
   | {
@@ -7,6 +8,7 @@ export type RetrieveAllSlicesTarget =
       targetId: string;
       name: string;
       paramSlot?: 'p' | 'cost_gbp' | 'labour_cost';
+      conditionalIndex?: number;
     }
   | {
       type: 'case';
@@ -33,64 +35,27 @@ class RetrieveAllSlicesPlannerService {
   }
 
   collectTargets(graph: GraphData): RetrieveAllSlicesTarget[] {
-    const items: RetrieveAllSlicesTarget[] = [];
-
-    // Collect parameters from edges
-    if (graph.edges) {
-      for (const edge of graph.edges as any[]) {
-        const edgeId: string = edge.uuid || edge.id || '';
-        if (!edgeId) continue;
-
-        if (edge.p?.id && typeof edge.p.id === 'string') {
-          items.push({
-            type: 'parameter',
-            objectId: edge.p.id,
-            targetId: edgeId,
-            name: `p: ${edge.p.id}`,
-            paramSlot: 'p',
-          });
-        }
-
-        if (edge.cost_gbp?.id && typeof edge.cost_gbp.id === 'string') {
-          items.push({
-            type: 'parameter',
-            objectId: edge.cost_gbp.id,
-            targetId: edgeId,
-            name: `cost_gbp: ${edge.cost_gbp.id}`,
-            paramSlot: 'cost_gbp',
-          });
-        }
-
-        if (edge.labour_cost?.id && typeof edge.labour_cost.id === 'string') {
-          items.push({
-            type: 'parameter',
-            objectId: edge.labour_cost.id,
-            targetId: edgeId,
-            name: `labour_cost: ${edge.labour_cost.id}`,
-            paramSlot: 'labour_cost',
-          });
-        }
+    return enumerateFetchTargets(graph as any).map((t): RetrieveAllSlicesTarget => {
+      if (t.type === 'case') {
+        return {
+          type: 'case',
+          objectId: t.objectId,
+          targetId: t.targetId,
+          name: `case: ${t.objectId}`,
+        };
       }
-    }
 
-    // Collect cases from nodes
-    if (graph.nodes) {
-      for (const node of graph.nodes as any[]) {
-        const nodeId: string = node.uuid || node.id || '';
-        if (!nodeId) continue;
-
-        if (node.case?.id && typeof node.case.id === 'string') {
-          items.push({
-            type: 'case',
-            objectId: node.case.id,
-            targetId: nodeId,
-            name: `case: ${node.case.id}`,
-          });
-        }
-      }
-    }
-
-    return items;
+      const slot = t.paramSlot || 'p';
+      const isConditional = typeof t.conditionalIndex === 'number';
+      return {
+        type: 'parameter',
+        objectId: t.objectId,
+        targetId: t.targetId,
+        name: isConditional ? `conditional_p[${t.conditionalIndex}]: ${t.objectId}` : `${slot}: ${t.objectId}`,
+        paramSlot: slot,
+        conditionalIndex: t.conditionalIndex,
+      };
+    });
   }
 }
 

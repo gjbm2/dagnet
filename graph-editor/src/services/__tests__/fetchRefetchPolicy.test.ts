@@ -12,6 +12,7 @@ import {
   shouldRefetch,
   analyzeSliceCoverage,
   computeFetchWindow,
+  computeEffectiveCohortMaturity,
   type RefetchDecision,
 } from '../fetchRefetchPolicy';
 import type { ParameterValue } from '../../types/parameterData';
@@ -48,6 +49,12 @@ describe('fetchRefetchPolicy', () => {
       expect(decision.type).toBe('partial');
       // Cutoff should be t95 + 1 = 15 days ago
       expect(decision.matureCutoff).toBe(ukDate(15, referenceDate));
+    });
+
+    it('computeEffectiveCohortMaturity prefers path_t95 over t95', () => {
+      expect(computeEffectiveCohortMaturity({ latency_parameter: true, t95: 7, path_t95: 21 })).toBe(21);
+      expect(computeEffectiveCohortMaturity({ latency_parameter: true, t95: 7 })).toBe(7);
+      expect(computeEffectiveCohortMaturity({ latency_parameter: true, t95: undefined, path_t95: undefined })).toBe(30);
     });
     
     it('should fall back to conservative default when t95 is not available', () => {
@@ -236,6 +243,47 @@ describe('fetchRefetchPolicy', () => {
       expect(decision.reason).toBe('immature_cohorts');
     });
 
+    it('prefers path_t95 for cohort maturity (cumulative lag)', () => {
+      // Construct a slice that is mature under edge t95=7 (15 days ago),
+      // but still immature under path_t95=21 (21-day cumulative lag).
+      const slice: ParameterValue = {
+        mean: 0.5,
+        n: 1000,
+        k: 500,
+        dates: [ukDate(15, referenceDate)],
+        n_daily: [100],
+        k_daily: [50],
+        cohort_from: ukDate(15, referenceDate),
+        cohort_to: ukDate(15, referenceDate),
+        sliceDSL: `cohort(anchor,${ukDate(15, referenceDate)}:${ukDate(15, referenceDate)})`,
+        data_source: {
+          type: 'api',
+          retrieved_at: new Date(referenceDate.getTime() - 24 * 60 * 60 * 1000).toISOString(), // 1 day ago
+        },
+      };
+
+      // With only edge t95=7, this should be mature → use_cache.
+      const edgeOnly = shouldRefetch({
+        existingSlice: slice,
+        latencyConfig: { latency_parameter: true, t95: 7 },
+        requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(0, referenceDate) },
+        isCohortQuery: true,
+        referenceDate,
+      });
+      expect(edgeOnly.type).toBe('use_cache');
+
+      // With path_t95=21, this should be immature → replace_slice.
+      const withPath = shouldRefetch({
+        existingSlice: slice,
+        latencyConfig: { latency_parameter: true, t95: 7, path_t95: 21 },
+        requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(0, referenceDate) },
+        isCohortQuery: true,
+        referenceDate,
+      });
+      expect(withPath.type).toBe('replace_slice');
+      expect(withPath.reason).toBe('immature_cohorts');
+    });
+
     it('should suppress replace_slice when cohort slice was fetched very recently (cooldown)', () => {
       const recentImmatureSlice: ParameterValue = {
         ...existingCohortSlice,
@@ -283,6 +331,34 @@ describe('fetchRefetchPolicy', () => {
       
       expect(decision.type).toBe('use_cache');
       expect(decision.hasImmatureCohorts).toBe(false);
+    });
+
+    it('should prefer path_t95 over t95 for cohort maturity', () => {
+      // This slice is mature under edge t95=7 (most recent cohort date is 10 days ago),
+      // but immature under path_t95=21 (10 days ago is within the 21-day maturity horizon).
+      const matureByEdgeButImmatureByPath: ParameterValue = {
+        ...existingCohortSlice,
+        dates: [
+          ukDate(30, referenceDate),
+          ukDate(20, referenceDate),
+          ukDate(10, referenceDate),
+        ],
+        n_daily: [100, 100, 100],
+        k_daily: [50, 50, 50],
+        cohort_to: ukDate(10, referenceDate),
+      };
+
+      const decision = shouldRefetch({
+        existingSlice: matureByEdgeButImmatureByPath,
+        latencyConfig: { latency_parameter: true, t95: 7, path_t95: 21 },
+        requestedWindow: { start: ukDate(30, referenceDate), end: ukDate(10, referenceDate) },
+        isCohortQuery: true,
+        referenceDate,
+      });
+
+      expect(decision.type).toBe('replace_slice');
+      expect(decision.hasImmatureCohorts).toBe(true);
+      expect(decision.reason).toBe('immature_cohorts');
     });
     
     it('should return replace_slice when no existing slice exists', () => {

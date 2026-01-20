@@ -33,6 +33,15 @@ export interface RetrieveAllSlicesOptions {
   /** If not provided, derived from graph.dataInterestsDSL. */
   slices?: string[];
   bustCache?: boolean;
+  /**
+   * If true, run the real Retrieve All execution loop but:
+   * - do not execute external HTTP (dry-run request construction only)
+   * - do not write files
+   * - do not mutate the graph
+   *
+   * The artefact is the session log trace (including DRY_RUN_HTTP entries).
+   */
+  simulate?: boolean;
 
   /** Return true to abort ASAP (checked between items and slices). */
   shouldAbort?: () => boolean;
@@ -68,6 +77,7 @@ class RetrieveAllSlicesService {
       setGraph,
       slices,
       bustCache = false,
+      simulate = false,
       shouldAbort,
       onProgress,
     } = options;
@@ -164,11 +174,13 @@ class RetrieveAllSlicesService {
                 objectId: item.objectId,
                 targetId: item.targetId,
                 graph: currentGraph,
-                setGraph,
+                setGraph: simulate ? (() => {}) : setGraph,
                 paramSlot: item.paramSlot,
+                conditionalIndex: item.conditionalIndex,
                 bustCache,
                 currentDSL: sliceDSL,
                 targetSlice: sliceDSL,
+                dontExecuteHttp: simulate,
               });
               sliceSuccess++;
             } else {
@@ -177,9 +189,10 @@ class RetrieveAllSlicesService {
                 objectId: item.objectId,
                 targetId: item.targetId,
                 graph: currentGraph,
-                setGraph,
+                setGraph: simulate ? (() => {}) : setGraph,
                 bustCache,
                 currentDSL: sliceDSL,
+                dontExecuteHttp: simulate,
               });
               sliceSuccess++;
             }
@@ -213,7 +226,7 @@ class RetrieveAllSlicesService {
 
       // On a fully successful run, stamp a graph-level marker so other devices that pull
       // can suppress retrieve-all nudges (nightly cron is the primary driver).
-      if (!aborted && totalErrors === 0) {
+      if (!simulate && !aborted && totalErrors === 0) {
         try {
           const g = getGraph();
           if (g && typeof g === 'object' && (g as any).metadata) {

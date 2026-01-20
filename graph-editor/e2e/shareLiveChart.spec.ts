@@ -255,10 +255,11 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     const shareFx = installShareForensics({ page: sharePage, testInfo, phase: 'share-bundle-chart-active' });
     await installShareLiveStubs(sharePage, state);
 
-    await sharePage.goto(new URL(shareUrl0, baseURL).toString(), { waitUntil: 'domcontentloaded' });
-    await expect(sharePage.getByText('Live view')).toBeVisible();
-    await expect(sharePage.getByText('Chart — Bridge View')).toBeVisible();
-    await expect(sharePage.getByText('Linked').first()).toBeVisible();
+    try {
+      await sharePage.goto(new URL(shareUrl0, baseURL).toString(), { waitUntil: 'domcontentloaded' });
+      await expect(sharePage.getByText('Live view')).toBeVisible();
+      await expect(sharePage.getByText('Chart — Bridge View')).toBeVisible();
+      await expect(sharePage.getByText('Linked').first()).toBeVisible();
 
     // Bridge must compute with exactly two scenarios, in the correct order:
     // bundle semantics for bridge_view require "Current last".
@@ -305,10 +306,14 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
       })
       .toEqual(['A', 'Current']);
 
-    await shareFx.recordJson('lastAnalyzeRequest.json', state.lastAnalyzeRequest || null);
-    await shareFx.snapshotDb('share');
-    await shareFx.flush();
-    await shareContext.close();
+      await shareFx.recordJson('lastAnalyzeRequest.json', state.lastAnalyzeRequest || null);
+    } finally {
+      // Always flush forensics on failure: this test is designed to guard persistence semantics and
+      // losing the share-phase artefacts makes regressions much harder to debug.
+      await shareFx.snapshotDb('share');
+      await shareFx.flush();
+      await shareContext.close();
+    }
   });
 
   test('live share (funnel) preserves scenario order/visibility exactly (no Current; hide_current=true)', async ({ browser, baseURL }) => {

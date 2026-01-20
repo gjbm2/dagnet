@@ -78,13 +78,13 @@ Second-order implication: any change that affects the computed horizons can crea
   - If `edge.p.latency.path_t95` is missing, it computes a `computePathT95(...)` map on-demand (cached per graph hash).
     - That on-demand computation uses `edge.p.mean` and may use default injection when an edge has latency enabled but `t95` is missing.
 - `graph-editor/src/services/cohortRetrievalHorizon.ts`
-  - `computeCohortRetrievalHorizon(...)` bounds cohort retrieval windows based on `path_t95` (preferred) or `edge_t95` fallback, relative to `referenceDate` (default `new Date()`).
-  - It classifies cohorts as missing/stale/stable, which is later used by the planner to decide “fetch vs refresh”.
+  - `computeCohortRetrievalHorizon(...)` **does not trim** the start of cohort windows; it evaluates horizons and classifies cohorts (missing/stale/stable) relative to `referenceDate` (default `new Date()`).
+  - Any “minimum fetch” behaviour must come from **coverage-aware planning** (i.e. only skipping dates already present in file), not from horizon-based start truncation.
 
 Second/third-order implication: nondeterministic horizons are not only a testing nuisance; they can change:
 
 - whether a slice is considered stale vs stable,
-- whether cohort windows are bounded (trimmed) or not,
+- whether cohort dates are treated as stale vs stable (and therefore scheduled for refresh),
 - and therefore whether a particular fetch run will hit the network at all.
 
 ### 1.4 Critical invariants locked by tests (do not ignore)

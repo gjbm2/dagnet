@@ -101,15 +101,28 @@ function getConserveMassFixtures(): { readText: (relPath: string) => string | nu
 }
 
 export async function installShareLiveStubs(page: Page, state: ShareLiveStubState) {
+  // Some share flows use relative cohort windows (e.g. cohort(-1w:)) which resolve against "now".
+  // Provide a cohort slice that always covers the last ~7 days so cache-only share regeneration is deterministic.
+  const cohortNow = new Date();
+  const cohortEndUk = formatDateUK(cohortNow);
+  const cohortStartDate = new Date(cohortNow);
+  cohortStartDate.setUTCDate(cohortStartDate.getUTCDate() - 7);
+  const cohortStartUk = formatDateUK(cohortStartDate);
+
   // GitHub API (fetch-based requests in gitService, and Octokit requests).
   await page.route('https://api.github.com/**', async (route: Route) => {
     const url = route.request().url();
 
-    // 1) Remote HEAD SHA (Octokit git.getRef → /git/ref/heads/<branch>)
+    // 1) Remote HEAD SHA (Octokit git.getRef → /git/ref(s)/heads/<branch>)
     //
     // Octokit may URL-encode the ref (e.g. "heads%2Fmain") depending on the route it uses.
     // Accept both forms.
-    if (url.includes('/git/ref/heads/') || url.includes('/git/ref/heads%2F')) {
+    if (
+      url.includes('/git/ref/heads/') ||
+      url.includes('/git/ref/heads%2F') ||
+      url.includes('/git/refs/heads/') ||
+      url.includes('/git/refs/heads%2F')
+    ) {
       inc(state, 'github:getRef');
       inc(state, `github:getRef:${state.version}`);
       const sha =
@@ -292,6 +305,13 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
             'type: probability',
             'query_overridden: true',
             'values:',
+            // Cohort slice used by share-live scenario regeneration (cohort(-1w:)).
+            "  - sliceDSL: 'cohort(-1w:)'",
+            `    cohort_from: '${cohortStartUk}'`,
+            `    cohort_to: '${cohortEndUk}'`,
+            '    mean: 0.5',
+            '    n: 100',
+            '    k: 50',
             // Uncontexted fallback
             '  - mean: 0.5',
             // Contexted slices used by the context() share regression test
@@ -505,6 +525,13 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
             'type: probability',
             'query_overridden: true',
             'values:',
+            // Cohort slice used by share-live scenario regeneration (cohort(-1w:)).
+            "  - sliceDSL: 'cohort(-1w:)'",
+            `    cohort_from: '${cohortStartUk}'`,
+            `    cohort_to: '${cohortEndUk}'`,
+            '    mean: 0.5',
+            '    n: 100',
+            '    k: 50',
             // Uncontexted fallback
             '  - mean: 0.5',
             // Contexted slices used by the context() share regression test
@@ -943,7 +970,9 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
   });
 
   // Compute API (GraphComputeClient)
-  await page.route('http://127.0.0.1:9000/**', async (route: Route) => {
+  //
+  // Some environments use localhost while others use 127.0.0.1 (env-driven). Stub both to avoid CORS failures.
+  const handleCompute = async (route: Route) => {
     const url = route.request().url();
 
     if (url.endsWith('/api/runner/analyze')) {
@@ -1027,6 +1056,9 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
 
     inc(state, 'compute:unexpected');
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ message: 'Unexpected compute call', url }) });
-  });
+  };
+
+  await page.route('http://127.0.0.1:9000/**', handleCompute);
+  await page.route('http://localhost:9000/**', handleCompute);
 }
 

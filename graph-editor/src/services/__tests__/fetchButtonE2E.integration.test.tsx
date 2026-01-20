@@ -18,23 +18,46 @@ import { mergeTimeSeriesIntoParameter } from '../windowAggregationService';
 import { isolateSlice, extractSliceDimensions } from '../sliceIsolation';
 import { fileRegistry } from '../../contexts/TabContext';
 import type { ParameterValue } from '../../types/parameterData';
+import { windowFetchPlannerService } from '../windowFetchPlannerService';
+import { contextRegistry } from '../contextRegistry';
+import { db } from '../../db/appDatabase';
+import { computePlannerQuerySignaturesForGraph } from '../plannerQuerySignatureService';
+import { buildFetchPlanProduction } from '../fetchPlanBuilderService';
+import { isSignatureCheckingEnabled } from '../signaturePolicyService';
 
 // Mock toast
 vi.mock('react-hot-toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn() }),
 }));
 
-// Mock session log
-vi.mock('../sessionLogService', () => ({
-  sessionLogService: {
-    startOperation: vi.fn(() => 'log-op-id'),
-    endOperation: vi.fn(),
-    addChild: vi.fn(),
-  },
-}));
-
 describe('AllSlicesModal → WindowSelector Cache Flow', () => {
   
+  beforeEach(async () => {
+    // Keep FileRegistry/IndexedDB clean for each test in this suite.
+    // This prevents cross-test pollution (a common cause of "passes locally, fails in CI" flakiness).
+    try {
+      await db.files.clear();
+    } catch {
+      // ignore: some test environments may not expose the DB (but most do)
+    }
+
+    // IMPORTANT: WindowFetchPlannerService caches analysis results by (dsl + graph hash).
+    // These tests intentionally reuse the same DSL/graph across cases, so we must invalidate
+    // between tests or we won't actually exercise the planning/signature codepath.
+    windowFetchPlannerService.invalidateCache();
+
+    // Also clear FileRegistry's in-memory cache (Dexie is the source of truth, but tests can leak memory state).
+    // This is intentionally "white-box" for tests only.
+    try {
+      (fileRegistry as any).files?.clear?.();
+      (fileRegistry as any).listeners?.clear?.();
+      (fileRegistry as any).updatingFiles?.clear?.();
+      (fileRegistry as any).pendingUpdates?.clear?.();
+    } catch {
+      // ignore
+    }
+  });
+
   describe('Step 1: mergeTimeSeriesIntoParameter writes sliceDSL correctly', () => {
     it('should write data with sliceDSL when fetching for a context', () => {
       const timeSeries = [
@@ -215,7 +238,7 @@ describe('AllSlicesModal → WindowSelector Cache Flow', () => {
           dates: ['2025-10-01'], 
           n_daily: [0], 
           k_daily: [0],
-          data_source: { type: 'amplitude', no_data: true, retrieved_at: '2025-10-01T00:00:00Z' },
+          data_source: ({ type: 'amplitude', no_data: true, retrieved_at: '2025-10-01T00:00:00Z' } as any),
         },
       ];
 
@@ -225,7 +248,7 @@ describe('AllSlicesModal → WindowSelector Cache Flow', () => {
       expect(paidSocialResult.length).toBe(1);
       expect(paidSocialResult[0].n).toBe(0);
       expect(paidSocialResult[0].dates).toContain('2025-10-01');
-      expect(paidSocialResult[0].data_source?.no_data).toBe(true);
+      expect((paidSocialResult[0].data_source as any)?.no_data).toBe(true);
     });
 
     it('calculateIncrementalFetch should NOT report missing dates when "no data" marker exists', async () => {
@@ -240,7 +263,7 @@ describe('AllSlicesModal → WindowSelector Cache Flow', () => {
             dates: ['2025-10-01'], // This is the key - dates array exists
             n_daily: [0], 
             k_daily: [0],
-            data_source: { type: 'amplitude' as const, no_data: true },
+            data_source: ({ type: 'amplitude' as const, no_data: true } as any),
           },
         ],
       };
@@ -334,5 +357,221 @@ describe('AllSlicesModal → WindowSelector Cache Flow', () => {
       expect(edge?.p?.evidence?.n).toBe(200);
       expect(edge?.p?.evidence?.k).toBe(30);
     });
+  });
+
+  describe('Step 6: Planner E2E - uncontexted cohort is satisfied from contexted MECE slices (no refetch)', () => {
+    function pickAnySignature(sig: string | string[]): string {
+      return Array.isArray(sig) ? sig[0] : sig;
+    }
+
+    function seedChannel(values: string[]) {
+      contextRegistry.clearCache();
+      (contextRegistry as any).cache.set('channel', {
+        id: 'channel',
+        name: 'channel',
+        description: 'test',
+        type: 'categorical',
+        // Treat "other" as a valid, queryable bucket for MECE completeness.
+        // (In production this is typically 'explicit' or 'computed' when an 'other' slice exists.)
+        otherPolicy: 'explicit',
+        values: values.map((id) => ({ id, label: id })),
+        metadata: { status: 'active', created_at: '1-Dec-25', version: '1.0.0' },
+      });
+    }
+
+    (isSignatureCheckingEnabled() ? it : it.skip)(
+      'CRITICAL: planner must NOT demand fetch when cohort headers fully cover requested window via MECE (signature-aware)',
+      async () => {
+      seedChannel(['paid-search', 'influencer', 'paid-social', 'other']);
+
+      // Minimal graph with a single fetchable parameter.
+      const graph: any = {
+        nodes: [
+          { id: 'a', uuid: 'a', event_id: 'a-event' },
+          { id: 'b', uuid: 'b', event_id: 'b-event' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            uuid: 'edge-1',
+            from: 'a',
+            to: 'b',
+            // NOTE: connection is on the param slot, not on the edge.
+            p: { id: 'test-param', connection: 'amplitude-prod' },
+            query: 'from(a).to(b)',
+          },
+        ],
+      };
+
+      // Seed minimal event files so buildDslFromEdge can resolve provider event names.
+      await fileRegistry.registerFile('event-a-event', {
+        fileId: 'event-a-event',
+        type: 'event',
+        data: { id: 'a-event', provider_event_names: { amplitude: 'A' } },
+        originalData: { id: 'a-event', provider_event_names: { amplitude: 'A' } },
+        isDirty: false,
+        isInitializing: false,
+        source: { type: 'local' } as any,
+        viewTabs: [],
+        lastModified: Date.now(),
+      } as any);
+      await fileRegistry.registerFile('event-b-event', {
+        fileId: 'event-b-event',
+        type: 'event',
+        data: { id: 'b-event', provider_event_names: { amplitude: 'B' } },
+        originalData: { id: 'b-event', provider_event_names: { amplitude: 'B' } },
+        isDirty: false,
+        isInitializing: false,
+        source: { type: 'local' } as any,
+        viewTabs: [],
+        lastModified: Date.now(),
+      } as any);
+
+      // Simulate Retrieve All having written ONLY contexted cohort slices (no uncontexted).
+      // Importantly: we only provide cohort_from/cohort_to bounds — no per-day arrays.
+      const values: ParameterValue[] = [
+        { sliceDSL: 'context(channel:paid-search)', cohort_from: '1-Nov-25', cohort_to: '15-Dec-25', mean: 0.5, n: 1, k: 1 },
+        { sliceDSL: 'context(channel:influencer)', cohort_from: '1-Nov-25', cohort_to: '15-Dec-25', mean: 0.5, n: 1, k: 1 },
+        { sliceDSL: 'context(channel:paid-social)', cohort_from: '1-Nov-25', cohort_to: '15-Dec-25', mean: 0.5, n: 1, k: 1 },
+        { sliceDSL: 'context(channel:other)', cohort_from: '1-Nov-25', cohort_to: '15-Dec-25', mean: 0.5, n: 1, k: 1 },
+      ];
+
+      // IMPORTANT: planner signature computation may depend on inspecting the parameter file values
+      // (e.g. to detect implicit-uncontexted MECE fulfilment).
+      // Register the file BEFORE computing signatures so the signature code sees the same state
+      // the real planner would see in-app.
+      await fileRegistry.registerFile('parameter-test-param', {
+        fileId: 'parameter-test-param',
+        type: 'parameter',
+        data: { id: 'test-param', type: 'probability', values },
+        originalData: { id: 'test-param', type: 'probability', values },
+        isDirty: false,
+        isInitializing: false,
+        source: { type: 'local' } as any,
+        viewTabs: [],
+        lastModified: Date.now(),
+      } as any);
+
+      // Add real query_signature values matching what the planner will compute for this graph+DSL.
+      // This ensures the test exercises signature isolation, not just header coverage.
+      const dsl = 'cohort(19-Nov-25:24-Nov-25)';
+      const sigs = await computePlannerQuerySignaturesForGraph({ graph, dsl });
+      const itemKey = Object.keys(sigs)[0]; // single parameter in this test graph
+      const sig = sigs[itemKey];
+      const chosenSig = pickAnySignature(sig);
+      expect(typeof chosenSig).toBe('string');
+      expect((chosenSig as any).length).toBeGreaterThan(10);
+      for (const v of values) (v as any).query_signature = chosenSig;
+
+      const result = await windowFetchPlannerService.analyse(graph, dsl, 'dsl_change');
+
+      // This is the core invariant the app needs:
+      // "uncontexted cohort can be satisfied from contexted MECE slices (by header coverage)"
+      expect(result.outcome).toBe('covered_stable');
+      expect(result.fetchPlanItems.length).toBe(0);
+      expect(result.unfetchableGaps.length).toBe(0);
+      }
+    );
+
+    (isSignatureCheckingEnabled() ? it : it.skip)(
+      'CRITICAL: if signed cache signatures do NOT match, planner must demand fetch (negative test)',
+      async () => {
+      seedChannel(['paid-search', 'influencer', 'paid-social', 'other']);
+
+      const graph: any = {
+        nodes: [
+          { id: 'a', uuid: 'a', event_id: 'a-event' },
+          { id: 'b', uuid: 'b', event_id: 'b-event' },
+        ],
+        edges: [
+          {
+            id: 'edge-1',
+            uuid: 'edge-1',
+            from: 'a',
+            to: 'b',
+            p: { id: 'test-param', connection: 'amplitude-prod' },
+            query: 'from(a).to(b)',
+          },
+        ],
+      };
+
+      await fileRegistry.registerFile('event-a-event', {
+        fileId: 'event-a-event',
+        type: 'event',
+        data: { id: 'a-event', provider_event_names: { amplitude: 'A' } },
+        originalData: { id: 'a-event', provider_event_names: { amplitude: 'A' } },
+        isDirty: false,
+        isInitializing: false,
+        source: { type: 'local' } as any,
+        viewTabs: [],
+        lastModified: Date.now(),
+      } as any);
+      await fileRegistry.registerFile('event-b-event', {
+        fileId: 'event-b-event',
+        type: 'event',
+        data: { id: 'b-event', provider_event_names: { amplitude: 'B' } },
+        originalData: { id: 'b-event', provider_event_names: { amplitude: 'B' } },
+        isDirty: false,
+        isInitializing: false,
+        source: { type: 'local' } as any,
+        viewTabs: [],
+        lastModified: Date.now(),
+      } as any);
+
+      const values: ParameterValue[] = [
+        { sliceDSL: 'context(channel:paid-search)', cohort_from: '1-Nov-25', cohort_to: '15-Dec-25', mean: 0.5, n: 1, k: 1 },
+        { sliceDSL: 'context(channel:influencer)', cohort_from: '1-Nov-25', cohort_to: '15-Dec-25', mean: 0.5, n: 1, k: 1 },
+        { sliceDSL: 'context(channel:paid-social)', cohort_from: '1-Nov-25', cohort_to: '15-Dec-25', mean: 0.5, n: 1, k: 1 },
+        { sliceDSL: 'context(channel:other)', cohort_from: '1-Nov-25', cohort_to: '15-Dec-25', mean: 0.5, n: 1, k: 1 },
+      ];
+
+      // Deliberately wrong signatures: must force needs_fetch despite FULL headers.
+      for (const v of values) (v as any).query_signature = 'deadbeef';
+
+      await fileRegistry.registerFile('parameter-test-param', {
+        fileId: 'parameter-test-param',
+        type: 'parameter',
+        data: { id: 'test-param', type: 'probability', values },
+        originalData: { id: 'test-param', type: 'probability', values },
+        isDirty: false,
+        isInitializing: false,
+        source: { type: 'local' } as any,
+        viewTabs: [],
+        lastModified: Date.now(),
+      } as any);
+
+      // Sanity: we must be able to compute a real "current signature" for this item, otherwise
+      // signature isolation won't be exercised and the test becomes meaningless.
+      const dsl = 'cohort(19-Nov-25:24-Nov-25)';
+      const sigs = await computePlannerQuerySignaturesForGraph({ graph, dsl });
+      const expectedItemKey = 'parameter:test-param:edge-1:p:'; // buildItemKey(...) canonical form
+      expect(Object.keys(sigs)).toContain(expectedItemKey);
+      const sig = sigs[expectedItemKey];
+      const chosenSig = pickAnySignature(sig);
+      expect(typeof chosenSig).toBe('string');
+      expect((chosenSig as any).length).toBeGreaterThan(10);
+      // Ensure the computed planner signature(s) are not trivially equal to our forced wrong signature.
+      if (Array.isArray(sig)) {
+        expect(sig).not.toContain('deadbeef');
+      } else {
+        expect(sig).not.toBe('deadbeef');
+      }
+
+      // Sanity: the plan builder must look up the signature using the SAME key.
+      const built = buildFetchPlanProduction(
+        graph,
+        dsl,
+        { start: '19-Nov-25', end: '24-Nov-25' },
+        { querySignatures: sigs }
+      );
+      expect(built.plan.items.length).toBe(1);
+      expect(built.plan.items[0].itemKey).toBe(expectedItemKey);
+
+      const result = await windowFetchPlannerService.analyse(graph, dsl, 'dsl_change');
+
+      expect(result.outcome).toBe('not_covered');
+      expect(result.fetchPlanItems.length).toBeGreaterThan(0);
+      }
+    );
   });
 });

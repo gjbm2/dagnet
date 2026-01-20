@@ -14,6 +14,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseUKDate, formatDateUK } from '../../lib/dateFormat';
 import { parseConstraints } from '../../lib/queryDSL';
 import { calculateIncrementalFetch } from '../windowAggregationService';
+import { contextRegistry } from '../contextRegistry';
+
+function seedChannel(values: string[], otherPolicy: 'null' | 'computed' | 'explicit' | 'undefined' = 'null') {
+  // These tests assert MECE behaviour for implicit-uncontexted fulfilment.
+  // MECE universe must be defined by a context definition.
+  contextRegistry.clearCache();
+  (contextRegistry as any).cache.set('channel', {
+    id: 'channel',
+    name: 'channel',
+    description: 'test',
+    type: 'categorical',
+    otherPolicy,
+    values: values.map((id) => ({ id, label: id })),
+    metadata: { status: 'active', created_at: '1-Dec-25', version: '1.0.0' },
+  });
+}
 
 // ============================================================================
 // UNIT TESTS: parseUKDate (Timezone handling)
@@ -331,6 +347,9 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
   });
 
   describe('Bug: calculateIncrementalFetch not filtering by context slice', () => {
+    beforeEach(() => {
+      seedChannel(['facebook', 'google']);
+    });
     // This bug caused: data exists for context(channel:facebook), but we're querying
     // context(channel:google). Without targetSlice filtering, system incorrectly
     // says "all dates exist" and skips API call.
@@ -571,6 +590,9 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
     // the coverage check should recognize data exists via MECE aggregation.
     
     it('should NOT require fetch when query has no context but MECE contexted data exists', () => {
+      // This fixture includes an explicit 'other' slice and expects full MECE coverage across 6 declared values.
+      seedChannel(['google', 'influencer', 'paid-social', 'referral', 'pr', 'other'], 'computed');
+
       // Simulating: pinned = window(-7d:-1d).context(channel) fetched all 6 slices
       // Then user's current query = window(24-Nov-25:30-Nov-25) with NO context
       const paramFileData = {
@@ -638,6 +660,10 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
     });
     
     it('should require fetch when MECE data is incomplete (one slice missing a date)', () => {
+      // This fixture only contains two declared channels (google + other). It is MECE-complete over those two,
+      // and should therefore perform MECE daily coverage checks (catching google's missing date).
+      seedChannel(['google', 'other'], 'computed');
+
       // Same as above but google is missing 30-Nov-25
       const paramFileData = {
         values: [
