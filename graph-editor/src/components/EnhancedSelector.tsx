@@ -829,10 +829,11 @@ export function EnhancedSelector({
                   <div
                     key={item.id}
                     className={`enhanced-selector-item ${inputValue === item.id ? 'selected' : ''} ${isUsed ? 'used' : ''}`}
+                    onClick={() => handleSelectItem(item)}
+                    style={{ cursor: 'pointer' }}
                   >
                     <div
-                      onClick={() => handleSelectItem(item)}
-                      style={{ flex: 1, cursor: 'pointer' }}
+                      style={{ flex: 1 }}
                     >
                       {/* Main line */}
                       <div className="enhanced-selector-item-main">

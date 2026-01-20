@@ -52,8 +52,9 @@
   - adding session-log diagnostics that explicitly report signature matching counts per item (so “COVERED but filtered out” is visible).
 
 
-
 - retrieve all in simulation mode IS writing to param files and/or graph. this is not permitted. 
+
+- Dark mode on user devices looks ugly (as only some elements are re-colouring)
 
 ## Pull latest issues
 - clients update their graph files after a fetch
