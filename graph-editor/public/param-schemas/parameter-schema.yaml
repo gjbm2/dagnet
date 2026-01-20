@@ -100,6 +100,10 @@ properties:
         type: boolean
         description: "If true, user manually set path_t95"
     additionalProperties: false
+
+  force_replace_at_ms:
+    type: number
+    description: "Epoch ms marker requesting a one-shot force-replace on pull (used when data is explicitly cleared to prevent stale data resurrection via 3-way merge)."
   
   values:
     type: array

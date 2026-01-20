@@ -505,8 +505,9 @@ export function QueryExpressionEditor({
           };
         }
         
-        // After .case( → suggest case IDs (graph + registry)
-        if (/\.case\([^:)]*$/.test(textUntilPosition)) {
+        // After case( or .case( → suggest case IDs (graph + registry)
+        // NOTE: conditional probability "condition" strings often use `case(...)` without the leading dot.
+        if (/(^|\.)(case)\([^:)]*$/.test(textUntilPosition)) {
           return {
             suggestions: allCases.map((c: any) => ({
               label: c.name,
@@ -519,9 +520,9 @@ export function QueryExpressionEditor({
           };
         }
         
-        // After .case(case-id: → suggest variant names
-        if (/\.case\([a-z0-9_-]+:([^)]*)$/.test(textUntilPosition)) {
-          const match = textUntilPosition.match(/\.case\(([a-z0-9_-]+):/);
+        // After case(case-id: or .case(case-id: → suggest variant names
+        if (/(^|\.)(case)\([a-z0-9_-]+:([^)]*)$/.test(textUntilPosition)) {
+          const match = textUntilPosition.match(/(?:^|\.)case\(([a-z0-9_-]+):/);
           if (match) {
             const caseId = match[1];
             const matchedCase = allCases.find((c: any) => c.id === caseId);

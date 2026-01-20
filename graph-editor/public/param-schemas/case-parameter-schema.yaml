@@ -11,6 +11,10 @@ required:
   - metadata
 
 properties:
+  force_replace_at_ms:
+    type: number
+    description: "Epoch ms marker requesting a one-shot force-replace on pull (used when schedules are explicitly cleared to prevent resurrection via 3-way merge)."
+
   # Canonical case identifier (single source of truth for cases)
   id:
     type: string

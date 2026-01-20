@@ -7144,7 +7144,7 @@ class DataOperationsService {
           if (nextGraph === graph) {
             toast('No changes applied (fields may be overridden)', { icon: 'ℹ️' });
             sessionLogService.endOperation(logOpId, 'success', `No changes to conditional_p[${conditionalIndex}] (overridden)`);
-            return;
+            return { success: true, ...fetchStats };
           }
           
           // AUTO-REBALANCE: If mean was updated, rebalance conditional probability siblings
@@ -7178,7 +7178,7 @@ class DataOperationsService {
           }
           
           sessionLogService.endOperation(logOpId, 'success', `Applied to conditional_p[${conditionalIndex}]`);
-          return;  // Done - skip the base edge path below
+          return { success: true, ...fetchStats };  // Done - skip the base edge path below
         }
         // ===== END CONDITIONAL_P HANDLING =====
         
@@ -7296,7 +7296,7 @@ class DataOperationsService {
         if (!updateData.variants) {
           console.warn('[DataOperationsService] No variants data to apply to case node');
           sessionLogService.endOperation(logOpId, 'warning', 'No variants data to apply to case node');
-          return;
+          return errorResult;
         }
         
         console.log('[DataOperationsService] Applying case variants directly to graph', {

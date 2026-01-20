@@ -171,6 +171,7 @@ describe('useClearDataFile', () => {
         id: 'test',
         name: 'Test Parameter',
         values: [], // Fully cleared - no stub entries that cause aggregation issues
+        force_replace_at_ms: expect.any(Number),
         metadata: { description: 'Test' }
       });
     });
@@ -208,6 +209,7 @@ describe('useClearDataFile', () => {
       expect(fileRegistry.updateFile).toHaveBeenCalledWith('case-test', {
         id: 'test',
         name: 'Test Case',
+        force_replace_at_ms: expect.any(Number),
         case: {
           variants: [{ name: 'control' }, { name: 'treatment' }],
           schedules: [] // Schedules cleared
@@ -286,6 +288,7 @@ describe('useClearDataFile', () => {
       expect(fileRegistry.updateFile).toHaveBeenCalledWith('parameter-malformed', {
         id: 'malformed',
         name: 'Malformed Parameter',
+        force_replace_at_ms: expect.any(Number),
         values: []
       });
     });

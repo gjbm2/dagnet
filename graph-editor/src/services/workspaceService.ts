@@ -34,6 +34,29 @@ export interface PullResult {
   newFiles?: string[];      // File paths that were newly added
   changedFiles?: string[];  // File paths that were changed
   deletedFiles?: string[];  // File paths that were deleted
+  /** Dirty derived-data files where remote requests force-replace and local is dirty (decision deferred to caller). */
+  forceReplaceRequests?: ForceReplaceRequest[];
+  /** File IDs where force-replace was applied (overwrite, skip merge). */
+  forceReplaceApplied?: string[];
+}
+
+export interface ForceReplaceRequest {
+  fileId: string;
+  fileName: string;
+  path: string;
+  type: ObjectType;
+  localForceReplaceAtMs?: number;
+  remoteForceReplaceAtMs: number;
+}
+
+export type ForceReplaceMode = 'off' | 'detect' | 'apply';
+
+export interface PullOptions {
+  forceReplace?: {
+    mode: ForceReplaceMode;
+    /** File IDs permitted to force-replace in apply mode (others will merge normally). */
+    allowFileIds?: string[];
+  };
 }
 
 /**
@@ -698,7 +721,7 @@ class WorkspaceService {
    * NEW: Uses SHA comparison to only fetch changed files (5x faster than re-clone)
    * Returns conflicts if 3-way merge fails for any files with local changes
    */
-  async pullLatest(repository: string, branch: string, gitCreds: any): Promise<PullResult> {
+  async pullLatest(repository: string, branch: string, gitCreds: any, options?: PullOptions): Promise<PullResult> {
     const workspaceId = `${repository}-${branch}`;
     console.log(`🔄 WorkspaceService: Pulling latest for ${workspaceId} (smart diff)...`);
 
@@ -906,11 +929,25 @@ class WorkspaceService {
         workspace.lastSynced = Date.now();
         workspace.commitSHA = commitSha; // Track last synced commit for remote-ahead detection
         await db.workspaces.put(workspace);
-        return { success: true, conflicts: [], filesUpdated: 0, filesDeleted: 0, newFiles: [], changedFiles: [], deletedFiles: [] };
+        return {
+          success: true,
+          conflicts: [],
+          filesUpdated: 0,
+          filesDeleted: 0,
+          newFiles: [],
+          changedFiles: [],
+          deletedFiles: [],
+          forceReplaceRequests: [],
+          forceReplaceApplied: [],
+        };
       }
 
       // STEP 6: Fetch changed files and perform 3-way merge if needed
       const conflicts: MergeConflict[] = [];
+      const forceReplaceRequests: ForceReplaceRequest[] = [];
+      const forceReplaceApplied: string[] = [];
+      const forceReplaceMode: ForceReplaceMode = options?.forceReplace?.mode ?? 'off';
+      const allowForceReplace = new Set<string>(options?.forceReplace?.allowFileIds ?? []);
       let updatedCount = 0;
       
       if (toFetch.length > 0) {
@@ -952,6 +989,75 @@ class WorkspaceService {
             const localFileState = localFileMap.get(treeItem.path);
             
             if (localFileState && localFileState.isDirty) {
+              // One-shot force-replace (per file) for derived-data files only (parameters/cases).
+              // This is designed to prevent stale data resurrection via 3-way merge after a "Clear Data" commit.
+              const isDerivedDataFile =
+                !dirConfig.isIndex &&
+                (dirConfig.type === 'parameter' || dirConfig.type === 'case');
+
+              if (isDerivedDataFile) {
+                const remoteForceAt = (data as any)?.force_replace_at_ms;
+                const remoteForceAtMs =
+                  (typeof remoteForceAt === 'number' && Number.isFinite(remoteForceAt) && remoteForceAt >= 0)
+                    ? remoteForceAt
+                    : undefined;
+
+                const localForceAt = (localFileState.data as any)?.force_replace_at_ms;
+                const localForceAtMs =
+                  (typeof localForceAt === 'number' && Number.isFinite(localForceAt) && localForceAt >= 0)
+                    ? localForceAt
+                    : undefined;
+
+                const forceReplaceRequested =
+                  remoteForceAtMs !== undefined &&
+                  (localForceAtMs === undefined || remoteForceAtMs > localForceAtMs);
+
+                if (forceReplaceRequested) {
+                  if (forceReplaceMode === 'apply' && allowForceReplace.has(fileId)) {
+                    // Caller allowed it: overwrite local with remote and skip merge.
+                    localFileState.data = data;
+                    localFileState.originalData = structuredClone(data);
+                    localFileState.isDirty = false;
+                    localFileState.isInitializing = true; // Allow editor normalization without marking dirty
+                    localFileState.sha = treeItem.sha;
+                    localFileState.lastSynced = Date.now();
+                    localFileState.source = {
+                      repository,
+                      path: treeItem.path,
+                      branch,
+                      commitHash: treeItem.sha
+                    };
+
+                    // Persist to IndexedDB (unprefixed + prefixed)
+                    await db.files.put(localFileState);
+                    const prefixedId = `${repository}-${branch}-${fileId}`;
+                    const prefixedFile = { ...localFileState, fileId: prefixedId };
+                    await db.files.put(prefixedFile);
+
+                    // Update in FileRegistry if loaded
+                    if (fileRegistry.getFile(fileId)) {
+                      (fileRegistry as any).files.set(fileId, localFileState);
+                      (fileRegistry as any).notifyListeners(fileId, localFileState);
+                    }
+
+                    forceReplaceApplied.push(fileId);
+                    updatedCount++;
+                    return;
+                  }
+
+                  // detect-only, or apply without permission: report request and defer this file.
+                  forceReplaceRequests.push({
+                    fileId,
+                    fileName,
+                    path: treeItem.path,
+                    type: dirConfig.type,
+                    localForceReplaceAtMs: localForceAtMs,
+                    remoteForceReplaceAtMs: remoteForceAtMs!,
+                  });
+                  return;
+                }
+              }
+
               // Local changes exist - perform 3-way merge
               console.log(`🔀 WorkspaceService: 3-way merge needed for ${treeItem.path} (local changes detected)`);
               
@@ -1185,11 +1291,31 @@ class WorkspaceService {
       
       if (conflicts.length > 0) {
         console.log(`⚠️ WorkspaceService: Pull completed with conflicts`);
-        return { success: true, conflicts, filesUpdated: updatedCount, filesDeleted: toDelete.length, newFiles, changedFiles, deletedFiles: toDelete };
+        return {
+          success: true,
+          conflicts,
+          filesUpdated: updatedCount,
+          filesDeleted: toDelete.length,
+          newFiles,
+          changedFiles,
+          deletedFiles: toDelete,
+          forceReplaceRequests,
+          forceReplaceApplied,
+        };
       }
       
       console.log(`✅ WorkspaceService: Pull successful - all files synced`);
-      return { success: true, conflicts: [], filesUpdated: updatedCount, filesDeleted: toDelete.length, newFiles, changedFiles, deletedFiles: toDelete };
+      return {
+        success: true,
+        conflicts: [],
+        filesUpdated: updatedCount,
+        filesDeleted: toDelete.length,
+        newFiles,
+        changedFiles,
+        deletedFiles: toDelete,
+        forceReplaceRequests,
+        forceReplaceApplied,
+      };
 
     } catch (error) {
       console.error(`❌ WorkspaceService: Pull failed, falling back to full re-clone:`, error);
@@ -1199,7 +1325,7 @@ class WorkspaceService {
       await this.cloneWorkspace(repository, branch, gitCreds);
       
       // After full re-clone, we don't have granular file info
-      return { success: true, conflicts: [], newFiles: [], changedFiles: [], deletedFiles: [] };
+      return { success: true, conflicts: [], newFiles: [], changedFiles: [], deletedFiles: [], forceReplaceRequests: [], forceReplaceApplied: [] };
     }
   }
 

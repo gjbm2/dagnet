@@ -5,7 +5,7 @@
  * Properly wired to workspaceService for IndexedDB-based workspace management.
  */
 
-import { workspaceService } from './workspaceService';
+import { workspaceService, type PullOptions, type ForceReplaceRequest } from './workspaceService';
 import { fileRegistry } from '../contexts/TabContext';
 import { gitService } from './gitService';
 import { credentialsManager } from '../lib/credentials';
@@ -59,7 +59,11 @@ class RepositoryOperationsService {
    * - Return conflict info if any
    * - Reload Navigator
    */
-  async pullLatest(repository: string, branch: string): Promise<{ success: boolean; conflicts?: any[] }> {
+  async pullLatest(
+    repository: string,
+    branch: string,
+    options?: PullOptions
+  ): Promise<{ success: boolean; conflicts?: any[]; forceReplaceRequests?: ForceReplaceRequest[]; forceReplaceApplied?: string[] }> {
     console.log(`🔄 RepositoryOperationsService: Pulling latest for ${repository}/${branch}`);
     sessionLogService.info('git', 'GIT_PULL', `Pulling latest from ${repository}/${branch}`, undefined,
       { repository, branch });
@@ -82,7 +86,36 @@ class RepositoryOperationsService {
 
     try {
     // Use workspaceService.pullLatest which does incremental SHA comparison + merge
-    const result = await workspaceService.pullLatest(repository, branch, gitCreds);
+    const result = await workspaceService.pullLatest(repository, branch, gitCreds, options);
+
+    // Force-replace session logging (request + applied)
+    try {
+      const reqs = (result as any)?.forceReplaceRequests as ForceReplaceRequest[] | undefined;
+      const applied = (result as any)?.forceReplaceApplied as string[] | undefined;
+      const mode = options?.forceReplace?.mode;
+
+      if (Array.isArray(reqs) && reqs.length > 0) {
+        sessionLogService.warning(
+          'git',
+          'GIT_PULL_FORCE_REPLACE_REQUESTED',
+          `Force replace requested for ${reqs.length} file(s)`,
+          undefined,
+          { repository, branch, mode, files: reqs.map(r => ({ fileId: r.fileId, path: r.path, remoteForceReplaceAtMs: r.remoteForceReplaceAtMs })) }
+        );
+      }
+
+      if (Array.isArray(applied) && applied.length > 0) {
+        sessionLogService.success(
+          'git',
+          'GIT_PULL_FORCE_REPLACE_APPLIED',
+          `Force replaced ${applied.length} file(s) (overwrite remote, skipped merge)`,
+          undefined,
+          { repository, branch, mode, fileIds: applied }
+        );
+      }
+    } catch {
+      // best-effort only
+    }
 
     // Dynamic update: file revision changes are a first-class staleness cause.
     // Emit a lightweight event so graph/scenario/chart orchestrators can decide what (if anything) to reconcile.
@@ -144,7 +177,12 @@ class RepositoryOperationsService {
           `Pull completed with ${result.conflicts.length} conflict(s)`, 
           result.conflicts.map((c: any) => c.fileName || c.fileId).join(', '),
           { conflicts: result.conflicts.map((c: any) => c.fileName || c.fileId) });
-      return { success: true, conflicts: result.conflicts };
+      return {
+        success: true,
+        conflicts: result.conflicts,
+        forceReplaceRequests: (result as any).forceReplaceRequests || [],
+        forceReplaceApplied: (result as any).forceReplaceApplied || [],
+      };
     }
 
     const fileDetails = buildFileDetails();
@@ -152,7 +190,11 @@ class RepositoryOperationsService {
     sessionLogService.success('git', 'GIT_PULL_SUCCESS', `Pulled latest from ${repository}/${branch}`,
       fileDetails,
       { repository, branch, newFiles: result.newFiles, changedFiles: result.changedFiles, deletedFiles: result.deletedFiles });
-    return { success: true };
+    return {
+      success: true,
+      forceReplaceRequests: (result as any).forceReplaceRequests || [],
+      forceReplaceApplied: (result as any).forceReplaceApplied || [],
+    };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       sessionLogService.error('git', 'GIT_PULL_ERROR', `Pull failed: ${message}`);
@@ -170,7 +212,26 @@ class RepositoryOperationsService {
     repository: string,
     branch: string
   ): Promise<{ success: boolean; conflictsResolved: number; conflicts?: any[] }> {
-    const result = await this.pullLatest(repository, branch);
+    // Headless/unattended default: auto-OK force-replace requests (overwrite remote, skip merge).
+    // This ensures dashboard mode and daily automation converge without user interaction.
+    const preflight = await this.pullLatest(repository, branch, { forceReplace: { mode: 'detect' } });
+    const requested = preflight.forceReplaceRequests || [];
+    const allowFileIds = requested.map(r => r.fileId);
+
+    if (allowFileIds.length > 0) {
+      sessionLogService.warning(
+        'git',
+        'GIT_PULL_FORCE_REPLACE_AUTO_OK',
+        `Auto-OK force replace for ${allowFileIds.length} file(s) (unattended)`,
+        undefined,
+        { repository, branch, fileIds: allowFileIds }
+      );
+    }
+
+    const result =
+      allowFileIds.length > 0
+        ? await this.pullLatest(repository, branch, { forceReplace: { mode: 'apply', allowFileIds } })
+        : preflight;
     const conflicts = result.conflicts || [];
     if (conflicts.length === 0) {
       return { success: true, conflictsResolved: 0 };

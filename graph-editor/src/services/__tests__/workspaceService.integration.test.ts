@@ -310,6 +310,172 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
     expect(file?.isDirty).toBe(true);
   });
 
+  it('should report force-replace requests in detect mode (and defer those dirty files)', async () => {
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: ['parameter-test-param'],
+      lastSynced: Date.now()
+    });
+
+    await db.files.add({
+      fileId: 'parameter-test-param',
+      type: 'parameter',
+      name: 'test-param.yaml',
+      path: 'parameters/test-param.yaml',
+      data: { id: 'test-param', value: 150, force_replace_at_ms: 1000 },
+      originalData: { id: 'test-param', value: 100, force_replace_at_ms: 1000 },
+      isDirty: true,
+      source: {
+        repository: 'test-repo',
+        path: 'parameters/test-param.yaml',
+        branch: 'main',
+        commitHash: 'abc123'
+      },
+      isLoaded: true,
+      isLocal: false,
+      viewTabs: [],
+      lastModified: Date.now(),
+      sha: 'sha-old',
+      lastSynced: Date.now()
+    });
+
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'parameters/test-param.yaml', type: 'blob', sha: 'sha-new', size: 120 }
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: {
+        content: 'id: test-param\nvalue: 0\nforce_replace_at_ms: 2000\nvalues: []\n',
+        sha: 'sha-new'
+      }
+    });
+
+    const gitCreds = {
+      name: 'test-repo',
+      owner: 'test-owner',
+      token: 'test-token',
+      basePath: '',
+      paramsPath: 'parameters',
+      graphsPath: 'graphs',
+      nodesPath: 'nodes',
+      eventsPath: 'events',
+      contextsPath: 'contexts',
+      casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds, {
+      forceReplace: { mode: 'detect' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.forceReplaceRequests?.length).toBe(1);
+    expect(result.forceReplaceRequests?.[0]).toMatchObject({
+      fileId: 'parameter-test-param',
+      path: 'parameters/test-param.yaml',
+      remoteForceReplaceAtMs: 2000,
+      localForceReplaceAtMs: 1000,
+    });
+
+    // Verify file was NOT overwritten in DB (deferred)
+    const fileAfter = await db.files.get('parameter-test-param');
+    expect(fileAfter?.data.value).toBe(150);
+    expect(fileAfter?.isDirty).toBe(true);
+    expect(fileAfter?.sha).toBe('sha-old');
+  });
+
+  it('should overwrite dirty param file in apply mode when allowed (skip 3-way merge)', async () => {
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: ['parameter-test-param'],
+      lastSynced: Date.now()
+    });
+
+    await db.files.add({
+      fileId: 'parameter-test-param',
+      type: 'parameter',
+      name: 'test-param.yaml',
+      path: 'parameters/test-param.yaml',
+      data: { id: 'test-param', value: 150, force_replace_at_ms: 1000 },
+      originalData: { id: 'test-param', value: 100, force_replace_at_ms: 1000 },
+      isDirty: true,
+      source: {
+        repository: 'test-repo',
+        path: 'parameters/test-param.yaml',
+        branch: 'main',
+        commitHash: 'abc123'
+      },
+      isLoaded: true,
+      isLocal: false,
+      viewTabs: [],
+      lastModified: Date.now(),
+      sha: 'sha-old',
+      lastSynced: Date.now()
+    });
+
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'parameters/test-param.yaml', type: 'blob', sha: 'sha-new', size: 120 }
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: {
+        content: 'id: test-param\nvalue: 0\nforce_replace_at_ms: 2000\nvalues: []\n',
+        sha: 'sha-new'
+      }
+    });
+
+    // Ensure merge3Way isn't called (we're overwriting)
+    const mergeSpy = vi.spyOn(mergeServiceModule, 'merge3Way');
+
+    const gitCreds = {
+      name: 'test-repo',
+      owner: 'test-owner',
+      token: 'test-token',
+      basePath: '',
+      paramsPath: 'parameters',
+      graphsPath: 'graphs',
+      nodesPath: 'nodes',
+      eventsPath: 'events',
+      contextsPath: 'contexts',
+      casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds, {
+      forceReplace: { mode: 'apply', allowFileIds: ['parameter-test-param'] },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.forceReplaceApplied).toContain('parameter-test-param');
+    expect(mergeSpy).not.toHaveBeenCalled();
+
+    const fileAfter = await db.files.get('parameter-test-param');
+    expect(fileAfter?.data.value).toBe(0);
+    expect((fileAfter?.data as any)?.force_replace_at_ms).toBe(2000);
+    expect(fileAfter?.isDirty).toBe(false);
+    expect(fileAfter?.sha).toBe('sha-new');
+  });
+
   it('should auto-merge when changes do not conflict', async () => {
     // Setup: Create workspace with dirty file
     const workspaceId = 'test-repo-main';

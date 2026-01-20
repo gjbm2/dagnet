@@ -155,6 +155,8 @@ export function useClearDataFile() {
         // Also remove any malformed 'values[N]' properties from buggy serialization
         const updatedData = { ...file.data };
         updatedData.values = [];  // Fully clear - no stub entries that cause aggregation issues
+        // One-shot force-replace marker to prevent stale data resurrection via 3-way merge on other clients.
+        (updatedData as any).force_replace_at_ms = Date.now();
         
         // Clean up malformed properties like 'values[0]', 'values[1]', etc.
         // These were created by a bug in applyChanges that treated 'values[0]' as a literal key
@@ -172,6 +174,7 @@ export function useClearDataFile() {
         // Clear schedules but keep structure
         const updatedData = {
           ...file.data,
+          force_replace_at_ms: Date.now(),
           case: {
             ...file.data?.case,
             schedules: []
