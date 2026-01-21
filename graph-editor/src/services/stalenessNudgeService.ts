@@ -657,9 +657,13 @@ class StalenessNudgeService {
     workspace?: WorkspaceScope
   ): Promise<RetrieveAllSlicesStalenessStatus> {
     const graphMarker = (graph as any)?.metadata?.last_retrieve_all_slices_success_at_ms;
-    if (typeof graphMarker === 'number' && Number.isFinite(graphMarker) && graphMarker >= 0) {
+    const hasGraphMarker = typeof graphMarker === 'number' && Number.isFinite(graphMarker) && graphMarker >= 0;
+
+    // Fast path: a recent "last successful run" marker should suppress staleness nudges even if
+    // per-parameter retrieved_at values are older (cached runs are still "fresh enough").
+    if (hasGraphMarker && nowMs - graphMarker <= STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS) {
       return {
-        isStale: nowMs - graphMarker > STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS,
+        isStale: false,
         parameterCount: 0,
         staleParameterCount: 0,
         mostRecentRetrievedAtMs: graphMarker,
@@ -728,6 +732,19 @@ class StalenessNudgeService {
       }
     }
 
+    // If we couldn't find any per-parameter retrieved_at timestamps but we DO have a (stale) graph marker,
+    // fall back to treating this as stale. This preserves the "don't nag on brand new graphs" behaviour
+    // while still respecting the marker for graphs that have previously been retrieved.
+    if (!hasAnyRetrievedAt && hasGraphMarker && parameterTargets.length > 0) {
+      return {
+        isStale: nowMs - graphMarker > STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS,
+        parameterCount: parameterTargets.length,
+        staleParameterCount: parameterTargets.length,
+        mostRecentRetrievedAtMs: graphMarker,
+        lastSuccessfulRunAtMs: graphMarker,
+      };
+    }
+
     return {
       // Only nudge if we have at least one real retrieval timestamp to compare against.
       // If nothing has ever been retrieved, this is a brand-new/empty state, not "stale".
@@ -735,6 +752,7 @@ class StalenessNudgeService {
       parameterCount: parameterTargets.length,
       staleParameterCount: staleCount,
       mostRecentRetrievedAtMs,
+      lastSuccessfulRunAtMs: hasGraphMarker ? graphMarker : undefined,
     };
   }
 

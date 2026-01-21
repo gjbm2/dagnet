@@ -111,6 +111,36 @@ describe('stalenessNudgeService', () => {
     expect(res.isStale).toBe(true);
   });
 
+  it('should NOT consider retrieve-all-slices stale when graph marker is stale but parameter retrieved_at is fresh', async () => {
+    const now = 2_000_000_000;
+    const fresh = new Date(now - 60_000).toISOString();
+
+    // Marker is older than threshold (25h ago)
+    const marker = now - (25 * 60 * 60 * 1000);
+
+    hoisted.mockGetFile.mockImplementation((fileId: string) => {
+      if (fileId === 'parameter-param-1') {
+        return {
+          data: {
+            values: [{ data_source: { retrieved_at: fresh } }],
+          },
+        };
+      }
+      return null;
+    });
+
+    const graph = {
+      edges: [{ uuid: 'edge-1', id: 'edge-1', p: { id: 'param-1' } }],
+      nodes: [],
+      metadata: { last_retrieve_all_slices_success_at_ms: marker },
+    } as any;
+
+    const res = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graph, now);
+    expect(res.isStale).toBe(false);
+    expect(res.lastSuccessfulRunAtMs).toBe(marker);
+    expect(res.mostRecentRetrievedAtMs).toBe(new Date(fresh).getTime());
+  });
+
   it('should NOT consider retrieve-all-slices stale when graph has no connected parameters', async () => {
     const graph = { edges: [], nodes: [] } as any;
     const res = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(graph, 123);
