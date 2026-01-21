@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.10b
+**Released:** 21-Jan-26
+
+Logging fixes
+
+---
+
 ## Version 1.3.8b
 **Released:** 20-Jan-26
 
