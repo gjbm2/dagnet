@@ -374,20 +374,41 @@ The consolidated service logic assumes:
 
 - **One path, many callers**: automation, dashboard behaviours, menus, and interactive modals must execute the same service method(s) so they cannot diverge in what they write.
 
-### 10.1.3 Concrete tracing checklist (to be completed during implementation)
+### 10.1.3 Concrete write-site inventory + tracing checklist (COMPLETED)
 
-Before implementing the consolidated service, trace and list the exact write sites and keys/fields for:
+This section is the “Phase‑0 safety inventory” deliverable: every persisted value that can influence nudging decisions is listed here with its **owner**, **scope**, and **audit trail**.
 
-- Deployed version caching and rate-limit timestamps.
-- Auto-reload guard values.
-- Remote-ahead “last checked” and “last seen” values (workspace vs share-live scopes).
-- Graph marker stamping for Retrieve All completion.
-- Per-parameter `retrieved_at` stamping and how it is persisted/committed.
-- Snooze/dismiss/prompt timestamps and their scope keys.
+#### 10.1.3.1 Write-site inventory table (concrete)
 
-Then ensure each is either:
-- removed as redundant, or
-- owned by the consolidated service and covered by tests in §11.
+| Category | Key / field | Scope | Storage | Write owner (single path) | Primary reads | Session Log audit |
+|---|---|---|---|---|---|---|
+| Client update | `dagnet:staleness:lastAppVersionCheckAtMs` | Global | localStorage | `stalenessNudgeService.markRemoteAppVersionChecked()` (via `refreshRemoteAppVersionIfDue`) | `stalenessNudgeService.shouldCheckRemoteAppVersion()` | `STALENESS_APP_VERSION_CHECK_STAMP` |
+| Client update | `dagnet:staleness:lastSeenRemoteAppVersion` | Global | localStorage | `stalenessNudgeService.cacheRemoteAppVersion()` | `stalenessNudgeService.getCachedRemoteAppVersion()`, `isRemoteAppVersionNewerThanLocal()` | `STALENESS_APP_VERSION_CACHE_SET` |
+| Client update | `dagnet:staleness:lastAutoReloadedRemoteAppVersion` | Global | localStorage | `stalenessNudgeService.recordAutoReloadedForRemoteVersion()` | `stalenessNudgeService.getLastAutoReloadedRemoteAppVersion()` | `STALENESS_APP_AUTO_RELOAD_GUARD_SET` |
+| Git (workspace) | `dagnet:staleness:lastRemoteCheckAtMs:${repo}-${branch}` | Repo/branch | localStorage | `stalenessNudgeService.markRemoteHeadChecked()` | `stalenessNudgeService.shouldCheckRemoteHead()` | `GIT_REMOTE_HEAD_CHECK_STAMP` |
+| Git (workspace) | `dagnet:staleness:dismissedRemoteSha:${repo}-${branch}` | Repo/branch | localStorage | `stalenessNudgeService.dismissRemoteSha()` / `clearDismissedRemoteSha()` | `stalenessNudgeService.isRemoteShaDismissed()` | `STALENESS_REMOTE_SHA_DISMISS`, `STALENESS_REMOTE_SHA_CLEAR` |
+| Git (share-live) | `dagnet:share:staleness:lastRemoteCheckAtMs:${repo}-${branch}-${graph}` | Repo/branch/graph | localStorage | `stalenessNudgeService.markShareRemoteHeadChecked()` | `stalenessNudgeService.shouldCheckShareRemoteHead()` | `GIT_SHARE_REMOTE_HEAD_CHECK_STAMP` |
+| Git (share-live) | `dagnet:share:staleness:lastSeenRemoteHeadSha:${repo}-${branch}-${graph}` | Repo/branch/graph | localStorage | `stalenessNudgeService.recordShareLastSeenRemoteHeadSha()` | `stalenessNudgeService.getShareLastSeenRemoteHeadSha()` | `GIT_SHARE_LAST_SEEN_HEAD_SET` |
+| Git (share-live) | `dagnet:share:staleness:dismissedRemoteSha:${repo}-${branch}-${graph}` | Repo/branch/graph | localStorage | `stalenessNudgeService.dismissShareRemoteSha()` / `clearShareDismissedRemoteSha()` | `stalenessNudgeService.isShareRemoteShaDismissed()` | `STALENESS_SHARE_REMOTE_SHA_DISMISS`, `STALENESS_SHARE_REMOTE_SHA_CLEAR` |
+| Prompt throttling | `dagnet:staleness:lastPromptedAtMs:${kind}` | Global (per kind) | localStorage | `stalenessNudgeService.markPrompted()` | `stalenessNudgeService.canPrompt()` | `STALENESS_PROMPTED_STAMP` |
+| Snooze throttling | `dagnet:staleness:snoozedUntilMs:${kind}:${scopeKey}` | Scoped | localStorage | `stalenessNudgeService.snooze()` | `stalenessNudgeService.isSnoozed()` | `STALENESS_SNOOZE_SET` |
+| Pending UI plan | `dagnet:staleness:pendingPlan` | Global | localStorage | `stalenessNudgeService.setPendingPlan()` / `clearPendingPlan()` | `stalenessNudgeService.getPendingPlan()` | `STALENESS_PENDING_PLAN_SET`, `STALENESS_PENDING_PLAN_CLEAR` |
+| Automatic-mode flag | `dagnet:staleness:automaticMode` | Global | localStorage | `stalenessNudgeService.setAutomaticMode()` / `clearVolatileFlags()` | `stalenessNudgeService.getAutomaticMode()` | `STALENESS_AUTOMATIC_MODE_SET`, `STALENESS_VOLATILE_FLAGS_CLEAR` |
+| Retrieve freshness | `graph.metadata.last_retrieve_all_slices_success_at_ms` | Entity (graph) | Graph file (git‑tracked) | `retrieveAllSlicesService` stamps marker on success | `stalenessNudgeService.getRetrieveAllSlicesStalenessStatus()` | `RETRIEVE_MARKER_STAMPED` (child entry on retrieve op) |
+| Retrieve freshness | `parameter.values[*].data_source.retrieved_at` | Entity (parameter) | Parameter file (git‑tracked) | `dataOperationsService` writes retrieval provenance during fetch | `stalenessNudgeService.getRetrieveAllSlicesStalenessStatus()` | Covered by Retrieve All op detail; keep per‑item logs + DAS failure details |
+| Force replace | `parameter.force_replace_at_ms` | Entity (parameter) | Parameter file (git‑tracked) | Written externally (remote flag), read by pull flow | `workspaceService` pull/force‑replace detection | Surfaced via force-replace modal + countdown logs |
+
+Notes:
+- `retrieved_at` values are currently ISO strings; they are treated as machine timestamps and are not shown directly to users without formatting.
+- Workspace “last synced” timestamps live in IndexedDB workspace metadata and are treated as authoritative for “pull last done”; this doc focuses on nudging‑decision writes (not all workspace persistence).
+
+#### 10.1.3.2 Tracing checklist (what to verify when changing nudging semantics)
+
+For each row above, confirm:
+- **Single owner**: there is exactly one service method responsible for writing it (or it is explicitly “external input” like `force_replace_at_ms`).
+- **Correct scoping**: global vs `repo-branch` vs `repo-branch-graph` vs entity is consistent with the decision that reads it.
+- **Session Log audit exists**: start/end/child entries carry enough metadata to reconstruct *why* the value changed.
+- **Tests cover it**: at least one existing suite asserts the write and the audit emission for the key/field.
 
 ---
 
@@ -1002,3 +1023,86 @@ Goal: remove old branching logic and ensure there is no duplicate code path.
 This implementation plan is complete only if the test work is delivered alongside the code in each phase. Use §16 as a detailed reference for scenario coverage, but do not treat testing as a separate phase that can be deferred “until later”.
 
 ---
+
+## 18. Implementation Status Checklist (as of 21-Jan-26)
+
+This section is an explicit forensic mapping of **each design element** in this document to the current codebase, and marks it **DONE** only when it is wholly implemented (including tests where required).
+
+### 18.1 Status legend
+
+- **DONE**: implemented end-to-end, including relevant tests, and no known duplicate paths remain.
+- **PARTIAL**: some parts implemented, but at least one requirement or invariant in this section is still missing.
+- **NOT DONE**: not implemented (or implemented in a way that contradicts the design).
+- **N/A**: informational/design context only (no direct implementation work required).
+
+### 18.2 Section-by-section status
+
+- **§1 Problem Statement**: **N/A**
+- **§2 Goals**: **DONE**
+- **§3 Non-Goals**: **N/A**
+- **§4 Concepts and Scopes**: **DONE**
+- **§5 First-Principles Decision Cascade**: **DONE**
+  - Cascade is enforced strictly: update due blocks pull/retrieve; pull due blocks retrieve; retrieve is never pre-selected.
+- **§6 Proposed Architecture**: **DONE**
+  - A central plan + orchestration API exists in `stalenessNudgeService`.
+  - `useStalenessNudges` is a thin adapter: signal gathering + execution are delegated into the service (no duplicated logic in the hook).
+- **§7 Data Sources and Invariants**: **DONE**
+  - **Client version (global)**: **DONE** for staged-rollout messaging and cached remote version behaviour.
+  - **Git freshness (scoped)**: **DONE** for workspace vs share-live remote-ahead checks and “remote ahead blocks retrieve”.
+  - **Retrieve freshness (entity-local)**: **DONE** for marker vs per-parameter precedence and correct “Last” derivation.
+- **§8 Multi-Target Reality: Graph Tabs vs Live Charts**: **DONE**
+  - Chart identity is represented in the plan model.
+  - Chart retrieve freshness is computed against the **parent graph** plus the chart’s effective DSL (slice filtering).
+- **§9 Mode-Specific Policy**: **DONE**
+  - **Interactive**: **DONE** (retrieve is never auto-run; retrieve is never pre-selected).
+  - **Dashboard / unattended**: **DONE**
+    - Auto-pull countdown exists and uses remote-wins in dashboard mode.
+    - Retrieve does not auto-run (as decided).
+    - A single coordinated banner surface exists (central banner manager + host; no ad-hoc per-hook stacking).
+  - **Automation (`retrieveall`)**: **DONE**
+    - Pull (remote-wins) → Retrieve All (headless) → Commit is implemented.
+    - Automation aborts (with Session Log reason) when client update is due.
+  - **Force replace on pull**: **DONE** for countdown consolidation and unattended auto-OK behaviour.
+  - **Share mode (Option B)**: **DONE**
+    - Retrieve remains permitted but non-automated; no automated git commit/push is attempted in share/static flows (verified by inspection).
+- **§10 Rate-Limiting and Nudging Policy**: **DONE**
+  - 24h threshold remains constant (as decided).
+  - “Unknown must not silently become Due” is respected by plan statuses.
+- **§10.1 Auditability: where flags and timestamps are written**: **DONE**
+  - Write-site inventory + tracing checklist are completed (§10.1.3).
+- **§11 Testing Strategy (First-Principles)**: **DONE**
+  - Plan matrix tests exist for update/pull/retrieve combinations and git-unknown override.
+  - Multi-client drift is represented deterministically for graphs.
+  - Chart entity coverage exists (service-level slice filtering + hook wiring test).
+- **§12 Migration / Refactor Plan (High Level)**: **DONE**
+  - Execution, countdown consolidation, and banner consolidation are implemented.
+- **§13 Open Questions / Decisions Needed**: **PARTIAL**
+  - Git-unknown “retrieve without pull” override: **DONE**
+  - No auto-retrieve in unattended contexts (except explicit `retrieveall`): **DONE**
+  - 24h constant policy: **DONE**
+  - Chart pinned DSL semantics (freshness computation) : **DONE**
+- **§14 Summary**: **N/A**
+- **§15 Countdown and Unattended Operation UX (Consolidation)**: **DONE**
+  - Countdown mechanism is shared (no bespoke countdown `setInterval` for the nudging flows).
+  - Centralised Session Log audit events exist for countdown start/cancel/expiry (via countdown primitive).
+  - Unattended banner presentation is a first-class UI surface (shared `CountdownBanner` used by automation and share-live refresh).
+- **§16 Testing Coverage and Strategy (Detailed)**: **DONE**
+  - Countdown and force-replace tests exist.
+  - Plan computation + orchestration tests exist for the cascade and key edge cases (including chart DSL staleness).
+- **§17 Detailed Implementation Plan (Prose)**: **DONE**
+  - Implemented end-to-end; this section is now historical record.
+- **§17.9 Acceptance criteria**: **DONE**
+  - Retrieve is not auto-run outside `retrieveall`: **DONE**
+  - Pull is scoped-global vs retrieve entity-local: **DONE** for graphs and charts
+  - Prod session logs are materially improved for nudging-related state: **DONE**
+
+### 18.3 Residual / remedial work (must be implemented to claim “fully done”)
+
+- **None (as of 21-Jan-26).**
+
+---
+
+## 19. Remaining implementation items (as of 21-Jan-26)
+
+- **None.** §18.2 and §18.3 have been updated to reflect the current, fully-implemented state.
+

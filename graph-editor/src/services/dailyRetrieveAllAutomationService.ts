@@ -3,6 +3,8 @@ import { formatDateUK } from '../lib/dateFormat';
 import { sessionLogService } from './sessionLogService';
 import { repositoryOperationsService } from './repositoryOperationsService';
 import { executeRetrieveAllSlicesWithProgressToast } from './retrieveAllSlicesService';
+import { stalenessNudgeService } from './stalenessNudgeService';
+import { APP_VERSION } from '../version';
 
 export interface DailyRetrieveAllAutomationOptions {
   repository: string;
@@ -63,6 +65,28 @@ class DailyRetrieveAllAutomationService {
       if (shouldAbort?.()) {
         sessionLogService.endOperation(logOpId, 'warning', 'Daily automation aborted before start');
         return;
+      }
+
+      // Automation safety: never run pull/retrieve/commit on an out-of-date client.
+      // If a newer client is deployed, log and abort so the operator can refresh the page.
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          const storage = window.localStorage;
+          await stalenessNudgeService.refreshRemoteAppVersionIfDue(Date.now(), storage);
+          if (stalenessNudgeService.isRemoteAppVersionNewerThanLocal(APP_VERSION, storage)) {
+            const remoteV = stalenessNudgeService.getCachedRemoteAppVersion(storage);
+            sessionLogService.addChild(
+              logOpId,
+              'warning',
+              'UPDATE_REQUIRED_ABORT',
+              `Daily automation aborted: update required (you: ${APP_VERSION}, deployed: ${remoteV ?? 'unknown'})`
+            );
+            sessionLogService.endOperation(logOpId, 'warning', 'Daily automation aborted: update required');
+            return;
+          }
+        }
+      } catch {
+        // Best-effort only; if version check fails (offline), proceed as before.
       }
 
       sessionLogService.addChild(logOpId, 'info', 'STEP_PULL', 'Pulling latest (remote wins)');

@@ -9,6 +9,9 @@ const hoisted = vi.hoisted(() => ({
   addChild: vi.fn(),
   endOperation: vi.fn(),
   formatDateUK: vi.fn(() => '19-Jan-26'),
+  refreshRemoteAppVersionIfDue: vi.fn(async () => {}),
+  isRemoteAppVersionNewerThanLocal: vi.fn(() => false),
+  getCachedRemoteAppVersion: vi.fn(() => undefined),
 }));
 
 vi.mock('../repositoryOperationsService', () => ({
@@ -29,6 +32,18 @@ vi.mock('../sessionLogService', () => ({
     addChild: hoisted.addChild,
     endOperation: hoisted.endOperation,
   },
+}));
+
+vi.mock('../stalenessNudgeService', () => ({
+  stalenessNudgeService: {
+    refreshRemoteAppVersionIfDue: hoisted.refreshRemoteAppVersionIfDue,
+    isRemoteAppVersionNewerThanLocal: hoisted.isRemoteAppVersionNewerThanLocal,
+    getCachedRemoteAppVersion: hoisted.getCachedRemoteAppVersion,
+  },
+}));
+
+vi.mock('../../version', () => ({
+  APP_VERSION: '1.0.0-beta',
 }));
 
 vi.mock('../../lib/dateFormat', () => ({
@@ -157,6 +172,25 @@ describe('dailyRetrieveAllAutomationService', () => {
     expect(snapshot.lastPull).toEqual({ repository: 'repo-1', branch: 'main' });
     expect(snapshot.lastCommit?.message).toBe('Daily data refresh (1) - 19-Jan-26');
     expect(snapshot.files.every((f) => !f.dirty)).toBe(true);
+  });
+
+  it('aborts before pull when an update is required (automation safety)', async () => {
+    hoisted.isRemoteAppVersionNewerThanLocal.mockReturnValue(true);
+    hoisted.getCachedRemoteAppVersion.mockReturnValue('2.0.0-beta');
+
+    await dailyRetrieveAllAutomationService.run({
+      repository: 'repo-1',
+      branch: 'main',
+      graphFileId: 'graph-1',
+      getGraph: () => ({ edges: [], nodes: [] } as any),
+      setGraph: vi.fn(),
+    });
+
+    expect(hoisted.refreshRemoteAppVersionIfDue).toHaveBeenCalledTimes(1);
+    expect(hoisted.pullLatestRemoteWins).toHaveBeenCalledTimes(0);
+    expect(hoisted.executeRetrieveAllSlicesWithProgressToast).toHaveBeenCalledTimes(0);
+    expect(hoisted.commitFiles).toHaveBeenCalledTimes(0);
+    expect(hoisted.endOperation).toHaveBeenCalledWith('op-1', 'warning', expect.stringContaining('update required'));
   });
 
   it('skips commit when no committable files exist', async () => {

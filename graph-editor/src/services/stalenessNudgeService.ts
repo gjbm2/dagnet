@@ -14,10 +14,13 @@ import { gitService } from './gitService';
 import type { GraphData } from '../types';
 import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerService';
 import { fileRegistry } from '../contexts/TabContext';
+import { isolateSlice } from './sliceIsolation';
 
 type NudgeKind = 'reload' | 'git-pull' | 'retrieve-all-slices';
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+const NUDGING_PLAN_ENGINE_VERSION = 'nudging-redux-v2';
 
 function safeNow(): number {
   return Date.now();
@@ -176,6 +179,130 @@ export interface PendingStalenessPlan {
   retrieveAllSlices?: boolean;
 }
 
+export type NudgingStepKey = 'reload' | 'git-pull' | 'retrieve-all-slices';
+export type NudgingStepStatus = 'due' | 'blocked' | 'unknown' | 'not_due';
+
+export interface NudgingStep {
+  key: NudgingStepKey;
+  status: NudgingStepStatus;
+  /** Short, user-facing explanation suitable for Session Log and UI. */
+  reason: string;
+  /** Which step blocks this step (only when status === 'blocked'). */
+  blockedBy?: NudgingStepKey;
+  /**
+   * True when retrieve is being allowed despite unknown git state (per policy decision),
+   * and execution must not attempt any git operations as part of that retrieve.
+   */
+  retrieveWithoutPull?: boolean;
+}
+
+export interface NudgingPlan {
+  /** The entity being evaluated (graph tab or chart tab). */
+  entity:
+    | { type: 'graph'; graphFileId?: string }
+    | { type: 'chart'; chartFileId?: string; parentGraphFileId?: string; effectiveQueryDsl?: string };
+  /** Optional scope (workspace or share-live). */
+  scope?: { type: 'workspace'; repository: string; branch: string } | { type: 'share-live'; repository: string; branch: string; graph: string };
+  steps: Record<NudgingStepKey, NudgingStep>;
+  /** Recommended defaults for interactive checkbox UI (pure suggestion; execution is separate). */
+  recommendedChecked: Record<NudgingStepKey, boolean>;
+}
+
+export interface NudgingSignals {
+  localAppVersion: string;
+  /** Cached deployed version (from version.json). If missing, client update status is Unknown. */
+  remoteAppVersion?: string;
+  /**
+   * Remote-ahead signal.
+   * - undefined => Unknown (not checked / not possible)
+   * - isRemoteAhead=false => Not due
+   * - isRemoteAhead=true => Due
+   */
+  git?: Pick<RemoteAheadStatus, 'isRemoteAhead' | 'localSha' | 'remoteHeadSha'>;
+  /** Retrieve freshness signal for the target entity. If missing, retrieve status is Unknown. */
+  retrieve?: RetrieveAllSlicesStalenessStatus;
+}
+
+export interface CollectedUpdateSignal {
+  /** True if deployed version is known to be newer than local. */
+  isOutdated: boolean;
+  /** True if reload is Due (not snoozed, outdated, and prompt allowed). */
+  reloadDue: boolean;
+  /** Cached deployed version (if present). */
+  remoteAppVersion?: string;
+}
+
+export interface CollectedGitSignal {
+  gitPullDue: boolean;
+  detectedRemoteSha: string | null;
+  gitPullLastDoneAtMs?: number;
+}
+
+export interface CollectedRetrieveSignal {
+  retrieveDue: boolean;
+  retrieveMostRecentRetrievedAtMs?: number;
+}
+
+function isRemoteSemverOlder(remote: string, local: string): boolean {
+  const r = parseSemverLoose(remote);
+  const l = parseSemverLoose(local);
+  if (!r || !l) return false;
+  if (r.major !== l.major) return r.major < l.major;
+  if (r.minor !== l.minor) return r.minor < l.minor;
+  if (r.patch !== l.patch) return r.patch < l.patch;
+  // Same base version; treat prerelease as not older for our purposes.
+  return false;
+}
+
+export interface RunSelectedStalenessActionsOptions {
+  selected: Set<NudgingStepKey>;
+  nowMs: number;
+  storage: StorageLike;
+
+  // Context
+  localAppVersion: string;
+  repository?: string;
+  branch: string;
+  /** Share-live identity graph name (not fileId), if applicable. */
+  shareGraph?: string;
+  /** Active graph fileId, if applicable. */
+  graphFileId?: string;
+  isShareLive: boolean;
+  /** "Automatic mode" here means: headless retrieve execution for this user-initiated run. */
+  automaticMode: boolean;
+
+  // Operations (callback pattern: service owns orchestration, callers provide UI integrations)
+  pullAll: () => Promise<void>;
+  refreshLiveShareToLatest?: () => Promise<{ success: boolean; error?: string }>;
+  pullLatestRemoteWins?: () => Promise<void>;
+
+  // Retrieve integrations
+  requestRetrieveAllSlices: () => void;
+  executeRetrieveAllSlicesHeadless: (opts: { toastId: string; toastLabel: string }) => Promise<void>;
+  openSessionLogTab: () => void;
+  getGraphData: () => GraphData | null;
+  setGraphData: (g: GraphData | null) => void;
+
+  // UI integrations
+  reloadPage: () => void;
+  notify: (kind: 'success' | 'error', message: string) => void;
+}
+
+export interface HandleStalenessAutoPullOptions {
+  nowMs: number;
+  storage: StorageLike;
+  repository?: string;
+  branch: string;
+  shareGraph?: string;
+  isShareLive: boolean;
+  isDashboardMode: boolean;
+
+  pullAll: () => Promise<void>;
+  pullLatestRemoteWins?: () => Promise<void>;
+  refreshLiveShareToLatest?: () => Promise<{ success: boolean; error?: string }>;
+  notify: (kind: 'success' | 'error', message: string) => void;
+}
+
 class StalenessNudgeService {
   private static instance: StalenessNudgeService;
 
@@ -186,8 +313,24 @@ class StalenessNudgeService {
     return StalenessNudgeService.instance;
   }
 
+  private audit(
+    operationType: Parameters<typeof sessionLogService.info>[0],
+    code: string,
+    message: string,
+    metadata?: Record<string, unknown>
+  ): void {
+    sessionLogService.info(operationType, code, message, undefined, {
+      planEngineVersion: NUDGING_PLAN_ENGINE_VERSION,
+      ...metadata,
+    });
+  }
+
   recordPageLoad(nowMs: number = safeNow(), storage: StorageLike = defaultStorage()): void {
     safeSetNumber(storage, LS.lastPageLoadAtMs, nowMs);
+    this.audit('session', 'STALENESS_PAGE_LOAD_STAMP', 'Recorded page load baseline', {
+      key: LS.lastPageLoadAtMs,
+      nowMs,
+    });
   }
 
   /** UI-only helper: last page load timestamp used as "Reload last done". */
@@ -207,6 +350,10 @@ class StalenessNudgeService {
 
   private markRemoteAppVersionChecked(nowMs: number, storage: StorageLike): void {
     safeSetNumber(storage, LS.lastAppVersionCheckAtMs, nowMs);
+    this.audit('session', 'STALENESS_APP_VERSION_CHECK_STAMP', 'Recorded deployed-version check timestamp', {
+      key: LS.lastAppVersionCheckAtMs,
+      nowMs,
+    });
   }
 
   getCachedRemoteAppVersion(storage: StorageLike = defaultStorage()): string | undefined {
@@ -220,7 +367,15 @@ class StalenessNudgeService {
 
   private setCachedRemoteAppVersion(version: string, storage: StorageLike): void {
     try {
+      const prev = storage.getItem(LS.lastSeenRemoteAppVersion) || undefined;
       storage.setItem(LS.lastSeenRemoteAppVersion, version);
+      if (prev !== version) {
+        this.audit('session', 'STALENESS_APP_VERSION_CACHE_SET', 'Updated cached deployed client version', {
+          key: LS.lastSeenRemoteAppVersion,
+          previous: prev,
+          next: version,
+        });
+      }
     } catch {
       // ignore
     }
@@ -250,6 +405,10 @@ class StalenessNudgeService {
   private markAutoReloadedRemoteAppVersion(remoteVersion: string, storage: StorageLike): void {
     try {
       storage.setItem(LS.lastAutoReloadedRemoteAppVersion, remoteVersion);
+      this.audit('session', 'STALENESS_APP_AUTO_RELOAD_GUARD_SET', 'Recorded auto-reload guard for deployed version', {
+        key: LS.lastAutoReloadedRemoteAppVersion,
+        remoteVersion,
+      });
     } catch {
       // ignore
     }
@@ -322,7 +481,16 @@ class StalenessNudgeService {
   }
 
   snooze(kind: NudgeKind, scope: string | undefined, nowMs: number, storage: StorageLike): void {
-    safeSetNumber(storage, LS.snoozedUntilMs(kind, scope), nowMs + STALENESS_NUDGE_SNOOZE_MS);
+    const untilMs = nowMs + STALENESS_NUDGE_SNOOZE_MS;
+    const key = LS.snoozedUntilMs(kind, scope);
+    safeSetNumber(storage, key, untilMs);
+    this.audit('session', 'STALENESS_SNOOZE_SET', 'Snoozed staleness nudge', {
+      kind,
+      scope,
+      key,
+      nowMs,
+      untilMs,
+    });
   }
 
   isSnoozed(kind: NudgeKind, scope: string | undefined, nowMs: number, storage: StorageLike): boolean {
@@ -331,7 +499,13 @@ class StalenessNudgeService {
   }
 
   markPrompted(kind: NudgeKind, nowMs: number, storage: StorageLike): void {
-    safeSetNumber(storage, LS.lastPromptedAtMs(kind), nowMs);
+    const key = LS.lastPromptedAtMs(kind);
+    safeSetNumber(storage, key, nowMs);
+    this.audit('session', 'STALENESS_PROMPT_MARK', 'Recorded that a staleness prompt was shown', {
+      kind,
+      key,
+      nowMs,
+    });
   }
 
   canPrompt(kind: NudgeKind, nowMs: number, storage: StorageLike): boolean {
@@ -340,8 +514,160 @@ class StalenessNudgeService {
     return nowMs - last > STALENESS_NUDGE_MIN_REPEAT_MS;
   }
 
+  /**
+   * Service-owned: refresh deployed version (rate-limited) and compute the update signal.
+   *
+   * NOTE: This method MAY update localStorage (version cache + last-checked stamp).
+   * It is intentionally separated from pure plan computation.
+   */
+  async collectUpdateSignal(opts: {
+    nowMs: number;
+    localAppVersion: string;
+    storage: StorageLike;
+    reloadSnoozed: boolean;
+  }): Promise<CollectedUpdateSignal> {
+    const { nowMs, localAppVersion, storage, reloadSnoozed } = opts;
+
+    if (!reloadSnoozed) {
+      await this.refreshRemoteAppVersionIfDue(nowMs, storage);
+    }
+
+    const isOutdated = this.isRemoteAppVersionNewerThanLocal(localAppVersion, storage);
+    const reloadDue = !reloadSnoozed && isOutdated && this.canPrompt('reload', nowMs, storage);
+    const remoteAppVersion = this.getCachedRemoteAppVersion(storage);
+    return { isOutdated, reloadDue, remoteAppVersion };
+  }
+
+  /**
+   * Service-owned: compute git remote-ahead signal (workspace or share-live), respecting:
+   * - snooze
+   * - prompt cooldown
+   * - rate-limited remote head checks
+   * - dismiss-by-SHA behaviour
+   */
+  async collectGitSignal(opts: {
+    nowMs: number;
+    storage: StorageLike;
+    repository?: string;
+    branch: string;
+    isShareLive: boolean;
+    shareGraph?: string;
+  }): Promise<CollectedGitSignal> {
+    const { nowMs, storage, repository, branch, isShareLive, shareGraph } = opts;
+
+    let gitPullDue = false;
+    let detectedRemoteSha: string | null = null;
+    let gitPullLastDoneAtMs: number | undefined;
+
+    if (!repository) {
+      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+    }
+
+    const scopeKey = isShareLive && shareGraph ? `${repository}-${branch}-${shareGraph}` : `${repository}-${branch}`;
+    if (this.isSnoozed('git-pull', scopeKey, nowMs, storage)) {
+      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+    }
+    if (!this.canPrompt('git-pull', nowMs, storage)) {
+      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+    }
+
+    if (isShareLive && shareGraph) {
+      const shouldCheck = this.shouldCheckShareRemoteHead({ repository, branch, graph: shareGraph }, nowMs, storage);
+      if (shouldCheck) {
+        const status = await this.getShareRemoteAheadStatus({ repository, branch, graph: shareGraph }, storage);
+        if (status.isRemoteAhead && status.remoteHeadSha) {
+          if (!this.isShareRemoteShaDismissed({ repository, branch, graph: shareGraph }, status.remoteHeadSha, storage)) {
+            gitPullDue = true;
+            detectedRemoteSha = status.remoteHeadSha;
+          }
+        }
+      }
+
+      // Share-live "last done" is best-effort from the graph file's sync metadata.
+      try {
+        const f = fileRegistry.getFile(`graph-${shareGraph}`) as any;
+        gitPullLastDoneAtMs = typeof f?.lastSynced === 'number' ? f.lastSynced : undefined;
+      } catch {
+        gitPullLastDoneAtMs = undefined;
+      }
+    } else {
+      const shouldCheck = this.shouldCheckRemoteHead(repository, branch, nowMs, storage);
+      if (shouldCheck) {
+        const status = await this.getRemoteAheadStatus(repository, branch, storage);
+        if (status.isRemoteAhead && status.remoteHeadSha) {
+          if (!this.isRemoteShaDismissed(repository, branch, status.remoteHeadSha, storage)) {
+            gitPullDue = true;
+            detectedRemoteSha = status.remoteHeadSha;
+          }
+        }
+      }
+
+      // Workspace "last done" from IndexedDB workspace metadata.
+      try {
+        const ws = await db.workspaces.get(`${repository}-${branch}`);
+        gitPullLastDoneAtMs = typeof ws?.lastSynced === 'number' ? ws.lastSynced : undefined;
+      } catch {
+        gitPullLastDoneAtMs = undefined;
+      }
+    }
+
+    return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+  }
+
+  /**
+   * Service-owned: compute retrieve staleness for a graph entity (or chart via parent graph + target slice DSL).
+   * Respects snooze + prompt cooldown; does not attempt any git operations.
+   */
+  async collectRetrieveSignal(opts: {
+    nowMs: number;
+    storage: StorageLike;
+    retrieveTargetGraphFileId?: string;
+    repository?: string;
+    branch: string;
+    targetSliceDsl?: string;
+  }): Promise<CollectedRetrieveSignal> {
+    const { nowMs, storage, retrieveTargetGraphFileId, repository, branch, targetSliceDsl } = opts;
+
+    let retrieveDue = false;
+    let retrieveMostRecentRetrievedAtMs: number | undefined;
+
+    if (!retrieveTargetGraphFileId) return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+    if (this.isSnoozed('retrieve-all-slices', retrieveTargetGraphFileId, nowMs, storage)) {
+      return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+    }
+    if (!this.canPrompt('retrieve-all-slices', nowMs, storage)) {
+      return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+    }
+
+    const graphFile = fileRegistry.getFile(retrieveTargetGraphFileId) as any;
+    if (graphFile?.type !== 'graph' || !graphFile?.data) return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+
+    const staleness = await this.getRetrieveAllSlicesStalenessStatus(
+      graphFile.data,
+      nowMs,
+      repository ? { repository, branch } : undefined,
+      targetSliceDsl
+    );
+    retrieveDue = staleness.isStale;
+
+    const a = staleness.lastSuccessfulRunAtMs;
+    const b = staleness.mostRecentRetrievedAtMs;
+    retrieveMostRecentRetrievedAtMs = a === undefined ? b : b === undefined ? a : Math.max(a, b);
+
+    return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+  }
+
   setPendingPlan(plan: PendingStalenessPlan, storage: StorageLike = defaultStorage()): void {
     safeSetJson(storage, LS.pendingPlan, plan);
+    this.audit('session', 'STALENESS_PENDING_PLAN_SET', 'Stored pending staleness plan', {
+      key: LS.pendingPlan,
+      createdAtMs: plan?.createdAtMs,
+      repository: plan?.repository,
+      branch: plan?.branch,
+      graphFileId: plan?.graphFileId,
+      pullAllLatest: plan?.pullAllLatest,
+      retrieveAllSlices: plan?.retrieveAllSlices,
+    });
   }
 
   getPendingPlan(storage: StorageLike = defaultStorage()): PendingStalenessPlan | undefined {
@@ -357,6 +683,9 @@ class StalenessNudgeService {
 
   clearPendingPlan(storage: StorageLike = defaultStorage()): void {
     safeRemove(storage, LS.pendingPlan);
+    this.audit('session', 'STALENESS_PENDING_PLAN_CLEAR', 'Cleared pending staleness plan', {
+      key: LS.pendingPlan,
+    });
   }
 
   /**
@@ -366,6 +695,14 @@ class StalenessNudgeService {
   clearVolatileFlags(storage: StorageLike = defaultStorage()): void {
     safeRemove(storage, LS.pendingPlan);
     safeRemove(storage, LS.automaticMode);
+    this.audit(
+      'session',
+      'STALENESS_VOLATILE_FLAGS_CLEAR',
+      'Cleared volatile staleness flags (safety: never persist across refresh)',
+      {
+        keys: [LS.pendingPlan, LS.automaticMode],
+      }
+    );
   }
 
   getAutomaticMode(storage: StorageLike = defaultStorage()): boolean {
@@ -376,6 +713,10 @@ class StalenessNudgeService {
 
   setAutomaticMode(enabled: boolean, storage: StorageLike = defaultStorage()): void {
     safeSetNumber(storage, LS.automaticMode, enabled ? 1 : 0);
+    this.audit('session', 'STALENESS_AUTOMATIC_MODE_SET', 'Set staleness automatic mode (per-run, non-persistent across refresh)', {
+      key: LS.automaticMode,
+      enabled,
+    });
   }
 
   /**
@@ -404,7 +745,15 @@ class StalenessNudgeService {
     storage: StorageLike = defaultStorage()
   ): void {
     const repoBranch = `${repository}-${branch}`;
-    safeSetNumber(storage, LS.lastRemoteCheckAtMs(repoBranch), nowMs);
+    const key = LS.lastRemoteCheckAtMs(repoBranch);
+    safeSetNumber(storage, key, nowMs);
+    this.audit('git', 'GIT_REMOTE_HEAD_CHECK_STAMP', 'Recorded remote HEAD check timestamp (rate-limit)', {
+      repository,
+      branch,
+      repoBranch,
+      key,
+      nowMs,
+    });
   }
 
   private shareScopeKey(scope: ShareLiveScope): string {
@@ -430,7 +779,16 @@ class StalenessNudgeService {
     storage: StorageLike = defaultStorage()
   ): void {
     const key = this.shareScopeKey(scope);
-    safeSetNumber(storage, LS.shareLastRemoteCheckAtMs(key), nowMs);
+    const lsKey = LS.shareLastRemoteCheckAtMs(key);
+    safeSetNumber(storage, lsKey, nowMs);
+    this.audit('git', 'GIT_SHARE_REMOTE_HEAD_CHECK_STAMP', 'Recorded share remote HEAD check timestamp (rate-limit)', {
+      repository: scope.repository,
+      branch: scope.branch,
+      graph: scope.graph,
+      scopeKey: key,
+      key: lsKey,
+      nowMs,
+    });
   }
 
   getShareLastSeenRemoteHeadSha(scope: ShareLiveScope, storage: StorageLike = defaultStorage()): string | undefined {
@@ -447,6 +805,14 @@ class StalenessNudgeService {
     const key = this.shareScopeKey(scope);
     try {
       storage.setItem(LS.shareLastSeenRemoteHeadSha(key), remoteHeadSha);
+      this.audit('git', 'GIT_SHARE_LAST_SEEN_HEAD_SET', 'Recorded share last-seen remote HEAD SHA', {
+        repository: scope.repository,
+        branch: scope.branch,
+        graph: scope.graph,
+        scopeKey: key,
+        key: LS.shareLastSeenRemoteHeadSha(key),
+        remoteHeadSha,
+      });
     } catch {
       // ignore
     }
@@ -466,6 +832,14 @@ class StalenessNudgeService {
     const key = this.shareScopeKey(scope);
     try {
       storage.setItem(LS.shareDismissedRemoteSha(key), remoteSha);
+      this.audit('session', 'STALENESS_SHARE_REMOTE_SHA_DISMISS', 'Dismissed share remote SHA (won’t prompt again until remote changes)', {
+        repository: scope.repository,
+        branch: scope.branch,
+        graph: scope.graph,
+        scopeKey: key,
+        key: LS.shareDismissedRemoteSha(key),
+        remoteSha,
+      });
     } catch {
       // ignore
     }
@@ -474,6 +848,13 @@ class StalenessNudgeService {
   clearDismissedShareRemoteSha(scope: ShareLiveScope, storage: StorageLike = defaultStorage()): void {
     const key = this.shareScopeKey(scope);
     safeRemove(storage, LS.shareDismissedRemoteSha(key));
+    this.audit('session', 'STALENESS_SHARE_REMOTE_SHA_CLEAR', 'Cleared dismissed share remote SHA marker', {
+      repository: scope.repository,
+      branch: scope.branch,
+      graph: scope.graph,
+      scopeKey: key,
+      key: LS.shareDismissedRemoteSha(key),
+    });
   }
 
   /**
@@ -508,6 +889,13 @@ class StalenessNudgeService {
     const repoBranch = `${repository}-${branch}`;
     try {
       storage.setItem(LS.dismissedRemoteSha(repoBranch), remoteSha);
+      this.audit('session', 'STALENESS_REMOTE_SHA_DISMISS', 'Dismissed remote SHA (won’t prompt again until remote changes)', {
+        repository,
+        branch,
+        repoBranch,
+        key: LS.dismissedRemoteSha(repoBranch),
+        remoteSha,
+      });
     } catch {
       // ignore
     }
@@ -523,6 +911,12 @@ class StalenessNudgeService {
   ): void {
     const repoBranch = `${repository}-${branch}`;
     safeRemove(storage, LS.dismissedRemoteSha(repoBranch));
+    this.audit('session', 'STALENESS_REMOTE_SHA_CLEAR', 'Cleared dismissed remote SHA marker', {
+      repository,
+      branch,
+      repoBranch,
+      key: LS.dismissedRemoteSha(repoBranch),
+    });
   }
 
   /**
@@ -572,7 +966,15 @@ class StalenessNudgeService {
         logOpId,
         'success',
         isRemoteAhead ? 'Remote is ahead' : 'Remote matches local',
-        { repository, branch, localSha, remoteHeadSha, isRemoteAhead }
+        {
+          repository,
+          branch,
+          localSha,
+          remoteHeadSha,
+          isRemoteAhead,
+          planEngineVersion: NUDGING_PLAN_ENGINE_VERSION,
+          storageKeyWritten: LS.lastRemoteCheckAtMs(`${repository}-${branch}`),
+        }
       );
 
       return { localSha, remoteHeadSha, isRemoteAhead };
@@ -632,7 +1034,16 @@ class StalenessNudgeService {
         logOpId,
         'success',
         isRemoteAhead ? 'Remote is ahead (share)' : 'Remote matches last-seen (share)',
-        { repository, branch, graph, localSha, remoteHeadSha, isRemoteAhead }
+        {
+          repository,
+          branch,
+          graph,
+          localSha,
+          remoteHeadSha,
+          isRemoteAhead,
+          planEngineVersion: NUDGING_PLAN_ENGINE_VERSION,
+          storageKeyWritten: LS.shareLastRemoteCheckAtMs(`${repository}-${branch}-${graph}`),
+        }
       );
 
       return { localSha, remoteHeadSha, isRemoteAhead };
@@ -654,7 +1065,8 @@ class StalenessNudgeService {
   async getRetrieveAllSlicesStalenessStatus(
     graph: GraphData,
     nowMs: number = safeNow(),
-    workspace?: WorkspaceScope
+    workspace?: WorkspaceScope,
+    targetSliceDsl?: string
   ): Promise<RetrieveAllSlicesStalenessStatus> {
     const graphMarker = (graph as any)?.metadata?.last_retrieve_all_slices_success_at_ms;
     const hasGraphMarker = typeof graphMarker === 'number' && Number.isFinite(graphMarker) && graphMarker >= 0;
@@ -712,6 +1124,19 @@ class StalenessNudgeService {
         continue;
       }
 
+      // If a target slice DSL is provided (e.g. chart entity pinned DSL), compute freshness
+      // against that slice only (do not mix other slices' retrieved_at).
+      if (typeof targetSliceDsl === 'string' && targetSliceDsl.trim()) {
+        try {
+          values = isolateSlice(values as any[], targetSliceDsl.trim());
+        } catch {
+          // If we cannot isolate a slice deterministically (e.g. implicit uncontexted on contexted-only data),
+          // treat this parameter as "unknown" for staleness (do not nag).
+          continue;
+        }
+        if (!Array.isArray(values) || values.length === 0) continue;
+      }
+
       let paramMostRecent: number | undefined;
       for (const v of values) {
         const ra: string | undefined = v?.data_source?.retrieved_at;
@@ -754,6 +1179,314 @@ class StalenessNudgeService {
       mostRecentRetrievedAtMs,
       lastSuccessfulRunAtMs: hasGraphMarker ? graphMarker : undefined,
     };
+  }
+
+  /**
+   * Compute a deterministic nudging plan from already-available signals.
+   *
+   * IMPORTANT (Phase 1 safety):
+   * - This is PURE plan computation; it must not perform network calls or mutate storage.
+   * - Signal gathering (remote checks, DB lookups) remains in existing call sites until Phase 2+.
+   */
+  computeNudgingPlanFromSignals(params: {
+    nowMs: number;
+    signals: NudgingSignals;
+    entity: NudgingPlan['entity'];
+    scope?: NudgingPlan['scope'];
+  }): NudgingPlan {
+    const { signals, entity, scope } = params;
+    const remoteV = signals.remoteAppVersion;
+    const localV = signals.localAppVersion;
+
+    const remoteKnown = typeof remoteV === 'string' && remoteV.length > 0;
+    const remoteNewer = remoteKnown ? isRemoteSemverNewer(remoteV!, localV) : false;
+    const remoteOlder = remoteKnown ? isRemoteSemverOlder(remoteV!, localV) : false;
+
+    const reload: NudgingStep = (() => {
+      if (!remoteKnown) {
+        return { key: 'reload', status: 'unknown', reason: 'Deployed client version not checked yet' };
+      }
+      if (remoteNewer) {
+        return { key: 'reload', status: 'due', reason: `A newer client is deployed (you: ${localV}, deployed: ${remoteV})` };
+      }
+      if (remoteOlder) {
+        return { key: 'reload', status: 'not_due', reason: `Deployed client is older than your client (staged rollout; you: ${localV}, deployed: ${remoteV})` };
+      }
+      return { key: 'reload', status: 'not_due', reason: 'Client is up to date' };
+    })();
+
+    const gitSignal = signals.git;
+    const pull: NudgingStep = (() => {
+      // Strict cascade: if update is due, downstream steps are blocked.
+      if (reload.status === 'due') {
+        return { key: 'git-pull', status: 'blocked', blockedBy: 'reload', reason: 'Blocked: update client first' };
+      }
+      if (!scope) {
+        return { key: 'git-pull', status: 'unknown', reason: 'Repository scope not available' };
+      }
+      if (!gitSignal) {
+        return { key: 'git-pull', status: 'unknown', reason: 'Remote git state not checked yet' };
+      }
+      if (gitSignal.isRemoteAhead) {
+        return { key: 'git-pull', status: 'due', reason: 'Remote has newer commits; pull is recommended' };
+      }
+      return { key: 'git-pull', status: 'not_due', reason: 'Local matches remote' };
+    })();
+
+    const retrieveSignal = signals.retrieve;
+    const retrieve: NudgingStep = (() => {
+      // Strict cascade: if update is due, downstream steps are blocked.
+      if (reload.status === 'due') {
+        return { key: 'retrieve-all-slices', status: 'blocked', blockedBy: 'reload', reason: 'Blocked: update client first' };
+      }
+      if (pull.status === 'due') {
+        return { key: 'retrieve-all-slices', status: 'blocked', blockedBy: 'git-pull', reason: 'Blocked: pull latest first' };
+      }
+      if (!retrieveSignal) {
+        return { key: 'retrieve-all-slices', status: 'unknown', reason: 'Retrieve freshness not evaluated' };
+      }
+      if (!retrieveSignal.isStale) {
+        return { key: 'retrieve-all-slices', status: 'not_due', reason: 'Retrieve is fresh (within cooloff window)' };
+      }
+
+      // Git unknown handling:
+      // Default cascade is conservative, but our decision is to allow retrieve when git is unknown,
+      // provided we clearly label it and ensure execution does not attempt any git operations.
+      if (pull.status === 'unknown') {
+        return {
+          key: 'retrieve-all-slices',
+          status: 'due',
+          reason: 'Retrieve is stale; proceeding without pull because git state is unknown',
+          retrieveWithoutPull: true,
+        };
+      }
+
+      return { key: 'retrieve-all-slices', status: 'due', reason: 'Retrieve is stale (refresh recommended)' };
+    })();
+
+    const steps: NudgingPlan['steps'] = {
+      reload,
+      'git-pull': pull,
+      'retrieve-all-slices': retrieve,
+    };
+
+    // Recommended defaults for interactive UI:
+    // - Reload and pull may be pre-selected when due.
+    // - Retrieve must NEVER be pre-selected (safety: avoid accidental thundering herd / surprise server load).
+    const recommendedChecked: NudgingPlan['recommendedChecked'] = {
+      reload: steps.reload.status === 'due',
+      // Strict cascade: do not pre-select pull when blocked behind update.
+      'git-pull': steps['git-pull'].status === 'due',
+      'retrieve-all-slices': false,
+    };
+
+    return { entity, scope, steps, recommendedChecked };
+  }
+
+  /**
+   * Execute user-selected staleness actions in a safe, deterministic order.
+   *
+   * IMPORTANT:
+   * - This is orchestration only. It relies on passed-in callbacks for UI/service integration.
+   * - Retrieve is never auto-run by this method unless the user explicitly selected it.
+   */
+  async runSelectedStalenessActions(opts: RunSelectedStalenessActionsOptions): Promise<void> {
+    const {
+      selected,
+      nowMs,
+      storage,
+      localAppVersion,
+      repository,
+      branch,
+      shareGraph,
+      graphFileId,
+      isShareLive,
+      automaticMode,
+      pullAll,
+      refreshLiveShareToLatest,
+      requestRetrieveAllSlices,
+      executeRetrieveAllSlicesHeadless,
+      openSessionLogTab,
+      getGraphData,
+      reloadPage,
+      notify,
+    } = opts;
+
+    const wantsReload = selected.has('reload');
+    const wantsPull = selected.has('git-pull');
+    const wantsRetrieve = selected.has('retrieve-all-slices');
+
+    // Strict cascade: if an update is due, do NOT run pull/retrieve on an out-of-date client.
+    // The only safe action is reload.
+    const updateDue = this.isRemoteAppVersionNewerThanLocal(localAppVersion, storage);
+    if (updateDue) {
+      if (wantsPull || wantsRetrieve) {
+        sessionLogService.warning(
+          'session',
+          'STALENESS_BLOCKED_BY_UPDATE',
+          'Blocked: update required before running pull/retrieve',
+          undefined,
+          {
+            repository,
+            branch,
+            fileId: graphFileId,
+            wantsPull,
+            wantsRetrieve,
+            planEngineVersion: NUDGING_PLAN_ENGINE_VERSION,
+          }
+        );
+        notify('error', 'Update required: reload before pulling/retrieving');
+      }
+      if (wantsReload) {
+        reloadPage();
+      }
+      return;
+    }
+
+    // SAFETY POLICY:
+    // - We do NOT persist pending plans across refresh.
+    // - If reload is selected alongside other actions, run those actions NOW (explicit user intent),
+    //   then reload at the end. Nothing is carried across refresh.
+    if (wantsReload && (wantsPull || wantsRetrieve)) {
+      sessionLogService.info(
+        'session',
+        'STALENESS_RUN_THEN_RELOAD',
+        'Reload selected alongside other actions; running selected actions now, then reloading (nothing will run automatically after refresh)',
+        undefined,
+        {
+          repository,
+          branch,
+          fileId: graphFileId,
+          wantsPull,
+          wantsRetrieve,
+          planEngineVersion: NUDGING_PLAN_ENGINE_VERSION,
+        }
+      );
+    }
+
+    if (wantsPull) {
+      if (isShareLive && repository && shareGraph) {
+        const res = await refreshLiveShareToLatest?.();
+        if (!res?.success) {
+          notify('error', res?.error || 'Live refresh failed');
+        } else {
+          notify('success', 'Updated to latest');
+          this.clearDismissedShareRemoteSha({ repository, branch, graph: shareGraph }, storage);
+        }
+      } else {
+        await pullAll();
+        // Clear dismissed SHA after successful pull so future changes are detected
+        if (repository) {
+          this.clearDismissedRemoteSha(repository, branch, storage);
+        }
+      }
+    }
+
+    if (wantsRetrieve) {
+      const mustCompleteBeforeReload = wantsReload;
+
+      // If pull was also selected, re-check staleness after pull based on repo-backed state.
+      if (wantsPull && graphFileId) {
+        const graphAfterPull = getGraphData();
+        if (!graphAfterPull) return;
+
+        const status = await this.getRetrieveAllSlicesStalenessStatus(
+          graphAfterPull,
+          nowMs,
+          repository ? { repository, branch } : undefined
+        );
+
+        if (!status.isStale) {
+          sessionLogService.info(
+            'data-fetch',
+            'RETRIEVE_ALL_SKIPPED_AFTER_PULL',
+            'Retrieve All skipped: pull brought fresh retrieval state (within cooloff window)',
+            undefined,
+            {
+              fileId: graphFileId,
+              repository,
+              branch,
+              mostRecentRetrievedAtMs: status.mostRecentRetrievedAtMs,
+              parameterCount: status.parameterCount,
+              staleParameterCount: status.staleParameterCount,
+              planEngineVersion: NUDGING_PLAN_ENGINE_VERSION,
+            }
+          );
+        } else if (automaticMode || mustCompleteBeforeReload) {
+          openSessionLogTab();
+          await executeRetrieveAllSlicesHeadless({
+            toastId: `retrieve-all-automatic:${graphFileId}`,
+            toastLabel: 'Retrieve All (automatic)',
+          });
+        } else {
+          requestRetrieveAllSlices();
+        }
+      } else if (automaticMode || mustCompleteBeforeReload) {
+        if (!graphFileId) return;
+        openSessionLogTab();
+        await executeRetrieveAllSlicesHeadless({
+          toastId: `retrieve-all-automatic:${graphFileId}`,
+          toastLabel: 'Retrieve All (automatic)',
+        });
+      } else {
+        requestRetrieveAllSlices();
+      }
+    }
+
+    if (wantsReload) {
+      reloadPage();
+    }
+  }
+
+  /**
+   * Auto-pull orchestration invoked by the staleness countdown expiry (git pull ONLY; no retrieve).
+   * This is currently used for dashboard/unattended flows.
+   */
+  async handleStalenessAutoPull(opts: HandleStalenessAutoPullOptions): Promise<void> {
+    const {
+      nowMs,
+      storage,
+      repository,
+      branch,
+      shareGraph,
+      isShareLive,
+      isDashboardMode,
+      pullAll,
+      pullLatestRemoteWins,
+      refreshLiveShareToLatest,
+      notify,
+    } = opts;
+
+    sessionLogService.info(
+      'session',
+      'STALENESS_AUTO_PULL',
+      isShareLive ? 'Auto-refreshing live share (countdown expired)' : 'Auto-pulling from repository (countdown expired)',
+      undefined,
+      { repository, branch, graph: shareGraph, nowMs, planEngineVersion: NUDGING_PLAN_ENGINE_VERSION }
+    );
+
+    if (isShareLive && repository && shareGraph) {
+      const res = await refreshLiveShareToLatest?.();
+      if (!res?.success) {
+        notify('error', res?.error || 'Live refresh failed');
+        return;
+      }
+      notify('success', 'Updated to latest');
+      this.clearDismissedShareRemoteSha({ repository, branch, graph: shareGraph }, storage);
+      return;
+    }
+
+    if (isDashboardMode && repository && pullLatestRemoteWins) {
+      // Unattended terminals prefer "remote wins" to avoid blocking on conflicts.
+      await pullLatestRemoteWins();
+    } else {
+      await pullAll();
+    }
+
+    // Clear dismissed SHA after successful pull (so future changes are detected)
+    if (repository) {
+      this.clearDismissedRemoteSha(repository, branch, storage);
+    }
   }
 
   // For tests / emergency reset
