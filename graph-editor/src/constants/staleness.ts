@@ -3,7 +3,6 @@
  *
  * Centralised here so all nudges and related UX use consistent timings.
  */
-export const STALENESS_NUDGE_RELOAD_AFTER_MS = 12 * 60 * 60 * 1000; // 12h
 export const STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS = 24 * 60 * 60 * 1000; // 24h (cron handles daily retrieves)
 
 /**

@@ -1,7 +1,6 @@
 import { db } from '../db/appDatabase';
 import {
   STALENESS_NUDGE_MIN_REPEAT_MS,
-  STALENESS_NUDGE_RELOAD_AFTER_MS,
   STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS,
   STALENESS_PENDING_PLAN_MAX_AGE_MS,
   STALENESS_NUDGE_SNOOZE_MS,
@@ -194,23 +193,6 @@ class StalenessNudgeService {
   /** UI-only helper: last page load timestamp used as "Reload last done". */
   getLastPageLoadAtMs(storage: StorageLike = defaultStorage()): number | undefined {
     return safeGetNumber(storage, LS.lastPageLoadAtMs);
-  }
-
-  shouldPromptReload(nowMs: number = safeNow(), storage: StorageLike = defaultStorage()): boolean {
-    const lastLoad = safeGetNumber(storage, LS.lastPageLoadAtMs);
-    if (!lastLoad) return false; // first load
-    return nowMs - lastLoad > STALENESS_NUDGE_RELOAD_AFTER_MS && this.canPrompt('reload', nowMs, storage);
-  }
-
-  /**
-   * Time-based fallback for reload nudge.
-   * This intentionally does NOT include canPrompt(), so callers can compose
-   * multiple signals behind a single prompt gate.
-   */
-  isReloadTimeBasedDue(nowMs: number = safeNow(), storage: StorageLike = defaultStorage()): boolean {
-    const lastLoad = safeGetNumber(storage, LS.lastPageLoadAtMs);
-    if (!lastLoad) return false; // first load
-    return nowMs - lastLoad > STALENESS_NUDGE_RELOAD_AFTER_MS;
   }
 
   /**

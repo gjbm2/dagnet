@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { dataOperationsService } from '../dataOperationsService';
+import { sessionLogService } from '../sessionLogService';
 import type { Graph } from '../../types';
 
 // In node env, DASRunnerFactory defaults to ./config/connections.yaml which doesn't exist in the repo.
@@ -61,6 +62,8 @@ describe('dataOperationsService.getFromSourceDirect failure propagation', () => 
   });
 
   it('throws on direct fetch failure so callers can count failures', async () => {
+    const addChildSpy = vi.spyOn(sessionLogService, 'addChild');
+
     const graph: Graph = {
       schema_version: '1.0.0',
       id: 'g1',
@@ -103,6 +106,11 @@ describe('dataOperationsService.getFromSourceDirect failure propagation', () => 
 
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toMatch(/API call failed:/);
+
+    // Ensure failure details are written to session logs (prod-safe debugging)
+    const dasFailureCalls = addChildSpy.mock.calls.filter((c) => c[2] === 'DAS_FAILURE_DETAILS');
+    expect(dasFailureCalls.length).toBeGreaterThan(0);
+    expect(dasFailureCalls[0]?.[5]).toMatchObject({ dasPhase: 'execute' });
     
     // Ensure we actually exercised the DAS execution path in this test
     expect(__mock.createDASRunner).toHaveBeenCalled();
