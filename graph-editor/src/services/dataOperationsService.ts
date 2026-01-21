@@ -5762,6 +5762,77 @@ class DataOperationsService {
             dryRun: opts?.dryRun === true,
           });
         };
+
+        const buildDASFailureDetailsForSessionLog = (r: {
+          error?: string;
+          phase?: string;
+          details?: unknown;
+        }): { detailsText: string; context: Record<string, unknown> } => {
+          const SENSITIVE_KEY_SUBSTRINGS = [
+            'api_key',
+            'secret_key',
+            'password',
+            'token',
+            'access_token',
+            'refresh_token',
+            'authorization',
+            'basic_auth',
+            'client_secret',
+            'service_account',
+          ];
+
+          const redactDeep = (value: unknown): unknown => {
+            if (value === null || value === undefined) return value;
+            if (typeof value !== 'object') return value;
+            if (Array.isArray(value)) return value.map(redactDeep);
+
+            const obj = value as Record<string, unknown>;
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(obj)) {
+              const lower = k.toLowerCase();
+              const isSensitive = SENSITIVE_KEY_SUBSTRINGS.some((s) => lower.includes(s));
+              out[k] = isSensitive ? '[REDACTED]' : redactDeep(v);
+            }
+            return out;
+          };
+
+          const safeJson = (value: unknown, maxChars: number): string => {
+            try {
+              const s = JSON.stringify(redactDeep(value));
+              if (s.length <= maxChars) return s;
+              return `${s.slice(0, maxChars)}…[truncated]`;
+            } catch {
+              const s = String(value);
+              if (s.length <= maxChars) return s;
+              return `${s.slice(0, maxChars)}…[truncated]`;
+            }
+          };
+
+          const phase = r.phase || 'unknown';
+          const detailsObj = (r.details && typeof r.details === 'object') ? (r.details as any) : undefined;
+          const httpStatus =
+            detailsObj && typeof detailsObj.status === 'number'
+              ? (detailsObj.status as number)
+              : undefined;
+
+          const lines: string[] = [];
+          lines.push(`phase: ${phase}`);
+          if (httpStatus !== undefined) lines.push(`http_status: ${httpStatus}`);
+          if (r.error) lines.push(`error: ${r.error}`);
+
+          // Always include a small, redacted preview of details so prod session logs remain useful.
+          if (r.details !== undefined) {
+            lines.push(`details: ${safeJson(r.details, 2000)}`);
+          }
+
+          return {
+            detailsText: lines.join('\n'),
+            context: {
+              dasPhase: phase,
+              httpStatus,
+            },
+          };
+        };
         
         // Rate limit before making API calls to external providers
         // This centralizes throttling for Amplitude and other rate-limited APIs
@@ -6168,6 +6239,17 @@ class DataOperationsService {
           
           if (!condResult.success) {
             console.error('[DataOps:DUAL_QUERY] Conditioned query failed:', condResult.error);
+
+            const failure = buildDASFailureDetailsForSessionLog(condResult);
+            sessionLogService.addChild(
+              logOpId,
+              'error',
+              'DAS_FAILURE_DETAILS',
+              `Conditioned query failed (gap ${gapIndex + 1}/${actualFetchWindows.length})`,
+              failure.detailsText,
+              failure.context
+            );
+
             // Report rate limit errors to rate limiter for backoff
             if (connectionName && rateLimiter.isRateLimitError(condResult.error)) {
               rateLimiter.reportRateLimitError(connectionName, condResult.error);
@@ -6181,11 +6263,17 @@ class DataOperationsService {
               sessionLogService.endOperation(
                 logOpId,
                 'warning',
-                `Partial fetch persisted; conditioned query failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${condResult.error}`
+                `Partial fetch persisted; conditioned query failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${condResult.error}`,
+                failure.context
               );
               break;
             }
-            sessionLogService.endOperation(logOpId, 'error', `Conditioned query failed: ${condResult.error}`);
+            sessionLogService.endOperation(
+              logOpId,
+              'error',
+              `Conditioned query failed: ${condResult.error}`,
+              failure.context
+            );
             // IMPORTANT: propagate failure so batch operations record a real failure (not a silent success).
             throw new Error(`Conditioned query failed: ${condResult.error}`);
           }
@@ -6322,6 +6410,16 @@ class DataOperationsService {
               details: result.details,
               window: fetchWindow,
             });
+
+            const failure = buildDASFailureDetailsForSessionLog(result);
+            sessionLogService.addChild(
+              logOpId,
+              'error',
+              'DAS_FAILURE_DETAILS',
+              `DAS execution failed (gap ${gapIndex + 1}/${actualFetchWindows.length})`,
+              failure.detailsText,
+              failure.context
+            );
             
             // Report rate limit errors to rate limiter for backoff
             if (connectionName && rateLimiter.isRateLimitError(result.error)) {
@@ -6339,11 +6437,12 @@ class DataOperationsService {
               sessionLogService.endOperation(
                 logOpId,
                 'warning',
-                `Partial fetch persisted; API failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${userMessage}`
+                `Partial fetch persisted; API failed on gap ${gapIndex + 1}/${actualFetchWindows.length}: ${userMessage}`,
+                failure.context
               );
               break;
             }
-            sessionLogService.endOperation(logOpId, 'error', `API call failed: ${userMessage}`);
+            sessionLogService.endOperation(logOpId, 'error', `API call failed: ${userMessage}`, failure.context);
             // IMPORTANT: propagate failure so batch operations record a real failure (not a silent success).
             throw new Error(`API call failed: ${userMessage}`);
           }

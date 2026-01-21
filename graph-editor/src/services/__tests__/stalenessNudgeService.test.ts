@@ -44,7 +44,6 @@ vi.mock('../sessionLogService', () => ({
 
 import { stalenessNudgeService } from '../stalenessNudgeService';
 import {
-  STALENESS_NUDGE_RELOAD_AFTER_MS,
   STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS,
 } from '../../constants/staleness';
 
@@ -73,28 +72,13 @@ describe('stalenessNudgeService', () => {
     hoisted.mockStartOperation.mockReturnValue('mock-op-id');
   });
 
-  it('should prompt reload when last page load is older than threshold', () => {
+  it('should cache remote deployed app version and compare to local (newer)', () => {
     const storage = new MemoryStorage() as any;
-    const t0 = 1_000_000;
-    stalenessNudgeService.recordPageLoad(t0, storage);
+    // Simulate version.json having been fetched already.
+    storage.setItem('dagnet:staleness:lastSeenRemoteAppVersion', '2.0.0-beta');
 
-    const shouldNot = stalenessNudgeService.shouldPromptReload(t0 + STALENESS_NUDGE_RELOAD_AFTER_MS - 1, storage);
-    expect(shouldNot).toBe(false);
-
-    const shouldYes = stalenessNudgeService.shouldPromptReload(t0 + STALENESS_NUDGE_RELOAD_AFTER_MS + 1, storage);
-    expect(shouldYes).toBe(true);
-  });
-
-  it('should respect reload snooze window', () => {
-    const storage = new MemoryStorage() as any;
-    const t0 = 10_000_000;
-    stalenessNudgeService.recordPageLoad(t0, storage);
-
-    const now = t0 + STALENESS_NUDGE_RELOAD_AFTER_MS + 5_000;
-    expect(stalenessNudgeService.shouldPromptReload(now, storage)).toBe(true);
-
-    stalenessNudgeService.snooze('reload', undefined, now, storage);
-    expect(stalenessNudgeService.isSnoozed('reload', undefined, now + 1, storage)).toBe(true);
+    expect(stalenessNudgeService.isRemoteAppVersionNewerThanLocal('1.0.0-beta', storage)).toBe(true);
+    expect(stalenessNudgeService.isRemoteAppVersionNewerThanLocal('2.0.0-beta', storage)).toBe(false);
   });
 
   it('should compute retrieve-all-slices staleness from connected parameter retrieved_at', async () => {

@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import './Modal.css';
 import {
-  STALENESS_NUDGE_RELOAD_AFTER_MS,
   STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS,
   STALENESS_NUDGE_GIT_PULL_LAST_DONE_RED_AFTER_MS,
 } from '../../constants/staleness';
@@ -97,12 +96,15 @@ export function StalenessUpdateModal({
   };
 
   const lastDoneRedAfterMsFor = (key: StalenessUpdateActionKey): number => {
-    if (key === 'reload') return STALENESS_NUDGE_RELOAD_AFTER_MS;
+    // Reload is version-delta driven; "Loaded at" is informational only.
+    // Never colour it as "stale by time" to avoid implying a time-based trigger.
+    if (key === 'reload') return Number.POSITIVE_INFINITY;
     if (key === 'git-pull') return STALENESS_NUDGE_GIT_PULL_LAST_DONE_RED_AFTER_MS;
     return STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS;
   };
 
   const lastDoneColourFor = (key: StalenessUpdateActionKey, lastDoneAtMs?: number): string => {
+    if (key === 'reload') return '#6b7280'; // grey (informational only)
     if (!lastDoneAtMs) return '#6b7280'; // grey (unknown/never)
     const age = Math.max(0, nowMs - lastDoneAtMs);
     const redAfter = lastDoneRedAfterMsFor(key);
@@ -216,9 +218,13 @@ export function StalenessUpdateModal({
                               whiteSpace: 'nowrap',
                               fontVariantNumeric: 'tabular-nums',
                             }}
-                            title={a.lastDoneAtMs ? `Last done: ${formatDmyHm(a.lastDoneAtMs)}` : 'Last done: Never'}
+                            title={
+                              a.key === 'reload'
+                                ? (a.lastDoneAtMs ? `Page loaded: ${formatDmyHm(a.lastDoneAtMs)}` : 'Page loaded: unknown')
+                                : (a.lastDoneAtMs ? `Last done: ${formatDmyHm(a.lastDoneAtMs)}` : 'Last done: Never')
+                            }
                           >
-                            Last: {a.lastDoneAtMs ? formatDmyHm(a.lastDoneAtMs) : 'Never'}
+                            {a.key === 'reload' ? 'Loaded' : 'Last'}: {a.lastDoneAtMs ? formatDmyHm(a.lastDoneAtMs) : (a.key === 'reload' ? 'Unknown' : 'Never')}
                           </div>
                         </div>
                       </div>

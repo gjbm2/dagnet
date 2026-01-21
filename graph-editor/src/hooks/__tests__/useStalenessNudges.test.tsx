@@ -20,7 +20,9 @@ const hoisted = vi.hoisted(() => ({
   recordDone: vi.fn(),
   getLastDoneAtMs: vi.fn(),
   getLastPageLoadAtMs: vi.fn(),
-  shouldPromptReload: vi.fn(),
+  refreshRemoteAppVersionIfDue: vi.fn(),
+  isRemoteAppVersionNewerThanLocal: vi.fn(),
+  getCachedRemoteAppVersion: vi.fn(),
   isSnoozed: vi.fn(),
   canPrompt: vi.fn(),
   markPrompted: vi.fn(),
@@ -127,7 +129,9 @@ vi.mock('../../services/stalenessNudgeService', () => ({
     recordDone: hoisted.recordDone,
     getLastDoneAtMs: hoisted.getLastDoneAtMs,
     getLastPageLoadAtMs: hoisted.getLastPageLoadAtMs,
-    shouldPromptReload: hoisted.shouldPromptReload,
+    refreshRemoteAppVersionIfDue: hoisted.refreshRemoteAppVersionIfDue,
+    isRemoteAppVersionNewerThanLocal: hoisted.isRemoteAppVersionNewerThanLocal,
+    getCachedRemoteAppVersion: hoisted.getCachedRemoteAppVersion,
     isSnoozed: hoisted.isSnoozed,
     canPrompt: hoisted.canPrompt,
     markPrompted: hoisted.markPrompted,
@@ -177,6 +181,9 @@ describe('useStalenessNudges', () => {
     hoisted.isDashboardMode = false;
     hoisted.isSnoozed.mockReturnValue(false);
     hoisted.canPrompt.mockReturnValue(true);
+    hoisted.refreshRemoteAppVersionIfDue.mockResolvedValue(undefined);
+    hoisted.isRemoteAppVersionNewerThanLocal.mockReturnValue(false);
+    hoisted.getCachedRemoteAppVersion.mockReturnValue(undefined);
     hoisted.getLastDoneAtMs.mockReturnValue(undefined);
     hoisted.getLastPageLoadAtMs.mockReturnValue(undefined);
     hoisted.shouldCheckRemoteHead.mockReturnValue(false);
@@ -198,7 +205,8 @@ describe('useStalenessNudges', () => {
   });
 
   it('should show combined modal and reload when only Reload is due + selected', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(true);
+    hoisted.isRemoteAppVersionNewerThanLocal.mockReturnValue(true);
+    hoisted.getCachedRemoteAppVersion.mockReturnValue('99.99.99-beta');
 
     const reloadSpy = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
 
@@ -214,7 +222,6 @@ describe('useStalenessNudges', () => {
   });
 
   it('should request retrieve-all-slices when Retrieve is due + selected', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
       isStale: true,
       parameterCount: 2,
@@ -237,7 +244,8 @@ describe('useStalenessNudges', () => {
   });
 
   it('should run retrieve-all headlessly before reloading when Reload + Retrieve are selected', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(true);
+    hoisted.isRemoteAppVersionNewerThanLocal.mockReturnValue(true);
+    hoisted.getCachedRemoteAppVersion.mockReturnValue('99.99.99-beta');
     hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
       isStale: true,
       parameterCount: 1,
@@ -266,7 +274,8 @@ describe('useStalenessNudges', () => {
   });
 
   it('should persist pending plan when Reload + Pull are selected', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(true);
+    hoisted.isRemoteAppVersionNewerThanLocal.mockReturnValue(true);
+    hoisted.getCachedRemoteAppVersion.mockReturnValue('99.99.99-beta');
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
 
@@ -289,7 +298,6 @@ describe('useStalenessNudges', () => {
   });
 
   it('should NOT auto-run due actions without user confirmation (no silent retrieve)', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckRemoteHead.mockReturnValue(false);
     hoisted.getRetrieveAllSlicesStalenessStatus.mockReturnValue({
       isStale: true,
@@ -306,7 +314,6 @@ describe('useStalenessNudges', () => {
   });
 
   it('should skip retrieve-all after pull when pull brings fresh retrieval state (not stale)', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
 
@@ -335,7 +342,6 @@ describe('useStalenessNudges', () => {
 
   it('should auto-pull after 30s countdown when remote is ahead (no retrieve-all)', async () => {
     vi.useFakeTimers();
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);
@@ -372,7 +378,6 @@ describe('useStalenessNudges', () => {
   it('should use remote-wins pull in dashboard mode after countdown', async () => {
     vi.useFakeTimers();
     hoisted.isDashboardMode = true;
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);
@@ -400,7 +405,6 @@ describe('useStalenessNudges', () => {
 
   it('should cancel countdown when Snooze is clicked', async () => {
     vi.useFakeTimers();
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);
@@ -425,7 +429,6 @@ describe('useStalenessNudges', () => {
   });
 
   it('should dismiss current SHA and not re-nudge until remote SHA changes', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
 
     // Simulate SHA-dismiss storage behaviour in the mock layer.
@@ -457,7 +460,6 @@ describe('useStalenessNudges', () => {
   });
 
   it('backdrop/× close should snooze (not dismiss)', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);
@@ -473,7 +475,6 @@ describe('useStalenessNudges', () => {
   });
 
   it('should not poll in background when document is hidden, but should prompt on visibility restore', async () => {
-    hoisted.shouldPromptReload.mockReturnValue(false);
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);

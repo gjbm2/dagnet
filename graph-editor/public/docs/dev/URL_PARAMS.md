@@ -131,6 +131,18 @@ https://dagnet.vercel.app/?graph=conversion-flow-v2-recs-collapsed&pullalllatest
 - If the pull fails (e.g. missing credentials), the app continues and still attempts to load the requested file.
 - The `pullalllatest` parameter is removed from the URL after it runs (so refresh won’t repeatedly pull).
 
+## Developer / diagnostics
+
+### `?sessionlogdiag` / `?sessionlogdiag=1`
+
+Enables **diagnostic (verbose) logging inside the Session Log**.
+
+This is **off by default** (to keep session logs small), but when enabled it adds more low-level operation details that make production debugging possible when the browser console is not available.
+
+Notes:
+- This flag affects what gets recorded into the Session Log, not just what is displayed.
+- Expect larger session logs when this is enabled.
+
 **Usage:**
 ```
 https://dagnet.vercel.app/?graph=<graph_name>

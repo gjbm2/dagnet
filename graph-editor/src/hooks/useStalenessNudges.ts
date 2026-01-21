@@ -423,10 +423,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         }
       }
 
-      const reloadDue =
-        !reloadSnoozed &&
-        ((isOutdated && stalenessNudgeService.canPrompt('reload', now, storage)) ||
-          stalenessNudgeService.shouldPromptReload(now, storage));
+      // Reload nudge is version-delta driven ONLY.
+      // Time-based reload prompts are intentionally not used (they were confusing and error-prone).
+      const reloadDue = !reloadSnoozed && isOutdated && stalenessNudgeService.canPrompt('reload', now, storage);
 
       const isShareLive = shareMode?.isLiveMode ?? false;
       const repository: string | undefined = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
@@ -527,7 +526,13 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         {
           key: 'reload',
           label: 'Reload page',
-          description: 'Ensures you’re on the latest client version and clears stale in-memory state.',
+          description: (() => {
+            const remote = (stalenessNudgeService as any).getCachedRemoteAppVersion?.(storage) as string | undefined;
+            if (remote) {
+              return `A newer client is deployed (you: ${APP_VERSION}, deployed: ${remote}). Reload to update and clear stale in-memory state.`;
+            }
+            return 'A newer client is deployed. Reload to update and clear stale in-memory state.';
+          })(),
           due: reloadDue,
           checked: reloadDue,
           lastDoneAtMs: stalenessNudgeService.getLastPageLoadAtMs(storage),

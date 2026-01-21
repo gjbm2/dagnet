@@ -29,6 +29,31 @@ export interface URLSettings {
 }
 
 /**
+ * Read a boolean flag from URL search params.
+ *
+ * Supported truthy values (case-insensitive): "", "1", "true", "yes", "on"
+ * Supported falsy values (case-insensitive): "0", "false", "no", "off"
+ *
+ * Examples:
+ * - ?flag            -> true
+ * - ?flag=1          -> true
+ * - ?flag=true       -> true
+ * - ?flag=0          -> false
+ * - (absent)         -> false
+ */
+export function getURLBooleanParam(searchParams: URLSearchParams, name: string): boolean {
+  if (!searchParams.has(name)) return false;
+  const raw = searchParams.get(name);
+  if (raw === null) return true; // present without a value
+  const v = raw.trim().toLowerCase();
+  if (v === '') return true;
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  // If the param is present but unrecognised, treat as true (safe for flags)
+  return true;
+}
+
+/**
  * Parse settings from URL parameters
  * 
  * @param searchParams - URLSearchParams object from window.location

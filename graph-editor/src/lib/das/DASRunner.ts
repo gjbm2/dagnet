@@ -718,19 +718,19 @@ export class DASRunner {
       }
       // For transform phase errors (JSONata), provide user-friendly message
       if (error.phase === 'transform') {
-        return `Data transformation failed. Check console for details.`;
+        return `Data transformation failed. Check Session Log for details.`;
       }
       // For other phases, show phase-specific messages
       if (error.phase === 'extract') {
-        return `Failed to extract data from API response. Check console for details.`;
+        return `Failed to extract data from API response. Check Session Log for details.`;
       }
       if (error.phase === 'template') {
-        return `Request template error. Check console for details.`;
+        return `Request template error. Check Session Log for details.`;
     }
-      return `Execution failed in phase "${error.phase}". Check console for details.`;
+      return `Execution failed in phase "${error.phase}". Check Session Log for details.`;
     }
 
-    return `Execution failed. Check console for details.`;
+    return `Execution failed. Check Session Log for details.`;
   }
 
   /**
