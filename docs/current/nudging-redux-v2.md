@@ -185,7 +185,9 @@ The plan must represent:
 
 **Invariants**
 - If remote is ahead, pull is Due and retrieve is Blocked.
-- If remote check is not possible (missing creds/network), pull is Unknown and retrieve should be Blocked (strict cascade) or explicitly policy-driven (see §9).
+- If remote check is not possible (missing creds/network), pull is Unknown.
+  - **Default (conservative cascade)**: retrieve is Blocked because a prerequisite is Unknown.
+  - **Decision override (see §13)**: do **not** hard-block retrieve purely because git is Unknown. In that case, retrieve may be allowed, but must be explicitly labelled as “retrieve without pull”, and the execution path must not attempt any git operations.
 
 **Impact note**
 - A successful pull mutates the local working set for *all* open graphs/charts in the same `repository/branch` scope. The nudging plan must therefore treat pull as a scoped-global prerequisite that can invalidate downstream “retrieve freshness” assessments across many entities.
@@ -248,6 +250,9 @@ Goal: avoid modal reliance.
   - log to Session Log that an unattended auto-reload occurred
 - Else if pull is Due:
   - auto-pull with a visible countdown and a way to snooze/dismiss (current behaviour can be formalised)
+  - **Remote-wins detail (current implementation)**: unattended auto-pull uses `pullLatestRemoteWins`, which:
+    - auto-OKs any `force_replace_at_ms` requests (overwrite local with remote for those files; skip merge)
+    - resolves any remaining merge conflicts by accepting the remote version (and logs the fact to Session Log)
 - Else if retrieve is Due:
   - surface a non-blocking banner (or equivalent) and keep the plan available in Session Log.
   - **Do not auto-run retrieve** in dashboard mode (see §13 decision) to avoid thundering herd behaviour.
@@ -258,11 +263,19 @@ Automation is already “pull → retrieve → commit”. It should:
 
 - **Bypass the modal entirely**.
 - Enforce the cascade deterministically:
-  - ensure client update is not required (if it is, log and abort or retry later depending on desired semantics)
+  - ensure client update is not required
+    - **Decision (automation safety)**: if a client update is Due, log a clear “update required” reason into Session Log and abort the automation run (do not attempt pull/retrieve on an out-of-date client).
   - then pull (remote-wins strategy is already specified)
   - then retrieve
-  - then commit if changes exist
+  - then commit + push if changes exist
 - Record a structured plan summary into Session Log at start so it is auditable.
+
+Clarifications (current implementation):
+
+- The pull step in `retrieveall` uses `pullLatestRemoteWins` (same semantics as dashboard auto-pull).
+- The “commit” step is an actual **commit + push** via `gitService.commitAndPushFiles`, and it is conditional:
+  - if there are no committable changes after retrieve, commit/push is skipped
+  - if remote becomes ahead during commit, the automation performs one extra remote-wins pull and retries once
 
 ### 9.4 Force replace on pull (remote “force” flag + 10s countdown)
 
@@ -272,6 +285,10 @@ There is an additional, separate “nudge-like” flow that can appear during **
 - If the local file is **dirty** and the remote `force_replace_at_ms` is newer than the local one, a pull may require a **one-shot force replace decision**:
   - **Interactive pull (“Pull All Latest”)**: a modal appears with a **10 second countdown**; if the user does nothing the default is **auto-OK** (overwrite local with remote; skip merge).
   - **Headless/unattended pull (dashboard mode / `pullLatestRemoteWins` used by automation)**: the system **auto-OKs immediately** (no modal), logs the decision, and continues.
+
+Related clarification:
+
+- **Normal interactive pull is not “remote wins” globally**. Outside unattended/automation contexts, we still do 3-way merges and surface conflicts for user resolution; only the explicit force-replace subset is “remote wins” (when confirmed/auto-confirmed).
 
 Design implications for the consolidated nudging service:
 
@@ -289,12 +306,21 @@ Minimum correctness requirements:
   - write Session Log entries for prompt + final choice,
   - and result in a pull outcome that is consistent with the decision (apply vs merge normally).
 
-### 9.4 Share mode (static / live)
+### 9.5 Share mode (static / live)
 
 Share mode policies should prioritise safety:
 
 - Static share (isolated DB, often read-only): git pull and retrieve operations should typically be Not applicable or Blocked.
-- Live share: git pull may be allowed, but commit is not; retrieve may be allowed only if it does not persist to git.
+- Live share: git pull may be allowed, but commit is not.
+  - **Decision (Option B)**: retrieve is **allowed** in live share, but it must be **local-only**:
+    - it may write updated derived-data files into the local store (e.g. IndexedDB) so the app can function
+    - it must **not** commit or push (and should not present any UI that implies it will)
+    - it must be **non-automated**:
+      - the nudging system must not auto-run retrieve in share contexts
+      - retrieve in share is user-initiated only (or explicitly triggered by a dedicated share workflow, if one exists)
+    - the plan must label this explicitly as “retrieve (local-only; not committed)”
+    - Session Log must include a clear audit entry that retrieve ran in “local-only share” mode
+  - **Definition**: “does not persist to git” means **no commit/push** and **no attempt** to mutate the remote repository; local state may still change to support interactive use.
 
 This implies the plan service must have explicit “capabilities” for the current mode (canPull, canRetrieve, canWriteFiles, canCommit).
 
@@ -476,7 +502,7 @@ This redesign makes nudging:
 - mode-aware (interactive vs dashboard vs automation vs share),
 - and testable under real multi-client drift.
 
-The next step is to agree on the open questions (especially cascade strictness under unknown states) before implementing the service refactor.
+The next step is to confirm the remaining policy details (notably share-mode capabilities and any intentionally allowed “retrieve without pull” situations) before implementing the service refactor.
 
 
 ---
@@ -556,3 +582,423 @@ Add coverage that proves:
   - unattended → banner
 - Default actions fire on expiry and are logged.
 - Cancel prevents the action and is logged.
+
+---
+
+
+## 16. Testing Coverage and Strategy (Detailed)
+
+This section is intentionally specific about what to test, where tests should live, and how to model cross-client interdependencies without creating slow or flaky suites.
+
+### 16.1 Principles for this test surface
+
+- **Prefer service-level tests over UI tests** for decision correctness.
+  - The plan engine should be testable without rendering React.
+- **UI tests verify wiring, not semantics**:
+  - the modal/banner renders the plan correctly
+  - user interactions call the correct service entry points
+  - countdown rendering switches modes correctly
+- **Model multi-client drift explicitly**:
+  - do not rely on “real” localStorage/IndexedDB state bleeding across tests
+  - use isolated in-memory storages per logical client
+- **No global-suite scans**:
+  - tests should be runnable by explicit file path (Vitest `--run path/to/test.ts`).
+- **Avoid time-flakiness**:
+  - use fake timers for countdown logic and for “now” computations
+  - keep all “now” values injectable into services
+- **Audit writes**:
+  - every persisted key/field used by plan computation must have a corresponding test that proves it is written by the consolidated path and is scope-keyed correctly.
+
+### 16.2 Test suite map (where each concern belongs)
+
+Add/extend tests in these existing locations (avoid new test files unless there is no sensible home):
+
+- **Plan computation and invariants (service-level)**:
+  - `graph-editor/src/services/__tests__/stalenessNudgeService.test.ts`
+  - If the plan engine is split into a new service file, extend the nearest existing suite in `graph-editor/src/services/__tests__/`.
+
+- **Hook/UI wiring (React-level)**:
+  - `graph-editor/src/hooks/__tests__/useStalenessNudges.test.tsx`
+  - `graph-editor/src/hooks/__tests__/useURLDailyRetrieveAll.test.ts`
+
+- **Automation pipeline correctness**:
+  - `graph-editor/src/services/__tests__/dailyRetrieveAllAutomationService.test.ts`
+
+- **Force-replace-on-pull detection and behaviour**:
+  - `graph-editor/src/services/__tests__/workspaceService.integration.test.ts`
+  - If we add a pull-all hook test, it should live under `graph-editor/src/hooks/__tests__/` and remain focused.
+
+### 16.3 Plan computation test matrix (what to cover)
+
+For a single target entity (graph tab) under a single repo/branch scope, cover combinations of:
+
+- **Client update signal**
+  - remote deployed version newer than local
+  - remote equal to local
+  - remote older than local (staged rollout)
+  - remote unknown (fetch not yet performed / offline)
+
+- **Git scope signal**
+  - remote ahead
+  - remote equal
+  - remote unknown (missing credentials, network error, or not yet checked)
+
+- **Retrieve freshness inputs**
+  - graph marker fresh (within 24h)
+  - graph marker stale (older than 24h)
+  - per-parameter retrieved_at present and fresh
+  - per-parameter retrieved_at present and stale
+  - no retrieved_at timestamps present (brand new / never retrieved)
+
+Assertions per combination:
+
+- **Cascade status**
+  - update due blocks downstream
+  - if update not due, pull due blocks retrieve
+  - retrieve due only when:
+    - update not due, and
+    - pull not due, and
+    - retrieve freshness is stale by policy
+- **Unknown handling**
+  - unknown does not silently become due
+  - retrieve may be allowed when git is unknown (per §13 decision), but must be labelled clearly in the plan as “retrieve without pull” and must not schedule any git operations
+- **Reason strings and context**
+  - every due/blocked/unknown state must carry a reason suitable for Session Log
+
+### 16.4 Multi-entity and scoped-global behaviour tests
+
+These tests must prove that pull is “scoped-global” and invalidates downstream decisions for many entities.
+
+Scenarios:
+
+- **Two graph tabs open in the same repo/branch**
+  - remote ahead → pull due for the scope
+  - both entities’ plans show pull due (or show retrieve blocked by pull)
+  - after a simulated pull completes, both plans recompute to reflect new scope state
+
+- **One chart entity and one graph entity**
+  - chart derives from a single graph but may use its own pinned DSL
+  - plan for the chart uses the chart’s effective DSL for retrieve freshness inputs
+  - pull due blocks chart retrieve the same way it blocks graph retrieve (scope is shared)
+
+### 16.5 Mode-specific behaviour tests (interactive vs dashboard vs automation vs share)
+
+#### Interactive mode
+
+Verify:
+
+- the modal renders the plan steps and statuses correctly
+- default checkbox selection matches the cascade (update > pull > retrieve)
+- clicking “Run selected” calls only the allowed service entry points in the correct order
+- retrieve is never executed automatically without user confirmation
+
+#### Dashboard / unattended mode
+
+Verify:
+
+- update due triggers auto-reload behaviour with appropriate loop guards
+- pull due uses countdown behaviour rendered as banner, and is cancellable
+- retrieve due does not auto-run (per §13 decision); it should surface as a banner/plan item only
+
+#### `retrieveall` automation mode
+
+Verify:
+
+- no nudging modal appears
+- the 30s start delay is driven by the central countdown mechanism and renders as banner
+- the pipeline ordering is deterministic (pull → retrieve → commit)
+- force-replace-on-pull never blocks on UI and is auto-OK
+- cancellation (automation stop) prevents the next step and logs an audit entry
+
+#### Share mode (static / live)
+
+Verify:
+
+- the plan correctly reflects capabilities (read-only constraints)
+- blocked actions are labelled as such (not silently hidden)
+- share-live scope uses scope-keyed remote-ahead tracking distinct from workspace tracking
+
+### 16.6 Countdown consolidation tests (single mechanism, two UI expressions)
+
+For each countdown-bearing operation (automation start delay, auto-pull countdown, force-replace countdown), verify:
+
+- **Single source of duration**: duration comes from the consolidated policy (not duplicated constants scattered across hooks).
+- **Presentation mode switch**:
+  - interactive → modal
+  - unattended → banner
+- **Expiry semantics**:
+  - expiry triggers the configured default action
+  - expiry is logged to Session Log with operation type and scope/entity
+- **Cancel semantics**:
+  - cancel prevents the default action
+  - cancel is logged to Session Log with operation type and scope/entity
+
+### 16.7 Force-replace-on-pull tests (10s modal + unattended auto-OK)
+
+There are two distinct correctness surfaces:
+
+- **Detection (service-level)**:
+  - `workspaceService` correctly emits force-replace requests only when:
+    - the local file is dirty, and
+    - remote `force_replace_at_ms` is present and newer than local
+  - apply mode overwrites and clears dirty state for allowed file IDs, and does not 3-way merge those files
+
+- **Interactive confirmation (hook/UI-level)**:
+  - the modal countdown defaults to OK at 0 seconds
+  - the user can explicitly cancel (merge normally)
+  - the final choice is logged to Session Log
+
+- **Automation path**:
+  - headless pulls auto-OK immediately and log the decision
+
+### 16.8 Audit/write-site assurance tests
+
+For every persisted value that affects plan computation, add tests that prove:
+
+- it is written only via the consolidated service path
+- it is scoped correctly (global vs repo/branch vs entity)
+- it is accompanied by Session Log audit entries where appropriate
+
+Minimum list to cover:
+
+- deployed version cache and its “last checked” timestamp
+- auto-reload guard for deployed version (avoid loops)
+- remote-ahead “last checked” timestamps per repo/branch and per share-live scope
+- graph marker stamping for retrieve success
+- per-parameter retrieved_at updates (as observed via files loaded into IndexedDB after pull/commit)
+- snooze/dismiss state keys and their scoping rules
+
+### 16.9 Performance and flake control
+
+Guardrails:
+
+- Keep plan computation tests pure and fast (no network, no real IndexedDB; use mocks/in-memory).
+- Keep UI tests minimal:
+  - render only enough to assert correct wiring and display
+  - avoid expensive end-to-end graph loading unless the scenario cannot be represented otherwise
+- Use fake timers for all countdown-related tests; never sleep real time.
+- Ensure all tests are runnable by explicit file paths, and document those file paths in the implementation plan during rollout.
+
+
+---
+
+## 17. Detailed Implementation Plan (Prose)
+
+This plan is intentionally prose-only. It describes what to change and what to test, without code snippets.
+
+### 17.1 Implementation principles and invariants (must hold throughout)
+
+- **Single source of truth**: all nudging decisions come from one central service. Hooks and UI components are access points only.
+- **Deterministic cascade**: update → pull → retrieve, with explicit statuses: due / blocked / unknown / not due.
+- **Scope correctness**:
+  - Client update is global.
+  - Git pull is scoped-global per repo/branch (one pull affects all open entities in that scope).
+  - Retrieve freshness is per entity (graph tab or live chart tab), and must never be treated as global.
+- **Safety**:
+  - Retrieve All must **never auto-run** outside explicit `retrieveall` automation mode.
+  - In unattended contexts, default actions are allowed only for safe operations (e.g. pull countdown, force-replace default OK), and must be cancellable and logged.
+- **Auditability**: any write that affects future plan computation must be accompanied by Session Log entries with scope, reason, and the affected key(s)/field(s).
+- **No duplicate countdown logic**: countdown behaviour is centralised and rendered via a single UI surface in modal or banner form.
+
+### 17.2 Phase 0 – Baseline trace and inventory (no behaviour change)
+
+Goal: enumerate all existing decision and write sites so we can migrate safely without missing hidden coupling.
+
+- **Create a write-site inventory table** in this doc (or a sibling appendix) listing:
+  - client update caching keys (localStorage): deployed version, last checked time, auto-reload guards
+  - remote-ahead tracking keys (workspace vs share-live scope) and where they are read/written
+  - retrieve freshness writes: graph marker, per-parameter retrieved_at stamping, and any other “last done” sources
+  - prompt cadence keys: last prompted, snooze windows, dismiss markers
+  - countdown state currently held in hooks (staleness countdown, pull force-replace countdown, automation start delay)
+- **Trace all entry points** that currently trigger these operations:
+  - staleness modal flow (focus/visibility and other triggers)
+  - menubar “update available” badge and reload trigger
+  - Pull All Latest UI paths
+  - automation `retrieveall` queue and daily automation service
+  - any share-live refresh mechanisms
+
+Deliverable: a complete inventory that can be used as an implementation checklist during migration.
+
+Testing deliverables (Phase 0):
+
+- Extend existing tests only to the extent needed to support later phases:
+  - Add or update minimal “harness” helpers (in existing test files) for:
+    - isolated in-memory storage per logical client
+    - deterministic “now” injection and fake-timer usage conventions
+  - Do not change behaviour yet; these are scaffolding changes to prevent flakiness later.
+
+### 17.3 Phase 1 – Introduce plan computation (service-only, no UI wiring yet)
+
+Goal: create a central “plan” computation API that expresses what is due/blocked/unknown/not due for a target entity.
+
+- **Create or extend a central service**:
+  - Preferred: evolve `graph-editor/src/services/stalenessNudgeService.ts` into the single “nudging plan service”.
+  - If the file becomes too large, split into a new service file, but keep a single exported public API and delete old paths (no parallel logic).
+- **Define a plan model** that includes:
+  - global client update step (local version, cached deployed version, status, reason)
+  - scoped-global git step (repo/branch or share-live scope, remote-ahead status, reason)
+  - entity retrieve step (graph/tab or chart entity, freshness inputs, status, reason)
+  - explicit dependency links (blocked-by), and a structured explanation suitable for Session Log
+- **Explicitly encode the policy decisions from §13**:
+  - retrieve is allowed even if git is unknown (machine can retrieve without git), but must be clearly indicated and must not attempt git operations
+  - charts derive from a single graph, but may use their own pinned DSL for freshness computation
+  - retrieve never auto-runs outside `retrieveall` mode
+  - retrieve staleness uses a constant 24h threshold for now
+- **Add a pure “plan computation” test suite**:
+  - Extend `graph-editor/src/services/__tests__/stalenessNudgeService.test.ts` (or the most appropriate existing suite) to include a matrix of states:
+    - remote client newer / equal / older / unknown
+    - remote git ahead / equal / unknown
+    - retrieve marker fresh / stale; parameter timestamps fresh / stale / missing
+  - Add multi-entity tests:
+    - two graph entities in same repo/branch: ensure the plan reflects scoped-global nature of pull
+    - chart entity with pinned DSL: ensure the plan records the chart’s effective DSL separately from the graph tab
+
+Testing gates (Phase 1):
+
+- The plan matrix tests must cover:
+  - staged rollout case (remote deployed version older than local)
+  - git unknown case where retrieve remains *allowed* but explicitly labelled “retrieve without pull”
+  - retrieve freshness precedence (marker vs per-parameter retrieved_at) and correct “Last” derivation
+- The multi-entity tests must demonstrate scoped-global pull invalidation across two entities in the same repo/branch.
+
+Success criteria: plan computation is deterministic and tested, but nothing user-facing changes yet.
+
+### 17.4 Phase 2 – Centralise execution (service executes plans; hooks/UI only call into service)
+
+Goal: eliminate duplicated business logic in hooks and ensure all entry points go through the same execution path.
+
+- **Add a plan execution API** to the central service:
+  - It should accept:
+    - current mode flags (interactive, dashboard, automation)
+    - target entity identity (graph or chart)
+    - selected actions (if interactive) or a computed default (if automation)
+  - It should enforce the cascade ordering and blocked states.
+- **Refactor `graph-editor/src/hooks/useStalenessNudges.ts`** to:
+  - call the plan service to get the plan
+  - render the modal from the plan (no bespoke logic for due-ness in the hook)
+  - invoke the plan execution API when “Run selected” is clicked
+- **Automation wiring**:
+  - In `graph-editor/src/hooks/useURLDailyRetrieveAllQueue.ts` and `graph-editor/src/services/dailyRetrieveAllAutomationService.ts`, ensure:
+    - retrieve is executed only in `retrieveall` mode (already true)
+    - plan/execution service is used for countdown/banner and for structured logging (see Phase 3/4)
+    - force-replace-on-pull remains auto-OK via `pullLatestRemoteWins` and emits audit logs
+
+Testing deliverables (Phase 2):
+
+- Extend `graph-editor/src/hooks/__tests__/useStalenessNudges.test.tsx` to verify:
+  - the hook renders the plan-provided statuses (due/blocked/unknown/not due) without re-deriving them
+  - clicking “Run selected” calls a single service entry point and respects cascade ordering
+  - retrieve does not run without explicit user confirmation in interactive mode
+- Extend `graph-editor/src/services/__tests__/dailyRetrieveAllAutomationService.test.ts` to verify:
+  - automation still runs pull → retrieve → commit in order
+  - force-replace-on-pull is auto-OK (no UI dependency) and emits audit log entries
+
+Testing gates (Phase 2):
+
+- There must be no remaining test that depends on the old hook-level decision branches; tests should assert against the new central service boundary.
+
+Success criteria: there is one execution path for nudging decisions. The hook no longer contains business logic beyond orchestration.
+
+### 17.5 Phase 3 – Centralise countdown/timer behaviour (modal vs banner)
+
+Goal: remove timer sprawl and implement the “Automated Operation Behaviour Pattern”.
+
+- **Introduce a central countdown/orchestration service** responsible for:
+  - starting countdowns with metadata (operation type, scope/entity, duration, default action)
+  - cancellation and completion
+  - emitting Session Log entries for start/expire/cancel
+- **Introduce a single UI surface** that renders countdown state in two modes:
+  - modal (normal interactive contexts)
+  - top banner (unattended contexts, including `retrieveall` automation mode)
+- **Migrate existing countdowns to the central mechanism**:
+  - automation start delay (~30s) in `useURLDailyRetrieveAllQueue`
+  - staleness auto-pull countdown (~30s) in staleness nudges flow
+  - force-replace-on-pull countdown (10s) in `usePullAll` interactive path
+- **Consolidate durations** into a single constants module (or a single service policy object) so they are not duplicated.
+
+Testing:
+- Extend the existing test suites (prefer `useURLDailyRetrieveAll.test.ts`, `useStalenessNudges.test.tsx`, and a pull-all hook test if present) to verify:
+  - the countdown starts with the configured duration
+  - it renders in modal vs banner depending on mode
+  - expiry triggers the correct default action
+  - cancel prevents the action and logs the cancel event
+
+Testing gates (Phase 3):
+
+- Countdown-bearing flows must have tests that prove:
+  - duration comes from a single policy source (no duplicated countdown constants)
+  - interactive contexts render countdowns as modal; unattended contexts render as banner
+  - expiry triggers the configured default action and logs a Session Log audit event
+  - cancel prevents the default action and logs a cancellation audit event
+
+Success criteria: there are no independent `setInterval` countdowns for these flows outside the central countdown mechanism.
+
+### 17.6 Phase 4 – Audit hardening (ensure write sites match plan assumptions)
+
+Goal: ensure all state that affects plan computation is written consistently, and is observable in prod via Session Log.
+
+- For each write site identified in Phase 0, ensure:
+  - it is performed only via the central service APIs (or a single clearly owned internal helper)
+  - it is scope-keyed correctly (global vs repo/branch vs entity)
+  - it emits Session Log entries with enough detail to debug post hoc without console logs
+- Explicitly verify (and test) the following high-risk couplings:
+  - deployed version cache and auto-reload guard behaviour
+  - remote-ahead tracking (workspace vs share-live) and how it interacts with pull and retrieve blocking
+  - retrieve marker vs per-parameter retrieved_at precedence and “Last” display correctness
+  - force-replace-on-pull request detection and apply behaviour, including unattended auto-OK
+
+Testing deliverables (Phase 4):
+
+- Add “write site audit” assertions for every persisted value that plan computation reads:
+  - deployed version cache and last-checked timestamps
+  - auto-reload loop guards (per remote version)
+  - remote-ahead last-checked and last-seen markers (workspace scope and share-live scope)
+  - retrieve marker stamping and per-parameter retrieved_at updates
+  - snooze/dismiss/prompt keys and their scoping rules
+- Each audit test should prove:
+  - the value is written by the consolidated service path (not UI ad-hoc code)
+  - it is scoped correctly (global vs repo/branch vs entity)
+  - it has a Session Log audit entry where appropriate
+
+Testing gates (Phase 4):
+
+- A multi-client drift scenario must be represented as a deterministic test:
+  - Client A (automation) commits refresh results.
+  - Client B (viewer) initially sees remote ahead and is not encouraged to retrieve before pull.
+  - After simulated pull, Client B no longer shows retrieve due if freshness is within the 24h policy window.
+
+Success criteria: the plan’s “reason” fields can be reconstructed from durable state and Session Log, even in prod.
+
+### 17.7 Phase 5 – Delete legacy paths and tighten invariants
+
+Goal: remove old branching logic and ensure there is no duplicate code path.
+
+- Delete or inline obsolete helpers in hooks/services that are superseded by the plan service.
+- Remove backwards-compatibility fallbacks that allow old behaviour to survive (unless explicitly required for a transitional release).
+- Ensure all menu components remain access points only (no business logic).
+
+### 17.8 Risk management and rollout strategy
+
+- Implement behind a single internal “plan engine” switch if needed for development, but do not ship long-lived dual paths.
+- Roll out in the following order:
+  - plan computation + tests
+  - execution path centralisation
+  - countdown centralisation
+  - audit hardening and cleanup
+- Add Session Log events that clearly label which plan engine version produced decisions during the rollout window.
+
+### 17.9 Acceptance criteria (what “done” means)
+
+- The modal/banner behaviour follows the cascade deterministically.
+- Pull is correctly treated as scoped-global; retrieve remains entity-local.
+- Retrieve never auto-runs outside `retrieveall` automation mode.
+- All countdowns are served by one central mechanism and render as modal vs banner appropriately.
+- A multi-client scenario (cron machine commits; viewer has not pulled) yields:
+  - pull due, retrieve blocked (or “not due” depending on chosen policy), and after pull the retrieve status updates correctly.
+- Prod session logs contain enough information to debug failures without relying on console logs.
+
+### 17.10 Implementation plan completeness note
+
+This implementation plan is complete only if the test work is delivered alongside the code in each phase. Use §16 as a detailed reference for scenario coverage, but do not treat testing as a separate phase that can be deferred “until later”.
+
+---
