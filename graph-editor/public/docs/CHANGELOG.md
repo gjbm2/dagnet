@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.11b
+**Released:** 21-Jan-26
+
+Re-built nudge machinery properly so it's less brittle and flakey.
+
+---
+
 ## Version 1.3.10b
 **Released:** 21-Jan-26
 
