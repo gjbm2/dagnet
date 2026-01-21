@@ -1,5 +1,13 @@
 # TODO
 
+- Support OR() events with Amplitude queries (so we can handle event switchovers)
+    These two are identical (and MECE):-
+      Blueprint CheckpointReached                 [old one]
+        checkpoint = SwitchRegistered
+        category = Energy
+      HouseholdServiceSwitch Registered           [new one]
+        householdService = Energy
+
 - ## CRITICAL — Signature gating disabled for release safety (20-Jan-26)
 +
 ### What happened / why this is here
