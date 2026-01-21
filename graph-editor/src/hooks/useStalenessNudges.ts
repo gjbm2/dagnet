@@ -10,11 +10,14 @@ import { sessionLogService } from '../services/sessionLogService';
 import { STALENESS_NUDGE_COUNTDOWN_SECONDS, STALENESS_NUDGE_VISIBLE_POLL_MS } from '../constants/staleness';
 import { db } from '../db/appDatabase';
 import { useShareModeOptional } from '../contexts/ShareModeContext';
+import { countdownService } from '../services/countdownService';
+import { useCountdown } from './useCountdown';
 import { useDashboardMode } from '../contexts/DashboardModeContext';
 import { liveShareSyncService } from '../services/liveShareSyncService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import toast from 'react-hot-toast';
 import { APP_VERSION } from '../version';
+import { bannerManagerService } from '../services/bannerManagerService';
 
 export interface UseStalenessNudgesResult {
   /** Must be rendered somewhere (for pull conflict resolution UI). */
@@ -48,12 +51,26 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   }, [tabs, activeTabId]);
 
   const activeFileId: string | undefined = activeTab?.fileId;
+  const activeFile: any = activeFileId ? (fileRegistry.getFile(activeFileId) as any) : null;
+  const activeFileType: string | undefined = activeFile?.type;
+  const activeChartParentGraphFileId: string | undefined =
+    activeFileType === 'chart'
+      ? (activeFile?.data?.recipe?.parent?.parent_file_id ?? activeFile?.data?.source?.parent_file_id)
+      : undefined;
+  const activeChartEffectiveDsl: string | undefined =
+    activeFileType === 'chart'
+      ? (activeFile?.data?.recipe?.analysis?.query_dsl ?? activeFile?.data?.source?.query_dsl)
+      : undefined;
+
+  const retrieveTargetGraphFileId: string | undefined =
+    activeFileType === 'chart' ? activeChartParentGraphFileId : activeFileId;
 
   const isVisible = () => !document.hidden;
 
   const inFlightRef = useRef(false);
   const lastGraphTriggerKeyRef = useRef<string>('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const isModalOpenRef = useRef<boolean>(false);
   // Safety: "automatic mode" must NEVER persist across refresh. It only applies to a workflow
   // the user explicitly initiates via the staleness nudge modal.
   const [automaticMode, setAutomaticMode] = useState<boolean>(false);
@@ -67,12 +84,16 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   }>>([]);
 
   // Countdown timer state for auto-pull when remote is ahead
-  const [countdownSeconds, setCountdownSeconds] = useState<number | undefined>(undefined);
-  const countdownIntervalRef = useRef<number | null>(null);
+  const [countdownKey, setCountdownKey] = useState<string | undefined>(undefined);
+  const countdownKeyRef = useRef<string | undefined>(undefined);
+  const countdownCancelTokenRef = useRef<number>(0);
+  const countdownState = useCountdown(countdownKey);
+  const countdownSeconds = countdownState?.secondsRemaining;
   // Track the remote SHA that triggered this modal (for dismiss logic)
   const currentRemoteShaRef = useRef<string | null>(null);
   // Share-live dashboard mode: refresh without a blocking modal.
   const [shareAutoRefreshPending, setShareAutoRefreshPending] = useState<boolean>(false);
+  const shareAutoRefreshPendingRef = useRef<boolean>(false);
 
   // Opt-out: suppress staleness nudges for this session when the URL contains ?nonudge
   // (used by share/embed links for read-only explore flows).
@@ -109,16 +130,18 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
   // Stop countdown timer
   const stopCountdown = useCallback(() => {
-    if (countdownIntervalRef.current !== null) {
-      window.clearInterval(countdownIntervalRef.current);
-      countdownIntervalRef.current = null;
-    }
-    setCountdownSeconds(undefined);
+    // Cancel by prefix to guarantee we kill the correct timer even if the key changes mid-flight.
+    countdownService.cancelCountdownsByPrefix('staleness:auto-pull:');
+    countdownCancelTokenRef.current += 1;
+    countdownKeyRef.current = undefined;
+    setCountdownKey(undefined);
+    shareAutoRefreshPendingRef.current = false;
     setShareAutoRefreshPending(false);
   }, []);
 
   const closeModal = useCallback(() => {
     stopCountdown();
+    isModalOpenRef.current = false;
     setIsModalOpen(false);
   }, [stopCountdown]);
 
@@ -135,130 +158,80 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     stalenessNudgeService.clearVolatileFlags(window.localStorage);
   }, []);
 
-  const runSelectedKeys = useCallback(async (
-    selected: Set<StalenessUpdateActionKey>,
-    opts?: { headlessRetrieve?: boolean }
-  ) => {
+  const runSelectedKeys = useCallback(async (selected: Set<StalenessUpdateActionKey>) => {
     const now = Date.now();
     const storage = window.localStorage;
 
     const isShareLive = shareMode?.isLiveMode ?? false;
     const repo = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
     const branch = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
-    const graph = isShareLive ? shareMode?.identity.graph : undefined;
-    const graphFileId = activeFileId;
+    const shareGraph = isShareLive ? shareMode?.identity.graph : undefined;
 
-    const wantsReload = selected.has('reload');
-    const wantsPull = selected.has('git-pull');
-    const wantsRetrieve = selected.has('retrieve-all-slices');
+    // NOTE: execution orchestration is centralised in the service; the hook only supplies callbacks.
+    await stalenessNudgeService.runSelectedStalenessActions({
+      selected: selected as any,
+      nowMs: now,
+      storage,
+      localAppVersion: APP_VERSION,
+      repository: repo || undefined,
+      branch,
+      shareGraph,
+      graphFileId: retrieveTargetGraphFileId,
+      isShareLive,
+      automaticMode,
 
-    // SAFETY POLICY:
-    // - We do NOT persist pending plans across refresh.
-    // - If the user selects "Reload" alongside other actions, we run those actions NOW (explicit user intent),
-    //   then reload at the end. Nothing is carried across refresh.
-    if (wantsReload && (wantsPull || wantsRetrieve)) {
-      sessionLogService.info(
-        'session',
-        'STALENESS_RUN_THEN_RELOAD',
-        'Reload selected alongside other actions; running selected actions now, then reloading (nothing will run automatically after refresh)',
-        undefined,
-        { repository: repo, branch, fileId: graphFileId, wantsPull, wantsRetrieve }
-      );
-    }
-
-    if (wantsPull) {
-      if (isShareLive && repo && graph) {
-        const res = await liveShareSyncService.refreshToLatest();
-        if (!res.success) {
-          toast.error(res.error || 'Live refresh failed');
-        } else {
-          toast.success('Updated to latest');
-          stalenessNudgeService.clearDismissedShareRemoteSha({ repository: repo, branch, graph }, storage);
-        }
-      } else {
+      pullAll: async () => {
         await pullAll();
-        // Clear dismissed SHA after successful pull so future changes are detected
-        if (repo) {
-          stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
-        }
-      }
-    }
+      },
+      refreshLiveShareToLatest: async () => {
+        return await liveShareSyncService.refreshToLatest();
+      },
+      pullLatestRemoteWins: async () => {
+        if (!repo) return;
+        await repositoryOperationsService.pullLatestRemoteWins(repo, branch);
+      },
 
-    if (wantsRetrieve) {
-      const mustCompleteBeforeReload = wantsReload;
-      if (wantsPull && activeFileId) {
-        // Intended behaviour for READ-ONLY users:
-        // After pull, decide based solely on repo-backed retrieved_at freshness (staleness/cooloff),
-        // not on any additional “planning” logic.
-        const graphAfterPull = (fileRegistry.getFile(activeFileId) as any)?.data || null;
-        if (!graphAfterPull) return;
-
-        const status = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(
-          graphAfterPull,
-          Date.now(),
-          repo ? { repository: repo, branch } : undefined
-        );
-        if (!status.isStale) {
-          sessionLogService.info(
-            'data-fetch',
-            'RETRIEVE_ALL_SKIPPED_AFTER_PULL',
-            'Retrieve All skipped: pull brought fresh retrieval state (within cooloff window)',
-            undefined,
-            {
-              fileId: activeFileId,
-              repository: repo,
-              branch,
-              mostRecentRetrievedAtMs: status.mostRecentRetrievedAtMs,
-              parameterCount: status.parameterCount,
-              staleParameterCount: status.staleParameterCount,
-            }
-          );
-        } else if (automaticMode || mustCompleteBeforeReload) {
-          const graphFile = fileRegistry.getFile(activeFileId) as any;
-          if (!graphFile?.data || graphFile?.type !== 'graph') return;
-          if (!tabOperations?.updateTabData) return;
-
-          // Headless/automatic retrieve: show Session Log as the primary UX for progress.
-          void sessionLogService.openLogTab();
-
-          await executeRetrieveAllSlicesWithProgressToast({
-            getGraph: () => (fileRegistry.getFile(activeFileId) as any)?.data || null,
-            setGraph: (g) => tabOperations.updateTabData(activeFileId, g),
-            toastId: `retrieve-all-automatic:${activeFileId}`,
-            toastLabel: 'Retrieve All (automatic)',
-          });
-        } else {
-          requestRetrieveAllSlices();
-        }
-      } else if (automaticMode || mustCompleteBeforeReload) {
-        if (!activeFileId) return;
-        const graphFile = fileRegistry.getFile(activeFileId) as any;
+      requestRetrieveAllSlices,
+      executeRetrieveAllSlicesHeadless: async ({ toastId, toastLabel }) => {
+        if (!retrieveTargetGraphFileId) return;
+        const graphFile = fileRegistry.getFile(retrieveTargetGraphFileId) as any;
         if (!graphFile?.data || graphFile?.type !== 'graph') return;
         if (!tabOperations?.updateTabData) return;
 
-        // Headless/automatic retrieve: show Session Log as the primary UX for progress.
-        void sessionLogService.openLogTab();
-
         await executeRetrieveAllSlicesWithProgressToast({
-          getGraph: () => (fileRegistry.getFile(activeFileId) as any)?.data || null,
-          setGraph: (g) => tabOperations.updateTabData(activeFileId, g),
-          toastId: `retrieve-all-automatic:${activeFileId}`,
-          toastLabel: 'Retrieve All (automatic)',
+          getGraph: () => (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null,
+          setGraph: (g) => tabOperations.updateTabData(retrieveTargetGraphFileId, g),
+          toastId,
+          toastLabel,
         });
-      } else {
-        requestRetrieveAllSlices();
-      }
-    }
+      },
+      openSessionLogTab: () => {
+        void sessionLogService.openLogTab();
+      },
+      getGraphData: () => {
+        if (!retrieveTargetGraphFileId) return null;
+        const graphAfterPull = (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null;
+        return graphAfterPull as any;
+      },
+      setGraphData: (g) => {
+        if (!retrieveTargetGraphFileId) return;
+        if (!tabOperations?.updateTabData) return;
+        tabOperations.updateTabData(retrieveTargetGraphFileId, g);
+      },
 
-    if (wantsReload) {
-      window.location.reload();
-    }
-  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, pullAll, fileRegistry, tabOperations, automaticMode]);
+      reloadPage: () => window.location.reload(),
+      notify: (kind, message) => {
+        if (kind === 'success') toast.success(message);
+        else toast.error(message);
+      },
+    });
+  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, pullAll, fileRegistry, tabOperations, automaticMode, shareMode]);
 
   const onRunSelected = useCallback(async () => {
     const selected = new Set(modalActions.filter(a => a.checked && !a.disabled).map(a => a.key));
 
     stopCountdown();
+    isModalOpenRef.current = false;
     setIsModalOpen(false);
     await runSelectedKeys(selected);
     // "Automatic mode" only applies to the workflow the user just initiated.
@@ -282,12 +255,12 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       } else if (a.key === 'git-pull') {
         if (pullScope) stalenessNudgeService.snooze('git-pull', pullScope, now, storage);
       } else if (a.key === 'retrieve-all-slices') {
-        if (activeFileId) stalenessNudgeService.snooze('retrieve-all-slices', activeFileId, now, storage);
+        if (retrieveTargetGraphFileId) stalenessNudgeService.snooze('retrieve-all-slices', retrieveTargetGraphFileId, now, storage);
       }
     }
 
     closeModal();
-  }, [modalActions, navState.selectedRepo, navState.selectedBranch, activeFileId, closeModal, shareMode]);
+  }, [modalActions, navState.selectedRepo, navState.selectedBranch, retrieveTargetGraphFileId, closeModal, shareMode]);
 
   /**
    * Dismiss: records the current remote SHA so user won't be nudged again
@@ -330,41 +303,64 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     const graph = isShareLive ? shareMode?.identity.graph : undefined;
     const storage = window.localStorage;
 
-    sessionLogService.info(
-      'session',
-      'STALENESS_AUTO_PULL',
-      isShareLive ? 'Auto-refreshing live share (countdown expired)' : 'Auto-pulling from repository (countdown expired)',
-      undefined,
-      { repository: repo, branch, graph }
-    );
-
     stopCountdown();
+    isModalOpenRef.current = false;
     setIsModalOpen(false);
 
-    if (isShareLive && repo && graph) {
-      const res = await liveShareSyncService.refreshToLatest();
-      if (!res.success) {
-        toast.error(res.error || 'Live refresh failed');
-        return;
-      }
-      toast.success('Updated to latest');
-      stalenessNudgeService.clearDismissedShareRemoteSha({ repository: repo, branch, graph }, storage);
-      return;
-    }
+    await stalenessNudgeService.handleStalenessAutoPull({
+      nowMs: Date.now(),
+      storage,
+      repository: repo || undefined,
+      branch,
+      shareGraph: graph,
+      isShareLive,
+      isDashboardMode,
+      pullAll: async () => {
+        await pullAll();
+      },
+      pullLatestRemoteWins: async () => {
+        if (!repo) return;
+        await repositoryOperationsService.pullLatestRemoteWins(repo, branch);
+      },
+      refreshLiveShareToLatest: async () => {
+        return await liveShareSyncService.refreshToLatest();
+      },
+      notify: (kind, message) => {
+        if (kind === 'success') toast.success(message);
+        else toast.error(message);
+      },
+    });
+  }, [navState.selectedRepo, navState.selectedBranch, stopCountdown, pullAll, shareMode, isDashboardMode]);
 
-    if (isDashboardMode && repo) {
-      // Unattended terminals should prefer "remote wins" to avoid blocking on conflicts.
-      await repositoryOperationsService.pullLatestRemoteWins(repo, branch);
-    } else {
-      // Execute git-pull only (not retrieve-all)
-      await pullAll();
-    }
-
-    // Clear dismissed SHA after successful pull (so future changes are detected)
-    if (repo) {
-      stalenessNudgeService.clearDismissedRemoteSha(repo, branch, storage);
-    }
-  }, [navState.selectedRepo, navState.selectedBranch, stopCountdown, pullAll, shareMode]);
+  const startCountdown = useCallback(
+    (opts: { key: string }) => {
+      stopCountdown();
+      const tokenAtStart = countdownCancelTokenRef.current;
+      countdownKeyRef.current = opts.key;
+      setCountdownKey(opts.key);
+      countdownService.startCountdown({
+        key: opts.key,
+        durationSeconds: STALENESS_NUDGE_COUNTDOWN_SECONDS,
+        onExpire: async () => {
+          // Extra cancellation safety: even if an expiry callback somehow runs after cancel,
+          // never execute if the key is no longer the active countdown for this hook.
+          if (!isModalOpenRef.current && !shareAutoRefreshPendingRef.current) return;
+          if (countdownCancelTokenRef.current !== tokenAtStart) return;
+          if (countdownKeyRef.current !== opts.key) return;
+          await onCountdownExpire();
+        },
+        audit: {
+          operationType: 'session',
+          startCode: 'STALENESS_AUTO_PULL_COUNTDOWN_START',
+          cancelCode: 'STALENESS_AUTO_PULL_COUNTDOWN_CANCEL',
+          expireCode: 'STALENESS_AUTO_PULL_COUNTDOWN_EXPIRE',
+          message: 'Staleness auto-pull countdown',
+          metadata: { key: opts.key },
+        },
+      });
+    },
+    [stopCountdown, onCountdownExpire]
+  );
 
   const maybePrompt = useCallback(async () => {
     if (suppressStalenessNudges) return;
@@ -388,30 +384,13 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       // Compute which actions are due (and not snoozed).
       const reloadSnoozed = stalenessNudgeService.isSnoozed('reload', undefined, now, storage);
 
-      // Prefer a deployed-version check over the crude time-based heuristic:
-      // - If version.json indicates a newer client is deployed, nudge immediately (subject to canPrompt).
-      // - If offline / unavailable, fall back to the existing time-based nudge.
-      //
-      // NOTE: the `typeof` guards keep this hook resilient to test mocks that stub
-      // stalenessNudgeService partially.
-      if (!reloadSnoozed) {
-        const refreshFn = (stalenessNudgeService as any).refreshRemoteAppVersionIfDue;
-        if (typeof refreshFn === 'function') {
-          await refreshFn.call(stalenessNudgeService, now, storage);
-        }
-      }
-
-      let isOutdated = false;
-      const newerFn = (stalenessNudgeService as any).isRemoteAppVersionNewerThanLocal;
-      if (typeof newerFn === 'function') {
-        isOutdated = !!newerFn.call(stalenessNudgeService, APP_VERSION, storage);
-      } else {
-        // Backwards-compatible fallback for partial mocks / older service shape.
-        const diffFn = (stalenessNudgeService as any).isRemoteAppVersionDifferent;
-        if (typeof diffFn === 'function') {
-          isOutdated = !!diffFn.call(stalenessNudgeService, APP_VERSION, storage);
-        }
-      }
+      const updateSignal = await stalenessNudgeService.collectUpdateSignal({
+        nowMs: now,
+        localAppVersion: APP_VERSION,
+        storage,
+        reloadSnoozed,
+      });
+      const isOutdated = updateSignal.isOutdated;
 
       // Unattended terminals (dashboard mode): auto-reload when a new client is deployed.
       // This avoids a modal that nobody can click, and keeps kiosk consoles fresh.
@@ -425,70 +404,34 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
       // Reload nudge is version-delta driven ONLY.
       // Time-based reload prompts are intentionally not used (they were confusing and error-prone).
-      const reloadDue = !reloadSnoozed && isOutdated && stalenessNudgeService.canPrompt('reload', now, storage);
+      const reloadDue = updateSignal.reloadDue;
 
       const isShareLive = shareMode?.isLiveMode ?? false;
       const repository: string | undefined = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
       const branch: string | undefined = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
       const graph: string | undefined = isShareLive ? shareMode?.identity.graph : undefined;
 
-      let gitPullDue = false;
-      let detectedRemoteSha: string | null = null;
-      if (
-        repository &&
-        !stalenessNudgeService.isSnoozed(
-          'git-pull',
-          (isShareLive && graph) ? `${repository}-${branch}-${graph}` : `${repository}-${branch}`,
-          now,
-          storage
-        ) &&
-        stalenessNudgeService.canPrompt('git-pull', now, storage)
-      ) {
-        if (isShareLive && graph) {
-          const shouldCheck = stalenessNudgeService.shouldCheckShareRemoteHead({ repository, branch, graph }, now, storage);
-          if (shouldCheck) {
-            const status = await stalenessNudgeService.getShareRemoteAheadStatus({ repository, branch, graph }, storage);
-            if (status.isRemoteAhead && status.remoteHeadSha) {
-              if (!stalenessNudgeService.isShareRemoteShaDismissed({ repository, branch, graph }, status.remoteHeadSha, storage)) {
-                gitPullDue = true;
-                detectedRemoteSha = status.remoteHeadSha;
-              }
-            }
-          }
-        } else {
-          // Rate-limited remote HEAD check (every 30 mins or on focus)
-          const shouldCheck = stalenessNudgeService.shouldCheckRemoteHead(repository, branch, now, storage);
-          if (shouldCheck) {
-            const status = await stalenessNudgeService.getRemoteAheadStatus(repository, branch, storage);
-            if (status.isRemoteAhead && status.remoteHeadSha) {
-              // Only nudge if this SHA hasn't been dismissed
-              if (!stalenessNudgeService.isRemoteShaDismissed(repository, branch, status.remoteHeadSha, storage)) {
-                gitPullDue = true;
-                detectedRemoteSha = status.remoteHeadSha;
-              }
-            }
-          }
-        }
-      }
+      const gitCollected = await stalenessNudgeService.collectGitSignal({
+        nowMs: now,
+        storage,
+        repository: repository || undefined,
+        branch,
+        isShareLive,
+        shareGraph: graph || undefined,
+      });
+      const gitPullDue = gitCollected.gitPullDue;
+      const detectedRemoteSha = gitCollected.detectedRemoteSha;
 
-      let retrieveDue = false;
-      let retrieveMostRecentRetrievedAtMs: number | undefined;
-      if (activeFileId && !stalenessNudgeService.isSnoozed('retrieve-all-slices', activeFileId, now, storage)) {
-        const activeFile = fileRegistry.getFile(activeFileId) as any;
-        if (activeFile?.type === 'graph' && activeFile?.data && stalenessNudgeService.canPrompt('retrieve-all-slices', now, storage)) {
-          const staleness = await stalenessNudgeService.getRetrieveAllSlicesStalenessStatus(
-            activeFile.data,
-            now,
-            repository ? { repository, branch } : undefined
-          );
-          retrieveDue = staleness.isStale;
-          // Prefer graph-level "last successful run" marker (cross-device), else fall back.
-          const a = staleness.lastSuccessfulRunAtMs;
-          const b = staleness.mostRecentRetrievedAtMs;
-          retrieveMostRecentRetrievedAtMs =
-            a === undefined ? b : b === undefined ? a : Math.max(a, b);
-        }
-      }
+      const retrieveSignalCollected = await stalenessNudgeService.collectRetrieveSignal({
+        nowMs: now,
+        storage,
+        retrieveTargetGraphFileId: retrieveTargetGraphFileId || undefined,
+        repository: repository || undefined,
+        branch,
+        targetSliceDsl: activeFileType === 'chart' ? activeChartEffectiveDsl : undefined,
+      });
+      const retrieveDue = retrieveSignalCollected.retrieveDue;
+      const retrieveMostRecentRetrievedAtMs = retrieveSignalCollected.retrieveMostRecentRetrievedAtMs;
 
       if (!reloadDue && !gitPullDue && !retrieveDue) return;
 
@@ -502,20 +445,60 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       // - retrieve all: data freshness (connected parameters' retrieved_at)
       //
       // Avoid localStorage UI stamps; they lie when actions run via other entry points (scheduler, menus).
-      let gitPullLastDoneAtMs: number | undefined;
-      if (repository) {
-        if (isShareLive && graph) {
-          const f = fileRegistry.getFile(`graph-${graph}`) as any;
-          gitPullLastDoneAtMs = typeof f?.lastSynced === 'number' ? f.lastSynced : undefined;
-        } else {
-          try {
-            const ws = await db.workspaces.get(`${repository}-${branch}`);
-            gitPullLastDoneAtMs = typeof ws?.lastSynced === 'number' ? ws.lastSynced : undefined;
-          } catch {
-            gitPullLastDoneAtMs = undefined;
-          }
-        }
-      }
+      const gitPullLastDoneAtMs = gitCollected.gitPullLastDoneAtMs;
+
+      // Build a deterministic cascade plan from the signals we already gathered.
+      // NOTE: prompting/snooze/rate-limit decisions still live here for now; Phase 3+ centralises them.
+      const remoteAppVersion = updateSignal.remoteAppVersion;
+      const scope =
+        repository
+          ? isShareLive && graph
+            ? ({ type: 'share-live', repository, branch, graph } as const)
+            : ({ type: 'workspace', repository, branch } as const)
+          : undefined;
+
+      // Only include git signal if we actually performed a check in this run (otherwise treat as unknown).
+      const gitSignal =
+        detectedRemoteSha !== null
+          ? ({
+              isRemoteAhead: gitPullDue,
+              localSha: undefined,
+              remoteHeadSha: detectedRemoteSha,
+            } as const)
+          : undefined;
+
+      const retrieveSignal = retrieveTargetGraphFileId
+        ? ({
+            isStale: retrieveDue,
+            parameterCount: 0,
+            staleParameterCount: 0,
+            mostRecentRetrievedAtMs: retrieveMostRecentRetrievedAtMs,
+          } as const)
+        : undefined;
+
+      const planFn = (stalenessNudgeService as any).computeNudgingPlanFromSignals;
+      const plan =
+        typeof planFn === 'function'
+          ? planFn.call(stalenessNudgeService, {
+              nowMs: now,
+              entity:
+                activeFileType === 'chart'
+                  ? {
+                      type: 'chart',
+                      chartFileId: activeFileId,
+                      parentGraphFileId: retrieveTargetGraphFileId,
+                      effectiveQueryDsl: activeChartEffectiveDsl,
+                    }
+                  : { type: 'graph', graphFileId: activeFileId },
+              scope,
+              signals: {
+                localAppVersion: APP_VERSION,
+                remoteAppVersion,
+                git: gitSignal,
+                retrieve: retrieveSignal,
+              },
+            })
+          : null;
 
       const actions: Array<{
         key: StalenessUpdateActionKey;
@@ -524,43 +507,48 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         due: boolean;
         checked: boolean;
         disabled?: boolean;
+        status?: 'due' | 'blocked' | 'unknown' | 'not_due';
         lastDoneAtMs?: number;
       }> = [
         {
           key: 'reload',
           label: 'Reload page',
           description: (() => {
-            const remote = (stalenessNudgeService as any).getCachedRemoteAppVersion?.(storage) as string | undefined;
-            if (remote) {
-              if (isOutdated) {
-                return `A newer client is deployed (you: ${APP_VERSION}, deployed: ${remote}). Reload to update and clear stale in-memory state.`;
-              }
-              if (remote !== APP_VERSION) {
-                return `Deployed version is older than your client (you: ${APP_VERSION}, deployed: ${remote}). This can happen during staged rollout; reloading may not change your version yet.`;
-              }
-            }
+            const s = plan?.steps?.reload;
+            if (s?.status === 'due') return `${s.reason}. Reload to update and clear stale in-memory state.`;
+            if (s?.status === 'not_due' && s.reason) return s.reason;
             return 'Reload to clear stale in-memory state.';
           })(),
           due: reloadDue,
-          checked: reloadDue,
+          checked: plan?.recommendedChecked?.reload ?? reloadDue,
+          status: plan?.steps?.reload?.status,
           lastDoneAtMs: stalenessNudgeService.getLastPageLoadAtMs(storage),
         },
         {
           key: 'git-pull',
           label: 'Pull latest from git',
-          description: 'Checks out the latest repository state (recommended if remote has new commits).',
+          description: plan?.steps?.['git-pull']?.reason || 'Checks out the latest repository state (recommended if remote has new commits).',
           due: gitPullDue,
-          checked: gitPullDue,
+          checked: plan?.recommendedChecked?.['git-pull'] ?? gitPullDue,
+          status: plan?.steps?.['git-pull']?.status,
           disabled: !repository,
           lastDoneAtMs: gitPullLastDoneAtMs,
         },
         {
           key: 'retrieve-all-slices',
-          label: 'Retrieve all slices (active graph)',
-          description: 'Runs the Retrieve All Slices flow for the currently focused graph. Usually handled by daily cron; only due if >24h stale.',
+          label: activeFileType === 'chart' ? 'Retrieve all slices (parent graph)' : 'Retrieve all slices (active graph)',
+          description: (() => {
+            const base = 'Runs the Retrieve All Slices flow for the currently focused graph. Usually handled by daily cron; only due if >24h stale.';
+            const s = plan?.steps?.['retrieve-all-slices'];
+            if (s?.retrieveWithoutPull) return `${base} (Proceeding without pull: git state unknown.)`;
+            if (s?.status === 'blocked' && s.blockedBy === 'git-pull') return `${base} (Blocked until pull completes.)`;
+            if (activeFileType === 'chart') return `${base} (From a chart tab: uses the parent graph and this chart’s effective DSL for freshness.)`;
+            return base;
+          })(),
           due: retrieveDue,
-          checked: false,
-          disabled: !activeFileId,
+          checked: plan?.recommendedChecked?.['retrieve-all-slices'] ?? false,
+          status: plan?.steps?.['retrieve-all-slices']?.status,
+          disabled: !retrieveTargetGraphFileId,
           lastDoneAtMs: retrieveMostRecentRetrievedAtMs,
         },
       ];
@@ -572,16 +560,34 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
       // Share-live dashboard mode: non-blocking refresh UX (no modal).
       if (isShareLive && isDashboardMode && gitPullDue && detectedRemoteSha) {
+        // If the user snoozed git-pull during this run, do not start a countdown afterwards.
+        // (Prevents a race where the modal closes while this async function is still finishing.)
+        const pullScope = repository ? `${repository}-${branch}-${graph}` : undefined;
+        if (pullScope && stalenessNudgeService.isSnoozed('git-pull', pullScope, Date.now(), storage)) return;
+        // Strict cascade: do not auto-pull in unattended mode when an update is due.
+        if (plan?.steps?.reload?.status === 'due') return;
+        shareAutoRefreshPendingRef.current = true;
         setShareAutoRefreshPending(true);
-        setCountdownSeconds(STALENESS_NUDGE_COUNTDOWN_SECONDS);
+        const id = shareMode?.identity;
+        if (id) {
+          startCountdown({ key: `staleness:auto-pull:share:${id.repo}:${id.branch}:${id.graph}` });
+        }
         return;
       }
 
+      isModalOpenRef.current = true;
       setIsModalOpen(true);
 
       // Start countdown if git-pull is due (remote is ahead)
       if (gitPullDue && detectedRemoteSha) {
-        setCountdownSeconds(STALENESS_NUDGE_COUNTDOWN_SECONDS);
+        // Strict cascade: do not start auto-pull countdown if update is due.
+        if (plan?.steps?.reload?.status === 'due') return;
+        const pullScope = repository
+          ? (isShareLive && graph ? `${repository}-${branch}-${graph}` : `${repository}-${branch}`)
+          : undefined;
+        if (pullScope && stalenessNudgeService.isSnoozed('git-pull', pullScope, Date.now(), storage)) return;
+        if (!isModalOpenRef.current) return;
+        startCountdown({ key: `staleness:auto-pull:workspace:${navState.selectedRepo}:${navState.selectedBranch}:${activeFileId ?? 'unknown-graph'}` });
       }
     } finally {
       inFlightRef.current = false;
@@ -594,37 +600,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Countdown interval effect
-  useEffect(() => {
-    if (countdownSeconds === undefined || countdownSeconds <= 0) {
-      return;
-    }
-
-    // Start the interval
-    countdownIntervalRef.current = window.setInterval(() => {
-      setCountdownSeconds(prev => {
-        if (prev === undefined || prev <= 1) {
-          // Countdown expired - will trigger auto-pull via separate effect
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => {
-      if (countdownIntervalRef.current !== null) {
-        window.clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-      }
-    };
-  }, [countdownSeconds !== undefined && countdownSeconds > 0]);
-
-  // Effect to handle countdown expiration
-  useEffect(() => {
-    if (countdownSeconds === 0 && (isModalOpen || shareAutoRefreshPending)) {
-      void onCountdownExpire();
-    }
-  }, [countdownSeconds, isModalOpen, shareAutoRefreshPending, onCountdownExpire]);
+  // Cleanup: ensure countdown timer is cancelled on unmount.
+  useEffect(() => stopCountdown, [stopCountdown]);
 
   // Run on key "user is back" moments.
   useEffect(() => {
@@ -664,18 +641,19 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   // Also re-check when the active graph file actually loads/changes (not just on focus).
   // This matters because staleness checks depend on graph content + connected parameter files.
   useEffect(() => {
-    if (!activeFileId) return;
+    const subscribeFileId = retrieveTargetGraphFileId;
+    if (!subscribeFileId) return;
     const fr: any = fileRegistry as any;
     if (typeof fr.subscribe !== 'function') return;
 
-    const unsubscribe = fr.subscribe(activeFileId, (updatedFile: any) => {
+    const unsubscribe = fr.subscribe(subscribeFileId, (updatedFile: any) => {
       if (!updatedFile) return;
       if (updatedFile.type !== 'graph') return;
       if (!updatedFile.data) return;
 
       // Debounce/re-trigger guard: only nudge-check when something meaningful changes.
       const lm = updatedFile.lastModified ?? 0;
-      const key = `${activeFileId}:${lm}:${updatedFile.isLoaded ? 1 : 0}`;
+      const key = `${subscribeFileId}:${lm}:${updatedFile.isLoaded ? 1 : 0}`;
       if (key === lastGraphTriggerKeyRef.current) return;
       lastGraphTriggerKeyRef.current = key;
 
@@ -684,7 +662,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     });
 
     return unsubscribe;
-  }, [activeFileId, fileRegistry, maybePrompt]);
+  }, [retrieveTargetGraphFileId, fileRegistry, maybePrompt]);
 
   const modal = React.createElement(StalenessUpdateModal, {
     isOpen: isModalOpen,
@@ -701,27 +679,44 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     countdownSeconds,
   });
 
-  const shareLiveCountdown =
-    shareAutoRefreshPending && countdownSeconds !== undefined
-      ? React.createElement(
-          'div',
-          {
-            style: {
-              position: 'fixed',
-              right: 12,
-              bottom: 12,
-              zIndex: 60,
-              background: '#111827',
-              color: '#fff',
-              borderRadius: 10,
-              padding: '10px 12px',
-              fontSize: 12,
-              boxShadow: '0 10px 25px rgba(0,0,0,0.25)',
-            },
-          },
-          `Update pending — refreshing in ${countdownSeconds}s`
-        )
-      : null;
+  // Share-live countdown banner is owned by the central banner manager (not ad-hoc rendering here).
+  useEffect(() => {
+    const shouldShow = shareAutoRefreshPending && typeof countdownSeconds === 'number';
+    if (!shouldShow) {
+      bannerManagerService.clearBanner('share-live-refresh');
+      return;
+    }
+
+    const repo = shareMode?.identity?.repo;
+    const branch = shareMode?.identity?.branch;
+    const graph = shareMode?.identity?.graph;
+    const detail =
+      repo && branch && graph
+        ? `Repo: ${repo}/${branch} • Graph: ${graph}`
+        : undefined;
+
+    bannerManagerService.setBanner({
+      id: 'share-live-refresh',
+      priority: 50,
+      label: `Update pending — refreshing in ${countdownSeconds ?? 0}s…`,
+      detail,
+      actionLabel: 'Snooze 1 hour',
+      onAction: () => {
+        try {
+          if (repo && branch && graph) {
+            const scopeKey = `${repo}-${branch}-${graph}`;
+            stalenessNudgeService.snooze('git-pull', scopeKey, Date.now(), window.localStorage);
+          }
+        } catch {
+          // ignore
+        }
+        stopCountdown();
+      },
+      actionTitle: 'Snooze auto-refresh for 1 hour',
+    });
+
+    return () => bannerManagerService.clearBanner('share-live-refresh');
+  }, [shareAutoRefreshPending, countdownSeconds, shareMode, stopCountdown]);
 
   if (suppressStalenessNudges) {
     return {
@@ -730,7 +725,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   }
 
   return {
-    modals: React.createElement(React.Fragment, null, conflictModal as any, shareLiveCountdown, modal),
+    modals: React.createElement(React.Fragment, null, conflictModal as any, modal),
   };
 }
 

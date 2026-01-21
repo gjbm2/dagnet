@@ -24,6 +24,7 @@ import { CopyPasteProvider } from './hooks/useCopyPaste';
 import { useStalenessNudges } from './hooks/useStalenessNudges';
 import { useURLDailyRetrieveAllQueue } from './hooks/useURLDailyRetrieveAllQueue';
 import { AutomationBanner } from './components/AutomationBanner';
+import { BannerHost } from './components/BannerHost';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
@@ -1862,6 +1863,7 @@ function AppShellContent() {
   if (isDashboardMode) {
     return (
       <>
+        <BannerHost />
         <ShareModeBanner />
         <AutomationBanner />
         <ShareChartBootstrapper />
@@ -1872,6 +1874,7 @@ function AppShellContent() {
   }
   return (
     <>
+      <BannerHost />
       <ShareModeBanner />
       <AutomationBanner />
       <ShareChartBootstrapper />

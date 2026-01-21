@@ -365,13 +365,23 @@ class RetrieveAllSlicesService {
 
       // On a fully successful run, stamp a graph-level marker so other devices that pull
       // can suppress retrieve-all nudges (nightly cron is the primary driver).
+      let stampedMarkerAtMs: number | undefined;
       if (!simulate && !aborted && totalErrors === 0) {
         try {
           const g = getGraph();
           if (g && typeof g === 'object') {
             const next: any = { ...(g as any) };
-            next.metadata = { ...(next.metadata || {}), last_retrieve_all_slices_success_at_ms: Date.now() };
+            stampedMarkerAtMs = Date.now();
+            next.metadata = { ...(next.metadata || {}), last_retrieve_all_slices_success_at_ms: stampedMarkerAtMs };
             setGraph(next);
+            sessionLogService.addChild(
+              logOpId,
+              'success',
+              'RETRIEVE_MARKER_STAMPED',
+              'Stamped graph retrieve marker (last successful Retrieve All)',
+              undefined,
+              { markerMs: stampedMarkerAtMs }
+            );
           }
         } catch {
           // Best-effort only; do not fail the run because a marker could not be written.
@@ -402,6 +412,7 @@ class RetrieveAllSlicesService {
           daysFetched: totalDaysFetched, 
           errors: totalErrors,
           duration: Math.round(durationMs),
+          markerMs: stampedMarkerAtMs,
         }
       );
 

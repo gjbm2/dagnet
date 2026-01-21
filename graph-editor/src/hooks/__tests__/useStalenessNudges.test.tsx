@@ -14,6 +14,8 @@ const hoisted = vi.hoisted(() => ({
   getFile: vi.fn(),
   updateTabData: vi.fn(),
   isDashboardMode: false,
+  activeTabId: 'tab-1' as string | null,
+  tabs: [{ id: 'tab-1', fileId: 'graph-1', viewMode: 'interactive' }] as any[],
 
   // stalenessNudgeService fakes
   recordPageLoad: vi.fn(),
@@ -40,6 +42,12 @@ const hoisted = vi.hoisted(() => ({
   clearVolatileFlags: vi.fn(),
   getAutomaticMode: vi.fn(),
   setAutomaticMode: vi.fn(),
+  computeNudgingPlanFromSignals: vi.fn(),
+  runSelectedStalenessActions: vi.fn(),
+  handleStalenessAutoPull: vi.fn(),
+  collectUpdateSignal: vi.fn(),
+  collectGitSignal: vi.fn(),
+  collectRetrieveSignal: vi.fn(),
 
   // db fakes
   dbWorkspacesGet: vi.fn(),
@@ -54,8 +62,8 @@ vi.mock('../../contexts/NavigatorContext', () => ({
 
 vi.mock('../../contexts/TabContext', () => ({
   useTabContext: () => ({
-    activeTabId: 'tab-1',
-    tabs: [{ id: 'tab-1', fileId: 'graph-1', viewMode: 'interactive' }],
+    activeTabId: hoisted.activeTabId,
+    tabs: hoisted.tabs,
     operations: { updateTabData: hoisted.updateTabData },
   }),
   useFileRegistry: () => ({ getFile: hoisted.getFile }),
@@ -149,6 +157,12 @@ vi.mock('../../services/stalenessNudgeService', () => ({
     clearVolatileFlags: hoisted.clearVolatileFlags,
     getAutomaticMode: hoisted.getAutomaticMode,
     setAutomaticMode: hoisted.setAutomaticMode,
+    computeNudgingPlanFromSignals: hoisted.computeNudgingPlanFromSignals,
+    runSelectedStalenessActions: hoisted.runSelectedStalenessActions,
+    handleStalenessAutoPull: hoisted.handleStalenessAutoPull,
+    collectUpdateSignal: hoisted.collectUpdateSignal,
+    collectGitSignal: hoisted.collectGitSignal,
+    collectRetrieveSignal: hoisted.collectRetrieveSignal,
   },
 }));
 
@@ -179,6 +193,8 @@ describe('useStalenessNudges', () => {
     }
 
     hoisted.isDashboardMode = false;
+    hoisted.activeTabId = 'tab-1';
+    hoisted.tabs = [{ id: 'tab-1', fileId: 'graph-1', viewMode: 'interactive' }];
     hoisted.isSnoozed.mockReturnValue(false);
     hoisted.canPrompt.mockReturnValue(true);
     hoisted.refreshRemoteAppVersionIfDue.mockResolvedValue(undefined);
@@ -197,10 +213,128 @@ describe('useStalenessNudges', () => {
     });
     hoisted.getPendingPlan.mockReturnValue(undefined);
     hoisted.getAutomaticMode.mockReturnValue(false);
+    hoisted.runSelectedStalenessActions.mockResolvedValue(undefined);
+    hoisted.handleStalenessAutoPull.mockResolvedValue(undefined);
+
+    // Default: compute a plan that matches existing behaviour (retrieve never pre-selected).
+    hoisted.computeNudgingPlanFromSignals.mockImplementation(({ signals }: any) => {
+      const localV = String(signals?.localAppVersion ?? '');
+      const remoteV = typeof signals?.remoteAppVersion === 'string' ? signals.remoteAppVersion : undefined;
+      const remoteNewer = remoteV ? hoisted.isRemoteAppVersionNewerThanLocal(localV, { getItem: () => remoteV } as any) : false;
+
+      const reloadStatus = remoteV
+        ? (remoteNewer ? 'due' : 'not_due')
+        : 'unknown';
+      const reloadReason =
+        reloadStatus === 'due'
+          ? `A newer client is deployed (you: ${localV}, deployed: ${remoteV})`
+          : remoteV && remoteV !== localV
+            ? `Deployed version is older than your client (staged rollout; you: ${localV}, deployed: ${remoteV})`
+            : 'Client is up to date';
+
+      const pullDue = !!signals?.git?.isRemoteAhead;
+      const pullStatus = pullDue ? 'due' : (signals?.git ? 'not_due' : 'unknown');
+
+      const retrieveStale = !!signals?.retrieve?.isStale;
+      const retrieveStatus =
+        reloadStatus === 'due'
+          ? 'blocked'
+          : pullDue
+            ? 'blocked'
+            : retrieveStale
+              ? 'due'
+              : (signals?.retrieve ? 'not_due' : 'unknown');
+
+      return {
+        entity: { type: 'graph', graphFileId: 'graph-1' },
+        scope: undefined,
+        steps: {
+          reload: { key: 'reload', status: reloadStatus, reason: reloadReason },
+          'git-pull': { key: 'git-pull', status: pullStatus, reason: pullDue ? 'Remote has newer commits; pull is recommended' : 'Local matches remote' },
+          'retrieve-all-slices': {
+            key: 'retrieve-all-slices',
+            status: retrieveStatus,
+            reason: retrieveStale ? 'Retrieve is stale (refresh recommended)' : 'Retrieve is fresh (within cooloff window)',
+            blockedBy: pullDue ? 'git-pull' : undefined,
+            retrieveWithoutPull: pullStatus === 'unknown' && retrieveStale ? true : undefined,
+          },
+        },
+        recommendedChecked: {
+          reload: reloadStatus === 'due',
+          'git-pull': pullStatus === 'due',
+          'retrieve-all-slices': false,
+        },
+      };
+    });
 
     hoisted.getFile.mockReturnValue({
       type: 'graph',
       data: { edges: [], nodes: [] },
+    });
+
+    // Default service-owned signal collection implementations (mirror pre-refactor hook behaviour).
+    hoisted.collectUpdateSignal.mockImplementation(async ({ nowMs, localAppVersion, storage, reloadSnoozed }: any) => {
+      if (!reloadSnoozed) await hoisted.refreshRemoteAppVersionIfDue(nowMs, storage);
+      const isOutdated = !!hoisted.isRemoteAppVersionNewerThanLocal(localAppVersion, storage);
+      const reloadDue = !reloadSnoozed && isOutdated && !!hoisted.canPrompt('reload', nowMs, storage);
+      const remoteAppVersion = hoisted.getCachedRemoteAppVersion(storage);
+      return { isOutdated, reloadDue, remoteAppVersion };
+    });
+
+    hoisted.collectGitSignal.mockImplementation(async ({ nowMs, storage, repository, branch, isShareLive }: any) => {
+      let gitPullDue = false;
+      let detectedRemoteSha: string | null = null;
+      let gitPullLastDoneAtMs: number | undefined;
+
+      if (!repository) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+      if (isShareLive) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+
+      const scopeKey = `${repository}-${branch}`;
+      if (hoisted.isSnoozed('git-pull', scopeKey, nowMs, storage)) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+      if (!hoisted.canPrompt('git-pull', nowMs, storage)) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+
+      if (hoisted.shouldCheckRemoteHead(repository, branch, nowMs, storage)) {
+        const status = await hoisted.getRemoteAheadStatus(repository, branch, storage);
+        if (status?.isRemoteAhead && status.remoteHeadSha) {
+          if (!hoisted.isRemoteShaDismissed(repository, branch, status.remoteHeadSha, storage)) {
+            gitPullDue = true;
+            detectedRemoteSha = status.remoteHeadSha;
+          }
+        }
+      }
+
+      try {
+        const ws = await hoisted.dbWorkspacesGet(`${repository}-${branch}`);
+        gitPullLastDoneAtMs = typeof ws?.lastSynced === 'number' ? ws.lastSynced : undefined;
+      } catch {
+        gitPullLastDoneAtMs = undefined;
+      }
+
+      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+    });
+
+    hoisted.collectRetrieveSignal.mockImplementation(async ({ nowMs, storage, retrieveTargetGraphFileId, repository, branch, targetSliceDsl }: any) => {
+      let retrieveDue = false;
+      let retrieveMostRecentRetrievedAtMs: number | undefined;
+
+      if (!retrieveTargetGraphFileId) return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+      if (hoisted.isSnoozed('retrieve-all-slices', retrieveTargetGraphFileId, nowMs, storage)) return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+      if (!hoisted.canPrompt('retrieve-all-slices', nowMs, storage)) return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+
+      const graphFile = hoisted.getFile(retrieveTargetGraphFileId);
+      if (graphFile?.type !== 'graph' || !graphFile?.data) return { retrieveDue, retrieveMostRecentRetrievedAtMs };
+
+      const staleness = await hoisted.getRetrieveAllSlicesStalenessStatus(
+        graphFile.data,
+        nowMs,
+        repository ? { repository, branch } : undefined,
+        targetSliceDsl
+      );
+      retrieveDue = !!staleness?.isStale;
+      const a = staleness?.lastSuccessfulRunAtMs;
+      const b = staleness?.mostRecentRetrievedAtMs;
+      retrieveMostRecentRetrievedAtMs = a === undefined ? b : b === undefined ? a : Math.max(a, b);
+      return { retrieveDue, retrieveMostRecentRetrievedAtMs };
     });
   });
 
@@ -217,7 +351,9 @@ describe('useStalenessNudges', () => {
     expect(screen.getByText('Automatic mode')).toBeTruthy();
 
     screen.getByRole('button', { name: 'Run selected' }).click();
-    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(hoisted.runSelectedStalenessActions).toHaveBeenCalledTimes(1);
+    });
     reloadSpy.mockRestore();
   });
 
@@ -240,7 +376,11 @@ describe('useStalenessNudges', () => {
     expect(retrieveCheckbox.checked).toBe(true);
 
     screen.getByRole('button', { name: 'Run selected' }).click();
-    expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(hoisted.runSelectedStalenessActions).toHaveBeenCalledTimes(1);
+    });
+    const call = hoisted.runSelectedStalenessActions.mock.calls[0]?.[0];
+    expect(call?.selected?.has?.('retrieve-all-slices')).toBe(true);
   });
 
   it('should NOT claim a newer deployed client when deployed version is older (modal opened for other due actions)', async () => {
@@ -304,13 +444,11 @@ describe('useStalenessNudges', () => {
     // SAFETY: retrieve-all is never pre-selected; user must explicitly tick it.
     clickActionCheckboxByRowTitle('Retrieve all slices (active graph)');
 
-    screen.getByText('Run selected').click();
+    screen.getByRole('button', { name: 'Run selected' }).click();
 
     await waitFor(() => {
-      expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(1);
+      expect(hoisted.runSelectedStalenessActions).toHaveBeenCalledTimes(1);
     });
-    expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
-    expect(reloadSpy).toHaveBeenCalledTimes(1);
     reloadSpy.mockRestore();
   });
 
@@ -327,14 +465,11 @@ describe('useStalenessNudges', () => {
     expect(await screen.findByText('Updates recommended')).toBeTruthy();
     expect(screen.getByText('Pull latest from git')).toBeTruthy();
 
-    screen.getByText('Run selected').click();
+    screen.getByRole('button', { name: 'Run selected' }).click();
 
-    // No pending plan persistence (must never survive refresh). Pull runs now (explicit user intent), then reload.
     await waitFor(() => {
-      expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
+      expect(hoisted.runSelectedStalenessActions).toHaveBeenCalledTimes(1);
     });
-    expect(hoisted.clearDismissedRemoteSha).toHaveBeenCalledTimes(1);
-    expect(reloadSpy).toHaveBeenCalledTimes(1);
     reloadSpy.mockRestore();
   });
 
@@ -350,8 +485,7 @@ describe('useStalenessNudges', () => {
 
     // Modal should be shown; nothing should auto-execute.
     expect(await screen.findByText('Updates recommended')).toBeTruthy();
-    expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
-    expect(hoisted.pullAll).toHaveBeenCalledTimes(0);
+    expect(hoisted.runSelectedStalenessActions).toHaveBeenCalledTimes(0);
   });
 
   it('should skip retrieve-all after pull when pull brings fresh retrieval state (not stale)', async () => {
@@ -373,12 +507,8 @@ describe('useStalenessNudges', () => {
     screen.getByRole('button', { name: 'Run selected' }).click();
 
     await waitFor(() => {
-      expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
+      expect(hoisted.runSelectedStalenessActions).toHaveBeenCalledTimes(1);
     });
-
-    // Retrieve should be skipped (no request event, no direct execute)
-    expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
-    expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
   });
 
   it('should auto-pull after 30s countdown when remote is ahead (no retrieve-all)', async () => {
@@ -400,20 +530,81 @@ describe('useStalenessNudges', () => {
     expect(screen.getByText('Pull latest from git')).toBeTruthy();
     expect(screen.getByText(/Auto-pulling from repository in/i)).toBeTruthy();
 
-    // Advance time until the countdown expires and the hook runs pullAll.
+    // Advance time until the countdown expires and the hook delegates to the auto-pull service.
     // We use a loop (rather than a single 30s jump) to avoid race conditions with effect scheduling.
     for (let i = 0; i < 40; i++) {
-      if (hoisted.pullAll.mock.calls.length > 0) break;
+      if (hoisted.handleStalenessAutoPull.mock.calls.length > 0) break;
       await vi.advanceTimersByTimeAsync(1_000);
       await Promise.resolve();
       await Promise.resolve();
     }
 
-    expect(hoisted.pullAll).toHaveBeenCalledTimes(1);
-    expect(hoisted.clearDismissedRemoteSha).toHaveBeenCalledTimes(1);
-    expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(0);
-    expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(0);
+    expect(hoisted.handleStalenessAutoPull).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+
+  it('should NOT start auto-pull countdown when an update is due (strict cascade)', async () => {
+    vi.useFakeTimers();
+    hoisted.isRemoteAppVersionNewerThanLocal.mockReturnValue(true);
+    hoisted.getCachedRemoteAppVersion.mockReturnValue('99.99.99-beta');
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
+    hoisted.isRemoteShaDismissed.mockReturnValue(false);
+
+    render(<Harness />);
+
+    for (let i = 0; i < 200; i++) {
+      if (screen.queryByText('Updates recommended')) break;
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.resolve();
+    }
+
+    expect(screen.getByText('Updates recommended')).toBeTruthy();
+    // No auto-pull countdown banner when reload is due.
+    expect(screen.queryByText(/Auto-pulling from repository in/i)).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(35_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(hoisted.handleStalenessAutoPull).toHaveBeenCalledTimes(0);
+    vi.useRealTimers();
+  });
+
+  it('passes chart effective DSL into retrieve staleness computation when active tab is a chart', async () => {
+    const chartDsl = 'context(channel:influencer).window(1-Dec-25:7-Dec-25)';
+    hoisted.tabs = [{ id: 'tab-1', fileId: 'chart-1', viewMode: 'interactive' }];
+
+    hoisted.getFile.mockImplementation((fileId: string) => {
+      if (fileId === 'chart-1') {
+        return {
+          type: 'chart',
+          data: {
+            recipe: { parent: { parent_file_id: 'graph-1' }, analysis: { query_dsl: chartDsl } },
+          },
+        } as any;
+      }
+      if (fileId === 'graph-1') {
+        return { type: 'graph', data: { edges: [], nodes: [] } } as any;
+      }
+      return null as any;
+    });
+
+    hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
+      isStale: true,
+      parameterCount: 1,
+      staleParameterCount: 1,
+      mostRecentRetrievedAtMs: 123,
+    } as any);
+
+    render(<Harness />);
+
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+
+    // Ensure the chart path threads the effective DSL through to the service call.
+    const call = hoisted.getRetrieveAllSlicesStalenessStatus.mock.calls.find((c) => c[3] === chartDsl);
+    expect(call).toBeTruthy();
+    expect(screen.getByText('Retrieve all slices (parent graph)')).toBeTruthy();
   });
 
   it('should use remote-wins pull in dashboard mode after countdown', async () => {
@@ -433,14 +624,13 @@ describe('useStalenessNudges', () => {
     expect(screen.getByText('Updates recommended')).toBeTruthy();
 
     for (let i = 0; i < 40; i++) {
-      if (hoisted.pullLatestRemoteWins.mock.calls.length > 0) break;
+      if (hoisted.handleStalenessAutoPull.mock.calls.length > 0) break;
       await vi.advanceTimersByTimeAsync(1_000);
       await Promise.resolve();
       await Promise.resolve();
     }
 
-    expect(hoisted.pullLatestRemoteWins).toHaveBeenCalledTimes(1);
-    expect(hoisted.pullAll).toHaveBeenCalledTimes(0);
+    expect(hoisted.handleStalenessAutoPull).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 
@@ -449,6 +639,16 @@ describe('useStalenessNudges', () => {
     hoisted.shouldCheckRemoteHead.mockReturnValue(true);
     hoisted.getRemoteAheadStatus.mockResolvedValue({ isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b' });
     hoisted.isRemoteShaDismissed.mockReturnValue(false);
+
+    // Model snooze behaviour in the mock layer so the modal doesn't immediately re-open.
+    let snoozedGitPull = false;
+    hoisted.snooze.mockImplementation((key: string) => {
+      if (key === 'git-pull') snoozedGitPull = true;
+    });
+    hoisted.isSnoozed.mockImplementation((key: string) => {
+      if (key === 'git-pull') return snoozedGitPull;
+      return false;
+    });
 
     render(<Harness />);
 
@@ -460,12 +660,18 @@ describe('useStalenessNudges', () => {
 
     // Snooze should cancel countdown and close the modal.
     screen.getByRole('button', { name: 'Snooze 1 hour' }).click();
+    for (let i = 0; i < 200; i++) {
+      if (!screen.queryByText('Updates recommended')) break;
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.resolve();
+    }
+    expect(screen.queryByText('Updates recommended')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(35_000);
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(hoisted.pullAll).toHaveBeenCalledTimes(0);
+    expect(hoisted.handleStalenessAutoPull).toHaveBeenCalledTimes(0);
     vi.useRealTimers();
   });
 

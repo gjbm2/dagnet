@@ -23,6 +23,7 @@ function ensureCountdownStyles(): void {
 }
 
 export type StalenessUpdateActionKey = 'reload' | 'git-pull' | 'retrieve-all-slices';
+export type StalenessUpdateActionStatus = 'due' | 'blocked' | 'unknown' | 'not_due';
 
 export interface StalenessUpdateAction {
   key: StalenessUpdateActionKey;
@@ -31,6 +32,8 @@ export interface StalenessUpdateAction {
   due: boolean;
   checked: boolean;
   disabled?: boolean;
+  /** Optional richer status (preferred over boolean `due` when present). */
+  status?: StalenessUpdateActionStatus;
   /** For display: last completion time (ms since epoch). */
   lastDoneAtMs?: number;
 }
@@ -76,8 +79,24 @@ export function StalenessUpdateModal({
 
   const nowMs = Date.now();
 
+  const statusLabelFor = (a: StalenessUpdateAction): string => {
+    const s = a.status ?? (a.due ? 'due' : 'not_due');
+    if (s === 'due') return 'Due';
+    if (s === 'blocked') return 'Blocked';
+    if (s === 'unknown') return 'Unknown';
+    return 'Not due';
+  };
+
+  const statusColourFor = (a: StalenessUpdateAction): string => {
+    const s = a.status ?? (a.due ? 'due' : 'not_due');
+    if (s === 'due') return '#b45309'; // amber
+    if (s === 'blocked') return '#1f2937'; // dark grey
+    if (s === 'unknown') return '#6b7280'; // grey
+    return '#6b7280';
+  };
+
   const anyChecked = actions.some(a => a.checked && !a.disabled);
-  const anyDue = actions.some(a => a.due);
+  const anyDue = actions.some(a => (a.status ?? (a.due ? 'due' : 'not_due')) !== 'not_due');
   const reloadChecked = actions.some(a => a.key === 'reload' && a.checked && !a.disabled);
   const otherChecked = actions.some(a => a.key !== 'reload' && a.checked && !a.disabled);
   const gitPullDue = actions.some(a => a.key === 'git-pull' && a.due);
@@ -208,8 +227,8 @@ export function StalenessUpdateModal({
                           {a.label}
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-                          <div style={{ fontSize: 12, color: a.due ? '#b45309' : '#6b7280', whiteSpace: 'nowrap' }}>
-                            {a.due ? 'Due' : 'Not due'}
+                          <div style={{ fontSize: 12, color: statusColourFor(a), whiteSpace: 'nowrap' }}>
+                            {statusLabelFor(a)}
                           </div>
                           <div
                             style={{

@@ -23,6 +23,7 @@ import { sessionLogService } from '../services/sessionLogService';
 import { dailyRetrieveAllAutomationService } from '../services/dailyRetrieveAllAutomationService';
 import { automationRunService } from '../services/automationRunService';
 import { isShareMode } from '../lib/shareBootResolver';
+import { countdownService } from '../services/countdownService';
 
 interface URLDailyRetrieveAllQueueParams {
   retrieveAllValues: string[]; // raw values from ?retrieveall=... (can be empty strings)
@@ -34,6 +35,61 @@ let urlDailyRetrieveAllQueueProcessed = false;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runAutomationStartCountdown(opts: {
+  runId: string;
+  totalSeconds: number;
+  shouldStop: () => boolean;
+}): Promise<'expired' | 'aborted'> {
+  const { runId, totalSeconds, shouldStop } = opts;
+  if (totalSeconds <= 0) return 'expired';
+
+  const key = `automation:retrieveall:start:${runId}`;
+  let lastSeconds: number | undefined;
+
+  const unsubscribe = countdownService.subscribe(() => {
+    const st = countdownService.getState(key);
+    if (!st) return;
+    // Avoid spamming state updates for the same value.
+    if (lastSeconds === st.secondsRemaining) return;
+    lastSeconds = st.secondsRemaining;
+    automationRunService.setCountdown(runId, st.secondsRemaining);
+  });
+
+  try {
+    automationRunService.setCountdown(runId, totalSeconds);
+    countdownService.startCountdown({
+      key,
+      durationSeconds: totalSeconds,
+      onExpire: () => {
+        // No-op here; we resolve by polling for removal below.
+      },
+      audit: {
+        operationType: 'session',
+        startCode: 'DAILY_RETRIEVE_ALL_COUNTDOWN_START',
+        cancelCode: 'DAILY_RETRIEVE_ALL_COUNTDOWN_CANCEL',
+        expireCode: 'DAILY_RETRIEVE_ALL_COUNTDOWN_EXPIRE',
+        message: 'Daily automation start countdown',
+        metadata: { runId, totalSeconds },
+      },
+    });
+
+    // Wait until countdown disappears (expired or cancelled) or stop is requested.
+    // We keep this loop small and deterministic (no user interaction expected during countdown).
+    while (true) {
+      if (shouldStop()) {
+        countdownService.cancelCountdown(key);
+        return 'aborted';
+      }
+      const st = countdownService.getState(key);
+      if (!st) return 'expired';
+      await sleep(50);
+    }
+  } finally {
+    unsubscribe();
+    countdownService.cancelCountdown(key);
+  }
 }
 
 function getURLDailyRetrieveAllStartDelayMs(): number {
@@ -283,19 +339,20 @@ export function useURLDailyRetrieveAllQueue(): void {
         if (startDelayMs > 0) {
           setAutomationTitle('countdown');
           const totalSeconds = Math.ceil(startDelayMs / 1000);
-          for (let remaining = totalSeconds; remaining > 0; remaining--) {
-            if (automationRunService.shouldStop(runId)) {
-              sessionLogService.warning(
-                'session',
-                'DAILY_RETRIEVE_ALL_ABORTED',
-                'Daily automation aborted by user (countdown phase)',
-                undefined,
-                { graphs: targetGraphNames, remainingSeconds: remaining }
-              );
-              return;
-            }
-            automationRunService.setCountdown(runId, remaining);
-            await sleep(1000);
+          const res = await runAutomationStartCountdown({
+            runId,
+            totalSeconds,
+            shouldStop: () => automationRunService.shouldStop(runId),
+          });
+          if (res === 'aborted') {
+            sessionLogService.warning(
+              'session',
+              'DAILY_RETRIEVE_ALL_ABORTED',
+              'Daily automation aborted by user (countdown phase)',
+              undefined,
+              { graphs: targetGraphNames }
+            );
+            return;
           }
         }
 

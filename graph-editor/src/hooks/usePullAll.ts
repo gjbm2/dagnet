@@ -17,6 +17,8 @@ import { MergeConflictModal, ConflictFile } from '../components/modals/MergeConf
 import { conflictResolutionService } from '../services/conflictResolutionService';
 import { ForceReplaceOnPullModal, type ForceReplaceOnPullRequest } from '../components/modals/ForceReplaceOnPullModal';
 import { sessionLogService } from '../services/sessionLogService';
+import { countdownService } from '../services/countdownService';
+import { useCountdown } from './useCountdown';
 
 interface UsePullAllResult {
   /** Whether a pull operation is in progress */
@@ -51,18 +53,18 @@ export function usePullAll(): UsePullAllResult {
   // Force-replace-on-pull confirmation (one-shot, per-file, countdown)
   const [isForceReplaceModalOpen, setIsForceReplaceModalOpen] = useState(false);
   const [forceReplaceRequests, setForceReplaceRequests] = useState<ForceReplaceOnPullRequest[]>([]);
-  const [forceReplaceCountdownSeconds, setForceReplaceCountdownSeconds] = useState<number>(0);
   const forceReplaceResolveRef = useRef<((ok: boolean) => void) | null>(null);
-  const forceReplaceIntervalRef = useRef<number | null>(null);
+  const forceReplaceCountdownKeyRef = useRef<string | null>(null);
+  const [forceReplaceCountdownKey, setForceReplaceCountdownKey] = useState<string | undefined>(undefined);
+  const forceReplaceCountdown = useCountdown(forceReplaceCountdownKey);
+  const forceReplacePromptSeqRef = useRef<number>(0);
 
   const closeForceReplaceModal = useCallback(() => {
-    if (forceReplaceIntervalRef.current !== null) {
-      window.clearInterval(forceReplaceIntervalRef.current);
-      forceReplaceIntervalRef.current = null;
-    }
+    if (forceReplaceCountdownKeyRef.current) countdownService.cancelCountdown(forceReplaceCountdownKeyRef.current);
+    forceReplaceCountdownKeyRef.current = null;
+    setForceReplaceCountdownKey(undefined);
     setIsForceReplaceModalOpen(false);
     setForceReplaceRequests([]);
-    setForceReplaceCountdownSeconds(0);
   }, []);
 
   const resolveForceReplace = useCallback((ok: boolean) => {
@@ -92,7 +94,10 @@ export function usePullAll(): UsePullAllResult {
 
     setForceReplaceRequests(requests);
     setIsForceReplaceModalOpen(true);
-    setForceReplaceCountdownSeconds(10);
+    forceReplacePromptSeqRef.current += 1;
+    const key = `force-replace-on-pull:${Date.now()}:${forceReplacePromptSeqRef.current}`;
+    forceReplaceCountdownKeyRef.current = key;
+    setForceReplaceCountdownKey(key);
 
     try {
       sessionLogService.warning(
@@ -106,25 +111,25 @@ export function usePullAll(): UsePullAllResult {
       // best-effort
     }
 
-    // Start countdown interval
-    forceReplaceIntervalRef.current = window.setInterval(() => {
-      setForceReplaceCountdownSeconds(prev => {
-        if (prev <= 1) return 0;
-        return prev - 1;
-      });
-    }, 1000);
+    // Start shared countdown (auto-OK on expiry).
+    countdownService.startCountdown({
+      key,
+      durationSeconds: 10,
+      onExpire: () => resolveForceReplace(true),
+      audit: {
+        operationType: 'git',
+        startCode: 'FORCE_REPLACE_COUNTDOWN_START',
+        cancelCode: 'FORCE_REPLACE_COUNTDOWN_CANCEL',
+        expireCode: 'FORCE_REPLACE_COUNTDOWN_EXPIRE',
+        message: 'Force-replace confirmation countdown',
+        metadata: { key, seconds: 10, requestCount: requests.length },
+      },
+    });
 
     return await new Promise<boolean>((resolve) => {
       forceReplaceResolveRef.current = resolve;
     });
-  }, []);
-
-  // Auto-confirm when countdown reaches 0
-  useEffect(() => {
-    if (!isForceReplaceModalOpen) return;
-    if (forceReplaceCountdownSeconds !== 0) return;
-    resolveForceReplace(true);
-  }, [isForceReplaceModalOpen, forceReplaceCountdownSeconds, resolveForceReplace]);
+  }, [resolveForceReplace]);
   
   const handleResolveConflicts = useCallback(async (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => {
     const resolvedCount = await conflictResolutionService.applyResolutions(conflicts as any, resolutions);
@@ -217,7 +222,7 @@ export function usePullAll(): UsePullAllResult {
 
   const forceReplaceModal = React.createElement(ForceReplaceOnPullModal, {
     isOpen: isForceReplaceModalOpen,
-    countdownSeconds: forceReplaceCountdownSeconds,
+    countdownSeconds: forceReplaceCountdown?.secondsRemaining ?? 0,
     requests: forceReplaceRequests,
     onOk: () => resolveForceReplace(true),
     onCancel: () => resolveForceReplace(false),
