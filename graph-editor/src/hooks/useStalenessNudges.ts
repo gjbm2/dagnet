@@ -483,7 +483,10 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
           );
           retrieveDue = staleness.isStale;
           // Prefer graph-level "last successful run" marker (cross-device), else fall back.
-          retrieveMostRecentRetrievedAtMs = staleness.lastSuccessfulRunAtMs ?? staleness.mostRecentRetrievedAtMs;
+          const a = staleness.lastSuccessfulRunAtMs;
+          const b = staleness.mostRecentRetrievedAtMs;
+          retrieveMostRecentRetrievedAtMs =
+            a === undefined ? b : b === undefined ? a : Math.max(a, b);
         }
       }
 
@@ -529,9 +532,14 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
           description: (() => {
             const remote = (stalenessNudgeService as any).getCachedRemoteAppVersion?.(storage) as string | undefined;
             if (remote) {
-              return `A newer client is deployed (you: ${APP_VERSION}, deployed: ${remote}). Reload to update and clear stale in-memory state.`;
+              if (isOutdated) {
+                return `A newer client is deployed (you: ${APP_VERSION}, deployed: ${remote}). Reload to update and clear stale in-memory state.`;
+              }
+              if (remote !== APP_VERSION) {
+                return `Deployed version is older than your client (you: ${APP_VERSION}, deployed: ${remote}). This can happen during staged rollout; reloading may not change your version yet.`;
+              }
             }
-            return 'A newer client is deployed. Reload to update and clear stale in-memory state.';
+            return 'Reload to clear stale in-memory state.';
           })(),
           due: reloadDue,
           checked: reloadDue,

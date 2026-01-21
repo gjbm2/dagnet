@@ -243,6 +243,47 @@ describe('useStalenessNudges', () => {
     expect(hoisted.requestRetrieveAllSlices).toHaveBeenCalledTimes(1);
   });
 
+  it('should NOT claim a newer deployed client when deployed version is older (modal opened for other due actions)', async () => {
+    // Reload is NOT due (remote not newer), but a remote version exists and differs.
+    hoisted.isRemoteAppVersionNewerThanLocal.mockReturnValue(false);
+    hoisted.getCachedRemoteAppVersion.mockReturnValue('0.0.1-beta');
+
+    // Force the modal to open for a different due action.
+    hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
+      isStale: true,
+      parameterCount: 1,
+      staleParameterCount: 1,
+    });
+
+    render(<Harness />);
+
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+
+    // Reload row still renders, but its description must not claim "newer deployed".
+    expect(screen.getByText('Reload page')).toBeTruthy();
+    expect(screen.getByText(/Deployed version is older than your client/)).toBeTruthy();
+    expect(screen.queryByText(/A newer client is deployed/)).toBeNull();
+  });
+
+  it('uses the newer of (graph marker, parameter retrieved_at) for Retrieve last-done display', async () => {
+    // Force modal open (retrieve due).
+    hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
+      isStale: true,
+      parameterCount: 1,
+      staleParameterCount: 1,
+      // Simulate: marker exists but older than the most recent parameter retrieved_at
+      lastSuccessfulRunAtMs: new Date('2026-01-20T09:44:56.739Z').getTime(),
+      mostRecentRetrievedAtMs: new Date('2026-01-21T10:12:01.000Z').getTime(),
+    } as any);
+
+    render(<Harness />);
+    expect(await screen.findByText('Updates recommended')).toBeTruthy();
+
+    // The retrieve row should display the newer timestamp (21-Jan-26 10:12), not the stale marker.
+    expect(screen.getByText('Retrieve all slices (active graph)')).toBeTruthy();
+    expect(screen.getByText(/Last:\s*21-Jan-26 10:12/)).toBeTruthy();
+  });
+
   it('should run retrieve-all headlessly before reloading when Reload + Retrieve are selected', async () => {
     hoisted.isRemoteAppVersionNewerThanLocal.mockReturnValue(true);
     hoisted.getCachedRemoteAppVersion.mockReturnValue('99.99.99-beta');
