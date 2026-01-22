@@ -122,6 +122,31 @@ export interface CacheAnalysisResult {
 }
 
 /**
+ * Fetch windows plan for a single getFromSource call.
+ *
+ * Emitted after cache analysis + maturity/refetch policy resolution, immediately before any external API calls.
+ * This allows batch workflows (Retrieve All) to emit a precise end-of-run “what was fetched” artefact.
+ *
+ * IMPORTANT:
+ * - Dates are UK format (d-MMM-yy) for internal/logging use.
+ * - `windows` are the *actual* chained gap windows that execution will attempt.
+ */
+export interface FetchWindowsPlanResult {
+  /** The authoritative per-item slice DSL that drove this fetch (e.g. context(channel:paid-search).window(-100d:)) */
+  targetSlice: string;
+  /** Window/cohort mode for this item */
+  mode: 'window' | 'cohort';
+  /** The resolved requested window (UK dates) */
+  requestedWindow: { start: string; end: string };
+  /** Planned windows to execute (UK dates), in order */
+  windows: Array<{ start: string; end: string }>;
+  /** True if execution will skip external fetch (fully cached and no refetch policy forces a fetch) */
+  shouldSkipFetch: boolean;
+  /** Optional: refetch policy classification (if available) */
+  refetchPolicyType?: string;
+}
+
+/**
  * Result from getFromSource/getFromSourceDirect with fetch statistics.
  * Used by retrieve-all to aggregate stats for summary reporting.
  */
@@ -5601,6 +5626,10 @@ class DataOperationsService {
       }
 
       const persistGapIfNeeded = async (fetchWindow: DateRange): Promise<void> => {
+        // CRITICAL: dry-run simulation must never mutate files.
+        if (dontExecuteHttp) {
+          return;
+        }
         if (
           !shouldPersistPerGap ||
           !paramFileForGapWrites ||
@@ -6779,7 +6808,8 @@ class DataOperationsService {
       
       // 6a. If writeToFile is true, write data to files
       // For parameters: write time-series data (or "no data" marker if API returned empty)
-      if (writeToFile && objectType === 'parameter' && objectId) {
+      // CRITICAL: dry-run simulation must never mutate files.
+      if (!dontExecuteHttp && writeToFile && objectType === 'parameter' && objectId) {
         try {
           // If we already persisted incrementally per-gap, do not bulk-merge/write again here.
           // The post-fetch getParameterFromFile step will still refresh the graph from file.
@@ -7066,7 +7096,8 @@ class DataOperationsService {
       
       // 6b. For versioned case fetches: write schedule entry to case file
       // NOTE: Controlled by versionedCase flag, NOT writeToFile (writeToFile is parameter-specific and for parameters only)
-      if (versionedCase && objectType === 'case' && objectId && lastResultRaw) {
+      // CRITICAL: dry-run simulation must never mutate files.
+      if (!dontExecuteHttp && versionedCase && objectType === 'case' && objectId && lastResultRaw) {
         try {
           const caseFileId = `case-${objectId}`;
           const caseFile = fileRegistry.getFile(caseFileId);

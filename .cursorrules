@@ -77,6 +77,12 @@ This section is about **behavioural/source-code changes** and other changes with
 - Show exactly what changed (`git diff` / precise regions).
 - Ask the user how they want it reverted; do not do broad resets without consent.
 
+### 0.6 DISCUSSION MODE CONFIRMATION (CURSOR WORKFLOW SAFETY)
+**CRITICAL**: When we are *discussing* possible code changes, the assistant must:
+
+- **Positively confirm before edits**: Explicitly ask and receive a clear “yes/go ahead” from the user **before** starting any code edits or running state-changing commands.
+- **If in doubt, check**: If there is any ambiguity about whether we are still discussing vs implementing, **pause and ask the user** rather than proceeding.
+
 ### 1. NO LOGIC IN UI/MENU FILES
 **CRITICAL**: Menu files, context menus, and UI components are ACCESS POINTS ONLY.
 

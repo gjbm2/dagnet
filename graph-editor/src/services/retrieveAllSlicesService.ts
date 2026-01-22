@@ -4,6 +4,7 @@ import { completeProgressToast, showProgressToast } from '../components/Progress
 import { dataOperationsService, setBatchMode, type CacheAnalysisResult } from './dataOperationsService';
 import { sessionLogService } from './sessionLogService';
 import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerService';
+import { getStarT95Data, setStarT95Data, type StarT95Data } from './t95DataService';
 
 /**
  * Current item cache status - reported immediately after cache analysis, before API fetch.
@@ -144,6 +145,28 @@ class RetrieveAllSlicesService {
       return { ...emptyResult, durationMs: performance.now() - startTime };
     }
 
+    // ----------------------------------------------------------------------------
+    // *t95 bracketing (crude v1)
+    //
+    // Requirement: avoid horizons drifting mid-run due to partial fetch sequencing.
+    // Strategy:
+    // - Snapshot baseline horizons at the start.
+    // - While fetching, force setGraph writes to keep horizons pinned to baseline.
+    // - Also capture the most recent "observed" horizons from the raw setGraph payloads.
+    // - At the end of the entire run, apply the observed horizons once (best-effort).
+    // ----------------------------------------------------------------------------
+    const baselineT95: StarT95Data = simulate ? {} : getStarT95Data(initialGraph as any);
+    let latestObservedT95: StarT95Data | null = null;
+    const setGraphPinnedT95 = (g: GraphData | null) => {
+      if (simulate) return; // simulation must not mutate graph
+      if (!g) return setGraph(g);
+      // Capture the horizons the underlying pipeline wanted to write (may be unchanged today).
+      latestObservedT95 = getStarT95Data(g as any);
+      // Force horizons to remain stable during the run.
+      const pinned = setStarT95Data(g as any, baselineT95) as any;
+      setGraph(pinned);
+    };
+
     let effectiveSlices: string[] = slices ?? [];
     if (effectiveSlices.length === 0) {
       const dsl = initialGraph.dataInterestsDSL || '';
@@ -274,7 +297,7 @@ class RetrieveAllSlicesService {
                 objectId: item.objectId,
                 targetId: item.targetId,
                 graph: currentGraph,
-                setGraph: simulate ? (() => {}) : setGraph,
+                setGraph: simulate ? (() => {}) : setGraphPinnedT95,
                 paramSlot: item.paramSlot,
                 conditionalIndex: item.conditionalIndex,
                 bustCache,
@@ -289,7 +312,7 @@ class RetrieveAllSlicesService {
                 objectId: item.objectId,
                 targetId: item.targetId,
                 graph: currentGraph,
-                setGraph: simulate ? (() => {}) : setGraph,
+                setGraph: simulate ? (() => {}) : setGraphPinnedT95,
                 bustCache,
                 currentDSL: sliceDSL,
                 dontExecuteHttp: simulate,
@@ -385,6 +408,19 @@ class RetrieveAllSlicesService {
           }
         } catch {
           // Best-effort only; do not fail the run because a marker could not be written.
+        }
+      }
+
+      // Apply the final observed *t95 dataset once, at the end of the run (best-effort).
+      // This keeps horizons stable during execution while still allowing updates to land deterministically at the boundary.
+      if (!simulate && latestObservedT95) {
+        try {
+          const g = getGraph();
+          if (g) {
+            setGraph(setStarT95Data(g as any, latestObservedT95) as any);
+          }
+        } catch {
+          // Best-effort only.
         }
       }
 
