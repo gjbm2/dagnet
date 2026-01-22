@@ -15,6 +15,7 @@ import { waitForLiveShareGraphDeps } from '../services/liveShareHydrationService
 import { sessionLogService } from '../services/sessionLogService';
 import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
 import { fetchDataService } from '../services/fetchDataService';
+import { fetchOrchestratorService } from '../services/fetchOrchestratorService';
 
 /**
  * Phase 3: Live chart share boot + refresh recompute pipeline.
@@ -211,20 +212,21 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
           return;
         }
 
-        await fetchDataService.fetchItems(
-          itemsForCurrent,
-          {
-            mode: 'from-file',
-            skipStage2: false,
-            allowFetchFromSource: false,
-            suppressBatchToast: true,
-            parentLogId,
-          } as any,
-          g0 as any,
-          (g) => graphStore.getState().setGraph(g as any),
-          currentDsl,
-          () => (graphStore.getState().graph as any) || null
-        );
+        // Unified cache-only pipeline: build plan (for observability) + from-file refresh (Stage‑2 enabled).
+        try {
+          fetchOrchestratorService.buildPlan({ graph: g0 as any, dsl: currentDsl, parentLogId });
+        } catch {
+          // Best-effort: do not block hydration if plan build fails (e.g. invalid DSL).
+        }
+        await fetchOrchestratorService.refreshFromFilesWithRetries({
+          graphGetter: () => (graphStore.getState().graph as any) || null,
+          setGraph: (g) => graphStore.getState().setGraph(g as any),
+          dsl: currentDsl,
+          skipStage2: false,
+          parentLogId,
+          attempts: 6,
+          delayMs: 75,
+        });
 
         if (parentLogId) {
           sessionLogService.addChild(parentLogId, 'success', 'LIVE_SHARE_CURRENT_HYDRATE_OK', 'Hydrated Current from files');

@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Graph } from '../../types';
+import { sessionLogService } from '../sessionLogService';
 
 vi.mock('react-hot-toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() },
@@ -89,6 +90,65 @@ describe('dataOperationsService.getFromSourceDirect persists successful gaps imm
     vi.clearAllMocks();
     (fileRegistry as any)._mockFiles.clear();
     executeSpy.mockReset();
+  });
+
+  it('does not misclassify "executed but returned no daily data" as cacheHit (plan-interpreter override windows)', async () => {
+    const addChildSpy = vi.spyOn(sessionLogService, 'addChild');
+
+    // No cached values; this should attempt external fetch for the override window.
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      connection: 'amplitude-test',
+      values: [],
+    });
+
+    executeSpy.mockResolvedValue({
+      success: true,
+      updates: [],
+      raw: {
+        time_series: [],
+        n: 0,
+        k: 0,
+      },
+    });
+
+    const graph: Graph = {
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', event_id: 'a' } as any,
+        { id: 'B', uuid: 'B', label: 'B', event_id: 'b' } as any,
+      ],
+      edges: [
+        {
+          id: 'e1',
+          uuid: 'e1',
+          from: 'A',
+          to: 'B',
+          query: 'from(a).to(b)',
+          p: { id: 'p1', connection: 'amplitude-test' },
+        } as any,
+      ],
+      currentQueryDSL: 'window(1-Dec-25:5-Dec-25)',
+    } as any;
+
+    const result = await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'e1',
+      graph,
+      setGraph: () => {},
+      writeToFile: true,
+      bustCache: false,
+      currentDSL: 'window(1-Dec-25:5-Dec-25)',
+      targetSlice: 'window(1-Dec-25:5-Dec-25)',
+      overrideFetchWindows: [{ start: '1-Dec-25', end: '5-Dec-25' }],
+    } as any);
+
+    expect(result.daysFetched).toBe(0);
+    expect(result.cacheHit).toBe(false);
+
+    // Explicit warning emitted for plan-interpreter (override windows) empty response.
+    const noDataCalls = addChildSpy.mock.calls.filter((c) => c[2] === 'FETCH_NO_DATA_RETURNED');
+    expect(noDataCalls.length).toBeGreaterThan(0);
   });
 
   it('writes first gap to file even if second gap fails', async () => {

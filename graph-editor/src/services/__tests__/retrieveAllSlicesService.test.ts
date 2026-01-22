@@ -10,6 +10,14 @@ vi.mock('../dataOperationsService', () => {
   };
 });
 
+// Mock plan builder so retrieve-all orchestration tests are deterministic and do not depend
+// on fileRegistry or cache semantics. These tests are about batch orchestration behaviour.
+vi.mock('../fetchPlanBuilderService', () => {
+  return {
+    buildFetchPlanProduction: vi.fn(),
+  };
+});
+
 vi.mock('../../components/ProgressToast', () => ({
   showProgressToast: vi.fn(),
   completeProgressToast: vi.fn(),
@@ -18,6 +26,7 @@ vi.mock('../../components/ProgressToast', () => ({
 import { completeProgressToast, showProgressToast } from '../../components/ProgressToast';
 import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } from '../retrieveAllSlicesService';
 import { dataOperationsService } from '../dataOperationsService';
+import { buildFetchPlanProduction } from '../fetchPlanBuilderService';
 
 describe('retrieveAllSlicesService', () => {
   beforeEach(() => {
@@ -25,6 +34,35 @@ describe('retrieveAllSlicesService', () => {
   });
 
   it('counts per-item failures (getFromSource throws) as errors in the final result', async () => {
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-01-14T12:00:00.000Z',
+        referenceNow: '2026-01-14T12:00:00.000Z',
+        dsl: 'cohort(-90d:)',
+        items: [
+          {
+            itemKey: 'parameter:p1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '2-Jan-26', reason: 'missing', dayCount: 2 }],
+          },
+        ],
+      },
+      diagnostics: {
+        totalItems: 1,
+        itemsNeedingFetch: 1,
+        itemsCovered: 0,
+        itemsUnfetchable: 0,
+        itemDiagnostics: [],
+      },
+    } as any);
     vi.mocked(dataOperationsService.getFromSource).mockRejectedValueOnce(new Error('boom'));
 
     const graph: any = {
@@ -68,13 +106,36 @@ describe('retrieveAllSlicesService', () => {
     };
 
     // Success path: no errors → marker written.
-    // Return a proper GetFromSourceResult
-    vi.mocked(dataOperationsService.getFromSource).mockResolvedValueOnce({
-      success: true,
-      cacheHit: true,
-      daysFetched: 0,
-      daysFromCache: 90,
-    });
+    // Covered item means no external execution is required.
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-01-14T12:00:00.000Z',
+        referenceNow: '2026-01-14T12:00:00.000Z',
+        dsl: 'cohort(-90d:)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'covered',
+            windows: [],
+          },
+        ],
+      },
+      diagnostics: {
+        totalItems: 1,
+        itemsNeedingFetch: 0,
+        itemsCovered: 1,
+        itemsUnfetchable: 0,
+        itemDiagnostics: [],
+      },
+    } as any);
     const res1 = await retrieveAllSlicesService.execute({
       getGraph: () => graph,
       setGraph,
@@ -87,6 +148,35 @@ describe('retrieveAllSlicesService', () => {
 
     // Error path: errors → no new marker write.
     setGraph.mockClear();
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-01-14T12:00:00.000Z',
+        referenceNow: '2026-01-14T12:00:00.000Z',
+        dsl: 'cohort(-90d:)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+          },
+        ],
+      },
+      diagnostics: {
+        totalItems: 1,
+        itemsNeedingFetch: 1,
+        itemsCovered: 0,
+        itemsUnfetchable: 0,
+        itemDiagnostics: [],
+      },
+    } as any);
     vi.mocked(dataOperationsService.getFromSource).mockRejectedValueOnce(new Error('boom'));
     const res2 = await retrieveAllSlicesService.execute({
       getGraph: () => graph,
@@ -105,6 +195,36 @@ describe('retrieveAllSlicesService', () => {
       edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
       nodes: [],
     };
+
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-01-14T12:00:00.000Z',
+        referenceNow: '2026-01-14T12:00:00.000Z',
+        dsl: 'cohort(-90d:)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '5-Jan-26', reason: 'missing', dayCount: 5 }],
+          },
+        ],
+      },
+      diagnostics: {
+        totalItems: 1,
+        itemsNeedingFetch: 1,
+        itemsCovered: 0,
+        itemsUnfetchable: 0,
+        itemDiagnostics: [],
+      },
+    } as any);
 
     // Return a proper GetFromSourceResult with cache miss
     vi.mocked(dataOperationsService.getFromSource).mockResolvedValueOnce({
@@ -154,12 +274,35 @@ describe('retrieveAllSlicesService', () => {
       // No metadata field!
     };
 
-    vi.mocked(dataOperationsService.getFromSource).mockResolvedValueOnce({
-      success: true,
-      cacheHit: true,
-      daysFetched: 0,
-      daysFromCache: 90,
-    });
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-01-14T12:00:00.000Z',
+        referenceNow: '2026-01-14T12:00:00.000Z',
+        dsl: 'cohort(-90d:)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'covered',
+            windows: [],
+          },
+        ],
+      },
+      diagnostics: {
+        totalItems: 1,
+        itemsNeedingFetch: 0,
+        itemsCovered: 1,
+        itemsUnfetchable: 0,
+        itemDiagnostics: [],
+      },
+    } as any);
     const res = await retrieveAllSlicesService.execute({
       getGraph: () => graph,
       setGraph,
@@ -185,22 +328,68 @@ describe('retrieveAllSlicesService', () => {
       nodes: [],
     };
 
-    // First item: cache hit
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-01-14T12:00:00.000Z',
+        referenceNow: '2026-01-14T12:00:00.000Z',
+        dsl: 'cohort(-90d:)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'covered',
+            windows: [],
+          },
+          {
+            itemKey: 'parameter:p-2:edge-2:p:',
+            type: 'parameter',
+            objectId: 'p-2',
+            targetId: 'edge-2',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '5-Jan-26', reason: 'missing', dayCount: 5 }],
+          },
+          {
+            itemKey: 'parameter:p-3:edge-3:p:',
+            type: 'parameter',
+            objectId: 'p-3',
+            targetId: 'edge-3',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'fetch',
+            windows: [{ start: '6-Jan-26', end: '15-Jan-26', reason: 'missing', dayCount: 10 }],
+          },
+        ],
+      },
+      diagnostics: {
+        totalItems: 3,
+        itemsNeedingFetch: 2,
+        itemsCovered: 1,
+        itemsUnfetchable: 0,
+        itemDiagnostics: [],
+      },
+    } as any);
+
+    // Two executed fetches (covered item does not call getFromSource)
     vi.mocked(dataOperationsService.getFromSource)
-      .mockResolvedValueOnce({
-        success: true,
-        cacheHit: true,
-        daysFetched: 0,
-        daysFromCache: 90,
-      })
-      // Second item: cache miss, fetch 5 days
       .mockResolvedValueOnce({
         success: true,
         cacheHit: false,
         daysFetched: 5,
         daysFromCache: 85,
       })
-      // Third item: cache miss, fetch 10 days
       .mockResolvedValueOnce({
         success: true,
         cacheHit: false,
@@ -230,33 +419,51 @@ describe('retrieveAllSlicesService', () => {
     });
   });
 
-  it('reports progress with current item cache status via onCacheAnalysis callback', async () => {
+  it('reports progress with current item cache status derived from the plan', async () => {
     const graph: any = {
       dataInterestsDSL: 'cohort(-90d:)',
       edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
       nodes: [],
     };
 
-    // Capture the onCacheAnalysis callback
-    let capturedCallback: any = null;
-    vi.mocked(dataOperationsService.getFromSource).mockImplementationOnce(async (opts: any) => {
-      capturedCallback = opts.onCacheAnalysis;
-      // Call the callback to simulate cache analysis
-      if (capturedCallback) {
-        capturedCallback({
-          cacheHit: false,
-          daysToFetch: 7,
-          gapCount: 2,
-          daysFromCache: 83,
-          totalDays: 90,
-        });
-      }
-      return {
-        success: true,
-        cacheHit: false,
-        daysFetched: 7,
-        daysFromCache: 83,
-      };
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-01-14T12:00:00.000Z',
+        referenceNow: '2026-01-14T12:00:00.000Z',
+        dsl: 'cohort(-90d:)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '',
+            classification: 'fetch',
+            windows: [
+              { start: '1-Jan-26', end: '3-Jan-26', reason: 'missing', dayCount: 3 },
+              { start: '10-Jan-26', end: '13-Jan-26', reason: 'missing', dayCount: 4 },
+            ],
+          },
+        ],
+      },
+      diagnostics: {
+        totalItems: 1,
+        itemsNeedingFetch: 1,
+        itemsCovered: 0,
+        itemsUnfetchable: 0,
+        itemDiagnostics: [],
+      },
+    } as any);
+
+    vi.mocked(dataOperationsService.getFromSource).mockResolvedValueOnce({
+      success: true,
+      cacheHit: false,
+      daysFetched: 7,
+      daysFromCache: 83,
     });
 
     const progressReports: any[] = [];

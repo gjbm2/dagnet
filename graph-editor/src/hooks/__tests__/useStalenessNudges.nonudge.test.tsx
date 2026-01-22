@@ -103,6 +103,7 @@ describe('useStalenessNudges (nonudge)', () => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     window.history.replaceState({}, document.title, '/?nonudge=1');
+    (window as any).__dagnetTabContextInitDone = true;
   });
 
   afterEach(() => {

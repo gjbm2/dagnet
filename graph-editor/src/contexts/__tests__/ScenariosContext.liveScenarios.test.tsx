@@ -34,6 +34,14 @@ vi.mock('../../services/fetchDataService', () => ({
   },
 }));
 
+vi.mock('../../services/fetchOrchestratorService', () => ({
+  fetchOrchestratorService: {
+    buildPlan: vi.fn(() => ({ plan: { version: 1, createdAt: 'x', referenceNow: 'x', dsl: 'x', items: [] } })),
+    executePlan: vi.fn(async () => ({ plan: { version: 1, createdAt: 'x', referenceNow: 'x', dsl: 'x', items: [] }, executedItemKeys: [], skippedCoveredItemKeys: [], skippedUnfetchableItemKeys: [], errors: [] })),
+    refreshFromFilesWithRetries: vi.fn(async () => ({ attempts: 1, failures: 0 })),
+  },
+}));
+
 // Force "normal workspace" boot mode for these tests.
 // Share boot config is cached globally, so tests must not depend on ambient URL state.
 vi.mock('../../lib/shareBootResolver', async (importOriginal) => {
@@ -88,6 +96,7 @@ vi.mock('../../services/chartRecomputeService', () => ({
 // Import after mocks
 import { ScenariosProvider, useScenariosContext } from '../ScenariosContext';
 import { fetchDataService } from '../../services/fetchDataService';
+import { fetchOrchestratorService } from '../../services/fetchOrchestratorService';
 import { db } from '../../db/appDatabase';
 import { recomputeOpenChartsForGraph } from '../../services/chartRecomputeService';
 import { autoUpdatePolicyService } from '../../services/autoUpdatePolicyService';
@@ -274,7 +283,7 @@ describe('ScenariosContext - Live Scenarios', () => {
 
       // Sanity: the handler should attempt regeneration (which calls fetch planning).
       await waitFor(() => {
-        expect(vi.mocked(fetchDataService.checkDSLNeedsFetch)).toHaveBeenCalled();
+        expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalled();
       }, { timeout: 2000 });
 
       // Reconcile is debounced (250ms) and also waits for regenerateAllLive to complete.
@@ -324,7 +333,7 @@ describe('ScenariosContext - Live Scenarios', () => {
         await captured[captured.length - 1]({ detail: { repository: '', branch: 'main' } });
       });
 
-      expect(vi.mocked(fetchDataService.checkDSLNeedsFetch)).not.toHaveBeenCalled();
+      expect((fetchOrchestratorService as any).buildPlan).not.toHaveBeenCalled();
       expect(vi.mocked(recomputeOpenChartsForGraph)).not.toHaveBeenCalled();
 
       (window as any).addEventListener = realAdd;
@@ -489,7 +498,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
 
       // Verify fetchDataService was called (indicates regeneration happened)
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalled();
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalled();
     });
 
     it('should record lastEffectiveDSL after regeneration', async () => {
@@ -617,8 +626,8 @@ describe('ScenariosContext - Live Scenarios', () => {
         await result.current.regenerateScenario(scenario.id, scenario);
       });
 
-      // fetchDataService should NOT have been called for non-live scenario
-      expect(fetchDataService.checkDSLNeedsFetch).not.toHaveBeenCalled();
+      // Orchestrator should NOT have been called for non-live scenario
+      expect((fetchOrchestratorService as any).buildPlan).not.toHaveBeenCalled();
     });
   });
 
@@ -655,7 +664,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
 
       // Both scenarios should have been processed
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(2);
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalledTimes(2);
     });
 
     it('should NOT regenerate static scenarios', async () => {
@@ -686,7 +695,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
 
       // Only live scenario should be processed
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(1);
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalledTimes(1);
     });
 
     it('should use baseDSLOverride when provided', async () => {
@@ -715,7 +724,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
 
       // Verify regeneration happened with the override
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalled();
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalled();
     });
 
     it('should handle empty scenario list gracefully', async () => {
@@ -728,7 +737,7 @@ describe('ScenariosContext - Live Scenarios', () => {
         await result.current.regenerateAllLive(undefined, []);
       });
 
-      expect(fetchDataService.checkDSLNeedsFetch).not.toHaveBeenCalled();
+      expect((fetchOrchestratorService as any).buildPlan).not.toHaveBeenCalled();
     });
   });
 
@@ -792,7 +801,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
 
       // Both live scenarios should be regenerated
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(2);
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalledTimes(2);
     });
 
     it('should NOT regenerate static scenarios', async () => {
@@ -821,7 +830,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
 
       // Only live scenario regenerated
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(1);
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalledTimes(1);
     });
 
     it('should fall back to regenerating all live scenarios when visibleOrder yields no live matches', async () => {
@@ -852,7 +861,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
 
       // Live scenario should still be regenerated via fallback.
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalledTimes(1);
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -924,7 +933,7 @@ describe('ScenariosContext - Live Scenarios', () => {
       });
 
       // Regeneration should have been triggered
-      expect(fetchDataService.checkDSLNeedsFetch).toHaveBeenCalled();
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalled();
     });
 
     it('should set isLive=false if DSL is cleared', async () => {

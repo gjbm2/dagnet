@@ -13,9 +13,6 @@ import { retrieveAllSlicesService } from '../../services/retrieveAllSlicesServic
 import { useTabContext } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
-import { retrieveAllSlicesPlannerService } from '../../services/retrieveAllSlicesPlannerService';
-import { fetchDataService, type FetchItem } from '../../services/fetchDataService';
-import { sessionLogService } from '../../services/sessionLogService';
 import { requestPutToBase } from '../../hooks/usePutToBaseRequestListener';
 import './Modal.css';
 
@@ -209,6 +206,7 @@ export function AllSlicesModal({
         setGraph: setGraphWithRef,
         slices: selectedSlices.map(s => s.dsl),
         bustCache,
+        postRunRefreshDsl: currentDSL,
         shouldAbort: () => abortRef.current,
         onProgress: (p) => {
           setProgress({
@@ -225,55 +223,9 @@ export function AllSlicesModal({
         },
       });
 
-      // Finalise: run a single graph-level topo/LAG derivation pass once, then optionally Put To Base.
-      // This is intentionally UI-modal-only behaviour.
-      if (!result.aborted && result.totalSuccess > 0 && graphRef.current && currentDSL?.trim()) {
-        const topoLogId = sessionLogService.startOperation(
-          'info',
-          'data-fetch',
-          'POST_RETRIEVE_TOPO_PASS',
-          'Post-retrieve topo pass (LAG derivations)',
-          { dsl: currentDSL }
-        );
-
-        try {
-          const finalGraph = graphRef.current as any;
-          const targets = retrieveAllSlicesPlannerService.collectTargets(finalGraph as any);
-          const topoItems: FetchItem[] = targets
-            .filter((t): t is Extract<typeof t, { type: 'parameter' }> => t.type === 'parameter')
-            .map((t) => ({
-              id: typeof (t as any).conditionalIndex === 'number'
-                ? `param-${t.objectId}-conditional_p[${(t as any).conditionalIndex}]-${t.targetId}`
-                : `param-${t.objectId}-${t.paramSlot ?? 'p'}-${t.targetId}`,
-              type: 'parameter',
-              name: t.name,
-              objectId: t.objectId,
-              targetId: t.targetId,
-              paramSlot: t.paramSlot,
-              conditionalIndex: (t as any).conditionalIndex,
-            }));
-
-          // Refresh the graph's scalar evidence/forecast fields for the CURRENT DSL from cache (no network),
-          // then reuse the normal Stage-2 passes (LAG + inbound-n) that are part of fetchItems().
-          //
-          // This fixes the "2-step funnel anchoring" mismatch where Retrieve All populates cache slices
-          // (e.g. cohort(-75d:)) but the graph's displayed scalars remain anchored to that slice rather
-          // than to the currentQueryDSL (e.g. cohort(1-Nov-25:30-Nov-25)).
-          await fetchDataService.fetchItems(
-            topoItems,
-            { mode: 'from-file', parentLogId: topoLogId, suppressBatchToast: true } as any,
-            finalGraph,
-            (g: any) => setGraphWithRef(g),
-            currentDSL,
-            () => graphRef.current as any
-          );
-
-          sessionLogService.endOperation(topoLogId, 'success', 'Post-retrieve topo pass complete');
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          sessionLogService.endOperation(topoLogId, 'error', `Post-retrieve topo pass failed: ${msg}`);
-        }
-
+      // Finalise: optionally Put To Base after retrieve (refresh live scenarios).
+      // Any post-retrieve topo/LAG pass is service-layer behaviour (not UI).
+      if (!result.aborted && result.totalSuccess > 0) {
         shouldPutToBase = putToBaseAfter && Boolean(activeTabId);
       }
 

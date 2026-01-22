@@ -45,6 +45,7 @@ import {
   fetchDataService,
   type FetchItem 
 } from '../services/fetchDataService';
+import { fetchOrchestratorService } from '../services/fetchOrchestratorService';
 import { sessionLogService } from '../services/sessionLogService';
 import { recomputeOpenChartsForGraph } from '../services/chartRecomputeService';
 import { autoUpdatePolicyService } from '../services/autoUpdatePolicyService';
@@ -838,9 +839,6 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       // Instead, we always follow the from-file path and let missing files/values surface
       // as explicit "Failed to load X/Y items from file cache" errors.
       const allowFetchFromSource = options?.allowFetchFromSource ?? true;
-      const cacheCheck = allowFetchFromSource
-        ? fetchDataService.checkDSLNeedsFetch(effectiveFetchDSL, baselineGraph)
-        : { needsFetch: false, items: [] };
       
       // CRITICAL: Create a DEEP COPY of the graph for scenario-specific fetching.
       // This ensures that fetching data for a scenario doesn't modify the main graph.
@@ -853,61 +851,66 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         // Scenarios store their params as overlays, not by modifying the base graph.
       };
       
-      if (cacheCheck.needsFetch && cacheCheck.items.length > 0 && allowFetchFromSource) {
-        console.log(`Fetching ${cacheCheck.items.length} items for scenario ${id}...`);
-        
-        // Fetch items using versioned mode (writes to file cache)
-        const fetchResults = await fetchDataService.fetchItems(
-          cacheCheck.items,
-          { mode: 'versioned', skipStage2: options?.skipStage2 ?? true },
-          scenarioGraph,
-          setScenarioGraph,
-          effectiveFetchDSL,
-          () => scenarioGraph
-        );
-        
-        const failures = fetchResults.filter(r => !r.success);
-        if (failures.length > 0) {
-          console.warn(`${failures.length} items failed to fetch:`, failures.map(f => f.item.name));
+      // Unified pipeline:
+      // 1) Build a plan (for observability and for "single plan contract").
+      // 2) If allowed, execute the plan exactly (plan interpreter).
+      // 3) Refresh from files to hydrate the scenarioGraph for the effective DSL (cache-only read).
+      //
+      // NOTE: In allowFetchFromSource=false contexts (share/live), step (2) is skipped by design.
+      const regenLogId = sessionLogService.startOperation(
+        'info',
+        'data-fetch',
+        'SCENARIO_REGEN_PIPELINE',
+        `Scenario regen pipeline: ${id}`,
+        { scenarioId: id, effectiveFetchDSL, allowFetchFromSource, skipStage2: options?.skipStage2 ?? true }
+      );
+      try {
+        const { plan } = fetchOrchestratorService.buildPlan({
+          graph: scenarioGraph as any,
+          dsl: effectiveFetchDSL,
+          bustCache: false,
+          parentLogId: regenLogId,
+        });
+
+        if (allowFetchFromSource) {
+          await fetchOrchestratorService.executePlan({
+            plan,
+            graph: scenarioGraph as any,
+            setGraph: setScenarioGraph as any,
+            bustCache: false,
+            simulate: false,
+            parentLogId: regenLogId,
+          });
+        } else {
+          sessionLogService.addChild(
+            regenLogId,
+            'info',
+            'SCENARIO_REGEN_SOURCE_FETCH_DISABLED',
+            'Source fetch disabled; running from-file refresh only',
+            undefined,
+            { allowFetchFromSource: false }
+          );
         }
-      } else {
-        console.log(`All data cached for scenario ${id}, loading from files...`);
-        
-        // Even if cached, we need to load from file to populate scenarioGraph params
-        // Build fetch items from graph to load from file
-        // Fallback to graph's current window if DSL doesn't specify one
-        const windowFromDSL = fetchDataService.extractWindowFromDSL(effectiveFetchDSL);
-        const fallbackWindow = graphStore?.getState().window;
-        const windowForFetch = windowFromDSL || fallbackWindow || { start: '', end: '' };
-        
-        const allItems = fetchDataService.getItemsForFromFileLoad(scenarioGraph);
-        
-        if (allItems.length > 0) {
-          // Share/live boot can race: graph is present before all dependency files have been seeded/restored.
-          // Retry briefly before failing so we don't produce "silent identical graphs" (start=end charts).
-          const MAX_ATTEMPTS = 6;
-          let lastFailures = 0;
-          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            const results = await fetchDataService.fetchItems(
-              allItems,
-              { mode: 'from-file', skipStage2: options?.skipStage2 ?? true },
-              scenarioGraph,
-              setScenarioGraph,
-              effectiveFetchDSL,
-              () => scenarioGraph
-            );
-            const failures = results.filter(r => !r.success);
-            lastFailures = failures.length;
-            if (failures.length === 0) break;
-            if (attempt < MAX_ATTEMPTS) {
-              await new Promise(resolve => setTimeout(resolve, 75));
-              continue;
-            }
-          }
-          if (lastFailures > 0) {
-            throw new Error(`Failed to load ${lastFailures}/${allItems.length} items from file cache`);
-          }
+
+        const refreshRes = await fetchOrchestratorService.refreshFromFilesWithRetries({
+          graphGetter: () => scenarioGraph as any,
+          setGraph: setScenarioGraph as any,
+          dsl: effectiveFetchDSL,
+          skipStage2: options?.skipStage2 ?? true,
+          parentLogId: regenLogId,
+          attempts: 6,
+          delayMs: 75,
+        });
+        if (refreshRes.failures > 0) {
+          // Mirror existing semantics: surface as explicit "failed to load from file cache".
+          const allItems = fetchDataService.getItemsForFromFileLoad(scenarioGraph);
+          throw new Error(`Failed to load ${refreshRes.failures}/${allItems.length} items from file cache`);
         }
+
+        sessionLogService.endOperation(regenLogId, 'success', 'Scenario regen pipeline complete');
+      } catch (e: any) {
+        sessionLogService.endOperation(regenLogId, 'error', e?.message || String(e));
+        throw e;
       }
       
       // Extract the fetched params from the scenario's isolated graph copy

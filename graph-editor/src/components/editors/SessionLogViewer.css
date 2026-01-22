@@ -199,6 +199,14 @@
   opacity: 0.85;
 }
 
+.log-details-pre {
+  margin: 0;
+  padding: 0;
+  white-space: pre;
+  overflow-x: auto;
+  font: inherit;
+}
+
 /* Context details */
 .log-context {
   padding: 4px 8px 8px;

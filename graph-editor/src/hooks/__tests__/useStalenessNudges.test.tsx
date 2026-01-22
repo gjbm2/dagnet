@@ -192,6 +192,9 @@ describe('useStalenessNudges', () => {
       if (typeof fn === 'function' && 'mockReset' in fn) (fn as any).mockReset();
     }
 
+    // Boot readiness gate in useStalenessNudges waits for TabContext init completion.
+    (window as any).__dagnetTabContextInitDone = true;
+
     hoisted.isDashboardMode = false;
     hoisted.activeTabId = 'tab-1';
     hoisted.tabs = [{ id: 'tab-1', fileId: 'graph-1', viewMode: 'interactive' }];
