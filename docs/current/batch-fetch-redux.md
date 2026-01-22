@@ -329,3 +329,224 @@ For `*t95` bracketing:
 - Logging changes must be treated as part of correctness: the “what we did” artefact is required for validating the system during iteration.
 - `*t95` handling is intentionally crude initially, but must be structurally isolated behind explicit batch start/end steps to prevent further entanglement.
 
+
+---
+
+## 9) Detailed implementation plan (prose-only; end-to-end)
+
+This section is an implementation plan for the **entire** change-set described above. It is intentionally detailed and operational, but contains **no code snippets**. It is written to minimise behavioural drift and to keep the system shippable in incremental stages.
+
+### 9.1 Scope, constraints, and invariants (must hold throughout)
+
+- **Single-plan contract**:
+  - For a given slice and graph snapshot, analysis/dry-run/live must be driven by the same plan artefact.
+  - Execution must not silently re-derive windows/policy mid-run; if any runtime condition forces deviation (rate limiting, adapter constraints), the deviation must be surfaced in the execution artefact as “planned vs executed”.
+
+- **Simulation safety**:
+  - Simulation/dry-run must never write to parameter files, case files, node files, or any IndexedDB-backed state.
+  - Simulation/dry-run must never mutate the graph state.
+  - Simulation/dry-run may emit log artefacts and may construct request payloads/commands for observability.
+
+- **Stage‑2 / LAG discipline** (explicitly addressing the “Stage‑2 after entire fetch” point):
+  - Stage‑2 must not run per item.
+  - For Retrieve All / batch runs, Stage‑2 is treated as a **post-pass** that runs **once after execution**, and is driven by an explicit decision about *which DSL it is anchoring to*.
+  - Stage‑2 must be invoked from the canonical orchestrator (services layer), not from UI components.
+
+- **No business logic in UI files**:
+  - `AllSlicesModal.tsx` must not contain bespoke orchestration loops beyond calling a service/hook.
+  - Any “post retrieve topo pass” behaviour must be moved into service-layer batch bracketing (or removed if it is redundant under the unified pipeline).
+
+- **No duplicate code paths**:
+  - There must be exactly one orchestration path for “build plan → execute plan → post-pass → artefacts”.
+  - Entry points (WindowSelector, Retrieve All, scenarios regen, share boot) must call the orchestrator with parameters rather than implementing bespoke loops.
+
+### 9.2 Phase 0 — Audit and pin the current behaviour (no behavioural changes)
+
+Goal: ensure we understand the current end-to-end paths and can detect drift.
+
+- **Trace entrypoints** and record the current call graph in this doc (add a short appendix table):
+  - WindowSelector “Fetch data”: `WindowSelector.tsx` → `windowFetchPlannerService.executeFetchPlan(...)` → existing fetch pipeline.
+  - Retrieve All UI: `AllSlicesModal.tsx` → `retrieveAllSlicesService.execute(...)` → `dataOperationsService.getFromSource(...)`.
+  - Scenario regeneration: `ScenariosContext.tsx` → `fetchDataService.checkDSLNeedsFetch(...)` / `fetchDataService.fetchItems(...)` / from-file path.
+  - Share/live boot: share hooks → from-file load path (fetch disabled).
+
+- **Confirm and document Stage‑2 posture**:
+  - Identify where Stage‑2 runs today (including “post retrieve topo pass” from the modal) and what DSL it anchors to.
+  - Confirm which flows run Stage‑2 in `from-file` mode and which suppress it.
+
+- **Catalogue existing test coverage** (do not change tests yet):
+  - Retrieve All simulation safety: `graph-editor/src/services/__tests__/allSlicesSimulation.test.ts`.
+  - Retrieve All service: `graph-editor/src/services/__tests__/retrieveAllSlicesService.test.ts`.
+  - Fetch button end-to-end: `graph-editor/src/services/__tests__/fetchButtonE2E.integration.test.tsx`.
+  - Multi-slice cache fulfilment suites (MECE, incomplete partitions, etc.): existing `multiSliceCache` and `contextMECEEquivalence` tests.
+
+Deliverable: an explicit “baseline behaviour notes” subsection in this doc (what currently happens, not what we want).
+
+### 9.3 Phase 1 — Define the canonical batch artefacts (plan + execution summary)
+
+Goal: make observability and testability first-class so later refactors are defensible.
+
+- **Define a canonical item key** used everywhere (plan rows and execution rows), stable across runs:
+  - Must include at minimum: item type, objectId, targetId, and where applicable param slot and conditional index.
+  - Must be independent of UI labels and not dependent on array iteration order.
+
+- **Define the plan artefact schema** (serialisable, deterministic):
+  - One plan per slice.
+  - For each item: classification (covered / unfetchable / fetch), and if fetch, the planned windows with explicit reasons (missing vs stale) and derived counts.
+  - The plan artefact must have deterministic ordering rules (items and windows).
+
+- **Define the execution artefact schema** (“what we did”, deterministic):
+  - One execution artefact per slice, plus an optional run-level aggregate artefact for the whole Retrieve All run.
+  - For each item, record:
+    - planned classification and planned windows,
+    - executed classification and executed windows (or “would execute” in simulation),
+    - cache status at execution time (hit/miss, days-to-fetch, gap count),
+    - outcomes (days returned / days persisted, where applicable),
+    - errors using a stable error classification.
+
+- **Define error classification**:
+  - A small, stable set of error kinds (e.g. invalid request, missing connection, provider rate limit, provider server error, file write blocked, etc.).
+  - Make the classification suitable for later automation and for human scanning.
+
+- **Define where the artefacts live in session logs**:
+  - Use `sessionLogService` with one start/end operation per slice and child events for the plan and the final artefact.
+  - Ensure the “human-readable table” is a deterministic rendering of the structured metadata, not the other way round.
+
+Deliverable: add a subsection to this doc that fully specifies the artefact schemas and deterministic ordering rules.
+
+### 9.4 Phase 2 — Implement batch-mode bracketing as explicit service-layer lifecycle hooks
+
+Goal: make “batch start / batch end” explicit so we can enforce sequencing, `*t95` isolation, and Stage‑2 timing.
+
+- **Introduce a single “batch run context” concept** (service layer):
+  - This context is created at batch start and passed through planning and execution.
+  - It must carry:
+    - resolved DSL for the slice (including resolved relative dates),
+    - a frozen reference date / day (for determinism),
+    - any frozen `*t95`/latency inputs used by planning/bounding decisions.
+
+- **Batch start hook**:
+  - Capture and freeze the inputs required for planning so they cannot drift mid-run.
+  - Ensure this is done once per slice execution (and optionally once per entire Retrieve All run if we later choose to scope it that way).
+
+- **Batch end hook**:
+  - Apply any end-of-run steps exactly once:
+    - Stage‑2 post-pass (see next phase for the exact posture),
+    - `*t95` persistence/update if required by the pipeline.
+  - Emit the canonical “what we did” artefact.
+
+Deliverable: a dedicated service-layer module responsible for batch lifecycle management, invoked by the canonical orchestrator only.
+
+### 9.5 Phase 3 — Make Retrieve All “plan once per slice, execute plan exactly”
+
+Goal: rework Retrieve All so it is a true batch-mode fetch per slice with an explicit plan artefact and plan-interpreter execution.
+
+- **Create a per-slice plan builder entry point** used by Retrieve All:
+  - It must:
+    - enumerate targets once for the graph snapshot,
+    - compute coverage/missing/stale decisions once,
+    - compile windows once (explicit reasons),
+    - produce a deterministic plan artefact.
+
+- **Execute in plan-interpreter mode**:
+  - Execution must call the existing low-level executor with “execute exactly these windows” inputs (the plan windows).
+  - It must not recompute `shouldRefetch`, cohort bounding, cache cutting, or gap discovery inside the per-item loop.
+  - In simulation/dry-run, execution must still run the same interpreter, but with external HTTP disabled and all writes/mutations blocked.
+
+- **Progress reporting**:
+  - Continue to report progress per slice and per item, but derive “what is being fetched” from the plan and “what happened” from the interpreter results.
+
+- **Remove or relocate deviant post-passes**:
+  - The current “post retrieve topo pass” in `AllSlicesModal.tsx` must be moved into the batch end hook (service layer), with an explicit explanation of why it exists and what DSL it anchors to.
+  - UI should remain an access point only.
+
+Files expected to be involved (non-exhaustive; exact edits will be traced during implementation):
+- `graph-editor/src/services/retrieveAllSlicesService.ts`
+- `graph-editor/src/services/retrieveAllSlicesPlannerService.ts` (likely remains as target enumerator)
+- `graph-editor/src/components/modals/AllSlicesModal.tsx` (thin wrapper only; remove bespoke orchestration)
+- `graph-editor/src/services/dataOperationsService.ts` (use interpreter inputs; enforce no-write in simulation)
+
+### 9.6 Phase 4 — Standardise all entrypoints onto the one orchestrator (eliminate deviant paths)
+
+Goal: enforce the “one code path” principle operationally.
+
+- **WindowSelector fetch button**:
+  - Ensure it uses the same plan builder + interpreter path (single-item run is a degenerate batch).
+  - Ensure dry-run/analysis and execution share plan identity (same windows, same reasons).
+
+- **Scenario regeneration**:
+  - Replace any deviant “needs fetch” computation that bypasses the plan builder.
+  - Scenarios must call the same plan + interpreter machinery with parameters controlling:
+    - apply target (scenario graph copy),
+    - allowFetchFromSource (false in share/live),
+    - whether to run Stage‑2 (often skipped for performance; must be explicit).
+
+- **Share/live boot**:
+  - Must route through the same pipeline with allowFetchFromSource=false and still emit plan/execution artefacts (execution is from-file refresh + logs, not network).
+
+Deliverable: an explicit call-site audit checklist in this doc and a requirement that no other fetch orchestration loops remain.
+
+### 9.7 Phase 5 — Stage‑2 and `*t95` bracketing integration (with explicit authority)
+
+Goal: implement the batch bracketing semantics that stop sequencing-sensitive drift.
+
+- **Stage‑2 timing**:
+  - Enforce: Stage‑2 runs once after execution (never per item) for the chosen anchoring DSL.
+  - Specify the anchoring DSL for Retrieve All:
+    - Minimum viable behaviour: after completing all slices, run one from-file refresh pass for the authoritative current DSL (to update graph scalars and LAG values) in the batch end hook.
+    - If additional per-slice Stage‑2 is required later, it must be explicitly justified and tested, but is not part of the minimum viable batch stabilisation.
+
+- **`*t95` handling**:
+  - Implement “freeze at batch start, apply at batch end” semantics behind the lifecycle hooks.
+  - Ensure no intermediate updates leak into planning/execution decisions mid-run.
+
+Important note: any change that affects horizon calculation or persistence has behavioural risk (file churn, staleness decisions). Keep the initial version structurally isolating rather than “perfecting determinism”.
+
+### 9.8 Phase 6 — Tests (extend existing suites; no weakening)
+
+Goal: prove correctness and prevent regressions, without weakening coverage.
+
+Tests to extend (preferred homes; update as implementation reveals the most appropriate suites):
+- **Retrieve All batch mode semantics**:
+  - Extend `graph-editor/src/services/__tests__/retrieveAllSlicesService.test.ts` to assert:
+    - planning happens once per slice (not per item),
+    - execution follows the plan windows exactly (planned vs executed match),
+    - “what we did” artefact is emitted and is deterministic for fixed inputs.
+- **Simulation safety**:
+  - Extend `graph-editor/src/services/__tests__/allSlicesSimulation.test.ts` to assert:
+    - no file writes,
+    - no graph mutation,
+    - plan artefact and execution artefact are still emitted.
+- **Cross-entrypoint unification**:
+  - Extend `graph-editor/src/services/__tests__/fetchButtonE2E.integration.test.tsx` to assert the WindowSelector path uses the same plan machinery (plan identity fields present in logs/metadata).
+- **Scenario path parity**:
+  - Extend an existing scenarios integration test (prefer one already covering regeneration) to assert it uses the unified pipeline and respects allowFetchFromSource=false in share contexts.
+
+Minimum scenarios to cover (must be explicitly asserted):
+- Covered items: plan says covered → no external execution scheduled.
+- Unfetchable items: appear in artefact with explicit reason, do not trigger network.
+- Multiple-gap items: plan windows are multiple and are executed exactly.
+- Partial failure: one window fails → remaining windows still run; rerun plans only remaining gaps.
+
+### 9.9 Phase 7 — Cleanup and enforcement
+
+Goal: keep the codebase honest going forward.
+
+- **Remove duplicate orchestration loops** after callers are migrated.
+- **Add grep-able invariants** in docs and (where appropriate) in service-level comments:
+  - “All entrypoints must call the orchestrator; no bespoke loops.”
+- **Audit session logging**:
+  - Ensure batch start/end boundaries are visible and that artefacts are easy to locate.
+
+### 9.10 Acceptance criteria (definition of “ready to implement” and “done”)
+
+This proposal is ready to implement when this section is fully specified (no ambiguous “maybe later” semantics for the core contract). The implementation is “done” when:
+
+- Retrieve All compiles a plan once per slice and executes exactly that plan (no per-item re-planning).
+- Simulation mode is provably no-write and no-graph-mutation, while still producing deterministic artefacts.
+- All relevant entrypoints route through the same canonical orchestration path.
+- Stage‑2 is invoked only via the canonical orchestrator (not UI) and runs once after execution in batch mode.
+- Session logs include:
+  - a deterministic plan artefact and a deterministic “what we did” artefact per slice (and optionally per run),
+  - stable row keys and stable error classifications suitable for later automated checking.
+
