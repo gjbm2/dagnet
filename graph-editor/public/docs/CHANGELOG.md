@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.12b
+**Released:** 22-Jan-26
+
+Fixes to batch fetching and logging
+
+---
+
 ## Version 1.3.11b
 **Released:** 21-Jan-26
 
