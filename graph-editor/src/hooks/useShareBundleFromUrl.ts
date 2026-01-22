@@ -12,6 +12,8 @@ import { db } from '../db/appDatabase';
 import { waitForLiveShareGraphDeps } from '../services/liveShareHydrationService';
 import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
 import { fetchDataService } from '../services/fetchDataService';
+import { fetchOrchestratorService } from '../services/fetchOrchestratorService';
+import { sessionLogService } from '../services/sessionLogService';
 
 async function waitForTabContextInitDone(timeoutMs: number = 10_000): Promise<void> {
   try {
@@ -300,16 +302,31 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
                 ? currentDslFromPayload.trim()
                 : (typeof (scenariosContext.graph as any)?.currentQueryDSL === 'string' ? String((scenariosContext.graph as any).currentQueryDSL) : '');
             if (graphStore && currentDsl && currentDsl.trim()) {
-              const itemsForCurrent = fetchDataService.getItemsForFromFileLoad(graphStore.getState().graph as any);
-              if (itemsForCurrent.length > 0) {
-                await fetchDataService.fetchItems(
-                  itemsForCurrent,
-                  { mode: 'from-file', skipStage2: false, allowFetchFromSource: false, suppressBatchToast: true } as any,
-                  graphStore.getState().graph as any,
-                  (g) => graphStore.getState().setGraph(g as any),
-                  currentDsl,
-                  () => (graphStore.getState().graph as any) || null
-                );
+              // Unified cache-only pipeline: build plan (for observability) + from-file refresh (Stage‑2 enabled).
+              const opId = sessionLogService.startOperation(
+                'info',
+                'data-fetch',
+                'LIVE_SHARE_CURRENT_HYDRATE',
+                'Live share: hydrate Current from file cache',
+                { currentDsl }
+              );
+              try {
+                const g0 = graphStore.getState().graph as any;
+                if (g0) {
+                  fetchOrchestratorService.buildPlan({ graph: g0, dsl: currentDsl, parentLogId: opId });
+                  await fetchOrchestratorService.refreshFromFilesWithRetries({
+                    graphGetter: () => (graphStore.getState().graph as any) || null,
+                    setGraph: (g) => graphStore.getState().setGraph(g as any),
+                    dsl: currentDsl,
+                    skipStage2: false,
+                    parentLogId: opId,
+                    attempts: 6,
+                    delayMs: 75,
+                  });
+                }
+                sessionLogService.endOperation(opId, 'success', 'Current hydrated from file cache');
+              } catch (e: any) {
+                sessionLogService.endOperation(opId, 'warning', e?.message || String(e));
               }
             }
           } catch {

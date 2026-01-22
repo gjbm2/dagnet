@@ -5607,6 +5607,11 @@ class DataOperationsService {
       let gapFailureMessage: string | undefined;
       let failedGapIndex: number | undefined;
 
+      // Track whether we actually attempted external execution (runner.execute) for this call.
+      // This is used to avoid misclassifying "executed but returned 0 daily points" as a cache hit.
+      let didAttemptExternalFetch = false;
+      let expectedDaysAttempted = 0;
+
       if (shouldPersistPerGap) {
         paramFileForGapWrites = fileRegistry.getFile(`parameter-${objectId}`);
         if (paramFileForGapWrites) {
@@ -5748,6 +5753,23 @@ class DataOperationsService {
       // Chain requests for each contiguous gap
       for (let gapIndex = 0; gapIndex < actualFetchWindows.length; gapIndex++) {
         const fetchWindow = actualFetchWindows[gapIndex];
+
+        // Record whether this gap would be an external fetch (vs dry-run).
+        // This must be set before any non-dry-run executeDAS calls.
+        if (!dontExecuteHttp) {
+          didAttemptExternalFetch = true;
+          try {
+            const startD = parseDate(normalizeDate(fetchWindow.start));
+            const endD = parseDate(normalizeDate(fetchWindow.end));
+            if (!Number.isNaN(startD.getTime()) && !Number.isNaN(endD.getTime())) {
+              const ms = endD.getTime() - startD.getTime();
+              const days = Math.floor(ms / (24 * 60 * 60 * 1000)) + 1; // inclusive
+              if (days > 0) expectedDaysAttempted += days;
+            }
+          } catch {
+            // Best-effort only.
+          }
+        }
         
         // Ensure the payload window reflects the actual window being executed.
         // This is required for plan-interpreter mode (overrideFetchWindows), and is harmless for
@@ -6706,7 +6728,37 @@ class DataOperationsService {
       
       // Update fetch stats with actual results
       fetchStats.daysFetched = fetchedDays;
-      fetchStats.cacheHit = (fetchedDays === 0 && !bustCache);
+      // cacheHit should mean "served from cache / skipped external fetch", not "executed but returned empty".
+      fetchStats.cacheHit = (!didAttemptExternalFetch && fetchedDays === 0 && !bustCache);
+
+      // If we executed plan-interpreter windows and received no daily points, emit an explicit log entry.
+      // This is not necessarily an error, but it is surprising and should be visible in batch runs.
+      if (
+        !dontExecuteHttp &&
+        hasOverrideWindows &&
+        writeToFile &&
+        objectType === 'parameter' &&
+        fetchedDays === 0 &&
+        actualFetchWindows.length > 0
+      ) {
+        sessionLogService.addChild(
+          logOpId,
+          'warning',
+          'FETCH_NO_DATA_RETURNED',
+          `No daily datapoints returned for ${objectId} (executed ${actualFetchWindows.length} plan window(s))`,
+          `Windows: ${gapsDesc}`,
+          {
+            source: connectionName || 'unknown',
+            fileId: `parameter-${objectId}`,
+            gapsCount: actualFetchWindows.length,
+            expectedDays: expectedDaysAttempted || undefined,
+            windows: actualFetchWindows.map((w) => ({
+              start: normalizeDate(w.start),
+              end: normalizeDate(w.end),
+            })),
+          }
+        );
+      }
       
       if (writeToFile && objectType === 'parameter') {
         sessionLogService.addChild(logOpId, 

@@ -34,7 +34,7 @@ export interface UseStalenessNudgesResult {
  * - This hook centralises the nudging logic so UI entry points stay access-only.
  */
 export function useStalenessNudges(): UseStalenessNudgesResult {
-  const { state: navState } = useNavigatorContext();
+  const { state: navState, isLoading: navigatorIsLoading } = useNavigatorContext();
   const tabContext = useTabContext() as any;
   const { pullAll, conflictModal } = usePullAll();
   const fileRegistry = useFileRegistry();
@@ -66,6 +66,15 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     activeFileType === 'chart' ? activeChartParentGraphFileId : activeFileId;
 
   const isVisible = () => !document.hidden;
+
+  const isTabContextInitDone = useCallback((): boolean => {
+    try {
+      const w = (typeof window !== 'undefined') ? (window as any) : undefined;
+      return w?.__dagnetTabContextInitDone === true;
+    } catch {
+      return false;
+    }
+  }, []);
 
   const inFlightRef = useRef(false);
   const lastGraphTriggerKeyRef = useRef<string>('');
@@ -373,6 +382,15 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       const now = Date.now();
       const storage = window.localStorage;
 
+      // Boot readiness gate:
+      // Nudges should NOT evaluate while app boot is incomplete, otherwise we get noisy "unknown/blocked"
+      // states while Navigator/TabContext/file registry are still initialising.
+      //
+      // We wait for:
+      // - TabContext boot completion (credentials/settings loaded + URL tabs opened)
+      // - A stable repo/branch identity (workspace mode) OR share identity (share-live)
+      if (!isTabContextInitDone()) return;
+
       // Always stamp this page load (the "last refresh" baseline).
       // We do this in maybePrompt rather than only once so hot reload / re-mounts
       // don't accidentally erase the signal.
@@ -408,8 +426,18 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
       const isShareLive = shareMode?.isLiveMode ?? false;
       const repository: string | undefined = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
-      const branch: string | undefined = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
+      const selectedBranch: string | undefined = isShareLive ? shareMode?.identity.branch : navState.selectedBranch;
+      const branch: string = selectedBranch || 'main';
       const graph: string | undefined = isShareLive ? shareMode?.identity.graph : undefined;
+
+      if (isShareLive) {
+        // Share-live boot must provide identity before nudges run.
+        if (!repository || !selectedBranch) return;
+      } else {
+        // Workspace mode: wait for NavigatorContext to finish initialising repo/branch (and stop loading).
+        if (!navState.selectedRepo || !navState.selectedBranch) return;
+        if (navigatorIsLoading) return;
+      }
 
       const gitCollected = await stalenessNudgeService.collectGitSignal({
         nowMs: now,
@@ -593,6 +621,15 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       inFlightRef.current = false;
     }
   }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen, shareMode, isDashboardMode]);
+
+  // Boot completion: when TabContext signals init done, re-run prompt evaluation once.
+  useEffect(() => {
+    const handler = () => {
+      void maybePrompt();
+    };
+    window.addEventListener('dagnet:tabContextInitDone' as any, handler);
+    return () => window.removeEventListener('dagnet:tabContextInitDone' as any, handler);
+  }, [maybePrompt]);
 
   // Record the page load baseline once on mount.
   useEffect(() => {

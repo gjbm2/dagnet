@@ -4,6 +4,11 @@ import { completeProgressToast, showProgressToast } from '../components/Progress
 import { dataOperationsService, setBatchMode, type CacheAnalysisResult } from './dataOperationsService';
 import { sessionLogService } from './sessionLogService';
 import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerService';
+import { parseConstraints } from '../lib/queryDSL';
+import { resolveRelativeDate, formatDateUK } from '../lib/dateFormat';
+import { buildFetchPlanProduction } from './fetchPlanBuilderService';
+import { summarisePlan, type FetchPlan, type FetchPlanItem } from './fetchPlanTypes';
+import { fetchDataService, type FetchItem } from './fetchDataService';
 
 /**
  * Current item cache status - reported immediately after cache analysis, before API fetch.
@@ -90,6 +95,16 @@ export interface RetrieveAllSlicesOptions {
 
   /** Optional progress callback (UI can wire progress bars / labels). */
   onProgress?: (p: RetrieveAllSlicesProgress) => void;
+
+  /**
+   * Optional: after a successful (non-simulated) Retrieve All run, perform one
+   * final from-file refresh for this DSL (to update graph scalars + Stage‑2/LAG once).
+   *
+   * IMPORTANT:
+   * - This must remain a service-layer post-pass (no bespoke UI orchestration).
+   * - This must never run in simulate mode.
+   */
+  postRunRefreshDsl?: string;
 }
 
 export interface RetrieveAllSlicesWithProgressToastOptions extends RetrieveAllSlicesOptions {
@@ -122,9 +137,13 @@ class RetrieveAllSlicesService {
       simulate = false,
       shouldAbort,
       onProgress,
+      postRunRefreshDsl,
     } = options;
 
     const startTime = performance.now();
+    // Batch bracketing: freeze a reference "now" once for the entire run.
+    // This prevents staleness semantics drifting mid-run due to wall-clock movement.
+    const batchReferenceNow = new Date().toISOString();
     
     const emptyResult: RetrieveAllSlicesResult = {
       totalSlices: 0,
@@ -167,7 +186,7 @@ class RetrieveAllSlicesService {
       'data-fetch',
       'BATCH_ALL_SLICES',
       `Retrieve All Slices: ${totalSlices} slice(s)`,
-      { filesAffected: effectiveSlices }
+      { filesAffected: effectiveSlices, referenceNow: batchReferenceNow }
     );
 
     let totalSuccess = 0;
@@ -208,8 +227,30 @@ class RetrieveAllSlicesService {
         const graphForSlice = getGraph();
         if (!graphForSlice) continue;
 
-        const batchItems = retrieveAllSlicesPlannerService.collectTargets(graphForSlice);
-        totalItems += batchItems.length;
+        // -------------------------------------------------------------------
+        // PLAN ONCE PER SLICE (single-plan contract)
+        // -------------------------------------------------------------------
+        const window = this.extractWindowFromDSL(sliceDSL);
+        if (!window) {
+          sessionLogService.addChild(
+            logOpId,
+            'warning',
+            'SLICE_SKIPPED_NO_WINDOW',
+            `Skipping slice "${sliceDSL}" (no window/cohort range)`,
+            undefined,
+            { sliceDSL }
+          );
+          continue;
+        }
+
+        const { plan: fetchPlan, diagnostics: planDiagnostics } = buildFetchPlanProduction(
+          graphForSlice as any,
+          sliceDSL,
+          window,
+          { bustCache, referenceNow: batchReferenceNow }
+        );
+
+        totalItems += fetchPlan.items.length;
 
         // Track per-slice stats
         let sliceCached = 0;
@@ -217,12 +258,33 @@ class RetrieveAllSlicesService {
         let sliceDaysFetched = 0;
         let sliceSuccess = 0;
         let sliceErrors = 0;
+        const sliceUnfetchable = fetchPlan.items.filter(i => i.classification === 'unfetchable').length;
+
+        // Log the plan artefact (deterministic ordering)
+        try {
+          const summary = summarisePlan(fetchPlan);
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'FETCH_PLAN_BUILT',
+            `Plan built for slice: ${summary.fetchItems} fetch, ${summary.coveredItems} covered, ${summary.unfetchableItems} unfetchable`,
+            this.formatFetchPlanTable(fetchPlan),
+            {
+              sliceDSL,
+              referenceNow: batchReferenceNow,
+              summary,
+              diagnostics: planDiagnostics,
+            } as any
+          );
+        } catch {
+          // Best-effort only: do not fail the slice because the table renderer errored.
+        }
 
         reportProgress({
           currentSlice: sliceIdx + 1,
           totalSlices,
           currentItem: 0,
-          totalItems: batchItems.length,
+          totalItems: fetchPlan.items.length,
           currentSliceDSL: sliceDSL,
           runningCacheHits: totalCacheHits,
           runningApiFetches: totalApiFetches,
@@ -230,93 +292,166 @@ class RetrieveAllSlicesService {
           runningTotalProcessed,
         });
 
-        for (let itemIdx = 0; itemIdx < batchItems.length; itemIdx++) {
+        // Track graph updates across sequential fetches (avoid stale closure)
+        let currentGraph: GraphData | null = graphForSlice;
+        const trackingSetGraph = (g: GraphData | null) => {
+          currentGraph = g;
+          if (!simulate) setGraph(g);
+        };
+
+        // Per-item execution accumulator for deterministic "what we did" artefact
+        const executionRows: Array<{
+          itemKey: string;
+          classificationPlanned: FetchPlanItem['classification'];
+          classificationExecuted: 'covered' | 'unfetchable' | 'executed' | 'failed';
+          plannedWindows: Array<{ start: string; end: string; reason: string; dayCount: number }>;
+          errorKind?: string;
+          errorMessage?: string;
+          cacheHit?: boolean;
+          daysFetched?: number;
+          dryRun?: boolean;
+        }> = [];
+
+        for (let itemIdx = 0; itemIdx < fetchPlan.items.length; itemIdx++) {
           if (shouldAbort?.()) {
             aborted = true;
             break;
           }
 
-          const item = batchItems[itemIdx];
-          
-          // Track current item's cache status (will be set by onCacheAnalysis callback)
-          let currentItemStatus: CurrentItemCacheStatus | undefined;
-          
-          const onCacheAnalysis = (analysis: CacheAnalysisResult) => {
-            currentItemStatus = {
-              cacheHit: analysis.cacheHit,
-              daysToFetch: analysis.daysToFetch,
-              gapCount: analysis.gapCount,
-            };
-            
-            // Report progress with current item status (before fetch starts)
-            reportProgress({
-              currentSlice: sliceIdx + 1,
-              totalSlices,
-              currentItem: itemIdx + 1,
-              totalItems: batchItems.length,
-              currentSliceDSL: sliceDSL,
-              currentItemStatus,
-              runningCacheHits: totalCacheHits,
-              runningApiFetches: totalApiFetches,
-              runningDaysFetched: totalDaysFetched,
-              runningTotalProcessed,
-            });
+          const planItem = fetchPlan.items[itemIdx];
+
+          // Progress status derived from the plan (deterministic; avoids per-item replanning)
+          const plannedDaysToFetch = planItem.windows.reduce((sum, w) => sum + (w.dayCount || 0), 0);
+          const plannedGapCount = planItem.windows.length;
+          const plannedStatus: CurrentItemCacheStatus = {
+            cacheHit: planItem.classification === 'covered',
+            daysToFetch: planItem.classification === 'fetch' ? plannedDaysToFetch : 0,
+            gapCount: planItem.classification === 'fetch' ? plannedGapCount : 0,
           };
 
-          try {
-            const currentGraph = getGraph();
-            if (!currentGraph) continue;
+          reportProgress({
+            currentSlice: sliceIdx + 1,
+            totalSlices,
+            currentItem: itemIdx + 1,
+            totalItems: fetchPlan.items.length,
+            currentSliceDSL: sliceDSL,
+            currentItemStatus: plannedStatus,
+            runningCacheHits: totalCacheHits,
+            runningApiFetches: totalApiFetches,
+            runningDaysFetched: totalDaysFetched,
+            runningTotalProcessed,
+          });
 
-            let result;
-            if (item.type === 'parameter') {
-              result = await dataOperationsService.getFromSource({
-                objectType: 'parameter',
-                objectId: item.objectId,
-                targetId: item.targetId,
-                graph: currentGraph,
-                setGraph: simulate ? (() => {}) : setGraph,
-                paramSlot: item.paramSlot,
-                conditionalIndex: item.conditionalIndex,
-                bustCache,
-                currentDSL: sliceDSL,
-                targetSlice: sliceDSL,
-                dontExecuteHttp: simulate,
-                onCacheAnalysis,
-              });
-            } else {
-              result = await dataOperationsService.getFromSource({
-                objectType: 'case',
-                objectId: item.objectId,
-                targetId: item.targetId,
-                graph: currentGraph,
-                setGraph: simulate ? (() => {}) : setGraph,
-                bustCache,
-                currentDSL: sliceDSL,
-                dontExecuteHttp: simulate,
-                onCacheAnalysis,
-              });
-            }
-            
-            sliceSuccess++;
-            runningTotalProcessed++;
-            
-            // Aggregate stats from result
-            if (result.cacheHit) {
+          try {
+            const g = currentGraph;
+            if (!g) continue;
+
+            // Covered / unfetchable: follow the plan (no executor call)
+            if (planItem.classification === 'covered') {
               sliceCached++;
               totalCacheHits++;
+              sliceSuccess++;
+              runningTotalProcessed++;
+              executionRows.push({
+                itemKey: planItem.itemKey,
+                classificationPlanned: planItem.classification,
+                classificationExecuted: 'covered',
+                plannedWindows: planItem.windows.map(w => ({ ...w })),
+                cacheHit: true,
+                daysFetched: 0,
+              });
+            } else if (planItem.classification === 'unfetchable') {
+              // Unfetchable is not an execution error; it is a plan classification.
+              sliceSuccess++;
+              runningTotalProcessed++;
+              executionRows.push({
+                itemKey: planItem.itemKey,
+                classificationPlanned: planItem.classification,
+                classificationExecuted: 'unfetchable',
+                plannedWindows: planItem.windows.map(w => ({ ...w })),
+              });
             } else {
-              sliceFetched++;
-              totalApiFetches++;
-              sliceDaysFetched += result.daysFetched;
-              totalDaysFetched += result.daysFetched;
+              // Fetch: execute the plan.
+              // Parameters are executed in plan-interpreter mode (override windows).
+              // Cases are executed via the existing "versioned schedule snapshot" behaviour.
+              const [type, objectId, targetId, slot, conditionalIndexStr] = planItem.itemKey.split(':');
+              const conditionalIndex =
+                typeof conditionalIndexStr === 'string' && conditionalIndexStr !== ''
+                  ? Number(conditionalIndexStr)
+                  : undefined;
+              const onCacheAnalysis = (_analysis: CacheAnalysisResult) => {
+                // In batch mode we drive progress from the plan. Cache analysis remains useful for logs only.
+              };
+
+              const result =
+                planItem.type === 'case'
+                  ? await dataOperationsService.getFromSource({
+                      objectType: 'case',
+                      objectId,
+                      targetId,
+                      graph: g,
+                      setGraph: simulate ? (() => {}) : trackingSetGraph,
+                      bustCache,
+                      currentDSL: sliceDSL,
+                      dontExecuteHttp: simulate,
+                      onCacheAnalysis,
+                    } as any)
+                  : await dataOperationsService.getFromSource({
+                      objectType: 'parameter',
+                      objectId,
+                      targetId,
+                      graph: g,
+                      setGraph: simulate ? (() => {}) : trackingSetGraph,
+                      paramSlot: slot || undefined,
+                      conditionalIndex,
+                      bustCache,
+                      currentDSL: sliceDSL,
+                      targetSlice: sliceDSL,
+                      dontExecuteHttp: simulate,
+                      // First-principles: plan already computed correct windows.
+                      skipCohortBounding: true,
+                      overrideFetchWindows: planItem.windows.map((w) => ({ start: w.start, end: w.end })),
+                      onCacheAnalysis,
+                    } as any);
+
+              sliceSuccess++;
+              runningTotalProcessed++;
+
+              // Stats:
+              // - In simulate mode, reflect "would fetch" using the plan (not the post-call result).
+              // - In live mode, classify as cached vs fetched based on result.cacheHit.
+              if (simulate) {
+                sliceFetched++;
+                totalApiFetches++;
+                sliceDaysFetched += plannedDaysToFetch;
+                totalDaysFetched += plannedDaysToFetch;
+              } else if (result.cacheHit) {
+                sliceCached++;
+                totalCacheHits++;
+              } else {
+                sliceFetched++;
+                totalApiFetches++;
+                sliceDaysFetched += result.daysFetched;
+                totalDaysFetched += result.daysFetched;
+              }
+
+              executionRows.push({
+                itemKey: planItem.itemKey,
+                classificationPlanned: planItem.classification,
+                classificationExecuted: 'executed',
+                plannedWindows: planItem.windows.map(w => ({ ...w })),
+                cacheHit: simulate ? false : result.cacheHit,
+                daysFetched: simulate ? plannedDaysToFetch : result.daysFetched,
+                dryRun: simulate,
+              });
             }
-            
+
             // Report progress after item completes
             reportProgress({
               currentSlice: sliceIdx + 1,
               totalSlices,
               currentItem: itemIdx + 1,
-              totalItems: batchItems.length,
+              totalItems: fetchPlan.items.length,
               currentSliceDSL: sliceDSL,
               runningCacheHits: totalCacheHits,
               runningApiFetches: totalApiFetches,
@@ -330,11 +465,19 @@ class RetrieveAllSlicesService {
               logOpId,
               'error',
               'ITEM_ERROR',
-              `[${sliceDSL}] ${item.name} failed`,
+              `[${sliceDSL}] ${planItem.itemKey} failed`,
               errorMessage
             );
             sliceErrors++;
             runningTotalProcessed++;
+            executionRows.push({
+              itemKey: planItem.itemKey,
+              classificationPlanned: planItem.classification,
+              classificationExecuted: 'failed',
+              plannedWindows: planItem.windows.map(w => ({ ...w })),
+              errorKind: 'EXECUTION_ERROR',
+              errorMessage,
+            });
           }
         }
 
@@ -344,12 +487,36 @@ class RetrieveAllSlicesService {
         // Record slice stats
         sliceStats.push({
           slice: sliceDSL,
-          items: batchItems.length,
+          items: fetchPlan.items.length,
           cached: sliceCached,
           fetched: sliceFetched,
           daysFetched: sliceDaysFetched,
           errors: sliceErrors,
         });
+
+        // Emit deterministic "what we did" artefact per slice
+        try {
+          sessionLogService.addChild(
+            logOpId,
+            sliceErrors > 0 ? 'warning' : 'success',
+            'WHAT_WE_DID',
+            `Slice "${sliceDSL}": processed=${fetchPlan.items.length}, cached=${sliceCached}, fetched=${sliceFetched}, unfetchable=${sliceUnfetchable}, daysFetched=${sliceDaysFetched}, errors=${sliceErrors}`,
+            this.formatExecutionTable({ sliceDSL, plan: fetchPlan, rows: executionRows }),
+            {
+              sliceDSL,
+              processed: fetchPlan.items.length,
+              cached: sliceCached,
+              fetched: sliceFetched,
+              unfetchable: sliceUnfetchable,
+              daysFetched: sliceDaysFetched,
+              errors: sliceErrors,
+              planSummary: summarisePlan(fetchPlan),
+              rows: executionRows,
+            } as any
+          );
+        } catch {
+          // best-effort
+        }
 
         sessionLogService.addChild(
           logOpId,
@@ -361,6 +528,53 @@ class RetrieveAllSlicesService {
         );
 
         if (aborted) break;
+      }
+
+      // -------------------------------------------------------------------
+      // Batch end post-pass: refresh graph scalars + Stage‑2 once, service-layer only.
+      // -------------------------------------------------------------------
+      if (!simulate && !aborted && totalSuccess > 0 && postRunRefreshDsl && postRunRefreshDsl.trim()) {
+        const topoLogId = sessionLogService.startOperation(
+          'info',
+          'data-fetch',
+          'POST_RETRIEVE_TOPO_PASS',
+          'Post-retrieve topo pass (from-file refresh + Stage‑2)',
+          { dsl: postRunRefreshDsl }
+        );
+        try {
+          const g = getGraph();
+          if (g) {
+            const targets = retrieveAllSlicesPlannerService.collectTargets(g);
+            const topoItems: FetchItem[] = targets
+              .filter((t): t is Extract<typeof t, { type: 'parameter' }> => t.type === 'parameter')
+              .map((t) => ({
+                id: typeof (t as any).conditionalIndex === 'number'
+                  ? `param-${t.objectId}-conditional_p[${(t as any).conditionalIndex}]-${t.targetId}`
+                  : `param-${t.objectId}-${t.paramSlot ?? 'p'}-${t.targetId}`,
+                type: 'parameter',
+                name: t.name,
+                objectId: t.objectId,
+                targetId: t.targetId,
+                paramSlot: t.paramSlot,
+                conditionalIndex: (t as any).conditionalIndex,
+              }));
+
+            if (topoItems.length > 0) {
+              await fetchDataService.fetchItems(
+                topoItems,
+                { mode: 'from-file', parentLogId: topoLogId, suppressBatchToast: true, skipStage2: false } as any,
+                g as any,
+                (next: any) => setGraph(next),
+                postRunRefreshDsl,
+                () => getGraph() as any
+              );
+            }
+          }
+          sessionLogService.endOperation(topoLogId, 'success', 'Post-retrieve topo pass complete');
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          sessionLogService.endOperation(topoLogId, 'error', `Post-retrieve topo pass failed: ${msg}`);
+        }
       }
 
       // On a fully successful run, stamp a graph-level marker so other devices that pull
@@ -400,6 +614,33 @@ class RetrieveAllSlicesService {
         aborted,
       });
 
+      // Run-level structured artefact (machine-readable metadata + compact string).
+      sessionLogService.addChild(
+        logOpId,
+        totalErrors > 0 ? 'warning' : 'success',
+        'BATCH_WHAT_WE_DID',
+        'Retrieve All: run artefact',
+        [
+          '',
+          'BATCH WHAT WE DID',
+          '─'.repeat(70),
+          `slices=${totalSlices} items=${totalItems} cached=${totalCacheHits} fetched=${totalApiFetches} daysFetched=${totalDaysFetched} errors=${totalErrors} aborted=${aborted}`,
+          `referenceNow=${batchReferenceNow}`,
+          '─'.repeat(70),
+        ].join('\n'),
+        {
+          referenceNow: batchReferenceNow,
+          totalSlices,
+          totalItems,
+          totalCacheHits,
+          totalApiFetches,
+          totalDaysFetched,
+          totalErrors,
+          aborted,
+          sliceStats,
+        } as any
+      );
+
       sessionLogService.endOperation(
         logOpId,
         totalErrors > 0 ? 'warning' : 'success',
@@ -435,6 +676,102 @@ class RetrieveAllSlicesService {
     } finally {
       setBatchMode(false);
     }
+  }
+
+  private extractWindowFromDSL(dsl: string): { start: string; end: string } | null {
+    try {
+      const constraints = parseConstraints(dsl);
+      if (constraints.cohort?.start) {
+        const start = resolveRelativeDate(constraints.cohort.start);
+        const end = constraints.cohort.end ? resolveRelativeDate(constraints.cohort.end) : formatDateUK(new Date());
+        return { start, end };
+      }
+      if (constraints.window?.start) {
+        const start = resolveRelativeDate(constraints.window.start);
+        const end = constraints.window.end ? resolveRelativeDate(constraints.window.end) : formatDateUK(new Date());
+        return { start, end };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private formatFetchPlanTable(plan: FetchPlan): string {
+    const lines: string[] = [];
+    const summary = summarisePlan(plan);
+    lines.push('');
+    lines.push('FETCH PLAN');
+    lines.push('─'.repeat(90));
+    lines.push(`DSL: ${plan.dsl}`);
+    lines.push(`createdAt: ${plan.createdAt}`);
+    lines.push(`referenceNow: ${plan.referenceNow}`);
+    lines.push(`items: ${summary.totalItems} (fetch=${summary.fetchItems}, covered=${summary.coveredItems}, unfetchable=${summary.unfetchableItems})`);
+    lines.push(`windows: ${summary.totalWindows} (days=${summary.totalDaysToFetch}, missingDays=${summary.missingDays}, staleDays=${summary.staleDays})`);
+    lines.push('─'.repeat(90));
+    lines.push('ItemKey                                                     Class        Windows');
+    lines.push('─'.repeat(90));
+    for (const item of plan.items) {
+      const key = (item.itemKey || '').padEnd(60);
+      const cls = item.classification.padEnd(12);
+      const win =
+        item.windows.length === 0
+          ? '-'
+          : item.windows.map(w => `${w.start}→${w.end}(${w.reason},${w.dayCount}d)`).join(' | ');
+      lines.push(`${key} ${cls} ${win}`);
+    }
+    lines.push('─'.repeat(90));
+    return lines.join('\n');
+  }
+
+  private formatExecutionTable(input: {
+    sliceDSL: string;
+    plan: FetchPlan;
+    rows: Array<{
+      itemKey: string;
+      classificationPlanned: FetchPlanItem['classification'];
+      classificationExecuted: 'covered' | 'unfetchable' | 'executed' | 'failed';
+      plannedWindows: Array<{ start: string; end: string; reason: string; dayCount: number }>;
+      errorKind?: string;
+      errorMessage?: string;
+      cacheHit?: boolean;
+      daysFetched?: number;
+      dryRun?: boolean;
+    }>;
+  }): string {
+    const { sliceDSL, plan, rows } = input;
+    const lines: string[] = [];
+    lines.push('');
+    lines.push('WHAT WE DID (per slice)');
+    lines.push('─'.repeat(110));
+    lines.push(`Slice: ${sliceDSL}`);
+    lines.push('─'.repeat(110));
+    lines.push('ItemKey                                                     Planned       Executed      Days  Notes');
+    lines.push('─'.repeat(110));
+    for (const r of rows) {
+      const key = (r.itemKey || '').padEnd(60);
+      const planned = (r.classificationPlanned || '').padEnd(12);
+      const executed = (r.classificationExecuted || '').padEnd(12);
+      const days = String(r.daysFetched ?? 0).padStart(4);
+      const notes =
+        r.classificationExecuted === 'failed'
+          ? `${r.errorKind || 'ERROR'}: ${r.errorMessage || ''}`
+          : (r.classificationExecuted === 'unfetchable'
+              ? 'unfetchable'
+              : (r.dryRun
+                  ? 'dry-run'
+                  : (r.cacheHit
+                      ? 'cacheHit'
+                      : ((r.classificationExecuted === 'executed' &&
+                          (r.daysFetched ?? 0) === 0 &&
+                          (r.plannedWindows?.length ?? 0) > 0)
+                          ? 'no-data'
+                          : ''))));
+      lines.push(`${key} ${planned} ${executed} ${days}  ${notes}`);
+    }
+    lines.push('─'.repeat(110));
+    // Plan table is emitted separately via FETCH_PLAN_BUILT; don't duplicate it here.
+    return lines.join('\n');
   }
   
   /**

@@ -367,7 +367,7 @@ function LogEntryRow({ entry, depth, showContext, onToggleExpand, onContextMenu 
           className="log-details"
           style={{ paddingLeft: `${depth * 20 + 32}px` }}
         >
-          {entry.details}
+          <pre className="log-details-pre">{entry.details}</pre>
         </div>
       )}
       
@@ -454,7 +454,20 @@ function ContextField({ fieldKey, value }: ContextFieldProps) {
       );
     }
     
-    // Generic array
+    // Generic array:
+    // - Arrays of primitives: inline join
+    // - Arrays of objects: pretty JSON (otherwise we get "[object Object]" which is useless)
+    const hasObjectValues = value.some((v: any) => v && typeof v === 'object');
+    if (hasObjectValues) {
+      return (
+        <div className="context-field context-field-object">
+          <span className="context-label">{label}:</span>
+          <code className="context-value-object">
+            {JSON.stringify(value, null, 2)}
+          </code>
+        </div>
+      );
+    }
     return (
       <div className="context-field">
         <span className="context-label">{label}:</span>

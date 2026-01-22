@@ -93,6 +93,13 @@ vi.mock('../../services/CompositionService', () => ({
   buildGraphForAnalysisLayer: hoisted.buildGraphForAnalysisLayer,
 }));
 
+vi.mock('../../services/fetchOrchestratorService', () => ({
+  fetchOrchestratorService: {
+    buildPlan: vi.fn(() => ({ plan: { version: 1, createdAt: 'x', referenceNow: 'x', dsl: 'x', items: [] } })),
+    refreshFromFilesWithRetries: vi.fn(async () => ({ attempts: 1, failures: 0 })),
+  },
+}));
+
 vi.mock('react-hot-toast', () => ({
   default: { error: vi.fn(), success: vi.fn(), loading: vi.fn() },
 }));
