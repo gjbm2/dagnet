@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.13b
+**Released:** 23-Jan-26
+
+Stabilised *t95 mechanics, hopefully improviing determinism in fetch and calcs.
+
+---
+
 ## Version 1.3.12b
 **Released:** 22-Jan-26
 
