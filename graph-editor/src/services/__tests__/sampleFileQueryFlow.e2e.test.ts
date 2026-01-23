@@ -88,8 +88,8 @@ import { extractParamsFromGraph } from '../GraphParamExtractor';
 import { flattenParams } from '../ParamPackDSLService';
 import { fetchItem as fetchSingleItem, type FetchItem } from '../fetchDataService';
 import { UpdateManager } from '../UpdateManager';
-import { logNormalInverseCDF } from '../statisticalEnhancementService';
-import { LATENCY_DEFAULT_SIGMA, LATENCY_T95_PERCENTILE } from '../../constants/latency';
+// NOTE: This suite used to assert a derived t95 calculation for scalar-only horizons. That behaviour is
+// no longer guaranteed because Stage‑2 does not write derived horizons onto the graph by default.
 import { fileRegistry } from '../../contexts/TabContext';
 import type { Graph } from '../../types';
 import { parseConstraints, normalizeConstraintString } from '../../lib/queryDSL';
@@ -498,12 +498,9 @@ describe('Sample File Query Flow E2E', () => {
       // === LATENCY (IN param pack) ===
       expect(paramPack['e.checkout-to-payment.p.latency.median_lag_days']).toBe(CHECKOUT_TO_PAYMENT_WINDOW.latency.median_lag_days);
       // In `from-file` mode, the file's window slice does NOT include per-day lag arrays, only a scalar t95.
-      // The LAG topo pass treats that scalar as a horizon prior, then derives a consistent t95 using the
-      // default σ lognormal model (see statisticalEnhancementService.fitLagDistribution behaviour when mean is missing).
-      const windowHorizonDays = CHECKOUT_TO_PAYMENT_WINDOW.latency.t95; // scalar t95 stored on the file slice
-      const impliedMedianDays = windowHorizonDays / 2;
-      const expectedDerivedT95 = logNormalInverseCDF(LATENCY_T95_PERCENTILE, Math.log(impliedMedianDays), LATENCY_DEFAULT_SIGMA);
-      expect(paramPack['e.checkout-to-payment.p.latency.t95']).toBeCloseTo(expectedDerivedT95, 2);
+      // Policy: Stage‑2 computes horizons for internal completeness/blend, but does NOT write derived horizons
+      // onto the graph by default. Therefore the param pack should reflect the file’s stored scalar horizon.
+      expect(paramPack['e.checkout-to-payment.p.latency.t95']).toBeCloseTo(CHECKOUT_TO_PAYMENT_WINDOW.latency.t95, 6);
       
       // === NOT IN PARAM PACK ===
       expect(paramPack['e.checkout-to-payment.p.evidence.n']).toBeDefined();

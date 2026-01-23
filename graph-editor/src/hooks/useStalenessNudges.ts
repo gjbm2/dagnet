@@ -4,7 +4,7 @@ import { useTabContext, useFileRegistry } from '../contexts/TabContext';
 import { stalenessNudgeService } from '../services/stalenessNudgeService';
 import { requestRetrieveAllSlices } from './useRetrieveAllSlicesRequestListener';
 import { usePullAll } from './usePullAll';
-import { StalenessUpdateModal, type StalenessUpdateActionKey } from '../components/modals/StalenessUpdateModal';
+import { StalenessUpdateModal, type StalenessUpdateAction, type StalenessUpdateActionKey } from '../components/modals/StalenessUpdateModal';
 import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
 import { sessionLogService } from '../services/sessionLogService';
 import { STALENESS_NUDGE_COUNTDOWN_SECONDS, STALENESS_NUDGE_VISIBLE_POLL_MS } from '../constants/staleness';
@@ -83,14 +83,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   // Safety: "automatic mode" must NEVER persist across refresh. It only applies to a workflow
   // the user explicitly initiates via the staleness nudge modal.
   const [automaticMode, setAutomaticMode] = useState<boolean>(false);
-  const [modalActions, setModalActions] = useState<Array<{
-    key: StalenessUpdateActionKey;
-    due: boolean;
-    checked: boolean;
-    disabled?: boolean;
-    description: string;
-    label: string;
-  }>>([]);
+  const [modalActions, setModalActions] = useState<StalenessUpdateAction[]>([]);
 
   // Countdown timer state for auto-pull when remote is ahead
   const [countdownKey, setCountdownKey] = useState<string | undefined>(undefined);
@@ -449,6 +442,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       });
       const gitPullDue = gitCollected.gitPullDue;
       const detectedRemoteSha = gitCollected.detectedRemoteSha;
+      const gitLocalSha = gitCollected.localSha;
+      const gitRemoteHeadSha = gitCollected.remoteHeadSha;
+      const gitRemoteCheckedAtMs = gitCollected.lastRemoteCheckedAtMs;
 
       const retrieveSignalCollected = await stalenessNudgeService.collectRetrieveSignal({
         nowMs: now,
@@ -490,7 +486,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         detectedRemoteSha !== null
           ? ({
               isRemoteAhead: gitPullDue,
-              localSha: undefined,
+              localSha: gitLocalSha,
               remoteHeadSha: detectedRemoteSha,
             } as const)
           : undefined;
@@ -528,16 +524,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
             })
           : null;
 
-      const actions: Array<{
-        key: StalenessUpdateActionKey;
-        label: string;
-        description: string;
-        due: boolean;
-        checked: boolean;
-        disabled?: boolean;
-        status?: 'due' | 'blocked' | 'unknown' | 'not_due';
-        lastDoneAtMs?: number;
-      }> = [
+      const actions: StalenessUpdateAction[] = [
         {
           key: 'reload',
           label: 'Reload page',
@@ -555,12 +542,26 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         {
           key: 'git-pull',
           label: 'Pull latest from git',
-          description: plan?.steps?.['git-pull']?.reason || 'Checks out the latest repository state (recommended if remote has new commits).',
+          description: (() => {
+            const base =
+              plan?.steps?.['git-pull']?.reason ||
+              'Compares remote HEAD SHA vs your local workspace SHA (recommended if remote has new commits).';
+            // If we have both SHAs, surface them in the description so "Due" is clearly SHA-driven.
+            if (gitLocalSha && detectedRemoteSha) {
+              const localShort = gitLocalSha.slice(0, 7);
+              const remoteShort = detectedRemoteSha.slice(0, 7);
+              return `${base} (Local: ${localShort}, Remote: ${remoteShort})`;
+            }
+            return base;
+          })(),
           due: gitPullDue,
           checked: plan?.recommendedChecked?.['git-pull'] ?? gitPullDue,
           status: plan?.steps?.['git-pull']?.status,
           disabled: !repository,
           lastDoneAtMs: gitPullLastDoneAtMs,
+          lastCheckedAtMs: gitRemoteCheckedAtMs,
+          localSha: gitLocalSha,
+          remoteSha: gitRemoteHeadSha ?? detectedRemoteSha ?? undefined,
         },
         {
           key: 'retrieve-all-slices',

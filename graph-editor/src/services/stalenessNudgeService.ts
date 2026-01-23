@@ -236,6 +236,12 @@ export interface CollectedGitSignal {
   gitPullDue: boolean;
   detectedRemoteSha: string | null;
   gitPullLastDoneAtMs?: number;
+  /** Workspace SHA used as "local" reference for the remote-ahead check (may be undefined if unknown). */
+  localSha?: string;
+  /** Remote HEAD SHA observed during the check (or last known; null/undefined when not checked). */
+  remoteHeadSha?: string | null;
+  /** Timestamp (ms) when remote HEAD was last checked for this scope (rate-limit stamp). */
+  lastRemoteCheckedAtMs?: number;
 }
 
 export interface CollectedRetrieveSignal {
@@ -558,23 +564,32 @@ class StalenessNudgeService {
     let gitPullDue = false;
     let detectedRemoteSha: string | null = null;
     let gitPullLastDoneAtMs: number | undefined;
+    let localSha: string | undefined;
+    let remoteHeadSha: string | null | undefined;
+    let lastRemoteCheckedAtMs: number | undefined;
 
     if (!repository) {
-      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
     }
 
     const scopeKey = isShareLive && shareGraph ? `${repository}-${branch}-${shareGraph}` : `${repository}-${branch}`;
     if (this.isSnoozed('git-pull', scopeKey, nowMs, storage)) {
-      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
     }
     if (!this.canPrompt('git-pull', nowMs, storage)) {
-      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
     }
 
     if (isShareLive && shareGraph) {
+      // Last checked timestamp (if any), even if we don't check in this run.
+      lastRemoteCheckedAtMs = safeGetNumber(storage, LS.shareLastRemoteCheckAtMs(this.shareScopeKey({ repository, branch, graph: shareGraph })));
       const shouldCheck = this.shouldCheckShareRemoteHead({ repository, branch, graph: shareGraph }, nowMs, storage);
       if (shouldCheck) {
         const status = await this.getShareRemoteAheadStatus({ repository, branch, graph: shareGraph }, storage);
+        localSha = status.localSha;
+        remoteHeadSha = status.remoteHeadSha;
+        // Refresh last-checked stamp after any attempted check.
+        lastRemoteCheckedAtMs = safeGetNumber(storage, LS.shareLastRemoteCheckAtMs(this.shareScopeKey({ repository, branch, graph: shareGraph })));
         if (status.isRemoteAhead && status.remoteHeadSha) {
           if (!this.isShareRemoteShaDismissed({ repository, branch, graph: shareGraph }, status.remoteHeadSha, storage)) {
             gitPullDue = true;
@@ -591,9 +606,15 @@ class StalenessNudgeService {
         gitPullLastDoneAtMs = undefined;
       }
     } else {
+      // Last checked timestamp (if any), even if we don't check in this run.
+      lastRemoteCheckedAtMs = safeGetNumber(storage, LS.lastRemoteCheckAtMs(`${repository}-${branch}`));
       const shouldCheck = this.shouldCheckRemoteHead(repository, branch, nowMs, storage);
       if (shouldCheck) {
         const status = await this.getRemoteAheadStatus(repository, branch, storage);
+        localSha = status.localSha;
+        remoteHeadSha = status.remoteHeadSha;
+        // Refresh last-checked stamp after any attempted check.
+        lastRemoteCheckedAtMs = safeGetNumber(storage, LS.lastRemoteCheckAtMs(`${repository}-${branch}`));
         if (status.isRemoteAhead && status.remoteHeadSha) {
           if (!this.isRemoteShaDismissed(repository, branch, status.remoteHeadSha, storage)) {
             gitPullDue = true;
@@ -611,7 +632,7 @@ class StalenessNudgeService {
       }
     }
 
-    return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+    return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
   }
 
   /**

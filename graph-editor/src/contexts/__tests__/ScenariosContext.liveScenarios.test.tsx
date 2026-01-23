@@ -499,6 +499,12 @@ describe('ScenariosContext - Live Scenarios', () => {
 
       // Verify fetchDataService was called (indicates regeneration happened)
       expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalled();
+
+      // IMPORTANT: Live scenario regeneration should match Current semantics by default:
+      // Stage-2 (LAG topo + inbound-n + evidence/forecast blending) must run unless explicitly disabled.
+      expect((fetchOrchestratorService as any).refreshFromFilesWithRetries).toHaveBeenCalledWith(
+        expect.objectContaining({ skipStage2: false })
+      );
     });
 
     it('should record lastEffectiveDSL after regeneration', async () => {

@@ -862,7 +862,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         'data-fetch',
         'SCENARIO_REGEN_PIPELINE',
         `Scenario regen pipeline: ${id}`,
-        { scenarioId: id, effectiveFetchDSL, allowFetchFromSource, skipStage2: options?.skipStage2 ?? true }
+        { scenarioId: id, effectiveFetchDSL, allowFetchFromSource, skipStage2: options?.skipStage2 ?? false }
       );
       try {
         const { plan } = fetchOrchestratorService.buildPlan({
@@ -896,7 +896,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           graphGetter: () => scenarioGraph as any,
           setGraph: setScenarioGraph as any,
           dsl: effectiveFetchDSL,
-          skipStage2: options?.skipStage2 ?? true,
+          skipStage2: options?.skipStage2 ?? false,
           parentLogId: regenLogId,
           attempts: 6,
           delayMs: 75,

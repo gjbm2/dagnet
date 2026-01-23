@@ -1607,8 +1607,11 @@ export interface LAGHelpers {
     queryDate: Date,
     windowFilter?: { start: Date; end: Date }
   ) => CohortData[];
-  /** Compute aggregate median/mean lag from cohorts */
-  aggregateLatencyStats: (cohorts: CohortData[]) => { median_lag_days: number; mean_lag_days: number } | undefined;
+  /** Compute aggregate median/mean lag from cohorts (optionally recency-weighted by half-life) */
+  aggregateLatencyStats: (
+    cohorts: CohortData[],
+    recencyHalfLifeDays?: number
+  ) => { median_lag_days: number; mean_lag_days: number } | undefined;
 }
 
 /**
@@ -2032,7 +2035,7 @@ export function enhanceGraphLatencies(
         if (!isWindowMode) {
           const fromNodeIdForPrior = normalizeNodeRef(edge.from);
           const windowCohortsForPriorOnly = windowAggregateFn(paramValues, queryDate, undefined);
-          const windowLagStatsForPriorOnly = helpers.aggregateLatencyStats(windowCohortsForPriorOnly);
+          const windowLagStatsForPriorOnly = helpers.aggregateLatencyStats(windowCohortsForPriorOnly, MODEL.RECENCY_HALF_LIFE_DAYS);
           const baselineMedianLagForPrior =
             windowLagStatsForPriorOnly?.median_lag_days ?? 0;
 
@@ -2069,10 +2072,15 @@ export function enhanceGraphLatencies(
       });
 
       // Get aggregate lag stats for this edge
-      const lagStats = helpers.aggregateLatencyStats(cohortsAll.length > 0 ? cohortsAll : cohortsScoped);
+      const lagStats = helpers.aggregateLatencyStats(cohortsAll.length > 0 ? cohortsAll : cohortsScoped, MODEL.RECENCY_HALF_LIFE_DAYS);
       const aggregateMedianLag = lagStats?.median_lag_days ?? effectiveHorizonDays / 2;
       const aggregateMeanLag = lagStats?.mean_lag_days;
-      const totalKForFit = (cohortsAll.length > 0 ? cohortsAll : cohortsScoped).reduce((sum, c) => sum + (c.k ?? 0), 0);
+      const cohortsForFit = cohortsAll.length > 0 ? cohortsAll : cohortsScoped;
+      // Fit quality gate should use an effective converter count consistent with horizon recency weighting.
+      const totalKForFit = cohortsForFit.reduce(
+        (sum, c) => sum + (c.k ?? 0) * computeRecencyWeight(c.age ?? 0, MODEL.RECENCY_HALF_LIFE_DAYS),
+        0
+      );
 
       // Get anchor median lag for downstream age adjustment.
       // This is the OBSERVED median lag from anchor (A) to this edge's source,
@@ -2170,7 +2178,8 @@ export function enhanceGraphLatencies(
         anchorMedianLag,  // Use observed anchor lag, NOT path_t95
         totalKForFit,     // Fit quality gate should consider full-history converters when available
         cohortsAll.length > 0 ? cohortsAll : cohortsScoped, // p∞ estimation should use full-history mature cohorts
-        edgeT95  // Authoritative t95 from edge.p.latency.t95 if set
+        edgeT95,  // Authoritative t95 from edge.p.latency.t95 if set
+        MODEL.RECENCY_HALF_LIFE_DAYS
       );
 
       // ---------------------------------------------------------------------
@@ -2198,15 +2207,27 @@ export function enhanceGraphLatencies(
         );
 
         if (anchorLagCohorts.length > 0) {
-          const totalNForAnchor = anchorLagCohorts.reduce((sum, c) => sum + c.n, 0);
-          const anchorMedian = anchorLagCohorts.reduce((sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
-          const anchorMean = anchorLagCohorts.reduce(
-            (sum, c) => sum + c.n * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
+          const totalWNForAnchor = anchorLagCohorts.reduce(
+            (sum, c) => sum + c.n * computeRecencyWeight(c.age ?? 0, MODEL.RECENCY_HALF_LIFE_DAYS),
             0
-          ) / (totalNForAnchor || 1);
+          );
+          const anchorMedian =
+            anchorLagCohorts.reduce(
+              (sum, c) => sum + c.n * computeRecencyWeight(c.age ?? 0, MODEL.RECENCY_HALF_LIFE_DAYS) * (c.anchor_median_lag_days ?? 0),
+              0
+            ) / (totalWNForAnchor || 1);
+          const anchorMean =
+            anchorLagCohorts.reduce(
+              (sum, c) =>
+                sum +
+                c.n *
+                  computeRecencyWeight(c.age ?? 0, MODEL.RECENCY_HALF_LIFE_DAYS) *
+                  (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
+              0
+            ) / (totalWNForAnchor || 1);
 
           // Anchor fit: A→X distribution inferred from anchor moments on downstream cohort data.
-          const anchorFitInitial = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
+          const anchorFitInitial = fitLagDistribution(anchorMedian, anchorMean, totalWNForAnchor);
 
           // Join-aware horizon constraint for A→X:
           // Use upstream computed path horizons (A→X) from inbound edges to X, weighted by their p.mean,
@@ -2835,7 +2856,7 @@ export function enhanceGraphLatencies(
       //
       // So: prefer the window-slice median lag as the baseline prior if available.
       const windowCohortsForPrior = windowAggregateFn(paramValues, queryDate, undefined);
-      const windowLagStatsForPrior = helpers.aggregateLatencyStats(windowCohortsForPrior);
+      const windowLagStatsForPrior = helpers.aggregateLatencyStats(windowCohortsForPrior, MODEL.RECENCY_HALF_LIFE_DAYS);
       const edgeBaselineMedianLag =
         windowLagStatsForPrior?.median_lag_days ?? aggregateMedianLag;
       const currentPriorToNode = nodeMedianLagPrior.get(fromNodeId) ?? 0;

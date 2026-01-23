@@ -5,6 +5,7 @@ import { repositoryOperationsService } from './repositoryOperationsService';
 import { executeRetrieveAllSlicesWithProgressToast } from './retrieveAllSlicesService';
 import { stalenessNudgeService } from './stalenessNudgeService';
 import { APP_VERSION } from '../version';
+import { lagHorizonsService } from './lagHorizonsService';
 
 export interface DailyRetrieveAllAutomationOptions {
   repository: string;
@@ -121,6 +122,19 @@ class DailyRetrieveAllAutomationService {
         undefined,
         retrieveResult as any
       );
+
+      // After Retrieve All, recompute + persist GLOBAL horizons (uncontexted, recency-weighted).
+      // Best-effort: do not fail the automation run if this step fails.
+      try {
+        await lagHorizonsService.recomputeHorizons({
+          mode: 'global',
+          getGraph,
+          setGraph,
+          reason: 'daily-retrieve-all-automation',
+        });
+      } catch {
+        sessionLogService.addChild(logOpId, 'warning', 'HORIZONS_GLOBAL_RECOMPUTE_FAILED', 'Global horizons recompute failed (best-effort)');
+      }
 
       if (shouldAbort?.()) {
         sessionLogService.endOperation(logOpId, 'warning', 'Daily automation aborted after retrieve');

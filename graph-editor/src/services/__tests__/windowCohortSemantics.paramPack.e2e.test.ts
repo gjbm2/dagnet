@@ -33,7 +33,7 @@ import { extractParamsFromGraph } from '../GraphParamExtractor';
 import { flattenParams } from '../ParamPackDSLService';
 import { fileRegistry } from '../../contexts/TabContext';
 import type { Graph } from '../../types';
-import { FORECAST_BLEND_LAMBDA } from '../../constants/latency';
+import { computeBlendedMean } from '../statisticalEnhancementService';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -127,13 +127,11 @@ function computeExpectedBlendMean(args: {
   nBaseline: number;
 }): number {
   const { evidenceMean, forecastMean, completeness, nQuery, nBaseline } = args;
-  // Mirror the canonical blend semantics (see statisticalEnhancementService.computeBlendedMean).
-  const nEff = completeness * nQuery;
-  const m0 = FORECAST_BLEND_LAMBDA * nBaseline;
-  const remaining = Math.max(0, 1 - completeness);
-  const m0Eff = m0 * remaining;
-  const wEvidence = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
-  return wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
+  const blended = computeBlendedMean({ evidenceMean, forecastMean, completeness, nQuery, nBaseline });
+  if (blended === undefined) {
+    throw new Error('computeBlendedMean returned undefined');
+  }
+  return blended;
 }
 
 describe('Window/Cohort LAG semantics (param-pack integration)', () => {

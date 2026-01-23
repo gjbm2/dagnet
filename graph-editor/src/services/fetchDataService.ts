@@ -124,6 +124,25 @@ export interface FetchOptions {
    * overriding them.
    */
   skipStage2?: boolean;
+
+  /**
+   * When true, allow Stage‑2 to write horizon fields (t95/path_t95) onto the graph.
+   *
+   * Policy:
+   * - Default false to avoid "floatiness" / non-deterministic behaviour after ordinary fetches.
+   * - Explicit flows (Retrieve All post-pass, "Latency horizons" actions) may set this true and
+   *   then persist to parameter files in the same operation.
+   */
+  writeLagHorizonsToGraph?: boolean;
+
+  /**
+   * When mode === 'from-file' and item.type === 'parameter', suppress the “missing days” warning toast and
+   * associated session-log child.
+   *
+   * This is intended for explicit global recompute workflows that deliberately request very wide windows
+   * (e.g. 10y) where “missing history” is expected and not actionable.
+   */
+  suppressMissingDataToast?: boolean;
 }
 
 export interface FetchResult {
@@ -583,6 +602,7 @@ async function fetchSingleItemInternal(
           conditionalIndex: item.conditionalIndex, // For conditional_p entries
           includePermissions: options?.includePermissions === true,
           copyOptions: options?.copyOptions,
+          suppressMissingDataToast: options?.suppressMissingDataToast === true,
         });
         // If getParameterFromFile returned a failure or warning, propagate it
         if (!result.success) {
@@ -1597,7 +1617,8 @@ export async function runStage2EnhancementsAndInboundN(
                 blendedMean: ev.blendedMean,
                 forecast: ev.forecast,
                 evidence: ev.evidence,
-              }))
+              })),
+              { writeHorizonsToGraph: itemOptions?.writeLagHorizonsToGraph === true }
             );
 
             // CRITICAL: Commit the post-LAG graph to state immediately.
@@ -1610,24 +1631,10 @@ export async function runStage2EnhancementsAndInboundN(
       // Keep local reference for inbound-n debugging and computation
       finalGraph = nextGraph;
 
-      // Option A (graph-mastered): Persist derived latency horizons back to parameter files so
-      // versioned fetch (file-backed) cannot diverge from direct fetch (graph-backed).
-      //
-      // IMPORTANT:
-      // - Uses the existing putParameterToFile() metadata-only write path (UpdateManager mappings).
-      // - Honours file-side override flags (latency.*_overridden) via UpdateManager override handling.
-      // - Suppresses toasts by forcing batchMode during the sync.
-      //
-      // CRITICAL: In `from-file` mode we must not write back to files as a side-effect of a read.
-      // This is both a behavioural invariant (reads should be read-only) and it prevents test hangs
-      // under fake timers (FileRegistry/Dexie may schedule internal work via timers).
-      if (itemOptions?.mode !== 'from-file') {
-        await persistGraphMasteredLatencyToParameterFiles({
-          graph: finalGraph,
-          setGraph,
-          edgeIds: edgeValuesToApply.map(ev => ev.edgeUuid),
-        });
-      }
+      // NOTE (policy):
+      // We do NOT persist derived horizons (t95/path_t95) back to parameter files as a side-effect
+      // of ordinary fetches. Persisting horizons is an explicit action (e.g. after Retrieve All, or
+      // via a dedicated "LAG horizons" menu action) so users can control automation via override flags.
             
             // DEBUG: Log p.mean values AFTER LAG application
             console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
@@ -1805,15 +1812,24 @@ export async function persistGraphMasteredLatencyToParameterFiles(args: {
       const paramId = edge?.p?.id;
       if (!paramId) continue;
 
-      // Only persist when there is something to persist.
-      // (If path_t95 is missing, we avoid writing undefined into files.)
       const lat = edge?.p?.latency;
-      const hasHorizon =
-        lat && (
-          (typeof lat.t95 === 'number' && Number.isFinite(lat.t95)) ||
-          (typeof lat.path_t95 === 'number' && Number.isFinite(lat.path_t95))
-        );
-      if (!hasHorizon) continue;
+      // Only persist when there is something meaningful to persist.
+      //
+      // Policy:
+      // - Persist edge t95 only for latency-enabled edges (local latency parameter).
+      // - Persist path_t95 only when it is a positive finite horizon (i.e. behind a lagged path).
+      // - Avoid writing 0/undefined horizons into files (prevents churn + accidental "unlagging").
+      const shouldWriteT95 =
+        lat?.latency_parameter === true &&
+        typeof lat.t95 === 'number' &&
+        Number.isFinite(lat.t95) &&
+        lat.t95 > 0;
+      const shouldWritePath =
+        typeof lat?.path_t95 === 'number' &&
+        Number.isFinite(lat.path_t95) &&
+        lat.path_t95 > 0;
+
+      if (!shouldWriteT95 && !shouldWritePath) continue;
 
       await dataOperationsService.putParameterToFile({
         paramId,

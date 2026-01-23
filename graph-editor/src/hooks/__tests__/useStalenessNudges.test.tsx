@@ -288,16 +288,21 @@ describe('useStalenessNudges', () => {
       let gitPullDue = false;
       let detectedRemoteSha: string | null = null;
       let gitPullLastDoneAtMs: number | undefined;
+      let localSha: string | undefined;
+      let remoteHeadSha: string | null | undefined;
+      const lastRemoteCheckedAtMs = Date.now();
 
-      if (!repository) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
-      if (isShareLive) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+      if (!repository) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
+      if (isShareLive) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
 
       const scopeKey = `${repository}-${branch}`;
-      if (hoisted.isSnoozed('git-pull', scopeKey, nowMs, storage)) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
-      if (!hoisted.canPrompt('git-pull', nowMs, storage)) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+      if (hoisted.isSnoozed('git-pull', scopeKey, nowMs, storage)) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
+      if (!hoisted.canPrompt('git-pull', nowMs, storage)) return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
 
       if (hoisted.shouldCheckRemoteHead(repository, branch, nowMs, storage)) {
         const status = await hoisted.getRemoteAheadStatus(repository, branch, storage);
+        localSha = status?.localSha;
+        remoteHeadSha = status?.remoteHeadSha;
         if (status?.isRemoteAhead && status.remoteHeadSha) {
           if (!hoisted.isRemoteShaDismissed(repository, branch, status.remoteHeadSha, storage)) {
             gitPullDue = true;
@@ -313,7 +318,7 @@ describe('useStalenessNudges', () => {
         gitPullLastDoneAtMs = undefined;
       }
 
-      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs };
+      return { gitPullDue, detectedRemoteSha, gitPullLastDoneAtMs, localSha, remoteHeadSha, lastRemoteCheckedAtMs };
     });
 
     hoisted.collectRetrieveSignal.mockImplementation(async ({ nowMs, storage, retrieveTargetGraphFileId, repository, branch, targetSliceDsl }: any) => {

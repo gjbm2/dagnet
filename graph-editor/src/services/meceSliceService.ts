@@ -73,6 +73,14 @@ export type MECEResolutionOptions = {
    * (This is the safe default for "treat as total population".)
    */
   requireComplete?: boolean;
+  /**
+   * How to select among multiple eligible MECE generations.
+   *
+   * - most_recent (default): pick the freshest coherent generation (current behaviour).
+   * - max_coverage: prefer using as much file-backed data as available (union across generations),
+   *   intended for explicit global recomputations where “use all data in files” is desired.
+   */
+  selectionMode?: 'most_recent' | 'max_coverage';
 };
 
 function isEligibleContextOnlySlice(value: ParameterValue): { key: string; value: string } | null {
@@ -277,9 +285,11 @@ function computeMECEGenerationCandidates(
 export function selectImplicitUncontextedSliceSetSync(args: {
   candidateValues: ParameterValue[];
   requireCompleteMECE?: boolean;
+  selectionMode?: 'most_recent' | 'max_coverage';
 }): ImplicitUncontextedSelection {
   const { candidateValues } = args;
   const requireCompleteMECE = args.requireCompleteMECE !== false;
+  const selectionMode = args.selectionMode ?? 'most_recent';
 
   const warnings: string[] = [];
 
@@ -293,21 +303,80 @@ export function selectImplicitUncontextedSliceSetSync(args: {
   const meceGen = computeMECEGenerationCandidates(candidateValues, { requireComplete: requireCompleteMECE });
   const meceCandidates = meceGen.candidates;
 
-  // Pick best MECE generation by recency (newest set wins). Tie-breaker: prefer the set with more slices.
-  const bestMECE =
-    meceCandidates.length > 0
-      ? meceCandidates.reduce((best, cur) => {
-          if (cur.recencyMs > best.recencyMs) return cur;
-          if (cur.recencyMs < best.recencyMs) return best;
-          if (cur.values.length > best.values.length) return cur;
-          // Deterministic final tie-breaker: key then signature lexicographically
-          const bestSig = best.querySignature ?? '';
-          const curSig = cur.querySignature ?? '';
-          const k = cur.key.localeCompare(best.key);
-          if (k !== 0) return k < 0 ? cur : best;
-          return curSig.localeCompare(bestSig) < 0 ? cur : best;
-        })
-      : undefined;
+  const bestMECE = (() => {
+    if (meceCandidates.length === 0) return undefined;
+    if (selectionMode === 'max_coverage') {
+      // For max coverage, pick the best MECE *key* (ignoring generation), then include ALL slices for that key.
+      // This avoids dropping older cohort windows that can still contribute useful lag information.
+      const eligible: Array<{ pv: ParameterValue; key: string; value: string }> = [];
+      for (const pv of candidateValues) {
+        const ctx = isEligibleContextOnlySlice(pv);
+        if (!ctx) continue;
+        eligible.push({ pv, key: ctx.key, value: ctx.value });
+      }
+      const byKey = new Map<string, { pvs: ParameterValue[]; values: Set<string> }>();
+      for (const e of eligible) {
+        const entry = byKey.get(e.key) ?? { pvs: [], values: new Set<string>() };
+        entry.pvs.push(e.pv);
+        entry.values.add(e.value);
+        byKey.set(e.key, entry);
+      }
+
+      const candidatesByKey: Array<{ key: string; pvs: ParameterValue[]; recencyMs: number; sliceCount: number }> = [];
+      for (const [key, entry] of byKey.entries()) {
+        const mockWindows = Array.from(entry.values).map((v) => ({ sliceDSL: `context(${key}:${v})` }));
+        const raw = contextRegistry.detectMECEPartitionSync(mockWindows, key);
+        if (raw.policy === 'unknown') continue;
+        if (!raw.isMECE) continue;
+        if (!raw.canAggregate) continue;
+        if (requireCompleteMECE && !raw.isComplete) continue;
+        const recencyMs =
+          entry.pvs.length > 0
+            ? entry.pvs.reduce((min, cur) => Math.min(min, parameterValueRecencyMs(cur)), Number.POSITIVE_INFINITY)
+            : 0;
+        candidatesByKey.push({
+          key,
+          pvs: entry.pvs,
+          recencyMs: Number.isFinite(recencyMs) ? recencyMs : 0,
+          sliceCount: entry.pvs.length,
+        });
+      }
+      if (candidatesByKey.length === 0) return undefined;
+      const bestKey = candidatesByKey.reduce((best, cur) => {
+        // Prefer the key with MORE slices (more coverage), then fresher (stalest-member recency),
+        // then deterministic key name.
+        if (cur.sliceCount > best.sliceCount) return cur;
+        if (cur.sliceCount < best.sliceCount) return best;
+        if (cur.recencyMs > best.recencyMs) return cur;
+        if (cur.recencyMs < best.recencyMs) return best;
+        return cur.key.localeCompare(best.key) < 0 ? cur : best;
+      });
+
+      // Return as a MECE generation candidate-like object (querySignature is intentionally null / mixed).
+      return {
+        key: bestKey.key,
+        querySignature: null,
+        // IMPORTANT: Do NOT dedupe by slice dims here — we want multiple cohort-window slices to survive.
+        values: bestKey.pvs,
+        mece: { isComplete: true, canAggregate: true, missingValues: [], policy: 'max_coverage' },
+        warnings: [],
+        recencyMs: bestKey.recencyMs,
+      } as MECEGenerationCandidate;
+    }
+
+    // Default: pick best MECE generation by recency (newest set wins). Tie-breaker: prefer the set with more slices.
+    return meceCandidates.reduce((best, cur) => {
+      if (cur.recencyMs > best.recencyMs) return cur;
+      if (cur.recencyMs < best.recencyMs) return best;
+      if (cur.values.length > best.values.length) return cur;
+      // Deterministic final tie-breaker: key then signature lexicographically
+      const bestSig = best.querySignature ?? '';
+      const curSig = cur.querySignature ?? '';
+      const k = cur.key.localeCompare(best.key);
+      if (k !== 0) return k < 0 ? cur : best;
+      return curSig.localeCompare(bestSig) < 0 ? cur : best;
+    });
+  })();
 
   const hasMECECandidate = !!bestMECE;
   const meceRecencyMs = bestMECE ? bestMECE.recencyMs : null;

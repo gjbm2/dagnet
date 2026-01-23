@@ -3449,7 +3449,8 @@ export class UpdateManager {
         k?: number;
         stdev?: number;
       };
-    }>
+    }>,
+    opts?: { writeHorizonsToGraph?: boolean }
   ): any {
     console.log('[UpdateManager] applyBatchLAGValues called:', {
       edgeUpdateCount: edgeUpdates?.length ?? 0,
@@ -3472,6 +3473,8 @@ export class UpdateManager {
     // Track which edges need rebalancing (by source node)
     const edgesToRebalance: string[] = [];
     
+    const writeHorizonsToGraph = opts?.writeHorizonsToGraph === true;
+
     // STEP 2: Apply ALL latency values and mean changes
     for (const update of edgeUpdates) {
       const edgeIndex = nextGraph.edges.findIndex((e: any) => 
@@ -3501,12 +3504,16 @@ export class UpdateManager {
         edge.p.latency.mean_lag_days = update.latency.mean_lag_days;
       }
       // Phase 2: respect override flags
-      if (edge.p.latency.t95_overridden !== true) {
-        edge.p.latency.t95 = this.roundHorizonDays(update.latency.t95);
+      if (writeHorizonsToGraph) {
+        if (edge.p.latency.t95_overridden !== true) {
+          edge.p.latency.t95 = this.roundHorizonDays(update.latency.t95);
+        }
       }
       edge.p.latency.completeness = update.latency.completeness;
-      if (edge.p.latency.path_t95_overridden !== true) {
-        edge.p.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);
+      if (writeHorizonsToGraph) {
+        if (edge.p.latency.path_t95_overridden !== true) {
+          edge.p.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);
+        }
       }
       
       // Apply forecast if provided

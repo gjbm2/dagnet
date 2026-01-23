@@ -3626,6 +3626,14 @@ class DataOperationsService {
      * Used by retrieve-all to show real-time progress.
      */
     onCacheAnalysis?: (result: CacheAnalysisResult) => void;
+    /**
+     * Optional forecasting settings (used for consistent recency weighting in horizon estimation).
+     * If omitted, defaults are loaded from forecasting settings / constants.
+     */
+    forecasting?: {
+      RECENCY_HALF_LIFE_DAYS?: number;
+      DEFAULT_T95_DAYS?: number;
+    };
   }): Promise<GetFromSourceResult> {
       const {
         objectType,
@@ -5025,25 +5033,39 @@ class DataOperationsService {
                     (c.anchor_median_lag_days ?? 0) > 0
                   );
                   if (anchorCandidates.length > 0) {
-                    const totalNForAnchor = anchorCandidates.reduce((sum, c) => sum + c.n, 0);
-                    const anchorMedian = anchorCandidates.reduce((sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
-                    const anchorMean = anchorCandidates.reduce(
-                      (sum, c) => sum + c.n * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
-                      0
-                    ) / (totalNForAnchor || 1);
-                    const edgeLag = aggregateLatencyStats(cohorts);
-                    const totalK = cohorts.reduce((sum, c) => sum + (c.k ?? 0), 0);
+                    const halfLife =
+                      typeof options?.forecasting?.RECENCY_HALF_LIFE_DAYS === 'number' &&
+                      Number.isFinite(options.forecasting.RECENCY_HALF_LIFE_DAYS) &&
+                      options.forecasting.RECENCY_HALF_LIFE_DAYS > 0
+                        ? options.forecasting.RECENCY_HALF_LIFE_DAYS
+                        : RECENCY_HALF_LIFE_DAYS;
+
+                    // Use the same recency weighting semantics as forecasts for horizon estimation.
+                    const w = (ageDays: number) => Math.exp(-Math.LN2 * Math.max(0, ageDays) / halfLife);
+
+                    const totalWNForAnchor = anchorCandidates.reduce((sum, c) => sum + c.n * w(c.age ?? 0), 0);
+                    const anchorMedian =
+                      anchorCandidates.reduce((sum, c) => sum + c.n * w(c.age ?? 0) * (c.anchor_median_lag_days ?? 0), 0) /
+                      (totalWNForAnchor || 1);
+                    const anchorMean =
+                      anchorCandidates.reduce(
+                        (sum, c) => sum + c.n * w(c.age ?? 0) * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
+                        0
+                      ) / (totalWNForAnchor || 1);
+
+                    const edgeLag = aggregateLatencyStats(cohorts, halfLife);
+                    const totalWK = cohorts.reduce((sum, c) => sum + (c.k ?? 0) * w(c.age ?? 0), 0);
                     if (edgeLag?.median_lag_days && edgeLag.median_lag_days > 0) {
-                      const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
-                      const edgeFit = fitLagDistribution(edgeLag.median_lag_days, edgeLag.mean_lag_days, totalK);
+                      const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalWNForAnchor);
+                      const edgeFit = fitLagDistribution(edgeLag.median_lag_days, edgeLag.mean_lag_days, totalWK);
                       const estimate = approximateLogNormalSumPercentileDays(anchorFit, edgeFit, LATENCY_PATH_T95_PERCENTILE);
                       if (estimate !== undefined && Number.isFinite(estimate) && estimate > 0) {
                         effectivePathT95 = estimate;
                         effectivePathT95Source = 'moment-matched';
                         momentMatchDebug = {
                           percentile: LATENCY_PATH_T95_PERCENTILE,
-                          totalNForAnchor,
-                          totalKForEdge: totalK,
+                          totalNForAnchor: totalWNForAnchor,
+                          totalKForEdge: totalWK,
                           anchorMedian,
                           anchorMean,
                           edgeMedian: edgeLag.median_lag_days,
