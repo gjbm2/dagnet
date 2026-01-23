@@ -19,6 +19,7 @@ import { useRetrieveAllSlicesRequestListener } from '../../hooks/useRetrieveAllS
 import { PinnedQueryModal } from '../modals/PinnedQueryModal';
 import { db } from '../../db/appDatabase';
 import { AutoUpdateChartsMenubarItem } from './AutoUpdateChartsMenubarItem';
+import { useLagHorizons } from '../../hooks/useLagHorizons';
 
 /**
  * Data Menu
@@ -34,13 +35,24 @@ export function DataMenu() {
   const { activeTabId, tabs, operations } = useTabContext();
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-') && activeTab?.viewMode === 'interactive';
+
+  // For global menu actions (like latency horizon recompute), we need a graph store even if the
+  // *currently focused* tab is not the interactive graph tab (e.g. user is viewing a parameter file).
+  //
+  // Prefer the active tab when it's a graph tab; otherwise fall back to any open interactive graph tab.
+  const graphTabForMenu =
+    (activeTab && isGraphTab)
+      ? activeTab
+      : (tabs.find(t => t.fileId.startsWith('graph-') && t.viewMode === 'interactive') ||
+         tabs.find(t => t.fileId.startsWith('graph-')) ||
+         null);
   
   // Get graph data from fileRegistry or graph store
-  const graphFile = activeTab && isGraphTab ? fileRegistry.getFile(activeTab.fileId) : null;
+  const graphFile = graphTabForMenu ? fileRegistry.getFile(graphTabForMenu.fileId) : null;
   const graphFromFile = graphFile?.data as GraphData | undefined;
   
   // Get graph store for currentDSL and setGraph
-  const graphStore = activeTab && isGraphTab ? getGraphStore(activeTab.fileId) : null;
+  const graphStore = graphTabForMenu ? getGraphStore(graphTabForMenu.fileId) : null;
   
   // Subscribe to graph store changes so we get updates when dataInterestsDSL changes
   const [graphFromStore, setGraphFromStore] = useState<GraphData | null>(
@@ -83,6 +95,12 @@ export function DataMenu() {
     graph: graph as any,
     setGraph: handleSetGraph as any,
     currentDSL: () => graphStore?.getState().currentDSL || '',  // AUTHORITATIVE DSL from graphStore
+  });
+
+  const lagHorizons = useLagHorizons({
+    getGraph: () => (graphStore?.getState().graph as any) || null,
+    setGraph: handleSetGraph as any,
+    getCurrentDsl: () => graphStore?.getState().currentDSL || '',
   });
   
   // Track selection state (will be wired up later)
@@ -805,6 +823,31 @@ export function DataMenu() {
             nodeId={selectedNodeId} 
             edgeId={selectedEdgeId} 
           />
+
+          {/* LAG horizons (explicit recompute + automation controls) */}
+          <Menubar.Sub>
+            <Menubar.SubTrigger className="menubar-item">
+              Latency horizons
+              <div className="menubar-right-slot">›</div>
+            </Menubar.SubTrigger>
+            <Menubar.Portal>
+              <Menubar.SubContent className="menubar-content" alignOffset={-4}>
+                <Menubar.Item className="menubar-item" disabled={!graphStore} onSelect={() => void lagHorizons.recomputeGlobal()}>
+                  Recompute globally (uncontexted)
+                </Menubar.Item>
+                <Menubar.Item className="menubar-item" disabled={!graphStore} onSelect={() => void lagHorizons.recomputeCurrent()}>
+                  Recompute based on current
+                </Menubar.Item>
+                <Menubar.Separator className="menubar-separator" />
+                <Menubar.Item className="menubar-item" disabled={!graphStore} onSelect={() => void lagHorizons.setAllOverrides()}>
+                  Set all horizons overrides
+                </Menubar.Item>
+                <Menubar.Item className="menubar-item" disabled={!graphStore} onSelect={() => void lagHorizons.removeAllOverrides()}>
+                  Remove all horizons overrides
+                </Menubar.Item>
+              </Menubar.SubContent>
+            </Menubar.Portal>
+          </Menubar.Sub>
           
           <Menubar.Separator className="menubar-separator" />
           

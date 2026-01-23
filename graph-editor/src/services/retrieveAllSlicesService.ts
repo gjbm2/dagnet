@@ -9,6 +9,7 @@ import { resolveRelativeDate, formatDateUK } from '../lib/dateFormat';
 import { buildFetchPlanProduction } from './fetchPlanBuilderService';
 import { summarisePlan, type FetchPlan, type FetchPlanItem } from './fetchPlanTypes';
 import { fetchDataService, type FetchItem } from './fetchDataService';
+import { lagHorizonsService } from './lagHorizonsService';
 
 /**
  * Current item cache status - reported immediately after cache analysis, before API fetch.
@@ -574,6 +575,25 @@ class RetrieveAllSlicesService {
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           sessionLogService.endOperation(topoLogId, 'error', `Post-retrieve topo pass failed: ${msg}`);
+        }
+      }
+
+      // -------------------------------------------------------------------
+      // Post-retrieve: recompute + persist GLOBAL horizons (uncontexted, recency-weighted).
+      //
+      // This is the canonical time to "improve the horizon model", because Retrieve All
+      // has just populated the widest slice cache coverage we have.
+      // -------------------------------------------------------------------
+      if (!simulate && !aborted && totalSuccess > 0) {
+        try {
+          await lagHorizonsService.recomputeHorizons({
+            mode: 'global',
+            getGraph,
+            setGraph,
+            reason: 'retrieve-all-slices',
+          });
+        } catch {
+          // Best-effort: do not fail retrieve-all because horizon persistence failed.
         }
       }
 

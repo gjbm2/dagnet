@@ -36,6 +36,12 @@ export interface StalenessUpdateAction {
   status?: StalenessUpdateActionStatus;
   /** For display: last completion time (ms since epoch). */
   lastDoneAtMs?: number;
+  /** For display: last time we checked remote state (ms since epoch). */
+  lastCheckedAtMs?: number;
+  /** For display: workspace/local SHA used for the remote-ahead check. */
+  localSha?: string;
+  /** For display: remote HEAD SHA observed during the check. */
+  remoteSha?: string;
 }
 
 export interface StalenessUpdateModalProps {
@@ -118,12 +124,14 @@ export function StalenessUpdateModal({
     // Reload is version-delta driven; "Loaded at" is informational only.
     // Never colour it as "stale by time" to avoid implying a time-based trigger.
     if (key === 'reload') return Number.POSITIVE_INFINITY;
-    if (key === 'git-pull') return STALENESS_NUDGE_GIT_PULL_LAST_DONE_RED_AFTER_MS;
+    // Git pull due-ness is SHA-driven; do not colour it as "stale by time".
+    if (key === 'git-pull') return Number.POSITIVE_INFINITY;
     return STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS;
   };
 
   const lastDoneColourFor = (key: StalenessUpdateActionKey, lastDoneAtMs?: number): string => {
     if (key === 'reload') return '#6b7280'; // grey (informational only)
+    if (key === 'git-pull') return '#6b7280'; // grey (informational only; not time-driven)
     if (!lastDoneAtMs) return '#6b7280'; // grey (unknown/never)
     const age = Math.max(0, nowMs - lastDoneAtMs);
     const redAfter = lastDoneRedAfterMsFor(key);
@@ -136,6 +144,12 @@ export function StalenessUpdateModal({
   useEffect(() => {
     if (hasCountdown) ensureCountdownStyles();
   }, [hasCountdown]);
+
+  const formatShaShort = (sha?: string) => {
+    const s = typeof sha === 'string' ? sha.trim() : '';
+    if (!s) return undefined;
+    return s.length <= 7 ? s : s.slice(0, 7);
+  };
 
   const modalContent = (
     <div className="modal-overlay" onClick={onClose}>
@@ -230,21 +244,63 @@ export function StalenessUpdateModal({
                           <div style={{ fontSize: 12, color: statusColourFor(a), whiteSpace: 'nowrap' }}>
                             {statusLabelFor(a)}
                           </div>
-                          <div
-                            style={{
-                              fontSize: 12,
-                              color: lastDoneColourFor(a.key, a.lastDoneAtMs),
-                              whiteSpace: 'nowrap',
-                              fontVariantNumeric: 'tabular-nums',
-                            }}
-                            title={
-                              a.key === 'reload'
-                                ? (a.lastDoneAtMs ? `Page loaded: ${formatDmyHm(a.lastDoneAtMs)}` : 'Page loaded: unknown')
-                                : (a.lastDoneAtMs ? `Last done: ${formatDmyHm(a.lastDoneAtMs)}` : 'Last done: Never')
-                            }
-                          >
-                            {a.key === 'reload' ? 'Loaded' : 'Last'}: {a.lastDoneAtMs ? formatDmyHm(a.lastDoneAtMs) : (a.key === 'reload' ? 'Unknown' : 'Never')}
-                          </div>
+                          {a.key === 'git-pull' ? (
+                            <>
+                              {(a.localSha || a.remoteSha) && (
+                                <div
+                                  style={{
+                                    fontSize: 12,
+                                    color: '#6b7280',
+                                    whiteSpace: 'nowrap',
+                                    fontVariantNumeric: 'tabular-nums',
+                                  }}
+                                  title={`Local: ${a.localSha || 'Unknown'} • Remote: ${a.remoteSha || 'Unknown'}`}
+                                >
+                                  Local: {formatShaShort(a.localSha) || 'Unknown'} • Remote: {formatShaShort(a.remoteSha) || 'Unknown'}
+                                </div>
+                              )}
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: '#6b7280',
+                                  whiteSpace: 'nowrap',
+                                  fontVariantNumeric: 'tabular-nums',
+                                }}
+                                title={a.lastCheckedAtMs ? `Last checked: ${formatDmyHm(a.lastCheckedAtMs)}` : 'Last checked: Unknown'}
+                              >
+                                Checked: {a.lastCheckedAtMs ? formatDmyHm(a.lastCheckedAtMs) : 'Unknown'}
+                              </div>
+                              {a.lastDoneAtMs !== undefined && (
+                                <div
+                                  style={{
+                                    fontSize: 12,
+                                    color: '#6b7280',
+                                    whiteSpace: 'nowrap',
+                                    fontVariantNumeric: 'tabular-nums',
+                                  }}
+                                  title={`Last pulled: ${formatDmyHm(a.lastDoneAtMs)}`}
+                                >
+                                  Pulled: {formatDmyHm(a.lastDoneAtMs)}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div
+                              style={{
+                                fontSize: 12,
+                                color: lastDoneColourFor(a.key, a.lastDoneAtMs),
+                                whiteSpace: 'nowrap',
+                                fontVariantNumeric: 'tabular-nums',
+                              }}
+                              title={
+                                a.key === 'reload'
+                                  ? (a.lastDoneAtMs ? `Page loaded: ${formatDmyHm(a.lastDoneAtMs)}` : 'Page loaded: unknown')
+                                  : (a.lastDoneAtMs ? `Last done: ${formatDmyHm(a.lastDoneAtMs)}` : 'Last done: Never')
+                              }
+                            >
+                              {a.key === 'reload' ? 'Loaded' : 'Last'}: {a.lastDoneAtMs ? formatDmyHm(a.lastDoneAtMs) : (a.key === 'reload' ? 'Unknown' : 'Never')}
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div style={{ marginTop: 4, fontSize: 13, color: '#4b5563', lineHeight: 1.35 }}>

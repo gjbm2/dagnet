@@ -18,6 +18,17 @@ vi.mock('../fetchPlanBuilderService', () => {
   };
 });
 
+// Mock lag horizons service (post-retrieve global recompute) so these tests remain focused on
+// retrieve-all orchestration and do not pull in graph/file registry semantics.
+vi.mock('../lagHorizonsService', () => {
+  return {
+    lagHorizonsService: {
+      recomputeHorizons: vi.fn(),
+      setAllHorizonOverrides: vi.fn(),
+    },
+  };
+});
+
 vi.mock('../../components/ProgressToast', () => ({
   showProgressToast: vi.fn(),
   completeProgressToast: vi.fn(),
@@ -27,6 +38,7 @@ import { completeProgressToast, showProgressToast } from '../../components/Progr
 import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } from '../retrieveAllSlicesService';
 import { dataOperationsService } from '../dataOperationsService';
 import { buildFetchPlanProduction } from '../fetchPlanBuilderService';
+import { lagHorizonsService } from '../lagHorizonsService';
 
 describe('retrieveAllSlicesService', () => {
   beforeEach(() => {
@@ -34,6 +46,7 @@ describe('retrieveAllSlicesService', () => {
   });
 
   it('counts per-item failures (getFromSource throws) as errors in the final result', async () => {
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
     vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
       plan: {
         version: 1,
@@ -90,6 +103,9 @@ describe('retrieveAllSlicesService', () => {
     expect(res.totalSuccess).toBe(0);
     expect(res.totalErrors).toBe(1);
     expect(res.aborted).toBe(false);
+
+    // Global horizon recompute is only attempted after successful work.
+    expect(vi.mocked(lagHorizonsService.recomputeHorizons)).not.toHaveBeenCalled();
   });
 
   it('stamps graph metadata last_retrieve_all_slices_success_at_ms only when run completes with 0 errors', async () => {
@@ -97,6 +113,7 @@ describe('retrieveAllSlicesService', () => {
     vi.setSystemTime(new Date('2026-01-14T12:00:00.000Z'));
 
     const setGraph = vi.fn();
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
 
     const graph: any = {
       dataInterestsDSL: 'cohort(-90d:)',
@@ -142,6 +159,7 @@ describe('retrieveAllSlicesService', () => {
       slices: ['cohort(-90d:)'],
     });
     expect(res1.totalErrors).toBe(0);
+    expect(vi.mocked(lagHorizonsService.recomputeHorizons)).toHaveBeenCalledTimes(1);
 
     const stamped = setGraph.mock.calls.find(c => (c[0] as any)?.metadata?.last_retrieve_all_slices_success_at_ms)?.[0] as any;
     expect(stamped?.metadata?.last_retrieve_all_slices_success_at_ms).toBe(new Date('2026-01-14T12:00:00.000Z').getTime());
@@ -185,6 +203,7 @@ describe('retrieveAllSlicesService', () => {
     });
     expect(res2.totalErrors).toBe(1);
     expect(setGraph.mock.calls.some(c => (c[0] as any)?.metadata?.last_retrieve_all_slices_success_at_ms)).toBe(false);
+    expect(vi.mocked(lagHorizonsService.recomputeHorizons)).toHaveBeenCalledTimes(1);
 
     vi.useRealTimers();
   });

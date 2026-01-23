@@ -22,6 +22,21 @@ import { mixtureLogNormalMedian } from './lagMixtureAggregationService';
 import { resolveMECEPartitionForImplicitUncontextedSync, findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
 
+/**
+ * Compute recency weight for a cohort-day using true half-life semantics.
+ *
+ * Mirrors the forecast weighting used elsewhere in the codebase:
+ *   w = exp(-ln(2) * ageDays / H)
+ */
+function computeRecencyWeight(ageDays: number, recencyHalfLifeDays?: number): number {
+  const halfLife =
+    (typeof recencyHalfLifeDays === 'number' && Number.isFinite(recencyHalfLifeDays) && recencyHalfLifeDays > 0)
+      ? recencyHalfLifeDays
+      : RECENCY_HALF_LIFE_DAYS;
+  const a = Number.isFinite(ageDays) && ageDays > 0 ? ageDays : 0;
+  return Math.exp(-Math.LN2 * a / halfLife);
+}
+
 export interface RawAggregation {
   method: 'naive';
   n: number;
@@ -2272,7 +2287,8 @@ export function aggregateWindowData(
  * @returns Aggregate latency stats, or undefined if no lag data
  */
 export function aggregateLatencyStats(
-  cohorts: CohortData[]
+  cohorts: CohortData[],
+  recencyHalfLifeDays?: number
 ): { median_lag_days: number; mean_lag_days: number } | undefined {
   // DEBUG: Log input
   console.log('[LAG_DEBUG] AGGREGATE_INPUT cohorts:', {
@@ -2307,24 +2323,29 @@ export function aggregateLatencyStats(
     return undefined;
   }
 
-  // Weighted average by k (converters)
-  let totalK = 0;
+  // Weighted average by (converters × recency weight).
+  // This makes horizon estimation responsive to recent lag shifts using the same half-life semantics
+  // as the forecast pipeline.
+  let totalWK = 0;
   let weightedMedian = 0;
   let weightedMean = 0;
 
   for (const cohort of withLag) {
-    totalK += cohort.k;
-    weightedMedian += cohort.k * (cohort.median_lag_days || 0);
-    weightedMean += cohort.k * (cohort.mean_lag_days || cohort.median_lag_days || 0);
+    const w = computeRecencyWeight(cohort.age ?? 0, recencyHalfLifeDays);
+    const wk = cohort.k * w;
+    if (!(wk > 0)) continue;
+    totalWK += wk;
+    weightedMedian += wk * (cohort.median_lag_days || 0);
+    weightedMean += wk * (cohort.mean_lag_days || cohort.median_lag_days || 0);
   }
 
-  if (totalK === 0) {
+  if (totalWK === 0) {
     return undefined;
   }
 
   return {
-    median_lag_days: weightedMedian / totalK,
-    mean_lag_days: weightedMean / totalK,
+    median_lag_days: weightedMedian / totalWK,
+    mean_lag_days: weightedMean / totalWK,
   };
 }
 

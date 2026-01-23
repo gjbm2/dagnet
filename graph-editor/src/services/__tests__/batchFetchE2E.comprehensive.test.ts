@@ -791,7 +791,10 @@ describe('Comprehensive Batch Fetch E2E Tests', () => {
       // Run fetch in from-file mode - this should compute t95 from the per-day lag data
       await fetchDataService.fetchItems(
         items,
-        { mode: 'from-file' },
+        // IMPORTANT:
+        // By default, Stage‑2 does NOT write horizons onto the graph (anti-floatiness policy).
+        // This test is specifically verifying horizon computation from lag arrays, so we opt in.
+        { mode: 'from-file', writeLagHorizonsToGraph: true },
         graph,
         setGraph,
         'cohort(16-Nov-25:22-Nov-25)',
