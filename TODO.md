@@ -1,5 +1,7 @@
 # TODO
 
+- Reason through possiblity of storing data in a dbs (leaving slice headers within param files) -- see docs/current/project-db/initial-thinking.md
+
 - ## CRITICAL — Signature gating disabled for release safety (20-Jan-26)
 +
 ### What happened / why this is here
