@@ -3654,6 +3654,15 @@ class DataOperationsService {
         overrideFetchWindows,
         onCacheAnalysis,
       } = options;
+
+    // Per-item slice identity for logging (distinct from the resolved window/cohort range).
+    // - `sliceDSLForLog` may be a full DSL (window/cohort/context/etc)
+    // - `sliceDimensionsForLog` is the canonical slice identifier used for file storage (context/case only)
+    const sliceDSLForLog = targetSlice || currentDSL || '';
+    const sliceDimensionsForLog = extractSliceDimensions(sliceDSLForLog);
+    const sliceLabelForLog =
+      sliceDimensionsForLog ||
+      (hasContextAny(sliceDSLForLog) ? 'contextAny(...)' : '(uncontexted)');
     
     // Track fetch statistics for return value
     let fetchStats = {
@@ -3701,7 +3710,10 @@ class DataOperationsService {
       { 
         fileId: objectId ? `${objectType}-${objectId}` : undefined, 
         fileType: objectType,
-        targetId
+        targetId,
+        slice: sliceDimensionsForLog || undefined,
+        sliceDSL: sliceDSLForLog || undefined,
+        sliceLabel: sliceLabelForLog,
       }
     );
 
@@ -4200,6 +4212,8 @@ class DataOperationsService {
                 { 
                   edgeQuery: queryDesc,
                   resolvedWindow: windowDesc,
+                  slice: sliceDimensionsForLog || undefined,
+                  sliceDSL: sliceDSLForLog || undefined,
                   events: queryPayload.events?.map((e: any) => e.event_id || e),
                   contextFilters: queryPayload.context_filters,
                   isConditional: conditionalIndex !== undefined,
@@ -7637,8 +7651,8 @@ class DataOperationsService {
       
       // End operation successfully
       sessionLogService.endOperation(logOpId, 'success', 
-        `Completed: ${entityLabel}`,
-        { sourceType: connectionName });
+        `Completed: ${entityLabel} (slice: ${sliceLabelForLog})`,
+        { sourceType: connectionName, slice: sliceDimensionsForLog || undefined, sliceDSL: sliceDSLForLog || undefined });
       
       return { success: true, ...fetchStats };
       
