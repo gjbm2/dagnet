@@ -2,6 +2,8 @@
 
 - Log mirrorring isn't working properly -- only some entries are captured and returned
 
+- Auto-retry if fetch fail on automated chron
+
 - Reason through possiblity of storing data in a dbs (leaving slice headers within param files) -- see docs/current/project-db/initial-thinking.md
 
 - ## CRITICAL — Signature gating disabled for release safety (20-Jan-26)
