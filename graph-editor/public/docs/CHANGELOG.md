@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.14b
+**Released:** 29-Jan-26
+
+Fixed param assignment
+
+---
+
 ## Version 1.3.13b
 **Released:** 23-Jan-26
 
