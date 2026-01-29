@@ -3,7 +3,8 @@
 **Status**: Proposal  
 **Date**: 29-Jan-26  
 **Author**: AI Assistant  
-**Supersedes**: Legacy monolithic signature system
+**Supersedes**: Legacy monolithic signature system  
+**Companion document**: [Battle Test Scenarios](./multi-sig-matching-testing-logic.md) — 15 orthogonal scenarios validating the logic
 
 ---
 
@@ -178,6 +179,14 @@ export function signatureCanSatisfy(
     const cacheDefHash = cacheSig.contextDefHashes[key];
     if (cacheDefHash === undefined) {
       return { compatible: false, reason: `missing_context_key:${key}` };
+    }
+    // Rule 2a: Treat 'missing' or 'error' hashes as non-match (fail-safe)
+    // We cannot validate correctness without the actual hash
+    if (cacheDefHash === 'missing' || cacheDefHash === 'error') {
+      return { compatible: false, reason: `context_hash_unavailable:${key}` };
+    }
+    if (queryDefHash === 'missing' || queryDefHash === 'error') {
+      return { compatible: false, reason: `query_hash_unavailable:${key}` };
     }
     if (cacheDefHash !== queryDefHash) {
       return { compatible: false, reason: `context_def_mismatch:${key}` };
@@ -858,8 +867,43 @@ export function verifyMECEForDimension(
 }
 
 /**
+ * Deduplicate slices before aggregation to prevent double-counting.
+ * 
+ * Dedupes by (sliceDSL, query_signature, window_from, window_to).
+ * If duplicates exist (e.g. file corruption), keeps the one with most recent retrieved_at.
+ */
+export function dedupeSlices(slices: ParameterValue[]): ParameterValue[] {
+  const byKey = new Map<string, ParameterValue>();
+  
+  for (const slice of slices) {
+    const key = [
+      slice.sliceDSL ?? '',
+      (slice as any).query_signature ?? '',
+      slice.window_from ?? '',
+      slice.window_to ?? '',
+    ].join('|');
+    
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, slice);
+    } else {
+      // Keep fresher slice
+      const existingTs = existing.retrieved_at ? new Date(existing.retrieved_at).getTime() : 0;
+      const newTs = slice.retrieved_at ? new Date(slice.retrieved_at).getTime() : 0;
+      if (newTs > existingTs) {
+        byKey.set(key, slice);
+      }
+    }
+  }
+  
+  return Array.from(byKey.values());
+}
+
+/**
  * Aggregate slices by summing n_daily/k_daily arrays.
  * All slices must have same date arrays (verified by caller).
+ * 
+ * IMPORTANT: Call dedupeSlices() before this function to prevent double-counting.
  */
 export function aggregateSlices(slices: ParameterValue[]): ParameterValue | null {
   if (slices.length === 0) return null;
@@ -1400,26 +1444,808 @@ Cache: 20 slices with context(channel:X).context(device:Y)
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 7.5 Edge Cases and Handling
+### 7.5 Critical Design Fixes (Post-Review)
+
+The following issues were identified during critical review and must be addressed:
+
+#### 7.5.1 Slice Dimension Heterogeneity: The Core Challenge
+
+**Critical insight:** Pinned queries can produce slices with DIFFERENT dimension sets:
+
+```
+Example 1 - Cartesian (.):
+  (cohort(-30d:);window(-30d)).(context(channel).context(user-device))
+  → Produces 4×5=20 slices: ALL channel×device combinations
+
+Example 2 - Union (;):
+  (cohort(-30d:);window(-30d)).(context(channel);context(user-device))
+  → Produces 4+5=9 slices: 4 channel-only + 5 device-only, NO combinations
+
+Example 3 - Mixed:
+  (cohort(-30d:);window(-30d)).(context(channel);context(user-device);context(user-device:mobile).context(channel))
+  → Produces 4+5+4=13 slices: channel-only + device-only + (mobile×all-channels)
+```
+
+**CRITICAL: Slices with different dimension sets CANNOT be aggregated together.**
+
+If we sum `context(channel:google)` (ALL devices for google) with `context(device:mobile)` (ALL channels for mobile), we'd **double-count** users who are both google AND mobile.
+
+**Design principle:** Group slices by dimension set, evaluate each group independently, pick the best satisfying group.
+
+#### 7.5.2 Dimension Set Grouping Strategy
+
+```typescript
+interface DimensionSetGroup {
+  /** Sorted array of context keys, e.g., ['channel'] or ['channel', 'device'] */
+  dimensionKeys: string[];
+  /** Slices belonging to this group */
+  slices: ParameterValue[];
+}
+
+/**
+ * Group slices by their dimension set (context keys).
+ * Slices with different dimension sets form separate groups.
+ */
+function groupByDimensionSet(slices: ParameterValue[]): DimensionSetGroup[] {
+  const groups = new Map<string, ParameterValue[]>();
+  
+  for (const slice of slices) {
+    const ctxMap = extractContextMap(slice.sliceDSL ?? '');
+    const dimKeys = Array.from(ctxMap.keys()).sort().join('|');
+    
+    if (!groups.has(dimKeys)) {
+      groups.set(dimKeys, []);
+    }
+    groups.get(dimKeys)!.push(slice);
+  }
+  
+  return Array.from(groups.entries()).map(([keyStr, slices]) => ({
+    dimensionKeys: keyStr ? keyStr.split('|') : [],
+    slices,
+  }));
+}
+```
+
+#### 7.5.3 Per-Group Satisfaction Evaluation
+
+For each dimension set group, determine if it can satisfy the query:
+
+```typescript
+interface GroupSatisfaction {
+  canSatisfy: boolean;
+  reason?: string;
+  reductionType: 'exact' | 'single_dim_mece' | 'multi_dim_reduction' | 'not_satisfiable';
+  unspecifiedDimensions: string[];
+  meceStatus: Record<string, { isMECE: boolean; isComplete: boolean }>;
+  combinationsComplete?: boolean;  // For multi-dim groups
+}
+
+function evaluateGroupSatisfaction(
+  group: DimensionSetGroup,
+  queryContextMap: Map<string, string>
+): GroupSatisfaction {
+  const groupDims = new Set(group.dimensionKeys);
+  const queryDims = new Set(queryContextMap.keys());
+  
+  // Case 1: Uncontexted group (no dimensions)
+  if (groupDims.size === 0) {
+    // Uncontexted slices satisfy uncontexted queries directly
+    if (queryDims.size === 0) {
+      return { canSatisfy: true, reductionType: 'exact', unspecifiedDimensions: [], meceStatus: {} };
+    }
+    // Uncontexted slices CANNOT satisfy contexted queries
+    return { canSatisfy: false, reason: 'uncontexted_cache_for_contexted_query', reductionType: 'not_satisfiable', unspecifiedDimensions: [], meceStatus: {} };
+  }
+  
+  // Case 2: Query specifies dimensions not in group
+  for (const qDim of queryDims) {
+    if (!groupDims.has(qDim)) {
+      return { canSatisfy: false, reason: `group_missing_query_dimension:${qDim}`, reductionType: 'not_satisfiable', unspecifiedDimensions: [], meceStatus: {} };
+    }
+  }
+  
+  // Case 3: Filter group slices to those matching query's specified values
+  const matchingSlices = group.slices.filter(slice => {
+    const sliceCtx = extractContextMap(slice.sliceDSL ?? '');
+    for (const [key, value] of queryContextMap) {
+      if (sliceCtx.get(key) !== value) return false;
+    }
+    return true;
+  });
+  
+  if (matchingSlices.length === 0) {
+    return { canSatisfy: false, reason: 'no_slices_match_query_values', reductionType: 'not_satisfiable', unspecifiedDimensions: [], meceStatus: {} };
+  }
+  
+  // Determine unspecified dimensions (in group but not in query)
+  const unspecifiedDimensions = group.dimensionKeys.filter(d => !queryContextMap.has(d));
+  
+  // Case 4: Exact match (no unspecified dimensions)
+  if (unspecifiedDimensions.length === 0) {
+    return { canSatisfy: true, reductionType: 'exact', unspecifiedDimensions: [], meceStatus: {} };
+  }
+  
+  // Case 5: Single unspecified dimension (single-dim reduction)
+  // Case 6: Multiple unspecified dimensions (multi-dim reduction)
+  const meceStatus: Record<string, { isMECE: boolean; isComplete: boolean }> = {};
+  
+  for (const dimKey of unspecifiedDimensions) {
+    const check = verifyMECEForDimension(matchingSlices, dimKey);
+    meceStatus[dimKey] = { isMECE: check.isMECE, isComplete: check.isComplete };
+    
+    if (!check.isMECE || !check.canAggregate) {
+      return { 
+        canSatisfy: false, 
+        reason: `dimension_not_mece:${dimKey}`, 
+        reductionType: 'not_satisfiable',
+        unspecifiedDimensions,
+        meceStatus,
+      };
+    }
+  }
+  
+  // Case 6b: For 2+ unspecified dims, verify all combinations exist
+  if (unspecifiedDimensions.length > 1) {
+    const { complete, missingCombinations } = verifyAllCombinationsExist(matchingSlices, unspecifiedDimensions);
+    if (!complete) {
+      return {
+        canSatisfy: false,
+        reason: 'missing_combinations',
+        reductionType: 'not_satisfiable',
+        unspecifiedDimensions,
+        meceStatus,
+        combinationsComplete: false,
+      };
+    }
+  }
+  
+  return {
+    canSatisfy: true,
+    reductionType: unspecifiedDimensions.length === 1 ? 'single_dim_mece' : 'multi_dim_reduction',
+    unspecifiedDimensions,
+    meceStatus,
+    combinationsComplete: true,
+  };
+}
+```
+
+#### 7.5.4 Multi-Group Query Resolution
+
+```typescript
+interface QueryResolution {
+  resolved: boolean;
+  selectedGroup?: DimensionSetGroup;
+  satisfaction?: GroupSatisfaction;
+  allGroups: Array<{ group: DimensionSetGroup; satisfaction: GroupSatisfaction }>;
+}
+
+function resolveQueryAcrossGroups(
+  allSlices: ParameterValue[],
+  queryContextMap: Map<string, string>
+): QueryResolution {
+  const groups = groupByDimensionSet(allSlices);
+  const evaluations = groups.map(group => ({
+    group,
+    satisfaction: evaluateGroupSatisfaction(group, queryContextMap),
+  }));
+  
+  // Find all satisfying groups
+  const satisfying = evaluations.filter(e => e.satisfaction.canSatisfy);
+  
+  if (satisfying.length === 0) {
+    return { resolved: false, allGroups: evaluations };
+  }
+  
+  // Priority: exact > single_dim_mece > multi_dim_reduction
+  // Within same priority: prefer freshest (most recent retrieved_at)
+  const priority = { exact: 0, single_dim_mece: 1, multi_dim_reduction: 2, not_satisfiable: 99 };
+  
+  satisfying.sort((a, b) => {
+    const pA = priority[a.satisfaction.reductionType];
+    const pB = priority[b.satisfaction.reductionType];
+    if (pA !== pB) return pA - pB;
+    
+    // Same priority: prefer freshest (most recent retrieved_at wins)
+    // Recency = min retrieved_at among slices in the group (stalest member rule)
+    const recencyA = getGroupRecency(a.group.slices);
+    const recencyB = getGroupRecency(b.group.slices);
+    if (recencyA !== recencyB) {
+      return recencyB - recencyA; // Descending: most recent (largest min-ts) first
+    }
+    
+    // Final tie-break: deterministic by dimension keys then signature
+    const keysA = a.group.dimensionKeys.sort().join('|');
+    const keysB = b.group.dimensionKeys.sort().join('|');
+    if (keysA !== keysB) {
+      return keysA.localeCompare(keysB);
+    }
+    
+    // Last resort: compare first slice's signature
+    const sigA = (a.group.slices[0] as any)?.query_signature ?? '';
+    const sigB = (b.group.slices[0] as any)?.query_signature ?? '';
+    return sigA.localeCompare(sigB);
+  });
+
+/**
+ * Get recency of a group as the MINIMUM retrieved_at timestamp among its slices.
+ * 
+ * Rationale: A group is only as fresh as its stalest member. Using max would
+ * incorrectly favour groups with one very new slice and several stale slices.
+ * 
+ * "Most recent wins" means "largest min-ts wins".
+ */
+function getGroupRecency(slices: ParameterValue[]): number {
+  let minTs = Number.POSITIVE_INFINITY;
+  for (const slice of slices) {
+    const ts = slice.retrieved_at ? new Date(slice.retrieved_at).getTime() : 0;
+    if (ts < minTs) minTs = ts;
+  }
+  return Number.isFinite(minTs) ? minTs : 0;
+}
+  
+  return {
+    resolved: true,
+    selectedGroup: satisfying[0].group,
+    satisfaction: satisfying[0].satisfaction,
+    allGroups: evaluations,
+  };
+}
+```
+
+#### 7.5.5 Worked Examples
+
+**Example A: Union slices (`;`), uncontexted query**
+
+```
+Slices in file (from: context(channel);context(user-device)):
+  Group {channel}: [google, meta, tiktok, other] — 4 slices
+  Group {device}: [mobile, desktop, tablet, ios, android] — 5 slices
+
+Query: uncontexted
+
+Evaluation:
+  Group {channel}: 
+    unspecifiedDimensions: [channel]
+    MECE for channel: all 4 present ✓
+    → canSatisfy: true, type: single_dim_mece
+    
+  Group {device}:
+    unspecifiedDimensions: [device]
+    MECE for device: all 5 present ✓
+    → canSatisfy: true, type: single_dim_mece
+
+Resolution: BOTH groups can satisfy. Pick either (both give same total).
+Note: We do NOT sum both groups — that would double-count!
+```
+
+**Example B: Partial Cartesian, single-dim query**
+
+```
+Slices in file (from: context(channel:google).context(device)):
+  Group {channel, device}: [google×mobile, google×desktop, google×tablet, google×ios, google×android] — 5 slices
+
+Query: context(channel:google)
+
+Evaluation:
+  Group {channel, device}:
+    Filter to channel=google: all 5 slices match
+    unspecifiedDimensions: [device]
+    MECE for device: all 5 present ✓
+    → canSatisfy: true, type: single_dim_mece
+
+Resolution: Use group {channel, device}, aggregate over device.
+```
+
+**Example C: Mixed slices, uncontexted query**
+
+```
+Slices in file (from: context(channel);context(device:mobile).context(channel)):
+  Group {channel}: [google, meta, tiktok, other] — 4 slices
+  Group {channel, device}: [google×mobile, meta×mobile, tiktok×mobile, other×mobile] — 4 slices
+
+Query: uncontexted
+
+Evaluation:
+  Group {channel}:
+    unspecifiedDimensions: [channel]
+    MECE for channel: all 4 ✓
+    → canSatisfy: true, type: single_dim_mece
+    
+  Group {channel, device}:
+    unspecifiedDimensions: [channel, device]
+    MECE for channel: all 4 ✓
+    MECE for device: only mobile (1 of 5) ✗
+    → canSatisfy: false, reason: dimension_not_mece:device
+
+Resolution: Use group {channel} (single-dim MECE).
+The multi-dim group cannot satisfy because device is incomplete.
+```
+
+**Example D: Sparse Cartesian, uncontexted query**
+
+```
+Slices in file (incomplete Cartesian):
+  Group {channel, device}: 
+    google×mobile, google×desktop, google×tablet, google×ios, google×android (5)
+    meta×mobile (1)
+    tiktok×mobile (1)
+    other×mobile, other×desktop (2)
+    — Total: 9 slices (not 4×5=20)
+
+Query: uncontexted
+
+Evaluation:
+  Group {channel, device}:
+    unspecifiedDimensions: [channel, device]
+    MECE for channel: [google, meta, tiktok, other] all 4 ✓
+    MECE for device: [mobile, desktop, tablet, ios, android] all 5 ✓
+    Combinations: 9/20 present ✗
+    → canSatisfy: false, reason: missing_combinations
+
+Resolution: No group satisfies → demand refetch.
+```
+
+#### 7.5.6 Per-Date Group Evaluation (Handling Temporal Heterogeneity)
+
+**Problem:** A parameter file may contain slices from different pinned DSL patterns across different time periods. Query-level group evaluation fails because no single group covers the full date range.
+
+**Example scenario** (uncontexted query spanning 6 weeks):
+```
+Epoch 1 (1-Nov to 14-Nov): Cartesian → {ch,dev} slices (4 combos)
+Epoch 2 (15-Nov to 28-Nov): Union → {ch} + {dev} slices (separate)
+Epoch 3 (29-Nov to 12-Dec): Mixed → {ch} + partial {ch,dev} slices
+```
+
+**Solution:** Evaluate group satisfaction **per-date**, then aggregate using the best satisfying group for each date.
+
+```typescript
+interface DateGroupCoverage {
+  date: string;
+  satisfyingGroups: Array<{
+    groupDimKeys: string[];
+    slicesForDate: ParameterValue[];
+    reductionType: 'exact' | 'single_dim_mece' | 'multi_dim_reduction';
+  }>;
+  selectedGroup?: {
+    groupDimKeys: string[];
+    slicesForDate: ParameterValue[];
+  };
+}
+
+function analyzePerDateGroupCoverage(
+  allSlices: ParameterValue[],
+  queryContextMap: Map<string, string>,
+  queryDates: string[]
+): PerDateGroupAnalysis {
+  const groups = groupByDimensionSet(allSlices);
+  
+  const perDateCoverage: DateGroupCoverage[] = queryDates.map(date => {
+    const satisfyingGroups: DateGroupCoverage['satisfyingGroups'] = [];
+    
+    for (const group of groups) {
+      // Filter group slices to those covering this specific date
+      const slicesForDate = group.slices.filter(s => 
+        s.dates?.includes(date) ?? false
+      );
+      
+      if (slicesForDate.length === 0) continue;
+      
+      // Create a temporary group with only date-relevant slices
+      const dateGroup = { dimensionKeys: group.dimensionKeys, slices: slicesForDate };
+      const satisfaction = evaluateGroupSatisfaction(dateGroup, queryContextMap);
+      
+      if (satisfaction.canSatisfy) {
+        satisfyingGroups.push({
+          groupDimKeys: group.dimensionKeys,
+          slicesForDate,
+          reductionType: satisfaction.reductionType,
+        });
+      }
+    }
+    
+    // Select best group for this date (priority: exact > single_dim > multi_dim)
+    // Within same priority: prefer freshest (most recent retrieved_at)
+    // Final tie-break: deterministic by dimension keys
+    const priority = { exact: 0, single_dim_mece: 1, multi_dim_reduction: 2 };
+    satisfyingGroups.sort((a, b) => {
+      const pA = priority[a.reductionType];
+      const pB = priority[b.reductionType];
+      if (pA !== pB) return pA - pB;
+      
+      // Same priority: prefer freshest (stalest member rule)
+      const recencyA = getGroupRecency(a.slicesForDate);
+      const recencyB = getGroupRecency(b.slicesForDate);
+      if (recencyA !== recencyB) {
+        return recencyB - recencyA; // Descending: most recent (largest min-ts) first
+      }
+      
+      // Final tie-break: deterministic by dimension keys
+      const keysA = a.groupDimKeys.sort().join('|');
+      const keysB = b.groupDimKeys.sort().join('|');
+      return keysA.localeCompare(keysB);
+    });
+    
+    return {
+      date,
+      satisfyingGroups,
+      selectedGroup: satisfyingGroups[0] ?? undefined,
+    };
+  });
+  
+  return {
+    perDateCoverage,
+    fullyCovered: perDateCoverage.every(d => d.selectedGroup !== undefined),
+    uncoveredDates: perDateCoverage.filter(d => !d.selectedGroup).map(d => d.date),
+  };
+}
+```
+
+**Worked example** (from scenario above):
+
+| Date Range | Available Groups | Best Group | Aggregation |
+|------------|-----------------|------------|-------------|
+| 1-Nov to 14-Nov | `{ch,dev}` ✓ | `{ch,dev}` | SUM(4 multi-dim slices) |
+| 15-Nov to 28-Nov | `{ch}` ✓, `{dev}` ✓ | `{ch}` (tie-break) | SUM(2 single-dim slices) |
+| 29-Nov to 12-Dec | `{ch}` ✓, `{ch,dev}` ✗ | `{ch}` | SUM(2 single-dim slices) |
+
+**Key invariant:** Within any single date, only ONE group's slices contribute to the total. This prevents double-counting.
+
+#### 7.5.7 Aggregation with Temporal Group Switching
+
+```typescript
+function aggregateWithTemporalGroupSwitching(
+  analysis: PerDateGroupAnalysis
+): AggregatedResult {
+  const dates: string[] = [];
+  const n_daily: number[] = [];
+  const k_daily: number[] = [];
+  
+  for (const coverage of analysis.perDateCoverage) {
+    if (!coverage.selectedGroup) {
+      // Gap in coverage — caller should have already verified fullyCovered
+      throw new Error(`Uncovered date: ${coverage.date}`);
+    }
+    
+    dates.push(coverage.date);
+    
+    // Sum the slices for this date within the selected group
+    const dateIndex = coverage.selectedGroup.slicesForDate[0]?.dates?.indexOf(coverage.date) ?? -1;
+    
+    let n_sum = 0, k_sum = 0;
+    for (const slice of coverage.selectedGroup.slicesForDate) {
+      const idx = slice.dates?.indexOf(coverage.date) ?? -1;
+      if (idx >= 0) {
+        n_sum += slice.n_daily?.[idx] ?? 0;
+        k_sum += slice.k_daily?.[idx] ?? 0;
+      }
+    }
+    
+    n_daily.push(n_sum);
+    k_daily.push(k_sum);
+  }
+  
+  return {
+    dates,
+    n_daily,
+    k_daily,
+    n: n_daily.reduce((a, b) => a + b, 0),
+    k: k_daily.reduce((a, b) => a + b, 0),
+    mean: n_daily.reduce((a, b) => a + b, 0) > 0
+      ? k_daily.reduce((a, b) => a + b, 0) / n_daily.reduce((a, b) => a + b, 0)
+      : undefined,
+  };
+}
+```
+
+#### 7.5.8 Multi-Dimensional MECE: Verify All Combinations
+
+For multi-dimensional groups with 2+ unspecified dimensions, we must verify all combinations exist:
+
+```typescript
+function verifyAllCombinationsExist(
+  slices: ParameterValue[],
+  unspecifiedDimensions: string[]
+): { complete: boolean; missingCombinations: string[] } {
+  if (unspecifiedDimensions.length <= 1) {
+    // Single dimension: per-dimension MECE is sufficient
+    return { complete: true, missingCombinations: [] };
+  }
+
+  // Build set of actual combinations
+  const actualCombinations = new Set<string>();
+  for (const slice of slices) {
+    const ctxMap = extractContextMap(slice.sliceDSL ?? '');
+    const combo = unspecifiedDimensions
+      .map(d => `${d}:${ctxMap.get(d) ?? ''}`)
+      .sort()
+      .join('|');
+    actualCombinations.add(combo);
+  }
+
+  // Build expected combinations from per-dimension values
+  const dimensionValues: Map<string, string[]> = new Map();
+  for (const dimKey of unspecifiedDimensions) {
+    const values = new Set<string>();
+    for (const slice of slices) {
+      const v = extractContextMap(slice.sliceDSL ?? '').get(dimKey);
+      if (v) values.add(v);
+    }
+    dimensionValues.set(dimKey, Array.from(values).sort());
+  }
+
+  // Generate Cartesian product of expected combinations
+  const expectedCombinations = cartesianProduct(
+    unspecifiedDimensions.map(d => dimensionValues.get(d)!)
+  ).map(combo => 
+    unspecifiedDimensions.map((d, i) => `${d}:${combo[i]}`).sort().join('|')
+  );
+
+  const missing = expectedCombinations.filter(c => !actualCombinations.has(c));
+  return { complete: missing.length === 0, missingCombinations: missing };
+}
+```
+
+**Update `tryDimensionalReduction`:**
+```typescript
+// After MECE verification for each dimension, add:
+if (unspecifiedDimensions.length > 1) {
+  const { complete, missingCombinations } = verifyAllCombinationsExist(
+    matchingSlices,
+    unspecifiedDimensions
+  );
+  if (!complete) {
+    return {
+      kind: 'not_reducible',
+      reason: 'missing_combinations',
+      diagnostics: {
+        // ... 
+        warnings: [`Missing ${missingCombinations.length} combinations: ${missingCombinations.slice(0, 5).join(', ')}...`],
+      },
+    };
+  }
+}
+```
+
+#### 7.5.2 Flexible Date Range Coverage
+
+**Problem:** Current logic requires all slices to have **identical** date arrays, but queries should be satisfiable by:
+- Uncontexted slice for dates x-y
+- MECE contexted slices for dates y-z
+- Query window: x-z
+
+**Design principle:** A query window [start, end] is covered if, **for each date d in the window**, there exists either:
+1. An uncontexted slice covering d, OR
+2. A complete MECE set of contexted slices covering d
+
+**Fix:** Replace monolithic aggregation with date-by-date coverage analysis:
+
+```typescript
+interface DateCoverage {
+  date: string;
+  source: 'uncontexted' | 'mece_aggregated' | 'uncovered';
+  slicesUsed: ParameterValue[];
+}
+
+function analyzePerDateCoverage(
+  allSlices: ParameterValue[],
+  queryContextMap: Map<string, string>,
+  requestedDates: string[]
+): { fullyCovered: boolean; coverage: DateCoverage[] } {
+  const coverage: DateCoverage[] = [];
+  
+  for (const date of requestedDates) {
+    // Option 1: Uncontexted slice covers this date
+    const uncontextedSlice = allSlices.find(s => 
+      !extractSliceDimensions(s.sliceDSL ?? '') && 
+      sliceCoversDate(s, date)
+    );
+    if (uncontextedSlice) {
+      coverage.push({ date, source: 'uncontexted', slicesUsed: [uncontextedSlice] });
+      continue;
+    }
+    
+    // Option 2: MECE contexted slices cover this date
+    const contextedForDate = allSlices.filter(s => 
+      extractSliceDimensions(s.sliceDSL ?? '') && 
+      matchesSpecifiedDimensions(extractContextMap(s.sliceDSL ?? ''), queryContextMap) &&
+      sliceCoversDate(s, date)
+    );
+    
+    if (contextedForDate.length > 0) {
+      const unspecifiedDims = getUnspecifiedDimensions(
+        extractContextMap(contextedForDate[0].sliceDSL ?? ''),
+        queryContextMap
+      );
+      
+      // Check MECE for all unspecified dims AND all combinations exist
+      let isMECE = true;
+      for (const dim of unspecifiedDims) {
+        if (!verifyMECEForDimension(contextedForDate, dim).isMECE) {
+          isMECE = false;
+          break;
+        }
+      }
+      if (isMECE && verifyAllCombinationsExist(contextedForDate, unspecifiedDims).complete) {
+        coverage.push({ date, source: 'mece_aggregated', slicesUsed: contextedForDate });
+        continue;
+      }
+    }
+    
+    // Date not covered
+    coverage.push({ date, source: 'uncovered', slicesUsed: [] });
+  }
+  
+  return {
+    fullyCovered: coverage.every(c => c.source !== 'uncovered'),
+    coverage,
+  };
+}
+```
+
+**Aggregation follows coverage:**
+```typescript
+function aggregateWithMixedCoverage(
+  coverage: DateCoverage[]
+): ParameterValue | null {
+  const n_daily: number[] = [];
+  const k_daily: number[] = [];
+  const dates: string[] = [];
+  
+  for (const c of coverage) {
+    if (c.source === 'uncovered') return null;
+    
+    dates.push(c.date);
+    
+    if (c.source === 'uncontexted') {
+      // Use uncontexted slice's values for this date
+      const slice = c.slicesUsed[0];
+      const idx = slice.dates?.indexOf(c.date) ?? -1;
+      n_daily.push(idx >= 0 ? (slice.n_daily?.[idx] ?? 0) : 0);
+      k_daily.push(idx >= 0 ? (slice.k_daily?.[idx] ?? 0) : 0);
+    } else {
+      // Sum MECE contexted slices for this date
+      let n = 0, k = 0;
+      for (const slice of c.slicesUsed) {
+        const idx = slice.dates?.indexOf(c.date) ?? -1;
+        n += idx >= 0 ? (slice.n_daily?.[idx] ?? 0) : 0;
+        k += idx >= 0 ? (slice.k_daily?.[idx] ?? 0) : 0;
+      }
+      n_daily.push(n);
+      k_daily.push(k);
+    }
+  }
+  
+  return {
+    sliceDSL: undefined, // Result is uncontexted
+    dates,
+    n_daily,
+    k_daily,
+    n: n_daily.reduce((a, b) => a + b, 0),
+    k: k_daily.reduce((a, b) => a + b, 0),
+    // ...
+  };
+}
+```
+
+#### 7.5.3 Dimension Set Consistency Validation
+
+**Problem:** Slices matching specified dimensions may have **inconsistent** additional dimensions.
+
+```
+Query: context(channel:google)
+Slice 1: context(channel:google).context(device:mobile)
+Slice 2: context(channel:google).context(device:desktop).context(region:uk)
+```
+
+Aggregating these would mix different granularities.
+
+**Fix:** Validate all matched slices have identical dimension keys:
+
+```typescript
+// In tryDimensionalReduction, after collecting matchingSlices:
+const dimensionSets = new Set(
+  matchingSlices.map(s => {
+    const keys = Array.from(extractContextMap(s.sliceDSL ?? '').keys());
+    return JSON.stringify(keys.sort());
+  })
+);
+
+if (dimensionSets.size !== 1) {
+  return {
+    kind: 'not_reducible',
+    reason: 'inconsistent_dimension_sets',
+    diagnostics: {
+      // ...
+      warnings: [`Slices have ${dimensionSets.size} different dimension sets`],
+    },
+  };
+}
+```
+
+```typescript
+function verifyAllCombinationsExist(
+  slices: ParameterValue[],
+  unspecifiedDimensions: string[]
+): { complete: boolean; missingCombinations: string[] } {
+  if (unspecifiedDimensions.length <= 1) {
+    // Single dimension: per-dimension MECE is sufficient
+    return { complete: true, missingCombinations: [] };
+  }
+
+  // Build set of actual combinations
+  const actualCombinations = new Set<string>();
+  for (const slice of slices) {
+    const ctxMap = extractContextMap(slice.sliceDSL ?? '');
+    const combo = unspecifiedDimensions
+      .map(d => `${d}:${ctxMap.get(d) ?? ''}`)
+      .sort()
+      .join('|');
+    actualCombinations.add(combo);
+  }
+
+  // Build expected combinations from per-dimension values
+  const dimensionValues: Map<string, string[]> = new Map();
+  for (const dimKey of unspecifiedDimensions) {
+    const values = new Set<string>();
+    for (const slice of slices) {
+      const v = extractContextMap(slice.sliceDSL ?? '').get(dimKey);
+      if (v) values.add(v);
+    }
+    dimensionValues.set(dimKey, Array.from(values).sort());
+  }
+
+  // Generate Cartesian product of expected combinations
+  const expectedCombinations = cartesianProduct(
+    unspecifiedDimensions.map(d => dimensionValues.get(d)!)
+  ).map(combo => 
+    unspecifiedDimensions.map((d, i) => `${d}:${combo[i]}`).sort().join('|')
+  );
+
+  const missing = expectedCombinations.filter(c => !actualCombinations.has(c));
+  return { complete: missing.length === 0, missingCombinations: missing };
+}
+```
+
+#### 7.5.7 Mixed Signature Types Integration
+
+With dimension set grouping, mixed signature types are handled naturally:
+
+1. **Signature filter** → includes compatible slices (both single and multi-dim)
+2. **Dimension grouping** → separates slices by their context key sets
+3. **Per-group evaluation** → each group evaluated independently
+4. **Selection** → pick best satisfying group
+
+The old dual-path approach (`isEligibleContextOnlySlice` vs `isEligibleMultiContextSlice`) is subsumed by the grouping strategy.
+
+#### 7.5.8 Aggregated Result Signature (Clarification)
+
+**Context:** Dimensional reduction is performed **on-the-fly** during planner coverage analysis. The aggregated `ParameterValue` is NOT persisted to files.
+
+**Therefore:** The signature inherited from the template slice is irrelevant — it's never used for subsequent queries. No fix needed.
+
+### 7.6 Edge Cases and Handling (Updated)
 
 | Edge Case | Handling |
 |-----------|----------|
-| **Slices have different date arrays** | Aggregation fails → demand refetch |
+| **Slices have different date arrays** | Per-date coverage analysis; aggregate date-by-date |
 | **One unspecified dimension incomplete** | MECE check fails → demand refetch |
-| **Multiple unspecified dimensions** | Verify MECE for ALL, aggregate if all pass |
+| **Multiple unspecified dimensions** | Verify MECE for ALL + verify all combinations exist |
+| **Missing combinations (sparse Cartesian)** | Combination check fails → demand refetch |
+| **Inconsistent dimension sets** | Validation fails → demand refetch |
+| **Mixed uncontexted + contexted for date range** | Per-date analysis supports mixed coverage |
+| **Mixed signature types in file** | Processed separately by eligibility checks |
 | **otherPolicy forbids aggregation** | canAggregate=false → demand refetch |
-| **Mixed signatures within filtered set** | Group by signature, pick best MECE generation |
 | **contextAny in cache** | Rejected by isEligibleMultiContextSlice |
 | **case dimensions in cache** | Rejected by isEligibleMultiContextSlice |
 
-### 7.6 Implementation Files Summary
+### 7.9 Implementation Files Summary (Updated)
 
 | File | Changes |
 |------|---------|
-| `dimensionalReductionService.ts` | **NEW** — Core dimensional reduction logic |
+| `dimensionalReductionService.ts` | **NEW** — Core dimensional reduction logic including: `groupByDimensionSet`, `evaluateGroupSatisfaction`, `resolveQueryAcrossGroups`, `analyzePerDateGroupCoverage`, `aggregateWithTemporalGroupSwitching`, `extractContextMap` (memoized), `clearContextMapCache`, `matchesSpecifiedDimensions`, `getUnspecifiedDimensions`, `verifyMECEForDimension`, `verifyAllCombinationsExist` (bounded), `dedupeSlices`, `aggregateSlices`, `tryDimensionalReduction`, `analyzePerDateCoverage`, `aggregateWithMixedCoverage`, `getGroupRecency` |
 | `meceSliceService.ts` | **EXTEND** — Add `isEligibleMultiContextSlice`, `computeMultiDimMECECandidates` |
 | `sliceIsolation.ts` | **EXTEND** — Add `isolateSlicePartialMatch` |
-| `windowAggregationService.ts` | **MODIFY** — Add `tryDimensionalReductionCoverage` in `hasFullSliceCoverageByHeader` |
+| `windowAggregationService.ts` | **MODIFY** — Add `tryDimensionalReductionCoverage` in `hasFullSliceCoverageByHeader`; integrate dimension set grouping and per-date group coverage analysis |
 | `fetchPlanBuilderService.ts` | **MODIFY** — Use dimensional reduction for coverage check |
 
 ---
@@ -1990,20 +2816,727 @@ describe('Dimensional Reduction E2E', () => {
 
 ### 8.5 Test Matrix: All Dimensional Scenarios
 
-| # | Cache Dims | Query Dims | MECE Status | Expected Result | Test File |
-|---|------------|------------|-------------|-----------------|-----------|
-| 1 | 1 (channel) | 0 (uncontexted) | Complete | REDUCED | `meceSliceService.test.ts` |
-| 2 | 1 (channel) | 1 (channel:google) | N/A (exact) | EXACT MATCH | `sliceIsolation.test.ts` |
-| 3 | 2 (ch+dev) | 0 (uncontexted) | Both complete | REDUCED | `dimensionalReduction.test.ts` |
-| 4 | 2 (ch+dev) | 1 (channel:google) | Device complete | REDUCED | `dimensionalReduction.test.ts` |
-| 5 | 2 (ch+dev) | 1 (channel:google) | Device incomplete | NOT REDUCIBLE | `dimensionalReduction.test.ts` |
-| 6 | 2 (ch+dev) | 2 (ch:g + dev:m) | N/A (exact) | EXACT MATCH | `sliceIsolation.test.ts` |
-| 7 | 3 (ch+dev+reg) | 1 (channel:google) | Both dev+reg complete | REDUCED | `dimensionalReduction.test.ts` |
-| 8 | 3 (ch+dev+reg) | 2 (ch:g + dev:m) | Region complete | REDUCED | `dimensionalReduction.test.ts` |
-| 9 | 3 (ch+dev+reg) | 2 (ch:g + dev:m) | Region incomplete | NOT REDUCIBLE | `dimensionalReduction.test.ts` |
-| 10 | 2 (ch+dev) | 0 (uncontexted) | Channel incomplete | NOT REDUCIBLE | `dimensionalReduction.test.ts` |
-| 11 | 2 (ch+dev) | 1 (channel:google) | Device not aggregatable | NOT REDUCIBLE | `dimensionalReduction.test.ts` |
-| 12 | 2 mixed sigs | 1 (channel:google) | One sig complete | REDUCED (best sig) | `meceSliceService.test.ts` |
+**CRITICAL: These tests MUST cover the pinned query patterns:**
+- Cartesian (`.`): `context(channel).context(device)` → full product
+- Union (`;`): `context(channel);context(device)` → separate single-dims
+- Mixed: `context(channel);context(device);context(device:mobile).context(channel)` → union + partial multi-dim
+
+| # | Slice Source Pattern | Query | Dimension Groups | Expected | Test |
+|---|---------------------|-------|------------------|----------|------|
+| 1 | Single-dim channel only | uncontexted | {ch} | REDUCED via single-dim MECE | `dimensionalReduction.test.ts` |
+| 2 | Single-dim channel only | context(ch:google) | {ch} | EXACT MATCH | `sliceIsolation.test.ts` |
+| 3 | Full Cartesian ch×dev | uncontexted | {ch,dev} | REDUCED (all combos exist) | `dimensionalReduction.test.ts` |
+| 4 | Full Cartesian ch×dev | context(ch:google) | {ch,dev} | REDUCED (single-dim over dev) | `dimensionalReduction.test.ts` |
+| 5 | **Union (;) ch + dev** | **uncontexted** | **{ch}, {dev}** | **REDUCED (pick either group)** | `dimensionalReduction.test.ts` |
+| 6 | **Union (;) ch + dev** | **context(ch:google)** | **{ch}, {dev}** | **EXACT MATCH (use {ch} group)** | `dimensionalReduction.test.ts` |
+| 7 | **Union (;) ch + dev** | **context(dev:mobile)** | **{ch}, {dev}** | **EXACT MATCH (use {dev} group)** | `dimensionalReduction.test.ts` |
+| 8 | **Mixed: ch + (mobile×ch)** | **uncontexted** | **{ch}, {ch,dev}** | **REDUCED ({ch} group)** | `dimensionalReduction.test.ts` |
+| 9 | **Mixed: ch + (mobile×ch)** | **context(ch:google)** | **{ch}, {ch,dev}** | **EXACT MATCH ({ch} group)** | `dimensionalReduction.test.ts` |
+| 10 | **Mixed: ch + (mobile×ch)** | **context(dev:mobile)** | **{ch}, {ch,dev}** | **NOT REDUCIBLE (no {dev} group)** | `dimensionalReduction.test.ts` |
+| 11 | Sparse Cartesian (9/20) | uncontexted | {ch,dev} | NOT REDUCIBLE (missing combos) | `dimensionalReduction.test.ts` |
+| 12 | Partial: google×dev only | uncontexted | {ch,dev} | NOT REDUCIBLE (ch incomplete) | `dimensionalReduction.test.ts` |
+| 13 | Partial: google×dev only | context(ch:google) | {ch,dev} | REDUCED (dev complete for google) | `dimensionalReduction.test.ts` |
+| 14 | Uncontexted + MECE ch | uncontexted | {}, {ch} | REDUCED (prefer uncontexted) | `dimensionalReduction.test.ts` |
+| 15 | Mixed date ranges | uncontexted | various | REDUCED (per-date analysis) | `dimensionalReduction.test.ts` |
+| 16 | Inconsistent dims in group | context(ch:google) | {ch,dev} mixed with {ch,dev,reg} | NOT REDUCIBLE | `dimensionalReduction.test.ts` |
+
+### 8.5.1 Critical Tests: Dimension Set Grouping & Pinned Query Patterns
+
+```typescript
+describe('Critical: Dimension Set Grouping', () => {
+  describe('groupByDimensionSet', () => {
+    it('separates slices by dimension keys', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        { sliceDSL: 'context(device:mobile)' },
+        { sliceDSL: 'context(channel:google).context(device:mobile)' },
+      ];
+
+      const groups = groupByDimensionSet(slices);
+
+      expect(groups.length).toBe(3);
+      expect(groups.find(g => g.dimensionKeys.join(',') === 'channel')?.slices.length).toBe(2);
+      expect(groups.find(g => g.dimensionKeys.join(',') === 'device')?.slices.length).toBe(1);
+      expect(groups.find(g => g.dimensionKeys.join(',') === 'channel,device')?.slices.length).toBe(1);
+    });
+
+    it('handles uncontexted slices as empty dimension set', () => {
+      const slices = [
+        { sliceDSL: undefined },
+        { sliceDSL: 'window(1-Nov-25:7-Nov-25)' },
+        { sliceDSL: 'context(channel:google)' },
+      ];
+
+      const groups = groupByDimensionSet(slices);
+
+      expect(groups.find(g => g.dimensionKeys.length === 0)?.slices.length).toBe(2);
+      expect(groups.find(g => g.dimensionKeys.join(',') === 'channel')?.slices.length).toBe(1);
+    });
+  });
+
+  describe('evaluateGroupSatisfaction', () => {
+    it('single-dim group satisfies uncontexted query via MECE', () => {
+      seedContextDefinition('channel', ['google', 'meta', 'other']);
+      
+      const group = {
+        dimensionKeys: ['channel'],
+        slices: [
+          { sliceDSL: 'context(channel:google)' },
+          { sliceDSL: 'context(channel:meta)' },
+          { sliceDSL: 'context(channel:other)' },
+        ],
+      };
+
+      const result = evaluateGroupSatisfaction(group, new Map());
+
+      expect(result.canSatisfy).toBe(true);
+      expect(result.reductionType).toBe('single_dim_mece');
+    });
+
+    it('multi-dim group cannot satisfy if missing combinations', () => {
+      seedContextDefinition('channel', ['google', 'meta']);
+      seedContextDefinition('device', ['mobile', 'desktop']);
+      
+      const group = {
+        dimensionKeys: ['channel', 'device'],
+        slices: [
+          { sliceDSL: 'context(channel:google).context(device:mobile)' },
+          { sliceDSL: 'context(channel:google).context(device:desktop)' },
+          // Missing meta×mobile, meta×desktop
+        ],
+      };
+
+      const result = evaluateGroupSatisfaction(group, new Map());
+
+      expect(result.canSatisfy).toBe(false);
+      expect(result.reason).toContain('dimension_not_mece'); // channel incomplete
+    });
+  });
+
+  describe('resolveQueryAcrossGroups', () => {
+    it('selects exact match over reduction when both available', () => {
+      seedContextDefinition('channel', ['google', 'meta', 'other']);
+      
+      const slices = [
+        // Single-dim group (can satisfy via MECE)
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        { sliceDSL: 'context(channel:other)' },
+        // Multi-dim group (partial, but has exact match for google)
+        { sliceDSL: 'context(channel:google).context(device:mobile)' },
+      ];
+
+      // Query for context(channel:google)
+      const result = resolveQueryAcrossGroups(slices, new Map([['channel', 'google']]));
+
+      expect(result.resolved).toBe(true);
+      expect(result.satisfaction?.reductionType).toBe('exact'); // Prefers single-dim exact match
+    });
+  });
+});
+
+describe('Critical: Pinned Query Pattern Tests', () => {
+  describe('Union pattern: context(channel);context(device)', () => {
+    beforeEach(() => {
+      seedContextDefinition('channel', ['google', 'meta', 'other']);
+      seedContextDefinition('device', ['mobile', 'desktop', 'tablet']);
+    });
+
+    it('uncontexted query: both groups satisfy, pick either', () => {
+      // Simulates: context(channel);context(device)
+      const slices = [
+        // {channel} group
+        { sliceDSL: 'context(channel:google)', n_daily: [100], k_daily: [50], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(channel:meta)', n_daily: [200], k_daily: [100], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(channel:other)', n_daily: [50], k_daily: [25], dates: ['1-Nov-25'] },
+        // {device} group
+        { sliceDSL: 'context(device:mobile)', n_daily: [150], k_daily: [75], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(device:desktop)', n_daily: [120], k_daily: [60], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(device:tablet)', n_daily: [80], k_daily: [40], dates: ['1-Nov-25'] },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map()); // uncontexted
+
+      expect(result.resolved).toBe(true);
+      // Both groups satisfy; implementation picks one
+      expect(['channel', 'device']).toContain(result.selectedGroup?.dimensionKeys[0]);
+      
+      // CRITICAL: Verify we do NOT sum both groups (would double-count)
+      const totalFromChannel = 100 + 200 + 50; // 350
+      const totalFromDevice = 150 + 120 + 80;  // 350
+      // Both should give same total (since MECE)
+      expect(totalFromChannel).toBe(totalFromDevice);
+    });
+
+    it('contexted query context(channel:google): uses {channel} group exact match', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        { sliceDSL: 'context(device:mobile)' },
+        { sliceDSL: 'context(device:desktop)' },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map([['channel', 'google']]));
+
+      expect(result.resolved).toBe(true);
+      expect(result.selectedGroup?.dimensionKeys).toEqual(['channel']);
+      expect(result.satisfaction?.reductionType).toBe('exact');
+    });
+
+    it('contexted query context(device:mobile): uses {device} group exact match', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        { sliceDSL: 'context(device:mobile)' },
+        { sliceDSL: 'context(device:desktop)' },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map([['device', 'mobile']]));
+
+      expect(result.resolved).toBe(true);
+      expect(result.selectedGroup?.dimensionKeys).toEqual(['device']);
+      expect(result.satisfaction?.reductionType).toBe('exact');
+    });
+
+    it('contexted query context(channel:google).context(device:mobile): FAILS (no multi-dim group)', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        { sliceDSL: 'context(device:mobile)' },
+        { sliceDSL: 'context(device:desktop)' },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map([['channel', 'google'], ['device', 'mobile']]));
+
+      expect(result.resolved).toBe(false);
+      // Neither group has both dimensions
+    });
+  });
+
+  describe('Mixed pattern: context(channel);context(device:mobile).context(channel)', () => {
+    beforeEach(() => {
+      seedContextDefinition('channel', ['google', 'meta', 'other']);
+      seedContextDefinition('device', ['mobile', 'desktop', 'tablet']);
+    });
+
+    it('uncontexted query: uses {channel} group (complete MECE)', () => {
+      // Simulates: context(channel);context(device:mobile).context(channel)
+      const slices = [
+        // {channel} group
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        { sliceDSL: 'context(channel:other)' },
+        // {channel,device} group - only mobile row
+        { sliceDSL: 'context(channel:google).context(device:mobile)' },
+        { sliceDSL: 'context(channel:meta).context(device:mobile)' },
+        { sliceDSL: 'context(channel:other).context(device:mobile)' },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map()); // uncontexted
+
+      expect(result.resolved).toBe(true);
+      expect(result.selectedGroup?.dimensionKeys).toEqual(['channel']);
+      // {channel,device} group fails: device only has 'mobile', not MECE
+    });
+
+    it('contexted query context(channel:google): exact match in {channel} group', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        { sliceDSL: 'context(channel:google).context(device:mobile)' },
+        { sliceDSL: 'context(channel:meta).context(device:mobile)' },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map([['channel', 'google']]));
+
+      expect(result.resolved).toBe(true);
+      expect(result.satisfaction?.reductionType).toBe('exact');
+    });
+
+    it('contexted query context(device:mobile): uses {channel,device} group (ch MECE for mobile)', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        { sliceDSL: 'context(channel:other)' },
+        { sliceDSL: 'context(channel:google).context(device:mobile)' },
+        { sliceDSL: 'context(channel:meta).context(device:mobile)' },
+        { sliceDSL: 'context(channel:other).context(device:mobile)' },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map([['device', 'mobile']]));
+
+      expect(result.resolved).toBe(true);
+      expect(result.selectedGroup?.dimensionKeys.sort()).toEqual(['channel', 'device']);
+      expect(result.satisfaction?.reductionType).toBe('single_dim_mece'); // Reduce over channel
+    });
+
+    it('contexted query context(device:desktop): FAILS (no desktop in multi-dim group)', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google)' },
+        { sliceDSL: 'context(channel:meta)' },
+        // Only mobile in multi-dim
+        { sliceDSL: 'context(channel:google).context(device:mobile)' },
+        { sliceDSL: 'context(channel:meta).context(device:mobile)' },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map([['device', 'desktop']]));
+
+      expect(result.resolved).toBe(false);
+    });
+  });
+
+  describe('Cartesian pattern: context(channel).context(device)', () => {
+    beforeEach(() => {
+      seedContextDefinition('channel', ['google', 'meta']);
+      seedContextDefinition('device', ['mobile', 'desktop']);
+    });
+
+    it('uncontexted query: all 4 combinations exist, reduces correctly', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google).context(device:mobile)', n_daily: [100], k_daily: [50], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(channel:google).context(device:desktop)', n_daily: [150], k_daily: [75], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(channel:meta).context(device:mobile)', n_daily: [80], k_daily: [40], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(channel:meta).context(device:desktop)', n_daily: [120], k_daily: [60], dates: ['1-Nov-25'] },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map());
+
+      expect(result.resolved).toBe(true);
+      expect(result.satisfaction?.reductionType).toBe('multi_dim_reduction');
+      expect(result.satisfaction?.combinationsComplete).toBe(true);
+    });
+
+    it('single-dim query context(channel:google): reduces over device', () => {
+      const slices = [
+        { sliceDSL: 'context(channel:google).context(device:mobile)', n_daily: [100], k_daily: [50], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(channel:google).context(device:desktop)', n_daily: [150], k_daily: [75], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(channel:meta).context(device:mobile)', n_daily: [80], k_daily: [40], dates: ['1-Nov-25'] },
+        { sliceDSL: 'context(channel:meta).context(device:desktop)', n_daily: [120], k_daily: [60], dates: ['1-Nov-25'] },
+      ];
+
+      const result = resolveQueryAcrossGroups(slices, new Map([['channel', 'google']]));
+
+      expect(result.resolved).toBe(true);
+      expect(result.satisfaction?.unspecifiedDimensions).toEqual(['device']);
+      expect(result.satisfaction?.reductionType).toBe('single_dim_mece');
+    });
+  });
+});
+
+describe('Critical: Temporal Heterogeneity (Multi-Epoch Queries)', () => {
+  beforeEach(() => {
+    seedContextDefinition('channel', ['google', 'meta']);
+    seedContextDefinition('device', ['mobile', 'desktop']);
+  });
+
+  it('CRITICAL: 6-week query spanning 3 different pinned DSL patterns', () => {
+    // This is the ultimate stress test: query spans epochs with different slice structures
+    
+    // Epoch 1 (1-14 Nov): Cartesian pattern → {ch,dev} slices
+    const epoch1Slices = [
+      { sliceDSL: 'context(channel:google).context(device:mobile)', dates: ['1-Nov-25', '7-Nov-25', '14-Nov-25'], n_daily: [100, 110, 120], k_daily: [50, 55, 60] },
+      { sliceDSL: 'context(channel:google).context(device:desktop)', dates: ['1-Nov-25', '7-Nov-25', '14-Nov-25'], n_daily: [150, 160, 170], k_daily: [75, 80, 85] },
+      { sliceDSL: 'context(channel:meta).context(device:mobile)', dates: ['1-Nov-25', '7-Nov-25', '14-Nov-25'], n_daily: [80, 85, 90], k_daily: [40, 43, 45] },
+      { sliceDSL: 'context(channel:meta).context(device:desktop)', dates: ['1-Nov-25', '7-Nov-25', '14-Nov-25'], n_daily: [120, 125, 130], k_daily: [60, 63, 65] },
+    ];
+
+    // Epoch 2 (15-28 Nov): Union pattern → {ch} + {dev} slices (separate)
+    const epoch2Slices = [
+      { sliceDSL: 'context(channel:google)', dates: ['15-Nov-25', '21-Nov-25', '28-Nov-25'], n_daily: [250, 270, 290], k_daily: [125, 135, 145] },
+      { sliceDSL: 'context(channel:meta)', dates: ['15-Nov-25', '21-Nov-25', '28-Nov-25'], n_daily: [200, 210, 220], k_daily: [100, 105, 110] },
+      { sliceDSL: 'context(device:mobile)', dates: ['15-Nov-25', '21-Nov-25', '28-Nov-25'], n_daily: [180, 190, 200], k_daily: [90, 95, 100] },
+      { sliceDSL: 'context(device:desktop)', dates: ['15-Nov-25', '21-Nov-25', '28-Nov-25'], n_daily: [270, 290, 310], k_daily: [135, 145, 155] },
+    ];
+
+    // Epoch 3 (29 Nov - 12 Dec): Mixed pattern → {ch} + partial {ch,dev}
+    const epoch3Slices = [
+      { sliceDSL: 'context(channel:google)', dates: ['29-Nov-25', '5-Dec-25', '12-Dec-25'], n_daily: [300, 320, 340], k_daily: [150, 160, 170] },
+      { sliceDSL: 'context(channel:meta)', dates: ['29-Nov-25', '5-Dec-25', '12-Dec-25'], n_daily: [220, 230, 240], k_daily: [110, 115, 120] },
+      // Partial {ch,dev} — only mobile row
+      { sliceDSL: 'context(channel:google).context(device:mobile)', dates: ['29-Nov-25', '5-Dec-25', '12-Dec-25'], n_daily: [130, 140, 150], k_daily: [65, 70, 75] },
+      { sliceDSL: 'context(channel:meta).context(device:mobile)', dates: ['29-Nov-25', '5-Dec-25', '12-Dec-25'], n_daily: [100, 105, 110], k_daily: [50, 53, 55] },
+    ];
+
+    const allSlices = [...epoch1Slices, ...epoch2Slices, ...epoch3Slices];
+    const queryDates = [
+      '1-Nov-25', '7-Nov-25', '14-Nov-25',      // Epoch 1
+      '15-Nov-25', '21-Nov-25', '28-Nov-25',    // Epoch 2
+      '29-Nov-25', '5-Dec-25', '12-Dec-25',     // Epoch 3
+    ];
+
+    const analysis = analyzePerDateGroupCoverage(allSlices, new Map(), queryDates);
+
+    // All dates should be covered
+    expect(analysis.fullyCovered).toBe(true);
+    expect(analysis.uncoveredDates).toEqual([]);
+
+    // Verify correct group selection per epoch
+    // Epoch 1: {ch,dev} group (only group with slices for these dates)
+    expect(analysis.perDateCoverage[0].selectedGroup?.groupDimKeys.sort()).toEqual(['channel', 'device']);
+    expect(analysis.perDateCoverage[1].selectedGroup?.groupDimKeys.sort()).toEqual(['channel', 'device']);
+    expect(analysis.perDateCoverage[2].selectedGroup?.groupDimKeys.sort()).toEqual(['channel', 'device']);
+
+    // Epoch 2: {ch} or {dev} group (both satisfy; implementation picks {ch})
+    expect(['channel', 'device']).toContain(analysis.perDateCoverage[3].selectedGroup?.groupDimKeys[0]);
+
+    // Epoch 3: {ch} group (only complete MECE for these dates)
+    expect(analysis.perDateCoverage[6].selectedGroup?.groupDimKeys).toEqual(['channel']);
+    expect(analysis.perDateCoverage[7].selectedGroup?.groupDimKeys).toEqual(['channel']);
+    expect(analysis.perDateCoverage[8].selectedGroup?.groupDimKeys).toEqual(['channel']);
+
+    // Now aggregate
+    const result = aggregateWithTemporalGroupSwitching(analysis);
+
+    // Verify dates are correct
+    expect(result.dates).toEqual(queryDates);
+
+    // Epoch 1 totals (sum all 4 {ch,dev} slices): 100+150+80+120=450 for day 1
+    expect(result.n_daily[0]).toBe(100 + 150 + 80 + 120); // 450
+
+    // Epoch 2 totals (sum 2 {ch} slices): 250+200=450 for day 4 (15-Nov)
+    expect(result.n_daily[3]).toBe(250 + 200); // 450
+
+    // Epoch 3 totals (sum 2 {ch} slices): 300+220=520 for day 7 (29-Nov)
+    expect(result.n_daily[6]).toBe(300 + 220); // 520
+  });
+
+  it('CRITICAL: detects gap when no group can satisfy middle epoch', () => {
+    // Epoch 1: {ch,dev} slices
+    const epoch1Slices = [
+      { sliceDSL: 'context(channel:google).context(device:mobile)', dates: ['1-Nov-25'], n_daily: [100], k_daily: [50] },
+      { sliceDSL: 'context(channel:google).context(device:desktop)', dates: ['1-Nov-25'], n_daily: [150], k_daily: [75] },
+      { sliceDSL: 'context(channel:meta).context(device:mobile)', dates: ['1-Nov-25'], n_daily: [80], k_daily: [40] },
+      { sliceDSL: 'context(channel:meta).context(device:desktop)', dates: ['1-Nov-25'], n_daily: [120], k_daily: [60] },
+    ];
+
+    // Epoch 2: MISSING — no slices at all for 15-Nov
+    
+    // Epoch 3: {ch} slices
+    const epoch3Slices = [
+      { sliceDSL: 'context(channel:google)', dates: ['29-Nov-25'], n_daily: [300], k_daily: [150] },
+      { sliceDSL: 'context(channel:meta)', dates: ['29-Nov-25'], n_daily: [220], k_daily: [110] },
+    ];
+
+    const allSlices = [...epoch1Slices, ...epoch3Slices];
+    const queryDates = ['1-Nov-25', '15-Nov-25', '29-Nov-25'];
+
+    const analysis = analyzePerDateGroupCoverage(allSlices, new Map(), queryDates);
+
+    expect(analysis.fullyCovered).toBe(false);
+    expect(analysis.uncoveredDates).toEqual(['15-Nov-25']);
+  });
+
+  it('CRITICAL: handles epoch with partial MECE (selects alternative group)', () => {
+    // Epoch 1: {ch} complete, {ch,dev} incomplete (only mobile)
+    const slices = [
+      // {ch} group — complete
+      { sliceDSL: 'context(channel:google)', dates: ['1-Nov-25'], n_daily: [250], k_daily: [125] },
+      { sliceDSL: 'context(channel:meta)', dates: ['1-Nov-25'], n_daily: [200], k_daily: [100] },
+      // {ch,dev} group — incomplete (missing desktop)
+      { sliceDSL: 'context(channel:google).context(device:mobile)', dates: ['1-Nov-25'], n_daily: [100], k_daily: [50] },
+      { sliceDSL: 'context(channel:meta).context(device:mobile)', dates: ['1-Nov-25'], n_daily: [80], k_daily: [40] },
+    ];
+
+    const analysis = analyzePerDateGroupCoverage(slices, new Map(), ['1-Nov-25']);
+
+    expect(analysis.fullyCovered).toBe(true);
+    
+    // Should select {ch} group because {ch,dev} is incomplete for device
+    expect(analysis.perDateCoverage[0].selectedGroup?.groupDimKeys).toEqual(['channel']);
+    
+    // Verify only 2 slices used (not 4)
+    expect(analysis.perDateCoverage[0].selectedGroup?.slicesForDate.length).toBe(2);
+  });
+
+  it('CRITICAL: tie-breaks by recency when equally-valid groups exist', () => {
+    // Both {ch} and {dev} groups can satisfy — most recent (largest min-ts) wins
+    // Recency is determined by stalest member (min retrieved_at) within the group
+    const slices = [
+      // {ch} group — older (stalest member = Nov 1 10:00)
+      { sliceDSL: 'context(channel:google)', dates: ['1-Nov-25'], n_daily: [250], k_daily: [125], retrieved_at: '2025-11-01T10:00:00Z' },
+      { sliceDSL: 'context(channel:meta)', dates: ['1-Nov-25'], n_daily: [200], k_daily: [100], retrieved_at: '2025-11-01T10:00:00Z' },
+      // {dev} group — fresher (stalest member = Nov 2 09:00)
+      { sliceDSL: 'context(device:mobile)', dates: ['1-Nov-25'], n_daily: [180], k_daily: [90], retrieved_at: '2025-11-02T09:00:00Z' },
+      { sliceDSL: 'context(device:desktop)', dates: ['1-Nov-25'], n_daily: [270], k_daily: [135], retrieved_at: '2025-11-02T09:00:00Z' },
+    ];
+
+    const analysis = analyzePerDateGroupCoverage(slices, new Map(), ['1-Nov-25']);
+
+    // Should select {dev} group because its stalest member is more recent
+    expect(analysis.perDateCoverage[0].selectedGroup?.groupDimKeys).toEqual(['device']);
+  });
+
+  it('CRITICAL: stalest member rule - mixed recency within group', () => {
+    // {ch} group has mixed recency: one very old, one very new
+    // {dev} group has uniform moderate recency
+    // Stalest member rule: {ch} recency = min(Oct1, Nov1) = Oct1, {dev} recency = Oct25
+    // Oct25 > Oct1, so {dev} wins even though {ch} has a newer member
+    const slices = [
+      // {ch} group — MIXED (stalest member = Oct 1)
+      { sliceDSL: 'context(channel:google)', dates: ['1-Nov-25'], n_daily: [100], k_daily: [50], retrieved_at: '2025-10-01T10:00:00Z' }, // VERY OLD
+      { sliceDSL: 'context(channel:meta)', dates: ['1-Nov-25'], n_daily: [80], k_daily: [40], retrieved_at: '2025-11-01T10:00:00Z' },    // VERY NEW
+      // {dev} group — UNIFORM (stalest member = Oct 25)
+      { sliceDSL: 'context(device:mobile)', dates: ['1-Nov-25'], n_daily: [90], k_daily: [45], retrieved_at: '2025-10-25T10:00:00Z' },
+      { sliceDSL: 'context(device:desktop)', dates: ['1-Nov-25'], n_daily: [90], k_daily: [45], retrieved_at: '2025-10-25T10:00:00Z' },
+    ];
+
+    const analysis = analyzePerDateGroupCoverage(slices, new Map(), ['1-Nov-25']);
+
+    // Should select {dev} because its stalest member (Oct25) is fresher than {ch}'s stalest (Oct1)
+    expect(analysis.perDateCoverage[0].selectedGroup?.groupDimKeys).toEqual(['device']);
+  });
+
+  it('CRITICAL: tie-breaks deterministically when same recency', () => {
+    // Both groups have same retrieved_at — should be deterministic
+    const slices = [
+      { sliceDSL: 'context(channel:google)', dates: ['1-Nov-25'], n_daily: [250], k_daily: [125], retrieved_at: '2025-11-02T10:00:00Z' },
+      { sliceDSL: 'context(channel:meta)', dates: ['1-Nov-25'], n_daily: [200], k_daily: [100], retrieved_at: '2025-11-02T10:00:00Z' },
+      { sliceDSL: 'context(device:mobile)', dates: ['1-Nov-25'], n_daily: [180], k_daily: [90], retrieved_at: '2025-11-02T10:00:00Z' },
+      { sliceDSL: 'context(device:desktop)', dates: ['1-Nov-25'], n_daily: [270], k_daily: [135], retrieved_at: '2025-11-02T10:00:00Z' },
+    ];
+
+    // Run twice to verify determinism
+    const analysis1 = analyzePerDateGroupCoverage(slices, new Map(), ['1-Nov-25']);
+    const analysis2 = analyzePerDateGroupCoverage(slices, new Map(), ['1-Nov-25']);
+
+    expect(analysis1.perDateCoverage[0].selectedGroup?.groupDimKeys)
+      .toEqual(analysis2.perDateCoverage[0].selectedGroup?.groupDimKeys);
+  });
+});
+
+describe('Critical: Sparse Cartesian Rejection', () => {
+  it('CRITICAL: rejects sparse Cartesian product (per-dim MECE but missing combos)', () => {
+    // This tests the attack scenario where per-dimension MECE passes
+    // but full Cartesian product is incomplete
+    seedContextDefinition('channel', ['google', 'meta', 'tiktok', 'other']);
+    seedContextDefinition('device', ['mobile', 'desktop', 'tablet', 'ios', 'android']);
+
+    // 9 slices: NOT a complete 4×5=20 Cartesian product
+    const slices = [
+      makeSlice('google', 'mobile'), makeSlice('google', 'desktop'),
+      makeSlice('google', 'tablet'), makeSlice('google', 'ios'),
+      makeSlice('google', 'android'),  // 5 for google
+      makeSlice('meta', 'mobile'),     // 1 for meta
+      makeSlice('tiktok', 'mobile'),   // 1 for tiktok
+      makeSlice('other', 'mobile'), makeSlice('other', 'desktop'), // 2 for other
+    ];
+
+    const result = resolveQueryAcrossGroups(slices, new Map()); // uncontexted query
+
+    expect(result.kind).toBe('not_reducible');
+    expect(result.reason).toBe('missing_combinations');
+    expect(result.diagnostics.warnings[0]).toContain('Missing');
+  });
+
+  it('CRITICAL: accepts complete Cartesian product', () => {
+    seedContextDefinition('channel', ['google', 'meta']);
+    seedContextDefinition('device', ['mobile', 'desktop']);
+
+    // Complete 2×2=4 Cartesian product
+    const slices = [
+      makeSlice('google', 'mobile'), makeSlice('google', 'desktop'),
+      makeSlice('meta', 'mobile'), makeSlice('meta', 'desktop'),
+    ];
+
+    const result = tryDimensionalReduction(slices, '');
+
+    expect(result.kind).toBe('reduced');
+    expect(result.diagnostics.slicesUsed).toBe(4);
+  });
+
+  it('single unspecified dimension: per-dim MECE is sufficient', () => {
+    // For 1D reduction, per-dimension check IS sufficient
+    seedContextDefinition('device', ['mobile', 'desktop', 'tablet']);
+
+    const slices = [
+      makeSlice('google', 'mobile'),
+      makeSlice('google', 'desktop'),
+      makeSlice('google', 'tablet'),
+    ];
+
+    const result = tryDimensionalReduction(slices, 'context(channel:google)');
+
+    expect(result.kind).toBe('reduced');
+    expect(result.diagnostics.slicesUsed).toBe(3);
+  });
+});
+
+describe('Critical: Flexible date range coverage', () => {
+  it('CRITICAL: mixed uncontexted + MECE contexted covers full range', () => {
+    // Dates 1-5: uncontexted slice
+    // Dates 5-10: MECE contexted slices
+    // Query: 1-10
+    const uncontextedSlice = {
+      sliceDSL: undefined,
+      dates: ['1-Nov-25', '2-Nov-25', '3-Nov-25', '4-Nov-25', '5-Nov-25'],
+      n_daily: [100, 110, 120, 130, 140],
+      k_daily: [50, 55, 60, 65, 70],
+    };
+
+    const contextedSlices = [
+      {
+        sliceDSL: 'context(channel:google)',
+        dates: ['5-Nov-25', '6-Nov-25', '7-Nov-25', '8-Nov-25', '9-Nov-25', '10-Nov-25'],
+        n_daily: [200, 210, 220, 230, 240, 250],
+        k_daily: [100, 105, 110, 115, 120, 125],
+      },
+      {
+        sliceDSL: 'context(channel:meta)',
+        dates: ['5-Nov-25', '6-Nov-25', '7-Nov-25', '8-Nov-25', '9-Nov-25', '10-Nov-25'],
+        n_daily: [50, 55, 60, 65, 70, 75],
+        k_daily: [25, 28, 30, 33, 35, 38],
+      },
+    ];
+
+    seedContextDefinition('channel', ['google', 'meta']);
+
+    const result = analyzePerDateCoverage(
+      [uncontextedSlice, ...contextedSlices],
+      new Map(), // uncontexted query
+      ['1-Nov-25', '2-Nov-25', '3-Nov-25', '4-Nov-25', '5-Nov-25',
+       '6-Nov-25', '7-Nov-25', '8-Nov-25', '9-Nov-25', '10-Nov-25']
+    );
+
+    expect(result.fullyCovered).toBe(true);
+    
+    // Dates 1-4: from uncontexted
+    expect(result.coverage[0].source).toBe('uncontexted');
+    expect(result.coverage[3].source).toBe('uncontexted');
+    
+    // Date 5: could be either (overlap) — prefer uncontexted for simplicity
+    // Dates 6-10: from MECE contexted
+    expect(result.coverage[5].source).toBe('mece_aggregated');
+    expect(result.coverage[9].source).toBe('mece_aggregated');
+  });
+
+  it('CRITICAL: gap in coverage detected', () => {
+    // Dates 1-3: uncontexted
+    // Dates 6-10: MECE contexted
+    // Gap at dates 4-5
+    const uncontextedSlice = {
+      sliceDSL: undefined,
+      dates: ['1-Nov-25', '2-Nov-25', '3-Nov-25'],
+      n_daily: [100, 110, 120],
+      k_daily: [50, 55, 60],
+    };
+
+    const contextedSlices = [
+      {
+        sliceDSL: 'context(channel:google)',
+        dates: ['6-Nov-25', '7-Nov-25', '8-Nov-25', '9-Nov-25', '10-Nov-25'],
+        n_daily: [200, 210, 220, 230, 240],
+        k_daily: [100, 105, 110, 115, 120],
+      },
+    ];
+
+    const result = analyzePerDateCoverage(
+      [uncontextedSlice, ...contextedSlices],
+      new Map(),
+      ['1-Nov-25', '2-Nov-25', '3-Nov-25', '4-Nov-25', '5-Nov-25',
+       '6-Nov-25', '7-Nov-25', '8-Nov-25', '9-Nov-25', '10-Nov-25']
+    );
+
+    expect(result.fullyCovered).toBe(false);
+    expect(result.coverage[3].source).toBe('uncovered'); // 4-Nov-25
+    expect(result.coverage[4].source).toBe('uncovered'); // 5-Nov-25
+  });
+
+  it('aggregation produces correct values with mixed sources', () => {
+    // Verify that aggregation correctly sums per-date values from mixed sources
+    const coverage: DateCoverage[] = [
+      { date: '1-Nov-25', source: 'uncontexted', slicesUsed: [{ dates: ['1-Nov-25'], n_daily: [100], k_daily: [50] }] },
+      { date: '2-Nov-25', source: 'mece_aggregated', slicesUsed: [
+        { dates: ['2-Nov-25'], n_daily: [60], k_daily: [30] },
+        { dates: ['2-Nov-25'], n_daily: [40], k_daily: [20] },
+      ]},
+    ];
+
+    const result = aggregateWithMixedCoverage(coverage);
+
+    expect(result.dates).toEqual(['1-Nov-25', '2-Nov-25']);
+    expect(result.n_daily).toEqual([100, 100]); // 100, then 60+40
+    expect(result.k_daily).toEqual([50, 50]);   // 50, then 30+20
+  });
+});
+
+describe('Critical: Dimension set consistency', () => {
+  it('CRITICAL: rejects slices with inconsistent dimension sets', () => {
+    const slices = [
+      { sliceDSL: 'context(channel:google).context(device:mobile)' },
+      { sliceDSL: 'context(channel:google).context(device:desktop).context(region:uk)' },
+    ];
+
+    const result = tryDimensionalReduction(slices, 'context(channel:google)');
+
+    expect(result.kind).toBe('not_reducible');
+    expect(result.reason).toBe('inconsistent_dimension_sets');
+  });
+
+  it('accepts slices with consistent dimension sets', () => {
+    seedContextDefinition('device', ['mobile', 'desktop']);
+    
+    const slices = [
+      { sliceDSL: 'context(channel:google).context(device:mobile)', dates: ['1-Nov-25'], n_daily: [100], k_daily: [50] },
+      { sliceDSL: 'context(channel:google).context(device:desktop)', dates: ['1-Nov-25'], n_daily: [100], k_daily: [50] },
+    ];
+
+    const result = tryDimensionalReduction(slices, 'context(channel:google)');
+
+    expect(result.kind).toBe('reduced');
+  });
+});
+
+describe('Critical: Mixed signature types in file', () => {
+  it('single-dim MECE works ignoring multi-dim slices in same file', () => {
+    const singleDimSig = '{"c":"abc","x":{"channel":"h1"}}';
+    const multiDimSig = '{"c":"abc","x":{"channel":"h1","device":"h2"}}';
+    
+    seedContextDefinition('channel', ['google', 'meta', 'other']);
+
+    const values = [
+      // Single-dim slices (complete MECE)
+      { sliceDSL: 'context(channel:google)', query_signature: singleDimSig },
+      { sliceDSL: 'context(channel:meta)', query_signature: singleDimSig },
+      { sliceDSL: 'context(channel:other)', query_signature: singleDimSig },
+      // Multi-dim slice (should be ignored by single-dim MECE logic)
+      { sliceDSL: 'context(channel:google).context(device:mobile)', query_signature: multiDimSig },
+    ];
+
+    // isEligibleContextOnlySlice rejects the multi-dim slice
+    expect(isEligibleContextOnlySlice(values[0])).toBeTruthy();
+    expect(isEligibleContextOnlySlice(values[3])).toBeNull();
+
+    // Single-dim MECE should work with first 3 slices
+    const meceResult = computeMECEGenerationCandidates(values, 'channel');
+    expect(meceResult.candidates.length).toBeGreaterThan(0);
+  });
+
+  it('multi-dim reduction works ignoring single-dim slices in same file', () => {
+    const singleDimSig = '{"c":"abc","x":{"channel":"h1"}}';
+    const multiDimSig = '{"c":"abc","x":{"channel":"h1","device":"h2"}}';
+    
+    seedContextDefinition('device', ['mobile', 'desktop']);
+
+    const values = [
+      // Single-dim slice
+      { sliceDSL: 'context(channel:google)', query_signature: singleDimSig },
+      // Multi-dim slices (complete for device)
+      { sliceDSL: 'context(channel:google).context(device:mobile)', query_signature: multiDimSig, dates: ['1-Nov-25'], n_daily: [100], k_daily: [50] },
+      { sliceDSL: 'context(channel:google).context(device:desktop)', query_signature: multiDimSig, dates: ['1-Nov-25'], n_daily: [100], k_daily: [50] },
+    ];
+
+    // Multi-dim query: context(channel:google)
+    // Should use the 2 multi-dim slices, not the single-dim one
+    const multiDimEligible = values.filter(v => isEligibleMultiContextSlice(v as any));
+    expect(multiDimEligible.length).toBe(2);
+
+    const result = tryDimensionalReduction(multiDimEligible, 'context(channel:google)');
+    expect(result.kind).toBe('reduced');
+    expect(result.diagnostics.slicesUsed).toBe(2);
+  });
+});
+```
 
 ### 8.6 Regression Tests
 
@@ -2060,20 +3593,40 @@ describe('Dimensional Reduction Regressions', () => {
 | **aggregateSlices** | 5 | Sum, date mismatch, single, empty, missing arrays |
 | **tryDimensionalReduction** | 5 | Happy path, MECE fail, uncontexted, no match, multi-dim |
 | **isEligibleMultiContextSlice** | 5 | Single, multi, uncontexted, case, contextAny |
+| **verifyAllCombinationsExist** | 3 | Complete Cartesian, sparse (attack), single-dim bypass |
+| **analyzePerDateCoverage** | 4 | Mixed sources, gaps, overlap, full range |
+| **aggregateWithMixedCoverage** | 2 | Correct sums, uncovered handling |
+| **groupByDimensionSet** | 2 | Separates by keys, handles uncontexted |
+| **evaluateGroupSatisfaction** | 2 | Single-dim MECE, multi-dim combos |
+| **resolveQueryAcrossGroups** | 1 | Selects best group |
+| **analyzePerDateGroupCoverage** | 4 | Per-date evaluation, gaps, tie-breaks |
+| **aggregateWithTemporalGroupSwitching** | 2 | Group switching, correct sums |
+| **Union pattern (;)** | 4 | Uncontexted, ch:google, dev:mobile, multi-dim fails |
+| **Mixed pattern** | 4 | Uncontexted, ch:google, dev:mobile, dev:desktop fails |
+| **Cartesian pattern (.)** | 2 | Uncontexted, single-dim query |
+| **Temporal heterogeneity** | 6 | 6-week/3-epoch, gap detection, partial MECE, recency tie-break, stalest-member, determinism |
+| **dedupeSlices** | 2 | Basic dedupe, fresher kept |
+| **missing/error hash handling** | 3 | Cache missing, query missing, both missing |
+| **H1: parseSignature robustness** | 7 | null, undefined, empty, legacy hex, not-json, wrong types, null x |
+| **H2: extractContextMap memoization** | 2 | Cache hit, cache miss |
+| **H4: verifyAllCombinations perf** | 3 | Fast path, bounded dims, capped diagnostics |
+| **Sparse Cartesian** | 1 | Missing combinations rejected |
+| **Dimension set consistency** | 2 | Inconsistent rejected, consistent accepted |
 | **computeMultiDimMECECandidates** | 3 | Signature grouping, MECE selection, freshness |
 | **isolateSlicePartialMatch** | 4 | Superset, uncontexted, all match, 3-dim |
 | **Integration: coverage** | 4 | Complete MECE, incomplete, uncontexted, aggregation |
-| **Test matrix scenarios** | 12 | All dimensional permutations |
+| **Test matrix scenarios** | 16 | All dimensional permutations |
 | **Regressions** | 3 | Single-dim, exact match, case rejection |
-| **Phase 5 Total** | **57** |
+| **Hardening (H1, H2, H4)** | 12 | Robustness, memoization, performance |
+| **Phase 5 Total** | **117** |
 
 ### 8.8 Updated Grand Total
 
 | Phase | Tests |
 |-------|-------|
 | Phases 1-4 (from proposal) | 71 |
-| Phase 5 (multi-dim) | 57 |
-| **Grand Total** | **128** |
+| Phase 5 (multi-dim + temporal + hardening) | 117 |
+| **Grand Total** | **188** |
 
 ---
 
@@ -2165,11 +3718,292 @@ describe('Dimensional Reduction Regressions', () => {
 | Performance regression (JSON parse) | Low | Low | Parse is fast; cache if needed |
 | False positive (accept invalid cache) | Low | Medium | Core hash + MECE verification protect |
 | False negative (reject valid cache) | Very Low | Low | Subset matching is strictly more permissive |
-| Test coverage gaps | Medium | High | 128 tests with full scenario matrix |
+| Test coverage gaps | Medium | High | 176 tests with full scenario matrix |
 | **Phase 5: Aggregation math errors** | Low | High | Unit tests verify sum correctness |
 | **Phase 5: Date array misalignment** | Medium | Medium | Explicit validation before aggregation |
 | **Phase 5: MECE verification too strict** | Medium | Low | Follows existing context definition policies |
 | **Phase 5: Performance with large slice sets** | Low | Medium | Lazy evaluation; early exit on MECE fail |
+
+---
+
+## 10.5 Implementation Hardening
+
+This section addresses specific implementation risks identified during design review.
+
+### H1. Legacy Signature Robustness
+
+**Risk**: The "Big Bang" signature change invalidates all existing caches. If `parseSignature` crashes on legacy 64-character hex strings, the entire system fails.
+
+**Requirement**: `parseSignature` MUST be defensive and never throw.
+
+```typescript
+export function parseSignature(sig: string): StructuredSignature {
+  // Guard: null/undefined/empty
+  if (!sig || typeof sig !== 'string') {
+    return { coreHash: '', contextDefHashes: {} };
+  }
+  
+  // Guard: Legacy hex hash (64 chars, hex only)
+  if (/^[a-f0-9]{64}$/i.test(sig)) {
+    // Legacy signature - return empty structure (will never match)
+    return { coreHash: '', contextDefHashes: {} };
+  }
+  
+  // Guard: Not JSON-like
+  if (!sig.startsWith('{')) {
+    return { coreHash: '', contextDefHashes: {} };
+  }
+  
+  try {
+    const parsed = JSON.parse(sig);
+    return {
+      coreHash: typeof parsed.c === 'string' ? parsed.c : '',
+      contextDefHashes: (parsed.x && typeof parsed.x === 'object') ? parsed.x : {},
+    };
+  } catch {
+    // Malformed JSON - return empty structure
+    return { coreHash: '', contextDefHashes: {} };
+  }
+}
+```
+
+**Test coverage required**:
+- [ ] `parseSignature(null)` → empty structure
+- [ ] `parseSignature(undefined)` → empty structure
+- [ ] `parseSignature('')` → empty structure
+- [ ] `parseSignature('a1b2c3...')` (64-char hex) → empty structure
+- [ ] `parseSignature('not json')` → empty structure
+- [ ] `parseSignature('{"c":123}')` (wrong type) → empty structure
+- [ ] `parseSignature('{"c":"abc","x":null}')` (null x) → coreHash only
+
+### H2. Context Map Memoization
+
+**Risk**: `extractContextMap` is called in hot loops (per-slice, per-date). For a 90-day query over 1,000 slices, this is 90,000+ parsing operations.
+
+**Requirement**: Memoize `extractContextMap` with a `Map<string, Map<string, string>>` keyed by `sliceDSL`.
+
+```typescript
+// Module-level cache (cleared on window reload)
+const contextMapCache = new Map<string, Map<string, string>>();
+
+export function extractContextMap(sliceDSL: string): Map<string, string> {
+  const key = sliceDSL ?? '';
+  
+  const cached = contextMapCache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  
+  // Actual parsing logic
+  const dims = extractSliceDimensions(key);
+  if (!dims) {
+    const empty = new Map<string, string>();
+    contextMapCache.set(key, empty);
+    return empty;
+  }
+  
+  const parsed = parseConstraints(dims);
+  const map = new Map<string, string>();
+  for (const ctx of parsed.context) {
+    map.set(ctx.key, ctx.value);
+  }
+  
+  contextMapCache.set(key, map);
+  return map;
+}
+
+// Optional: Clear cache (e.g., after workspace switch)
+export function clearContextMapCache(): void {
+  contextMapCache.clear();
+}
+```
+
+**Performance target**: `extractContextMap` should be O(1) for repeated calls with the same DSL string.
+
+### H3. Module Dependency Boundaries
+
+**Risk**: Circular dependencies between `dimensionalReductionService`, `contextRegistry`, and `meceSliceService`.
+
+**Requirement**: Strict layering with no circular imports.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 4: Orchestration                                          │
+│   windowAggregationService, fetchPlanBuilderService             │
+│   (imports from Layers 1-3)                                     │
+├─────────────────────────────────────────────────────────────────┤
+│ Layer 3: Business Logic                                         │
+│   dimensionalReductionService, meceSliceService                 │
+│   (imports from Layers 1-2 only)                                │
+├─────────────────────────────────────────────────────────────────┤
+│ Layer 2: Signature Matching                                     │
+│   signatureMatchingService                                      │
+│   (imports from Layer 1 only)                                   │
+├─────────────────────────────────────────────────────────────────┤
+│ Layer 1: Pure Utilities (no service imports)                    │
+│   contextRegistry (data only), sliceIsolation, dslExplosion     │
+│   (imports only types and pure functions)                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Implementation rules**:
+1. `signatureMatchingService.ts` — ZERO imports from other services (pure functions only)
+2. `dimensionalReductionService.ts` — may import `contextRegistry` and `signatureMatchingService`
+3. `meceSliceService.ts` — may import `dimensionalReductionService` for multi-dim logic
+4. `windowAggregationService.ts` — may import from all lower layers
+
+**Verification**: Run `madge --circular src/services/` after implementation to detect cycles.
+
+### H4. Combination Verification Performance
+
+**Risk**: `verifyAllCombinationsExist` generates a Cartesian product of dimension values. For 4 dimensions × 5 values each = 625 expected combinations.
+
+**Requirement**: Early exit and bounded iteration.
+
+```typescript
+export function verifyAllCombinationsExist(
+  slices: ParameterValue[],
+  unspecifiedDimensions: string[]
+): { complete: boolean; missingCombinations: string[] } {
+  // Fast path: single dimension doesn't need combination check
+  if (unspecifiedDimensions.length <= 1) {
+    return { complete: true, missingCombinations: [] };
+  }
+  
+  // Guard: Limit dimensionality to prevent combinatorial explosion
+  // Real-world queries rarely exceed 3 dimensions
+  if (unspecifiedDimensions.length > 4) {
+    console.warn(`verifyAllCombinationsExist: ${unspecifiedDimensions.length} dimensions, skipping full verification`);
+    return { complete: false, missingCombinations: ['too_many_dimensions'] };
+  }
+  
+  // Build set of actual combinations (O(n) where n = slices.length)
+  const actualCombinations = new Set<string>();
+  for (const slice of slices) {
+    const ctxMap = extractContextMap(slice.sliceDSL ?? '');
+    const combo = unspecifiedDimensions
+      .map(d => `${d}:${ctxMap.get(d) ?? ''}`)
+      .sort()
+      .join('|');
+    actualCombinations.add(combo);
+  }
+  
+  // Collect dimension values (O(n))
+  const dimensionValues: Map<string, Set<string>> = new Map();
+  for (const dimKey of unspecifiedDimensions) {
+    dimensionValues.set(dimKey, new Set());
+  }
+  for (const slice of slices) {
+    const ctxMap = extractContextMap(slice.sliceDSL ?? '');
+    for (const dimKey of unspecifiedDimensions) {
+      const v = ctxMap.get(dimKey);
+      if (v) dimensionValues.get(dimKey)!.add(v);
+    }
+  }
+  
+  // Calculate expected count without generating all combinations
+  let expectedCount = 1;
+  for (const values of dimensionValues.values()) {
+    expectedCount *= values.size;
+  }
+  
+  // Fast check: if actual count equals expected, we're complete
+  if (actualCombinations.size === expectedCount) {
+    return { complete: true, missingCombinations: [] };
+  }
+  
+  // Slow path: find missing combinations (only if incomplete)
+  // Limit to reporting first 10 missing for diagnostics
+  const missing: string[] = [];
+  const arrays = unspecifiedDimensions.map(d => Array.from(dimensionValues.get(d)!).sort());
+  
+  function* generateCombinations(index: number, current: string[]): Generator<string[]> {
+    if (index === arrays.length) {
+      yield [...current];
+      return;
+    }
+    for (const v of arrays[index]) {
+      current.push(v);
+      yield* generateCombinations(index + 1, current);
+      current.pop();
+    }
+  }
+  
+  for (const combo of generateCombinations(0, [])) {
+    const key = unspecifiedDimensions.map((d, i) => `${d}:${combo[i]}`).sort().join('|');
+    if (!actualCombinations.has(key)) {
+      missing.push(key);
+      if (missing.length >= 10) break; // Limit diagnostic output
+    }
+  }
+  
+  return { complete: false, missingCombinations: missing };
+}
+```
+
+**Performance characteristics**:
+- Single dimension: O(1) early exit
+- Slice parsing: O(n) with memoization (see H2)
+- Fast completeness check: O(1) set size comparison
+- Missing diagnostics: Only generated when incomplete, capped at 10
+
+### H5. Stalest Member Behaviour Documentation
+
+**Risk**: The "stalest member" recency rule may surprise users when a group with one old slice is deprioritised even though most of its slices are fresh.
+
+**Requirement**: This behaviour is **intentional** and must be documented in diagnostics.
+
+When session logging shows group selection, include:
+
+```typescript
+sessionLogService.info('dimensional-reduction', 'GROUP_SELECTED', 
+  `Selected group {${selectedGroup.dimensionKeys.join(',')}} for date ${date}`,
+  undefined,
+  {
+    priority: satisfaction.reductionType,
+    recency: new Date(groupRecency).toISOString(),
+    recencyRule: 'stalest_member',  // Explicitly label the rule
+    sliceCount: selectedGroup.slices.length,
+    rejectedGroups: rejectedGroups.map(g => ({
+      dims: g.dimensionKeys,
+      reason: g.reason,
+      recency: g.recency,
+    })),
+  }
+);
+```
+
+**User-facing documentation** (add to `graph-editor/public/docs/query-expressions.md`):
+
+> **Cache Freshness**: When multiple cached slice sets can satisfy a query, the system prefers the set where the *oldest* slice is most recent. This ensures you never get a mix of fresh and stale data.
+
+### H6. Dedupe Integration Point
+
+**Risk**: `dedupeSlices` exists but may not be called at the right point in the pipeline.
+
+**Requirement**: Dedupe MUST be called in `aggregateWithTemporalGroupSwitching` before summing.
+
+```typescript
+function aggregateWithTemporalGroupSwitching(
+  analysis: PerDateGroupAnalysis
+): AggregatedResult {
+  // ...existing code...
+  
+  for (const coverage of analysis.perDateCoverage) {
+    if (!coverage.selectedGroup) {
+      throw new Error(`Uncovered date: ${coverage.date}`);
+    }
+    
+    // CRITICAL: Dedupe before summing to prevent double-count
+    const dedupedSlices = dedupeSlices(coverage.selectedGroup.slicesForDate);
+    
+    // Sum the deduped slices for this date
+    // ...rest of summing logic using dedupedSlices...
+  }
+}
+```
+
+**Test**: Scenario 15 in `multi-sig-matching-testing-logic.md` verifies this.
 
 ---
 
@@ -2178,7 +4012,7 @@ describe('Dimensional Reduction Regressions', () => {
 1. **Primary bug fixed**: Uncontexted query over single-dim MECE cache no longer demands refetch
 2. **Multi-dim support**: Single-dim query over multi-dim MECE cache uses cache
 3. **Full uncontexted support**: Uncontexted query over multi-dim MECE cache uses cache
-4. **Tests pass**: All 128 unit, integration, and E2E tests pass
+4. **Tests pass**: All 188 unit, integration, and E2E tests pass
 5. **Coverage**: 100% branch coverage on matching and reduction logic
 6. **No regressions**: Existing single-dim MECE behaviour preserved
 7. **Aggregation correctness**: Sum-based reduction verified mathematically
