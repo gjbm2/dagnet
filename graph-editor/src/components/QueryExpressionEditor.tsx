@@ -39,6 +39,8 @@ interface ParsedQueryChip {
   type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'contextAny' | 'window' | 'cohort' | 'minus' | 'plus';
   values: string[];
   rawText: string;
+  /** Text that appears before this chip (operators, parens, etc.) */
+  precedingText: string;
 }
 
 /**
@@ -116,30 +118,50 @@ const innerChipConfig = {
   }
 };
 
-// Parse query string into chips
+interface ParsedQueryResult {
+  chips: ParsedQueryChip[];
+  /** Text after the last chip (e.g. trailing ".") */
+  trailingText: string;
+}
+
+// Parse query string into chips, preserving structural delimiters
 function parseQueryToChips(query: string): ParsedQueryChip[] {
-  if (!query) return [];
+  return parseQueryToChipsWithStructure(query).chips;
+}
+
+function parseQueryToChipsWithStructure(query: string): ParsedQueryResult {
+  if (!query) return { chips: [], trailingText: '' };
   
   const chips: ParsedQueryChip[] = [];
   
   // Match ALL function calls in order they appear
   const functionRegex = /(from|to|exclude|visited|visitedAny|case|context|contextAny|window|cohort|minus|plus)\(([^)]+)\)/g;
   let match;
+  let lastIndex = 0;
   
   while ((match = functionRegex.exec(query)) !== null) {
     const funcType = match[1] as ParsedQueryChip['type'];
     const content = match[2];
+    
+    // Capture text between previous match end and this match start
+    const precedingText = query.slice(lastIndex, match.index);
     
     chips.push({
       type: funcType,
       values: (funcType === 'exclude' || funcType === 'visited' || funcType === 'visitedAny' || funcType === 'contextAny') 
         ? content.split(',').map(s => s.trim())
         : [content],
-      rawText: match[0]
+      rawText: match[0],
+      precedingText
     });
+    
+    lastIndex = match.index + match[0].length;
   }
   
-  return chips;
+  // Capture any trailing text after the last chip
+  const trailingText = query.slice(lastIndex);
+  
+  return { chips, trailingText };
 }
 
 export function QueryExpressionEditor({
@@ -181,6 +203,7 @@ export function QueryExpressionEditor({
   };
   
   const [chips, setChips] = useState<ParsedQueryChip[]>([]);
+  const [trailingText, setTrailingText] = useState<string>('');
   const [hoveredChipIndex, setHoveredChipIndex] = useState<number | null>(null);
   const [hoveredInnerChip, setHoveredInnerChip] = useState(false);
   const [editorHeight, setEditorHeight] = useState(height);
@@ -292,12 +315,15 @@ export function QueryExpressionEditor({
   
   // Parse value into chips when it changes
   useEffect(() => {
+    const result = parseQueryToChipsWithStructure(value);
     console.log('[QueryExpressionEditor] Value changed, parsing to chips:', { 
       value, 
       isEditing,
-      chipsCount: parseQueryToChips(value).length 
+      chipsCount: result.chips.length,
+      trailingText: result.trailingText
     });
-    setChips(parseQueryToChips(value));
+    setChips(result.chips);
+    setTrailingText(result.trailingText);
   }, [value, isEditing]);
   
   // Calculate editor height based on content
@@ -1815,130 +1841,155 @@ export function QueryExpressionEditor({
           const innerConfig = innerChipConfig[innerType];
           
           return (
-            <div
-              key={index}
-              ref={(el) => {
-                if (el) chipRefs.current.set(index, el);
-              }}
-              onMouseEnter={() => setHoveredChipIndex(index)}
-              onMouseLeave={() => setHoveredChipIndex(null)}
-              onClick={(e) => handleOuterChipClick(chip, e)}
-              onContextMenu={(e) => handleChipContextMenu(index, chip, e)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'flex-start',  // Align to top when wrapped
-                flexWrap: 'wrap',
-                gap: '4px',
-                padding: '5px 8px',
-                backgroundColor: '#F9FAFB',  // Neutral light grey
-                borderRadius: '6px',
-                border: '1px solid #D1D5DB',
-                fontSize: '12px',
-                fontWeight: '500',
-                position: 'relative',
-                transition: 'all 0.15s ease',
-                cursor: readonly ? 'default' : 'pointer',
-                maxWidth: '100%',
-                minWidth: 0  // Allow shrinking below content size
-              }}
-            >
-              <Icon size={13} style={{ color: '#6B7280', alignSelf: 'center' }} />
-              <span style={{ color: '#374151', fontWeight: '600', alignSelf: 'center' }}>
-                {config.label}
-              </span>
-              <span style={{ color: '#6B7280', alignSelf: 'center' }}>(</span>
-              
-              {/* Inner chips for values */}
-              {chip.values.map((val, vIndex) => (
-                <React.Fragment key={vIndex}>
-                  <div
-                    onClick={(e) => handleInnerChipClick(chip, val, e)}
-                    onMouseEnter={() => setHoveredInnerChip(true)}
-                    onMouseLeave={() => setHoveredInnerChip(false)}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      padding: '2px 6px',
-                      backgroundColor: innerConfig.bgColour,
-                      borderRadius: '4px',
-                      border: `1px solid ${innerConfig.borderColor}`,
-                      fontSize: '11px',
-                      fontWeight: '500',
-                      cursor: readonly ? 'default' : 'pointer',
-                      position: 'relative',
-                      wordBreak: 'break-word',
-                      maxWidth: '100%'
+            <React.Fragment key={index}>
+              {/* Render preceding text (operators, parens) */}
+              {chip.precedingText && (
+                <span style={{ 
+                  color: '#6B7280', 
+                  fontWeight: '600',
+                  fontSize: '14px',
+                  alignSelf: 'center',
+                  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace'
+                }}>
+                  {chip.precedingText}
+                </span>
+              )}
+              <div
+                ref={(el) => {
+                  if (el) chipRefs.current.set(index, el);
+                }}
+                onMouseEnter={() => setHoveredChipIndex(index)}
+                onMouseLeave={() => setHoveredChipIndex(null)}
+                onClick={(e) => handleOuterChipClick(chip, e)}
+                onContextMenu={(e) => handleChipContextMenu(index, chip, e)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'flex-start',  // Align to top when wrapped
+                  flexWrap: 'wrap',
+                  gap: '4px',
+                  padding: '5px 8px',
+                  backgroundColor: '#F9FAFB',  // Neutral light grey
+                  borderRadius: '6px',
+                  border: '1px solid #D1D5DB',
+                  fontSize: '12px',
+                  fontWeight: '500',
+                  position: 'relative',
+                  transition: 'all 0.15s ease',
+                  cursor: readonly ? 'default' : 'pointer',
+                  maxWidth: '100%',
+                  minWidth: 0  // Allow shrinking below content size
+                }}
+              >
+                <Icon size={13} style={{ color: '#6B7280', alignSelf: 'center' }} />
+                <span style={{ color: '#374151', fontWeight: '600', alignSelf: 'center' }}>
+                  {config.label}
+                </span>
+                <span style={{ color: '#6B7280', alignSelf: 'center' }}>(</span>
+                
+                {/* Inner chips for values */}
+                {chip.values.map((val, vIndex) => (
+                  <React.Fragment key={vIndex}>
+                    <div
+                      onClick={(e) => handleInnerChipClick(chip, val, e)}
+                      onMouseEnter={() => setHoveredInnerChip(true)}
+                      onMouseLeave={() => setHoveredInnerChip(false)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        padding: '2px 6px',
+                        backgroundColor: innerConfig.bgColour,
+                        borderRadius: '4px',
+                        border: `1px solid ${innerConfig.borderColor}`,
+                        fontSize: '11px',
+                        fontWeight: '500',
+                        cursor: readonly ? 'default' : 'pointer',
+                        position: 'relative',
+                        wordBreak: 'break-word',
+                        maxWidth: '100%'
+                      }}
+                    >
+                      <span style={{ color: innerConfig.textColour }}>
+                        {val}
+                      </span>
+                    </div>
+                    {vIndex < chip.values.length - 1 && (
+                      <span style={{ color: '#6B7280', margin: '0 2px', alignSelf: 'center' }}>,</span>
+                    )}
+                  </React.Fragment>
+                ))}
+                
+                <span style={{ color: '#6B7280', alignSelf: 'center' }}>)</span>
+                
+                {/* Dropdown button for context chips */}
+                {!readonly && (chip.type === 'context' || chip.type === 'contextAny') && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const chipEl = chipRefs.current.get(index);
+                      if (chipEl) {
+                        handleChipDropdownOpen(index, chip, e, chipEl);
+                      }
                     }}
+                    style={{
+                      marginLeft: '4px',
+                      padding: '2px 4px',
+                      border: 'none',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      alignSelf: 'center',
+                      color: '#9CA3AF',
+                      transition: 'color 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.color = '#374151'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
+                    title="Change values"
                   >
-                    <span style={{ color: innerConfig.textColour }}>
-                      {val}
-                    </span>
-                  </div>
-                  {vIndex < chip.values.length - 1 && (
-                    <span style={{ color: '#6B7280', margin: '0 2px', alignSelf: 'center' }}>,</span>
-                  )}
-                </React.Fragment>
-              ))}
-              
-              <span style={{ color: '#6B7280', alignSelf: 'center' }}>)</span>
-              
-              {/* Dropdown button for context chips */}
-              {!readonly && (chip.type === 'context' || chip.type === 'contextAny') && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    const chipEl = chipRefs.current.get(index);
-                    if (chipEl) {
-                      handleChipDropdownOpen(index, chip, e, chipEl);
-                    }
-                  }}
-                  style={{
-                    marginLeft: '4px',
-                    padding: '2px 4px',
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    alignSelf: 'center',
-                    color: '#9CA3AF',
-                    transition: 'color 0.15s ease'
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.color = '#374151'}
-                  onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
-                  title="Change values"
-                >
-                  <ChevronDown size={12} />
-                </button>
-              )}
-              
-              {/* Delete button for entire outer chip - always visible */}
-              {!readonly && (
-                <button
-                  type="button"
-                  onClick={(e) => handleDeleteChip(chip, e)}
-                  style={{
-                    marginLeft: '2px',
-                    padding: '2px',
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    alignSelf: 'center',
-                    color: '#9CA3AF',
-                    transition: 'color 0.15s ease'
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.color = '#374151'}
-                  onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
-                  title="Remove term"
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
+                    <ChevronDown size={12} />
+                  </button>
+                )}
+                
+                {/* Delete button for entire outer chip - always visible */}
+                {!readonly && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleDeleteChip(chip, e)}
+                    style={{
+                      marginLeft: '2px',
+                      padding: '2px',
+                      border: 'none',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      alignSelf: 'center',
+                      color: '#9CA3AF',
+                      transition: 'color 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.color = '#374151'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
+                    title="Remove term"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            </React.Fragment>
           );
         })}
+            {/* Render trailing text (closing parens, trailing operators) */}
+            {trailingText && (
+              <span style={{ 
+                color: '#6B7280', 
+                fontWeight: '600',
+                fontSize: '14px',
+                alignSelf: 'center',
+                fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace'
+              }}>
+                {trailingText}
+              </span>
+            )}
           </div>
         )}
       </div>
