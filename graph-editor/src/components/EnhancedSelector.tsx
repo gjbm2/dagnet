@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Plug, Zap, X, ExternalLink, FilePlus, Maximize2 } from 'lucide-react';
-import { ObjectType } from '../types';
+import { ObjectType, Graph } from '../types';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useValidationMode } from '../contexts/ValidationContext';
 import { useTabContext } from '../contexts/TabContext';
@@ -102,10 +102,15 @@ export function EnhancedSelector({
   const { mode: validationMode } = useValidationMode();
   const { graph, setGraph, setAutoUpdating, currentDSL } = useGraphStore();
   
+  // Keep a ref to the latest graph so async callbacks (auto-get) always read the current state
+  const graphRef = useRef<Graph | null>(graph);
+  useEffect(() => { graphRef.current = graph; }, [graph]);
+  
   // Centralized fetch hook for auto-get operations
   // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
+  // CRITICAL: Pass a getter so fetchItem always reads the LATEST graph, not a stale closure.
   const { fetchItem } = useFetchData({
-    graph: graph as any,
+    graph: () => graphRef.current,
     setGraph: setGraph as any,
     currentDSL,  // AUTHORITATIVE DSL from graphStore
   });
