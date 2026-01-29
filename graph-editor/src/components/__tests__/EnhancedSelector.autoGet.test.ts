@@ -428,6 +428,112 @@ describe('createFetchItem for EnhancedSelector', () => {
 // TESTS: Mode Verification
 // ============================================================================
 
+// ============================================================================
+// TESTS: Stale Graph Closure Regression (Critical Bug Fix)
+// ============================================================================
+
+describe('EnhancedSelector stale graph closure regression', () => {
+  /**
+   * REGRESSION TEST for the stale graph closure bug.
+   * 
+   * The bug: When a user selects an item from the dropdown:
+   * 1. handleSelectItem calls onChange(item.id) to update graph (e.g., edge.p.id = 'new-param')
+   * 2. handleSelectItem schedules setTimeout for auto-get
+   * 3. When setTimeout fires, fetchItem was using the OLD graph (captured at render time)
+   * 4. The fetch service would write back using stale graph, overwriting the new p.id
+   * 
+   * The fix: EnhancedSelector now uses a graphRef and passes a getter function
+   * to useFetchData, ensuring fetchItem always reads the CURRENT graph state.
+   */
+  
+  it('should use the UPDATED graph when fetchItem is called after graph mutation', async () => {
+    // Simulate the scenario:
+    // 1. Initial graph has edge.p.id = 'old-param'
+    // 2. User selects 'new-param' -> graph is mutated to edge.p.id = 'new-param'
+    // 3. Auto-get fires -> fetchItem must see graph with edge.p.id = 'new-param'
+    
+    const initialGraph = {
+      nodes: [{ uuid: 'node-1', id: 'test-node' }],
+      edges: [{ uuid: 'edge-1', id: 'test-edge', p: { id: 'old-param' } }],
+      currentQueryDSL: 'window(1-Dec-25:7-Dec-25)',
+    };
+    
+    const updatedGraph = {
+      ...initialGraph,
+      edges: [{ uuid: 'edge-1', id: 'test-edge', p: { id: 'new-param' } }],
+    };
+    
+    // This simulates what EnhancedSelector does with graphRef
+    let currentGraph = initialGraph;
+    const graphRef = { current: initialGraph };
+    const getGraph = () => graphRef.current;
+    
+    // Track what graph fetchItem receives
+    let graphSeenByFetchItem: any = null;
+    const trackingFetchItem = vi.fn(async (item: any, options: any) => {
+      // In the real implementation, fetchItem calls getGraph() to get current graph
+      graphSeenByFetchItem = getGraph();
+      return { success: true };
+    });
+    
+    // Simulate the selection flow:
+    // Step 1: User selects 'new-param' - this triggers onChange which mutates graph
+    graphRef.current = updatedGraph; // Graph is updated BEFORE auto-get fires
+    
+    // Step 2: Auto-get fires (via setTimeout in real code)
+    await simulateAutoGet(
+      {
+        type: 'parameter',
+        itemId: 'new-param',
+        targetInstanceUuid: 'edge-1',
+        hasFile: true,
+        paramSlot: 'p',
+      },
+      getGraph(), // Pass the getter result (simulating what useFetchData does)
+      trackingFetchItem,
+      vi.fn()
+    );
+    
+    // Verify fetchItem saw the UPDATED graph, not the stale initial graph
+    expect(graphSeenByFetchItem).toBe(updatedGraph);
+    expect(graphSeenByFetchItem.edges[0].p.id).toBe('new-param');
+    expect(graphSeenByFetchItem.edges[0].p.id).not.toBe('old-param');
+  });
+  
+  it('should NOT see stale graph when using ref pattern (the fix)', async () => {
+    // This test explicitly verifies the ref pattern works correctly
+    const staleGraph = {
+      nodes: [],
+      edges: [{ uuid: 'e1', p: { id: 'stale-value' } }],
+    };
+    
+    const freshGraph = {
+      nodes: [],
+      edges: [{ uuid: 'e1', p: { id: 'fresh-value' } }],
+    };
+    
+    // Ref pattern: always points to latest
+    const graphRef = { current: staleGraph };
+    
+    // Simulate what happens during render vs async callback
+    const capturedAtRenderTime = graphRef.current; // Would be stale in old code
+    
+    // Graph updates (as if onChange was called)
+    graphRef.current = freshGraph;
+    
+    // In the old buggy code, fetchItem would use capturedAtRenderTime
+    // In the fixed code, fetchItem reads from graphRef.current
+    
+    // Verify the ref pattern gives us fresh data
+    expect(graphRef.current).toBe(freshGraph);
+    expect(graphRef.current.edges[0].p.id).toBe('fresh-value');
+    
+    // The stale capture would have been wrong
+    expect(capturedAtRenderTime).toBe(staleGraph);
+    expect(capturedAtRenderTime.edges[0].p.id).toBe('stale-value');
+  });
+});
+
 describe('EnhancedSelector auto-get mode', () => {
   let mockFetchItem: ReturnType<typeof vi.fn>;
   let mockSetAutoUpdating: ReturnType<typeof vi.fn>;

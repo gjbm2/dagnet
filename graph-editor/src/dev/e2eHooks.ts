@@ -17,6 +17,7 @@ import { getShareBootConfig } from '../lib/shareBootResolver';
 import { sessionLogService } from '../services/sessionLogService';
 import { graphComputeClient } from '../lib/graphComputeClient';
 import { db } from '../db/appDatabase';
+import { fileRegistry } from '../contexts/TabContext';
 
 export function installE2eHooks(): void {
   if (!import.meta.env.DEV) return;
@@ -140,7 +141,32 @@ export function installE2eHooks(): void {
     // Install E2E-only hooks only when explicitly requested.
     if (!url.searchParams.has('e2e')) return;
 
+    // Expose fileRegistry for E2E tests to seed data
+    (window as any).fileRegistry = fileRegistry;
+
     (window as any).dagnetE2e = {
+      /**
+       * Select an edge by UUID (for E2E testing PropertiesPanel interactions).
+       * Dispatches the proper events to update React state and show edge properties.
+       */
+      selectEdge: (edgeUuid: string) => {
+        window.dispatchEvent(new CustomEvent('dagnet:e2e:selectEdge', { detail: { edgeUuid } }));
+        return { success: true, edgeUuid };
+      },
+      /**
+       * Select a node by UUID (for E2E testing PropertiesPanel interactions).
+       */
+      selectNode: (nodeUuid: string) => {
+        window.dispatchEvent(new CustomEvent('dagnet:e2e:selectNode', { detail: { nodeUuid } }));
+        return { success: true, nodeUuid };
+      },
+      /**
+       * Clear selection (for E2E testing).
+       */
+      clearSelection: () => {
+        window.dispatchEvent(new CustomEvent('dagnet:e2e:clearSelection'));
+        return { success: true };
+      },
       /**
        * Trigger share-live refresh immediately (no countdown / no modal).
        * This exercises the real refresh pipeline:

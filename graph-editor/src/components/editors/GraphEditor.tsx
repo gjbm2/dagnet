@@ -425,6 +425,33 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     return () => window.removeEventListener('dagnet:openPropertiesPanel' as any, handler);
   }, [sidebarOps]);
   
+  // E2E hooks: Listen for programmatic selection requests (dev/E2E only)
+  useEffect(() => {
+    const handleSelectEdge = (e: CustomEvent<{ edgeUuid: string }>) => {
+      console.log(`[GraphEditor] E2E: selectEdge`, e.detail.edgeUuid);
+      handleEdgeSelection(e.detail.edgeUuid);
+      sidebarOps.maximize('properties');
+    };
+    const handleSelectNode = (e: CustomEvent<{ nodeUuid: string }>) => {
+      console.log(`[GraphEditor] E2E: selectNode`, e.detail.nodeUuid);
+      handleNodeSelection(e.detail.nodeUuid);
+      sidebarOps.maximize('properties');
+    };
+    const handleClearSelection = () => {
+      console.log(`[GraphEditor] E2E: clearSelection`);
+      handleNodeSelection(null);
+      handleEdgeSelection(null);
+    };
+    window.addEventListener('dagnet:e2e:selectEdge' as any, handleSelectEdge);
+    window.addEventListener('dagnet:e2e:selectNode' as any, handleSelectNode);
+    window.addEventListener('dagnet:e2e:clearSelection' as any, handleClearSelection);
+    return () => {
+      window.removeEventListener('dagnet:e2e:selectEdge' as any, handleSelectEdge);
+      window.removeEventListener('dagnet:e2e:selectNode' as any, handleSelectNode);
+      window.removeEventListener('dagnet:e2e:clearSelection' as any, handleClearSelection);
+    };
+  }, [handleEdgeSelection, handleNodeSelection, sidebarOps]);
+  
   // Listen for request to open Scenarios panel (from scenario chips)
   useEffect(() => {
     const handler = () => {
