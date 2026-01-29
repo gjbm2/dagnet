@@ -133,16 +133,35 @@ export interface SignatureMatchResult {
 
 /**
  * Parse a serialised signature string into structured form.
+ * 
+ * CRITICAL: This function MUST be defensive and never throw.
+ * Legacy signatures and malformed inputs return empty structure.
  */
 export function parseSignature(sig: string): StructuredSignature {
+  // Guard: null/undefined/empty
+  if (!sig || typeof sig !== 'string') {
+    return { coreHash: '', contextDefHashes: {} };
+  }
+  
+  // Guard: Legacy hex hash (64 chars, hex only)
+  if (/^[a-f0-9]{64}$/i.test(sig)) {
+    // Legacy signature - return empty structure (will never match)
+    return { coreHash: '', contextDefHashes: {} };
+  }
+  
+  // Guard: Not JSON-like
+  if (!sig.startsWith('{')) {
+    return { coreHash: '', contextDefHashes: {} };
+  }
+  
   try {
     const parsed = JSON.parse(sig);
     return {
-      coreHash: parsed.c || '',
-      contextDefHashes: parsed.x || {},
+      coreHash: typeof parsed.c === 'string' ? parsed.c : '',
+      contextDefHashes: (parsed.x && typeof parsed.x === 'object') ? parsed.x : {},
     };
   } catch {
-    // Malformed signature — treat as incompatible with everything
+    // Malformed JSON - return empty structure
     return { coreHash: '', contextDefHashes: {} };
   }
 }
@@ -2006,7 +2025,7 @@ if (unspecifiedDimensions.length > 1) {
 }
 ```
 
-#### 7.5.2 Flexible Date Range Coverage
+#### 7.5.9 Flexible Date Range Coverage
 
 **Problem:** Current logic requires all slices to have **identical** date arrays, but queries should be satisfiable by:
 - Uncontexted slice for dates x-y
@@ -2127,7 +2146,7 @@ function aggregateWithMixedCoverage(
 }
 ```
 
-#### 7.5.3 Dimension Set Consistency Validation
+#### 7.5.10 Dimension Set Consistency Validation
 
 **Problem:** Slices matching specified dimensions may have **inconsistent** additional dimensions.
 
@@ -2206,7 +2225,7 @@ function verifyAllCombinationsExist(
 }
 ```
 
-#### 7.5.7 Mixed Signature Types Integration
+#### 7.5.11 Mixed Signature Types Integration
 
 With dimension set grouping, mixed signature types are handled naturally:
 
@@ -2217,7 +2236,7 @@ With dimension set grouping, mixed signature types are handled naturally:
 
 The old dual-path approach (`isEligibleContextOnlySlice` vs `isEligibleMultiContextSlice`) is subsumed by the grouping strategy.
 
-#### 7.5.8 Aggregated Result Signature (Clarification)
+#### 7.5.12 Aggregated Result Signature (Clarification)
 
 **Context:** Dimensional reduction is performed **on-the-fly** during planner coverage analysis. The aggregated `ParameterValue` is NOT persisted to files.
 
@@ -3736,36 +3755,7 @@ This section addresses specific implementation risks identified during design re
 
 **Requirement**: `parseSignature` MUST be defensive and never throw.
 
-```typescript
-export function parseSignature(sig: string): StructuredSignature {
-  // Guard: null/undefined/empty
-  if (!sig || typeof sig !== 'string') {
-    return { coreHash: '', contextDefHashes: {} };
-  }
-  
-  // Guard: Legacy hex hash (64 chars, hex only)
-  if (/^[a-f0-9]{64}$/i.test(sig)) {
-    // Legacy signature - return empty structure (will never match)
-    return { coreHash: '', contextDefHashes: {} };
-  }
-  
-  // Guard: Not JSON-like
-  if (!sig.startsWith('{')) {
-    return { coreHash: '', contextDefHashes: {} };
-  }
-  
-  try {
-    const parsed = JSON.parse(sig);
-    return {
-      coreHash: typeof parsed.c === 'string' ? parsed.c : '',
-      contextDefHashes: (parsed.x && typeof parsed.x === 'object') ? parsed.x : {},
-    };
-  } catch {
-    // Malformed JSON - return empty structure
-    return { coreHash: '', contextDefHashes: {} };
-  }
-}
-```
+**Implementation**: See §3.1 `parseSignature` — the hardened implementation with all guards is the canonical version.
 
 **Test coverage required**:
 - [ ] `parseSignature(null)` → empty structure
@@ -4149,24 +4139,40 @@ describe('signatureCanSatisfy - context keys', () => {
     });
   });
 
-  describe('special context hash values', () => {
-    it('handles "missing" def hash (context not loaded)', () => {
+  describe('special context hash values (fail-safe behaviour)', () => {
+    // Per C3 in multi-sig-matching-testing-logic.md:
+    // 'missing' and 'error' hashes are treated as incompatible (fail-safe > false positive)
+    
+    it('rejects "missing" vs "missing" (fail-safe: cannot validate correctness)', () => {
       const cache = { coreHash: 'abc', contextDefHashes: { channel: 'missing' } };
       const query = { coreHash: 'abc', contextDefHashes: { channel: 'missing' } };
-      // Both have 'missing' - this is technically a match, but both are invalid
-      expect(signatureCanSatisfy(cache, query).compatible).toBe(true);
+      const result = signatureCanSatisfy(cache, query);
+      expect(result.compatible).toBe(false);
+      expect(result.reason).toBe('context_hash_unavailable:channel');
     });
 
     it('rejects "missing" vs real hash', () => {
       const cache = { coreHash: 'abc', contextDefHashes: { channel: 'missing' } };
       const query = { coreHash: 'abc', contextDefHashes: { channel: 'real-hash' } };
-      expect(signatureCanSatisfy(cache, query).compatible).toBe(false);
+      const result = signatureCanSatisfy(cache, query);
+      expect(result.compatible).toBe(false);
+      expect(result.reason).toBe('context_hash_unavailable:channel');
     });
 
-    it('handles "error" def hash', () => {
+    it('rejects "error" vs "error" (fail-safe: cannot validate correctness)', () => {
       const cache = { coreHash: 'abc', contextDefHashes: { channel: 'error' } };
       const query = { coreHash: 'abc', contextDefHashes: { channel: 'error' } };
-      expect(signatureCanSatisfy(cache, query).compatible).toBe(true);
+      const result = signatureCanSatisfy(cache, query);
+      expect(result.compatible).toBe(false);
+      expect(result.reason).toBe('context_hash_unavailable:channel');
+    });
+
+    it('rejects real hash vs "missing" in query', () => {
+      const cache = { coreHash: 'abc', contextDefHashes: { channel: 'real-hash' } };
+      const query = { coreHash: 'abc', contextDefHashes: { channel: 'missing' } };
+      const result = signatureCanSatisfy(cache, query);
+      expect(result.compatible).toBe(false);
+      expect(result.reason).toBe('query_hash_unavailable:channel');
     });
   });
 
