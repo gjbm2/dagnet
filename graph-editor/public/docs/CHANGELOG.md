@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.15b
+**Released:** 29-Jan-26
+
+Added parens and other visible syntax to dsl display
+
+---
+
 ## Version 1.3.14b
 **Released:** 29-Jan-26
 
