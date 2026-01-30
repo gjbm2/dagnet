@@ -10,6 +10,8 @@ import { buildFetchPlanProduction } from './fetchPlanBuilderService';
 import { summarisePlan, type FetchPlan, type FetchPlanItem } from './fetchPlanTypes';
 import { fetchDataService, type FetchItem } from './fetchDataService';
 import { lagHorizonsService } from './lagHorizonsService';
+import { rateLimiter, getEffectiveRateLimitCooloffMinutes } from './rateLimiter';
+import { countdownService } from './countdownService';
 
 /**
  * Current item cache status - reported immediately after cache analysis, before API fetch.
@@ -111,6 +113,68 @@ export interface RetrieveAllSlicesOptions {
 export interface RetrieveAllSlicesWithProgressToastOptions extends RetrieveAllSlicesOptions {
   toastId: string;
   toastLabel?: string;
+}
+
+/**
+ * Run a rate limit cooldown with countdown.
+ * Returns 'expired' when the countdown completes, 'aborted' if shouldStop returns true.
+ */
+async function runRateLimitCooldown(opts: {
+  cooldownMinutes: number;
+  shouldStop: () => boolean;
+  logOpId: string;
+}): Promise<'expired' | 'aborted'> {
+  const { cooldownMinutes, shouldStop, logOpId } = opts;
+  const totalSeconds = cooldownMinutes * 60;
+  const key = `automation:ratelimit:cooldown:${Date.now()}`;
+
+  sessionLogService.addChild(
+    logOpId,
+    'warning',
+    'RATE_LIMIT_COOLDOWN_START',
+    `Rate limit hit - waiting ${cooldownMinutes} minutes before resuming`,
+    undefined,
+    { cooldownMinutes, totalSeconds }
+  );
+
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    const checkAbort = setInterval(() => {
+      if (resolved) return;
+      if (shouldStop()) {
+        resolved = true;
+        clearInterval(checkAbort);
+        countdownService.cancelCountdown(key);
+        resolve('aborted');
+      }
+    }, 1000);
+
+    countdownService.startCountdown({
+      key,
+      durationSeconds: totalSeconds,
+      onExpire: () => {
+        if (resolved) return;
+        resolved = true;
+        clearInterval(checkAbort);
+        sessionLogService.addChild(
+          logOpId,
+          'info',
+          'RATE_LIMIT_COOLDOWN_EXPIRED',
+          `Rate limit cooldown complete - resuming retrieval`
+        );
+        resolve('expired');
+      },
+      audit: {
+        operationType: 'data-fetch',
+        startCode: 'RATE_LIMIT_COOLDOWN_START',
+        cancelCode: 'RATE_LIMIT_COOLDOWN_CANCEL',
+        expireCode: 'RATE_LIMIT_COOLDOWN_EXPIRE',
+        message: `Rate limit cooldown (${cooldownMinutes} minutes)`,
+        metadata: { cooldownMinutes },
+      },
+    });
+  });
 }
 
 class RetrieveAllSlicesService {
@@ -462,6 +526,38 @@ class RetrieveAllSlicesService {
             
           } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
+            
+            // Check if this is a rate limit error - if so, wait and retry
+            if (rateLimiter.isRateLimitError(errorMessage)) {
+              const cooldownMinutes = getEffectiveRateLimitCooloffMinutes();
+              sessionLogService.addChild(
+                logOpId,
+                'warning',
+                'RATE_LIMIT_HIT',
+                `[${sliceDSL}] ${planItem.itemKey} hit rate limit - initiating ${cooldownMinutes}min cooldown`,
+                errorMessage,
+                { itemKey: planItem.itemKey, cooldownMinutes }
+              );
+              
+              // Run cooldown with countdown
+              const cooldownResult = await runRateLimitCooldown({
+                cooldownMinutes,
+                shouldStop: shouldAbort ?? (() => false),
+                logOpId,
+              });
+              
+              if (cooldownResult === 'aborted') {
+                aborted = true;
+                break;
+              }
+              
+              // Retry the same item by decrementing the index
+              // The loop will increment it back, effectively retrying this item
+              itemIdx--;
+              continue;
+            }
+            
+            // Not a rate limit error - record the failure and continue
             sessionLogService.addChild(
               logOpId,
               'error',

@@ -46,6 +46,8 @@ import type { ParameterValue } from '../types/parameterData';
 import { enumerateFetchTargets } from './fetchTargetEnumerationService';
 import { selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 import { isSignatureCheckingEnabled } from './signaturePolicyService';
+import { canCacheSatisfyQuery } from './signatureMatchingService';
+import { tryDimensionalReduction } from './dimensionalReductionService';
 
 // =============================================================================
 // Types
@@ -390,6 +392,17 @@ function buildParameterPlanItem(
     let sliceValues: ParameterValue[] = [];
     try {
       sliceValues = isolateSlice(modeFilteredValues, dsl);
+      
+      // NEW: If isolateSlice returns empty but we have values, try dimensional reduction
+      // (e.g., query asks for channel:google but cache has channel+device)
+      if (sliceValues.length === 0 && modeFilteredValues.length > 0 && targetDims !== '') {
+        const dimReductionResult = tryDimensionalReduction(modeFilteredValues, dsl);
+        
+        if (dimReductionResult.kind === 'reduced' && dimReductionResult.aggregatedValues) {
+          sliceValues = dimReductionResult.aggregatedValues;
+          notes.push(`Dimensional reduction: aggregated ${dimReductionResult.diagnostics.slicesUsed} slices across [${dimReductionResult.diagnostics.unspecifiedDimensions.join(', ')}]`);
+        }
+      }
     } catch (e) {
       notes.push(`Slice isolation failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -432,8 +445,10 @@ function buildParameterPlanItem(
     shouldFilterBySignature && typeof currentSignature === 'string' ? currentSignature : undefined;
   const valuesForCoverage = shouldFilterBySignature
     ? modeFilteredValues.filter((v) => {
-        const sig = (v as any).query_signature;
-        return sig === currentSignature;
+        const cacheSig = (v as any).query_signature;
+        if (!cacheSig || !currentSignature) return false;
+        // Use subset-aware matching: cache signature can satisfy query if cache has superset of context keys
+        return canCacheSatisfyQuery(cacheSig, currentSignature);
       })
     : modeFilteredValues;
   // IMPORTANT: Coverage in the planner must match the UI/Fetch-button coverage semantics.

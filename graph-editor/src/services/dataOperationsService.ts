@@ -67,6 +67,7 @@ import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImpl
 import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
 import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
+import { serialiseSignature } from './signatureMatchingService';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
 import { contextRegistry } from './contextRegistry';
@@ -592,10 +593,17 @@ export function extractSheetsUpdateData(
 }
 
 /**
- * Compute query signature (SHA-256 hash) for consistency checking
- * Uses Web Crypto API available in modern browsers
+ * Compute query signature for consistency checking.
  * 
- * Includes event_ids from nodes to detect when event definitions change
+ * Returns a STRUCTURED signature (JSON) with two components:
+ * - coreHash: SHA-256 of non-context semantic inputs (connection, events, filters, etc.)
+ * - contextDefHashes: Per-context-key definition hashes
+ * 
+ * This enables cache sharing when:
+ * - Query asks for uncontexted data but cache has contexted MECE slices
+ * - Query asks for single-dimension data but cache has multi-dimensional slices
+ * 
+ * @see docs/current/multi-sig-matching.md for full design specification
  */
 export async function computeQuerySignature(
   queryPayload: any,
@@ -603,7 +611,8 @@ export async function computeQuerySignature(
   graph?: Graph | null,
   edge?: any,
   contextKeys?: string[],
-  workspace?: { repository: string; branch: string }
+  workspace?: { repository: string; branch: string },
+  eventDefinitions?: Record<string, any>  // NEW: Event definitions for hashing
 ): Promise<string> {
   try {
     // Extract event_ids from nodes if graph and edge are provided
@@ -724,22 +733,82 @@ export async function computeQuerySignature(
       .map((k) => String(k))
       .sort();
 
-    const contextHashes = await Promise.all(
-      allContextKeys.map(async (key) => {
-        try {
-          const ctx = await contextRegistry.getContext(key, workspace ? { workspace } : undefined);
-          if (!ctx) {
-            return { key, hash: 'missing', status: 'missing' };
-          }
+    // ─────────────────────────────────────────────────────────────────────────────
+    // CONTEXT DEFINITION HASHES (per-key, for structured signature)
+    // ─────────────────────────────────────────────────────────────────────────────
+    const contextDefHashes: Record<string, string> = {};
+    for (const key of allContextKeys) {
+      try {
+        const ctx = await contextRegistry.getContext(key, workspace ? { workspace } : undefined);
+        if (!ctx) {
+          contextDefHashes[key] = 'missing';
+        } else {
           const normalized = normalizeContextDefinition(ctx);
-          const ctxHash = await hashText(JSON.stringify(normalized));
-          return { key, hash: ctxHash, status: 'ok' };
-        } catch (error) {
-          console.warn('[computeQuerySignature] Failed to hash context definition:', { key, error });
-          return { key, hash: 'error', status: 'error' };
+          contextDefHashes[key] = await hashText(JSON.stringify(normalized));
         }
-      })
-    );
+      } catch (error) {
+        console.warn('[computeQuerySignature] Failed to hash context definition:', { key, error });
+        contextDefHashes[key] = 'error';
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // RESOLVE ANCHOR NODE → EVENT ID (BUG FIX: use event_id, not node_id)
+    // ─────────────────────────────────────────────────────────────────────────────
+    const edgeLatency = edge?.p?.latency;
+    const latencyAnchorEventId = (() => {
+      const anchorNodeId = edgeLatency?.anchor_node_id;
+      if (!anchorNodeId || !graph?.nodes) return '';
+      const anchorNode = graph.nodes.find((n: any) => n.id === anchorNodeId || n.uuid === anchorNodeId);
+      return anchorNode?.event_id || '';
+    })();
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // EVENT DEFINITION HASHES (detect when event definition files change)
+    // ─────────────────────────────────────────────────────────────────────────────
+    const eventDefHashes: Record<string, string> = {};
+    const allEventIds = [
+      from_event_id,
+      to_event_id,
+      ...visited_event_ids,
+      ...exclude_event_ids,
+      latencyAnchorEventId,
+    ].filter(Boolean) as string[];
+
+    for (const eventId of allEventIds) {
+      const eventDef = eventDefinitions?.[eventId];
+      if (eventDef) {
+        // Hash the semantically relevant parts of the event definition
+        const normalized = {
+          id: eventDef.id,
+          provider_event_names: eventDef.provider_event_names || {},
+          amplitude_filters: eventDef.amplitude_filters || [],
+        };
+        eventDefHashes[eventId] = await hashText(JSON.stringify(normalized));
+      } else {
+        eventDefHashes[eventId] = 'not_loaded';
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // NORMALIZE ORIGINAL QUERY TO USE EVENT IDS (maximise cache sharing)
+    // ─────────────────────────────────────────────────────────────────────────────
+    const escapeRegex = (str: string): string => {
+      return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    };
+
+    const normalizeQueryToEventIds = (q: string): string => {
+      if (!q || !graph?.nodes) return q;
+      let out = q;
+      // Replace node references with their event_ids
+      for (const node of graph.nodes) {
+        if (node.id && node.event_id) {
+          // Replace from(nodeId) with from(eventId), etc.
+          out = out.replace(new RegExp(`\\b${escapeRegex(node.id)}\\b`, 'g'), node.event_id);
+        }
+      }
+      return out;
+    };
 
     // Normalize original query string for signature purposes.
     //
@@ -769,64 +838,51 @@ export async function computeQuerySignature(
     };
 
     const rawOriginalQuery = edge?.query || '';
-    const originalQueryForSignature = normalizeOriginalQueryForSignature(rawOriginalQuery);
+    const strippedQuery = normalizeOriginalQueryForSignature(rawOriginalQuery);
+    // Convert node IDs to event IDs for cross-graph cache sharing
+    const normalizedOriginalQuery = normalizeQueryToEventIds(strippedQuery);
 
-    // Create a canonical representation of the query.
-    // Include event_ids and original query string to detect topology changes.
-    // Include context hashes for the ENTIRE context key definition (not per-value filters).
-    //
-    // Latency / cohort semantics:
-    // - Cohort mode (A-anchored) changes the external query shape.
-    // - Anchor identity changes the query semantics.
-    // - Conversion window days (derived from latency horizon / path) changes provider query parameters.
-    //
-    // IMPORTANT: We intentionally do NOT include cohort/`window date bounds here.
-    // Those bounds are stored on each cached value entry (window_from/window_to or cohort_from/cohort_to),
-    // and including them in the signature would defeat incremental re-use for daily caches.
-    const edgeLatency = edge?.p?.latency;
-    const canonical = JSON.stringify({
+    // ─────────────────────────────────────────────────────────────────────────────
+    // BUILD CORE HASH (everything EXCEPT context keys/hashes)
+    // ─────────────────────────────────────────────────────────────────────────────
+    const coreCanonical = JSON.stringify({
       connection: connectionName || '',
-      // Provider-specific event names (from DSL)
-      from: queryPayload.from || '',
-      to: queryPayload.to || '',
-      visited: (queryPayload.visited || []).sort(),
-      exclude: (queryPayload.exclude || []).sort(),
-      // Original event_ids from nodes (for change detection)
+      // Event IDs (semantic identity)
       from_event_id: from_event_id || '',
       to_event_id: to_event_id || '',
       visited_event_ids: visited_event_ids.sort(),
       exclude_event_ids: exclude_event_ids.sort(),
+      // Event definition hashes (detect event file changes)
+      event_def_hashes: eventDefHashes,
+      // Other semantic inputs
       event_filters: queryPayload.event_filters || {},
-      context_keys: allContextKeys,
-      context_hashes: contextHashes,
       case: (queryPayload.case || []).sort(),
-      // Cohort / latency semantics (exclude bounds, include shape + anchor + conversion window)
       cohort_mode: !!queryPayload.cohort,
       cohort_anchor_event_id: queryPayload?.cohort?.anchor_event_id || '',
-      // Edge latency primitives (include anchor node id and enablement as semantic inputs)
       latency_parameter: edgeLatency?.latency_parameter === true,
-      anchor_node_id: edgeLatency?.anchor_node_id || '',
-      // IMPORTANT: Include normalized original query string to capture minus()/plus()/visited()/exclude()
-      // terms which are NOT preserved in the DSL object by buildDslFromEdge.
-      // This MUST NOT include context/window/cohort bounds (see normalization above).
-      original_query: originalQueryForSignature,
+      latency_anchor_event_id: latencyAnchorEventId,  // Uses event_id, not node_id!
+      // Normalized query (uses event_ids, not node_ids)
+      original_query: normalizedOriginalQuery,
     });
-    
-    // Compute SHA-256 hash
-    const hashHex = await hashText(canonical);
+    const coreHash = await hashText(coreCanonical);
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // BUILD STRUCTURED SIGNATURE
+    // ─────────────────────────────────────────────────────────────────────────────
+    const structuredSig = serialiseSignature({ coreHash, contextDefHashes });
     
     // ===== DIAGNOSTIC: Show what went into the signature =====
-    console.log('[computeQuerySignature] Signature computed:', {
-      signature: hashHex.substring(0, 12) + '...',
+    console.log('[computeQuerySignature] Structured signature computed:', {
+      coreHash: coreHash.substring(0, 12) + '...',
+      contextKeys: Object.keys(contextDefHashes),
       originalQuery: rawOriginalQuery || 'N/A',
-      normalizedOriginalQuery: originalQueryForSignature || 'N/A',
-      hasMinus: rawOriginalQuery.includes('.minus('),
-      hasPlus: rawOriginalQuery.includes('.plus('),
-      canonicalKeys: Object.keys(JSON.parse(canonical)),
+      normalizedOriginalQuery: normalizedOriginalQuery || 'N/A',
+      eventDefHashCount: Object.keys(eventDefHashes).length,
+      latencyAnchorEventId: latencyAnchorEventId || 'N/A',
     });
     // =========================================================
     
-    return hashHex;
+    return structuredSig;
   } catch (error) {
     console.warn('[DataOperationsService] Failed to compute query signature:', error);
     // Fallback: use simple string hash
@@ -1459,7 +1515,9 @@ class DataOperationsService {
                     connectionName,
                     graph,
                     targetEdge,
-                    signatureContextKeys
+                    signatureContextKeys,
+                    undefined,  // workspace
+                    compEventDefs  // eventDefinitions
                   );
                 }
                 const t5 = performance.now();
@@ -4878,7 +4936,8 @@ class DataOperationsService {
           graph,
           edgeForQuerySignature || targetEdge,
           fallbackContextKeys,
-          workspaceForSignature
+          workspaceForSignature,
+          eventDefinitions  // Pass event definitions for hashing
         );
         console.log('[DataOperationsService] Computed query signature for storage:', {
           signature: querySignature?.substring(0, 16) + '...',
@@ -5340,11 +5399,21 @@ class DataOperationsService {
               ).join('; ')
             : 'No gaps';
           
+          // Build signature info for logging (light touch: add to detail/metadata)
+          const sigDiag = incrementalResult.signatureDiagnostics;
+          const sigInfo = sigDiag 
+            ? (sigDiag.matchType === 'dimensional_reduction'
+                ? ` | Sig: reduced over ${sigDiag.reducedDimensions?.join(', ') || '?'} (${sigDiag.slicesAggregated} slices)`
+                : sigDiag.matchType !== 'no_match' 
+                  ? ` | Sig: ${sigDiag.matchType}` 
+                  : '')
+            : '';
+          
           sessionLogService.addChild(logOpId, 
             cacheStatus === 'CACHE_HIT' ? 'success' : 'info',
             cacheStatus,
             `Cache check for window ${windowDesc}`,
-            `${cacheDetail}${incrementalResult.fetchWindows.length > 0 ? `\n${gapDetails}` : ''}`,
+            `${cacheDetail}${sigInfo}${incrementalResult.fetchWindows.length > 0 ? `\n${gapDetails}` : ''}`,
             {
               window: windowDesc,
               totalDays: incrementalResult.totalDays,
@@ -5353,6 +5422,12 @@ class DataOperationsService {
               gapCount: incrementalResult.fetchWindows.length,
               bustCache: bustCache || false,
               targetSlice: currentDSL || targetSlice || '',
+              signatureMatch: sigDiag?.matchType,
+              signatureFiltered: sigDiag ? `${sigDiag.signatureFilteredCount}/${sigDiag.totalValues}` : undefined,
+              dimensionalReduction: sigDiag?.usedDimensionalReduction ? {
+                dimensions: sigDiag.reducedDimensions,
+                slicesAggregated: sigDiag.slicesAggregated,
+              } : undefined,
             }
           );
           
@@ -5935,6 +6010,105 @@ class DataOperationsService {
         }
         
         // =====================================================================
+        // CRITICAL: DRY RUN CHECK - MUST BE BEFORE ANY API CALLS
+        // BUG FIX (29-Jan-26): Previously this check was AFTER dual query execution,
+        // causing simulation mode to hit real Amplitude API when needsDualQuery=true.
+        // =====================================================================
+        if (dontExecuteHttp) {
+          // Build dry-run log entries showing what HTTP requests WOULD be made
+          const redactUrlForLog = (url: string): string => {
+            try {
+              return url
+                .replace(/([?&]api_key=)[^&]+/gi, '$1<redacted>')
+                .replace(/([?&]apikey=)[^&]+/gi, '$1<redacted>')
+                .replace(/([?&]token=)[^&]+/gi, '$1<redacted>')
+                .replace(/([?&]access_token=)[^&]+/gi, '$1<redacted>');
+            } catch {
+              return url;
+            }
+          };
+
+          const redactRequestForLog = (req: any): any => {
+            if (!req || typeof req !== 'object') return req;
+            const out: any = structuredClone(req);
+            if (typeof out.url === 'string') {
+              out.url = redactUrlForLog(out.url);
+            }
+            if (out.headers && typeof out.headers === 'object') {
+              for (const [k, v] of Object.entries(out.headers)) {
+                const key = String(k);
+                if (/authorization|cookie|x-api-key|api-key|apikey/i.test(key)) {
+                  out.headers[key] = '<redacted>';
+                } else {
+                  out.headers[key] = v;
+                }
+              }
+            }
+            return out;
+          };
+
+          const toCurlCommandForLog = (req: any): string | undefined => {
+            if (!req?.method || !req?.url) return undefined;
+            const method = String(req.method).toUpperCase();
+            const url = String(req.url);
+            const parts: string[] = [`curl -X ${method} '${url}'`];
+            const headers = req.headers && typeof req.headers === 'object' ? req.headers : undefined;
+            if (headers) {
+              for (const [k, v] of Object.entries(headers)) {
+                if (v === undefined || v === null) continue;
+                parts.push(`-H '${String(k)}: ${String(v)}'`);
+              }
+            }
+            const body = (req.body ?? req.data ?? req.payload) as unknown;
+            if (body !== undefined && body !== null && method !== 'GET') {
+              const bodyStr =
+                typeof body === 'string'
+                  ? body
+                  : (() => {
+                      try { return JSON.stringify(body); } catch { return String(body); }
+                    })();
+              parts.push(`--data-raw '${bodyStr.replace(/'/g, `'\"'\"'`)}'`);
+            }
+            return parts.join(' ');
+          };
+
+          const runDry = async (label: string, payload: any) => {
+            const dry = await executeDAS(payload, { dryRun: true });
+
+            const req = (dry.success ? (dry.raw as any)?.request : undefined) as any;
+            const reqRedacted = req ? redactRequestForLog(req) : undefined;
+            const curl = reqRedacted ? toCurlCommandForLog(reqRedacted) : undefined;
+            sessionLogService.addChild(
+              logOpId,
+              'info',
+              'DRY_RUN_HTTP',
+              `DRY RUN: would call HTTP (${label})`,
+              curl ?? (reqRedacted ? `${reqRedacted.method} ${reqRedacted.url}` : undefined),
+              reqRedacted ? { request: reqRedacted, httpCommand: curl } : undefined
+            );
+          };
+
+          if (isComposite) {
+            sessionLogService.addChild(
+              logOpId,
+              'warning',
+              'DRY_RUN_COMPOSITE',
+              'DRY RUN: composite query detected (minus/plus); not enumerating sub-queries in dry-run yet',
+              queryString
+            );
+            await runDry('composite-top-level', queryPayload);
+          } else if (needsDualQuery && baseQueryPayload) {
+            await runDry('base (n_query)', baseQueryPayload);
+            await runDry('conditioned (k query)', queryPayload);
+          } else {
+            await runDry('simple', queryPayload);
+          }
+
+          // Do not mutate files or graph in dry-run mode.
+          continue;
+        }
+        
+        // =====================================================================
         // DUAL QUERY FOR N: Run base query first if we have upstream conditions
         // This runs ONCE, upstream of both composite and simple query paths
         // =====================================================================
@@ -6099,108 +6273,6 @@ class DataOperationsService {
           );
         }
         
-        // DRY RUN: Build the real DAS request(s) but stop before external HTTP.
-        // IMPORTANT: In dry-run mode we do NOT attempt to compute composite inclusion-exclusion results,
-        // because that requires real numerical responses. We only show the exact runner.execute calls
-        // that would be made for the non-composite pipeline.
-        if (dontExecuteHttp) {
-          const redactUrlForLog = (url: string): string => {
-            try {
-              // Redact common secret-bearing query params.
-              // (We do not attempt perfect coverage; this is a best-effort safety layer.)
-              return url
-                .replace(/([?&]api_key=)[^&]+/gi, '$1<redacted>')
-                .replace(/([?&]apikey=)[^&]+/gi, '$1<redacted>')
-                .replace(/([?&]token=)[^&]+/gi, '$1<redacted>')
-                .replace(/([?&]access_token=)[^&]+/gi, '$1<redacted>');
-            } catch {
-              return url;
-            }
-          };
-
-          const redactRequestForLog = (req: any): any => {
-            if (!req || typeof req !== 'object') return req;
-            const out: any = structuredClone(req);
-            if (typeof out.url === 'string') {
-              out.url = redactUrlForLog(out.url);
-            }
-            if (out.headers && typeof out.headers === 'object') {
-              for (const [k, v] of Object.entries(out.headers)) {
-                const key = String(k);
-                if (/authorization|cookie|x-api-key|api-key|apikey/i.test(key)) {
-                  out.headers[key] = '<redacted>';
-                } else {
-                  out.headers[key] = v;
-                }
-              }
-            }
-            return out;
-          };
-
-          const toCurlCommandForLog = (req: any): string | undefined => {
-            if (!req?.method || !req?.url) return undefined;
-            const method = String(req.method).toUpperCase();
-            const url = String(req.url);
-            const parts: string[] = [`curl -X ${method} '${url}'`];
-            const headers = req.headers && typeof req.headers === 'object' ? req.headers : undefined;
-            if (headers) {
-              for (const [k, v] of Object.entries(headers)) {
-                if (v === undefined || v === null) continue;
-                parts.push(`-H '${String(k)}: ${String(v)}'`);
-              }
-            }
-            // Prefer explicit body fields if present.
-            const body = (req.body ?? req.data ?? req.payload) as unknown;
-            if (body !== undefined && body !== null && method !== 'GET') {
-              const bodyStr =
-                typeof body === 'string'
-                  ? body
-                  : (() => {
-                      try { return JSON.stringify(body); } catch { return String(body); }
-                    })();
-              parts.push(`--data-raw '${bodyStr.replace(/'/g, `'\"'\"'`)}'`);
-            }
-            return parts.join(' ');
-          };
-
-          const runDry = async (label: string, payload: any) => {
-            const dry = await executeDAS(payload, { dryRun: true });
-
-            const req = (dry.success ? (dry.raw as any)?.request : undefined) as any;
-            const reqRedacted = req ? redactRequestForLog(req) : undefined;
-            const curl = reqRedacted ? toCurlCommandForLog(reqRedacted) : undefined;
-            sessionLogService.addChild(
-              logOpId,
-              'info',
-              'DRY_RUN_HTTP',
-              `DRY RUN: would call HTTP (${label})`,
-              curl ?? (reqRedacted ? `${reqRedacted.method} ${reqRedacted.url}` : undefined),
-              reqRedacted ? { request: reqRedacted, httpCommand: curl } : undefined
-            );
-          };
-
-          if (isComposite) {
-            sessionLogService.addChild(
-              logOpId,
-              'warning',
-              'DRY_RUN_COMPOSITE',
-              'DRY RUN: composite query detected (minus/plus); not enumerating sub-queries in dry-run yet',
-              queryString
-            );
-            // Still show the single top-level request that would have been executed in the simple path
-            // (this is useful for visibility even though actual execution would call composite executor).
-            await runDry('composite-top-level', queryPayload);
-          } else if (needsDualQuery && baseQueryPayload) {
-            await runDry('base (n_query)', baseQueryPayload);
-            await runDry('conditioned (k query)', queryPayload);
-          } else {
-            await runDry('simple', queryPayload);
-          }
-
-          // Do not mutate files or graph in dry-run mode.
-          continue;
-        }
-
         if (isComposite) {
           // Composite query: use inclusion-exclusion executor
           console.log('[DataOps] Detected composite query, using inclusion-exclusion executor');

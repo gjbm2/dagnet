@@ -337,7 +337,8 @@ export async function computePlannerQuerySignaturesForGraph(input: {
         graph as any,
         edgeForDsl,
         baseSignatureContextKeys,
-        workspaceForSignature
+        workspaceForSignature,
+        buildResult.eventDefinitions  // Pass event definitions for hashing
       );
       out[itemKey] = sig;
     } catch {

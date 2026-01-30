@@ -168,23 +168,33 @@ describe('computeQuerySignature - context_filters', () => {
       },
     };
 
+    // Graph is required for anchor_node_id → event_id resolution
+    // Without a graph, anchor_node_id cannot be resolved and both signatures would be identical
+    const graphWithNodes: any = {
+      nodes: [
+        { id: 'A', event_id: 'event-A' },
+        { id: 'B', event_id: 'event-B' },
+        { id: 'Z', event_id: 'event-Z' },  // Different event_id
+      ],
+    };
+
     const edgeBase: any = {
       query: 'from(A).to(B)',
       p: { latency: { latency_parameter: true, anchor_node_id: 'A' } },
     };
 
-    const sig1 = await computeQuerySignature(basePayload, 'amplitude-prod', undefined, edgeBase);
+    const sig1 = await computeQuerySignature(basePayload, 'amplitude-prod', graphWithNodes, edgeBase);
     const sig2 = await computeQuerySignature(
       { ...basePayload, cohort: { ...basePayload.cohort, anchor_event_id: 'event-anchor-Z' } },
       'amplitude-prod',
-      undefined,
+      graphWithNodes,
       edgeBase
     );
     const sig3 = await computeQuerySignature(
       basePayload,
       'amplitude-prod',
-      undefined,
-      { ...edgeBase, p: { latency: { latency_parameter: true, anchor_node_id: 'Z' } } }
+      graphWithNodes,
+      { ...edgeBase, p: { latency: { latency_parameter: true, anchor_node_id: 'Z' } } }  // Different anchor node → different event_id
     );
 
     expect(sig1).not.toEqual(sig2);
