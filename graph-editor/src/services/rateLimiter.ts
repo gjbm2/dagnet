@@ -7,12 +7,34 @@
  * - Each query has a "cost" (typically 200-500 for funnel queries)
  * - Budget: ~360-1000 cost per minute depending on plan
  * - When exceeded: 429 "Too Many Requests" with query cost in message
+ * - Serious rate limit: 1-hour cooloff period
  * 
  * This service provides:
  * - Global rate limiting across all call sites
  * - Automatic backoff on 429 errors
  * - Per-provider configuration
+ * - Automation mode: 61-minute cooloff for serious rate limits
  */
+
+/**
+ * Cooloff period (in minutes) for automation mode when a serious rate limit is hit.
+ * Amplitude enforces a 1-hour cooloff; we wait 61 minutes to ensure the limit resets.
+ */
+export const AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES = 61;
+
+/**
+ * Get the effective cooloff duration in minutes.
+ * Allows test override via window.__dagnetTestRateLimitCooloffMinutes for E2E testing.
+ */
+export function getEffectiveRateLimitCooloffMinutes(): number {
+  if (typeof window !== 'undefined') {
+    const override = (window as any).__dagnetTestRateLimitCooloffMinutes;
+    if (typeof override === 'number' && override > 0) {
+      return override;
+    }
+  }
+  return AUTOMATION_RATE_LIMIT_COOLOFF_MINUTES;
+}
 
 export interface RateLimiterConfig {
   /** Minimum delay between requests (ms) */

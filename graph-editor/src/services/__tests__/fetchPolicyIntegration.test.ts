@@ -205,13 +205,11 @@ describe('Policy: partial – Immature Portion Refetch', () => {
     });
     
     it('calculateIncrementalFetch finds missing dates when no aggregate data', () => {
-      // Existing coverage: days 20-10, but WITHOUT aggregate data (only daily)
-      // This bypasses the FAST PATH which checks for mean + n
+      // Existing coverage: days 20-10, with daily data only
       const dates: string[] = [];
       for (let i = 20; i >= 10; i--) dates.push(daysAgo(i));
       
       const value: ParameterValue = {
-        // NO mean or n - this is the key to bypass FAST PATH
         dates,
         n_daily: dates.map(() => 100),
         k_daily: dates.map(() => 50),
@@ -318,7 +316,7 @@ describe('Policy: partial – Immature Portion Refetch', () => {
     });
     
     it('wider immature window means more days to fetch', () => {
-      // Build value WITHOUT aggregate data to bypass FAST PATH
+      // Build value with daily data
       const dates: string[] = [];
       for (let i = 30; i >= 16; i--) dates.push(daysAgo(i));
       
@@ -465,7 +463,6 @@ describe('Policy: gaps_only – Standard Incremental Fetch', () => {
   describe('Gap detection with non-latency edge', () => {
     it('calculateIncrementalFetch finds all gaps (no aggregate data)', () => {
       // Param file with a gap in the middle
-      // Build values WITHOUT aggregate data to bypass FAST PATH
       const dates1: string[] = [];
       for (let i = 30; i >= 20; i--) dates1.push(daysAgo(i));
       
@@ -513,7 +510,6 @@ describe('Policy: gaps_only – Standard Incremental Fetch', () => {
       const dates2 = [daysAgo(20), daysAgo(19), daysAgo(18)];
       const dates3 = [daysAgo(5), daysAgo(4), daysAgo(3)];
       
-      // Values without mean/n to bypass FAST PATH
       const value1: ParameterValue = {
         dates: dates1,
         n_daily: [100, 100, 100],
@@ -563,7 +559,7 @@ describe('Policy with Slice Isolation', () => {
   
   describe('Context-filtered fetch planning', () => {
     it('calculateIncrementalFetch respects slice isolation (no aggregate)', () => {
-      // Param file with two context slices, WITHOUT aggregate to bypass FAST PATH
+      // Param file with two context slices
       const ukSlice: ParameterValue = {
         dates: [daysAgo(30), daysAgo(29), daysAgo(28)],
         n_daily: [333, 333, 334],
@@ -602,10 +598,8 @@ describe('Policy with Slice Isolation', () => {
   describe('Mixed cohort/window param file', () => {
     it('window query treats file with aggregate data as cached', () => {
       // Param file with both window and cohort slices
-      // Note: When aggregate data exists AND fully covers requested window, FAST PATH returns cached
-      // CRITICAL: The window slice must FULLY CONTAIN the requested window for fast path to trigger
       const windowSlice: ParameterValue = {
-        mean: 0.5, // Has aggregate data → FAST PATH triggers
+        mean: 0.5,
         n: 1100,
         k: 550,
         dates: [daysAgo(30), daysAgo(29), daysAgo(28), daysAgo(27), daysAgo(26), 
@@ -613,7 +607,7 @@ describe('Policy with Slice Isolation', () => {
         n_daily: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100],
         k_daily: [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50],
         window_from: daysAgo(30),
-        window_to: daysAgo(20), // Must cover full requested window
+        window_to: daysAgo(20),
         sliceDSL: `window(${daysAgo(30)}:${daysAgo(20)})`,
       };
       
@@ -631,8 +625,7 @@ describe('Policy with Slice Isolation', () => {
       
       const paramFile = buildParamFile([windowSlice, cohortSlice]);
       
-      // Window query with aggregate data present AND full coverage → FAST PATH returns cached
-      // This is CORRECT behavior: we have usable aggregate data covering the entire requested window
+      // Window slice dates fully cover the requested window → no fetch needed
       const result = calculateIncrementalFetch(
         paramFile,
         { start: daysAgo(30), end: daysAgo(20) },
@@ -641,7 +634,6 @@ describe('Policy with Slice Isolation', () => {
         '' // Uncontexted query
       );
       
-      // FAST PATH: aggregate data exists with full coverage → no fetch needed
       expect(result.needsFetch).toBe(false);
     });
     

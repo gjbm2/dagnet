@@ -19,8 +19,10 @@ import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 // LAG: CohortData type is used for aggregation helpers further down in this file
 import type { CohortData } from './statisticalEnhancementService';
 import { mixtureLogNormalMedian } from './lagMixtureAggregationService';
-import { resolveMECEPartitionForImplicitUncontextedSync, findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
+import { resolveMECEPartitionForImplicitUncontextedSync, findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync, tryMultiDimensionalReduction } from './meceSliceService';
 import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
+import { canCacheSatisfyQuery } from './signatureMatchingService';
+import { tryDimensionalReduction } from './dimensionalReductionService';
 
 /**
  * Compute recency weight for a cohort-day using true half-life semantics.
@@ -127,6 +129,21 @@ export interface IncrementalFetchResult {
   daysAvailable: number;
   /** Days that need fetching */
   daysToFetch: number;
+  /** Signature matching diagnostics (for session logging) */
+  signatureDiagnostics?: {
+    /** How cache was matched: 'exact' | 'superset' | 'dimensional_reduction' | 'legacy_accepted' | 'disabled' */
+    matchType: 'exact' | 'superset' | 'dimensional_reduction' | 'legacy_accepted' | 'disabled' | 'no_match';
+    /** Total values in file before signature filter */
+    totalValues: number;
+    /** Values that passed signature filter */
+    signatureFilteredCount: number;
+    /** Whether dimensional reduction was used */
+    usedDimensionalReduction: boolean;
+    /** Dimensions reduced over (if any) */
+    reducedDimensions?: string[];
+    /** Slices aggregated (if dimensional reduction used) */
+    slicesAggregated?: number;
+  };
 }
 
 /**
@@ -919,6 +936,14 @@ export function calculateIncrementalFetch(
   // coverage/gap detection, regardless of query_signature.
   const effectiveQuerySignature = isSignatureCheckingEnabled() ? querySignature : undefined;
 
+  // Track signature diagnostics for session logging
+  const signatureDiagnostics: IncrementalFetchResult['signatureDiagnostics'] = {
+    matchType: !isSignatureCheckingEnabled() ? 'disabled' : 'no_match',
+    totalValues: 0,
+    signatureFilteredCount: 0,
+    usedDimensionalReduction: false,
+  };
+
   // Signature filtering:
   // If a querySignature is provided and the file contains ANY signed entries,
   // only consider entries with a matching signature as "cached".
@@ -928,10 +953,31 @@ export function calculateIncrementalFetch(
   const allValues = (paramFileData.values && Array.isArray(paramFileData.values))
     ? (paramFileData.values as ParameterValue[])
     : [];
+  signatureDiagnostics.totalValues = allValues.length;
+  
   const hasAnySignedValues = !!effectiveQuerySignature && allValues.some(v => !!v.query_signature);
-  const signatureFilteredValues = hasAnySignedValues
-    ? allValues.filter(v => v.query_signature === effectiveQuerySignature)
+  const signatureFilteredValues = hasAnySignedValues && effectiveQuerySignature
+    ? allValues.filter(v => {
+        if (!v.query_signature) return false;
+        // Use subset-aware matching: cache signature can satisfy query if cache has superset of context keys
+        return canCacheSatisfyQuery(v.query_signature, effectiveQuerySignature);
+      })
     : allValues;
+  
+  signatureDiagnostics.signatureFilteredCount = signatureFilteredValues.length;
+  
+  // Determine match type
+  if (!isSignatureCheckingEnabled()) {
+    signatureDiagnostics.matchType = 'disabled';
+  } else if (!hasAnySignedValues) {
+    signatureDiagnostics.matchType = 'legacy_accepted';
+  } else if (signatureFilteredValues.length > 0) {
+    // Check if it was exact match or superset match
+    // (We can't easily distinguish here, so we'll update this if dimensional reduction is used)
+    signatureDiagnostics.matchType = 'superset'; // Superset matching is the default now
+  } else {
+    signatureDiagnostics.matchType = 'no_match';
+  }
 
   // Normalize requested window dates
   const normalizedWindow: DateRange = {
@@ -950,89 +996,6 @@ export function calculateIncrementalFetch(
     allDatesInWindow.push(dateStr);
     // CRITICAL: Use UTC iteration to avoid DST/local-time drift across long ranges.
     currentDateIter.setUTCDate(currentDateIter.getUTCDate() + 1);
-  }
-
-  // FAST PATH: Check if any matching slice has AGGREGATE values (mean, n)
-  // If a slice has aggregate values, we don't need daily data - data is "available".
-  // IMPORTANT: If slice isolation fails (e.g. uncontexted query on contexted-only file),
-  // we SKIP this fast path and fall back to the full MECE / incremental logic below.
-  // CRITICAL: Also verify the slice's date range overlaps with the requested window!
-  // Otherwise we'd incorrectly report "data available" for dates outside the cached range.
-  // IMPORTANT: Do NOT apply this fast path for contextAny (multi-slice) queries.
-  // In contextAny mode, cache coverage must be computed across ALL component slices,
-  // which is handled by the full path below. The fast path uses `.some(...)` and
-  // would incorrectly treat "one slice fully cached" as "all cached".
-  if (!bustCache && signatureFilteredValues.length > 0 && !hasContextAny(targetSlice)) {
-    try {
-      // IMPORTANT: Keep cohort-mode and window-mode caches isolated.
-      // If the file contains both a window() entry and a cohort() entry for the same slice family,
-      // cache cutting must only consider values matching the requested mode.
-      const targetIsCohort = typeof targetSlice === 'string' && targetSlice.includes('cohort(');
-      const targetIsWindow = typeof targetSlice === 'string' && targetSlice.includes('window(');
-      const modeFilteredValues = isolateSlice(signatureFilteredValues, targetSlice).filter(v => {
-        if (targetIsCohort) return isCohortModeValue(v);
-        if (targetIsWindow) return !isCohortModeValue(v);
-        return true; // no explicit mode in targetSlice (fallback behaviour)
-      });
-      
-      // Check if any slice has aggregate data AND fully covers the requested window.
-      // IMPORTANT: we require the slice window to CONTAIN the requested window, not
-      // just overlap. Otherwise we'd incorrectly declare "fully cached" when only
-      // a tail fragment (e.g. last 7 days) is available.
-      const hasAggregateDataWithCoverage = modeFilteredValues.some(v => {
-        // Must have aggregate values
-        const hasAggregate = v.mean !== undefined && v.mean !== null && 
-          (v.n !== undefined || (v as any).evidence?.n !== undefined);
-        if (!hasAggregate) return false;
-        
-        // Must have date coverage that fully contains requested window
-        // Check window_from/window_to or cohort_from/cohort_to
-        const sliceStart = isCohortModeValue(v) ? v.cohort_from : v.window_from;
-        const sliceEnd = isCohortModeValue(v) ? v.cohort_to : v.window_to;
-        
-        if (!sliceStart || !sliceEnd) {
-          // No aggregate window bounds – fall back to daily coverage check.
-          if (v.dates && Array.isArray(v.dates) && v.dates.length > 0) {
-            const sliceDates = new Set(v.dates.map((d: string) => normalizeDate(d)));
-            // Requested window is fully covered only if ALL requested dates are present
-            const allCovered = allDatesInWindow.every(reqDate => sliceDates.has(reqDate));
-            return allCovered;
-          }
-          // No date information at all - can't verify coverage, skip fast path
-          return false;
-        }
-        
-        const reqStart = parseDate(normalizedWindow.start);
-        const reqEnd = parseDate(normalizedWindow.end);
-        const sStart = parseDate(sliceStart);
-        const sEnd = parseDate(sliceEnd);
-        
-        // Full coverage if slice window fully contains requested window
-        const fullyContained = sStart <= reqStart && sEnd >= reqEnd;
-        return fullyContained;
-      });
-      
-      if (hasAggregateDataWithCoverage) {
-        console.log(`[calculateIncrementalFetch] FAST PATH: Found aggregate data with coverage for slice`, {
-          targetSlice,
-          matchingSlicesCount: modeFilteredValues.length,
-        });
-        // Data available - no fetch needed
-        return {
-          existingDates: new Set(allDatesInWindow),
-          missingDates: [],
-          fetchWindows: [],
-          fetchWindow: null,
-          needsFetch: false,
-          totalDays: allDatesInWindow.length,
-          daysAvailable: allDatesInWindow.length,
-          daysToFetch: 0,
-        };
-      }
-    } catch (error) {
-      console.warn('[calculateIncrementalFetch] FAST PATH slice isolation failed, falling back to full path:', error);
-      // Continue to full incremental/MECE logic
-    }
   }
 
   // Extract all existing dates from parameter file values
@@ -1266,23 +1229,60 @@ export function calculateIncrementalFetch(
         }
       } else {
         // CRITICAL: Isolate to target slice first
-        const sliceValues = isolateSlice(signatureFilteredValues, targetSlice).filter(modeMatchesTarget);
+        let sliceValues = isolateSlice(signatureFilteredValues, targetSlice).filter(modeMatchesTarget);
+        
+        // NEW: If isolateSlice returns empty but we have signature-filtered values,
+        // try dimensional reduction (e.g., query asks for channel:google but cache has channel+device)
+        if (sliceValues.length === 0 && signatureFilteredValues.length > 0 && normalizedTarget !== '') {
+          const dimReductionResult = tryDimensionalReduction(
+            signatureFilteredValues.filter(modeMatchesTarget),
+            targetSlice
+          );
+          
+          if (dimReductionResult.kind === 'reduced' && dimReductionResult.aggregatedValues) {
+            sliceValues = dimReductionResult.aggregatedValues;
+            // Track dimensional reduction in diagnostics
+            signatureDiagnostics.matchType = 'dimensional_reduction';
+            signatureDiagnostics.usedDimensionalReduction = true;
+            signatureDiagnostics.reducedDimensions = dimReductionResult.diagnostics.unspecifiedDimensions;
+            signatureDiagnostics.slicesAggregated = dimReductionResult.diagnostics.slicesUsed;
+            console.log('[calculateIncrementalFetch] Used dimensional reduction for coverage:', {
+              targetSlice,
+              specifiedDims: dimReductionResult.diagnostics.specifiedDimensions,
+              unspecifiedDims: dimReductionResult.diagnostics.unspecifiedDimensions,
+              slicesUsed: dimReductionResult.diagnostics.slicesUsed,
+              warnings: dimReductionResult.diagnostics.warnings,
+            });
+          }
+        }
         
         for (const value of sliceValues) {
           // Extract dates from this value entry
-          // CRITICAL: Only count dates that have VALID data (non-null n_daily/k_daily)
-          // Without this check, dates with null values would be counted as "cached"
-          // and no fetch would be triggered, leaving graph with stale data
+          // CRITICAL: Only count dates that have VALID data
+          // - If daily arrays exist (n_daily/k_daily), check each date has valid data
+          // - If aggregate data exists (mean/n) but no daily arrays, all dates are valid
+          // - Without this check, dates with null values would be counted as "cached"
           if (value.dates && Array.isArray(value.dates)) {
-            for (let i = 0; i < value.dates.length; i++) {
-              const date = value.dates[i];
-              // Check if this date has valid data
-              const hasValidN = value.n_daily && value.n_daily[i] !== null && value.n_daily[i] !== undefined;
-              const hasValidK = value.k_daily && value.k_daily[i] !== null && value.k_daily[i] !== undefined;
-              
-              if (hasValidN || hasValidK) {
-                const normalizedDate = normalizeDate(date);
-                existingDates.add(normalizedDate);
+            const hasDailyArrays = !!(value.n_daily || value.k_daily);
+            const hasAggregateData = value.mean !== undefined && value.mean !== null &&
+              (value.n !== undefined && value.n !== null);
+            
+            if (hasDailyArrays) {
+              // Per-date validation: only count dates with valid daily data
+              for (let i = 0; i < value.dates.length; i++) {
+                const date = value.dates[i];
+                const hasValidN = value.n_daily && value.n_daily[i] !== null && value.n_daily[i] !== undefined;
+                const hasValidK = value.k_daily && value.k_daily[i] !== null && value.k_daily[i] !== undefined;
+                
+                if (hasValidN || hasValidK) {
+                  const normalizedDate = normalizeDate(date);
+                  existingDates.add(normalizedDate);
+                }
+              }
+            } else if (hasAggregateData) {
+              // Aggregate-only data: all dates in the dates array are valid
+              for (const date of value.dates) {
+                existingDates.add(normalizeDate(date));
               }
             }
           }
@@ -1395,6 +1395,7 @@ export function calculateIncrementalFetch(
     totalDays: allDatesInWindow.length,
     daysAvailable: daysAvailableInWindow, // Count of dates in requested window that exist
     daysToFetch: missingDates.length,
+    signatureDiagnostics,
   };
 }
 

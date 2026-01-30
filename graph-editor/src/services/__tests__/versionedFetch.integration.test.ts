@@ -357,8 +357,6 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
     it('should only count dates from the correct context slice', () => {
       
       // Simulate param file with data for multiple contexts
-      // NOTE: Do NOT include `mean`/`n` - that would trigger the FAST PATH
-      // which only checks "does aggregate exist?" not "what dates are missing?"
       const paramFileData = {
         values: [
           {
@@ -519,7 +517,6 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
     
     it('should require fetch when one contextAny slice is missing a date', () => {
       // Same as above but google is missing 30-Nov-25
-      // NOTE: Do NOT include `mean`/`n` - that would trigger the FAST PATH
       const paramFileData = {
         values: [
           {
@@ -555,7 +552,6 @@ describe('Regression Tests - Versioned Fetch Bugs', () => {
     
     it('should require fetch when one entire contextAny slice is missing', () => {
       // google exists but influencer doesn't exist at all
-      // NOTE: Do NOT include `mean`/`n` - that would trigger the FAST PATH
       const paramFileData = {
         values: [
           {

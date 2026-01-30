@@ -630,4 +630,99 @@ export async function resolveMECEPartitionForImplicitUncontexted(
   return resolveMECEPartitionForImplicitUncontextedSync(candidateValues, options);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-Dimensional Reduction Support (Phase 5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+import {
+  tryDimensionalReduction,
+  type DimensionalReductionResult,
+} from './dimensionalReductionService';
+
+export interface MultiDimensionalReductionResult {
+  kind: 'reduced' | 'not_reducible' | 'fallback_single_dim';
+  reducedValues?: ParameterValue[];
+  diagnostics: {
+    method: 'multi_dimensional' | 'single_dimensional' | 'none';
+    specifiedDimensions: string[];
+    unspecifiedDimensions: string[];
+    slicesUsed: number;
+    warnings: string[];
+  };
+}
+
+/**
+ * Attempt to resolve slices for a query using multi-dimensional reduction.
+ *
+ * This function:
+ * 1. First tries multi-dimensional reduction (new Phase 5 logic)
+ * 2. If that fails, falls back to single-dimensional MECE (existing logic)
+ * 3. Returns the best available result
+ *
+ * @param allSlices - All cached slices
+ * @param queryDSL - The query DSL string (e.g., 'context(channel:google)' or '' for uncontexted)
+ * @returns Result indicating whether reduction was possible
+ */
+export function tryMultiDimensionalReduction(
+  allSlices: ParameterValue[],
+  queryDSL: string
+): MultiDimensionalReductionResult {
+  // Attempt multi-dimensional reduction first
+  const multiDimResult = tryDimensionalReduction(allSlices, queryDSL);
+
+  if (multiDimResult.kind === 'reduced' && multiDimResult.aggregatedValues) {
+    return {
+      kind: 'reduced',
+      reducedValues: multiDimResult.aggregatedValues,
+      diagnostics: {
+        method: 'multi_dimensional',
+        specifiedDimensions: multiDimResult.diagnostics.specifiedDimensions,
+        unspecifiedDimensions: multiDimResult.diagnostics.unspecifiedDimensions,
+        slicesUsed: multiDimResult.diagnostics.slicesUsed,
+        warnings: multiDimResult.diagnostics.warnings,
+      },
+    };
+  }
+
+  // If multi-dim failed and query is uncontexted, try single-dimension MECE
+  const queryDims = extractSliceDimensions(queryDSL);
+  const isUncontexted = !queryDims || queryDims === '';
+
+  if (isUncontexted) {
+    const singleDimResult = selectImplicitUncontextedSliceSetSync({
+      candidateValues: allSlices,
+      requireCompleteMECE: true,
+    });
+
+    if (singleDimResult.kind === 'mece_partition' || singleDimResult.kind === 'explicit_uncontexted') {
+      return {
+        kind: 'fallback_single_dim',
+        reducedValues: singleDimResult.values,
+        diagnostics: {
+          method: 'single_dimensional',
+          specifiedDimensions: [],
+          unspecifiedDimensions: singleDimResult.kind === 'mece_partition' ? [singleDimResult.key] : [],
+          slicesUsed: singleDimResult.values.length,
+          warnings: singleDimResult.diagnostics.warnings || [],
+        },
+      };
+    }
+  }
+
+  // Neither multi-dim nor single-dim worked
+  return {
+    kind: 'not_reducible',
+    diagnostics: {
+      method: 'none',
+      specifiedDimensions: multiDimResult.diagnostics.specifiedDimensions,
+      unspecifiedDimensions: multiDimResult.diagnostics.unspecifiedDimensions,
+      slicesUsed: 0,
+      warnings: [
+        multiDimResult.reason || 'Multi-dimensional reduction not possible',
+        ...(multiDimResult.diagnostics.warnings || []),
+      ],
+    },
+  };
+}
+
 

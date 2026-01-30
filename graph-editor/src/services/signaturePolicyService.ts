@@ -1,17 +1,17 @@
 /**
  * Signature Policy Service
  *
- * TEMPORARY RELEASE SAFETY MEASURE (20-Jan-26):
- * - Signature checking is currently disabled because it can block business-critical fetch workflows
- *   when cached files contain legacy / mismatched signatures.
- *
- * When re-enabling:
- * - Ensure planner + executor compute signatures identically (including workspace scoping)
- * - Ensure MECE implicit-uncontexted fulfilment can match signed contexted generations
- * - Ensure signature mismatch NEVER prevents fetching (at worst, it should trigger a refetch)
+ * ENABLED (29-Jan-26) after implementing structured signatures with subset-aware matching.
+ * 
+ * The new signature system:
+ * - Uses structured signatures with separate coreHash and contextDefHashes
+ * - Supports subset-aware matching: cache with superset of context keys can satisfy query
+ * - Fixes the bug where uncontexted queries rejected contexted MECE cache
+ * 
+ * @see docs/current/multi-sig-matching.md for full design specification
  */
-export const SIGNATURE_CHECKING_ENABLED = false;
-export const SIGNATURE_WRITING_ENABLED = false;
+export const SIGNATURE_CHECKING_ENABLED = true;
+export const SIGNATURE_WRITING_ENABLED = true;
 
 export function isSignatureCheckingEnabled(): boolean {
   return SIGNATURE_CHECKING_ENABLED;
