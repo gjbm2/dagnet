@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.3.16b
+**Released:** 30-Jan-26
+
+Upgraded signature matching and slice selection logic
+
+---
+
 ## Version 1.3.15b
 **Released:** 29-Jan-26
 
