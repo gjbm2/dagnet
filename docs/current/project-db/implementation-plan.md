@@ -63,7 +63,7 @@ The following blocking ambiguities were identified and resolved before Phase 1 c
 | **D: Timestamp Semantics** | `retrieved_at` timezone ambiguity | ✅ `TIMESTAMPTZ` with explicit UTC; display in `d-MMM-yy` |
 | **E: Test DB Strategy** | No executable test infrastructure | ✅ Neon test branch; Python integration tests; TS mocks Python responses |
 
-**Resolved:** Context Definition Stability — Option C selected (store both `core_hash` and `context_def_hashes`; V1 queries use `core_hash` only). See `snapshot-db-design.md` §3.7.6.
+**Resolved:** Context Definition Stability — Option C selected (store both `core_hash` and `context_def_hashes`; V1 queries use `core_hash` only). See `snapshot-db-design.md` §3.8.6.
 
 ---
 
@@ -172,7 +172,7 @@ CREATE INDEX idx_snapshots_lookup
     ON snapshots (param_id, core_hash, slice_key, anchor_day);
 ```
 
-**Note:** `context_def_hashes` stores the context definition portion of the signature for future strict matching and audit purposes. V1 queries use `core_hash` only. See `snapshot-db-design.md` §3.7.6 for decision rationale.
+**Note:** `context_def_hashes` stores the context definition portion of the signature for future strict matching and audit purposes. V1 queries use `core_hash` only. See `snapshot-db-design.md` §3.8.6 for decision rationale.
 
 3. Create Neon test branch for testing
 4. Verify connection from local Python server
@@ -449,7 +449,7 @@ if (allTimeSeriesData.length > 0 && querySignature && !dontExecuteHttp) {
     
     const { appendSnapshots } = await import('./snapshotWriteService');
     
-    // Per §3.7.6: Store both coreHash and contextDefHashes
+    // Per §3.8.6: Store both coreHash and contextDefHashes
     // querySignature is a StructuredSignature: { coreHash, contextDefHashes }
     const result = await appendSnapshots({
       param_id: dbParamId,
@@ -1486,7 +1486,7 @@ const FIXTURE_MECE = {
 - **Audit:** Can detect when context definitions changed over time
 - **Data cost:** Negligible (~75 KB/day extra)
 
-See `snapshot-db-design.md` §3.7.6 for full rationale.
+See `snapshot-db-design.md` §3.8.6 for full rationale.
 
 ---
 

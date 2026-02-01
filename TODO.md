@@ -1,5 +1,11 @@
 # TODO
 
+## Snapshot DB — Open Design Point (BLOCKING)
+
+**Must resolve before implementation:** Analytics response shape for mature cohorts / non-latency edges where full snapshot history isn't available. See `docs/current/project-db/snapshot-db-design.md` §24.1 for options under discussion.
+
+---
+
 - Log mirrorring isn't working properly -- only some entries are captured and returned
 
 - Auto-retry if fetch fail on automated chron
