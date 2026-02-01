@@ -51,7 +51,7 @@ CREATE TABLE snapshots (
     -- Identity (4 columns)
     param_id            TEXT NOT NULL,
     core_hash           TEXT NOT NULL,
-    context_def_hashes  TEXT,               -- JSON object; see §3.7.6
+    context_def_hashes  TEXT,               -- JSON object; see §3.8.6
     slice_key           TEXT NOT NULL,
     
     -- Time dimensions (2 columns)
@@ -83,7 +83,7 @@ CREATE INDEX idx_snapshots_lookup
 - NOT part of the primary key (V1 matching uses `core_hash` only)
 - Allows future strict matching and audit of context definition evolution
 - Nullable for backward compatibility (rows written before this decision)
-- See §3.7.6 for decision rationale
+- See §3.8.6 for decision rationale
 
 #### 3.2.1 Timestamp Semantics (Blocker D Resolved)
 
@@ -149,7 +149,192 @@ Latency data (median/mean lag) is stored per row because:
 
 Note: Lag histogram can also be **derived** from ΔY between successive snapshots (day-level granularity). Storing Amplitude's values provides sub-day precision and a reference for validation.
 
-### 3.5 Why Signature Handles Intra-Workspace Sharing
+### 3.5 Virtual Snapshot Reconstruction
+
+**Critical concept:** We do NOT store complete snapshots every day. We store **partial fetches** (the "gap" data), and reconstruct complete views on demand.
+
+#### 3.5.1 The Partial Fetch Pattern
+
+Typical daily fetch behaviour:
+- DSL: `cohort(-100d:)` — 100 days of cohort history
+- But we only FETCH ~14 days (the "gap" — data likely to change due to latency)
+- Older anchor_days are mature and stable
+
+**What gets written to DB each day:**
+```
+Day 1:   anchor_days [-14d:-1d] with retrieved_at = Day1
+Day 2:   anchor_days [-14d:-1d] with retrieved_at = Day2
+...
+Day 180: anchor_days [-14d:-1d] with retrieved_at = Day180
+```
+
+Each day writes ~14 rows, NOT 100 rows. The DB accumulates partial overlapping snapshots.
+
+#### 3.5.2 Reconstructing a Virtual Snapshot
+
+To answer "what did we know on date X about the full cohort range?", we reconstruct:
+
+```sql
+WITH ranked AS (
+  SELECT *,
+    ROW_NUMBER() OVER (
+      PARTITION BY anchor_day
+      ORDER BY retrieved_at DESC
+    ) AS rn
+  FROM snapshots
+  WHERE param_id = %s
+    AND core_hash = %s
+    AND anchor_day BETWEEN %s AND %s  -- full cohort range
+    AND retrieved_at <= %s            -- the target date X
+)
+SELECT * FROM ranked WHERE rn = 1
+```
+
+This returns **one row per anchor_day** — the latest snapshot we had as of date X.
+
+**Result:**
+- Mature anchor_days: their last snapshot (maybe weeks/months old)
+- Recent anchor_days: their snapshot from date X
+- **Combined:** Complete time-series as it was known on date X
+
+#### 3.5.3 Two Query Modes
+
+| Mode | What we query | Returns |
+|------|---------------|---------|
+| **Raw snapshots** | All rows for anchor_day range | Multiple rows per anchor_day (full accumulation history) |
+| **Virtual snapshot** | Reconstructed view at date X | One row per anchor_day (latest as of X) |
+
+**Histogram/Daily Conversions → Raw snapshots:**
+Derivations need ALL snapshots to compute ΔY between successive `retrieved_at` values.
+
+**`asAt(date)` query → Virtual snapshot:**
+Returns the reconstructed view as of that date, matching what the file would have shown.
+
+#### 3.5.4 Succession of Virtual Snapshots for Time-Series Analysis
+
+For analysis showing how metrics changed over time (e.g., weekly conversion rate trend):
+
+```python
+def derive_conversion_rate_over_time(
+    param_id: str,
+    core_hash: str,
+    cohort_range: tuple[date, date],
+    analysis_dates: list[date]  # e.g., every Monday for past 12 weeks
+) -> list[dict]:
+    """
+    Build a time-series of conversion rates by reconstructing virtual snapshots
+    at each analysis date.
+    """
+    results = []
+    
+    for analysis_date in analysis_dates:
+        # Reconstruct virtual snapshot as of this date
+        virtual_snapshot = query_virtual_snapshot(
+            param_id, core_hash, cohort_range, as_at=analysis_date
+        )
+        
+        # Compute aggregate metrics from that snapshot
+        total_X = sum(row['X'] for row in virtual_snapshot)
+        total_Y = sum(row['Y'] for row in virtual_snapshot)
+        
+        results.append({
+            'date': analysis_date,
+            'conversion_rate': total_Y / total_X if total_X > 0 else 0,
+            'total_conversions': total_Y,
+        })
+    
+    return results
+```
+
+This produces a time-series showing how the conversion rate evolved week-over-week, based on what was known at each point in time.
+
+#### 3.5.5 Cold Start and Graceful Coverage
+
+**Principle:** Do the best we can with available data. Only show gaps where data truly cannot be inferred.
+
+**Day 1 — Zero snapshot history:**
+
+We can STILL provide analytics for:
+- **Mature cohorts (age > t95):** Current file/Amplitude data IS the final truth
+- **Non-latency edges:** Current data IS the final truth (lag ≈ 0)
+- **Any analysis not requiring historical comparison**
+
+We CANNOT provide:
+- **Immature cohort history:** "What did this cohort look like 7 days ago?"
+- **Lag histogram for immature cohorts:** Need to observe accumulation
+
+**Graceful degradation logic:**
+
+```python
+def derive_histogram_with_coverage(
+    param_id: str,
+    core_hash: str,
+    cohort_range: tuple[date, date],
+    t95_days: int,
+    today: date
+) -> HistogramResult:
+    """
+    Derive lag histogram using best available data:
+    - Mature cohorts: use current file data (no snapshots needed)
+    - Immature cohorts: use snapshots if available, else mark as missing
+    """
+    
+    result_bins = defaultdict(int)
+    coverage = {'mature': 0, 'immature_with_snapshots': 0, 'immature_missing': 0}
+    
+    for anchor_day in date_range(cohort_range):
+        cohort_age = (today - anchor_day).days
+        
+        if cohort_age >= t95_days:
+            # MATURE: Use current file data — this IS the final truth
+            current_Y = get_from_file(param_id, anchor_day)
+            # Attribute all conversions to "within t95" bucket
+            result_bins['mature'] += current_Y
+            coverage['mature'] += 1
+            
+        else:
+            # IMMATURE: Need snapshots to see accumulation
+            snapshots = query_snapshots(param_id, core_hash, anchor_day)
+            
+            if len(snapshots) >= 2:
+                # Have history — can derive ΔY
+                for i in range(1, len(snapshots)):
+                    lag = (snapshots[i]['retrieved_at'].date() - anchor_day).days
+                    delta_Y = snapshots[i]['Y'] - snapshots[i-1]['Y']
+                    if delta_Y > 0:
+                        result_bins[lag] += delta_Y
+                coverage['immature_with_snapshots'] += 1
+                
+            else:
+                # Insufficient history — mark as gap
+                coverage['immature_missing'] += 1
+    
+    return HistogramResult(
+        data=dict(result_bins),
+        coverage=coverage,
+        message=_build_coverage_message(coverage)
+    )
+
+def _build_coverage_message(coverage: dict) -> str:
+    total = sum(coverage.values())
+    if coverage['immature_missing'] == 0:
+        return None  # Full coverage
+    
+    pct_covered = (coverage['mature'] + coverage['immature_with_snapshots']) / total * 100
+    return f"Coverage: {pct_covered:.0f}% — {coverage['immature_missing']} recent cohorts awaiting snapshot history"
+```
+
+**What the user sees:**
+
+| Scenario | Display |
+|----------|---------|
+| Day 1 (no snapshots) | "Lag histogram (mature cohorts only — recent cohorts awaiting snapshot history)" |
+| Day 7 (partial) | "Lag histogram (92% coverage — 3 recent cohorts awaiting history)" |
+| Day 14+ (full) | "Lag histogram" (no message — full coverage) |
+
+**Key insight:** For mature cohorts, we DON'T need snapshots — the current state IS the historical truth. This means we can provide useful analytics immediately, with coverage improving as snapshots accumulate.
+
+### 3.6 Why Signature Handles Intra-Workspace Sharing
 
 Parameters are shared across graphs within a workspace. The signature system correctly handles this:
 
@@ -159,14 +344,14 @@ Parameters are shared across graphs within a workspace. The signature system cor
 
 Cross-workspace isolation is achieved by the workspace prefix on `param_id`, not by signature differences.
 
-### 3.6 Alignment with Structured Signatures
+### 3.7 Alignment with Structured Signatures
 
 The `core_hash` is the same value computed by `computeQuerySignature()` in TypeScript. This ensures:
 - Same signature logic for files and DB
 - Frontend can pass pre-computed signature to Python
 - No signature computation needed in Python
 
-### 3.7 Context Definition Stability
+### 3.8 Context Definition Stability
 
 **⚠️ DESIGN DECISION REQUIRED**
 
@@ -182,9 +367,9 @@ Where:
 
 **The question:** What should we store in the DB `core_hash` column?
 
-See **§3.7.1 Strategic Options** below for full analysis.
+See **§3.8.1 Strategic Options** below for full analysis.
 
-#### 3.7.1 Strategic Options for Context Definition Handling
+#### 3.8.1 Strategic Options for Context Definition Handling
 
 **Background:** The current signature system splits query identity into:
 1. `coreHash` — semantic inputs (events, path, cohort/window mode, event definitions)
@@ -276,7 +461,7 @@ CREATE TABLE context_def_history (
 
 ---
 
-#### 3.7.2 Impact Analysis by Change Type
+#### 3.8.2 Impact Analysis by Change Type
 
 | Change Type | Option A | Option B | Option C | Option D |
 |-------------|----------|----------|----------|----------|
@@ -290,7 +475,7 @@ CREATE TABLE context_def_history (
 
 ---
 
-#### 3.7.3 MECE Aggregation Implications
+#### 3.8.3 MECE Aggregation Implications
 
 MECE (Mutually Exclusive, Collectively Exhaustive) aggregation sums slice data to produce uncontexted totals.
 
@@ -306,7 +491,7 @@ MECE (Mutually Exclusive, Collectively Exhaustive) aggregation sums slice data t
 
 ---
 
-#### 3.7.4 Considerations
+#### 3.8.4 Considerations
 
 1. **How often do context definitions change?**
    - Trivial changes (whitespace, comments): Should NOT orphan data
@@ -329,7 +514,7 @@ MECE (Mutually Exclusive, Collectively Exhaustive) aggregation sums slice data t
 
 ---
 
-#### 3.7.5 Byte Cost Analysis
+#### 3.8.5 Byte Cost Analysis
 
 **SHA-256 hash = 64 hex characters (64 bytes)**
 
@@ -365,7 +550,7 @@ Assumptions:
 
 ---
 
-#### 3.7.6 Decision: Option C Selected
+#### 3.8.6 Decision: Option C Selected
 
 **Decision:** Store both `core_hash` and `context_def_hashes` as separate columns.
 
@@ -373,7 +558,7 @@ Assumptions:
 - For V1: Use `core_hash` only for matching (flexible, resilient to context evolution)
 - Future: Can add stricter matching using `context_def_hashes` when needed
 - Audit: Can detect when context definitions changed over time
-- Data cost: Negligible (~75 KB/day extra; see §3.7.5)
+- Data cost: Negligible (~75 KB/day extra; see §3.8.5)
 
 **Implications:**
 1. Schema adds `context_def_hashes TEXT` column (JSON object)
@@ -3423,3 +3608,116 @@ const FIXTURE_DUAL_QUERY_RESULT = {
 | `asAt_no_side_effects` | Historical query | No file writes, no DB writes |
 | `asAt_shape_matches_live` | Compare result shapes | Identical `TimeSeriesPoint` structure |
 | `asAt_future_date` | `asAt(tomorrow)` | Behaves like live query (latest available) |
+
+---
+
+## 24. Open Discussion Points
+
+> **These items MUST be resolved before implementation begins.**
+
+### 24.1 Analytics Without Full Snapshot History (OPEN)
+
+**Status:** Under discussion  
+**Blocking:** Phase 2 (Analytics Read Path)
+
+#### The Question
+
+Certain analytics are possible for **mature cohorts** and **non-latency edges** even without accumulated snapshot history. How should we design the analytics response to handle this gracefully?
+
+#### Background
+
+After the initial "launch fetch" populates the DB with a baseline snapshot:
+- **Immature cohorts** (age < t95) will accumulate ΔY over successive snapshots — full lag attribution possible
+- **Mature cohorts** (age ≥ t95) have stable Y values — we have FINAL Y but only ONE observation
+- **Non-latency edges** have no late-arrival behaviour — each day's Y is final immediately
+
+For mature cohorts and non-latency edges, the **current file data IS the historical truth** (by definition). We don't need multiple snapshots to know the answer.
+
+#### What This Affects
+
+| Analysis Type | Needs Snapshot Accumulation? | Mature/Non-latency Handling |
+|---------------|------------------------------|----------------------------|
+| **Total conversions** | ❌ No | Use baseline/file Y directly |
+| **Conversion rate** | ❌ No | Use baseline/file Y directly |
+| **Lag histogram** | ✅ Yes (for attribution) | ? |
+| **Daily conversions** | ✅ Yes (for attribution) | ? |
+
+The open question is: **what should analytics return for mature/non-latency cohorts where we CAN'T attribute conversions to specific lags or dates?**
+
+#### Options Under Consideration
+
+**Option A: Separate "attributed" vs "unattributed"**
+
+```json
+{
+  "lag_histogram": {
+    "buckets": [...],
+    "total_attributed": 275
+  },
+  "unattributed": {
+    "count": 200,
+    "reason": "mature_before_tracking"
+  },
+  "total_conversions": 475,
+  "coverage": {
+    "attributed_pct": 57.9
+  }
+}
+```
+
+- Pro: Honest and complete
+- Pro: User sees total conversions AND understands what can/can't be broken down
+- Con: More complex response shape
+
+**Option B: Histogram only shows what can be attributed**
+
+```json
+{
+  "lag_histogram": {
+    "buckets": [...],
+    "total": 275,
+    "note": "Excludes 200 conversions from mature cohorts (pre-tracking)"
+  }
+}
+```
+
+- Pro: Simpler response
+- Con: User might not realise they're seeing partial data
+
+**Option C: Impute mature cohorts using t95 distribution**
+
+Assume mature cohorts followed the same lag distribution as the t95 model suggests, and distribute their Y across histogram buckets accordingly.
+
+- Pro: "Complete" histogram
+- Con: Not based on observed data — could be misleading
+- Con: More complex logic
+
+**Option D: Defer analytics until sufficient history exists**
+
+Simply don't offer histogram/daily-conversions until we have N days of snapshots.
+
+- Pro: Only shows real data
+- Con: Poor day-1 experience
+- Con: Wastes the information we DO have (totals, mature cohort Y)
+
+#### Additional Considerations
+
+1. **Non-latency edges are simpler:** For these, each day's Y is immediately final. A histogram is trivial (all conversions have lag=0). Daily conversions = Y per anchor_day. No accumulation needed.
+
+2. **The "mature at launch" cohort is fixed:** Over time, these cohorts age out of the analysis window. Eventually all visible cohorts have full accumulation history.
+
+3. **File data availability:** If we need mature cohort Y and it's not in the DB baseline, can Python query the file? (Current design: Python queries DB only.) Or should frontend send mature cohort data in the analytics request?
+
+#### Decision Required
+
+Before implementing Phase 2, we need to decide:
+
+1. **Response shape:** How does the analytics response represent "attributed" vs "unattributed"?
+2. **Non-latency handling:** Does Python detect non-latency edges and handle them specially, or is this frontend logic?
+3. **File fallback:** If DB is empty/missing, does Python need file data, or do we simply require a fetch first?
+
+#### Related Decisions (Already Made)
+
+- **No file→DB backfill mechanism:** Simplicity. Require a fresh fetch to populate DB.
+- **Launch sequence:** One-time "refresh all" populates baseline for all active queries.
+- **DB is the sole source for Python analytics:** Python doesn't read parameter files.
