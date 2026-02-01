@@ -153,9 +153,9 @@ echo ""
 
 # Load environment variables from .env.local (priority) or .env (fallback)
 if [ -f "graph-editor/.env.local" ]; then
-    export $(grep -v '^#' graph-editor/.env.local | grep -E '^VITE_PORT=|^PYTHON_API_PORT=' | xargs)
+    export $(grep -v '^#' graph-editor/.env.local | grep -E '^VITE_PORT=|^PYTHON_API_PORT=|^DB_CONNECTION=' | xargs)
 elif [ -f "graph-editor/.env" ]; then
-    export $(grep -v '^#' graph-editor/.env | grep -E '^VITE_PORT=|^PYTHON_API_PORT=' | xargs)
+    export $(grep -v '^#' graph-editor/.env | grep -E '^VITE_PORT=|^PYTHON_API_PORT=|^DB_CONNECTION=' | xargs)
 fi
 
 # Default ports if not set
@@ -204,6 +204,7 @@ tmux send-keys -t dagnet:dev.1 "cd $(pwd)/graph-editor" C-m
 tmux send-keys -t dagnet:dev.1 "source venv/bin/activate" C-m
 tmux send-keys -t dagnet:dev.1 "export PYTHON_API_PORT=${PYTHON_API_PORT}" C-m
 tmux send-keys -t dagnet:dev.1 "export VITE_PORT=${VITE_PORT}" C-m
+tmux send-keys -t dagnet:dev.1 "export DB_CONNECTION=\"${DB_CONNECTION}\"" C-m
 tmux send-keys -t dagnet:dev.1 "clear" C-m
 tmux send-keys -t dagnet:dev.1 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
 tmux send-keys -t dagnet:dev.1 "echo '  🐍 PYTHON API SERVER (Backend)'" C-m

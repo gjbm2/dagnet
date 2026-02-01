@@ -46,6 +46,37 @@ def health():
     }
 
 
+# Snapshot DB health check
+@app.get("/api/snapshots/health")
+def snapshots_health():
+    """Test connection to snapshot DB using DB_CONNECTION env var."""
+    import psycopg2
+    
+    conn_string = os.environ.get('DB_CONNECTION')
+    if not conn_string:
+        return {
+            "status": "error",
+            "error": "DB_CONNECTION env var not set"
+        }
+    
+    try:
+        conn = psycopg2.connect(conn_string)
+        cur = conn.cursor()
+        cur.execute('SELECT version()')
+        version = cur.fetchone()[0]
+        conn.close()
+        return {
+            "status": "ok",
+            "db": "connected",
+            "version": version[:60] + "..."
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+
 # Simple roundtrip test endpoint: Parse DSL query string
 @app.post("/api/parse-query")
 async def parse_query_endpoint(request: Request):
