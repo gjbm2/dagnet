@@ -1312,20 +1312,32 @@ export async function runStage2EnhancementsAndInboundN(
     // This replaces the old approach where LAG was computed per-edge in
     // dataOperationsService, then path_t95 was computed separately here.
     // ═══════════════════════════════════════════════════════════════════════
-        // Check if any fetched items were parameters on latency edges
+        // Check if any fetched items were parameters on latency edges (BOTH edge.p AND edge.conditional_p[i].p)
         const latencyCheck = effectiveItems.map(item => {
           if (item.type !== 'parameter') return { item: item.name, hasLatency: false, reason: 'not parameter' };
           const edge = finalGraph.edges?.find((e: any) => 
             e.uuid === item.targetId || e.id === item.targetId
           );
           if (!edge) return { item: item.name, hasLatency: false, reason: 'edge not found' };
-          const hasLatency = edge?.p?.latency?.latency_parameter === true;
+          
+          // Check base edge probability
+          const baseHasLatency = edge?.p?.latency?.latency_parameter === true;
+          
+          // Check conditional probabilities (PARITY PRINCIPLE: conditional_p must be first-class)
+          const conditionalLatency = (edge.conditional_p || []).map((cp: any, idx: number) => ({
+            index: idx,
+            hasLatency: cp?.p?.latency?.latency_parameter === true,
+            t95: cp?.p?.latency?.t95,
+          }));
+          const anyConditionalHasLatency = conditionalLatency.some((c: any) => c.hasLatency);
+          
           return { 
             item: item.name, 
-            hasLatency, 
+            hasLatency: baseHasLatency || anyConditionalHasLatency, 
             latency_parameter: edge?.p?.latency?.latency_parameter,
             t95: edge?.p?.latency?.t95,
             edgeId: edge.uuid || edge.id,
+            conditionalLatency,
           };
         });
         const hasLatencyItems = latencyCheck.some(c => c.hasLatency);
@@ -1394,7 +1406,15 @@ export async function runStage2EnhancementsAndInboundN(
             ) as any;
             if (!edge) continue;
             
-            const edgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+            const baseEdgeId = edge.uuid || edge.id || `${edge.from}->${edge.to}`;
+            
+            // PARITY PRINCIPLE: conditional_p parameters use composite key format
+            // Base probability: "edgeId"
+            // Conditional probability: "edgeId:conditional[N]"
+            const conditionalIndex = (item as any).conditionalIndex;
+            const paramLookupKey = typeof conditionalIndex === 'number' 
+              ? `${baseEdgeId}:conditional[${conditionalIndex}]`
+              : baseEdgeId;
             
             // Try param file from registry first
             let allValues: ParameterValueForLAG[] | undefined;
@@ -1406,8 +1426,13 @@ export async function runStage2EnhancementsAndInboundN(
             }
             
             // Fall back to edge's direct data if no param file
-            if (!allValues && edge.p?.values) {
-              allValues = edge.p.values as ParameterValueForLAG[];
+            // NOTE: For conditional params, fall back to conditional_p[N].p.values
+            if (!allValues) {
+              if (typeof conditionalIndex === 'number') {
+                allValues = edge.conditional_p?.[conditionalIndex]?.p?.values as ParameterValueForLAG[];
+              } else {
+                allValues = edge.p?.values as ParameterValueForLAG[];
+              }
             }
             
             if (allValues && allValues.length > 0) {
@@ -1486,7 +1511,9 @@ export async function runStage2EnhancementsAndInboundN(
               }
               
               console.log('[fetchDataService] Filtered param values for LAG:', {
-                edgeId,
+                paramLookupKey,
+                baseEdgeId,
+                conditionalIndex,
                 targetDims,
                 lagSliceSource,
                 hasCohortFilter: !!(cohortStart && cohortEnd),
@@ -1497,7 +1524,7 @@ export async function runStage2EnhancementsAndInboundN(
               });
               
               if (filteredValues.length > 0) {
-                paramLookup.set(edgeId, filteredValues);
+                paramLookup.set(paramLookupKey, filteredValues);
               }
             }
           }
@@ -1607,10 +1634,14 @@ export async function runStage2EnhancementsAndInboundN(
               finalGraph,
               edgeValuesToApply.map(ev => ({
                 edgeId: ev.edgeUuid,
+                conditionalIndex: ev.conditionalIndex, // PARITY: Pass conditionalIndex for conditional_p writes
                 latency: preserveLatencySummaryFromFile
                   ? (() => {
                       const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
-                      const existing = edge?.p?.latency;
+                      // For conditional probabilities, get existing latency from conditional_p[i].p.latency
+                      const existing = typeof ev.conditionalIndex === 'number'
+                        ? edge?.conditional_p?.[ev.conditionalIndex]?.p?.latency
+                        : edge?.p?.latency;
                       return selectLatencyToApplyForTopoPass(ev.latency, existing, true);
                     })()
                   : ev.latency,

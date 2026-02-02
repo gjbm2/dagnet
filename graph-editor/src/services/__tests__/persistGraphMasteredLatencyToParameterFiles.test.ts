@@ -121,6 +121,85 @@ describe('persistGraphMasteredLatencyToParameterFiles', () => {
     expect(updated?.latency?.path_t95).toBe(30.16);
     expect(updated?.latency?.path_t95_overridden).toBe(true);
   });
+
+  // §0.3: onset_delta_days Graph → File sync tests
+  it('writes latency.onset_delta_days from graph → parameter file when not overridden (§0.3)', async () => {
+    await registerFileForTest('parameter-p1', 'parameter', {
+      id: 'p1',
+      type: 'probability',
+      latency: { onset_delta_days: 2, onset_delta_days_overridden: false },
+      values: [],
+    });
+
+    const graph: Graph = {
+      nodes: [{ id: 'A' } as any, { id: 'B' } as any],
+      edges: [{
+        uuid: 'e1',
+        id: 'A-to-B',
+        from: 'A',
+        to: 'B',
+        query: 'from(A).to(B)',
+        p: {
+          id: 'p1',
+          latency: { 
+            path_t95: 37.61, 
+            t95: 13.12, 
+            onset_delta_days: 5,  // Graph has updated onset
+            onset_delta_days_overridden: false 
+          },
+        } as any,
+      } as any],
+    } as any;
+
+    await persistGraphMasteredLatencyToParameterFiles({
+      graph,
+      setGraph: () => {},
+      edgeIds: ['e1'],
+    });
+
+    const updated = fileRegistry.getFile('parameter-p1')?.data as any;
+    expect(updated?.latency?.onset_delta_days).toBe(5);
+  });
+
+  it('does NOT overwrite latency.onset_delta_days when file onset_delta_days_overridden=true (§0.3)', async () => {
+    await registerFileForTest('parameter-p1', 'parameter', {
+      id: 'p1',
+      type: 'probability',
+      latency: { onset_delta_days: 2, onset_delta_days_overridden: true },
+      values: [],
+    });
+
+    const graph: Graph = {
+      nodes: [{ id: 'A' } as any, { id: 'B' } as any],
+      edges: [{
+        uuid: 'e1',
+        id: 'A-to-B',
+        from: 'A',
+        to: 'B',
+        query: 'from(A).to(B)',
+        p: {
+          id: 'p1',
+          latency: { 
+            path_t95: 37.61, 
+            t95: 13.12, 
+            onset_delta_days: 5,  // Graph has different value
+            onset_delta_days_overridden: false 
+          },
+        } as any,
+      } as any],
+    } as any;
+
+    await persistGraphMasteredLatencyToParameterFiles({
+      graph,
+      setGraph: () => {},
+      edgeIds: ['e1'],
+    });
+
+    const updated = fileRegistry.getFile('parameter-p1')?.data as any;
+    // Should keep original value because file has override flag
+    expect(updated?.latency?.onset_delta_days).toBe(2);
+    expect(updated?.latency?.onset_delta_days_overridden).toBe(true);
+  });
 });
 
 

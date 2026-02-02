@@ -1621,13 +1621,20 @@ export interface LAGHelpers {
 export interface EdgeLAGValues {
   /** Edge UUID (for lookup) */
   edgeUuid: string;
-  /** Latency values to write to edge.p.latency */
+  /** 
+   * Index into conditional_p array. 
+   * undefined = base edge probability (edge.p)
+   * number = conditional probability (edge.conditional_p[conditionalIndex].p)
+   */
+  conditionalIndex?: number;
+  /** Latency values to write to edge.p.latency (or edge.conditional_p[i].p.latency) */
   latency: {
     median_lag_days?: number;
     mean_lag_days?: number;
     t95: number;
     completeness: number;
     path_t95: number;
+    onset_delta_days?: number;  // Aggregated onset delay from window slices (min)
   };
   /** Blended p.mean (if computed) */
   blendedMean?: number;
@@ -2414,6 +2421,30 @@ export function enhanceGraphLatencies(
         return dsl.includes('window(') && !dsl.includes('cohort(');
       }).length;
       
+      // Aggregate onset_delta_days from window() slices only
+      // Precedence: uncontexted window slice > min(contexted window slices)
+      // NOTE: Cohort slices have truncated histogram data (~10 days) - onset unreliable
+      let edgeOnsetDeltaDays: number | undefined;
+      const windowSlicesWithOnset = paramValues.filter((v: any) => {
+        const dsl = v.sliceDSL ?? '';
+        return dsl.includes('window(') && typeof v.latency?.onset_delta_days === 'number';
+      });
+      if (windowSlicesWithOnset.length > 0) {
+        // Prefer uncontexted slice if available
+        const uncontextedSlice = windowSlicesWithOnset.find((v: any) => {
+          const dsl = v.sliceDSL ?? '';
+          return !dsl.includes('context(');
+        });
+        if (uncontextedSlice) {
+          edgeOnsetDeltaDays = (uncontextedSlice as any).latency.onset_delta_days;
+        } else {
+          // Fall back to min across contexted slices
+          edgeOnsetDeltaDays = Math.min(
+            ...windowSlicesWithOnset.map((v: any) => v.latency.onset_delta_days)
+          );
+        }
+      }
+      
       const edgeLAGValues: EdgeLAGValues = {
         edgeUuid,
         latency: {
@@ -2422,6 +2453,7 @@ export function enhanceGraphLatencies(
           t95: latencyStats.t95,
           completeness: completenessUsed,
           path_t95: edgePathT95,
+          onset_delta_days: edgeOnsetDeltaDays,
         },
         debug: {
           queryDate: queryDate.toISOString().split('T')[0],
@@ -2874,6 +2906,113 @@ export function enhanceGraphLatencies(
       });
       result.edgeValues.push(edgeLAGValues);
       result.edgesWithLAG++;
+      
+      // PARITY PRINCIPLE: Process conditional_p probabilities with latency enabled
+      // Conditional probabilities share the same physical edge (same path_t95, anchor, etc.)
+      // but have their own parameter values and computed LAG stats
+      const conditionalPs = (edge as any).conditional_p || [];
+      for (let cpIdx = 0; cpIdx < conditionalPs.length; cpIdx++) {
+        const cp = conditionalPs[cpIdx];
+        if (cp?.p?.latency?.latency_parameter !== true) continue;
+        
+        // Check for parameter values in paramLookup using composite key
+        const conditionalKey = `${edgeId}:conditional[${cpIdx}]`;
+        const cpParamValues = paramLookup.get(conditionalKey);
+        if (!cpParamValues || cpParamValues.length === 0) {
+          console.log('[LAG_TOPO_SKIP_CONDITIONAL] noParamValues:', { 
+            edgeId, 
+            conditionalIndex: cpIdx, 
+            conditionalKey,
+            hasInLookup: paramLookup.has(conditionalKey)
+          });
+          continue;
+        }
+        
+        // Use same aggregation logic as base edge
+        const cpCohortsScoped = aggregateFn(cpParamValues, queryDate, cohortWindow);
+        const cpCohortsAll = aggregateFn(cpParamValues, queryDate, undefined);
+        if (cpCohortsScoped.length === 0) {
+          console.log('[LAG_TOPO_SKIP_CONDITIONAL] noCohorts:', { edgeId, conditionalIndex: cpIdx });
+          continue;
+        }
+        
+        // Get aggregate lag stats
+        const cpLagStats = helpers.aggregateLatencyStats(cpCohortsAll.length > 0 ? cpCohortsAll : cpCohortsScoped, MODEL.RECENCY_HALF_LIFE_DAYS);
+        const cpMedianLag = cpLagStats?.median_lag_days ?? effectiveHorizonDays / 2;
+        const cpMeanLag = cpLagStats?.mean_lag_days;
+        
+        // Compute t95 and completeness using same logic as base edge
+        const cpEdgeT95 = cp.p?.latency?.t95;
+        const cpLatencyStats = computeEdgeLatencyStats(
+          cpCohortsScoped,
+          cpMedianLag,
+          cpMeanLag,
+          MODEL.DEFAULT_T95_DAYS,
+          anchorMedianLag,
+          undefined, // fitTotalKOverride
+          cpCohortsAll.length > 0 ? cpCohortsAll : cpCohortsScoped, // p∞ estimation
+          cpEdgeT95, // Authoritative t95 if set
+          MODEL.RECENCY_HALF_LIFE_DAYS
+        );
+        
+        // Use the computed completeness from cpLatencyStats
+        const cpCompleteness = cpLatencyStats.completeness;
+        
+        // Aggregate onset from window slices (same logic as base edge)
+        let cpOnsetDeltaDays: number | undefined;
+        const cpWindowSlicesWithOnset = cpParamValues.filter((v: any) => {
+          const dsl = v.sliceDSL ?? '';
+          return dsl.includes('window(') && typeof v.latency?.onset_delta_days === 'number';
+        });
+        if (cpWindowSlicesWithOnset.length > 0) {
+          const uncontextedSlice = cpWindowSlicesWithOnset.find((v: any) => {
+            const dsl = v.sliceDSL ?? '';
+            return !dsl.includes('context(');
+          });
+          if (uncontextedSlice) {
+            cpOnsetDeltaDays = (uncontextedSlice as any).latency.onset_delta_days;
+          } else {
+            cpOnsetDeltaDays = Math.min(
+              ...cpWindowSlicesWithOnset.map((v: any) => v.latency.onset_delta_days)
+            );
+          }
+        }
+        
+        // Build EdgeLAGValues for conditional probability
+        const cpEdgeLAGValues: EdgeLAGValues = {
+          edgeUuid,
+          conditionalIndex: cpIdx,
+          latency: {
+            median_lag_days: cpMedianLag,
+            mean_lag_days: cpMeanLag,
+            t95: cpLatencyStats.t95,
+            completeness: cpCompleteness,
+            path_t95: edgePathT95, // Shared with base edge
+            onset_delta_days: cpOnsetDeltaDays,
+          },
+        };
+        
+        // Preserve forecast/evidence from conditional probability
+        if (cp.p?.forecast?.mean !== undefined) {
+          cpEdgeLAGValues.forecast = { mean: cp.p.forecast.mean };
+        }
+        if (cp.p?.evidence) {
+          cpEdgeLAGValues.evidence = {
+            mean: cp.p.evidence.mean,
+            n: cp.p.evidence.n,
+            k: cp.p.evidence.k,
+          };
+        }
+        
+        console.log('[LAG_TOPO_PUSHING_CONDITIONAL] edgeValues:', {
+          edgeUuid: cpEdgeLAGValues.edgeUuid,
+          conditionalIndex: cpIdx,
+          t95: cpEdgeLAGValues.latency.t95,
+          completeness: cpEdgeLAGValues.latency.completeness,
+        });
+        result.edgeValues.push(cpEdgeLAGValues);
+        result.edgesWithLAG++;
+      }
 
       // Update in-degree and queue
       const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;

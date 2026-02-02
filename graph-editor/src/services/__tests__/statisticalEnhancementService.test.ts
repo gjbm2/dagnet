@@ -1278,6 +1278,86 @@ describe('enhanceGraphLatencies', () => {
     }
   });
 
+  it('PARITY: should emit EdgeLAGValues for conditional_p[i] when paramLookup includes composite key', () => {
+    const now = new Date();
+    const dates = [
+      new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    ];
+
+    const graph: GraphForPath = {
+      nodes: [
+        { id: 'start', entry: { is_start: true } },
+        { id: 'a' },
+      ],
+      edges: [
+        {
+          id: 'start-to-a',
+          from: 'start',
+          to: 'a',
+          p: { mean: 0.8, latency: { latency_parameter: true, t95: 30 } },
+          conditional_p: [
+            {
+              condition: 'context(channel:paid)',
+              p: { mean: 0.9, latency: { latency_parameter: true, t95: 30 } },
+            },
+          ],
+        } as any,
+      ],
+    };
+
+    const paramLookup = new Map<string, ParameterValueForLAG[]>([
+      [
+        'start-to-a',
+        [
+          {
+            mean: 0.8,
+            n: 300,
+            k: 240,
+            dates,
+            n_daily: [100, 100, 100],
+            k_daily: [80, 80, 80],
+            median_lag_days: [5, 5, 5],
+            mean_lag_days: [6, 6, 6],
+            // Provide onset on a window slice (uncontexted)
+            sliceDSL: 'window(30d)',
+            latency: { onset_delta_days: 2 },
+          } as any,
+        ],
+      ],
+      [
+        'start-to-a:conditional[0]',
+        [
+          {
+            mean: 0.9,
+            n: 300,
+            k: 270,
+            dates,
+            n_daily: [100, 100, 100],
+            k_daily: [90, 90, 90],
+            median_lag_days: [7, 7, 7],
+            mean_lag_days: [9, 9, 9],
+            // Provide onset on a window slice (uncontexted)
+            sliceDSL: 'window(30d)',
+            latency: { onset_delta_days: 4 },
+          } as any,
+        ],
+      ],
+    ]);
+
+    const result = enhanceGraphLatencies(graph, paramLookup, new Date(), mockHelpers);
+
+    // Base edge output
+    const base = result.edgeValues.find((v) => v.edgeUuid === 'start-to-a' && v.conditionalIndex === undefined);
+    expect(base).toBeDefined();
+
+    // Conditional output
+    const cp0 = result.edgeValues.find((v) => v.edgeUuid === 'start-to-a' && v.conditionalIndex === 0);
+    expect(cp0).toBeDefined();
+    expect(cp0!.latency.onset_delta_days).toBe(4);
+  });
+
   it('should compute cumulative path_t95 for downstream edges', () => {
     const graph = createLatencyGraph();
     const paramLookup = createParamLookup();

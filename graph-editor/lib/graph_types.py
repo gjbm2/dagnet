@@ -68,6 +68,8 @@ class LatencyConfig(BaseModel):
     t95_overridden: bool = Field(False, description="If true, user manually set t95")
     path_t95: Optional[float] = Field(None, ge=0, description="Critical path t95 in days (max t95 from anchor to this edge)")
     path_t95_overridden: bool = Field(False, description="If true, user manually set path_t95")
+    onset_delta_days: Optional[float] = Field(None, ge=0, description="Onset delay in days - minimum time before conversions begin (aggregated from window slices)")
+    onset_delta_days_overridden: bool = Field(False, description="If true, user manually set onset_delta_days")
     median_lag_days: Optional[float] = Field(None, ge=0, description="Weighted median lag in days (display only)")
     mean_lag_days: Optional[float] = Field(None, ge=0, description="Weighted mean lag in days (used with median to compute t95)")
     completeness: Optional[float] = Field(None, ge=0, le=1, description="Maturity progress 0-1 (display only)")

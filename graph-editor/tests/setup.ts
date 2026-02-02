@@ -101,7 +101,9 @@ if (typeof window !== 'undefined' && !window.indexedDB) {
 
 // Mock fetch to serve files from public/ folder in tests
 // This prevents ECONNREFUSED errors when tests try to load schemas
-const originalFetch = globalThis.fetch;
+// For real HTTP calls (Python API), use undici which works in Node.js
+const { fetch: undiciFetch } = require('undici');
+
 globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input.toString();
   
@@ -124,11 +126,20 @@ globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
     }
   }
   
-  // Handle localhost URLs - fail fast instead of hanging
+  // Allow real HTTP calls to Python API (snapshot writes, etc.)
+  // These need undici because happy-dom's fetch doesn't make real network calls
+  const isPythonApi = url.includes('/api/snapshots/') || 
+    url.includes(':9000/') || url.includes(':8000/');
+  if ((url.includes('localhost') || url.includes('127.0.0.1')) && isPythonApi) {
+    // Use undici for real HTTP calls
+    return undiciFetch(input, init);
+  }
+  
+  // Block other localhost URLs to fail fast instead of hanging
   if (url.includes('localhost') || url.includes('127.0.0.1')) {
     return new Response('Network error', { status: 500 });
   }
   
-  // Pass through to original fetch for other URLs
-  return originalFetch(input, init);
+  // Pass through to undici for external URLs
+  return undiciFetch(input, init);
 }) as typeof fetch;

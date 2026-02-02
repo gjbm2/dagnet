@@ -47,6 +47,19 @@ vi.mock('../../lib/das', async () => {
 });
 
 // -----------------------------------------------------------------------------
+// Enable snapshot writes in test environment
+// -----------------------------------------------------------------------------
+// The snapshotWriteService checks VITE_SNAPSHOTS_ENABLED at module load time.
+// We mock the module to always enable writes, but use the REAL fetch implementation
+// so writes actually go to the production database.
+
+// -----------------------------------------------------------------------------
+// Snapshot writes use the REAL snapshotWriteService
+// The tests/setup.ts mock now allows /api/snapshots/ calls through
+// VITE_SNAPSHOTS_ENABLED defaults to true (only false if explicitly set)
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
 // Mock ONLY the HTTP executor used by DAS in node (Amplitude interface)
 // -----------------------------------------------------------------------------
 
@@ -198,6 +211,68 @@ import { fileRegistry } from '../../contexts/TabContext';
 import { db } from '../../db/appDatabase';
 
 // -----------------------------------------------------------------------------
+// Snapshot DB verification helpers (for e2e DB write testing)
+// -----------------------------------------------------------------------------
+
+const TEST_PREFIX = 'pytest-amplitude-e2e';
+const TEST_RUN_ID = Date.now().toString();
+const TEST_WORKSPACE = { repository: TEST_PREFIX, branch: TEST_RUN_ID };
+
+interface SnapshotRow {
+  param_id: string;
+  anchor_day: string;
+  x: number;
+  y: number;
+  a?: number;
+  median_lag_days?: number;
+  mean_lag_days?: number;
+}
+
+async function querySnapshotsFromDb(paramId: string): Promise<SnapshotRow[]> {
+  const baseUrl = process.env.DAGNET_PYTHON_API_URL || process.env.VITE_PYTHON_API_URL || 'http://localhost:9000';
+  
+  const response = await undiciFetch(`${baseUrl}/api/snapshots/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ param_id: paramId }),
+  });
+  
+  if (!response.ok) {
+    console.warn(`[Snapshot Query] Failed: ${response.status}`);
+    return [];
+  }
+  
+  const result = await response.json() as any;
+  return result.rows || [];
+}
+
+async function deleteTestSnapshots(paramIdPrefix: string): Promise<number> {
+  const baseUrl = process.env.DAGNET_PYTHON_API_URL || process.env.VITE_PYTHON_API_URL || 'http://localhost:9000';
+  
+  try {
+    const response = await undiciFetch(`${baseUrl}/api/snapshots/delete-test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ param_id_prefix: paramIdPrefix }),
+    });
+    
+    if (!response.ok) {
+      console.warn(`[Snapshot Delete] Failed: ${response.status}`);
+      return 0;
+    }
+    
+    const result = await response.json() as any;
+    return result.deleted || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function makeTestParamId(baseName: string): string {
+  return `${TEST_PREFIX}-${TEST_RUN_ID}-${baseName}`;
+}
+
+// -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
 
@@ -220,6 +295,25 @@ async function registerFileForTest(fileId: string, type: any, data: any): Promis
     isDirty: false,
     isInitializing: false,
     source: { repository: 'test', branch: 'main', isLocal: true } as any,
+    viewTabs: [],
+    lastModified: Date.now(),
+  } as any);
+}
+
+/**
+ * Register a file with test workspace source for DB write testing.
+ * The source.repository and source.branch are used to construct dbParamId.
+ * This ensures dbParamId = '{TEST_PREFIX}-{TEST_RUN_ID}-{objectId}' for cleanup.
+ */
+async function registerFileForDbTest(fileId: string, type: any, data: any): Promise<void> {
+  await fileRegistry.registerFile(fileId, {
+    fileId,
+    type,
+    data,
+    originalData: structuredClone(data),
+    isDirty: false,
+    isInitializing: false,
+    source: { repository: TEST_PREFIX, branch: TEST_RUN_ID, isLocal: true } as any,
     viewTabs: [],
     lastModified: Date.now(),
   } as any);
@@ -339,6 +433,9 @@ describePython('E2E: Smooth lag Amplitude responses → param-pack stats', () =>
   beforeEach(async () => {
     vi.clearAllMocks();
 
+    // Clean up any leftover test snapshots from previous runs
+    await deleteTestSnapshots(TEST_PREFIX);
+
     // Hard reset between tests: both the in-memory FileRegistry cache and IndexedDB.
     // Without this, versioned fetch can hit old parameter-file state and silently reuse July data.
     // NOTE: In node (fake-indexeddb) Dexie.delete() can trip browser-only code paths (CustomEvent).
@@ -389,6 +486,11 @@ describePython('E2E: Smooth lag Amplitude responses → param-pack stats', () =>
     await registerFileForTest('event-event-a', 'event', evA);
     await registerFileForTest('event-event-b', 'event', evB);
     await registerFileForTest('event-event-c', 'event', evC);
+  });
+
+  afterEach(async () => {
+    // Clean up test snapshots from DB
+    await deleteTestSnapshots(TEST_PREFIX);
   });
 
   it('July window vs July cohort produce identical B→C p.mean = 25%', async () => {
@@ -540,6 +642,333 @@ describePython('E2E: Smooth lag Amplitude responses → param-pack stats', () =>
       expect(Math.abs(reachBlended - reachEvidence)).toBeLessThanOrEqual(0.05);
     });
   }, 30_000);
+});
+
+// =============================================================================
+// E2E: Snapshot DB Write Verification
+// =============================================================================
+// These tests verify that fetched Amplitude data is correctly written to the
+// production Neon database. They use test-prefixed param_ids for cleanup.
+
+describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
+  
+  // Cache fixtures - load once, reuse across tests
+  let abParam: any, bcParam: any, evA: any, evB: any, evC: any;
+  
+  beforeAll(async () => {
+    globalThis.indexedDB = new IDBFactory();
+    
+    // Clean up any leftover test snapshots (once at start)
+    await deleteTestSnapshots(TEST_PREFIX);
+    
+    // Load fixtures once
+    abParam = loadYaml('../../../../param-registry/test/parameters/ab-smooth-lag.yaml');
+    bcParam = loadYaml('../../../../param-registry/test/parameters/bc-smooth-lag.yaml');
+    evA = loadYaml('../../../../param-registry/test/events/event-a.yaml');
+    evB = loadYaml('../../../../param-registry/test/events/event-b.yaml');
+    evC = loadYaml('../../../../param-registry/test/events/event-c.yaml');
+  });
+  
+  afterAll(async () => {
+    // Clean up at end
+    await deleteTestSnapshots(TEST_PREFIX);
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+
+    // Reset IDB
+    await Promise.all([
+      db.workspaces.clear(),
+      db.files.clear(),
+      db.tabs.clear(),
+      db.scenarios.clear(),
+      db.appState.clear(),
+      db.settings.clear(),
+      db.credentials.clear(),
+    ]);
+    try {
+      const map = (fileRegistry as any).files as Map<string, any> | undefined;
+      map?.clear();
+    } catch {
+      // Best-effort only.
+    }
+
+    // Mock credentials (Amplitude HTTP is mocked anyway, so these aren't used for real API calls)
+    vi.spyOn(credentialsManager, 'loadCredentials').mockResolvedValue({
+      success: true,
+      source: 'mock' as any,
+      credentials: {
+        amplitude: {
+          api_key: 'test-api-key',
+          secret_key: 'test-secret-key',
+          basic_auth_b64: Buffer.from('test-api-key:test-secret-key').toString('base64'),
+        },
+      },
+    } as any);
+    vi.spyOn(credentialsManager, 'getProviderCredentials').mockReturnValue({
+      api_key: 'test-api-key',
+      secret_key: 'test-secret-key',
+      basic_auth_b64: Buffer.from('test-api-key:test-secret-key').toString('base64'),
+    } as any);
+
+    // Register fixture files with TEST WORKSPACE source for DB cleanup
+    // The source.repository and source.branch form the dbParamId prefix
+    // This means dbParamId = '{TEST_PREFIX}-{TEST_RUN_ID}-ab-smooth-lag'
+    await registerFileForDbTest('parameter-ab-smooth-lag', 'parameter', abParam);
+    await registerFileForDbTest('parameter-bc-smooth-lag', 'parameter', bcParam);
+    await registerFileForDbTest('event-event-a', 'event', evA);
+    await registerFileForDbTest('event-event-b', 'event', evB);
+    await registerFileForDbTest('event-event-c', 'event', evC);
+  });
+
+  // Helper to construct expected dbParamId (matches dataOperationsService logic)
+  const getDbParamId = (objectId: string) => `${TEST_PREFIX}-${TEST_RUN_ID}-${objectId}`;
+
+  it('writes snapshot rows directly via appendSnapshots', async () => {
+    // Directly test the snapshot write using the real service
+    const { appendSnapshots } = await import('../snapshotWriteService');
+    
+    const testParamId = getDbParamId('direct-write-test');
+    const testRows = Array.from({ length: 31 }, (_, i) => ({
+      anchor_day: `2025-07-${String(i + 1).padStart(2, '0')}`,
+      X: 200,
+      Y: 100,
+    }));
+    
+    const result = await appendSnapshots({
+      param_id: testParamId,
+      core_hash: 'direct-test-hash',
+      slice_key: '',
+      retrieved_at: new Date(),
+      rows: testRows,
+      diagnostic: true,
+    });
+    
+    // Log result for debugging
+    if (!result.success) {
+      // eslint-disable-next-line no-console
+      console.error('[TEST] appendSnapshots failed:', result);
+    }
+    
+    expect(result.success).toBe(true);
+    expect(result.inserted).toBe(31);
+    
+    // Verify by querying back
+    const rows = await querySnapshotsFromDb(testParamId);
+    expect(rows.length).toBe(31);
+  }, 15_000);
+
+  it('writes July window fetch data to snapshot DB with correct X/Y values', async () => {
+    // Clean this specific param before test
+    await deleteTestSnapshots(getDbParamId('ab-smooth-lag'));
+    
+    await withFixedNow('2025-07-31T12:00:00Z', async () => {
+      const graph = loadJson('../../../../param-registry/test/graphs/ab-bc-smooth-lag-rebalance.json') as Graph;
+      let currentGraph: Graph | null = structuredClone(graph);
+      const setGraph = (g: Graph | null) => { currentGraph = g; };
+
+      const abItem: FetchItem = {
+        id: 'param-ab-smooth-lag-p-A-B',
+        type: 'parameter',
+        name: 'p: ab-smooth-lag',
+        objectId: 'ab-smooth-lag',  // Original param ID
+        targetId: 'A-B',
+        paramSlot: 'p',
+      };
+
+      // Verify the file source is set up correctly for dbParamId construction
+      const regFile = fileRegistry.getFile('parameter-ab-smooth-lag');
+      expect(regFile?.source?.repository).toBe(TEST_PREFIX);
+      expect(regFile?.source?.branch).toBe(TEST_RUN_ID);
+
+      const windowDsl = 'window(1-Jul-25:31-Jul-25)';
+      // Force fresh fetch (bypass cache) to trigger snapshot write
+      const result = await fetchItem(abItem, { mode: 'versioned', bustCache: true }, currentGraph as Graph, setGraph, windowDsl);
+      expect(result.success).toBe(true);
+
+      // Wait for shadow-write to complete (fire-and-forget, typically <500ms)
+      await new Promise(r => setTimeout(r, 500));
+
+      // Query the snapshot DB - dbParamId is constructed from file source + objectId
+      const dbParamId = getDbParamId('ab-smooth-lag');
+      const rows = await querySnapshotsFromDb(dbParamId);
+      
+      // Should have 31 days of July data
+      expect(rows.length).toBe(31);
+      
+      // Verify data integrity
+      const totalX = rows.reduce((sum, r) => sum + (r.x || 0), 0);
+      const totalY = rows.reduce((sum, r) => sum + (r.y || 0), 0);
+      
+      expect(totalX).toBeGreaterThan(0);
+      expect(totalY).toBeGreaterThan(0);
+      
+      // Verify 50% conversion rate (fixture characteristic for A→B)
+      expect(totalY / totalX).toBeCloseTo(0.5, 1);
+    });
+  }, 30_000);
+
+  it('writes cohort mode fetch data to snapshot DB with anchor (A) values', async () => {
+    await withFixedNow('2025-07-31T12:00:00Z', async () => {
+      const graph = loadJson('../../../../param-registry/test/graphs/ab-bc-smooth-lag-rebalance.json') as Graph;
+      let currentGraph: Graph | null = structuredClone(graph);
+      const setGraph = (g: Graph | null) => { currentGraph = g; };
+
+      const abItem: FetchItem = {
+        id: 'param-ab-smooth-lag-p-A-B',
+        type: 'parameter',
+        name: 'p: ab-smooth-lag',
+        objectId: 'ab-smooth-lag',
+        targetId: 'A-B',
+        paramSlot: 'p',
+      };
+
+      const bcItem: FetchItem = {
+        id: 'param-bc-smooth-lag-p-B-C',
+        type: 'parameter',
+        name: 'p: bc-smooth-lag',
+        objectId: 'bc-smooth-lag',
+        targetId: 'B-C',
+        paramSlot: 'p',
+      };
+
+      const cohortDsl = 'cohort(1-Jul-25:31-Jul-25)';
+      
+      // Fetch both params in cohort mode
+      await fetchItem(abItem, { mode: 'versioned' }, currentGraph as Graph, setGraph, cohortDsl);
+      const result = await fetchItem(bcItem, { mode: 'versioned' }, currentGraph as Graph, setGraph, cohortDsl);
+      expect(result.success).toBe(true);
+
+      await new Promise(r => setTimeout(r, 500));
+
+      // Query BC param rows - should have anchor (A) values in cohort mode
+      const dbParamId = getDbParamId('bc-smooth-lag');
+      const rows = await querySnapshotsFromDb(dbParamId);
+      
+      expect(rows.length).toBeGreaterThan(0);
+      
+      // In cohort mode (3-step funnel), A column should be populated
+      const rowsWithAnchor = rows.filter(r => r.a !== null && r.a !== undefined && r.a > 0);
+      expect(rowsWithAnchor.length).toBe(rows.length);
+    });
+  }, 30_000);
+
+  it('two successive fetches create time-stamped rows (full E2E flow)', async () => {
+    // Clean this specific param before test (avoid interference from earlier tests)
+    await deleteTestSnapshots(getDbParamId('ab-smooth-lag'));
+    
+    // FULL E2E: fetchItem → dataOperationsService → snapshotWriteService → DB
+    // Each fetch has a different retrieved_at, so we get 2 sets of rows.
+    // This is BY DESIGN - we track how values change over time.
+    // NOTE: Do NOT use withFixedNow here - we need real time to pass for different timestamps.
+    
+    // Verify file registration is correct (from beforeEach)
+    const regFile = fileRegistry.getFile('parameter-ab-smooth-lag');
+    expect(regFile?.source?.repository).toBe(TEST_PREFIX);
+    expect(regFile?.source?.branch).toBe(TEST_RUN_ID);
+    
+    const graph = loadJson('../../../../param-registry/test/graphs/ab-bc-smooth-lag-rebalance.json') as Graph;
+    let currentGraph: Graph | null = structuredClone(graph);
+    const setGraph = (g: Graph | null) => { currentGraph = g; };
+
+    const abItem: FetchItem = {
+      id: 'param-ab-smooth-lag-p-A-B',
+      type: 'parameter',
+      name: 'p: ab-smooth-lag',
+      objectId: 'ab-smooth-lag',
+      targetId: 'A-B',
+      paramSlot: 'p',
+    };
+
+    // Use a specific date range in the past (within fixture data)
+    const windowDsl = 'window(1-Jul-25:10-Jul-25)';
+    const dbParamId = getDbParamId('ab-smooth-lag');
+    
+    // First fetch
+    const r1 = await fetchItem(abItem, { mode: 'versioned', bustCache: true }, currentGraph as Graph, setGraph, windowDsl);
+    expect(r1.success).toBe(true);
+    await new Promise(r => setTimeout(r, 500)); // Wait for shadow-write
+
+    const rowsAfterFirst = await querySnapshotsFromDb(dbParamId);
+    expect(rowsAfterFirst.length).toBe(10); // 10 days of data
+    
+    // Record the first timestamp
+    const firstTimestamp = rowsAfterFirst[0]?.retrieved_at;
+    expect(firstTimestamp).toBeDefined();
+
+    // Second fetch - use fresh graph to avoid any caching issues
+    // Small wait to ensure different timestamp (retrieved_at has ms precision)
+    await new Promise(r => setTimeout(r, 50));
+    
+    const freshGraph = loadJson('../../../../param-registry/test/graphs/ab-bc-smooth-lag-rebalance.json') as Graph;
+    let freshCurrentGraph: Graph | null = structuredClone(freshGraph);
+    const setFreshGraph = (g: Graph | null) => { freshCurrentGraph = g; };
+    
+    const r2 = await fetchItem(abItem, { mode: 'versioned', bustCache: true }, freshCurrentGraph as Graph, setFreshGraph, windowDsl);
+    expect(r2.success).toBe(true);
+    await new Promise(r => setTimeout(r, 500)); // Wait for shadow-write
+
+    const rowsAfterSecond = await querySnapshotsFromDb(dbParamId);
+    
+    // 20 rows: 10 from first fetch + 10 from second (different retrieved_at)
+    expect(rowsAfterSecond.length).toBe(20);
+    
+    // Verify both sets have correct data
+    const uniqueDates = [...new Set(rowsAfterSecond.map((r: { anchor_day: string }) => r.anchor_day))];
+    expect(uniqueDates.length).toBe(10); // Still 10 unique dates
+    
+    // Verify we have 2 different retrieved_at timestamps
+    const uniqueTimestamps = [...new Set(rowsAfterSecond.map((r: { retrieved_at: string }) => r.retrieved_at))];
+    expect(uniqueTimestamps.length).toBe(2); // 2 distinct fetch times
+    
+    // The second timestamp should be different from the first
+    expect(uniqueTimestamps).toContain(firstTimestamp);
+    const secondTimestamp = uniqueTimestamps.find(t => t !== firstTimestamp);
+    expect(secondTimestamp).toBeDefined();
+    expect(new Date(secondTimestamp!).getTime()).toBeGreaterThan(new Date(firstTimestamp).getTime());
+  }, 15_000);
+
+  it('DB upsert prevents exact duplicates (same timestamp)', async () => {
+    // Direct DB test: ON CONFLICT (param_id, core_hash, slice_key, anchor_day, retrieved_at) DO NOTHING
+    const { appendSnapshots } = await import('../snapshotWriteService');
+    
+    const testParamId = getDbParamId('upsert-test');
+    const fixedTimestamp = new Date('2025-07-15T12:00:00Z');
+    const testRows = Array.from({ length: 10 }, (_, i) => ({
+      anchor_day: `2025-07-${String(i + 1).padStart(2, '0')}`,
+      X: 200,
+      Y: 100,
+    }));
+    
+    // First write
+    const r1 = await appendSnapshots({
+      param_id: testParamId,
+      core_hash: 'upsert-test-hash',
+      slice_key: '',
+      retrieved_at: fixedTimestamp,
+      rows: testRows,
+    });
+    expect(r1.success).toBe(true);
+    expect(r1.inserted).toBe(10);
+    
+    const rowsAfterFirst = await querySnapshotsFromDb(testParamId);
+    expect(rowsAfterFirst.length).toBe(10);
+
+    // Second write with SAME timestamp - should be idempotent
+    const r2 = await appendSnapshots({
+      param_id: testParamId,
+      core_hash: 'upsert-test-hash',
+      slice_key: '',
+      retrieved_at: fixedTimestamp,
+      rows: testRows,
+    });
+    expect(r2.success).toBe(true);
+    expect(r2.inserted).toBe(0); // All duplicates
+
+    const rowsAfterSecond = await querySnapshotsFromDb(testParamId);
+    expect(rowsAfterSecond.length).toBe(10); // Still 10, not 20
+  }, 15_000);
 });
 
 

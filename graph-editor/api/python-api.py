@@ -11,6 +11,8 @@ Routes:
 - /api/runner/analyze -> run analytics
 - /api/runner/available-analyses -> get available analysis types
 - /api/compile-exclude -> compile excludes() to minus/plus form
+- /api/snapshots/append -> shadow-write snapshot data to DB
+- /api/snapshots/health -> DB health check
 """
 from http.server import BaseHTTPRequestHandler
 import json
@@ -62,9 +64,13 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/runner/available-analyses'
                 elif endpoint == 'compile-exclude':
                     path = '/api/compile-exclude'
+                elif endpoint == 'snapshots-append':
+                    path = '/api/snapshots/append'
+                elif endpoint == 'snapshots-health':
+                    path = '/api/snapshots/health'
                 # If no endpoint param and no original path header, this is an error
                 elif not original_path:
-                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude")
+                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health")
                     return
             
             if path == '/api/parse-query':
@@ -79,6 +85,10 @@ class handler(BaseHTTPRequestHandler):
                 self.handle_runner_available_analyses(data)
             elif path == '/api/compile-exclude':
                 self.handle_compile_exclude(data)
+            elif path == '/api/snapshots/append':
+                self.handle_snapshots_append(data)
+            elif path == '/api/snapshots/health':
+                self.handle_snapshots_health(data)
             else:
                 self.send_error_response(404, f"Unknown endpoint: {path}")
                 
@@ -144,6 +154,28 @@ class handler(BaseHTTPRequestHandler):
         """Handle compile-exclude endpoint - compiles excludes() to minus/plus form."""
         try:
             from api_handlers import handle_compile_exclude as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+    
+    def handle_snapshots_append(self, data):
+        """Handle snapshots/append endpoint - shadow-write to snapshot DB."""
+        try:
+            from api_handlers import handle_snapshots_append as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+    
+    def handle_snapshots_health(self, data):
+        """Handle snapshots/health endpoint - DB connectivity check."""
+        try:
+            from api_handlers import handle_snapshots_health as handler_func
             response = handler_func(data)
             self.send_success_response(response)
         except ValueError as e:

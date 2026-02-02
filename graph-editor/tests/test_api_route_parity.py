@@ -17,10 +17,10 @@ PYTHON_API_PATH = GRAPH_EDITOR_DIR / 'api' / 'python-api.py'
 
 
 def extract_dev_server_routes(content: str) -> set:
-    """Extract @app.post routes from dev-server.py"""
+    """Extract @app.post and @app.get routes from dev-server.py"""
     routes = set()
-    # Match @app.post("/api/...") patterns
-    for match in re.finditer(r'@app\.post\(["\']([^"\']+)["\']\)', content):
+    # Match @app.post("/api/...") and @app.get("/api/...") patterns
+    for match in re.finditer(r'@app\.(?:post|get)\(["\']([^"\']+)["\']\)', content):
         route = match.group(1)
         # Normalize: remove trailing slash
         routes.add(route.rstrip('/'))
@@ -42,6 +42,10 @@ def extract_python_api_routes(content: str) -> set:
             routes.add('/api/runner/analyze')
         elif endpoint == 'runner-available-analyses':
             routes.add('/api/runner/available-analyses')
+        elif endpoint == 'snapshots-append':
+            routes.add('/api/snapshots/append')
+        elif endpoint == 'snapshots-health':
+            routes.add('/api/snapshots/health')
         else:
             routes.add(f'/api/{endpoint}')
     return routes
@@ -71,6 +75,8 @@ def test_route_parity():
         '/api/query-graph',     # Legacy debugging endpoint
         '/api/generate-query',  # Legacy single-query generation
         '/api/generate-all-queries',  # Legacy bulk query generation
+        '/api/snapshots/query',       # Test-only: query snapshots for verification
+        '/api/snapshots/delete-test', # Test-only: cleanup test data (pytest-* prefix only)
     }
     dev_api_routes -= DEV_ONLY_ROUTES
     

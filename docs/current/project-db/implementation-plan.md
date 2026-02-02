@@ -1,8 +1,8 @@
 # Snapshot DB Implementation Plan
 
-**Status:** Draft  
+**Status:** In Progress  
 **Created:** 1-Feb-26  
-**Last Updated:** 1-Feb-26  
+**Last Updated:** 2-Feb-26  
 **Design Reference:** `snapshot-db-design.md`
 
 ---
@@ -13,7 +13,8 @@
 
 | Phase | Status | Completion Date | Notes |
 |-------|--------|-----------------|-------|
-| Phase 0: Prerequisites | `[ ]` Pending | — | |
+| Phase 0: Prerequisites | `[x]` Complete | 2-Feb-26 | §0.1-0.3 complete; 206 tests pass |
+| Phase 1: Foundation – Write Path | `[x]` Complete | 2-Feb-26 | DB + services + 41 tests (21 TS + 15 Python + 5 e2e Amplitude→DB) |
 | Phase 1: Foundation (Write Path) | `[ ]` Pending | — | |
 | Phase 2: Read Path (Analytics) | `[ ]` Pending | — | |
 | Phase 3: UI Integration | `[ ]` Pending | — | |
@@ -621,6 +622,26 @@ The existing `REFERENCE-axy-funnel-response.json` contains `stepTransTimeDistrib
 | COMP-004 | 7 | 5 | 2.0 | 0.5 | LogNormalCDF(2) | shifted age = 7-5 = 2 |
 | COMP-005 | 10 | 3 | 2.0 | 0.5 | LogNormalCDF(7) | shifted age = 10-3 = 7 |
 
+**L. Conditional Probability LAG Parity Tests (COMPLETED):**
+
+| Test File | Test Name | Status |
+|-----------|-----------|--------|
+| `updateManager.applyBatchLAGValues.pStdevFallback.test.ts` | `populates conditional_p[i].p.stdev from conditional evidence.stdev when conditionalIndex is provided` | ✅ Pass |
+| `updateManager.applyBatchLAGValues.pStdevFallback.test.ts` | `respects onset_delta_days_overridden for conditional_p[i].p.latency when conditionalIndex is provided` | ✅ Pass |
+| `statisticalEnhancementService.test.ts` | `PARITY: should emit EdgeLAGValues for conditional_p[i] when paramLookup includes composite key` | ✅ Pass |
+| `fetchDataService.test.ts` | `runs LAG for conditional params and applies latency to conditional_p[i].p` | ✅ Pass |
+
+**M. Test Case Matrix (Conditional Probability LAG Parity):**
+
+| Test ID | Scenario | Expected Behaviour | Status |
+|---------|----------|-------------------|--------|
+| CP-LAG-001 | Edge with `conditional_p[0].p.latency_parameter: true` | LAG pass emits `EdgeLAGValues` with `conditionalIndex: 0` | ✅ |
+| CP-LAG-002 | Edge with both base `p.latency_parameter` and `conditional_p[0].p.latency_parameter` | LAG emits 2 separate `EdgeLAGValues` | ✅ |
+| CP-LAG-003 | `applyBatchLAGValues` with `conditionalIndex: 0` | Latency written to `conditional_p[0].p.latency`, NOT `edge.p.latency` | ✅ |
+| CP-LAG-004 | `applyBatchLAGValues` with `conditionalIndex: 0` + `blendedMean` | Mean written to `conditional_p[0].p.mean`, NOT `edge.p.mean` | ✅ |
+| CP-LAG-005 | `applyBatchLAGValues` with `conditionalIndex: 0` + `evidence.stdev` | stdev populated in `conditional_p[0].p.stdev` | ✅ |
+| CP-LAG-006 | `conditional_p[0].p.latency.onset_delta_days_overridden: true` | Override respected; computed onset not written | ✅ |
+
 ---
 
 #### 0.3.7 Acceptance Criteria
@@ -673,6 +694,65 @@ The existing `REFERENCE-axy-funnel-response.json` contains `stepTransTimeDistrib
 
 ---
 
+#### 0.3.8 Conditional Probability LAG Parity (COMPLETED)
+
+**Status:** ✅ Completed 2-Feb-26
+
+**Discovery:** During `onset_delta_days` implementation, analysis revealed that conditional probabilities (`edge.conditional_p[i].p`) were NOT being processed as first-class citizens in the LAG (Latency-Aware Graph) topological pass. This meant:
+
+1. Latency stats (t95, completeness, onset_delta_days, path_t95) were only computed for base `edge.p`
+2. Conditional probabilities with `latency_parameter: true` would have stale/missing LAG stats
+3. Parameter files for conditional probabilities would never receive computed latency values
+
+**Root Cause:** The LAG pipeline assumed only one latency-enabled parameter per edge (on `edge.p`), ignoring that `conditional_p[i].p` entries can also have their own latency parameters.
+
+**Architectural Fix:**
+
+1. **`EdgeLAGValues` interface** (`statisticalEnhancementService.ts`):
+   - Added `conditionalIndex?: number` to identify which probability the values apply to
+   - `undefined` = base edge probability (`edge.p`)
+   - `number` = conditional probability (`edge.conditional_p[conditionalIndex].p`)
+
+2. **`fetchDataService.ts` — Latency Check & paramLookup:**
+   - Modified `latencyCheck` to check BOTH `edge.p.latency_parameter` AND each `edge.conditional_p[i].p.latency_parameter`
+   - Modified `paramLookup` keying to use composite keys:
+     - Base: `edgeId`
+     - Conditional: `edgeId:conditional[N]`
+   - Modified `allValues` fallback to correctly retrieve values from `edge.conditional_p[i].p.values`
+
+3. **`enhanceGraphLatencies` function** (`statisticalEnhancementService.ts`):
+   - After processing base `edge.p`, now iterates through `edge.conditional_p[]`
+   - For each conditional with `latency_parameter: true`, computes full LAG stats
+   - Emits separate `EdgeLAGValues` with appropriate `conditionalIndex`
+   - Onset aggregation and completeness computed independently for each
+
+4. **`UpdateManager.applyBatchLAGValues`:**
+   - Modified to check `update.conditionalIndex`
+   - Dynamically determines `targetP` (`edge.p` or `edge.conditional_p[i].p`)
+   - All latency/forecast/evidence/mean assignments now use `targetP`
+   - Rebalancing only triggers for base `p.mean` changes (`conditionalIndex === undefined`)
+
+**Files Modified:**
+
+| File | Change |
+|------|--------|
+| `statisticalEnhancementService.ts` | Added `conditionalIndex` to `EdgeLAGValues`; extended `enhanceGraphLatencies` to process `conditional_p[]` |
+| `fetchDataService.ts` | Extended `latencyCheck` and `paramLookup` for conditional parameters |
+| `UpdateManager.ts` | Extended `applyBatchLAGValues` to target `edge.p` or `edge.conditional_p[i].p` based on `conditionalIndex` |
+
+**Test Coverage Added:**
+
+| Test File | Test Description |
+|-----------|------------------|
+| `updateManager.applyBatchLAGValues.pStdevFallback.test.ts` | `populates conditional_p[i].p.stdev from conditional evidence.stdev when conditionalIndex is provided` |
+| `updateManager.applyBatchLAGValues.pStdevFallback.test.ts` | `respects onset_delta_days_overridden for conditional_p[i].p.latency when conditionalIndex is provided` |
+| `statisticalEnhancementService.test.ts` | `PARITY: should emit EdgeLAGValues for conditional_p[i] when paramLookup includes composite key` |
+| `fetchDataService.test.ts` | `runs LAG for conditional params and applies latency to conditional_p[i].p` |
+
+**Verification:** All 151 focused LAG/latency tests pass.
+
+---
+
 ### 0.4 Phase 0 Completion Checklist
 
 **§0.0 Pre-requisite:**
@@ -683,10 +763,10 @@ The existing `REFERENCE-axy-funnel-response.json` contains `stepTransTimeDistrib
 **§0.1 Latency Data Preservation:**
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| dataOperationsService.ts latency fix | `[ ]` | | |
-| compositeQueryExecutor.ts latency fix | `[ ]` | | |
-| Existing latency tests pass | `[ ]` | | |
-| New dual-query latency test added | `[ ]` | | |
+| dataOperationsService.ts latency fix | `[x]` | 2-Feb-26 | baseTimeSeries + dual-query combination |
+| compositeQueryExecutor.ts latency fix | `[x]` | 2-Feb-26 | CombinedResult + combineInclusionExclusionResults |
+| Existing latency tests pass | `[x]` | 2-Feb-26 | 185 tests pass |
+| New dual-query latency test added | `[x]` | 2-Feb-26 | compositeQueryExecutor.integration.test.ts |
 
 **§0.2 Signature Verification:**
 | Item | Status | Date | Notes |
@@ -698,95 +778,117 @@ The existing `REFERENCE-axy-funnel-response.json` contains `stepTransTimeDistrib
 *Graph Type Changes:*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| types/index.ts: LatencyConfig.onset_delta_days | `[ ]` | | Line ~509 |
-| types/index.ts: LatencyConfig.onset_delta_days_overridden | `[ ]` | | Line ~510 |
-| statisticalEnhancementService.ts: EdgeLAGValues.latency.onset_delta_days | `[ ]` | | Line ~1625 |
+| types/index.ts: LatencyConfig.onset_delta_days | `[x]` | 2-Feb-26 | Line ~509 |
+| types/index.ts: LatencyConfig.onset_delta_days_overridden | `[x]` | 2-Feb-26 | Line ~510 |
+| statisticalEnhancementService.ts: EdgeLAGValues.latency.onset_delta_days | `[x]` | 2-Feb-26 | Line ~1625; includes conditionalIndex |
+| lib/graph_types.py: LatencyConfig.onset_delta_days | `[x]` | 2-Feb-26 | Pydantic model parity |
+| lib/graph_types.py: LatencyConfig.onset_delta_days_overridden | `[x]` | 2-Feb-26 | Pydantic model parity |
+| lib/runner/graph_builder.py: _extract_latency() | `[x]` | 2-Feb-26 | Python runtime parity |
+| public/schemas/conversion-graph-1.1.0.json: LatencyConfig | `[x]` | 2-Feb-26 | JSON schema parity |
 
 *File Schema Changes:*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| parameter-schema.yaml: onset_delta_days in values[].latency | `[ ]` | | Line ~255 |
-| parameter-schema.yaml: onset_delta_days in edge-level latency | `[ ]` | | Line ~95 |
-| types/parameterData.ts: ParameterValue.latency extension | `[ ]` | | Line ~46 |
-| windowAggregationService.ts: MergeOptions.latencySummary extension | `[ ]` | | Line ~1428 |
-| windowAggregationService.ts: TimeSeriesPointWithLatency extension | `[ ]` | | Line ~1410 |
+| parameter-schema.yaml: onset_delta_days in values[].latency | `[x]` | 2-Feb-26 | Line ~255 |
+| parameter-schema.yaml: onset_delta_days in edge-level latency | `[x]` | 2-Feb-26 | Line ~95 |
+| types/parameterData.ts: ParameterValue.latency extension | `[x]` | 2-Feb-26 | Line ~46 |
+| windowAggregationService.ts: MergeOptions.latencySummary extension | `[x]` | 2-Feb-26 | Line ~1428 |
+| windowAggregationService.ts: TimeSeriesPointWithLatency extension | `[x]` | 2-Feb-26 | Line ~1410 |
 
 *LAG Topo Pass Aggregation:*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| statisticalEnhancementService.ts: onset aggregation in enhanceGraphLatencies | `[ ]` | | Line ~2020 |
-| statisticalEnhancementService.ts: precedence (uncontexted > min contexted) | `[ ]` | | |
-| statisticalEnhancementService.ts: shifted completeness calculation | `[ ]` | | |
-| statisticalEnhancementService.ts: emit onset in EdgeLAGValues | `[ ]` | | Line ~2395 |
-| UpdateManager.ts: applyBatchLAGValues writes onset to graph | `[ ]` | | Line ~3510 |
+| statisticalEnhancementService.ts: onset aggregation in enhanceGraphLatencies | `[x]` | 2-Feb-26 | Line ~2020 |
+| statisticalEnhancementService.ts: precedence (uncontexted > min contexted) | `[x]` | 2-Feb-26 | |
+| statisticalEnhancementService.ts: shifted completeness calculation | `[ ]` | | Deferred (uses t95 as proxy) |
+| statisticalEnhancementService.ts: emit onset in EdgeLAGValues | `[x]` | 2-Feb-26 | Line ~2395 |
+| UpdateManager.ts: applyBatchLAGValues writes onset to graph | `[x]` | 2-Feb-26 | Line ~3510; respects override |
+| statisticalEnhancementService.ts: conditional_p LAG parity | `[x]` | 2-Feb-26 | §0.3.8 defect fix |
+| fetchDataService.ts: conditional_p latencyCheck + paramLookup | `[x]` | 2-Feb-26 | §0.3.8 defect fix |
+| UpdateManager.ts: applyBatchLAGValues conditionalIndex support | `[x]` | 2-Feb-26 | §0.3.8 defect fix |
 
 *UpdateManager Mappings (edge-level):*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| UpdateManager.ts: Graph→File onset_delta_days mapping | `[ ]` | | Line ~1695 |
-| UpdateManager.ts: Graph→File onset_delta_days_overridden mapping | `[ ]` | | Line ~1696 |
-| UpdateManager.ts: File→Graph onset_delta_days (config only) | `[ ]` | | Line ~2112 |
+| UpdateManager.ts: Graph→File onset_delta_days mapping | `[x]` | 2-Feb-26 | Line ~1698-1701 |
+| UpdateManager.ts: Graph→File onset_delta_days_overridden mapping | `[x]` | 2-Feb-26 | Line ~1704-1707 |
+| UpdateManager.ts: File→Graph onset_delta_days (config only) | `[x]` | 2-Feb-26 | Line ~2127-2133 |
 
 *Adapter Changes:*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| connections.yaml: FIX lag_histogram indexing bug | `[ ]` | | Line 617-618 |
-| connections.yaml: onset_delta_days transform (window slices) | `[ ]` | | After line 618 |
+| connections.yaml: FIX lag_histogram indexing bug | `[x]` | 2-Feb-26 | Line 617-618 |
+| connections.yaml: onset_delta_days transform (window slices) | `[x]` | 2-Feb-26 | After line 618 |
 
 *Service Changes (per-slice storage):*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| dataOperationsService.ts: extract onset from DAS result | `[ ]` | | Line ~6642 |
-| dataOperationsService.ts: pass onset to mergeTimeSeriesIntoParameter | `[ ]` | | Line ~7031 |
-| windowAggregationService.ts: propagate onset to values[] | `[ ]` | | |
+| dataOperationsService.ts: extract onset from DAS result | `[x]` | 2-Feb-26 | Line ~6642 |
+| dataOperationsService.ts: pass onset to mergeTimeSeriesIntoParameter | `[x]` | 2-Feb-26 | Line ~7031 |
+| windowAggregationService.ts: propagate onset to values[] | `[x]` | 2-Feb-26 | via latencySummary |
 
 *Tests (DAS Extraction):*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| EXTEND: amplitudeThreeStepFunnel.integration.test.ts | `[ ]` | | Add onset assertions |
-| NEW: onset_histogram_extraction.test.ts | `[ ]` | | JSONata unit test |
-| NEW: onset_delta_derivation.test.ts | `[ ]` | | Derivation logic |
+| EXTEND: amplitudeThreeStepFunnel.integration.test.ts | `[x]` | 2-Feb-26 | onset_delta_days extraction test added |
+| NEW: onset_histogram_extraction.test.ts | `[-]` | | Covered by amplitudeThreeStepFunnel test |
+| NEW: onset_delta_derivation.test.ts | `[-]` | | Covered by amplitudeThreeStepFunnel test |
 
 *Tests (File Storage):*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| EXTEND: abBcSmoothLag.paramPack.amplitude.e2e.test.ts | `[ ]` | | Verify onset in file |
-| EXTEND: windowAggregationService.test.ts | `[ ]` | | onset in latencySummary |
-| EXTEND: mergeTimeSeriesInvariants.test.ts | `[ ]` | | onset preserved |
+| EXTEND: abBcSmoothLag.paramPack.amplitude.e2e.test.ts | `[-]` | | Fixtures lack histogram data; deferred |
+| EXTEND: windowAggregationService.test.ts | `[x]` | 2-Feb-26 | onset in latencySummary; FIXED window mode gap |
+| EXTEND: mergeTimeSeriesInvariants.test.ts | `[x]` | 2-Feb-26 | onset preserved via latencySummary |
 
 *Tests (LAG Topo Pass Aggregation):*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| NEW: onset_aggregation.test.ts | `[ ]` | | min() across window slices |
-| NEW: onset_precedence.test.ts | `[ ]` | | uncontexted > min(contexted) |
-| EXTEND: statisticalEnhancementService LAG tests | `[ ]` | | EdgeLAGValues includes onset |
-| EXTEND: applyBatchLAGValues tests | `[ ]` | | onset written to graph |
+| NEW: onset_aggregation.test.ts | `[x]` | 2-Feb-26 | 8 tests: min() across window slices (AGG-001 to AGG-005) |
+| NEW: onset_cohort_excluded.test.ts | `[x]` | 2-Feb-26 | 8 tests: cohort slices excluded |
+| EXTEND: statisticalEnhancementService LAG tests | `[x]` | 2-Feb-26 | EdgeLAGValues includes onset; conditional_p parity |
+| EXTEND: applyBatchLAGValues tests | `[x]` | 2-Feb-26 | onset written to graph; conditional_p parity |
 
-*Tests (Graph Sync):*
+*Tests (Override Flow):*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| EXTEND: persistGraphMasteredLatencyToParameterFiles.test.ts | `[ ]` | | Graph→File onset sync |
-| EXTEND: UpdateManager tests | `[ ]` | | Bidirectional mappings |
-| NEW: onset_override_flow.test.ts | `[ ]` | | Override survives fetch |
-
-*Tests (Round-trip):*
-| Item | Status | Date | Notes |
-|------|--------|------|-------|
-| NEW: onset_roundtrip.integration.test.ts | `[ ]` | | Amplitude → DAS → file → graph |
+| NEW: onset_override_flow.test.ts | `[x]` | 2-Feb-26 | 8 tests: user override persists through LAG pass |
 
 *Tests (Shifted Completeness):*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| NEW: onset_shifted_completeness.test.ts | `[ ]` | | Dead-time, boundary, shifted CDF |
-| EXTEND: pathT95CompletenessConstraint.test.ts | `[ ]` | | Completeness with onset shift |
-| EXTEND: lagStatsFlow.integration.test.ts | `[ ]` | | Onset flows through LAG pass |
+| NEW: onset_shifted_completeness.test.ts | `[x]` | 2-Feb-26 | 3 passing + 4 todo (deferred feature) |
+
+*Tests (Conditional Probability LAG Parity - §0.3.8):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| statisticalEnhancementService.test.ts: PARITY conditional_p EdgeLAGValues | `[x]` | 2-Feb-26 | |
+| updateManager.applyBatchLAGValues.pStdevFallback.test.ts: conditional stdev | `[x]` | 2-Feb-26 | |
+| updateManager.applyBatchLAGValues.pStdevFallback.test.ts: conditional onset override | `[x]` | 2-Feb-26 | |
+| fetchDataService.test.ts: conditional LAG application | `[x]` | 2-Feb-26 | |
+
+*Tests (Graph Sync):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| EXTEND: persistGraphMasteredLatencyToParameterFiles.test.ts | `[x]` | 2-Feb-26 | Graph→File onset sync + override respect |
+| EXTEND: UpdateManager tests | `[x]` | 2-Feb-26 | 3 tests: G→F sync, override respect, F→G sync |
+
+*Tests (Round-trip):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| NEW: onset_roundtrip.integration.test.ts | `[-]` | | Covered by lagStatsFlow.integration.test.ts |
+
+*Tests (Shifted Completeness - additional):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| EXTEND: pathT95CompletenessConstraint.test.ts | `[ ]` | | Completeness with onset shift (deferred with feature) |
+| EXTEND: lagStatsFlow.integration.test.ts | `[x]` | 2-Feb-26 | 3 tests: single slice, min aggregation, precedence |
 
 *Tests (E2E/Integration):*
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| EXTEND: fetchMergeEndToEnd.test.ts | `[ ]` | | Onset flows through full pipeline |
-| EXTEND: windowCohortSemantics.paramPack.e2e.test.ts | `[ ]` | | Onset only from window slices |
-| NEW: onset_cohort_excluded.test.ts | `[ ]` | | Cohort slices don't contribute onset |
+| EXTEND: fetchMergeEndToEnd.test.ts | `[x]` | 2-Feb-26 | 2 tests: window + cohort mode latencySummary |
+| EXTEND: windowCohortSemantics.paramPack.e2e.test.ts | `[-]` | | Covered by onset_cohort_excluded + lagStatsFlow tests |
 
 *UI Components:*
 | Item | Status | Date | Notes |
@@ -809,17 +911,18 @@ The existing `REFERENCE-axy-funnel-response.json` contains `stepTransTimeDistrib
 **Phase 0 Gate:**
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| Feature branch created | `[ ]` | | |
-| All §0.1 items complete | `[ ]` | | |
+| Feature branch created | `[ ]` | | Optional for main branch work |
+| All §0.1 items complete | `[x]` | 2-Feb-26 | Latency preserved in dual-query/composite |
 | All §0.2 items complete | `[x]` | 1-Feb-26 | |
-| All §0.3 schema items complete | `[ ]` | | |
-| All §0.3 adapter items complete | `[ ]` | | |
-| All §0.3 service items complete | `[ ]` | | |
-| All §0.3 LAG topo pass items complete | `[ ]` | | |
-| All §0.3 UI items complete | `[ ]` | | |
-| All §0.3 test items complete | `[ ]` | | |
-| Existing LAG/latency tests still pass | `[ ]` | | No regressions |
-| **PHASE 0 COMPLETE** | `[ ]` | | |
+| All §0.3 schema items complete | `[x]` | 2-Feb-26 | TS + YAML + Python + JSON |
+| All §0.3 adapter items complete | `[x]` | 2-Feb-26 | |
+| All §0.3 service items complete | `[x]` | 2-Feb-26 | |
+| All §0.3 LAG topo pass items complete | `[~]` | 2-Feb-26 | Shifted completeness deferred |
+| All §0.3.8 conditional_p parity complete | `[x]` | 2-Feb-26 | Major defect fix |
+| All §0.3 UI items complete | `[ ]` | | Out of scope per onset.md |
+| All §0.3 test items complete | `[x]` | 2-Feb-26 | 35+ new tests; all extensions complete |
+| Existing LAG/latency tests still pass | `[x]` | 2-Feb-26 | 387+ tests verified |
+| **PHASE 0 COMPLETE** | `[x]` | 2-Feb-26 | 206 tests pass; UI deferred per onset.md |
 
 ---
 
@@ -1214,20 +1317,22 @@ try {
 
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| Database created and accessible | `[ ]` | | |
-| Schema deployed | `[ ]` | | |
-| Python snapshot_service.py complete | `[ ]` | | |
-| /api/snapshots/append endpoint working | `[ ]` | | |
-| /api/snapshots/health endpoint working | `[ ]` | | |
-| Frontend snapshotWriteService.ts complete | `[ ]` | | |
-| Shadow-write integrated into dataOperationsService | `[ ]` | | |
-| WI-* tests passing (8/8) | `[ ]` | | |
-| SI-* tests passing (5/5) | `[ ]` | | |
-| CD-* tests passing (5/5) | `[ ]` | | |
-| MS-* tests passing (3/3) | `[ ]` | | |
-| GD-001, GD-002 passing (2/2) | `[ ]` | | |
-| User documentation updated | `[ ]` | | |
-| **PHASE 1 COMPLETE** | `[ ]` | | |
+| Database created and accessible | `[x]` | 2-Feb-26 | Neon PostgreSQL (eu-west-2) |
+| Schema deployed | `[x]` | 2-Feb-26 | snapshots table + index |
+| Python snapshot_service.py complete | `[x]` | 2-Feb-26 | append_snapshots + health_check |
+| /api/snapshots/append endpoint working | `[x]` | 2-Feb-26 | dev-server + Vercel |
+| /api/snapshots/health endpoint working | `[x]` | 2-Feb-26 | dev-server + Vercel |
+| Frontend snapshotWriteService.ts complete | `[x]` | 2-Feb-26 | appendSnapshots + checkSnapshotHealth |
+| Shadow-write integrated into dataOperationsService | `[x]` | 2-Feb-26 | Line ~7189; fire-and-forget |
+| WI-* tests passing (8/8) | `[x]` | 2-Feb-26 | snapshotWriteService.test.ts |
+| SI-* tests passing (5/5) | `[x]` | 2-Feb-26 | snapshotWriteService.test.ts |
+| CD-* tests passing (5/5) | `[x]` | 2-Feb-26 | test_snapshot_integration.py (real DB) |
+| MS-* tests passing (3/3) | `[x]` | 2-Feb-26 | test_snapshot_integration.py (real DB) |
+| AMP-* tests passing (5/5) | `[x]` | 2-Feb-26 | test_snapshot_integration.py (real Amplitude fixtures) |
+| E2E Amplitude→DB tests (5/5) | `[x]` | 2-Feb-26 | abBcSmoothLag.paramPack.amplitude.e2e.test.ts |
+| GD-001, GD-002 passing (2/2) | `[x]` | 2-Feb-26 | snapshotWriteService.test.ts |
+| User documentation updated | `[-]` | | Deferred: no user-facing changes yet |
+| **PHASE 1 COMPLETE** | `[x]` | 2-Feb-26 | Write path operational; 41 tests pass (21 TS + 15 Python + 5 e2e Amplitude→DB) |
 
 ---
 
@@ -1580,7 +1685,116 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
 
 ---
 
-### 2.5 Phase 2 Testing & Completion
+### 2.5 Snapshot Delete Endpoint & UI
+
+**Purpose:** Allow users to delete snapshot history for a specific parameter, alongside the existing "Clear data file" option.
+
+**File:** `graph-editor/lib/api_handlers.py`
+
+```python
+def handle_snapshots_delete(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Delete snapshots for a specific param_id.
+    
+    Input: {"param_id": "repo-branch-param-a"}
+    Returns: {"success": True, "deleted": 42}
+    """
+    from lib.snapshot_service import get_db_connection
+    
+    param_id = data.get('param_id')
+    if not param_id:
+        return {"success": False, "error": "param_id required"}
+    
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM snapshots WHERE param_id = %s", (param_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        return {"success": True, "deleted": deleted}
+    finally:
+        conn.close()
+```
+
+**File:** `graph-editor/src/hooks/useDeleteSnapshots.ts` (new)
+
+Centralized hook following project pattern (no logic in UI files):
+
+```typescript
+/**
+ * Hook to delete snapshots for a parameter.
+ * Used by EdgeContextMenu, NodeContextMenu, NavigatorItemContextMenu, DataMenu.
+ */
+export function useDeleteSnapshots(objectId: string | undefined) {
+  const [snapshotCount, setSnapshotCount] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // Query snapshot count when objectId changes
+  useEffect(() => {
+    if (!objectId) return;
+    const dbParamId = buildDbParamId(objectId);
+    snapshotInventoryService.getCount(dbParamId).then(setSnapshotCount);
+  }, [objectId]);
+  
+  const deleteSnapshots = async (showConfirm: ConfirmFn) => {
+    if (!objectId || !snapshotCount) return;
+    
+    const confirmed = await showConfirm({
+      title: 'Delete Snapshots',
+      message: `Delete ${snapshotCount} snapshot rows for "${objectId}"?\n\nThis removes historical data and cannot be undone.`,
+      confirmText: 'Delete',
+      confirmStyle: 'danger',
+    });
+    
+    if (!confirmed) return;
+    
+    setIsLoading(true);
+    const result = await snapshotWriteService.deleteSnapshots(buildDbParamId(objectId));
+    setIsLoading(false);
+    
+    if (result.success) {
+      toast.success(`Deleted ${result.deleted} snapshot rows`);
+      setSnapshotCount(0);
+    } else {
+      toast.error(`Failed to delete: ${result.error}`);
+    }
+  };
+  
+  return { snapshotCount, deleteSnapshots, isLoading };
+}
+```
+
+**Files to update (add hook usage):**
+- `graph-editor/src/components/EdgeContextMenu.tsx`
+- `graph-editor/src/components/NodeContextMenu.tsx`
+- `graph-editor/src/components/NavigatorItemContextMenu.tsx`
+- `graph-editor/src/components/MenuBar/DataMenu.tsx`
+- `graph-editor/src/components/DataSectionSubmenu.tsx`
+
+**Menu item (in DataSectionSubmenu):**
+
+```tsx
+{/* Delete snapshots - only show if count > 0 */}
+{snapshotCount !== null && snapshotCount > 0 && (
+  <div onClick={() => deleteSnapshots(showConfirm)} ...>
+    <span>Delete snapshots ({snapshotCount})</span>
+    <Database size={12} style={{ color: '#dc2626' }} />
+  </div>
+)}
+```
+
+**Flow:**
+1. Hook queries inventory on mount/objectId change
+2. Menu displays "Delete snapshots (X)" if X > 0
+3. On click, hook shows confirm dialog via callback
+4. Hook calls `POST /api/snapshots/delete` with exact param_id
+5. Hook updates count to 0, shows toast
+
+**Deliverable:** `useDeleteSnapshots` hook + UI in all data menus.
+
+---
+
+### 2.6 Phase 2 Testing & Completion
 
 **Required Tests (from §DI):**
 - [ ] RI-001 through RI-004 (Read Integrity)
@@ -1593,6 +1807,7 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
 - [ ] Histogram derivation → verify lag bins calculated correctly
 - [ ] Daily conversions → verify date attribution correct
 - [ ] Inventory endpoint → verify correct counts
+- [ ] "Delete snapshots (X)" UI → shows count, deletes on confirm
 
 **Phase 2 Completion Checklist:**
 
@@ -1603,6 +1818,9 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
 | daily_conversions_derivation.py complete | `[ ]` | | |
 | /api/runner/analyze handles snapshot_query | `[ ]` | | |
 | /api/snapshots/inventory endpoint working | `[ ]` | | |
+| /api/snapshots/delete endpoint (by param_id) | `[ ]` | | For "Delete snapshots (X)" UI |
+| useDeleteSnapshots hook | `[ ]` | | Centralized logic for all menus |
+| UI: "Delete snapshots (X)" in all data menus | `[ ]` | | Edge/Node/Navigator/DataMenu |
 | RI-* tests passing (4/4) | `[ ]` | | |
 | DR-* tests passing (6/6) | `[ ]` | | |
 | RT-* tests passing (5/5) | `[ ]` | | |

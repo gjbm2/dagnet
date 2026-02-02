@@ -497,6 +497,14 @@ export interface LatencyConfig {
   /** True if user manually set path_t95 (vs computed from topo pass) */
   path_t95_overridden?: boolean;
   
+  /** Onset delay in days - minimum time before conversions begin.
+   *  Aggregated from window() slice histograms (min of per-slice onset values).
+   *  Used for shifted lognormal latency fitting and maturity calculations.
+   */
+  onset_delta_days?: number;
+  /** True if user manually set onset_delta_days (vs aggregated from slices) */
+  onset_delta_days_overridden?: boolean;
+  
   // === Display-only fields (populated from file, not user-editable) ===
   
   /** Weighted median lag in days for this edge */

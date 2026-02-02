@@ -811,6 +811,40 @@ describe('Window Mode: Forecast/Latency Recomputation', () => {
     expect((merged as any).forecast).toBeDefined();
   });
   
+  it('preserves onset_delta_days when provided via latencySummary (§0.3)', () => {
+    // §0.3: onset_delta_days is extracted from DAS result and passed through
+    // latencySummary in mergeOptions. It should be preserved in the merged value.
+    const existing: ParameterValue[] = [];
+    const newTimeSeries = makeTimeSeries(30, 10);
+    
+    const result = mergeTimeSeriesIntoParameter(
+      existing,
+      newTimeSeries,
+      { start: daysAgo(30), end: daysAgo(10) },
+      undefined,
+      undefined,
+      undefined,
+      'api',
+      '',
+      { 
+        isCohortMode: false, // Window mode - onset is valid
+        latencySummary: {
+          median_lag_days: 6.5,
+          mean_lag_days: 7.2,
+          onset_delta_days: 3, // §0.3: onset delay from histogram
+        },
+      }
+    );
+    
+    const merged = result.find(v => !isCohortModeValue(v))!;
+    
+    // Latency summary should be preserved
+    expect((merged as any).latency).toBeDefined();
+    expect((merged as any).latency.onset_delta_days).toBe(3);
+    expect((merged as any).latency.median_lag_days).toBe(6.5);
+    expect((merged as any).latency.mean_lag_days).toBe(7.2);
+  });
+  
   it('does not add forecast when recomputeForecast is false', () => {
     const existing: ParameterValue[] = [];
     const newTimeSeries = makeTimeSeries(30, 10);

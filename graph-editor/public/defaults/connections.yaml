@@ -615,7 +615,18 @@ connections:
             )
         # Extract histogram for the X→Y transition (for lag CDF fitting)
         - name: lag_histogram
-          jsonata: "step_trans_time_distribution[$number($queryPayload.to_step_index)]"
+          jsonata: "step_trans_time_distribution.step_bins[$number($queryPayload.to_step_index)]"
+        # Derive onset_delta_days: smallest whole day with conversions > 0
+        # NOTE: Only meaningful for window() slices; cohort() histogram is truncated
+        - name: onset_delta_days
+          jsonata: |
+            (
+              $bins := lag_histogram.bins;
+              $msPerDay := 86400000;
+              /* Find first bin with uniques > 0 */
+              $firstNonZero := $filter($bins, function($b) { $b.bin_dist.uniques > 0 })[0];
+              $firstNonZero ? $floor($firstNonZero.start / $msPerDay) : null
+            )
       upsert:
         mode: replace
         writes:

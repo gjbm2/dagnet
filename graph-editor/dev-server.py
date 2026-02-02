@@ -50,31 +50,77 @@ def health():
 @app.get("/api/snapshots/health")
 def snapshots_health():
     """Test connection to snapshot DB using DB_CONNECTION env var."""
-    import psycopg2
-    
-    conn_string = os.environ.get('DB_CONNECTION')
-    if not conn_string:
-        return {
-            "status": "error",
-            "error": "DB_CONNECTION env var not set"
-        }
-    
+    from api_handlers import handle_snapshots_health
+    return handle_snapshots_health({})
+
+
+# Snapshot DB query endpoint (for integration tests)
+@app.post("/api/snapshots/query")
+async def snapshots_query(request: Request):
+    """Query snapshots from DB for verification."""
     try:
-        conn = psycopg2.connect(conn_string)
-        cur = conn.cursor()
-        cur.execute('SELECT version()')
-        version = cur.fetchone()[0]
-        conn.close()
-        return {
-            "status": "ok",
-            "db": "connected",
-            "version": version[:60] + "..."
-        }
+        data = await request.json()
+        from api_handlers import handle_snapshots_query
+        return handle_snapshots_query(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e)
-        }
+        import traceback
+        print(f"[snapshots/query] Error: {e}")
+        print(f"[snapshots/query] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Snapshot DB delete-test endpoint (for integration test cleanup)
+@app.post("/api/snapshots/delete-test")
+async def snapshots_delete_test(request: Request):
+    """Delete test data from DB (only pytest-* prefixed param_ids)."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_delete_test
+        return handle_snapshots_delete_test(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/delete-test] Error: {e}")
+        print(f"[snapshots/delete-test] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Snapshot DB append endpoint
+@app.post("/api/snapshots/append")
+async def snapshots_append(request: Request):
+    """
+    Append snapshot rows to the database.
+    
+    Shadow-writes time-series data after successful fetches.
+    
+    Request: {
+        "param_id": "repo-branch-param-id",
+        "core_hash": "abc123",
+        "context_def_hashes": {"channel": "def456"},  // optional
+        "slice_key": "context(channel:google)",       // or '' for uncontexted
+        "retrieved_at": "2025-12-10T12:00:00Z",
+        "rows": [
+            {"anchor_day": "2025-12-01", "X": 100, "Y": 15, "median_lag_days": 5.2},
+            ...
+        ]
+    }
+    
+    Response: {"success": true, "inserted": 14}
+    """
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_append
+        return handle_snapshots_append(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/append] Error: {e}")
+        print(f"[snapshots/append] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Simple roundtrip test endpoint: Parse DSL query string
