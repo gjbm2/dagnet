@@ -233,5 +233,77 @@ describe('compositeQueryExecutor - Integration Tests', () => {
       }
     });
   });
+
+  describe('§0.1 Latency Data Preservation', () => {
+    /**
+     * CRITICAL: When combining sub-query results via inclusion-exclusion,
+     * latency fields (median_lag_days, mean_lag_days, anchor_*) from the
+     * base query must be preserved in the combined time_series output.
+     */
+
+    it('should preserve latency fields from base query in combined time_series', async () => {
+      // Setup mock runner to return time_series with latency data for base query
+      const baseTimeSeries = [
+        { date: '2025-01-01', n: 100, k: 50, p: 0.5, median_lag_days: 3.5, mean_lag_days: 4.2, anchor_median_lag_days: 2.1, anchor_mean_lag_days: 2.8 },
+        { date: '2025-01-02', n: 120, k: 60, p: 0.5, median_lag_days: 3.2, mean_lag_days: 4.0, anchor_median_lag_days: 2.0, anchor_mean_lag_days: 2.5 },
+      ];
+      const minusTimeSeries = [
+        { date: '2025-01-01', n: 100, k: 10, p: 0.1 },  // No latency in minus query
+        { date: '2025-01-02', n: 120, k: 15, p: 0.125 },
+      ];
+
+      let callIndex = 0;
+      mockRunner.execute = vi.fn().mockImplementation(() => {
+        const isBase = callIndex === 0;
+        callIndex++;
+        return Promise.resolve({
+          success: true,
+          raw: {
+            from_count: isBase ? 220 : 220,
+            to_count: isBase ? 110 : 25,
+            time_series: isBase ? baseTimeSeries : minusTimeSeries,
+          }
+        });
+      });
+
+      const queryString = 'from(node-a).to(node-b).minus(node-c)';
+      const baseDsl = {
+        from: 'event-a',
+        to: 'event-b',
+        window: { start: '2025-01-01', end: '2025-01-02' },
+        mode: 'daily'
+      };
+
+      const result = await executeCompositeQuery(
+        queryString,
+        baseDsl,
+        'amplitude-prod',
+        mockRunner
+      );
+
+      // Verify time_series exists
+      expect(result.evidence.time_series).toBeDefined();
+      expect(result.evidence.time_series?.length).toBe(2);
+
+      // Verify latency fields are preserved from base query
+      const day1 = result.evidence.time_series?.find(d => d.date === '2025-01-01');
+      const day2 = result.evidence.time_series?.find(d => d.date === '2025-01-02');
+
+      expect(day1?.median_lag_days).toBe(3.5);
+      expect(day1?.mean_lag_days).toBe(4.2);
+      expect(day1?.anchor_median_lag_days).toBe(2.1);
+      expect(day1?.anchor_mean_lag_days).toBe(2.8);
+
+      expect(day2?.median_lag_days).toBe(3.2);
+      expect(day2?.mean_lag_days).toBe(4.0);
+      expect(day2?.anchor_median_lag_days).toBe(2.0);
+      expect(day2?.anchor_mean_lag_days).toBe(2.5);
+
+      // Verify k was adjusted via inclusion-exclusion (but latency preserved)
+      // k_adjusted = k_base - k_minus (coefficient -1 for minus term)
+      expect(day1?.k).toBe(40);  // 50 - 10 = 40
+      expect(day2?.k).toBe(45);  // 60 - 15 = 45
+    });
+  });
 });
 

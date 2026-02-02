@@ -5576,6 +5576,8 @@ class DataOperationsService {
       let updateData: any = {};
       // For cases: capture the most recent transformed raw result (e.g. variants_update, gate_id)
       let lastResultRaw: any = null;
+      // LAG: Capture onset_delta_days from histogram (window slices only)
+      let lastOnsetDeltaDays: number | undefined = undefined;
       
       // Store query info for versioned parameter storage
       let queryParamsForStorage: any = undefined;
@@ -6236,6 +6238,7 @@ class DataOperationsService {
           }
           
           // For time series: same logic - use k values for explicit n_query, n values for auto-stripped
+          // CRITICAL (§0.1): Preserve latency fields from base query
           if (Array.isArray(baseRaw?.time_series)) {
             if (explicitNQuery) {
               // For explicit n_query, the "n" for the main query is the "k" of the n_query
@@ -6244,14 +6247,24 @@ class DataOperationsService {
                   date: day.date,
                   n: day.n,  // Use from_count as n for window-mode to(X)
                   k: day.n,
-                  p: day.p
+                  p: day.p,
+                  // Preserve latency fields from base query
+                  ...(day.median_lag_days !== undefined && { median_lag_days: day.median_lag_days }),
+                  ...(day.mean_lag_days !== undefined && { mean_lag_days: day.mean_lag_days }),
+                  ...(day.anchor_median_lag_days !== undefined && { anchor_median_lag_days: day.anchor_median_lag_days }),
+                  ...(day.anchor_mean_lag_days !== undefined && { anchor_mean_lag_days: day.anchor_mean_lag_days }),
                 }));
               } else {
                 baseTimeSeries = baseRaw.time_series.map((day: any) => ({
                   date: day.date,
                   n: day.k,  // Use k as n
                   k: day.k,  // (k is the same for reference)
-                  p: day.p
+                  p: day.p,
+                  // Preserve latency fields from base query
+                  ...(day.median_lag_days !== undefined && { median_lag_days: day.median_lag_days }),
+                  ...(day.mean_lag_days !== undefined && { mean_lag_days: day.mean_lag_days }),
+                  ...(day.anchor_median_lag_days !== undefined && { anchor_median_lag_days: day.anchor_median_lag_days }),
+                  ...(day.anchor_mean_lag_days !== undefined && { anchor_mean_lag_days: day.anchor_mean_lag_days }),
                 }));
               }
             } else {
@@ -6318,18 +6331,47 @@ class DataOperationsService {
                 let timeSeries = combined.evidence.time_series;
                 
                 // If dual query, override n values with base time-series n
+                // CRITICAL (§0.1): Also preserve latency from base time-series (k_query result)
                 if (needsDualQuery && baseTimeSeries) {
-                  const baseDateMap = new Map(baseTimeSeries.map(d => [d.date, d.n]));
-                  timeSeries = timeSeries.map(day => {
-                    const base_n = baseDateMap.get(day.date) ?? day.n;
+                  const baseDateMap = new Map(baseTimeSeries.map((d: any) => [d.date, {
+                    n: d.n,
+                    median_lag_days: d.median_lag_days,
+                    mean_lag_days: d.mean_lag_days,
+                    anchor_median_lag_days: d.anchor_median_lag_days,
+                    anchor_mean_lag_days: d.anchor_mean_lag_days,
+                  }]));
+                  timeSeries = timeSeries.map((day: any) => {
+                    const baseData = baseDateMap.get(day.date);
+                    const base_n = baseData?.n ?? day.n;
                     return {
                       date: day.date,
                       n: base_n,  // Use base n
                       k: day.k,   // Keep composite k
-                      p: base_n > 0 ? day.k / base_n : 0
+                      p: base_n > 0 ? day.k / base_n : 0,
+                      // Preserve latency from composite (if present) or fall back to base
+                      ...(day.median_lag_days !== undefined 
+                          ? { median_lag_days: day.median_lag_days }
+                          : baseData?.median_lag_days !== undefined 
+                            ? { median_lag_days: baseData.median_lag_days }
+                            : {}),
+                      ...(day.mean_lag_days !== undefined 
+                          ? { mean_lag_days: day.mean_lag_days }
+                          : baseData?.mean_lag_days !== undefined 
+                            ? { mean_lag_days: baseData.mean_lag_days }
+                            : {}),
+                      ...(day.anchor_median_lag_days !== undefined 
+                          ? { anchor_median_lag_days: day.anchor_median_lag_days }
+                          : baseData?.anchor_median_lag_days !== undefined 
+                            ? { anchor_median_lag_days: baseData.anchor_median_lag_days }
+                            : {}),
+                      ...(day.anchor_mean_lag_days !== undefined 
+                          ? { anchor_mean_lag_days: day.anchor_mean_lag_days }
+                          : baseData?.anchor_mean_lag_days !== undefined 
+                            ? { anchor_mean_lag_days: baseData.anchor_mean_lag_days }
+                            : {}),
                     };
                   });
-                  console.log('[DataOps:DUAL_QUERY] Overrode composite time-series n with base n');
+                  console.log('[DataOps:DUAL_QUERY] Overrode composite time-series n with base n (latency preserved)');
                 }
                 
                 console.log(`[DataOperationsService] Extracted ${timeSeries.length} days from composite query (gap ${gapIndex + 1})`);
@@ -6708,6 +6750,10 @@ class DataOperationsService {
               });
               allTimeSeriesData.push(timeSeries as { date: string; n: number; k: number; p: number });
             }
+            // LAG: Capture onset_delta_days from histogram (window slices only)
+            if (typeof (result.raw as any)?.onset_delta_days === 'number') {
+              lastOnsetDeltaDays = (result.raw as any).onset_delta_days;
+            }
             await persistGapIfNeeded(fetchWindow);
           }
           
@@ -6989,6 +7035,86 @@ class DataOperationsService {
                 failedGapIndex,
               }
             );
+            
+            // =========================================================================
+            // SNAPSHOT DB: Shadow-write fetched data to database (incremental persist path)
+            // This mirrors the snapshot write in the else branch below.
+            // =========================================================================
+            if (allTimeSeriesData.length > 0 && querySignature) {
+              const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
+              let dbParamId = '';
+              
+              try {
+                const workspace = (() => {
+                  const pf = fileRegistry.getFile(`parameter-${objectId}`);
+                  return {
+                    repository: pf?.source?.repository || 'unknown',
+                    branch: pf?.source?.branch || 'unknown',
+                  };
+                })();
+                
+                dbParamId = `${workspace.repository}-${workspace.branch}-${objectId}`;
+                const sliceDSL = targetSlice || extractSliceDimensions(currentDSL || '');
+                
+                // Map time-series to snapshot rows
+                const snapshotRows = allTimeSeriesData.map(day => ({
+                  anchor_day: normalizeDate(day.date),
+                  A: (day as any).anchor_n,
+                  X: day.n,
+                  Y: day.k,
+                  median_lag_days: (day as any).median_lag_days,
+                  mean_lag_days: (day as any).mean_lag_days,
+                  anchor_median_lag_days: (day as any).anchor_median_lag_days,
+                  anchor_mean_lag_days: (day as any).anchor_mean_lag_days,
+                  onset_delta_days: lastOnsetDeltaDays,
+                }));
+                
+                const { appendSnapshots } = await import('./snapshotWriteService');
+                
+                const result = await appendSnapshots({
+                  param_id: dbParamId,
+                  core_hash: typeof querySignature === 'string' ? querySignature : (querySignature as any).coreHash || querySignature,
+                  context_def_hashes: typeof querySignature === 'object' ? (querySignature as any).contextDefHashes : undefined,
+                  slice_key: sliceDSL || '',
+                  retrieved_at: new Date(),
+                  rows: snapshotRows,
+                  diagnostic: diagnosticOn,
+                });
+                
+                if (result.success) {
+                  if (result.inserted > 0) {
+                    const diag = result.diagnostic;
+                    sessionLogService.addChild(logOpId, 'info', 'SNAPSHOT_WRITE',
+                      `Wrote ${result.inserted} snapshot rows to DB`,
+                      diag ? `${diag.sql_time_ms}ms` : undefined,
+                      diag ? {
+                        param_id: dbParamId,
+                        date_range: diag.date_range,
+                        rows_attempted: diag.rows_attempted,
+                        rows_inserted: diag.rows_inserted,
+                        duplicates_skipped: diag.duplicates_skipped,
+                        has_latency: diag.has_latency,
+                        has_anchor: diag.has_anchor,
+                        slice_key: diag.slice_key,
+                      } : { param_id: dbParamId, inserted: result.inserted }
+                    );
+                  }
+                } else {
+                  sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_FAILED',
+                    `Snapshot write failed: ${result.error || 'unknown error'}`,
+                    undefined,
+                    { param_id: dbParamId, error: result.error }
+                  );
+                }
+              } catch (error) {
+                console.warn('[DataOps] Snapshot write failed (non-fatal):', error);
+                sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_ERROR',
+                  `Snapshot write error: ${error instanceof Error ? error.message : error}`,
+                  undefined,
+                  { param_id: dbParamId || objectId }
+                );
+              }
+            }
           } else {
           // Get parameter file (re-read to get latest state)
           let paramFile = fileRegistry.getFile(`parameter-${objectId}`);
@@ -7041,6 +7167,12 @@ class DataOperationsService {
                     // isCohortMode determines sliceDSL format (cohort vs window), independent of forecast
                     {
                       isCohortMode: isCohortQuery,
+                      // LAG: Pass onset_delta_days for per-slice storage (window slices only)
+                      ...(lastOnsetDeltaDays !== undefined && {
+                        latencySummary: {
+                          onset_delta_days: lastOnsetDeltaDays,
+                        },
+                      }),
                       // LAG: Pass latency config for forecast recomputation if available
                       ...(shouldRecomputeForecast && {
                         latencyConfig: {
@@ -7174,6 +7306,104 @@ class DataOperationsService {
               console.log('[DataOperationsService] Removed stale n_query from parameter file:', {
                 paramId: objectId
               });
+            }
+            
+            // =========================================================================
+            // SNAPSHOT DB: Shadow-write fetched data to database
+            // This is fire-and-forget - failures are logged but don't block the fetch.
+            // Only write if we have actual fetched data (not cache hit or no-data marker).
+            // =========================================================================
+            if (allTimeSeriesData.length > 0 && querySignature && !dontExecuteHttp) {
+              const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
+              let dbParamId = '';
+              
+              try {
+                const workspace = (() => {
+                  const pf = fileRegistry.getFile(`parameter-${objectId}`);
+                  return {
+                    repository: pf?.source?.repository || 'unknown',
+                    branch: pf?.source?.branch || 'unknown',
+                  };
+                })();
+                
+                dbParamId = `${workspace.repository}-${workspace.branch}-${objectId}`;
+                
+                // Map time-series to snapshot rows
+                const snapshotRows = allTimeSeriesData.map(day => ({
+                  anchor_day: normalizeDate(day.date),
+                  A: (day as any).anchor_n,  // Cohort mode only
+                  X: day.n,
+                  Y: day.k,
+                  median_lag_days: (day as any).median_lag_days,
+                  mean_lag_days: (day as any).mean_lag_days,
+                  anchor_median_lag_days: (day as any).anchor_median_lag_days,
+                  anchor_mean_lag_days: (day as any).anchor_mean_lag_days,
+                  onset_delta_days: lastOnsetDeltaDays,
+                }));
+                
+                // Dynamic import to avoid circular deps and enable tree-shaking
+                const { appendSnapshots } = await import('./snapshotWriteService');
+                
+                // Per §3.8.6: Store both coreHash and contextDefHashes
+                // Pass diagnostic flag so backend returns detailed info for session log
+                const result = await appendSnapshots({
+                  param_id: dbParamId,
+                  core_hash: typeof querySignature === 'string' ? querySignature : (querySignature as any).coreHash || querySignature,
+                  context_def_hashes: typeof querySignature === 'object' ? (querySignature as any).contextDefHashes : undefined,
+                  slice_key: sliceDSL || '',
+                  retrieved_at: new Date(),
+                  rows: snapshotRows,
+                  diagnostic: diagnosticOn,  // Request detailed info from backend
+                });
+                
+                if (result.success) {
+                  if (result.inserted > 0) {
+                    // Log success with backend diagnostic info if available
+                    const diag = result.diagnostic;
+                    sessionLogService.addChild(logOpId, 'info', 'SNAPSHOT_WRITE',
+                      `Wrote ${result.inserted} snapshot rows to DB`,
+                      diag ? `${diag.sql_time_ms}ms` : undefined,
+                      diag ? {
+                        param_id: dbParamId,
+                        date_range: diag.date_range,
+                        rows_attempted: diag.rows_attempted,
+                        rows_inserted: diag.rows_inserted,
+                        duplicates_skipped: diag.duplicates_skipped,
+                        has_latency: diag.has_latency,
+                        has_anchor: diag.has_anchor,
+                        slice_key: diag.slice_key,
+                      } : { param_id: dbParamId, inserted: result.inserted }
+                    );
+                  } else if (diagnosticOn) {
+                    // Log duplicates only in diagnostic mode (all rows already existed)
+                    const diag = result.diagnostic;
+                    sessionLogService.addChild(logOpId, 'info', 'SNAPSHOT_WRITE_SKIPPED',
+                      `All ${diag?.rows_attempted || snapshotRows.length} rows already in DB`,
+                      diag ? `${diag.sql_time_ms}ms` : undefined,
+                      diag ? {
+                        param_id: dbParamId,
+                        date_range: diag.date_range,
+                        duplicates_skipped: diag.duplicates_skipped,
+                      } : { param_id: dbParamId }
+                    );
+                  }
+                } else {
+                  // DB returned error but we still have data in file
+                  sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_FAILED',
+                    `Snapshot write failed: ${result.error || 'unknown error'}`,
+                    undefined,
+                    { param_id: dbParamId, error: result.error }
+                  );
+                }
+              } catch (error) {
+                // Network/server error - log but don't fail the fetch
+                console.warn('[DataOps] Snapshot write failed (non-fatal):', error);
+                sessionLogService.addChild(logOpId, 'warning', 'SNAPSHOT_WRITE_ERROR',
+                  `Snapshot write error: ${error instanceof Error ? error.message : error}`,
+                  undefined,
+                  { param_id: dbParamId || objectId }
+                );
+              }
             }
             
             await fileRegistry.updateFile(`parameter-${objectId}`, updatedFileData);

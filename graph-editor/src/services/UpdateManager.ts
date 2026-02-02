@@ -1692,6 +1692,19 @@ export class UpdateManager {
         targetField: 'latency.path_t95_overridden',
         requiresIgnoreOverrideFlags: true,
         condition: (source) => source.p?.latency?.path_t95_overridden !== undefined && source.p?.id
+      },
+      // onset_delta_days: onset delay (aggregated in LAG topo pass, user-overridable)
+      { 
+        sourceField: 'p.latency.onset_delta_days', 
+        targetField: 'latency.onset_delta_days',
+        overrideFlag: 'latency.onset_delta_days_overridden',
+        condition: (source) => source.p?.latency?.onset_delta_days !== undefined && source.p?.id
+      },
+      {
+        sourceField: 'p.latency.onset_delta_days_overridden',
+        targetField: 'latency.onset_delta_days_overridden',
+        requiresIgnoreOverrideFlags: true,
+        condition: (source) => source.p?.latency?.onset_delta_days_overridden !== undefined && source.p?.id
       }
     ]);
     
@@ -2110,6 +2123,14 @@ export class UpdateManager {
         condition: isProbType
       },
       { sourceField: 'latency.path_t95_overridden', targetField: 'p.latency.path_t95_overridden', requiresIgnoreOverrideFlags: true },
+      // onset_delta_days: onset delay (user-overridable, edge-level)
+      { 
+        sourceField: 'latency.onset_delta_days', 
+        targetField: 'p.latency.onset_delta_days',
+        overrideFlag: 'p.latency.onset_delta_days_overridden',
+        condition: isProbType
+      },
+      { sourceField: 'latency.onset_delta_days_overridden', targetField: 'p.latency.onset_delta_days_overridden', requiresIgnoreOverrideFlags: true },
       
       // LAG: Latency DATA fields (file → graph only, display-only)
       { 
@@ -3432,12 +3453,19 @@ export class UpdateManager {
     graph: any,
     edgeUpdates: Array<{
       edgeId: string;
+      /** 
+       * Index into conditional_p array. 
+       * undefined = base edge probability (edge.p)
+       * number = conditional probability (edge.conditional_p[conditionalIndex].p)
+       */
+      conditionalIndex?: number;
       latency: {
         median_lag_days?: number;
         mean_lag_days?: number;
         t95: number;
         completeness: number;
         path_t95: number;
+        onset_delta_days?: number;
       };
       blendedMean?: number;
       forecast?: {
@@ -3488,89 +3516,118 @@ export class UpdateManager {
       
       const edge = nextGraph.edges[edgeIndex];
       
-      // Ensure p and p.latency exist
-      if (!edge.p) {
-        edge.p = {};
-      }
-      if (!edge.p.latency) {
-        edge.p.latency = {};
+      // PARITY PRINCIPLE: Handle both base edge (edge.p) and conditional probabilities (edge.conditional_p[i].p)
+      const conditionalIndex = update.conditionalIndex;
+      let targetP: any;
+      
+      if (typeof conditionalIndex === 'number') {
+        // Writing to conditional probability
+        if (!edge.conditional_p?.[conditionalIndex]?.p) {
+          console.warn('[UpdateManager] applyBatchLAGValues: conditional_p entry not found:', {
+            edgeId: update.edgeId,
+            conditionalIndex,
+          });
+          continue;
+        }
+        targetP = edge.conditional_p[conditionalIndex].p;
+      } else {
+        // Writing to base edge probability
+        if (!edge.p) {
+          edge.p = {};
+        }
+        targetP = edge.p;
       }
       
-      // Apply latency values
+      // Ensure latency object exists on target
+      if (!targetP.latency) {
+        targetP.latency = {};
+      }
+      
+      // Apply latency values (to targetP which is either edge.p or edge.conditional_p[i].p)
       if (update.latency.median_lag_days !== undefined) {
-        edge.p.latency.median_lag_days = update.latency.median_lag_days;
+        targetP.latency.median_lag_days = update.latency.median_lag_days;
       }
       if (update.latency.mean_lag_days !== undefined) {
-        edge.p.latency.mean_lag_days = update.latency.mean_lag_days;
+        targetP.latency.mean_lag_days = update.latency.mean_lag_days;
       }
       // Phase 2: respect override flags
       if (writeHorizonsToGraph) {
-        if (edge.p.latency.t95_overridden !== true) {
-          edge.p.latency.t95 = this.roundHorizonDays(update.latency.t95);
+        if (targetP.latency.t95_overridden !== true) {
+          targetP.latency.t95 = this.roundHorizonDays(update.latency.t95);
         }
       }
-      edge.p.latency.completeness = update.latency.completeness;
+      targetP.latency.completeness = update.latency.completeness;
       if (writeHorizonsToGraph) {
-        if (edge.p.latency.path_t95_overridden !== true) {
-          edge.p.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);
+        if (targetP.latency.path_t95_overridden !== true) {
+          targetP.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);
         }
+      }
+      // onset_delta_days: only write if not overridden and value provided
+      if ((update.latency as any).onset_delta_days !== undefined && 
+          targetP.latency.onset_delta_days_overridden !== true) {
+        targetP.latency.onset_delta_days = (update.latency as any).onset_delta_days;
       }
       
       // Apply forecast if provided
       if (update.forecast) {
-        if (!edge.p.forecast) {
-          edge.p.forecast = {};
+        if (!targetP.forecast) {
+          targetP.forecast = {};
         }
         if (update.forecast.mean !== undefined) {
-          edge.p.forecast.mean = update.forecast.mean;
+          targetP.forecast.mean = update.forecast.mean;
         }
       }
       
       // Apply evidence if provided
       if (update.evidence) {
-        if (!edge.p.evidence) {
-          edge.p.evidence = {};
+        if (!targetP.evidence) {
+          targetP.evidence = {};
         }
         if (update.evidence.mean !== undefined) {
-          edge.p.evidence.mean = update.evidence.mean;
+          targetP.evidence.mean = update.evidence.mean;
         }
         if (update.evidence.n !== undefined) {
-          edge.p.evidence.n = update.evidence.n;
+          targetP.evidence.n = update.evidence.n;
         }
         if (update.evidence.k !== undefined) {
-          edge.p.evidence.k = update.evidence.k;
+          targetP.evidence.k = update.evidence.k;
         }
         if (update.evidence.stdev !== undefined) {
-          edge.p.evidence.stdev = update.evidence.stdev;
+          targetP.evidence.stdev = update.evidence.stdev;
         }
       }
 
       // Keep p.stdev consistently populated when the topo/LAG pass updates p.mean but
       // does not provide a corresponding blended stdev. Use evidence.stdev if available.
       // Respect explicit overrides.
-      if (edge.p.stdev_overridden !== true && edge.p.stdev === undefined) {
-        const es = (edge.p.evidence as any)?.stdev;
+      if (targetP.stdev_overridden !== true && targetP.stdev === undefined) {
+        const es = (targetP.evidence as any)?.stdev;
         if (typeof es === 'number' && Number.isFinite(es)) {
-          edge.p.stdev = this.roundToDP(es);
+          targetP.stdev = this.roundToDP(es);
         }
       }
       
       console.log('[UpdateManager] applyBatchLAGValues: Applied latency to edge:', {
         edgeId: update.edgeId,
         edgeIndex,
-        t95: edge.p.latency.t95,
-        completeness: edge.p.latency.completeness,
-        path_t95: edge.p.latency.path_t95,
-        forecastMean: edge.p.forecast?.mean,
-        evidenceMean: edge.p.evidence?.mean,
+        conditionalIndex: update.conditionalIndex,
+        t95: targetP.latency.t95,
+        completeness: targetP.latency.completeness,
+        path_t95: targetP.latency.path_t95,
+        forecastMean: targetP.forecast?.mean,
+        evidenceMean: targetP.evidence?.mean,
       });
       
       // Apply blended mean if provided and different
       if (update.blendedMean !== undefined) {
-        const oldMean = edge.p.mean;
+        const oldMean = targetP.mean;
         if (oldMean !== update.blendedMean) {
-          edge.p.mean = this.roundToDP(update.blendedMean);
-          edgesToRebalance.push(update.edgeId);
+          targetP.mean = this.roundToDP(update.blendedMean);
+          // Only rebalance sibling edges for base edge p.mean updates.
+          // Conditional probability rebalancing is handled via the dedicated conditional rebalance flows.
+          if (update.conditionalIndex === undefined) {
+            edgesToRebalance.push(update.edgeId);
+          }
         }
       }
     }

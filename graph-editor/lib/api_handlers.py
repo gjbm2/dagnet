@@ -397,3 +397,154 @@ def handle_compile_exclude(data: Dict[str, Any]) -> Dict[str, Any]:
             "success": False
         }
 
+
+def handle_snapshots_append(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle append-snapshots endpoint.
+    
+    Shadow-writes time-series data to the snapshot database after successful fetches.
+    
+    Args:
+        data: Request body containing:
+            - param_id: Workspace-prefixed parameter ID (required)
+            - core_hash: Query signature hash (required)
+            - context_def_hashes: Dict of context def hashes (optional)
+            - slice_key: Context slice DSL or '' (required)
+            - retrieved_at: ISO timestamp string (required)
+            - rows: List of daily data points (required)
+            - diagnostic: bool (optional) - if true, return detailed diagnostic info
+    
+    Returns:
+        Response dict with:
+            - success: bool
+            - inserted: int
+            - diagnostic: dict (only if diagnostic=true in request)
+    """
+    from datetime import datetime
+    import json
+    from snapshot_service import append_snapshots
+    
+    param_id = data.get('param_id')
+    core_hash = data.get('core_hash')
+    context_def_hashes = data.get('context_def_hashes')
+    slice_key = data.get('slice_key', '')
+    retrieved_at_str = data.get('retrieved_at')
+    rows = data.get('rows', [])
+    diagnostic = data.get('diagnostic', False)
+    
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    if not core_hash:
+        raise ValueError("Missing 'core_hash' field")
+    if not retrieved_at_str:
+        raise ValueError("Missing 'retrieved_at' field")
+    
+    # Parse ISO timestamp
+    retrieved_at = datetime.fromisoformat(retrieved_at_str.replace('Z', '+00:00'))
+    
+    # Convert context_def_hashes dict to JSON string if provided
+    context_def_hashes_json = json.dumps(context_def_hashes) if context_def_hashes else None
+    
+    result = append_snapshots(
+        param_id=param_id,
+        core_hash=core_hash,
+        context_def_hashes=context_def_hashes_json,
+        slice_key=slice_key,
+        retrieved_at=retrieved_at,
+        rows=rows,
+        diagnostic=diagnostic
+    )
+    
+    return result
+
+
+def handle_snapshots_health(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle snapshots health check endpoint.
+    
+    Returns database connectivity status for feature flag decisions.
+    """
+    from snapshot_service import health_check
+    return health_check()
+
+
+def handle_snapshots_query(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle snapshots query endpoint.
+    
+    Query snapshots from the database for a given param_id.
+    Used for integration testing verification.
+    
+    Args:
+        data: Request body containing:
+            - param_id: Parameter ID to query (required)
+    
+    Returns:
+        Response dict with rows
+    """
+    from snapshot_service import get_db_connection
+    
+    param_id = data.get('param_id')
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT param_id, core_hash, slice_key, anchor_day, retrieved_at,
+                   A as a, X as x, Y as y, 
+                   median_lag_days, mean_lag_days,
+                   anchor_median_lag_days, anchor_mean_lag_days,
+                   onset_delta_days
+            FROM snapshots
+            WHERE param_id = %s
+            ORDER BY anchor_day, slice_key
+        """, (param_id,))
+        columns = [desc[0] for desc in cur.description]
+        rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+        return {
+            'success': True,
+            'rows': rows,
+            'count': len(rows)
+        }
+    finally:
+        conn.close()
+
+
+def handle_snapshots_delete_test(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle delete-test-snapshots endpoint.
+    
+    Delete test data from the snapshot database by param_id prefix.
+    ONLY for integration testing cleanup - requires prefix starting with 'pytest-'.
+    
+    Args:
+        data: Request body containing:
+            - param_id_prefix: Prefix to match for deletion (required, must start with 'pytest-')
+    
+    Returns:
+        Response dict with deleted count
+    """
+    from snapshot_service import get_db_connection
+    
+    prefix = data.get('param_id_prefix')
+    if not prefix:
+        raise ValueError("Missing 'param_id_prefix' field")
+    
+    # Safety: only allow deletion of test data
+    if not prefix.startswith('pytest-'):
+        raise ValueError("param_id_prefix must start with 'pytest-' for safety")
+    
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{prefix}%',))
+        deleted = cur.rowcount
+        conn.commit()
+        return {
+            'success': True,
+            'deleted': deleted
+        }
+    finally:
+        conn.close()

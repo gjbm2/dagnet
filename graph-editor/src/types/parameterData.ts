@@ -48,6 +48,8 @@ export interface ParameterValue {
     mean_lag_days?: number;
     completeness?: number;
     t95?: number;
+    onset_delta_days?: number;  // Onset delay before conversions begin (per-slice value from histogram)
+    onset_delta_days_overridden?: boolean;  // True if user manually set onset_delta_days
   };
 
   // Evidence block

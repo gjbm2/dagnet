@@ -99,6 +99,13 @@ properties:
       path_t95_overridden:
         type: boolean
         description: "If true, user manually set path_t95"
+      onset_delta_days:
+        type: number
+        minimum: 0
+        description: "Onset delay in days - minimum time before conversions begin (aggregated from window slices)"
+      onset_delta_days_overridden:
+        type: boolean
+        description: "If true, user manually set onset_delta_days"
     additionalProperties: false
 
   force_replace_at_ms:
@@ -253,6 +260,10 @@ properties:
               type: number
               minimum: 0
               description: "95th percentile lag in days"
+            onset_delta_days:
+              type: number
+              minimum: 0
+              description: "Onset delay in days - minimum time before conversions begin (per-slice value from histogram)"
             histogram:
               type: object
               description: "Lag distribution histogram"

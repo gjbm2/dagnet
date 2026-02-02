@@ -1323,5 +1323,125 @@ describe('UpdateManager', () => {
       expect(result.edges[2].conditional_p).toBeUndefined();
     });
   });
+
+  // ============================================================
+  // TEST SUITE: onset_delta_days Bidirectional Mappings (§0.3)
+  // ============================================================
+  
+  describe('onset_delta_days Bidirectional Mappings (§0.3)', () => {
+    it('should sync onset_delta_days from graph to file during UPDATE', async () => {
+      const graphEdge = {
+        uuid: 'edge-uuid-123',
+        id: 'A-to-B',
+        p: {
+          id: 'param-onset-test',
+          mean: 0.45,
+          latency: {
+            onset_delta_days: 5,
+            onset_delta_days_overridden: false,
+            t95: 14,
+          }
+        },
+      };
+      
+      const existingFile = {
+        id: 'param-onset-test',
+        type: 'probability',
+        latency: {
+          onset_delta_days: 2,  // Old value
+          onset_delta_days_overridden: false,
+        },
+        values: []
+      };
+      
+      // Use interactive: false to actually apply changes (not validateOnly)
+      const result = await updateManager.handleGraphToFile(
+        graphEdge,
+        existingFile,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      expect(result.success).toBe(true);
+      // Graph value should be synced to file
+      expect(existingFile.latency.onset_delta_days).toBe(5);
+    });
+    
+    it('should NOT overwrite file onset_delta_days when onset_delta_days_overridden=true', async () => {
+      const graphEdge = {
+        uuid: 'edge-uuid-123',
+        id: 'A-to-B',
+        p: {
+          id: 'param-onset-test',
+          mean: 0.45,
+          latency: {
+            onset_delta_days: 5,  // Graph wants to set 5
+            onset_delta_days_overridden: false,
+          }
+        },
+      };
+      
+      const existingFile = {
+        id: 'param-onset-test',
+        type: 'probability',
+        latency: {
+          onset_delta_days: 2,  // User override
+          onset_delta_days_overridden: true,  // OVERRIDE FLAG
+        },
+        values: []
+      };
+      
+      const result = await updateManager.handleGraphToFile(
+        graphEdge,
+        existingFile,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      expect(result.success).toBe(true);
+      // File value should be PRESERVED (not overwritten)
+      expect(existingFile.latency.onset_delta_days).toBe(2);
+      expect(existingFile.latency.onset_delta_days_overridden).toBe(true);
+    });
+    
+    it('should sync onset_delta_days from file to graph during GET', async () => {
+      const paramFile = {
+        id: 'param-onset-test',
+        type: 'probability',
+        latency: {
+          onset_delta_days: 7,
+          onset_delta_days_overridden: false,
+        },
+        values: []
+      };
+      
+      const graphEdge = {
+        uuid: 'edge-uuid-123',
+        id: 'A-to-B',
+        p: {
+          id: 'param-onset-test',
+          mean: 0.45,
+          latency: {
+            onset_delta_days: 3,  // Different from file
+            onset_delta_days_overridden: false,
+          }
+        },
+      };
+      
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        graphEdge,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+      
+      expect(result.success).toBe(true);
+      // File value should sync to graph
+      expect(graphEdge.p.latency.onset_delta_days).toBe(7);
+    });
+  });
 });
 

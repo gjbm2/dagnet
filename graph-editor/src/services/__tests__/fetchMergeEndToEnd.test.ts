@@ -757,3 +757,72 @@ describe('Scenario 6: Empty Fetch Results', () => {
   });
 });
 
+// =============================================================================
+// Scenario 7: onset_delta_days Flow (§0.3)
+// =============================================================================
+
+describe('Scenario 7: onset_delta_days Flow Through Merge (§0.3)', () => {
+  /**
+   * onset_delta_days is extracted from DAS histogram data and passed through
+   * latencySummary in mergeOptions. Verify it's preserved in the merged value.
+   */
+  
+  it('preserves onset_delta_days from latencySummary in window mode', () => {
+    const dasRunner = new SimulatedDASRunner();
+    const timeSeries = dasRunner.fetchWindow(14, 7);
+    
+    const values = mergeTimeSeriesIntoParameter(
+      [],
+      timeSeries,
+      { start: daysAgo(14), end: daysAgo(7) },
+      'test-sig',
+      {},
+      'from(a).to(b)',
+      'amplitude',
+      '',
+      {
+        isCohortMode: false,
+        latencySummary: {
+          median_lag_days: 6,
+          mean_lag_days: 7,
+          onset_delta_days: 3,  // §0.3: onset delay from histogram
+        },
+      }
+    );
+    
+    expect(values.length).toBe(1);
+    expect(values[0].latency).toBeDefined();
+    expect(values[0].latency!.onset_delta_days).toBe(3);
+    expect(values[0].latency!.median_lag_days).toBe(6);
+    expect(values[0].latency!.mean_lag_days).toBe(7);
+  });
+  
+  it('preserves onset_delta_days from latencySummary in cohort mode', () => {
+    const dasRunner = new SimulatedDASRunner();
+    const timeSeries = dasRunner.fetchWindow(14, 7);
+    
+    const values = mergeTimeSeriesIntoParameter(
+      [],
+      timeSeries,
+      { start: daysAgo(14), end: daysAgo(7) },
+      'test-sig',
+      {},
+      'from(a).to(b)',
+      'amplitude',
+      '',
+      {
+        isCohortMode: true,
+        latencySummary: {
+          median_lag_days: 6,
+          mean_lag_days: 7,
+          onset_delta_days: 5,  // §0.3: onset delay
+        },
+      }
+    );
+    
+    expect(values.length).toBe(1);
+    expect(values[0].latency).toBeDefined();
+    expect(values[0].latency!.onset_delta_days).toBe(5);
+  });
+});
+

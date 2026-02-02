@@ -20,6 +20,7 @@ import {
   extractWindowFromDSL,
   createFetchItem,
   computeAndApplyInboundN,
+  runStage2EnhancementsAndInboundN,
   type FetchItem,
 } from '../fetchDataService';
 import type { Graph, DateRange } from '../../types';
@@ -71,6 +72,16 @@ vi.mock('../../components/ProgressToast', () => ({
 import { fileRegistry } from '../../contexts/TabContext';
 import { calculateIncrementalFetch, parseDate } from '../windowAggregationService';
 import { parseConstraints } from '../../lib/queryDSL';
+import { forecastingSettingsService } from '../forecastingSettingsService';
+
+vi.mock('../forecastingSettingsService', () => ({
+  forecastingSettingsService: {
+    getForecastingModelSettings: vi.fn(async () => ({
+      RECENCY_HALF_LIFE_DAYS: 14,
+      DEFAULT_T95_DAYS: 30,
+    })),
+  },
+}));
 
 // Helper to create mock graph
 function createMockGraph(options: {
@@ -534,6 +545,91 @@ describe('FetchDataService', () => {
       expect(edgeAX.p.forecast?.k).toBeCloseTo(1000 * 0.5);
       expect(edgeXY.p.n).toBeCloseTo(1000 * 0.5);
       expect(edgeXY.p.forecast?.k).toBeCloseTo((1000 * 0.5) * 0.8);
+    });
+  });
+
+  describe('runStage2EnhancementsAndInboundN (PARITY: conditional_p first-class)', () => {
+    it('runs LAG for conditional params and applies latency to conditional_p[i].p', async () => {
+      // Make parseConstraints return a window DSL so LAG scoping uses window() dates.
+      (parseConstraints as ReturnType<typeof vi.fn>).mockReturnValue({
+        cohort: null,
+        window: { start: '1-Nov-25', end: '7-Nov-25' },
+        visited: [],
+        exclude: [],
+        context: [],
+        cases: [],
+        visitedAny: [],
+        contextAny: [],
+      });
+
+      // Provide a parameter file with values so LAG has something to read.
+      // The item uses conditionalIndex=0 and objectId='cond-param', so this file will be used.
+      (fileRegistry.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => {
+        if (id === 'parameter-cond-param') {
+          return {
+            data: {
+              values: [
+                {
+                  sliceDSL: 'window(30d)',
+                  dates: ['2025-01-01', '2025-01-02', '2025-01-03'],
+                  n_daily: [100, 100, 100],
+                  k_daily: [50, 50, 50],
+                  median_lag_days: [5, 5, 5],
+                  mean_lag_days: [6, 6, 6],
+                  latency: { onset_delta_days: 3 },
+                },
+              ],
+            },
+          };
+        }
+        return null;
+      });
+
+      const graph: any = {
+        nodes: [{ id: 'start', entry: { is_start: true } }, { id: 'a' }],
+        edges: [
+          {
+            id: 'start-to-a',
+            from: 'start',
+            to: 'a',
+            p: { mean: 0.5, latency: {} },
+            conditional_p: [
+              { condition: 'context(channel:paid)', p: { mean: 0.6, latency: { latency_parameter: true, t95: 30 } } },
+            ],
+          },
+        ],
+        metadata: { version: '1.1.0', created_at: '1-Jan-25' },
+        policies: {},
+      };
+
+      const items: FetchItem[] = [
+        {
+          id: 'param-cond-param-conditional_p[0]-start-to-a',
+          type: 'parameter',
+          name: 'conditional_p[0]: cond-param',
+          objectId: 'cond-param',
+          targetId: 'start-to-a',
+          paramSlot: 'p',
+          conditionalIndex: 0,
+        },
+      ];
+
+      const setGraph = vi.fn();
+      await runStage2EnhancementsAndInboundN(
+        items,
+        items,
+        { mode: 'versioned' } as any,
+        graph,
+        setGraph,
+        'window(1-Nov-25:7-Nov-25)'
+      );
+
+      // Should have applied to conditional param (not base)
+      expect(setGraph).toHaveBeenCalled();
+      const updated = setGraph.mock.calls[setGraph.mock.calls.length - 1][0] as any;
+      const e = updated.edges.find((x: any) => x.id === 'start-to-a');
+      expect(e.p.latency?.t95).toBeUndefined();
+      expect(e.conditional_p[0].p.latency?.t95).toBeDefined();
     });
   });
 

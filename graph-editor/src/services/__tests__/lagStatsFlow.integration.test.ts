@@ -1577,5 +1577,227 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       expect(activeEdgesCustom.size).toBe(1);  // 1e-10 > 1e-12
     });
   });
+
+  // ============================================================================
+  // §0.3: onset_delta_days Flow Through LAG Pass
+  // ============================================================================
+  
+  describe('onset_delta_days Through LAG Pass (§0.3)', () => {
+    const helpers = createLAGHelpers();
+    
+    /**
+     * Helper to create a window slice with onset_delta_days
+     */
+    function createWindowSliceWithOnset(
+      dateRange: string,
+      n: number,
+      k: number,
+      forecast: number,
+      onsetDeltaDays: number
+    ): ParameterValueForLAG {
+      return {
+        sliceDSL: `window(${dateRange})`,
+        n,
+        k,
+        mean: k / n,
+        forecast,
+        latency: {
+          onset_delta_days: onsetDeltaDays,
+        },
+        data_source: { retrieved_at: '2025-12-10T00:00:00Z', type: 'test' },
+      } as ParameterValueForLAG;
+    }
+    
+    it('includes onset_delta_days in EdgeLAGValues output (single window slice)', () => {
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B', type: 'end' },
+        ],
+        edges: [
+          {
+            id: 'e1', uuid: 'e1', from: 'A', to: 'B',
+            p: {
+              mean: 0.5,
+              latency: { latency_parameter: true },
+              forecast: { mean: 0.5 },
+              evidence: { mean: 0.5, n: 1000, k: 500 },
+            },
+          },
+        ],
+      };
+      
+      const dates = ['20-Nov-25', '21-Nov-25', '22-Nov-25', '23-Nov-25', '24-Nov-25'];
+      
+      const paramLookup = new Map();
+      paramLookup.set('e1', [
+        createCohortSlice(dates, [200, 200, 200, 200, 200], [100, 100, 100, 100, 100], [5, 5, 5, 5, 5]),
+        createWindowSliceWithOnset('1-Nov-25:19-Nov-25', 1100, 550, 0.50, 3), // onset = 3 days
+      ]);
+      
+      const queryDate = new Date('2025-11-24');
+      const cohortWindow = {
+        start: new Date('2025-11-20'),
+        end: new Date('2025-11-24'),
+      };
+      
+      const result = enhanceGraphLatencies(
+        graph,
+        paramLookup,
+        queryDate,
+        helpers,
+        cohortWindow
+      );
+      
+      expect(result.edgesWithLAG).toBe(1);
+      expect(result.edgeValues.length).toBe(1);
+      
+      const e1Result = result.edgeValues.find(v => v.edgeUuid === 'e1');
+      expect(e1Result).toBeDefined();
+      
+      // §0.3: onset_delta_days should be extracted from window slice and included in EdgeLAGValues
+      expect(e1Result!.latency.onset_delta_days).toBe(3);
+    });
+    
+    it('aggregates onset_delta_days as min() across multiple contexted window slices', () => {
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B', type: 'end' },
+        ],
+        edges: [
+          {
+            id: 'e1', uuid: 'e1', from: 'A', to: 'B',
+            p: {
+              mean: 0.5,
+              latency: { latency_parameter: true },
+              forecast: { mean: 0.5 },
+              evidence: { mean: 0.5, n: 1000, k: 500 },
+            },
+          },
+        ],
+      };
+      
+      const dates = ['20-Nov-25', '21-Nov-25', '22-Nov-25', '23-Nov-25', '24-Nov-25'];
+      
+      // Helper for contexted window slices with onset
+      function createContextedWindowSliceWithOnset(
+        dateRange: string,
+        context: string,
+        n: number,
+        k: number,
+        forecast: number,
+        onsetDeltaDays: number
+      ): ParameterValueForLAG {
+        return {
+          sliceDSL: `window(${dateRange}).context(${context})`,
+          n,
+          k,
+          mean: k / n,
+          forecast,
+          latency: { onset_delta_days: onsetDeltaDays },
+          data_source: { retrieved_at: '2025-12-10T00:00:00Z', type: 'test' },
+        } as ParameterValueForLAG;
+      }
+      
+      // Two CONTEXTED window slices with different onset values - should take min
+      // Per design: min() is used when all slices are contexted
+      const paramLookup = new Map();
+      paramLookup.set('e1', [
+        createCohortSlice(dates, [200, 200, 200, 200, 200], [100, 100, 100, 100, 100], [5, 5, 5, 5, 5]),
+        createContextedWindowSliceWithOnset('1-Nov-25:10-Nov-25', 'channel:google', 500, 250, 0.50, 5),   // onset = 5
+        createContextedWindowSliceWithOnset('11-Nov-25:19-Nov-25', 'channel:paid', 600, 300, 0.50, 2),    // onset = 2 (min!)
+      ]);
+      
+      const queryDate = new Date('2025-11-24');
+      const cohortWindow = {
+        start: new Date('2025-11-20'),
+        end: new Date('2025-11-24'),
+      };
+      
+      const result = enhanceGraphLatencies(
+        graph,
+        paramLookup,
+        queryDate,
+        helpers,
+        cohortWindow
+      );
+      
+      const e1Result = result.edgeValues.find(v => v.edgeUuid === 'e1');
+      expect(e1Result).toBeDefined();
+      
+      // §0.3: Should take min(5, 2) = 2 across contexted slices
+      expect(e1Result!.latency.onset_delta_days).toBe(2);
+    });
+    
+    it('prefers uncontexted onset_delta_days over contexted slices', () => {
+      const graph: GraphForPath = {
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B', type: 'end' },
+        ],
+        edges: [
+          {
+            id: 'e1', uuid: 'e1', from: 'A', to: 'B',
+            p: {
+              mean: 0.5,
+              latency: { latency_parameter: true },
+              forecast: { mean: 0.5 },
+              evidence: { mean: 0.5, n: 1000, k: 500 },
+            },
+          },
+        ],
+      };
+      
+      const dates = ['20-Nov-25', '21-Nov-25', '22-Nov-25', '23-Nov-25', '24-Nov-25'];
+      
+      function createContextedWindowSliceWithOnset(
+        dateRange: string,
+        context: string,
+        n: number,
+        k: number,
+        forecast: number,
+        onsetDeltaDays: number
+      ): ParameterValueForLAG {
+        return {
+          sliceDSL: `window(${dateRange}).context(${context})`,
+          n,
+          k,
+          mean: k / n,
+          forecast,
+          latency: { onset_delta_days: onsetDeltaDays },
+          data_source: { retrieved_at: '2025-12-10T00:00:00Z', type: 'test' },
+        } as ParameterValueForLAG;
+      }
+      
+      // Mix of uncontexted and contexted slices
+      const paramLookup = new Map();
+      paramLookup.set('e1', [
+        createCohortSlice(dates, [200, 200, 200, 200, 200], [100, 100, 100, 100, 100], [5, 5, 5, 5, 5]),
+        createWindowSliceWithOnset('1-Nov-25:19-Nov-25', 1100, 550, 0.50, 4),  // UNCONTEXTED: onset = 4
+        createContextedWindowSliceWithOnset('1-Nov-25:10-Nov-25', 'channel:google', 500, 250, 0.50, 1),  // contexted: onset = 1 (smaller but ignored)
+      ]);
+      
+      const queryDate = new Date('2025-11-24');
+      const cohortWindow = {
+        start: new Date('2025-11-20'),
+        end: new Date('2025-11-24'),
+      };
+      
+      const result = enhanceGraphLatencies(
+        graph,
+        paramLookup,
+        queryDate,
+        helpers,
+        cohortWindow
+      );
+      
+      const e1Result = result.edgeValues.find(v => v.edgeUuid === 'e1');
+      expect(e1Result).toBeDefined();
+      
+      // §0.3: Should use uncontexted value (4), not min across contexted (1)
+      expect(e1Result!.latency.onset_delta_days).toBe(4);
+    });
+  });
 });
 

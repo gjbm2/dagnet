@@ -105,7 +105,30 @@ const MOCK_TWO_STEP_RESPONSE = {
     
     groupValue: "",
     meta: { segmentIndex: 0 },
-    propsum: []
+    propsum: [],
+    
+    // Histogram data for onset_delta_days extraction
+    // step_bins[0] = entry (no conversions yet)
+    // step_bins[1] = X→Y transition histogram
+    stepTransTimeDistribution: {
+      segment_index: 0,
+      step_bins: [
+        { bins: [{ start: 0, end: 1000, bin_dist: { uniques: 1450, totals: 1450 } }] },
+        {
+          // X→Y histogram: first conversion at ~3.5 days (302400000ms)
+          // This should result in onset_delta_days = floor(302400000 / 86400000) = 3
+          bins: [
+            { start: 0, end: 86400000, bin_dist: { uniques: 0, totals: 0 } },          // day 0: no conversions
+            { start: 86400000, end: 172800000, bin_dist: { uniques: 0, totals: 0 } },  // day 1: no conversions
+            { start: 172800000, end: 259200000, bin_dist: { uniques: 0, totals: 0 } }, // day 2: no conversions
+            { start: 259200000, end: 345600000, bin_dist: { uniques: 5, totals: 5 } }, // day 3: first conversions!
+            { start: 345600000, end: 432000000, bin_dist: { uniques: 15, totals: 15 } },// day 4
+            { start: 432000000, end: 518400000, bin_dist: { uniques: 200, totals: 200 } },// day 5
+            { start: 518400000, end: 604800000, bin_dist: { uniques: 801, totals: 801 } } // day 6+
+          ]
+        }
+      ]
+    }
   }],
   numSeries: 1,
   wasCached: true,
@@ -333,6 +356,40 @@ describe('Amplitude 3-Step Funnel Integration', () => {
       
       expect(raw.median_lag_days).toBeCloseTo(expectedMedianDays, 1);
       expect(raw.mean_lag_days).toBeCloseTo(expectedMeanDays, 1);
+    });
+
+    it('should extract onset_delta_days from histogram data (§0.3)', async () => {
+      mockHttpExecutor.mockResponse = MOCK_TWO_STEP_RESPONSE;
+      
+      const result = await runner.execute('amplitude-prod', {
+        from: 'switch-registered',
+        to: 'switch-success'
+      }, {
+        window: { start: '2025-09-01T00:00:00Z', end: '2025-09-05T23:59:59Z' },
+        edgeId: 'test-edge',
+        eventDefinitions: {
+          'switch-registered': { provider_event_names: { amplitude: 'Blueprint CheckpointReached (SwitchRegistered)' } },
+          'switch-success': { provider_event_names: { amplitude: 'Blueprint SwitchSuccess' } }
+        },
+        context: { mode: 'daily', excludeTestAccounts: false }
+      });
+      
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error(`Execution failed: ${result.error}`);
+      
+      const raw = result.raw as any;
+      
+      // Diagnostics
+      console.log('[TEST] onset_delta_days extraction:', {
+        lag_histogram: raw.lag_histogram,
+        onset_delta_days: raw.onset_delta_days,
+        to_step_index: raw._debug_to_step_index
+      });
+      
+      // The mock histogram has first non-zero bin at 259200000ms (day 3)
+      // onset_delta_days = floor(259200000 / 86400000) = 3
+      expect(typeof raw.onset_delta_days).toBe('number');
+      expect(raw.onset_delta_days).toBe(3);
     });
 
     // NOTE: Per-day latency (median_lag_days/mean_lag_days in time_series)

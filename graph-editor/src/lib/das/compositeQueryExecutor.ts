@@ -42,7 +42,17 @@ export interface CombinedResult {
   evidence: { 
     n: number; 
     k: number;
-    time_series?: Array<{ date: string; n: number; k: number; p: number }>;
+    time_series?: Array<{ 
+      date: string; 
+      n: number; 
+      k: number; 
+      p: number;
+      // Latency fields from base query (preserved through combination)
+      median_lag_days?: number;
+      mean_lag_days?: number;
+      anchor_median_lag_days?: number;
+      anchor_mean_lag_days?: number;
+    }>;
   };
 }
 
@@ -291,18 +301,42 @@ function combineInclusionExclusionResults(results: SubQueryResult[]): CombinedRe
   if (allHaveTimeSeries) {
     console.log(`[Combine] Combining time-series from ${results.length} sub-queries`);
     
-    // Extract base time-series (from first query)
-    const baseTimeSeries: Array<{ date: string; n: number; k: number }> = base.raw.time_series;
+    // Extract base time-series (from first query) - includes latency data
+    const baseTimeSeries: Array<{ 
+      date: string; 
+      n: number; 
+      k: number;
+      median_lag_days?: number;
+      mean_lag_days?: number;
+      anchor_median_lag_days?: number;
+      anchor_mean_lag_days?: number;
+    }> = base.raw.time_series;
     
-    // Build date map: date -> {n, k}
-    const dateMap = new Map<string, { n: number; k: number }>();
+    // Build date map: date -> {n, k, latency fields}
+    // CRITICAL (§0.1): Preserve latency fields from base query
+    const dateMap = new Map<string, { 
+      n: number; 
+      k: number;
+      median_lag_days?: number;
+      mean_lag_days?: number;
+      anchor_median_lag_days?: number;
+      anchor_mean_lag_days?: number;
+    }>();
     
-    // Start with base time-series
+    // Start with base time-series (preserving latency)
     for (const point of baseTimeSeries) {
-      dateMap.set(point.date, { n: point.n, k: point.k });
+      dateMap.set(point.date, { 
+        n: point.n, 
+        k: point.k,
+        median_lag_days: point.median_lag_days,
+        mean_lag_days: point.mean_lag_days,
+        anchor_median_lag_days: point.anchor_median_lag_days,
+        anchor_mean_lag_days: point.anchor_mean_lag_days,
+      });
     }
     
     // Apply inclusion-exclusion to each date's k value
+    // NOTE: Latency is NOT adjusted - it comes from the base query (k_query)
     for (const result of results.slice(1)) {
       const timeSeries = result.raw.time_series as Array<{ date: string; n: number; k: number }>;
       
@@ -317,6 +351,7 @@ function combineInclusionExclusionResults(results: SubQueryResult[]): CombinedRe
     }
     
     // Convert map back to array, clamping k to valid range [0, n]
+    // CRITICAL (§0.1): Include latency fields in output
     time_series = Array.from(dateMap.entries()).map(([date, data]) => {
       const k_clamped = Math.max(0, Math.min(data.n, data.k));
       const p = data.n > 0 ? k_clamped / data.n : 0;
@@ -324,14 +359,19 @@ function combineInclusionExclusionResults(results: SubQueryResult[]): CombinedRe
         date,
         n: data.n,
         k: k_clamped,
-        p
+        p,
+        // Preserve latency from base query
+        ...(data.median_lag_days !== undefined && { median_lag_days: data.median_lag_days }),
+        ...(data.mean_lag_days !== undefined && { mean_lag_days: data.mean_lag_days }),
+        ...(data.anchor_median_lag_days !== undefined && { anchor_median_lag_days: data.anchor_median_lag_days }),
+        ...(data.anchor_mean_lag_days !== undefined && { anchor_mean_lag_days: data.anchor_mean_lag_days }),
       };
     });
     
     // Sort by date
     time_series.sort((a, b) => a.date.localeCompare(b.date));
     
-    console.log(`[Combine] Combined time-series: ${time_series.length} days`);
+    console.log(`[Combine] Combined time-series: ${time_series.length} days (latency preserved from base)`);
   } else {
     console.log(`[Combine] No time-series to combine (not all sub-queries returned daily data)`);
   }

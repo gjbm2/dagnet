@@ -18,6 +18,13 @@ const whatwgUrlPlugin = () => ({
 
 export default defineConfig({
   plugins: [react() as any, whatwgUrlPlugin()],  // Type assertion to resolve Vite version mismatch
+  
+  // Set environment variables for tests
+  define: {
+    'import.meta.env.VITE_PYTHON_API_URL': JSON.stringify('http://localhost:9000'),
+    'import.meta.env.VITE_SNAPSHOTS_ENABLED': JSON.stringify('true'),
+  },
+  
   test: {
     globals: true,
     environment: 'happy-dom', // Using happy-dom instead of jsdom to avoid whatwg-url dependency conflicts

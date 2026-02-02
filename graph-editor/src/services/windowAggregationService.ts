@@ -1414,6 +1414,7 @@ export interface TimeSeriesPointWithLatency {
   p: number;
   median_lag_days?: number;  // For cohort mode: X→Y median lag
   mean_lag_days?: number;    // For cohort mode: X→Y mean lag
+  onset_delta_days?: number; // Onset delay before conversions begin (derived from histogram)
   // Anchor lag data for downstream completeness calculation
   anchor_n?: number;                 // Cohort entry count at anchor (step 0)
   anchor_median_lag_days?: number;   // A→X median lag (upstream transition time)
@@ -1428,6 +1429,7 @@ export interface MergeOptions {
   latencySummary?: {         // Aggregate latency summary (for cohort mode)
     median_lag_days?: number;
     mean_lag_days?: number;
+    onset_delta_days?: number;
   };
   
   // === LAG: Latency configuration for forecast recomputation (design.md §3.2) ===
@@ -1877,6 +1879,8 @@ export function mergeTimeSeriesIntoParameter(
             : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})
         )
       : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})),
+    // §0.3: Propagate latency summary for window mode (includes onset_delta_days)
+    ...(mergeOptions?.latencySummary && { latency: mergeOptions.latencySummary }),
     data_source: {
       type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
       retrieved_at: new Date().toISOString(),

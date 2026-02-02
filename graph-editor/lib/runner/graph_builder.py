@@ -334,6 +334,8 @@ def _extract_latency(p_param: Optional[dict]) -> Optional[dict]:
                 't95_overridden': latency.get('t95_overridden'),
                 'path_t95': latency.get('path_t95'),
                 'path_t95_overridden': latency.get('path_t95_overridden'),
+                'onset_delta_days': latency.get('onset_delta_days'),
+                'onset_delta_days_overridden': latency.get('onset_delta_days_overridden'),
                 # Display-only stats
                 'median_lag_days': latency.get('median_lag_days'),
                 'mean_lag_days': latency.get('mean_lag_days'),

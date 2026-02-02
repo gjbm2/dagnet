@@ -538,6 +538,42 @@ describe('WindowAggregationService', () => {
       expect(result[0].latency.t95).toBe(14.2);
     });
 
+    it('should store onset_delta_days in latency summary when provided (§0.3)', () => {
+      const existingValues: any[] = [];
+      const newTimeSeries = [
+        { date: '2024-11-01', n: 1000, k: 300, p: 0.3 },
+      ];
+      const newWindow = { start: '1-Nov-24', end: '1-Nov-24' };
+      
+      const result = mergeTimeSeriesIntoParameter(
+        existingValues,
+        newTimeSeries,
+        newWindow,
+        'test-sig',
+        {},
+        'test-query',
+        'amplitude',
+        undefined,
+        { 
+          isCohortMode: false, // window mode - onset is valid
+          latencySummary: {
+            median_lag_days: 2.5,
+            mean_lag_days: 3.1,
+            completeness: 0.85,
+            t95: 14.2,
+            onset_delta_days: 3  // §0.3: onset delay from histogram
+          }
+        }
+      );
+      
+      expect(result.length).toBe(1);
+      expect(result[0].latency).toBeDefined();
+      expect(result[0].latency.onset_delta_days).toBe(3);
+      // Other latency fields should still be present
+      expect(result[0].latency.median_lag_days).toBe(2.5);
+      expect(result[0].latency.mean_lag_days).toBe(3.1);
+    });
+
     it('should use window_from/window_to when isCohortMode is false (default)', () => {
       const existingValues: any[] = [];
       const newTimeSeries = [
