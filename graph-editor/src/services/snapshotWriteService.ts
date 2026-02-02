@@ -89,7 +89,10 @@ export interface AppendSnapshotsResult {
 // Configuration
 // -----------------------------------------------------------------------------
 
-const PYTHON_API_BASE = import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:8000';
+// Environment-aware base URL (same pattern as graphComputeClient.ts)
+const PYTHON_API_BASE = import.meta.env.DEV 
+  ? (import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:9000')  // Local Python dev server
+  : '';                                                                 // Vercel serverless (same origin)
 
 /** 
  * Feature flag for snapshot writes.
@@ -201,5 +204,146 @@ export async function checkSnapshotHealth(): Promise<{ status: 'ok' | 'error'; d
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return { status: 'error', db: 'unreachable', error: errorMessage };
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Phase 2: Read Path — Inventory & Delete
+// -----------------------------------------------------------------------------
+
+export interface SnapshotInventory {
+  /** Whether any snapshots exist */
+  has_data: boolean;
+  /** Parameter ID */
+  param_id: string;
+  /** Earliest anchor_day (ISO date string) or null */
+  earliest: string | null;
+  /** Latest anchor_day (ISO date string) or null */
+  latest: string | null;
+  /** Total row count */
+  row_count: number;
+  /** Number of unique anchor_days */
+  unique_days: number;
+  /** Number of unique slice_keys */
+  unique_slices: number;
+  /** Number of unique core_hashes */
+  unique_hashes: number;
+}
+
+export interface DeleteSnapshotsResult {
+  success: boolean;
+  deleted: number;
+  error?: string;
+}
+
+/**
+ * Get snapshot inventory for multiple parameters in one request.
+ * 
+ * Efficient batch query for UI that needs to show snapshot counts.
+ * 
+ * @param paramIds - List of workspace-prefixed parameter IDs
+ * @returns Map of param_id to inventory
+ */
+export async function getBatchInventory(
+  paramIds: string[]
+): Promise<Record<string, SnapshotInventory>> {
+  if (!SNAPSHOTS_ENABLED || paramIds.length === 0) {
+    // Return empty inventory for all requested params
+    const result: Record<string, SnapshotInventory> = {};
+    for (const pid of paramIds) {
+      result[pid] = {
+        has_data: false,
+        param_id: pid,
+        earliest: null,
+        latest: null,
+        row_count: 0,
+        unique_days: 0,
+        unique_slices: 0,
+        unique_hashes: 0,
+      };
+    }
+    return result;
+  }
+  
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/inventory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ param_ids: paramIds }),
+    });
+    
+    if (!response.ok) {
+      console.error('[SnapshotInventory] Failed:', response.status);
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data.inventory;
+    
+  } catch (error) {
+    console.error('[SnapshotInventory] Error:', error);
+    // Return empty inventory on error
+    const result: Record<string, SnapshotInventory> = {};
+    for (const pid of paramIds) {
+      result[pid] = {
+        has_data: false,
+        param_id: pid,
+        earliest: null,
+        latest: null,
+        row_count: 0,
+        unique_days: 0,
+        unique_slices: 0,
+        unique_hashes: 0,
+      };
+    }
+    return result;
+  }
+}
+
+/**
+ * Get snapshot inventory for a single parameter.
+ * 
+ * Convenience wrapper around getBatchInventory for single-param use.
+ * 
+ * @param paramId - Workspace-prefixed parameter ID
+ * @returns Inventory for the parameter
+ */
+export async function getInventory(paramId: string): Promise<SnapshotInventory> {
+  const batch = await getBatchInventory([paramId]);
+  return batch[paramId];
+}
+
+/**
+ * Delete all snapshots for a specific parameter.
+ * 
+ * Used by the "Delete snapshots (X)" UI feature.
+ * 
+ * @param paramId - Exact workspace-prefixed parameter ID
+ * @returns Result with deleted count
+ */
+export async function deleteSnapshots(paramId: string): Promise<DeleteSnapshotsResult> {
+  if (!SNAPSHOTS_ENABLED) {
+    return { success: true, deleted: 0 };
+  }
+  
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ param_id: paramId }),
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[SnapshotDelete] Failed:', response.status, errorText);
+      return { success: false, deleted: 0, error: errorText };
+    }
+    
+    return await response.json();
+    
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[SnapshotDelete] Error:', errorMessage);
+    return { success: false, deleted: 0, error: errorMessage };
   }
 }

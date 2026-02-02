@@ -85,6 +85,11 @@ For LAG-enabled edges, tooltips also show:
 - **Evidence vs Forecast**: Breakdown of observed vs projected conversions
 - **Maturity status**: Green/amber/red indicator of cohort maturity
 
+If snapshot history is available for the edge parameter, the tooltip also shows:
+- **Snapshot date range**: Earliest to latest cohort dates with stored data
+- **Row count**: Total number of snapshot records stored
+- **Gap warning**: ⚠ indicator if there are missing days in the snapshot history
+
 ## What-If Analysis
 
 ### Setting Overrides
@@ -180,6 +185,49 @@ Data is automatically aggregated from daily breakdowns:
 - **Consistent Windows**: Use the same window size when comparing periods
 - **Check Evidence**: Larger n values give more reliable probability estimates
 
+## Snapshot Data Storage
+
+### What is Snapshot Storage?
+
+When you fetch data for an edge parameter, DagNet can store a **snapshot** of the raw conversion data in a database. This enables:
+- **Historical analysis**: Query how data looked at any point in time
+- **Lag histogram analysis**: See the distribution of conversion lag times
+- **Daily conversions tracking**: Track conversion volumes by calendar date
+- **Gap detection**: Identify missing data in your time series
+
+### When Snapshots are Stored
+
+Snapshots are written automatically when:
+1. **Fetching data**: When you refresh edge data from Amplitude or other sources
+2. **Window expansion**: When your cohort window includes days without existing snapshots
+
+Each snapshot stores:
+- **Cohort anchor date**: The entry date for that cohort
+- **Conversion counts**: Number of users who converted (Y) and total users (N)
+- **Timestamp**: When the snapshot was recorded
+
+### Viewing Snapshot Availability
+
+You can see snapshot availability in several places:
+- **Edge tooltips**: Shows date range and row count when you hover over an edge
+- **Context menus**: Shows "Delete snapshots (X)" with the count
+- **Gap warnings**: ⚠ indicators show when there are missing days
+
+### Managing Snapshots
+
+**Delete snapshots**: Right-click an edge or parameter file and select "Delete snapshots (X)" to remove all stored snapshot data for that parameter.
+
+### Gap Warnings
+
+When snapshot data has gaps (missing days), you'll see warnings:
+- **In edge tooltips**: "⚠ X days missing"
+- **In analysis charts**: Yellow warning banner showing sparse data details
+
+Gaps may indicate:
+- Data fetching was interrupted
+- Source data wasn't available for those dates
+- Cohort windows didn't cover certain periods
+
 ## Analytics Panel
 
 ### Opening Analytics
@@ -198,6 +246,43 @@ The Analytics panel shows the current query as a DSL expression. You can:
 | **Reach Probability** | Probability of reaching selected node(s) from the anchor |
 | **Conversion Funnel** | Step-by-step breakdown of conversion through a path |
 | **Path Comparison** | Compare conversion rates across different paths |
+| **Lag Histogram** | Distribution of conversion lag days from snapshot history |
+| **Daily Conversions** | Conversion counts by calendar date from snapshot history |
+
+### Snapshot-Based Analyses
+
+The **Lag Histogram** and **Daily Conversions** analyses work differently from other analysis types — they query historical snapshot data rather than computing from the current graph state.
+
+#### Lag Histogram
+
+Shows the distribution of how long it takes users to convert after entering the funnel:
+- **X-axis**: Lag in days (0 = same day, 1 = next day, etc.)
+- **Y-axis**: Number of conversions
+- **Percentages**: Each bar shows what portion of total conversions occurred at that lag
+
+Use this to understand:
+- Whether conversions happen quickly or are spread over time
+- The median and typical lag times
+- Long-tail conversion patterns
+
+#### Daily Conversions
+
+Shows conversion counts by calendar date:
+- **X-axis**: Calendar dates
+- **Y-axis**: Number of conversions attributed to that date
+- **Date range**: From earliest to latest snapshot data
+
+Use this to understand:
+- Daily conversion volumes over time
+- Seasonality and trends
+- Impact of campaigns or changes
+
+#### Gap Warnings
+
+Both snapshot analyses display a warning banner when data is sparse:
+- Shows how many days are missing within the date range
+- Indicates the data may not be representative
+- Suggests fetching more data to fill gaps
 
 ### Multi-Scenario Analysis
 The Analytics panel respects scenario visibility:

@@ -6,6 +6,7 @@ import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
+import { useEdgeSnapshotInventory } from '../../hooks/useEdgeSnapshotInventory';
 import toast from 'react-hot-toast';
 import Tooltip from '@/components/Tooltip';
 import { getConditionalColour, getConditionalProbabilityColour, isConditionalEdge } from '@/lib/conditionalColours';
@@ -217,6 +218,10 @@ export default function ConversionEdge({
   const scenariosContext = useScenariosContextOptional();
   const { operations: tabOps, tabs, activeTabId } = useTabContext();
   const currentTab = tabs.find(t => t.id === activeTabId);
+  
+  // Snapshot inventory for tooltip (centralised in hook)
+  const edgeIdForInventory = data?.id || id;
+  const { inventory: snapshotInventory, fetchInventory } = useEdgeSnapshotInventory(edgeIdForInventory);
   const scenarioState = currentTab?.editorState?.scenarioState;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
@@ -264,11 +269,14 @@ export default function ConversionEdge({
     // Set initial position
     setTooltipPos({ x: e.clientX, y: e.clientY });
     
+    // Trigger snapshot inventory fetch (hook handles caching)
+    fetchInventory();
+    
     // Show tooltip after delay (500ms)
     tooltipTimeoutRef.current = setTimeout(() => {
       setShowTooltip(true);
     }, 500);
-  }, [data?.scenarioOverlay]);
+  }, [data?.scenarioOverlay, fetchInventory]);
 
   // Handle mouse move to update tooltip position
   const handleTooltipMouseMove = useCallback((e: React.MouseEvent<SVGPathElement>) => {
@@ -448,6 +456,20 @@ export default function ConversionEdge({
       lines.push('');
       if (data.cost_gbp?.mean) lines.push(`cost_gbp: £${data.cost_gbp.mean.toFixed(0)}`);
       if (data.labour_cost?.mean) lines.push(`labour_cost: ${data.labour_cost.mean.toFixed(0)}d`);
+    }
+    
+    // Snapshot availability
+    if (snapshotInventory && snapshotInventory.row_count > 0) {
+      lines.push('');
+      lines.push('snapshots:');
+      const fmtDate = (d: string) => {
+        const date = new Date(d);
+        return `${date.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][date.getMonth()]}-${date.getFullYear().toString().slice(-2)}`;
+      };
+      if (snapshotInventory.earliest && snapshotInventory.latest) {
+        lines.push(`  ${fmtDate(snapshotInventory.earliest)} — ${fmtDate(snapshotInventory.latest)}`);
+      }
+      lines.push(`  ${snapshotInventory.row_count.toLocaleString()} rows, ${snapshotInventory.unique_days} days`);
     }
     
     return lines.join('\n');

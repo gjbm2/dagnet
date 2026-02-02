@@ -843,8 +843,284 @@ Deferred due to complexity.
 
 ---
 
-## 15. References
+## 15. File Impact Analysis
 
-- [Snapshot DB Design](./snapshot-db-design.md) — §19
-- [Implementation Plan](./implementation-plan.md) — Phase 4
+### 15.1 DSL Parsing (CRITICAL - affects many downstream files)
+
+| File | Current Behaviour | Required Change |
+|------|-------------------|-----------------|
+| `graph-editor/src/lib/queryDSL.ts` | No asAt function | Add to `QUERY_FUNCTIONS`, `ParsedConstraints`, `parseConstraints()`, `normalizeConstraintString()`, `augmentDSLWithConstraint()` |
+| `graph-editor/lib/query_dsl.py` | No asAt function | Add to `ParsedQuery`, `parse_query()`, `_extract_as_at()` |
+
+### 15.2 Scenario Composition
+
+| File | Current Behaviour | Required Change |
+|------|-------------------|-----------------|
+| `graph-editor/src/services/scenarioRegenerationService.ts` | `FetchParts` has window/cohort | Add `asAt` field, update `splitDSLParts()`, `buildFetchDSL()` |
+| `graph-editor/src/contexts/ScenariosContext.tsx` | Regenerates from Amplitude | Detect asAt in scenario DSL, skip regeneration for asAt scenarios |
+| `graph-editor/src/components/panels/ScenariosPanel.tsx` | All scenarios regenerable | Show asAt badge, disable regeneration button for asAt scenarios |
+
+### 15.3 WindowSelector UI
+
+| File | Current Behaviour | Required Change |
+|------|-------------------|-----------------|
+| `graph-editor/src/components/WindowSelector.tsx` | `queryMode: 'cohort' \| 'window'` | Add `'asAt'` mode, date picker, DSL construction with asAt |
+| `graph-editor/src/contexts/GraphStoreContext.tsx` | No asAt state | May need to track asAt state if persisted to graph |
+
+### 15.4 Data Operations Fork
+
+| File | Current Behaviour | Required Change |
+|------|-------------------|-----------------|
+| `graph-editor/src/services/dataOperationsService.ts` | Always calls DAS | Detect asAt in DSL, fork to DB query before DAS execution (~line 5910) |
+| `graph-editor/src/lib/graphComputeClient.ts` | No querySnapshots | Add `querySnapshots()` method for asAt DB retrieval |
+| `graph-editor/lib/snapshot_service.py` | Phase 1-2 handlers | Add `query_snapshots_asat()` with signature validation |
+
+### 15.5 Files That Import queryDSL (Review Required)
+
+These files import from `queryDSL.ts` and use `ParsedConstraints`. **Review each to ensure asAt field is handled or ignored as appropriate.**
+
+#### Services (High Priority - Core Logic)
+
+| File | Uses | Impact |
+|------|------|--------|
+| `src/services/dataOperationsService.ts` | `parseConstraints` | **MODIFY**: Detect asAt for DB fork |
+| `src/services/scenarioRegenerationService.ts` | `parseConstraints`, `augmentDSLWithConstraint` | **MODIFY**: Handle asAt in composition |
+| `src/services/windowAggregationService.ts` | `parseConstraints` | Review: May ignore asAt (aggregation doesn't change) |
+| `src/services/fetchDataService.ts` | `parseConstraints` | Review: Orchestrates fetch, may need asAt awareness |
+| `src/services/fetchOrchestratorService.ts` | `parseConstraints` | Review: May ignore asAt |
+| `src/services/windowFetchPlannerService.ts` | `parseConstraints` | Review: Planner may need asAt awareness |
+| `src/services/fetchPlanBuilderService.ts` | `parseConstraints` | Review: Plan building may ignore asAt |
+| `src/services/meceSliceService.ts` | `parseConstraints` | Review: MECE resolution may ignore asAt |
+| `src/services/sliceIsolation.ts` | `parseConstraints` | Review: Slice isolation may ignore asAt |
+| `src/services/querySignatureService.ts` | `parseConstraints` | **CRITICAL**: Signature computation - asAt should NOT affect signature |
+| `src/services/contextAggregationService.ts` | `parseConstraints` | Review: May ignore asAt |
+| `src/services/slicePlanValidationService.ts` | `parseConstraints` | Review: Validation may ignore asAt |
+| `src/services/contextRegistry.ts` | `parseConstraints` | Review: Context extraction may ignore asAt |
+| `src/services/dimensionalReductionService.ts` | `parseConstraints` | Review: May ignore asAt |
+| `src/services/retrieveAllSlicesService.ts` | `parseConstraints` | Review: Bulk retrieval may ignore asAt |
+| `src/services/lagHorizonsService.ts` | `parseConstraints` | Review: May ignore asAt |
+| `src/services/plannerQuerySignatureService.ts` | `parseConstraints` | Review: May ignore asAt |
+| `src/services/variableAggregationCache.ts` | `parseConstraints` | Review: Cache key may ignore asAt |
+
+#### Libraries
+
+| File | Uses | Impact |
+|------|------|--------|
+| `src/lib/dslDynamics.ts` | `parseConstraints` | Review: Dynamic DSL may ignore asAt |
+| `src/lib/dslExplosion.ts` | `parseConstraints` | Review: Explosion may ignore asAt |
+| `src/lib/whatIf.ts` | `parseConstraints` | Review: What-if may ignore asAt |
+| `src/lib/graphPruning.ts` | `parseConstraints` | Review: Pruning may ignore asAt |
+| `src/lib/conditionalReferences.ts` | `parseConstraints` | Review: May ignore asAt |
+| `src/lib/das/buildDslFromEdge.ts` | `parseConstraints` | Review: DSL building may ignore asAt |
+| `src/lib/das/compositeQueryParser.ts` | `parseConstraints` | Review: Composite parsing may ignore asAt |
+| `src/lib/das/buildDataQuerySpec.ts` | `parseConstraints` | Review: Query spec may ignore asAt |
+
+#### Components
+
+| File | Uses | Impact |
+|------|------|--------|
+| `src/components/WindowSelector.tsx` | `parseConstraints` | **MODIFY**: Add asAt mode UI |
+| `src/components/QueryExpressionEditor.tsx` | `parseConstraints` | Review: May need asAt autocomplete |
+| `src/components/WhatIfAnalysisControl.tsx` | `parseConstraints` | Review: May ignore asAt |
+| `src/components/PropertiesPanel.tsx` | `parseConstraints` | Review: May display asAt info |
+| `src/components/panels/ScenariosPanel.tsx` | `parseConstraints` | **MODIFY**: Show asAt badge |
+| `src/components/edges/ConversionEdge.tsx` | `parseConstraints` | Review: May show snapshot availability |
+| `src/components/modals/PinnedQueryModal.tsx` | `parseConstraints` | Review: May ignore asAt |
+
+#### Contexts
+
+| File | Uses | Impact |
+|------|------|--------|
+| `src/contexts/GraphStoreContext.tsx` | `parseConstraints` | Review: State management |
+| `src/contexts/ScenariosContext.tsx` | `parseConstraints` | **MODIFY**: Handle asAt scenarios |
+
+### 15.6 Python Files
+
+| File | Uses | Impact |
+|------|------|--------|
+| `lib/query_dsl.py` | Defines `ParsedQuery` | **MODIFY**: Add `as_at` field |
+| `lib/api_handlers.py` | `handle_runner_analyze` | **MODIFY**: Add asAt query handling |
+| `lib/snapshot_service.py` | DB operations | **MODIFY**: Add `query_snapshots_asat()` |
+| `lib/graph_select.py` | `parse_query` | Review: Selection may ignore asAt |
+| `lib/graph_types.py` | Types | Review: May need asAt type |
+| `lib/runner/analyzer.py` | `parse_query` | Review: Analysis may ignore asAt |
+
+---
+
+## 16. Signature Computation — asAt Exclusion
+
+**CRITICAL:** `asAt` MUST NOT affect query signature.
+
+The signature identifies the **query semantics** (from/to/visited/context/etc.), not the retrieval mode.
+
+```typescript
+// In querySignatureService.ts → computeQuerySignature()
+
+// asAt is NOT included in coreCanonical:
+const coreCanonical = JSON.stringify({
+  connection: connectionName || '',
+  from_event_id: from_event_id || '',
+  to_event_id: to_event_id || '',
+  visited_event_ids: visited_event_ids.sort(),
+  exclude_event_ids: exclude_event_ids.sort(),
+  event_def_hashes: eventDefHashes,
+  event_filters: queryPayload.event_filters || {},
+  case: (queryPayload.case || []).sort(),
+  cohort_mode: !!queryPayload.cohort,
+  cohort_anchor_event_id: queryPayload?.cohort?.anchor_event_id || '',
+  latency_parameter: edgeLatency?.latency_parameter === true,
+  latency_anchor_event_id: latencyAnchorEventId,
+  original_query: normalizedOriginalQuery,
+  // NO asAt here — asAt changes retrieval source, not query semantics
+});
+```
+
+This ensures:
+- Historical data with same query definition has matching signature
+- asAt queries can retrieve data stored by live queries
+- Signature mismatch indicates actual query change, not just asAt toggle
+
+---
+
+## 17. Code Path Traces
+
+### 17.1 asAt Path: Historical Query Fork
+
+```
+User sets asAt date in WindowSelector
+    ↓
+WindowSelector.tsx
+    └── setQueryMode('asAt')
+    └── setAsAtDate('2025-12-01')
+    └── buildDSL() → "cohort(...).asAt(1-Dec-25)"
+    └── setCurrentDSL()
+    ↓
+User triggers fetch (or scenario regeneration)
+    ↓
+dataOperationsService.ts → getFromSourceDirect()
+    │
+    ├── [LINE ~4850] Parse DSL
+    │   └── queryDSL.ts → parseConstraints()
+    │       └── Extract asAt: "1-Dec-25"
+    │
+    ├── [NEW: ~LINE 5900] asAt DETECTION
+    │   │
+    │   └── IF asAt is set:
+    │       │
+    │       ├── Build DB query params
+    │       │   └── snapshotQueryService.ts → buildSnapshotQuery()
+    │       │
+    │       ├── Call Python endpoint
+    │       │   └── graphComputeClient.ts → querySnapshots()
+    │       │       └── HTTP POST /api/snapshots/query
+    │       │           └── snapshot_service.py → query_snapshots_asat()
+    │       │               └── psycopg2 SELECT with retrieved_at <= asAt
+    │       │
+    │       ├── Validate signature match
+    │       │   └── IF no match → throw Error("Query configuration changed")
+    │       │
+    │       ├── Convert to time-series format
+    │       │   └── Same shape as DAS response
+    │       │
+    │       └── SKIP DAS execution, SKIP file write
+    │
+    └── ELSE: Normal DAS execution path
+```
+
+### 17.2 Scenario Composition with asAt
+
+```
+User creates scenario with queryDSL: "asAt(1-Dec-25)"
+    ↓
+ScenariosContext.tsx → createLiveScenario()
+    └── scenario.meta.queryDSL = "asAt(1-Dec-25)"
+    ↓
+User makes scenario visible
+    ↓
+ScenariosContext.tsx → regenerateScenario()
+    │
+    ├── scenarioRegenerationService.ts → splitDSLParts()
+    │   └── Extract: fetchParts.asAt = "1-Dec-25"
+    │
+    ├── computeInheritedDSL()
+    │   └── baseDSL + lower scenarios → "cohort(-30d:)"
+    │
+    ├── computeEffectiveFetchDSL()
+    │   └── inherited + scenario → "cohort(-30d:).asAt(1-Dec-25)"
+    │
+    └── dataOperationsService.ts → getFromSourceDirect()
+        └── asAt detected → DB query path (not Amplitude)
+```
+
+---
+
+## 18. Test Files to Update
+
+| Test File | Scope | Updates Needed |
+|-----------|-------|----------------|
+| `src/lib/__tests__/queryDSL.test.ts` | DSL parsing | Add asAt parsing tests |
+| `src/lib/__tests__/queryDSL.asAt.test.ts` | asAt-specific | **CREATE**: Dedicated asAt parsing tests |
+| `src/services/__tests__/dataOperationsService.integration.test.ts` | Data ops | Add asAt fork tests |
+| `src/services/__tests__/scenarioRegenerationService.test.ts` | Scenarios | Add asAt scenario tests |
+| `src/contexts/__tests__/ScenariosContext.liveScenarios.test.tsx` | Scenarios | Add asAt composition tests |
+| `src/components/__tests__/WindowSelector.coverage.test.ts` | WindowSelector | Add asAt mode tests |
+| `lib/tests/test_query_dsl_asat.py` | Python DSL | **CREATE**: Python asAt parsing tests |
+
+---
+
+## 19. Completion Checklist
+
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| queryDSL.ts: asAt parsing | `[ ]` | | |
+| query_dsl.py: asAt parsing | `[ ]` | | |
+| graphComputeClient: querySnapshots() | `[ ]` | | |
+| /api/snapshots/query endpoint (asAt) | `[ ]` | | |
+| dataOperationsService: asAt fork | `[ ]` | | |
+| WindowSelector: asAt mode UI | `[ ]` | | |
+| ScenariosPanel: asAt badge | `[ ]` | | |
+| scenarioRegenerationService: asAt composition | `[ ]` | | |
+| DSL parsing tests passing | `[ ]` | | |
+| Signature exclusion test passing | `[ ]` | | |
+| Round-trip asAt test passing | `[ ]` | | |
+| GD-004 (asAt DB unavailable) passing | `[ ]` | | |
+| User documentation updated | `[ ]` | | |
+| Query expressions docs updated | `[ ]` | | |
+| **PHASE 4 COMPLETE** | `[ ]` | | |
+
+---
+
+## 20. Documentation Updates (Phase 4)
+
+### 20.1 User Documentation
+
+**File:** `graph-editor/public/docs/user-guide.md`
+
+Add new section: "Viewing Historical Data (`asAt`)" with examples
+
+### 20.2 Query Reference
+
+**File:** `graph-editor/public/docs/query-expressions.md`
+
+- Add `asAt(date)` function documentation with syntax and examples
+- Add "Historical Queries" section explaining signature validation
+
+### 20.3 API Reference
+
+**File:** `graph-editor/public/docs/api-reference.md`
+
+- Add `/api/snapshots/query` endpoint documentation (asAt variant)
+
+### 20.4 CHANGELOG
+
+**File:** `graph-editor/public/docs/CHANGELOG.md`
+
+Add entry: "Added: Historical queries via `asAt()` DSL function"
+
+---
+
+## 21. References
+
+- [Snapshot DB Design](./00-snapshot-db-design.md) — §19
+- [Implementation Plan](./implementation-plan.md) — Phases 0-3
 - [Query Expressions Docs](../../graph-editor/public/docs/query-expressions.md) — DSL reference

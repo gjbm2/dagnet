@@ -7069,6 +7069,9 @@ class DataOperationsService {
                   onset_delta_days: lastOnsetDeltaDays,
                 }));
                 
+                // DEBUG: Log snapshot row count before write
+                console.log(`[DataOps:SNAPSHOT_DEBUG] Incremental path: allTimeSeriesData.length=${allTimeSeriesData.length}, snapshotRows.length=${snapshotRows.length}, first 3 rows:`, snapshotRows.slice(0, 3));
+                
                 const { appendSnapshots } = await import('./snapshotWriteService');
                 
                 const result = await appendSnapshots({
@@ -7340,6 +7343,9 @@ class DataOperationsService {
                   anchor_mean_lag_days: (day as any).anchor_mean_lag_days,
                   onset_delta_days: lastOnsetDeltaDays,
                 }));
+                
+                // DEBUG: Log snapshot row count before write
+                console.log(`[DataOps:SNAPSHOT_DEBUG] Bulk path: allTimeSeriesData.length=${allTimeSeriesData.length}, snapshotRows.length=${snapshotRows.length}, first 3 rows:`, snapshotRows.slice(0, 3));
                 
                 // Dynamic import to avoid circular deps and enable tree-shaking
                 const { appendSnapshots } = await import('./snapshotWriteService');

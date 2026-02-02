@@ -30,6 +30,10 @@ A web-based visual editor for creating and analyzing directed acyclic graphs (DA
    - `VITE_GIT_REPO_OWNER` - Your GitHub username
    - `VITE_GIT_REPO_NAME` - Your repository name
 
+   **Database variables (for snapshot storage):**
+   - `DB_CONNECTION` - PostgreSQL connection string for snapshot database (e.g., Neon)
+   - `VITE_SNAPSHOTS_ENABLED=true` - Enable snapshot writes (default: false)
+
    **Optional variables (defaults work for most setups):**
    - `VITE_PORT=5173` - Frontend dev server port
    - `VITE_PYTHON_API_PORT=9000` - Python backend port
@@ -198,6 +202,55 @@ Active technical specs, architecture decisions, and project contexts:
 
 #### Archive (`docs/archive/`)
 Historical documentation and completed work - useful for understanding design decisions and past implementations
+
+## Database Setup (Snapshot Storage)
+
+DagNet can store historical conversion data in a PostgreSQL database for analytics.
+
+### Setting Up Neon (Recommended)
+
+1. Create a free account at [neon.tech](https://neon.tech)
+2. Create a new project and database
+3. Copy the connection string from the dashboard
+4. Add to your `.env.local`:
+   ```bash
+   DB_CONNECTION=postgresql://user:password@host/database?sslmode=require
+   VITE_SNAPSHOTS_ENABLED=true
+   ```
+
+### Database Schema
+
+The database requires a single `snapshots` table. Create it with:
+
+```sql
+CREATE TABLE IF NOT EXISTS snapshots (
+    param_id TEXT NOT NULL,
+    core_hash TEXT NOT NULL,
+    slice_key TEXT NOT NULL DEFAULT '',
+    anchor_day DATE NOT NULL,
+    retrieved_at TIMESTAMPTZ NOT NULL,
+    A INTEGER,
+    X INTEGER NOT NULL,
+    Y INTEGER NOT NULL,
+    median_lag_days REAL,
+    mean_lag_days REAL,
+    anchor_median_lag_days REAL,
+    anchor_mean_lag_days REAL,
+    onset_delta_days REAL,
+    PRIMARY KEY (param_id, core_hash, slice_key, anchor_day, retrieved_at)
+);
+
+CREATE INDEX idx_snapshots_param_hash ON snapshots(param_id, core_hash);
+CREATE INDEX idx_snapshots_anchor ON snapshots(anchor_day);
+```
+
+### Verifying Database Connection
+
+Check the connection with the health endpoint:
+```bash
+curl http://localhost:9000/api/snapshots/health
+# Should return: {"status": "ok", "database": "connected"}
+```
 
 ## Tech Stack
 

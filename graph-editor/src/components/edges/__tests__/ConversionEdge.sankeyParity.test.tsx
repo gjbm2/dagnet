@@ -90,6 +90,15 @@ vi.mock('../../../contexts/TabContext', () => ({
   fileRegistry: {},
 }));
 
+vi.mock('../../../contexts/NavigatorContext', () => ({
+  useNavigatorContext: () => ({
+    state: {
+      selectedRepo: 'test-repo',
+      selectedBranch: 'main',
+    },
+  }),
+}));
+
 vi.mock('../../../services/dataOperationsService', () => ({
   dataOperationsService: {},
 }));

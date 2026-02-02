@@ -47,6 +47,7 @@ vi.mock('../../contexts/TabContext', () => {
     }),
     fileRegistry: {
       getFile: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()), // Returns unsubscribe function
     },
   };
 });

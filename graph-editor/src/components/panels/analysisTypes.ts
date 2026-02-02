@@ -19,6 +19,8 @@ import {
   Waypoints,
   Network,
   Info,
+  Database,
+  Calendar,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -148,6 +150,22 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'General stats for selected nodes',
     selectionHint: 'Select any nodes',
     icon: Info,
+  },
+  
+  // Snapshot-based analyses (requires DB)
+  {
+    id: 'lag_histogram',
+    name: 'Lag Histogram',
+    shortDescription: 'Conversion lag distribution from snapshots',
+    selectionHint: 'Select a parameter edge with snapshot history',
+    icon: Database,
+  },
+  {
+    id: 'daily_conversions',
+    name: 'Daily Conversions',
+    shortDescription: 'Conversion counts by calendar date',
+    selectionHint: 'Select a parameter edge with snapshot history',
+    icon: Calendar,
   },
 ];
 

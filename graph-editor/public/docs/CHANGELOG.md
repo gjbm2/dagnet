@@ -1,4 +1,38 @@
 # DagNet Release Notes
+## Version 1.4.0
+**Released:** 2-Feb-26
+
+### Snapshot Database Integration (Project DB)
+
+**Added: Snapshot data storage**
+- Conversion data is now automatically stored in a database when fetching
+- Enables historical analysis and time-series queries
+- Each snapshot captures cohort anchor date, conversion counts, and timestamp
+
+**Added: Lag histogram analysis**
+- New analysis type showing the distribution of conversion lag times
+- Visualise how long it takes users to convert after entering the funnel
+- Available in the Analytics panel when snapshot data exists
+
+**Added: Daily conversions analysis**
+- New analysis type showing conversion counts by calendar date
+- Track daily conversion volumes and identify trends
+- Available in the Analytics panel when snapshot data exists
+
+**Added: Snapshot availability in edge tooltips**
+- Edge tooltips now show snapshot date range and row count
+- Gap warnings (⚠) indicate missing days in snapshot history
+
+**Added: Delete snapshots feature**
+- Right-click edges or parameter files to delete stored snapshot data
+- Shows count of snapshots that will be deleted
+
+**Added: Gap warnings in charts**
+- Lag histogram and daily conversions charts show warnings for sparse data
+- Indicates missing days within the date range
+
+---
+
 ## Version 1.3.16b
 **Released:** 30-Jan-26
 
