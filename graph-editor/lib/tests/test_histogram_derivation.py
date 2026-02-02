@@ -157,3 +157,31 @@ class TestHistogramDerivation:
         
         total_pct = sum(d['pct'] for d in result['data'])
         assert abs(total_pct - 1.0) < 0.001, f"Percentages sum to {total_pct}, expected ~1.0"
+
+    def test_histogram_multi_slice_mece_safe(self):
+        """
+        Multiple slices for the same anchor_day MUST NOT interfere with lag deltas.
+        Deltas must be computed per (anchor_day, slice_key) series and then aggregated.
+        """
+        anchor_day = date(2025, 10, 1)
+
+        rows = [
+            # Slice A: Y goes 0 -> 5 with lag 1 then lag 2
+            {'anchor_day': anchor_day.isoformat(), 'slice_key': 'context(channel:a)', 'y': 2,
+             'retrieved_at': datetime(2025, 10, 2, 12, 0, 0)},  # lag 1, +2
+            {'anchor_day': anchor_day.isoformat(), 'slice_key': 'context(channel:a)', 'y': 5,
+             'retrieved_at': datetime(2025, 10, 3, 12, 0, 0)},  # lag 2, +3
+
+            # Slice B: Y goes 0 -> 7 with lag 1 then lag 2
+            {'anchor_day': anchor_day.isoformat(), 'slice_key': 'context(channel:b)', 'y': 3,
+             'retrieved_at': datetime(2025, 10, 2, 12, 0, 0)},  # lag 1, +3
+            {'anchor_day': anchor_day.isoformat(), 'slice_key': 'context(channel:b)', 'y': 7,
+             'retrieved_at': datetime(2025, 10, 3, 12, 0, 0)},  # lag 2, +4
+        ]
+
+        result = derive_lag_histogram(rows)
+        lag_map = {d['lag_days']: d['conversions'] for d in result['data']}
+
+        assert lag_map.get(1, 0) == 5  # 2 + 3
+        assert lag_map.get(2, 0) == 7  # 3 + 4
+        assert result['total_conversions'] == 12

@@ -25,6 +25,7 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import yaml from 'js-yaml';
 import { fetch as undiciFetch } from 'undici';
 
@@ -42,6 +43,17 @@ import { deriveBaseDSLForRebase, prepareScenariosForBatch, type ScenarioForBatch
 import { GraphComputeClient, type AnalysisResponse } from '../../lib/graphComputeClient';
 
 type AmpCreds = { apiKey: string; secretKey: string };
+
+// -----------------------------------------------------------------------------
+// Snapshot DB test workspace prefix (must start with 'pytest-' for safe cleanup)
+// -----------------------------------------------------------------------------
+//
+// Snapshot writes use dbParamId = `${repository}-${branch}-${objectId}`.
+// We force repository/branch to be unique per test run so the DB assertions are
+// strict and we can clean up via /api/snapshots/delete-test (prefix delete).
+//
+const SNAPSHOT_TEST_REPO = `pytest-realamp-${Date.now()}`;
+const SNAPSHOT_TEST_BRANCH = `run-${Math.random().toString(16).slice(2)}`;
 
 function findRepoRootFromCwd(): string {
   let dir = process.cwd();
@@ -137,11 +149,244 @@ async function registerFileForTest(fileId: string, type: any, data: any): Promis
     originalData: structuredClone(data),
     isDirty: false,
     isInitializing: false,
-    source: { repository: 'test', branch: 'main', isLocal: true } as any,
+    source: { repository: SNAPSHOT_TEST_REPO, branch: SNAPSHOT_TEST_BRANCH, isLocal: true } as any,
     viewTabs: [],
     lastModified: Date.now(),
   } as any);
 }
+
+function dbParamIdFor(objectId: string): string {
+  return `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-${objectId}`;
+}
+
+async function deleteTestSnapshotsByPrefix(prefix: string): Promise<void> {
+  // dev-server.py exposes /api/snapshots/delete-test for integration cleanup.
+  // Safety: backend requires prefix starts with 'pytest-'.
+  await undiciFetch('http://localhost:9000/api/snapshots/delete-test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ param_id_prefix: prefix }),
+  });
+}
+
+async function getInventory(paramIds: string[]): Promise<Record<string, any>> {
+  const resp = await undiciFetch('http://localhost:9000/api/snapshots/inventory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ param_ids: paramIds }),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`snapshots/inventory HTTP ${resp.status}: ${text}`);
+  }
+  const body = JSON.parse(text);
+  return body.inventory || {};
+}
+
+async function querySnapshotsRaw(paramId: string): Promise<any[]> {
+  // Query the actual snapshot rows for this param_id (via dev-server /api/snapshots/query)
+  const resp = await undiciFetch('http://localhost:9000/api/snapshots/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ param_id: paramId }),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`snapshots/query HTTP ${resp.status}: ${text}`);
+  }
+  const body = JSON.parse(text);
+  return body.rows || [];
+}
+
+function persistTestArtifacts(filename: string, data: any): void {
+  // Write to graph-editor/debug/ for easy inspection
+  const debugDir = path.join(REPO_ROOT, 'graph-editor/debug');
+  if (!fs.existsSync(debugDir)) {
+    fs.mkdirSync(debugDir, { recursive: true });
+  }
+  const filePath = path.join(debugDir, filename);
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  console.log(`[SNAPSHOT_DB_E2E] Persisted artifacts to: ${filePath}`);
+}
+
+type AmplitudeHttpRecord = {
+  atIso: string;
+  tag?: { run: string; dsl: string };
+  request: {
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    requestKey: string; // sha256(url + "\n" + body)
+  };
+  response: {
+    status?: number;
+    headers?: Record<string, string>;
+    rawBody?: string;
+    bodySha256?: string;
+  };
+  error?: string;
+};
+
+function sha256Hex(input: string): string {
+  return createHash('sha256').update(input).digest('hex');
+}
+
+function redactHeaders(headers: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!headers) return headers;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === 'authorization') {
+      out[k] = '***REDACTED***';
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function installAmplitudeHttpRecorder(getTag: () => { run: string; dsl: string } | undefined): {
+  records: AmplitudeHttpRecord[];
+  restore: () => void;
+} {
+  const records: AmplitudeHttpRecord[] = [];
+  const originalFetch = (globalThis as any).fetch as typeof fetch | undefined;
+  if (!originalFetch) {
+    throw new Error('Global fetch not available; cannot record Amplitude HTTP');
+  }
+
+  (globalThis as any).fetch = (async (input: any, init?: any) => {
+    const atIso = new Date().toISOString();
+    const url = typeof input === 'string' ? input : String(input?.url ?? input);
+    const isAmplitude = url.includes('amplitude.com/api/2/');
+
+    // Always pass through for non-Amplitude requests
+    if (!isAmplitude) {
+      return await originalFetch(input as any, init as any);
+    }
+
+    const method = init?.method ?? 'GET';
+    const headers = redactHeaders(init?.headers as Record<string, string> | undefined);
+    const body = typeof init?.body === 'string' ? init.body : undefined;
+    const requestKey = sha256Hex(`${url}\n${body ?? ''}`);
+
+    const baseRecord: AmplitudeHttpRecord = {
+      atIso,
+      tag: getTag(),
+      request: { url, method, headers, body, requestKey },
+      response: {},
+    };
+
+    try {
+      const response = await originalFetch(input as any, init as any);
+
+      // Clone before reading so downstream can still .text()
+      let rawBody: string | undefined;
+      try {
+        const cloned = (response as any).clone ? (response as any).clone() : null;
+        if (cloned) {
+          rawBody = await cloned.text();
+        }
+      } catch {
+        // best-effort only
+      }
+
+      const respHeaders: Record<string, string> = {};
+      try {
+        (response as any).headers?.forEach?.((value: string, key: string) => {
+          respHeaders[key] = value;
+        });
+      } catch {
+        // ignore
+      }
+
+      records.push({
+        ...baseRecord,
+        response: {
+          status: (response as any).status,
+          headers: respHeaders,
+          rawBody,
+          bodySha256: rawBody ? sha256Hex(rawBody) : undefined,
+        },
+      });
+
+      return response;
+    } catch (e) {
+      records.push({
+        ...baseRecord,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
+  }) as any;
+
+  return {
+    records,
+    restore: () => {
+      (globalThis as any).fetch = originalFetch as any;
+    },
+  };
+}
+
+async function analyzeFromSnapshotDb(args: {
+  param_id: string;
+  core_hash?: string;
+  anchor_from: string; // yyyy-mm-dd
+  anchor_to: string;   // yyyy-mm-dd
+  slice_keys: string[];
+  analysis_type: 'daily_conversions' | 'lag_histogram';
+  as_at?: string; // ISO timestamp
+}): Promise<any> {
+  const resp = await undiciFetch('http://localhost:9000/api/runner/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      analysis_type: args.analysis_type,
+      snapshot_query: {
+        param_id: args.param_id,
+        core_hash: args.core_hash,
+        anchor_from: args.anchor_from,
+        anchor_to: args.anchor_to,
+        slice_keys: args.slice_keys,
+        as_at: args.as_at,
+      },
+    }),
+  });
+
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`runner/analyze(snapshot_query) HTTP ${resp.status}: ${text}`);
+  }
+  return JSON.parse(text);
+}
+
+async function withFixedDateConstructor<T>(isoDateTime: string, fn: () => Promise<T>): Promise<T> {
+  // We need to control `new Date()` (not just Date.now) because snapshot writes pass retrieved_at: new Date().
+  const RealDate = Date;
+  const fixedMs = new RealDate(isoDateTime).getTime();
+
+  class MockDate extends RealDate {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    constructor(...args: any[]) {
+      if (args.length === 0) {
+        // Return a real Date fixed at fixedMs
+        return new RealDate(fixedMs) as any;
+      }
+      return new RealDate(...args) as any;
+    }
+    static now() {
+      return fixedMs;
+    }
+  }
+
+  (globalThis as any).Date = MockDate as any;
+  try {
+    return await fn();
+  } finally {
+    (globalThis as any).Date = RealDate;
+  }
+}
+
 
 async function hardResetState(): Promise<void> {
   // IndexedDB reset (Dexie)
@@ -679,7 +924,21 @@ describeLocal('LOCAL e2e: cohort(A,-20d:-18d) MECE Σ(channel) == uncontexted Am
       const item: FetchItem = createFetchItem('parameter', paramId, edgeId);
 
       const graph0 = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
-      let currentGraph: Graph | null = structuredClone(graph0);
+      // IMPORTANT: force a small path_t95 so a “next-day cron” re-fetch only needs a tail subset,
+      // rather than re-requesting the full 20-day window.
+      const graphForCron = structuredClone(graph0) as any;
+      try {
+        const edges: any[] = Array.isArray(graphForCron.edges) ? graphForCron.edges : [];
+        for (const e of edges) {
+          if (e?.p?.latency && typeof e.p.latency === 'object') {
+            e.p.latency.path_t95 = 7;
+          }
+        }
+      } catch {
+        // ignore - test will fail later if graph shape changes
+      }
+
+      let currentGraph: Graph | null = graphForCron as Graph;
       const setGraph = (g: Graph | null) => { currentGraph = g; };
 
       const channels = ['paid-search', 'influencer', 'paid-social', 'other'] as const;
@@ -920,6 +1179,15 @@ describeLocalPython('LOCAL e2e: after retrieving all slices, live scenarios → 
     globalThis.indexedDB = new IDBFactory();
   });
 
+  beforeAll(async () => {
+    // Ensure a clean DB namespace for this run (strict counts rely on this).
+    await deleteTestSnapshotsByPrefix(SNAPSHOT_TEST_REPO);
+  });
+
+  // NOTE: We intentionally do NOT clean up after the test.
+  // This allows manual inspection of DB rows vs Amplitude responses.
+  // To clean up manually: DELETE FROM snapshots WHERE param_id LIKE 'pytest-realamp-%';
+
   beforeEach(async () => {
     credentialsManager.clearCache();
     await hardResetState();
@@ -941,6 +1209,281 @@ describeLocalPython('LOCAL e2e: after retrieving all slices, live scenarios → 
     const param = loadYamlFixture('param-registry/test/parameters/energy-rec-to-switch-registered-latency.yaml');
     await registerFileForTest('parameter-energy-rec-to-switch-registered-latency', 'parameter', param);
   });
+
+  it(
+    'simulates serial daily snapshot jobs (20-Nov then 21-Nov) and verifies Python snapshot compositing does not double-count',
+    async () => {
+      if (!creds) throw new Error('Missing Amplitude creds');
+      if (!PYTHON_AVAILABLE) throw new Error('Python GraphCompute is not reachable (expected for this local-only test)');
+
+      // We simulate two daily cron runs:
+      // - Run 1 "as-at" 20-Nov-25
+      // - Run 2 "as-at" 21-Nov-25
+      //
+      // Underlying Amplitude data is historic, so counts likely won't change.
+      // The critical property we test is that the read-side (Python) composes
+      // multiple retrieved_at snapshots without double-counting.
+      //
+      // Fixed date ranges for determinism ("Nov data"), shifted by 1 day so the
+      // anchor-day sets are not identical across runs.
+      const days = 20;
+      const channels = ['paid-search', 'influencer', 'paid-social', 'other'] as const;
+
+      const graph0 = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+      let currentGraph: Graph | null = structuredClone(graph0);
+      const setGraph = (g: Graph | null) => { currentGraph = g; };
+
+      // X-Y edge: energy-rec → switch-registered (2-step for window, 3-step A→X→Y for cohort)
+      const item: FetchItem = createFetchItem('parameter', 'energy-rec-to-switch-registered-latency', 'X-Y');
+      const objectId = 'energy-rec-to-switch-registered-latency';
+      const pid = dbParamIdFor(objectId);
+
+      // Hard reset DB namespace for this test run (strict assertions)
+      await deleteTestSnapshotsByPrefix(SNAPSHOT_TEST_REPO);
+
+      // Collect all fetch results for artifact persistence
+      const fetchResults: Array<{ run: '20-Nov' | '21-Nov'; dsl: string; mode: string; result: any }> = [];
+      const currentAmpTag: { run: string; dsl: string } = { run: 'unknown', dsl: '' };
+      const ampRecorder = installAmplitudeHttpRecorder(() => ({ ...currentAmpTag }));
+
+      // Log the test namespace for manual DB inspection
+      console.log(`\n[SNAPSHOT_DB_E2E] Test namespace: ${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}`);
+      console.log(`[SNAPSHOT_DB_E2E] dbParamId: ${pid}`);
+      console.log(`[SNAPSHOT_DB_E2E] To query: SELECT * FROM snapshots WHERE param_id LIKE '${SNAPSHOT_TEST_REPO}%' ORDER BY slice_key, anchor_day;\n`);
+
+      async function runOneCronDay(args: {
+        label: '20-Nov' | '21-Nov';
+        fixedRetrievedAtIso: string;
+        windowDsl: string;
+        cohortDsl: string;
+        bustCache: boolean;
+      }): Promise<void> {
+        await withFixedDateConstructor(args.fixedRetrievedAtIso, async () => {
+          // MECE-only: we do NOT fetch explicit uncontexted slices.
+          // We fetch contexted slices (channel partition) and rely on MECE aggregation logic elsewhere.
+          for (const ch of channels) {
+            const dsl = `${args.windowDsl}.context(channel:${ch})`;
+            currentAmpTag.run = args.label;
+            currentAmpTag.dsl = dsl;
+            console.log(`[SNAPSHOT_DB_E2E] [${args.label}] Fetching: ${dsl}`);
+            const r = await fetchItem(item, { mode: 'versioned', bustCache: args.bustCache }, currentGraph as Graph, setGraph, dsl);
+            expect(r.success).toBe(true);
+            if (typeof (r as any).daysFetched === 'number') {
+              console.log(`[SNAPSHOT_DB_E2E] [${args.label}] window(contexted:${ch}) daysFetched=${(r as any).daysFetched}`);
+            }
+            fetchResults.push({ run: args.label, dsl, mode: `window-contexted-${ch}`, result: r });
+          }
+
+          for (const ch of channels) {
+            const dsl = `${args.cohortDsl}.context(channel:${ch})`;
+            currentAmpTag.run = args.label;
+            currentAmpTag.dsl = dsl;
+            console.log(`[SNAPSHOT_DB_E2E] [${args.label}] Fetching: ${dsl}`);
+            const r = await fetchItem(item, { mode: 'versioned', bustCache: args.bustCache }, currentGraph as Graph, setGraph, dsl);
+            expect(r.success).toBe(true);
+            if (typeof (r as any).daysFetched === 'number') {
+              console.log(`[SNAPSHOT_DB_E2E] [${args.label}] cohort(contexted:${ch}) daysFetched=${(r as any).daysFetched}`);
+            }
+            fetchResults.push({ run: args.label, dsl, mode: `cohort-contexted-${ch}`, result: r });
+          }
+        });
+
+        // Allow fire-and-forget DB writes to finish (we fixed retrieved_at so there should be one timestamp per run)
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+
+      // Cron run 1: as-at 20-Nov-25 (20-day windows ending 20-Nov)
+      await runOneCronDay({
+        label: '20-Nov',
+        fixedRetrievedAtIso: '2025-11-20T12:00:00.000Z',
+        windowDsl: 'window(1-Nov-25:20-Nov-25)',
+        cohortDsl: 'cohort(1-Nov-25:20-Nov-25)',
+        bustCache: true,
+      });
+
+      const rowsAfterRun1 = await querySnapshotsRaw(pid);
+      // MECE-only: 4 context slices for window + 4 for cohort = 8 slices
+      const expectedRowsRun1 = days * channels.length * 2; // 20 * 4 * 2 = 160
+      expect(rowsAfterRun1.length).toBe(expectedRowsRun1);
+
+      // Cron run 2: as-at 21-Nov-25
+      // Use the SAME DSLs. With bustCache=false and small path_t95,
+      // production planner should only refresh a tail subset (not re-fetch the full window).
+      await runOneCronDay({
+        label: '21-Nov',
+        fixedRetrievedAtIso: '2025-11-21T12:00:00.000Z',
+        windowDsl: 'window(1-Nov-25:20-Nov-25)',
+        cohortDsl: 'cohort(1-Nov-25:20-Nov-25)',
+        bustCache: false,
+      });
+
+      const rowsAfterRun2 = await querySnapshotsRaw(pid);
+      // Second run should add some rows, but should NOT fully duplicate the entire first run.
+      // If this fails, it indicates we're not simulating “incremental cron” behaviour properly.
+      expect(rowsAfterRun2.length).toBeGreaterThan(rowsAfterRun1.length);
+      expect(rowsAfterRun2.length).toBeLessThan(rowsAfterRun1.length + expectedRowsRun1);
+
+      // We expect exactly two retrieved_at timestamps (one per cron day), since we fixed the Date constructor.
+      const uniqueRetrievedAt = [...new Set(rowsAfterRun2.map((r: any) => String(r.retrieved_at)))].sort();
+      expect(uniqueRetrievedAt.length).toBe(2);
+      expect(uniqueRetrievedAt).toContain('2025-11-20T12:00:00+00:00');
+      expect(uniqueRetrievedAt).toContain('2025-11-21T12:00:00+00:00');
+
+      // Assert per-run row counts reflect incremental fetch (run2 subset).
+      const run1Count = rowsAfterRun2.filter((r: any) => r.retrieved_at === '2025-11-20T12:00:00+00:00').length;
+      const run2Count = rowsAfterRun2.filter((r: any) => r.retrieved_at === '2025-11-21T12:00:00+00:00').length;
+      expect(run1Count).toBe(expectedRowsRun1);
+      expect(run2Count).toBeGreaterThan(0);
+      expect(run2Count).toBeLessThan(run1Count);
+
+      // -------------------------------------------------------------------------
+      // Python read-side compositing assertions:
+      // Query ONE semantic series (cohort, one channel context) and ensure that adding the
+      // second cron run does NOT double-count conversions/histogram totals.
+      // -------------------------------------------------------------------------
+      const run1Rows = rowsAfterRun2.filter((r: any) => r.retrieved_at === '2025-11-20T12:00:00+00:00');
+      const cohortRun1Rows = run1Rows.filter((r: any) => r.a != null);
+      if (cohortRun1Rows.length === 0) {
+        throw new Error(`[SNAPSHOT_DB_E2E] Could not locate any cohort-mode rows for run-1 (expected A column populated).`);
+      }
+
+      // MECE union: Python should be able to take the 4 channel slices as input and aggregate them.
+      // In production, the slice plan comes from the same DSLs the frontend requested, not by querying DB.
+      const cohortSliceKeysByChannel: Record<string, string> = Object.fromEntries(
+        channels.map((ch) => [ch, `cohort(1-Nov-25:20-Nov-25).context(channel:${ch})`])
+      );
+      const cohortSliceKeys = Object.values(cohortSliceKeysByChannel);
+
+      const anchorFrom = '2025-11-01';
+      const anchorTo = '2025-11-20';
+
+      // As-at end-of-day cut-offs
+      const asAt20 = '2025-11-20T23:59:59.000Z';
+      const asAt21 = '2025-11-21T23:59:59.000Z';
+
+      const daily20 = await analyzeFromSnapshotDb({
+        param_id: pid,
+        anchor_from: anchorFrom,
+        anchor_to: anchorTo,
+        slice_keys: cohortSliceKeys,
+        analysis_type: 'daily_conversions',
+        as_at: asAt20,
+      });
+
+      const daily21 = await analyzeFromSnapshotDb({
+        param_id: pid,
+        anchor_from: anchorFrom,
+        anchor_to: anchorTo,
+        slice_keys: cohortSliceKeys,
+        analysis_type: 'daily_conversions',
+        as_at: asAt21,
+      });
+
+      // Sanity: both should succeed and have some rows analysed.
+      expect(daily20.success).toBe(true);
+      expect(daily21.success).toBe(true);
+      expect(Number(daily20.rows_analysed ?? 0)).toBeGreaterThan(0);
+      expect(Number(daily21.rows_analysed ?? 0)).toBeGreaterThan(0);
+
+      // Crucial compositing property:
+      // The second cron run adds more snapshot rows (rows_analysed increases),
+      // but derived totals should NOT double-count.
+      expect(Number(daily21.rows_analysed)).toBeGreaterThan(Number(daily20.rows_analysed));
+      expect(daily21.result.total_conversions).toBe(daily20.result.total_conversions);
+
+      const hist20 = await analyzeFromSnapshotDb({
+        param_id: pid,
+        anchor_from: anchorFrom,
+        anchor_to: anchorTo,
+        slice_keys: cohortSliceKeys,
+        analysis_type: 'lag_histogram',
+        as_at: asAt20,
+      });
+      const hist21 = await analyzeFromSnapshotDb({
+        param_id: pid,
+        anchor_from: anchorFrom,
+        anchor_to: anchorTo,
+        slice_keys: cohortSliceKeys,
+        analysis_type: 'lag_histogram',
+        as_at: asAt21,
+      });
+
+      expect(hist20.success).toBe(true);
+      expect(hist21.success).toBe(true);
+      expect(Number(hist21.rows_analysed)).toBeGreaterThan(Number(hist20.rows_analysed));
+      expect(hist21.result.total_conversions).toBe(hist20.result.total_conversions);
+
+      // =========================================================================
+      // PERSIST ARTIFACTS FOR MANUAL INSPECTION
+      // =========================================================================
+      persistTestArtifacts(`snapshot-e2e-${Date.now()}.json`, {
+        testRun: {
+          repo: SNAPSHOT_TEST_REPO,
+          branch: SNAPSHOT_TEST_BRANCH,
+          dbParamId: pid,
+          cronSimulation: {
+            run1RetrievedAt: '2025-11-20T12:00:00.000Z',
+            run2RetrievedAt: '2025-11-21T12:00:00.000Z',
+            run1: { windowDsl: 'window(1-Nov-25:20-Nov-25)', cohortDsl: 'cohort(1-Nov-25:20-Nov-25)' },
+            run2: { windowDsl: 'window(1-Nov-25:21-Nov-25)', cohortDsl: 'cohort(1-Nov-25:21-Nov-25)' },
+          },
+          forcedPathT95: 7,
+          expectedDays: days,
+          expectedRowsRun1,
+        },
+        fetchResults: fetchResults.map(fr => ({
+          run: fr.run,
+          dsl: fr.dsl,
+          mode: fr.mode,
+          success: fr.result.success,
+          daysFetched: fr.result.daysFetched,
+          // Include the n/k daily data if available
+          nDaily: fr.result.nDaily,
+          kDaily: fr.result.kDaily,
+          pDaily: fr.result.pDaily,
+        })),
+        // Raw Amplitude HTTP recordings (sanitised; auth header redacted). This is intended to be re-used
+        // in a future test variant that mocks only the Amplitude HTTP step and replays these responses.
+        amplitudeHttp: {
+          records: ampRecorder.records,
+          byRequestKey: Object.fromEntries(
+            ampRecorder.records
+              .filter(r => r.request?.requestKey && r.response?.rawBody)
+              .map(r => [
+                r.request.requestKey,
+                {
+                  request: r.request,
+                  response: r.response,
+                  tag: r.tag,
+                },
+              ])
+          ),
+        },
+        pythonSnapshotAnalysis: {
+          cohortSliceKeysByChannel,
+          daily20,
+          daily21,
+          hist20,
+          hist21,
+        },
+        dbRowCount: rowsAfterRun2.length,
+        dbRowCountByRetrievedAt: {
+          '2025-11-20T12:00:00+00:00': run1Count,
+          '2025-11-21T12:00:00+00:00': run2Count,
+        },
+        dbRows: rowsAfterRun2,
+      });
+
+      // Always restore fetch wrapper so other tests are unaffected
+      ampRecorder.restore();
+
+      console.log(`\n[SNAPSHOT_DB_E2E] ====== DATA PERSISTED FOR MANUAL INSPECTION ======`);
+      console.log(`[SNAPSHOT_DB_E2E] DB data NOT deleted - inspect directly:`);
+      console.log(`[SNAPSHOT_DB_E2E]   SELECT * FROM snapshots WHERE param_id = '${pid}' ORDER BY slice_key, anchor_day;`);
+      console.log(`[SNAPSHOT_DB_E2E] ===================================================\n`);
+    },
+    720_000  // 12 minutes for 20 real Amplitude calls
+  );
 
   it(
     'creates one scenario per channel value, runs Reach Probability on Y, and Σ scenario n/k equals Amplitude baseline n/k',

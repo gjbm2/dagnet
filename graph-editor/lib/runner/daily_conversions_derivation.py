@@ -28,27 +28,33 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     daily_totals: Dict[date, int] = defaultdict(int)
     
-    # Group by anchor_day
-    by_anchor: Dict[date, List[Dict]] = defaultdict(list)
+    # Group by (anchor_day, slice_key).
+    #
+    # CRITICAL:
+    # - retrieved_at deltas must be computed within a single semantic series.
+    # - If multiple slices are provided (e.g. MECE channel partition), we must
+    #   compute deltas per slice and then sum, rather than mixing slices together.
+    by_series: Dict[tuple, List[Dict]] = defaultdict(list)
     for row in rows:
         anchor = row['anchor_day']
         if isinstance(anchor, str):
             anchor = date.fromisoformat(anchor)
-        by_anchor[anchor].append(row)
-    
-    for anchor_day, snapshots in by_anchor.items():
+        slice_key = row.get('slice_key') or ''
+        by_series[(anchor, slice_key)].append(row)
+
+    for (anchor_day, _slice_key), snapshots in by_series.items():
         snapshots_sorted = sorted(snapshots, key=lambda r: _parse_datetime(r['retrieved_at']))
         prev_Y = 0
-        
+
         for snap in snapshots_sorted:
             retrieved = _parse_datetime(snap['retrieved_at'])
-            
+
             current_Y = snap.get('y') or snap.get('Y') or 0
             delta_Y = current_Y - prev_Y
-            
+
             if delta_Y > 0:
                 daily_totals[retrieved.date()] += delta_Y
-            
+
             prev_Y = current_Y
     
     total = sum(daily_totals.values())

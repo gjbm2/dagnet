@@ -6,6 +6,81 @@
 
 ---
 
+- ## Snapshot DB — CRITICAL missing integration vs design (2-Feb-26)
+-
+- **Design intent (explicit):** `docs/current/project-db/snapshot-db-design.md` §2  
+- **Core principle:** **Frontend resolves everything** (DSL parse, slice plan, MECE verification, signature set) and **Python only queries DB + derives**.
+-
+- **What we discovered:** the core wiring is missing in production UI:
+-   - `AnalyticsPanel.tsx` always calls `graphComputeClient.analyzeSelection()` / `analyzeMultipleScenarios()` (scenario-based graph analysis).
+-   - It does **not** build or send `snapshot_query` (no `param_id`, no `slice_keys`, no `core_hash`, no `as_at`).
+-   - `graphComputeClient.analyzeSnapshots()` exists (posts `/api/runner/analyze` with `snapshot_query`) but has **no call sites**.
+-   - `AnalyticsPanel.tsx` currently tracks only **selected nodes**, not **selected edges**, so it cannot even identify the parameter edge to analyse from DB.
+-   - Python `get_available_analyses` is DSL-driven (`runner/analysis_types.yaml`), and **does not advertise** snapshot analyses (`lag_histogram`, `daily_conversions`) as normal DSL analyses; yet the UI lists them as “snapshot-based analyses”.
+-
+- **Impact:** core architecture deviates from the snapshot DB design; snapshot analytics UI can’t be “real” because it never exercises the DB-backed path. Any confidence from UI usage is illusory.
+-
+- **Required implementation (minimal, design-conformant):**
+-   - **Selection plumbing:** capture selected edge UUID(s) in `AnalyticsPanel.tsx` (from `dagnet:querySelection`) and resolve to the parameter objectId / edge.
+-   - **Central service (NOT UI logic):** build `snapshot_query` coordinates:
+-     - `param_id` = `${repo}-${branch}-${objectId}`
+-     - `slice_keys` = MECE slice plan from context definition + parameter file slices (front end decides).
+-     - `core_hash` (optional) = computed from the same query signature mechanism used on write.
+-     - `anchor_from/anchor_to` and optional `as_at`.
+-   - **Analytics dispatch:** when `analysis_type` is `lag_histogram` or `daily_conversions`, call `graphComputeClient.analyzeSnapshots()` instead of scenario analysis.
+-   - **Availability gating:** snapshot analyses must be enabled/disabled based on *edge selection + snapshot inventory coverage*, not DSL matching from `runner/available-analyses`.
+-   - **Multi-slice safety:** ensure Python derivations are MECE-safe when multiple `slice_keys` are queried together (deltas must be per-slice).
+-
+- **Acceptance criteria:**
+-   - Selecting an edge with snapshot history and choosing `lag_histogram` / `daily_conversions` results in a request containing `snapshot_query` (not `scenarios`).
+-   - Python returns derived results from DB for the provided `slice_keys` and date range.
+-   - Works for MECE union (4 channel slices) and supports successive-day `as_at` compositing without double counting.
+-
+- ### Status of the real-Amplitude E2E we built (NOT yet run)
+-
+- **Test file:** `graph-editor/src/services/__tests__/cohortAxy.meceSum.vsAmplitude.local.e2e.test.ts`
+-
+- **What it currently does (intended coverage):**
+-   - **MECE-only snapshotting**: fetches only 4 channel context slices (no explicit uncontexted slice), for both:
+-     - `window(1-Nov-25:20-Nov-25).context(channel:paid-search|influencer|paid-social|other)`
+-     - `cohort(1-Nov-25:20-Nov-25).context(channel:paid-search|influencer|paid-social|other)`
+-   - **Serial “daily cron” simulation**:
+-     - Run 1: fixed `retrieved_at = 20-Nov-25` (via `Date` constructor override) + `bustCache: true`
+-     - Run 2: fixed `retrieved_at = 21-Nov-25` + `bustCache: false` + forced small `path_t95 = 7` to try to ensure incremental tail refresh
+-   - **DB assertions (write-path correctness):**
+-     - Run 1 expects **160 rows** (\(20 days × 4 channels × 2 modes\)).
+-     - Run 2 expects **0 < rows < 160** (incremental subset, not full replay).
+-     - Confirms two distinct `retrieved_at` timestamps and records per-run row counts.
+-   - **Python read-side compositing assertions (DB → derived analytics):**
+-     - Calls `/api/runner/analyze` with `snapshot_query.as_at` for 20-Nov vs 21-Nov.
+-     - Passes **all 4 cohort slice keys** (MECE union) and verifies:
+-       - `rows_analysed` increases on the later as-at date, but
+-       - `total_conversions` does **not** double-count across snapshots.
+-   - **Persistence for manual inspection / future replay:**
+-     - Writes `graph-editor/debug/snapshot-e2e-*.json` containing:
+-       - fetch results, DB rows, Python derived results
+-       - **raw Amplitude HTTP recordings** (auth redacted) keyed by a stable request hash for future “mock-only-HTTP” replay.
+-
+- **Defects fixed while building this test:**
+-   - Python derivations were **not MECE-safe** when multiple `slice_keys` are queried together; deltas were mixing slices.
+-     - Fixed by grouping deltas per `(anchor_day, slice_key)` in:
+-       - `graph-editor/lib/runner/daily_conversions_derivation.py`
+-       - `graph-editor/lib/runner/histogram_derivation.py`
+-     - Added Python unit tests:
+-       - `graph-editor/lib/tests/test_daily_conversions.py` (`*_multi_slice_mece_safe`)
+-       - `graph-editor/lib/tests/test_histogram_derivation.py` (`*_multi_slice_mece_safe`)
+-   - Python snapshot analysis now honours `snapshot_query.as_at` (needed for cron/as-at simulation).
+-
+- **What is still missing / unknown until we run it:**
+-   - **Not executed yet**: needs a real run to validate planning + DB writes.
+-   - **Environment requirements to run:**
+-     - `DAGNET_RUN_REAL_AMPLITUDE_E2E=1`
+-     - repo-root `.env.amplitude.local` with Amplitude creds
+-     - Python dev server on `localhost:9000` with `DB_CONNECTION` set
+-   - **Incremental behaviour is an assumption**: Run 2 will only be “subset” if planner + cache rules refetch a tail window as expected.
+-   - **Test hygiene**: Amplitude HTTP recorder restores `global.fetch` at the end; if the test fails early, it may not restore (wrap in `try/finally` when stabilising).
+-   - **Does not prove UI wiring**: even if this passes, the app UI still isn’t wired to call `snapshot_query` (see section above).
+-
 - Log mirrorring isn't working properly -- only some entries are captured and returned
 
 - Auto-retry if fetch fail on automated chron
