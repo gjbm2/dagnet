@@ -36,6 +36,7 @@ This implementation plan is part of a documentation suite. Each document has a s
 |----------|-------|-------------------|
 | **`snapshot-db-design.md`** | Comprehensive design reference (schema, data flow, signatures, derivation algorithms) | For technical details, algorithms, rationale |
 | **`asat.md`** | Historical query (`asAt()`) design and implementation | Phase 4 implementation; DSL parsing, fork logic, UI |
+| **`onset.md`** | Onset delay (`onset_delta_days`) for shifted lognormal latency fitting | Latency improvement; schema extension, completeness integration |
 | **`time-series-charting.md`** | Advanced charting (fan charts, evidence/forecast, aggregation) | Phase 5+ (deferred); charting enhancements |
 | **`initial-thinking.md`** | Original problem statement and commercial requirements | Context and motivation |
 
@@ -119,15 +120,705 @@ cohort_mode: !!queryPayload.cohort
 
 ---
 
-### 0.3 Phase 0 Completion Checklist
+### 0.3 Extract and Derive `onset_delta_days` from Amplitude Histogram
 
+**Problem:** Amplitude provides `stepTransTimeDistribution` histogram data. This is already extracted by the DAS adapter but not fully processed or persisted. We need to derive `onset_delta_days` (onset delay before conversions begin) for improved latency fitting.
+
+**Critical Design Constraints:**
+
+1. **Window slices only**: Onset is only meaningful for window() slices. Cohort() slices have histogram data limited to ~10 days, which is insufficient for long-latency edges — onset derived from cohort() data would be unreliable.
+
+2. **Aggregation in LAG topo pass**: Edge-level onset must be aggregated (via `min()`) across all window() slices in the same place that computes t95/completeness — i.e., inside `enhanceGraphLatencies()`. This ensures:
+   - Order-independent aggregation (not "last fetch wins")
+   - Mode-consistency (cohort-mode can still use window-derived onset)
+   - Single aggregation engine (no duplicate codepaths)
+
+3. **No `anchor_onset_delta_days`**: Window slices are 2-step (X→Y) with no anchor component. The `anchor_latency` block only exists for cohort() queries, which have unreliable onset data anyway.
+
+**Complete Data Flow:**
+```
+Amplitude API Response
+  └── data[0].stepTransTimeDistribution: { segment_index, step_bins: [...] }
+      ↓
+connections.yaml (DAS Adapter)
+  └── extract: step_trans_time_distribution ← jmes: "data[0].stepTransTimeDistribution"
+  └── transform: lag_histogram ← jsonata (BUG FIX needed: use step_bins[])
+  └── transform: onset_delta_days ← jsonata (NEW: first non-zero bin in days)
+      ↓
+      NOTE: onset only extracted for window() slices (adapter conditional)
+      ↓
+DASRunner.ts → result.raw
+  └── result.raw.onset_delta_days ← NEW
+  └── result.raw.time_series[].median_lag_days ← WORKING
+      ↓
+dataOperationsService.ts → mergeTimeSeriesIntoParameter()
+  └── latencySummary: { median_lag_days, mean_lag_days, onset_delta_days }
+      ↓
+Parameter File (YAML)
+  └── values[].latency.onset_delta_days ← per-slice value (window slices only)
+      ↓
+fetchDataService.ts → enhanceGraphLatencies() (LAG TOPO PASS)
+  └── For each edge:
+      1. Read all values[] for edge via paramLookup
+      2. Filter to window() slices only (sliceDSL contains 'window(')
+      3. Extract onset_delta_days from each window slice
+      4. AGGREGATE: edge-level onset = min(window slice onsets)
+         Precedence: uncontexted window slice > min(contexted window slices)
+      5. Use aggregated onset in shifted lognormal fitting
+      6. Emit onset in EdgeLAGValues
+      ↓
+UpdateManager.applyBatchLAGValues()
+  └── Writes onset_delta_days to graph edge (p.latency.onset_delta_days)
+      ↓
+UpdateManager (Graph → File sync, explicit persistence)
+  └── latency.onset_delta_days (edge-level) ← p.latency.onset_delta_days
+      ↓
+UpdateManager (File → Graph sync, on load)
+  └── p.latency.onset_delta_days ← latency.onset_delta_days (edge-level)
+```
+
+**Key difference from current `t95` flow**: `t95` is *computed* via lognormal fitting. `onset_delta_days` is *aggregated* (min) from raw slice data. Both happen in the same LAG topo pass.
+
+---
+
+#### 0.3.1 Precise Schema Changes
+
+**File 1: `graph-editor/src/types/index.ts` (Graph Types)**
+
+**Location:** Inside `LatencyConfig` interface (around line 471-510)
+
+**Current** (ends with):
+```typescript
+  /** Weighted mean lag in days (used with median to compute t95) */
+  mean_lag_days?: number;
+  
+  /** Maturity progress 0-1 (see design §5.5) */
+  completeness?: number;
+}
+```
+
+**Add before closing brace:**
+```typescript
+  /** Onset delay (days) before conversions begin on this edge.
+   *  Derived from Amplitude histogram; used for shifted completeness model.
+   */
+  onset_delta_days?: number;
+  /** True if user manually set onset_delta_days */
+  onset_delta_days_overridden?: boolean;
+```
+
+---
+
+**File 2: `graph-editor/public/param-schemas/parameter-schema.yaml`**
+
+**Location:** Inside `values[].latency` properties (after line 255, after `t95`)
+
+**Add:**
+```yaml
+            onset_delta_days:
+              type: number
+              minimum: 0
+              description: "Onset delay (days) before conversions begin on this edge"
+            onset_delta_days_overridden:
+              type: boolean
+              default: false
+              description: "If true, user manually set onset_delta_days"
+```
+
+**NOTE:** Do NOT add onset_delta_days to `values[].anchor_latency`. Window slices (which provide onset data) have no anchor component. Anchor_latency only exists for cohort() queries, which have unreliable onset data.
+
+---
+
+**File 3: `graph-editor/src/types/parameterData.ts`**
+
+**Location:** Inside `ParameterValue.latency` type (around line 46-51)
+
+**Current:**
+```typescript
+  latency?: {
+    median_lag_days?: number;
+    mean_lag_days?: number;
+    completeness?: number;
+    t95?: number;
+  };
+```
+
+**Change to:**
+```typescript
+  latency?: {
+    median_lag_days?: number;
+    mean_lag_days?: number;
+    completeness?: number;
+    t95?: number;
+    onset_delta_days?: number;
+    onset_delta_days_overridden?: boolean;
+  };
+```
+
+---
+
+**File 3: `graph-editor/src/services/windowAggregationService.ts`**
+
+**Location 1:** `MergeOptions.latencySummary` interface (around line 1428-1431)
+
+**Current:**
+```typescript
+  latencySummary?: {
+    median_lag_days?: number;
+    mean_lag_days?: number;
+  };
+```
+
+**Change to:**
+```typescript
+  latencySummary?: {
+    median_lag_days?: number;
+    mean_lag_days?: number;
+    onset_delta_days?: number;
+  };
+```
+
+**Location 2:** `TimeSeriesPointWithLatency` interface (around line 1410-1421)
+
+**Add field:**
+```typescript
+  onset_delta_days?: number;  // Onset delay before conversions begin
+```
+
+---
+
+#### 0.3.2 Precise Adapter Changes
+
+**File: `graph-editor/public/defaults/connections.yaml`**
+
+**Change 1 (BUG FIX):** Line 617-618, fix histogram extraction
+
+**Current:**
+```yaml
+        - name: lag_histogram
+          jsonata: "step_trans_time_distribution[$number($queryPayload.to_step_index)]"
+```
+
+**Change to:**
+```yaml
+        - name: lag_histogram
+          jsonata: "step_trans_time_distribution.step_bins[$number($queryPayload.to_step_index)]"
+```
+
+**Change 2 (NEW):** After line 618, add onset derivation transform
+
+```yaml
+        # Derive onset_delta_days: smallest whole day with conversions > 0
+        # NOTE: Only meaningful for window() slices; cohort() histogram is truncated
+        - name: onset_delta_days
+          jsonata: |
+            (
+              $bins := lag_histogram.bins;
+              $msPerDay := 86400000;
+              /* Find first bin with uniques > 0 */
+              $firstNonZero := $filter($bins, function($b) { $b.bin_dist.uniques > 0 })[0];
+              $firstNonZero ? $floor($firstNonZero.start / $msPerDay) : null
+            )
+```
+
+**NOTE:** No `anchor_onset_delta_days` transform. Window slices (the only source of reliable onset data) have no anchor component.
+
+---
+
+#### 0.3.3 Precise UpdateManager Mappings
+
+**File: `graph-editor/src/services/UpdateManager.ts`**
+
+UpdateManager provides bidirectional sync for edge-level onset. However, onset aggregation does NOT use `values[latest]` (which would be "last fetch wins"). Instead:
+
+1. Per-slice onset is stored in `values[].latency.onset_delta_days`
+2. Edge-level onset is aggregated in the LAG topo pass (`enhanceGraphLatencies`)
+3. LAG pass writes to graph via `applyBatchLAGValues`
+4. UpdateManager syncs graph ↔ file for the edge-level value
+
+**Location 1:** Graph → File mappings (around line 1669-1695, after path_t95 mappings)
+
+**Add:**
+```typescript
+      // onset_delta_days: onset delay (aggregated in LAG topo pass, user-overridable)
+      { 
+        sourceField: 'p.latency.onset_delta_days', 
+        targetField: 'latency.onset_delta_days',
+        overrideFlag: 'latency.onset_delta_days_overridden',
+        condition: (source) => source.p?.latency?.onset_delta_days !== undefined && source.p?.id
+      },
+      {
+        sourceField: 'p.latency.onset_delta_days_overridden',
+        targetField: 'latency.onset_delta_days_overridden',
+        requiresIgnoreOverrideFlags: true,
+        condition: (source) => source.p?.latency?.onset_delta_days_overridden !== undefined && source.p?.id
+      },
+```
+
+**Location 2:** File → Graph mappings (around line 2098-2112, after path_t95 mappings)
+
+**Add to CONFIG section only:**
+```typescript
+      // onset_delta_days: onset delay (user-overridable, edge-level)
+      { 
+        sourceField: 'latency.onset_delta_days', 
+        targetField: 'p.latency.onset_delta_days',
+        overrideFlag: 'p.latency.onset_delta_days_overridden',
+        condition: isProbType
+      },
+      { sourceField: 'latency.onset_delta_days_overridden', targetField: 'p.latency.onset_delta_days_overridden', requiresIgnoreOverrideFlags: true },
+```
+
+**IMPORTANT:** Do NOT add a `values[latest].latency.onset_delta_days` → graph mapping. This would cause "last fetch wins" bugs. Edge-level onset comes from the LAG topo pass aggregation, not from `values[latest]`.
+
+---
+
+#### 0.3.4 Precise Service Changes
+
+**File 1: `graph-editor/src/services/dataOperationsService.ts`**
+
+Pass onset through to values[] storage (per-slice).
+
+**Location 1:** Around line 6642, after `const rawData = result.raw as any;`
+
+**Add extraction:**
+```typescript
+// Extract onset_delta_days from histogram (if present, window slices only)
+const onset_delta_days = rawData?.onset_delta_days ?? null;
+```
+
+**Location 2:** Find call to `mergeTimeSeriesIntoParameter()` (~line 7031) and ensure `latencySummary` includes onset:
+
+```typescript
+latencySummary: {
+  median_lag_days: rawData?.median_lag_days,
+  mean_lag_days: rawData?.mean_lag_days,
+  onset_delta_days: rawData?.onset_delta_days,  // NEW: per-slice value
+},
+```
+
+**NOTE:** This stores per-slice onset in `values[].latency.onset_delta_days`. The edge-level aggregation happens in the LAG topo pass (below).
+
+---
+
+**File 2: `graph-editor/src/services/statisticalEnhancementService.ts`**
+
+Add onset aggregation to the LAG topo pass.
+
+**Location:** Inside `enhanceGraphLatencies()`, at the start of the per-edge processing loop (around line 2020-2030, after `cohortsAll` is computed)
+
+**Add onset aggregation:**
+```typescript
+// Aggregate onset_delta_days from window() slices only
+// Precedence: uncontexted window slice > min(contexted window slices)
+const windowSlices = paramValues.filter(v => 
+  (v as any).sliceDSL?.includes('window(') && 
+  typeof (v as any).latency?.onset_delta_days === 'number'
+);
+
+let edgeOnsetDeltaDays: number | undefined;
+if (windowSlices.length > 0) {
+  // Prefer uncontexted slice if available
+  const uncontexted = windowSlices.find(v => 
+    !(v as any).sliceDSL?.includes('context(')
+  );
+  if (uncontexted) {
+    edgeOnsetDeltaDays = (uncontexted as any).latency.onset_delta_days;
+  } else {
+    // Fall back to min across contexted slices
+    edgeOnsetDeltaDays = Math.min(
+      ...windowSlices.map(v => (v as any).latency.onset_delta_days)
+    );
+  }
+}
+```
+
+**Location 2:** Where `EdgeLAGValues` is constructed (around line 2395-2420)
+
+**Add onset to the emitted values:**
+```typescript
+const edgeLAGValues: EdgeLAGValues = {
+  edgeUuid,
+  latency: {
+    median_lag_days: aggregateMedianLag,
+    mean_lag_days: aggregateMeanLag,
+    t95: latencyStats.t95,
+    completeness: completenessUsed,
+    path_t95: edgePathT95,
+    onset_delta_days: edgeOnsetDeltaDays,  // NEW: aggregated from window slices
+  },
+  // ... rest of EdgeLAGValues
+};
+```
+
+---
+
+**File 3: `graph-editor/src/services/UpdateManager.ts`**
+
+Extend `applyBatchLAGValues` to write onset to graph.
+
+**Location:** Inside `applyBatchLAGValues()` (around line 3505-3520)
+
+**Add after completeness write:**
+```typescript
+// onset_delta_days: only write if not overridden and value provided
+if (update.latency.onset_delta_days !== undefined && 
+    edge.p.latency.onset_delta_days_overridden !== true) {
+  edge.p.latency.onset_delta_days = update.latency.onset_delta_days;
+}
+```
+
+---
+
+#### 0.3.5 Complete File Impact List
+
+**CRITICAL: Branch the repo before commencing code build.**
+```bash
+git checkout -b feature/onset-delta-days
+```
+
+**A. Adapter Layer (DAS):**
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `graph-editor/public/defaults/connections.yaml` | MODIFY | Fix lag_histogram indexing; add onset_delta_days transform |
+
+**B. Type Definitions:**
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `graph-editor/src/types/index.ts` | MODIFY | Add onset_delta_days + _overridden to LatencyConfig |
+| `graph-editor/src/types/parameterData.ts` | MODIFY | Add onset_delta_days to ParameterValue.latency |
+
+**C. Schema:**
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `graph-editor/public/param-schemas/parameter-schema.yaml` | MODIFY | Add onset_delta_days to edge-level latency AND values[].latency |
+
+**D. Services (Core Logic):**
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `graph-editor/src/services/windowAggregationService.ts` | MODIFY | Extend MergeOptions.latencySummary + TimeSeriesPointWithLatency |
+| `graph-editor/src/services/dataOperationsService.ts` | MODIFY | Extract onset from DAS result; pass to mergeTimeSeriesIntoParameter |
+| `graph-editor/src/services/statisticalEnhancementService.ts` | MODIFY | Aggregate onset in enhanceGraphLatencies; emit in EdgeLAGValues; use in completeness |
+| `graph-editor/src/services/UpdateManager.ts` | MODIFY | Graph↔File mappings; applyBatchLAGValues writes onset |
+| `graph-editor/src/services/fetchDataService.ts` | VERIFY | May need updates if LAGHelpers interface changes |
+
+**E. UI Components:**
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `graph-editor/src/components/ParameterSection.tsx` | MODIFY | Add onset_delta_days display/edit field in latency section |
+| `graph-editor/src/components/edges/ConversionEdge.tsx` | MODIFY | Add onset to tooltip display |
+| `graph-editor/src/components/edges/edgeBeadHelpers.tsx` | VERIFY | May need onset in bead data |
+| `graph-editor/src/components/canvas/buildScenarioRenderEdges.ts` | VERIFY | May need onset for scenario rendering |
+
+**F. Documentation:**
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `graph-editor/public/docs/lag-statistics-reference.md` | MODIFY | Document shifted completeness formula |
+
+---
+
+#### 0.3.6 Comprehensive Test Coverage Requirements
+
+**A. Existing Tests to EXTEND (DAS/Extraction):**
+
+| Test File | Current Coverage | Required Extension |
+|-----------|------------------|-------------------|
+| `lib/das/__tests__/amplitudeThreeStepFunnel.integration.test.ts` | Tests median_lag_days, mean_lag_days extraction | Add: onset_delta_days extraction from reference data |
+
+**B. Existing Tests to EXTEND (File Storage/Merge):**
+
+| Test File | Current Coverage | Required Extension |
+|-----------|------------------|-------------------|
+| `services/__tests__/windowAggregationService.test.ts` | Tests mergeTimeSeriesIntoParameter | Add: onset_delta_days in latencySummary flows to values[] |
+| `services/__tests__/mergeTimeSeriesInvariants.test.ts` | Tests merge invariants | Add: onset_delta_days preserved through merge |
+| `services/__tests__/abBcSmoothLag.paramPack.amplitude.e2e.test.ts` | E2E with Amplitude data | Add: onset_delta_days persisted to param file |
+
+**C. Existing Tests to EXTEND (LAG Topo Pass):**
+
+| Test File | Current Coverage | Required Extension |
+|-----------|------------------|-------------------|
+| `services/__tests__/statisticalEnhancementService.test.ts` | Tests computeEdgeLatencyStats, enhanceGraphLatencies | Add: onset aggregation (min), precedence rule, shifted completeness |
+| `services/__tests__/lagStatsFlow.integration.test.ts` | Tests LAG flow end-to-end | Add: onset flows through LAG pass to graph |
+| `services/__tests__/pathT95CompletenessConstraint.test.ts` | Tests completeness with t95 constraint | Add: completeness with onset shift |
+| `services/__tests__/cohortEvidenceDebiasing.e2e.test.ts` | Tests cohort evidence handling | Add: verify cohort slices don't contribute onset |
+
+**D. Existing Tests to EXTEND (UpdateManager/Graph Sync):**
+
+| Test File | Current Coverage | Required Extension |
+|-----------|------------------|-------------------|
+| `services/__tests__/updateManager.applyBatchLAGValues.pStdevFallback.test.ts` | Tests applyBatchLAGValues | Add: onset written to graph, respects override |
+| `services/__tests__/persistGraphMasteredLatencyToParameterFiles.test.ts` | Tests graph→file latency sync | Add: onset_delta_days syncs graph→file |
+| `services/__tests__/UpdateManager.*.test.ts` (all) | Tests UpdateManager mappings | Add: onset_delta_days bidirectional sync |
+
+**E. Existing Tests to EXTEND (E2E/Integration):**
+
+| Test File | Current Coverage | Required Extension |
+|-----------|------------------|-------------------|
+| `services/__tests__/fetchMergeEndToEnd.test.ts` | Tests fetch→merge flow | Add: onset flows through full pipeline |
+| `services/__tests__/windowCohortSemantics.paramPack.e2e.test.ts` | Tests window vs cohort semantics | Add: onset only from window slices |
+| `services/__tests__/batchFetchE2E.comprehensive.test.ts` | Tests batch fetch | Add: onset aggregation across multiple fetches |
+
+**F. New Tests Required:**
+
+| Test | File | Description |
+|------|------|-------------|
+| `onset_histogram_extraction.test.ts` | `lib/das/__tests__/` | Unit: JSONata transform extracts onset from step_bins correctly |
+| `onset_delta_derivation.test.ts` | `lib/das/__tests__/` | Unit: First-conversion derivation logic for various histogram shapes |
+| `onset_aggregation.test.ts` | `services/__tests__/` | Unit: min() aggregation across window slices |
+| `onset_precedence.test.ts` | `services/__tests__/` | Unit: uncontexted > min(contexted) precedence |
+| `onset_shifted_completeness.test.ts` | `services/__tests__/` | Unit: completeness = 0 during dead-time |
+| `onset_roundtrip.integration.test.ts` | `services/__tests__/` | Integration: Amplitude → DAS → file → LAG → graph → file |
+| `onset_override_flow.test.ts` | `services/__tests__/` | Integration: User override persists through data fetch |
+| `onset_cohort_excluded.test.ts` | `services/__tests__/` | Integration: cohort() slices don't contribute to onset |
+
+**G. UI Tests to ADD:**
+
+| Test | File | Description |
+|------|------|-------------|
+| `onset_properties_panel.test.tsx` | `components/__tests__/` | Unit: onset field displays, edits, override checkbox |
+| `onset_edge_tooltip.test.tsx` | `components/__tests__/` | Unit: onset shown in edge tooltip |
+
+**H. Test Fixtures Required:**
+
+The existing `REFERENCE-axy-funnel-response.json` contains `stepTransTimeDistribution` with histogram bins. Verify:
+- `step_bins[1]`: First non-zero bin at 331200000ms = 3.83 days → onset_delta_days = 3
+- `step_bins[2]`: Check first non-zero bin for X→Y transition
+
+**I. Test Case Matrix (Onset Derivation):**
+
+| Test ID | Input | Expected onset_delta_days | Notes |
+|---------|-------|---------------------------|-------|
+| ONSET-001 | First bin has conversions (start=0) | 0 | Immediate conversions |
+| ONSET-002 | First conversion at day 3.8 | 3 | floor(3.8) = 3 |
+| ONSET-003 | All bins empty except tail (day 7) | 7 | Edge case |
+| ONSET-004 | No histogram data | undefined | Graceful handling |
+| ONSET-005 | Empty bins array | undefined | Graceful handling |
+| ONSET-006 | Only cohort slice (no window) | undefined | cohort excluded |
+
+**J. Test Case Matrix (Onset Aggregation):**
+
+| Test ID | Slices | Expected edge onset | Notes |
+|---------|--------|---------------------|-------|
+| AGG-001 | window:uncontexted onset=2 | 2 | Single uncontexted |
+| AGG-002 | window:ctx:A onset=3, window:ctx:B onset=5 | 3 | min(contexted) |
+| AGG-003 | window:uncontexted onset=4, window:ctx:A onset=2 | 4 | uncontexted takes precedence |
+| AGG-004 | cohort:date1 onset=1, window:ctx:A onset=5 | 5 | cohort excluded |
+| AGG-005 | No window slices | undefined | No onset available |
+
+**K. Test Case Matrix (Shifted Completeness):**
+
+| Test ID | age | onset | μ | σ | Expected completeness | Notes |
+|---------|-----|-------|---|---|----------------------|-------|
+| COMP-001 | 5 | 0 | 2.0 | 0.5 | LogNormalCDF(5) | No shift |
+| COMP-002 | 3 | 5 | 2.0 | 0.5 | 0 | age < onset → dead-time |
+| COMP-003 | 5 | 5 | 2.0 | 0.5 | 0 | age = onset → boundary |
+| COMP-004 | 7 | 5 | 2.0 | 0.5 | LogNormalCDF(2) | shifted age = 7-5 = 2 |
+| COMP-005 | 10 | 3 | 2.0 | 0.5 | LogNormalCDF(7) | shifted age = 10-3 = 7 |
+
+---
+
+#### 0.3.7 Acceptance Criteria
+
+**Pre-requisite:**
+- [ ] Feature branch created: `git checkout -b feature/onset-delta-days`
+
+**DAS Extraction:**
+- [ ] `lag_histogram` extraction bug fixed (correct indexing into step_bins)
+- [ ] `onset_delta_days` JSONata transform added and working (window slices only)
+- [ ] Extraction verified against reference Amplitude data
+
+**Type Extensions:**
+- [ ] `types/index.ts`: LatencyConfig extended with onset_delta_days + overridden
+- [ ] `types/parameterData.ts`: ParameterValue.latency extended
+- [ ] `windowAggregationService.ts`: MergeOptions + TimeSeriesPointWithLatency extended
+- [ ] `statisticalEnhancementService.ts`: EdgeLAGValues extended with onset_delta_days
+
+**File Storage (per-slice):**
+- [ ] Parameter schema extended (`parameter-schema.yaml` - values[].latency only, NOT anchor_latency)
+- [ ] `dataOperationsService.ts` extracts and passes onset through to mergeTimeSeriesIntoParameter
+- [ ] `windowAggregationService.ts` includes onset in merged values[]
+
+**LAG Topo Pass Aggregation:**
+- [ ] `statisticalEnhancementService.ts`: Aggregates onset from window() slices via min()
+- [ ] `statisticalEnhancementService.ts`: Precedence rule (uncontexted > min(contexted))
+- [ ] `statisticalEnhancementService.ts`: Uses onset in shifted completeness calculation
+- [ ] `statisticalEnhancementService.ts`: EdgeLAGValues includes aggregated onset
+- [ ] `UpdateManager.ts`: applyBatchLAGValues writes onset to graph (respects override)
+
+**Graph ↔ File Sync (edge-level):**
+- [ ] Parameter schema extended (`parameter-schema.yaml` - edge-level latency)
+- [ ] UpdateManager: Graph→File mappings for onset_delta_days + _overridden
+- [ ] UpdateManager: File→Graph mappings (config section only, NOT values[latest])
+
+**UI Surfacing:**
+- [ ] `ParameterSection.tsx`: onset field displays, edits, override checkbox
+- [ ] `ConversionEdge.tsx`: onset shown in edge tooltip
+
+**Tests (ALL MUST PASS):**
+- [ ] Existing LAG/latency tests still pass (no regressions)
+- [ ] DAS extraction tests extended with onset assertion
+- [ ] New unit tests for onset derivation (various histogram shapes)
+- [ ] LAG topo pass aggregation tests (min, precedence, cohort excluded)
+- [ ] Shifted completeness tests (dead-time, boundary, shifted CDF)
+- [ ] UpdateManager bidirectional sync tests for onset
+- [ ] Override persistence test (user override survives data fetch)
+- [ ] Round-trip integration test (Amplitude → DAS → file → LAG → graph → file)
+- [ ] E2E test: onset in UI matches file matches graph
+
+---
+
+### 0.4 Phase 0 Completion Checklist
+
+**§0.0 Pre-requisite:**
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| Create feature branch: `git checkout -b feature/onset-delta-days` | `[ ]` | | BEFORE any code changes |
+
+**§0.1 Latency Data Preservation:**
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
 | dataOperationsService.ts latency fix | `[ ]` | | |
 | compositeQueryExecutor.ts latency fix | `[ ]` | | |
 | Existing latency tests pass | `[ ]` | | |
 | New dual-query latency test added | `[ ]` | | |
+
+**§0.2 Signature Verification:**
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
 | Signature cohort_mode verified | `[x]` | 1-Feb-26 | Verified in design phase |
+
+**§0.3 onset_delta_days Extraction/Derivation/Storage:**
+
+*Graph Type Changes:*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| types/index.ts: LatencyConfig.onset_delta_days | `[ ]` | | Line ~509 |
+| types/index.ts: LatencyConfig.onset_delta_days_overridden | `[ ]` | | Line ~510 |
+| statisticalEnhancementService.ts: EdgeLAGValues.latency.onset_delta_days | `[ ]` | | Line ~1625 |
+
+*File Schema Changes:*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| parameter-schema.yaml: onset_delta_days in values[].latency | `[ ]` | | Line ~255 |
+| parameter-schema.yaml: onset_delta_days in edge-level latency | `[ ]` | | Line ~95 |
+| types/parameterData.ts: ParameterValue.latency extension | `[ ]` | | Line ~46 |
+| windowAggregationService.ts: MergeOptions.latencySummary extension | `[ ]` | | Line ~1428 |
+| windowAggregationService.ts: TimeSeriesPointWithLatency extension | `[ ]` | | Line ~1410 |
+
+*LAG Topo Pass Aggregation:*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| statisticalEnhancementService.ts: onset aggregation in enhanceGraphLatencies | `[ ]` | | Line ~2020 |
+| statisticalEnhancementService.ts: precedence (uncontexted > min contexted) | `[ ]` | | |
+| statisticalEnhancementService.ts: shifted completeness calculation | `[ ]` | | |
+| statisticalEnhancementService.ts: emit onset in EdgeLAGValues | `[ ]` | | Line ~2395 |
+| UpdateManager.ts: applyBatchLAGValues writes onset to graph | `[ ]` | | Line ~3510 |
+
+*UpdateManager Mappings (edge-level):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| UpdateManager.ts: Graph→File onset_delta_days mapping | `[ ]` | | Line ~1695 |
+| UpdateManager.ts: Graph→File onset_delta_days_overridden mapping | `[ ]` | | Line ~1696 |
+| UpdateManager.ts: File→Graph onset_delta_days (config only) | `[ ]` | | Line ~2112 |
+
+*Adapter Changes:*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| connections.yaml: FIX lag_histogram indexing bug | `[ ]` | | Line 617-618 |
+| connections.yaml: onset_delta_days transform (window slices) | `[ ]` | | After line 618 |
+
+*Service Changes (per-slice storage):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| dataOperationsService.ts: extract onset from DAS result | `[ ]` | | Line ~6642 |
+| dataOperationsService.ts: pass onset to mergeTimeSeriesIntoParameter | `[ ]` | | Line ~7031 |
+| windowAggregationService.ts: propagate onset to values[] | `[ ]` | | |
+
+*Tests (DAS Extraction):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| EXTEND: amplitudeThreeStepFunnel.integration.test.ts | `[ ]` | | Add onset assertions |
+| NEW: onset_histogram_extraction.test.ts | `[ ]` | | JSONata unit test |
+| NEW: onset_delta_derivation.test.ts | `[ ]` | | Derivation logic |
+
+*Tests (File Storage):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| EXTEND: abBcSmoothLag.paramPack.amplitude.e2e.test.ts | `[ ]` | | Verify onset in file |
+| EXTEND: windowAggregationService.test.ts | `[ ]` | | onset in latencySummary |
+| EXTEND: mergeTimeSeriesInvariants.test.ts | `[ ]` | | onset preserved |
+
+*Tests (LAG Topo Pass Aggregation):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| NEW: onset_aggregation.test.ts | `[ ]` | | min() across window slices |
+| NEW: onset_precedence.test.ts | `[ ]` | | uncontexted > min(contexted) |
+| EXTEND: statisticalEnhancementService LAG tests | `[ ]` | | EdgeLAGValues includes onset |
+| EXTEND: applyBatchLAGValues tests | `[ ]` | | onset written to graph |
+
+*Tests (Graph Sync):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| EXTEND: persistGraphMasteredLatencyToParameterFiles.test.ts | `[ ]` | | Graph→File onset sync |
+| EXTEND: UpdateManager tests | `[ ]` | | Bidirectional mappings |
+| NEW: onset_override_flow.test.ts | `[ ]` | | Override survives fetch |
+
+*Tests (Round-trip):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| NEW: onset_roundtrip.integration.test.ts | `[ ]` | | Amplitude → DAS → file → graph |
+
+*Tests (Shifted Completeness):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| NEW: onset_shifted_completeness.test.ts | `[ ]` | | Dead-time, boundary, shifted CDF |
+| EXTEND: pathT95CompletenessConstraint.test.ts | `[ ]` | | Completeness with onset shift |
+| EXTEND: lagStatsFlow.integration.test.ts | `[ ]` | | Onset flows through LAG pass |
+
+*Tests (E2E/Integration):*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| EXTEND: fetchMergeEndToEnd.test.ts | `[ ]` | | Onset flows through full pipeline |
+| EXTEND: windowCohortSemantics.paramPack.e2e.test.ts | `[ ]` | | Onset only from window slices |
+| NEW: onset_cohort_excluded.test.ts | `[ ]` | | Cohort slices don't contribute onset |
+
+*UI Components:*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| ParameterSection.tsx: onset_delta_days field | `[ ]` | | Display, edit, override checkbox |
+| ConversionEdge.tsx: onset in tooltip | `[ ]` | | Add to latency section |
+| VERIFY: edgeBeadHelpers.tsx | `[ ]` | | May need onset in bead data |
+
+*UI Tests:*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| NEW: onset_properties_panel.test.tsx | `[ ]` | | Field displays, edits, override |
+| NEW: onset_edge_tooltip.test.tsx | `[ ]` | | Onset shown in tooltip |
+
+*Documentation:*
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| lag-statistics-reference.md: shifted formula | `[ ]` | | Document completeness with onset |
+
+**Phase 0 Gate:**
+| Item | Status | Date | Notes |
+|------|--------|------|-------|
+| Feature branch created | `[ ]` | | |
+| All §0.1 items complete | `[ ]` | | |
+| All §0.2 items complete | `[x]` | 1-Feb-26 | |
+| All §0.3 schema items complete | `[ ]` | | |
+| All §0.3 adapter items complete | `[ ]` | | |
+| All §0.3 service items complete | `[ ]` | | |
+| All §0.3 LAG topo pass items complete | `[ ]` | | |
+| All §0.3 UI items complete | `[ ]` | | |
+| All §0.3 test items complete | `[ ]` | | |
+| Existing LAG/latency tests still pass | `[ ]` | | No regressions |
 | **PHASE 0 COMPLETE** | `[ ]` | | |
 
 ---
@@ -159,11 +850,12 @@ CREATE TABLE snapshots (
     X                   INTEGER,            -- From-step count
     Y                   INTEGER,            -- To-step count (conversions)
     
-    -- Latency (4 columns)
+    -- Latency (5 columns)
     median_lag_days         REAL,
     mean_lag_days           REAL,
     anchor_median_lag_days  REAL,
     anchor_mean_lag_days    REAL,
+    onset_delta_days        REAL,           -- Onset delay before conversions begin (derived from histogram)
     
     PRIMARY KEY (param_id, core_hash, slice_key, anchor_day, retrieved_at)
 );
@@ -1816,12 +2508,12 @@ dataOperationsService.ts → getFromSourceDirect()
     │       ├── Build DB query params
     │       │   └── snapshotQueryService.ts → buildSnapshotQuery()
     │       │
-        │       ├── Call Python endpoint
-        │       │   └── graphComputeClient.ts → querySnapshots()
-        │       │       └── HTTP POST /api/snapshots/query
-        │       │           └── snapshot_handlers.py → handle_snapshots_query()
-        │       │               └── snapshot_service.py → query_snapshots()
-        │       │                   └── psycopg2 SELECT with retrieved_at <= asAt
+    │       ├── Call Python endpoint
+    │       │   └── graphComputeClient.ts → querySnapshots()
+    │       │       └── HTTP POST /api/snapshots/query
+    │       │           └── snapshot_handlers.py → handle_snapshots_query()
+    │       │               └── snapshot_service.py → query_snapshots()
+    │       │                   └── psycopg2 SELECT with retrieved_at <= asAt
     │       │
     │       ├── Validate signature match
     │       │   └── IF no match → throw Error("Query configuration changed")

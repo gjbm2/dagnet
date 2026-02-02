@@ -8,12 +8,28 @@
 
 ## 1. Objectives
 
-Enable two commercial requirements that require **longitudinal snapshot history**:
+This design enables two distinct classes of analysis:
 
-1. **Conversion Lag Histogram**: Distribution of time from cohort entry to conversion, derived from successive daily snapshots
-2. **Daily Conversions Bar Chart**: Count of conversions attributed to each calendar date within the query timeframe
+1. **Snapshot-history-derived attribution** (requires longitudinal snapshot history in the DB):
+   - **Conversion lag histogram (empirical)**: distribution of lag \(= \text{retrieved\_at} - \text{anchor\_day}\), derived from ΔY between successive snapshots
+   - **Calendar-day attributed conversions (empirical)**: conversions attributed to a calendar day, derived from ΔY between successive snapshots and attributed to `retrieved_at` (UTC day)
+2. **Single-snapshot, maturity-aware views** (available immediately from the latest time-series; improved by the DB but not blocked by lack of history):
+   - **Anchor-day series**: conversions \(Y\) by `anchor_day` (A-entry day in `cohort()` mode; X-entry day in `window()` mode)
+   - **Evidence + forecast delta**: split each `anchor_day` bar into observed evidence vs expected “late arrivals”, using the current latency model (e.g. `path_t95`) to estimate completeness
 
-These cannot be served from parameter files alone, which implement "latest wins" semantics and do not preserve snapshot history.
+The snapshot-history-derived attribution analyses cannot be served from parameter files alone, which implement “latest wins” semantics and do not preserve a longitudinal snapshot history.
+
+### 1.1 Analysis taxonomy (what is and is not available)
+
+This section is intentionally explicit: many analyses sound similar but have different data requirements.
+
+| Analysis class | What it means | Available with **no** snapshot history? | Requires longitudinal snapshot history? |
+|---|---|---:|---:|
+| **Anchor-day series (Y by `anchor_day`)** | “For each anchor day in the range, what is the current best estimate of conversions?” | ✅ Yes (from latest time-series / file “latest wins”) | ❌ No |
+| **Anchor-day series with Evidence + Forecast delta** | “Split each anchor-day total into observed vs expected late arrivals” | ✅ Yes (needs latency model / completeness estimate) | ❌ No |
+| **Lag histogram (empirical)** | “How many conversions arrived at lag 0,1,2… days?” from observed accumulation | ⚠️ Partial: only for cohorts where we have ≥2 snapshots; mature-at-launch cannot be fully attributed | ✅ Yes |
+| **Calendar-day attribution (empirical)** | “How many conversions happened on each calendar day?” by attributing ΔY to snapshot days | ⚠️ Partial: non-latency edges are effectively lag=0; latency edges need snapshots | ✅ Yes |
+| **Historical `asAt(T)` view** | “What did the time-series look like as of date T?” | ❌ No (needs DB) | ✅ Needs DB (virtual snapshots), but does **not** require raw snapshot sequences for every day |
 
 ---
 
@@ -63,11 +79,12 @@ CREATE TABLE snapshots (
     X                   INTEGER,
     Y                   INTEGER,
     
-    -- Latency (4 columns)
+    -- Latency (5 columns)
     median_lag_days         REAL,
     mean_lag_days           REAL,
     anchor_median_lag_days  REAL,
     anchor_mean_lag_days    REAL,
+    onset_delta_days        REAL,
     
     PRIMARY KEY (param_id, core_hash, slice_key, anchor_day, retrieved_at)
 );
@@ -76,7 +93,7 @@ CREATE INDEX idx_snapshots_lookup
     ON snapshots (param_id, core_hash, slice_key, anchor_day);
 ```
 
-**Total: 13 columns** (5 PK + 1 audit + 3 counts + 4 latency)
+**Total: 14 columns** (5 PK + 1 audit + 3 counts + 5 latency)
 
 **Note on `context_def_hashes`:**
 - Stores the `x` portion of the structured signature as JSON: `{"channel":"hash1","device":"hash2"}`
@@ -137,6 +154,7 @@ SELECT (retrieved_at AT TIME ZONE 'UTC')::DATE AS attribution_date
 | `mean_lag_days` | Amplitude `dayAvgTransTimes` | Mean transition time to Y (days) |
 | `anchor_median_lag_days` | Amplitude `dayMedianTransTimes` | Median A→X time (days); null for 2-step funnel |
 | `anchor_mean_lag_days` | Amplitude `dayAvgTransTimes` | Mean A→X time (days); null for 2-step funnel |
+| `onset_delta_days` | Derived from Amplitude `stepTransTimeDistribution` | Onset delay (days) before conversions begin (simple V1: first day bin with any conversions) |
 
 ### 3.4 Why Store Latency?
 
@@ -148,6 +166,20 @@ Latency data (median/mean lag) is stored per row because:
 4. **Latency trends**: Track whether conversion lag is increasing/decreasing across cohorts
 
 Note: Lag histogram can also be **derived** from ΔY between successive snapshots (day-level granularity). Storing Amplitude's values provides sub-day precision and a reference for validation.
+
+### 3.4.1 `onset_delta_days` (V1: “first conversion”)
+
+For many `window()` slices, we observe that conversions do not begin immediately. We therefore define an **onset delay** \(`onset_delta_days`\) in days, used to support shifted-latency fitting (e.g. shifted lognormal) and more realistic early-time maturity.
+
+**V1 derivation (simple):**
+- Use Amplitude `stepTransTimeDistribution` for the relevant edge step.
+- Convert bin ranges from ms to day ranges.
+- Define `onset_delta_days` as the smallest whole day \(d \ge 0\) for which the day-binned histogram has `count > 0`.
+- If all explicit day bins are zero but the tail bucket (e.g. `10+`) is non-zero, set `onset_delta_days` to the tail start day (e.g. 10).
+
+**Persistence:**
+- Stored in parameter files as a derived latency summary value in days (for offline-first reproducibility).
+- Also written to the snapshot DB per row (redundant but deliberate) to keep the DB self-contained for analysis queries.
 
 ### 3.5 Virtual Snapshot Reconstruction
 
@@ -204,8 +236,11 @@ This returns **one row per anchor_day** — the latest snapshot we had as of dat
 | **Raw snapshots** | All rows for anchor_day range | Multiple rows per anchor_day (full accumulation history) |
 | **Virtual snapshot** | Reconstructed view at date X | One row per anchor_day (latest as of X) |
 
-**Histogram/Daily Conversions → Raw snapshots:**
-Derivations need ALL snapshots to compute ΔY between successive `retrieved_at` values.
+**Snapshot-delta attribution analyses → Raw snapshots:**
+Empirical lag histogram and calendar-day attribution both need multiple snapshots to compute ΔY between successive `retrieved_at` values.
+
+**Anchor-day series (and Evidence + Forecast delta) → Virtual snapshot (or file “latest wins”):**
+These are computed from the latest known \(Y\) per `anchor_day` and do not require longitudinal snapshot sequences.
 
 **`asAt(date)` query → Virtual snapshot:**
 Returns the reconstructed view as of that date, matching what the file would have shown.
@@ -255,13 +290,15 @@ This produces a time-series showing how the conversion rate evolved week-over-we
 **Day 1 — Zero snapshot history:**
 
 We can STILL provide analytics for:
-- **Mature cohorts (age > t95):** Current file/Amplitude data IS the final truth
+- **Anchor-day series (all modes):** Latest \(Y\) by `anchor_day` is available immediately (“latest wins”)
+- **Mature cohorts (age > t95):** Current file/Amplitude data is effectively final for those `anchor_day`s
+- **Evidence + forecast delta:** Use latency model completeness to estimate “late arrivals” without needing historical snapshots
 - **Non-latency edges:** Current data IS the final truth (lag ≈ 0)
 - **Any analysis not requiring historical comparison**
 
 We CANNOT provide:
 - **Immature cohort history:** "What did this cohort look like 7 days ago?"
-- **Lag histogram for immature cohorts:** Need to observe accumulation
+- **Empirical lag attribution for immature cohorts without snapshots:** Need to observe accumulation (ΔY across `retrieved_at`)
 
 **Graceful degradation logic:**
 
@@ -823,14 +860,14 @@ def derive_histogram(rows: list[dict]) -> AnalysisResult:
     )
 ```
 
-### 5.5 Python Derives Daily Conversions
+### 5.5 Python Derives Calendar-day Attribution (ΔY → `retrieved_at`)
 
 ```python
 # lib/runner/daily_conversions_derivation.py
 
 def derive_daily_conversions(rows: list[dict]) -> AnalysisResult:
     """
-    Derive daily conversion counts (conversions attributed to each calendar date).
+    Derive calendar-day attributed conversion counts (empirical).
     
     For each anchor_day, ΔY between snapshots represents conversions that occurred
     (or were attributed) on the snapshot date.
@@ -857,7 +894,7 @@ def derive_daily_conversions(rows: list[dict]) -> AnalysisResult:
     
     return AnalysisResult(
         analysis_type='daily_conversions',
-        analysis_name='Daily Conversions',
+        analysis_name='Calendar-day Attributed Conversions',
         semantics=ResultSemantics(
             dimensions=[DimensionSpec(id='date', name='Date', type='time')],
             metrics=[MetricSpec(id='conversions', name='Conversions', type='count')],
@@ -1581,8 +1618,10 @@ Window mode snapshots work identically to cohort mode for derivation purposes:
 | `A` column | Anchor entrants | NULL (no anchor concept) |
 | `X` column | From-step count | From-step count |
 | `Y` column | Conversions | Conversions |
+| Anchor-day series (Y by `anchor_day`) | Direct from latest/virtual snapshot | Direct from latest/virtual snapshot |
+| Evidence + forecast delta (E/F split) | Completeness from latency model | Completeness from latency model |
 | Histogram derivation | ΔY between snapshots | ΔY between snapshots |
-| Daily conversions | ΔY attributed to `retrieved_at` | ΔY attributed to `retrieved_at` |
+| Calendar-day attribution | ΔY attributed to `retrieved_at` | ΔY attributed to `retrieved_at` |
 
 **Window mode is NOT problematic.** The derivation algorithm is identical:
 - For each `anchor_day`, successive `retrieved_at` snapshots show Y accumulating
@@ -2836,9 +2875,11 @@ Before implementing `asAt`:
 
 ## 20. Snapshot-Based Analysis Types
 
-### 20.1 Daily Conversions Chart
+### 20.1 Calendar-day Attributed Conversions (Snapshot-delta)
 
-**Purpose:** Show a bar chart of conversions per calendar date for a selected edge.
+**Purpose:** Show a bar chart of conversions per calendar date for a selected edge, by attributing ΔY to the snapshot day (`retrieved_at` UTC day).
+
+**Important:** This is **not** the same as the anchor-day series (Y by `anchor_day`). Anchor-day series can be produced immediately from the latest time-series and optionally split into Evidence + Forecast delta; it does not require longitudinal snapshots. This analysis does.
 
 **Trigger:** `from(X).to(Y)` DSL with analysis type `daily_conversions_snapshot`.
 
@@ -2865,7 +2906,7 @@ const request: AnalysisRequest = {
 ```python
 def derive_daily_conversions(rows: list[dict]) -> AnalysisResult:
     """
-    Derive daily conversion counts from snapshot history.
+    Derive calendar-day attributed conversion counts from snapshot history.
     
     For each anchor_day, ΔY between snapshots = conversions attributed
     to the retrieved_at date.
@@ -2891,7 +2932,7 @@ def derive_daily_conversions(rows: list[dict]) -> AnalysisResult:
     
     return AnalysisResult(
         analysis_type='daily_conversions_snapshot',
-        analysis_name='Daily Conversions',
+        analysis_name='Calendar-day Attributed Conversions',
         semantics=ResultSemantics(
             dimensions=[DimensionSpec(id='date', name='Date', type='time', role='primary')],
             metrics=[MetricSpec(id='conversions', name='Conversions', type='count')],
@@ -2989,7 +3030,7 @@ const selectedEdgeId = useMemo(() => {
 
 **Future enhancements (post-V1):**
 - Line chart showing conversion % by stage over time
-- Evidence vs forecast distinction for immature cohorts
+- Evidence vs forecast distinction as a time-series overlay (note: the bar-style Evidence + Forecast delta by `anchor_day` is available without snapshot history; this bullet is about richer charting)
 - Configurable aggregation (daily/weekly/monthly)
 
 **Key insight:** Charting complexity should NOT block the core write/read path. Get data flowing first; iterate on presentation later.
@@ -3026,8 +3067,8 @@ The derivation needs access to latency columns to compute completeness and split
 // Add to ANALYSIS_TYPES array:
 {
   id: 'daily_conversions_snapshot',
-  name: 'Daily Conversions (History)',
-  shortDescription: 'Conversions per day from snapshot history',
+  name: 'Calendar-day Attributed Conversions (History)',
+  shortDescription: 'Conversions per calendar day from snapshot deltas',
   selectionHint: 'Select single edge with from().to()',
   icon: Calendar,  // from lucide-react
 },
@@ -3376,9 +3417,9 @@ Response shape:
 
 ---
 
-## 22. Critical Path for Daily Conversions
+## 22. Critical Path for Calendar-day Attribution (Snapshot-delta)
 
-To enable the daily conversions use case end-to-end:
+To enable the calendar-day attributed conversions use case end-to-end:
 
 1. **Phase 0** (Prerequisite)
    - [ ] Fix latency preservation in dual-query/composite paths (§13)
@@ -3390,18 +3431,18 @@ To enable the daily conversions use case end-to-end:
 
 3. **Phase 2** (Read Path)
    - [ ] Add `snapshot_query` parameter to `AnalysisRequest`
-   - [ ] Implement `derive_daily_conversions()` in Python (§19.1)
+   - [ ] Implement `derive_daily_conversions()` in Python (§5.5)
    - [ ] Implement `query_snapshots()` DB query function
 
 4. **Phase 3** (Frontend Integration)
-   - [ ] Edge selection → DSL propagation (§20.1)
-   - [ ] Add bar chart renderer (§20.2)
-   - [ ] Register `daily_conversions_snapshot` analysis type (§20.3)
-   - [ ] Build snapshot query construction service (§20.4)
+   - [ ] Edge selection → DSL propagation (§21.1)
+   - [ ] Add bar chart renderer (see §20.1 “Frontend rendering”)
+   - [ ] Register `daily_conversions_snapshot` analysis type (§21.3)
+   - [ ] Build snapshot query construction service (§21.4)
 
 5. **Phase 4** (Polish)
    - [ ] Coverage warnings for sparse data
-   - [ ] Snapshot inventory UI (§20.5)
+   - [ ] Snapshot inventory UI (§21.5)
 
 ---
 
@@ -3622,7 +3663,7 @@ const FIXTURE_DUAL_QUERY_RESULT = {
 
 #### The Question
 
-Certain analytics are possible for **mature cohorts** and **non-latency edges** even without accumulated snapshot history. How should we design the analytics response to handle this gracefully?
+Certain analytics are possible immediately (from the latest time-series), while others require longitudinal snapshot history. How should we design analytics responses so it is always clear which class of result the user is seeing, and what is missing (if anything)?
 
 #### Background
 
@@ -3635,14 +3676,14 @@ For mature cohorts and non-latency edges, the **current file data IS the histori
 
 #### What This Affects
 
-| Analysis Type | Needs Snapshot Accumulation? | Mature/Non-latency Handling |
-|---------------|------------------------------|----------------------------|
-| **Total conversions** | ❌ No | Use baseline/file Y directly |
-| **Conversion rate** | ❌ No | Use baseline/file Y directly |
-| **Lag histogram** | ✅ Yes (for attribution) | ? |
-| **Daily conversions** | ✅ Yes (for attribution) | ? |
+| Analysis Type | Requires longitudinal snapshot history? | Availability without history |
+|---------------|-----------------------------------------|-----------------------------|
+| **Anchor-day series (Y by `anchor_day`)** | ❌ No | ✅ Available immediately (especially reliable for cohorts older than `path_t95`) |
+| **Anchor-day series with Evidence + Forecast delta** | ❌ No | ✅ Available immediately (uses latency model completeness) |
+| **Lag histogram (empirical attribution)** | ✅ Yes | ⚠️ Partial: cohorts fetched before history began cannot be fully attributed |
+| **Calendar-day attribution (empirical)** | ✅ Yes | ⚠️ Partial: non-latency edges are effectively lag=0; latency edges need snapshots |
 
-The open question is: **what should analytics return for mature/non-latency cohorts where we CAN'T attribute conversions to specific lags or dates?**
+The open question is specifically about the **attribution** analyses (lag histogram and calendar-day attribution): **what should we return when full empirical attribution is not possible because the necessary snapshot history does not exist (yet)?**
 
 #### Options Under Consideration
 
@@ -3704,9 +3745,11 @@ Simply don't offer histogram/daily-conversions until we have N days of snapshots
 
 1. **Non-latency edges are simpler:** For these, each day's Y is immediately final. A histogram is trivial (all conversions have lag=0). Daily conversions = Y per anchor_day. No accumulation needed.
 
-2. **The "mature at launch" cohort is fixed:** Over time, these cohorts age out of the analysis window. Eventually all visible cohorts have full accumulation history.
+2. **Maturity-aware “Evidence + Forecast delta” is a valid fallback view:** Even without longitudinal snapshots, we can show a by-`anchor_day` chart where each bar is split into observed evidence plus forecast delta (expected late arrivals), using the latency model / `path_t95` completeness. This is not empirical attribution; it is an analytic projection, and should be labelled as such.
 
-3. **File data availability:** If we need mature cohort Y and it's not in the DB baseline, can Python query the file? (Current design: Python queries DB only.) Or should frontend send mature cohort data in the analytics request?
+3. **The "mature at launch" cohort is fixed:** Over time, these cohorts age out of the analysis window. Eventually all visible cohorts have full accumulation history.
+
+4. **File data availability:** If we need mature cohort Y and it's not in the DB baseline, can Python query the file? (Current design: Python queries DB only.) Or should frontend send mature cohort data in the analytics request?
 
 #### Decision Required
 
