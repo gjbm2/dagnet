@@ -233,7 +233,7 @@ def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     
     Queries snapshot DB and derives analytics (histogram, daily conversions).
     """
-    from datetime import date
+    from datetime import date, datetime
     from snapshot_service import query_snapshots
     from runner.histogram_derivation import derive_lag_histogram
     from runner.daily_conversions_derivation import derive_daily_conversions
@@ -249,6 +249,11 @@ def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     if not snapshot_query.get('anchor_to'):
         raise ValueError("snapshot_query.anchor_to required")
     
+    # Optional point-in-time cut-off (supports serial cron-run simulation)
+    as_at = None
+    if snapshot_query.get('as_at'):
+        as_at = datetime.fromisoformat(str(snapshot_query['as_at']).replace('Z', '+00:00'))
+
     # Query snapshots
     rows = query_snapshots(
         param_id=snapshot_query['param_id'],
@@ -256,6 +261,7 @@ def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
         slice_keys=snapshot_query.get('slice_keys', ['']),
         anchor_from=date.fromisoformat(snapshot_query['anchor_from']),
         anchor_to=date.fromisoformat(snapshot_query['anchor_to']),
+        as_at=as_at,
     )
     
     if not rows:

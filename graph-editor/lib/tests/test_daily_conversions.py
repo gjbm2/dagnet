@@ -170,3 +170,27 @@ class TestDailyConversionsDerivation:
         assert date_map.get('2025-10-03', 0) == 5
         
         assert result['total_conversions'] == 15
+
+    def test_daily_conversions_multi_slice_mece_safe(self):
+        """
+        Multiple slices for the same anchor_day MUST NOT interfere with deltas.
+
+        This simulates MECE partitions (e.g. channel=A, channel=B) where each slice is a
+        separate cumulative Y series over retrieved_at.
+        """
+        rows = [
+            # Slice A: Y goes 0 -> 5
+            {'anchor_day': '2025-10-01', 'slice_key': 'context(channel:a)', 'y': 2, 'retrieved_at': datetime(2025, 10, 2, 12, 0, 0)},
+            {'anchor_day': '2025-10-01', 'slice_key': 'context(channel:a)', 'y': 5, 'retrieved_at': datetime(2025, 10, 3, 12, 0, 0)},
+            # Slice B: Y goes 0 -> 7
+            {'anchor_day': '2025-10-01', 'slice_key': 'context(channel:b)', 'y': 3, 'retrieved_at': datetime(2025, 10, 2, 12, 0, 0)},
+            {'anchor_day': '2025-10-01', 'slice_key': 'context(channel:b)', 'y': 7, 'retrieved_at': datetime(2025, 10, 3, 12, 0, 0)},
+        ]
+
+        result = derive_daily_conversions(rows)
+
+        # Oct 2: 2 + 3 = 5, Oct 3: (5-2) + (7-3) = 7
+        date_map = {d['date']: d['conversions'] for d in result['data']}
+        assert date_map.get('2025-10-02', 0) == 5
+        assert date_map.get('2025-10-03', 0) == 7
+        assert result['total_conversions'] == 12

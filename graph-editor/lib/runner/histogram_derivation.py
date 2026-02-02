@@ -27,17 +27,23 @@ def derive_lag_histogram(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             'cohorts_analysed': int
         }
     """
-    # Group by anchor_day
-    by_anchor: Dict[date, List[Dict]] = defaultdict(list)
+    # Group by (anchor_day, slice_key).
+    #
+    # CRITICAL:
+    # - retrieved_at deltas must be computed within a single semantic series.
+    # - If multiple slices are provided (e.g. MECE channel partition), compute deltas
+    #   per slice then aggregate, rather than mixing slices (which corrupts deltas).
+    by_series: Dict[tuple, List[Dict]] = defaultdict(list)
     for row in rows:
         anchor = row['anchor_day']
         if isinstance(anchor, str):
             anchor = date.fromisoformat(anchor)
-        by_anchor[anchor].append(row)
+        slice_key = row.get('slice_key') or ''
+        by_series[(anchor, slice_key)].append(row)
     
     lag_bins: Dict[int, int] = defaultdict(int)
     
-    for anchor_day, snapshots in by_anchor.items():
+    for (anchor_day, _slice_key), snapshots in by_series.items():
         # Sort by retrieved_at
         snapshots_sorted = sorted(snapshots, key=lambda r: _parse_datetime(r['retrieved_at']))
         prev_Y = 0
@@ -68,7 +74,7 @@ def derive_lag_histogram(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         'analysis_type': 'lag_histogram',
         'data': data,
         'total_conversions': total,
-        'cohorts_analysed': len(by_anchor),
+        'cohorts_analysed': len(by_series),
     }
 
 
