@@ -122,6 +122,7 @@ export function EnhancedSelector({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showSyncMenu, setShowSyncMenu] = useState(false);
   const [registryItems, setRegistryItems] = useState<RegistryItem[]>([]);
+  const [indexVersion, setIndexVersion] = useState(0); // Incremented when index file changes
   
   // Get context to open modal
   const selectionContext = useSelectionContext();
@@ -151,9 +152,20 @@ export function EnhancedSelector({
     }
   }, [value]);
 
+  // Subscribe to index file changes - triggers reload when index file is loaded/updated
+  useEffect(() => {
+    const indexFileId = `${type}-index`;
+    const unsubscribe = fileRegistry.subscribe(indexFileId, () => {
+      // Index file changed - increment version to trigger items reload
+      setIndexVersion(v => v + 1);
+    });
+    
+    return unsubscribe;
+  }, [type]);
+
   // Load registry items
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES2: Load registry items`);
+    console.log(`[${new Date().toISOString()}] [EnhancedSelector] useEffect#ES2: Load registry items (version ${indexVersion})`);
     const loadItems = async () => {
       try {
         let items: RegistryItem[];
@@ -172,7 +184,7 @@ export function EnhancedSelector({
     };
     
     loadItems();
-  }, [type, parameterType]);
+  }, [type, parameterType, indexVersion]);
 
   // Map registry items
   const allItems = registryItems.map(item => ({

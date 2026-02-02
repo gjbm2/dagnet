@@ -46,6 +46,12 @@ def extract_python_api_routes(content: str) -> set:
             routes.add('/api/snapshots/append')
         elif endpoint == 'snapshots-health':
             routes.add('/api/snapshots/health')
+        elif endpoint == 'snapshots-inventory':
+            routes.add('/api/snapshots/inventory')
+        elif endpoint == 'snapshots-delete':
+            routes.add('/api/snapshots/delete')
+        elif endpoint == 'snapshots-query-full':
+            routes.add('/api/snapshots/query-full')
         else:
             routes.add(f'/api/{endpoint}')
     return routes

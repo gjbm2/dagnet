@@ -88,6 +88,57 @@ async def snapshots_delete_test(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Snapshot inventory endpoint (batch query for UI)
+@app.post("/api/snapshots/inventory")
+async def snapshots_inventory(request: Request):
+    """Get snapshot inventory for multiple parameters."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_inventory
+        return handle_snapshots_inventory(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/inventory] Error: {e}")
+        print(f"[snapshots/inventory] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Snapshot delete endpoint (for "Delete snapshots (X)" UI)
+@app.post("/api/snapshots/delete")
+async def snapshots_delete(request: Request):
+    """Delete all snapshots for a specific parameter."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_delete
+        return handle_snapshots_delete(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/delete] Error: {e}")
+        print(f"[snapshots/delete] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Snapshot full query endpoint (for analytics)
+@app.post("/api/snapshots/query-full")
+async def snapshots_query_full(request: Request):
+    """Query snapshots with full filtering support."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_query_full
+        return handle_snapshots_query_full(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/query-full] Error: {e}")
+        print(f"[snapshots/query-full] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Snapshot DB append endpoint
 @app.post("/api/snapshots/append")
 async def snapshots_append(request: Request):

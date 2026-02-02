@@ -177,14 +177,25 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     Handle runner/analyze endpoint.
     
     Args:
-        data: Request body containing:
-            - scenarios: List of scenario data (required)
-            - query_dsl: DSL query string (optional)
-            - analysis_type: Override analysis type (optional)
+        data: Request body containing EITHER:
+            Scenario-based analysis:
+                - scenarios: List of scenario data (required)
+                - query_dsl: DSL query string (optional)
+                - analysis_type: Override analysis type (optional)
+            
+            Snapshot-based analysis:
+                - snapshot_query: {param_id, core_hash, anchor_from, anchor_to, slice_keys?}
+                - analysis_type: 'lag_histogram' | 'daily_conversions'
     
     Returns:
         Analysis results
     """
+    # Check for snapshot-based analysis first
+    snapshot_query = data.get('snapshot_query')
+    if snapshot_query:
+        return _handle_snapshot_analyze(data)
+    
+    # Standard scenario-based analysis
     from runner import analyze
     from runner.types import AnalysisRequest, ScenarioData
     
@@ -214,6 +225,59 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     
     # Return JSON-serializable response
     return response.model_dump()
+
+
+def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle snapshot-based analysis within runner/analyze endpoint.
+    
+    Queries snapshot DB and derives analytics (histogram, daily conversions).
+    """
+    from datetime import date
+    from snapshot_service import query_snapshots
+    from runner.histogram_derivation import derive_lag_histogram
+    from runner.daily_conversions_derivation import derive_daily_conversions
+    
+    snapshot_query = data['snapshot_query']
+    analysis_type = data.get('analysis_type', 'lag_histogram')
+    
+    # Validate required fields
+    if not snapshot_query.get('param_id'):
+        raise ValueError("snapshot_query.param_id required")
+    if not snapshot_query.get('anchor_from'):
+        raise ValueError("snapshot_query.anchor_from required")
+    if not snapshot_query.get('anchor_to'):
+        raise ValueError("snapshot_query.anchor_to required")
+    
+    # Query snapshots
+    rows = query_snapshots(
+        param_id=snapshot_query['param_id'],
+        core_hash=snapshot_query.get('core_hash'),
+        slice_keys=snapshot_query.get('slice_keys', ['']),
+        anchor_from=date.fromisoformat(snapshot_query['anchor_from']),
+        anchor_to=date.fromisoformat(snapshot_query['anchor_to']),
+    )
+    
+    if not rows:
+        return {
+            "success": False,
+            "error": "No snapshot data found for query",
+            "query": snapshot_query,
+        }
+    
+    # Route to appropriate derivation
+    if analysis_type == 'lag_histogram':
+        result = derive_lag_histogram(rows)
+    elif analysis_type == 'daily_conversions':
+        result = derive_daily_conversions(rows)
+    else:
+        raise ValueError(f"Unknown analysis_type for snapshot: {analysis_type}")
+    
+    return {
+        "success": True,
+        "result": result,
+        "rows_analysed": len(rows),
+    }
 
 
 def handle_runner_available_analyses(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -548,3 +612,116 @@ def handle_snapshots_delete_test(data: Dict[str, Any]) -> Dict[str, Any]:
         }
     finally:
         conn.close()
+
+
+# =============================================================================
+# Phase 2: Read Path — Query Endpoints
+# =============================================================================
+
+def handle_snapshots_query_full(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle full snapshot query endpoint.
+    
+    Query snapshots with filtering by date range, signature, slices.
+    
+    Args:
+        data: Request body containing:
+            - param_id: Parameter ID (required)
+            - core_hash: Query signature (optional)
+            - slice_keys: List of slice keys (optional)
+            - anchor_from: Start date ISO string (optional)
+            - anchor_to: End date ISO string (optional)
+            - as_at: Timestamp ISO string for point-in-time query (optional)
+            - limit: Max rows (optional, default 10000)
+    
+    Returns:
+        Response dict with rows
+    """
+    from datetime import date, datetime
+    from snapshot_service import query_snapshots
+    
+    param_id = data.get('param_id')
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    
+    # Parse optional date filters
+    anchor_from = None
+    if data.get('anchor_from'):
+        anchor_from = date.fromisoformat(data['anchor_from'])
+    
+    anchor_to = None
+    if data.get('anchor_to'):
+        anchor_to = date.fromisoformat(data['anchor_to'])
+    
+    as_at = None
+    if data.get('as_at'):
+        as_at = datetime.fromisoformat(data['as_at'].replace('Z', '+00:00'))
+    
+    rows = query_snapshots(
+        param_id=param_id,
+        core_hash=data.get('core_hash'),
+        slice_keys=data.get('slice_keys'),
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        as_at=as_at,
+        limit=data.get('limit', 10000)
+    )
+    
+    return {
+        'success': True,
+        'rows': rows,
+        'count': len(rows)
+    }
+
+
+def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle batch inventory endpoint.
+    
+    Get snapshot inventory for multiple parameters in a single request.
+    
+    Args:
+        data: Request body containing:
+            - param_ids: List of parameter IDs (required)
+    
+    Returns:
+        Response dict with inventory per param_id
+    """
+    from snapshot_service import get_batch_inventory
+    
+    param_ids = data.get('param_ids')
+    if not param_ids:
+        raise ValueError("Missing 'param_ids' field")
+    
+    if not isinstance(param_ids, list):
+        raise ValueError("'param_ids' must be a list")
+    
+    inventory = get_batch_inventory(param_ids)
+    
+    return {
+        'success': True,
+        'inventory': inventory
+    }
+
+
+def handle_snapshots_delete(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle snapshot delete endpoint.
+    
+    Delete all snapshots for a specific parameter.
+    Used by "Delete snapshots (X)" UI feature.
+    
+    Args:
+        data: Request body containing:
+            - param_id: Exact parameter ID to delete (required)
+    
+    Returns:
+        Response dict with deleted count
+    """
+    from snapshot_service import delete_snapshots
+    
+    param_id = data.get('param_id')
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    
+    return delete_snapshots(param_id)

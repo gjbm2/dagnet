@@ -193,3 +193,260 @@ def health_check() -> Dict[str, Any]:
         return {"status": "error", "db": "not_configured", "error": str(e)}
     except Exception as e:
         return {"status": "error", "db": "unavailable", "error": str(e)}
+
+
+# =============================================================================
+# Phase 2: Read Path — Query Functions
+# =============================================================================
+
+def query_snapshots(
+    param_id: str,
+    core_hash: Optional[str] = None,
+    slice_keys: Optional[List[str]] = None,
+    anchor_from: Optional[date] = None,
+    anchor_to: Optional[date] = None,
+    as_at: Optional[datetime] = None,
+    limit: int = 10000
+) -> List[Dict[str, Any]]:
+    """
+    Query snapshot rows from the database.
+    
+    Args:
+        param_id: Workspace-prefixed parameter ID (required)
+        core_hash: Query signature hash (optional filter)
+        slice_keys: List of slice keys to include (optional, None = all)
+        anchor_from: Start of anchor date range (optional)
+        anchor_to: End of anchor date range (optional)
+        as_at: If provided, only return snapshots retrieved before this timestamp
+        limit: Maximum rows to return (default 10000)
+    
+    Returns:
+        List of snapshot rows as dicts with columns:
+        - param_id, core_hash, slice_key, anchor_day, retrieved_at
+        - a, x, y (lowercase for JSON serialization)
+        - median_lag_days, mean_lag_days
+        - anchor_median_lag_days, anchor_mean_lag_days
+        - onset_delta_days
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        
+        query = """
+            SELECT 
+                param_id, core_hash, slice_key, anchor_day, retrieved_at,
+                A as a, X as x, Y as y,
+                median_lag_days, mean_lag_days,
+                anchor_median_lag_days, anchor_mean_lag_days,
+                onset_delta_days
+            FROM snapshots
+            WHERE param_id = %s
+        """
+        params: List[Any] = [param_id]
+        
+        if core_hash is not None:
+            query += " AND core_hash = %s"
+            params.append(core_hash)
+        
+        if slice_keys is not None:
+            query += " AND slice_key = ANY(%s)"
+            params.append(slice_keys)
+        
+        if anchor_from is not None:
+            query += " AND anchor_day >= %s"
+            params.append(anchor_from)
+        
+        if anchor_to is not None:
+            query += " AND anchor_day <= %s"
+            params.append(anchor_to)
+        
+        if as_at is not None:
+            query += " AND retrieved_at <= %s"
+            params.append(as_at)
+        
+        query += " ORDER BY anchor_day, slice_key, retrieved_at"
+        query += f" LIMIT {int(limit)}"
+        
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        # Convert date/datetime to ISO strings for JSON serialization
+        for row in rows:
+            if row.get('anchor_day') and hasattr(row['anchor_day'], 'isoformat'):
+                row['anchor_day'] = row['anchor_day'].isoformat()
+            if row.get('retrieved_at') and hasattr(row['retrieved_at'], 'isoformat'):
+                row['retrieved_at'] = row['retrieved_at'].isoformat()
+        
+        return rows
+        
+    finally:
+        conn.close()
+
+
+def get_snapshot_inventory(
+    param_id: str,
+    core_hash: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get inventory summary of available snapshots for a parameter.
+    
+    Args:
+        param_id: Workspace-prefixed parameter ID
+        core_hash: Optional filter by query signature
+    
+    Returns:
+        Dict with:
+        - has_data: bool
+        - earliest: ISO date string or None
+        - latest: ISO date string or None
+        - row_count: int
+        - unique_days: int
+        - unique_slices: int
+        - unique_hashes: int (distinct core_hash values)
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        
+        query = """
+            SELECT 
+                MIN(anchor_day) as earliest,
+                MAX(anchor_day) as latest,
+                COUNT(*) as row_count,
+                COUNT(DISTINCT anchor_day) as unique_days,
+                COUNT(DISTINCT slice_key) as unique_slices,
+                COUNT(DISTINCT core_hash) as unique_hashes
+            FROM snapshots
+            WHERE param_id = %s
+        """
+        params: List[Any] = [param_id]
+        
+        if core_hash is not None:
+            query += " AND core_hash = %s"
+            params.append(core_hash)
+        
+        cur.execute(query, params)
+        row = cur.fetchone()
+        
+        if not row or row[0] is None:
+            return {
+                'has_data': False,
+                'param_id': param_id,
+                'earliest': None,
+                'latest': None,
+                'row_count': 0,
+                'unique_days': 0,
+                'unique_slices': 0,
+                'unique_hashes': 0,
+            }
+        
+        return {
+            'has_data': True,
+            'param_id': param_id,
+            'earliest': row[0].isoformat() if row[0] else None,
+            'latest': row[1].isoformat() if row[1] else None,
+            'row_count': row[2],
+            'unique_days': row[3],
+            'unique_slices': row[4],
+            'unique_hashes': row[5],
+        }
+        
+    finally:
+        conn.close()
+
+
+def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Get inventory summary for multiple parameters in a single query.
+    
+    More efficient than calling get_snapshot_inventory() multiple times.
+    
+    Args:
+        param_ids: List of workspace-prefixed parameter IDs
+    
+    Returns:
+        Dict mapping param_id -> inventory dict (same format as get_snapshot_inventory)
+    """
+    if not param_ids:
+        return {}
+    
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT 
+                param_id,
+                MIN(anchor_day) as earliest,
+                MAX(anchor_day) as latest,
+                COUNT(*) as row_count,
+                COUNT(DISTINCT anchor_day) as unique_days,
+                COUNT(DISTINCT slice_key) as unique_slices,
+                COUNT(DISTINCT core_hash) as unique_hashes
+            FROM snapshots
+            WHERE param_id = ANY(%s)
+            GROUP BY param_id
+        """, (param_ids,))
+        
+        results = {}
+        
+        # Initialize all requested param_ids with empty inventory
+        for pid in param_ids:
+            results[pid] = {
+                'has_data': False,
+                'param_id': pid,
+                'earliest': None,
+                'latest': None,
+                'row_count': 0,
+                'unique_days': 0,
+                'unique_slices': 0,
+                'unique_hashes': 0,
+            }
+        
+        # Fill in actual data for params that have snapshots
+        for row in cur.fetchall():
+            pid = row[0]
+            results[pid] = {
+                'has_data': True,
+                'param_id': pid,
+                'earliest': row[1].isoformat() if row[1] else None,
+                'latest': row[2].isoformat() if row[2] else None,
+                'row_count': row[3],
+                'unique_days': row[4],
+                'unique_slices': row[5],
+                'unique_hashes': row[6],
+            }
+        
+        return results
+        
+    finally:
+        conn.close()
+
+
+def delete_snapshots(param_id: str) -> Dict[str, Any]:
+    """
+    Delete all snapshots for a specific parameter.
+    
+    Used by the "Delete snapshots (X)" UI feature.
+    
+    Args:
+        param_id: Exact workspace-prefixed parameter ID to delete
+    
+    Returns:
+        Dict with:
+        - success: bool
+        - deleted: int (rows deleted)
+        - error: str (if success=False)
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM snapshots WHERE param_id = %s", (param_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        return {'success': True, 'deleted': deleted}
+    except Exception as e:
+        return {'success': False, 'deleted': 0, 'error': str(e)}
+    finally:
+        conn.close()

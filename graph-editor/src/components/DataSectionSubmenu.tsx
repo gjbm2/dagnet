@@ -23,6 +23,10 @@ interface DataSectionSubmenuProps {
   onClearCache: (section: DataOperationSection) => void;
   onClearDataFile: (section: DataOperationSection) => void;
   onOpenFile: (section: DataOperationSection) => void;
+  /** Snapshot count for this section (optional, only for parameters) */
+  snapshotCount?: number;
+  /** Handler to delete snapshots (optional) */
+  onDeleteSnapshots?: (section: DataOperationSection) => void;
 }
 
 export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
@@ -39,6 +43,8 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
   onClearCache,
   onClearDataFile,
   onOpenFile,
+  snapshotCount,
+  onDeleteSnapshots,
 }) => {
   return (
     <div
@@ -256,6 +262,29 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             >
               <span>Clear data file</span>
               <Trash2 size={12} style={{ color: '#666' }} />
+            </div>
+          )}
+          
+          {/* Delete snapshots - show for parameters (disabled when count is 0 or loading) */}
+          {onDeleteSnapshots && (
+            <div
+              onClick={(snapshotCount ?? 0) > 0 ? () => onDeleteSnapshots(section) : undefined}
+              style={{
+                padding: '6px 12px',
+                cursor: (snapshotCount ?? 0) > 0 ? 'pointer' : 'default',
+                fontSize: '13px',
+                borderRadius: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '16px',
+                opacity: (snapshotCount ?? 0) > 0 ? 1 : 0.4,
+              }}
+              onMouseEnter={(e) => (snapshotCount ?? 0) > 0 && (e.currentTarget.style.background = '#f8f9fa')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            >
+              <span>Delete snapshots ({snapshotCount ?? 0})</span>
+              <Database size={12} style={{ color: (snapshotCount ?? 0) > 0 ? '#dc2626' : '#999' }} />
             </div>
           )}
         </div>

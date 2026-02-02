@@ -56,6 +56,7 @@ export function ParameterSelector({
   const [isNewFileModalOpen, setIsNewFileModalOpen] = useState(false);
   const [selectedRegistryId, setSelectedRegistryId] = useState<string | null>(null);
   const [registryItems, setRegistryItems] = useState<RegistryItem[]>([]);
+  const [indexVersion, setIndexVersion] = useState(0); // Incremented when index file changes
   const inputRef = useRef<HTMLInputElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
 
@@ -68,6 +69,17 @@ export function ParameterSelector({
       prevValueRef.current = value;
     }
   }, [value]);
+
+  // Subscribe to index file changes - triggers reload when index file is loaded/updated
+  useEffect(() => {
+    const indexFileId = `${type}-index`;
+    const unsubscribe = fileRegistry.subscribe(indexFileId, () => {
+      // Index file changed - increment version to trigger items reload
+      setIndexVersion(v => v + 1);
+    });
+    
+    return unsubscribe;
+  }, [type]);
 
   // Load registry items from central service
   useEffect(() => {
@@ -91,7 +103,7 @@ export function ParameterSelector({
     };
     
     loadItems();
-  }, [type, parameterType]);
+  }, [type, parameterType, indexVersion]);
 
   // Map RegistryItem to format expected by selector
   const allItems = registryItems.map(item => ({

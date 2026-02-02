@@ -21,6 +21,7 @@ import { usePullAll } from '../hooks/usePullAll';
 import { useRenameFile } from '../hooks/useRenameFile';
 import { useViewHistory } from '../hooks/useViewHistory';
 import { useClearDataFile } from '../hooks/useClearDataFile';
+import { useDeleteSnapshots } from '../hooks/useDeleteSnapshots';
 import { useWhereUsed } from '../hooks/useWhereUsed';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { HistoryModal } from './modals/HistoryModal';
@@ -90,6 +91,11 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   const { clearDataFile, canClearData } = useClearDataFile();
   const hasDataToClear = fileId ? canClearData(fileId) : false;
   const isDataFile = item.type === 'parameter' || item.type === 'case';
+  
+  // Snapshot deletion hook (only for parameters)
+  const paramIds = item.type === 'parameter' && item.id ? [item.id] : [];
+  const { snapshotCounts, deleteSnapshots } = useDeleteSnapshots(paramIds);
+  const snapshotCount = item.type === 'parameter' ? snapshotCounts[item.id] : undefined;
 
   // Where used hook
   const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(fileId);
@@ -316,6 +322,18 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
         onClose();
       },
       disabled: !hasDataToClear
+    });
+  }
+  
+  // Delete snapshots (for parameters - disabled when count is 0 or loading)
+  if (item.type === 'parameter') {
+    menuItems.push({
+      label: `Delete snapshots (${snapshotCount ?? 0})`,
+      onClick: (snapshotCount ?? 0) > 0 ? async () => {
+        await deleteSnapshots(item.id);
+        onClose();
+      } : () => {},
+      disabled: (snapshotCount ?? 0) === 0,
     });
   }
 

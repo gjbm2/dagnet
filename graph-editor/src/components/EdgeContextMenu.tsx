@@ -21,6 +21,7 @@ import { getAllDataSections, type DataOperationSection } from './DataOperationsS
 import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
 import { useClearDataFile } from '../hooks/useClearDataFile';
+import { useDeleteSnapshots } from '../hooks/useDeleteSnapshots';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
 import { useCopyPaste } from '../hooks/useCopyPaste';
@@ -181,6 +182,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   
   // Get all data operation sections using single source of truth
   const dataOperationSections = getAllDataSections(null, edgeId, graph);
+  
+  // Snapshot deletion hook - handles batch inventory and deletion
+  const parameterObjectIds = dataOperationSections
+    .filter(s => s.objectType === 'parameter')
+    .map(s => s.objectId);
+  const { snapshotCounts, deleteSnapshots } = useDeleteSnapshots(parameterObjectIds);
   
   // Centralized fetch hook - all fetch operations go through this
   // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
@@ -714,6 +721,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onClearCache={handleSectionClearCache}
               onClearDataFile={handleSectionClearDataFile}
               onOpenFile={handleSectionOpenFile}
+              snapshotCount={section.objectType === 'parameter' ? snapshotCounts[section.objectId] : undefined}
+              onDeleteSnapshots={section.objectType === 'parameter' ? (s) => { deleteSnapshots(s.objectId); onClose(); } : undefined}
             />
           ))}
         </>

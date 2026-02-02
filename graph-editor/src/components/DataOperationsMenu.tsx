@@ -19,6 +19,8 @@ import { dataOperationsService } from '../services/dataOperationsService';
 import { fileRegistry } from '../contexts/TabContext';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
+import { useDeleteSnapshots } from '../hooks/useDeleteSnapshots';
+import { Database } from 'lucide-react';
 import './LightningMenu.css';
 import type { BatchOperationType, SingleOperationTarget } from './modals/BatchOperationsModal';
 
@@ -187,6 +189,11 @@ export function DataOperationsMenu({
   
   // Open file hook
   const { openFile } = useOpenFile();
+  
+  // Snapshot deletion hook (only for parameters)
+  const paramIds = objectType === 'parameter' && objectId ? [objectId] : [];
+  const { snapshotCounts, deleteSnapshots } = useDeleteSnapshots(paramIds);
+  const snapshotCount = objectType === 'parameter' ? snapshotCounts[objectId] : undefined;
   
   // Handlers (same as LightningMenu, now using centralized hook)
   const handleGetFromFile = () => {
@@ -378,6 +385,22 @@ export function DataOperationsMenu({
           title={actualFileExists ? "Edit connection settings" : "No file connected"}
         >
           <span>Connection settings...</span>
+        </button>
+      )}
+      
+      {/* Delete snapshots (for parameters - disabled when count is 0 or loading) */}
+      {objectType === 'parameter' && (
+        <button
+          className={itemClassName}
+          onClick={(snapshotCount ?? 0) > 0 ? () => { deleteSnapshots(objectId); if (onClose) onClose(); } : undefined}
+          title={(snapshotCount ?? 0) > 0 ? "Delete historical snapshot data" : "No snapshots to delete"}
+          disabled={(snapshotCount ?? 0) === 0}
+          style={{ color: (snapshotCount ?? 0) > 0 ? '#dc2626' : '#999', opacity: (snapshotCount ?? 0) > 0 ? 1 : 0.4 }}
+        >
+          <span>Delete snapshots ({snapshotCount ?? 0})</span>
+          <div className={pathwayClassName}>
+            <Database size={12} style={{ color: (snapshotCount ?? 0) > 0 ? '#dc2626' : '#999' }} />
+          </div>
         </button>
       )}
       

@@ -653,6 +653,59 @@ export class GraphComputeClient {
     
     return result;
   }
+
+  /**
+   * Run snapshot-based analysis (lag histogram or daily conversions).
+   * 
+   * Queries the snapshot database and derives analytics.
+   * Requires snapshot data to exist for the parameter.
+   * 
+   * @param request - Snapshot analysis request with param_id, date range, and analysis type
+   */
+  async analyzeSnapshots(request: SnapshotAnalysisRequest): Promise<SnapshotAnalysisResponse> {
+    if (this.useMock) {
+      console.log('[GraphComputeClient] Mock: analyzeSnapshots', request);
+      return {
+        success: false,
+        error: 'Snapshot analysis not available in mock mode',
+      };
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      });
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type');
+        if (contentType?.includes('application/json')) {
+          const error = await response.json();
+          return {
+            success: false,
+            error: error.detail || error.error || `HTTP ${response.status}`,
+          };
+        }
+        return {
+          success: false,
+          error: `Snapshot analysis failed: ${response.status}`,
+        };
+      }
+
+      const result = await response.json();
+      return {
+        success: result.success ?? true,
+        error: result.error,
+        result: result,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Network error',
+      };
+    }
+  }
 }
 
 // ============================================================
@@ -754,6 +807,41 @@ export interface AvailableAnalysis {
 
 export interface AvailableAnalysesResponse {
   analyses: AvailableAnalysis[];
+}
+
+// ============================================================
+// Snapshot Analysis Types
+// ============================================================
+
+export interface SnapshotAnalysisRequest {
+  snapshot_query: {
+    param_id: string;
+    core_hash?: string;
+    anchor_from: string;  // ISO date
+    anchor_to: string;    // ISO date
+    slice_keys?: string[];
+  };
+  analysis_type: 'lag_histogram' | 'daily_conversions';
+}
+
+export interface LagHistogramResult {
+  analysis_type: 'lag_histogram';
+  data: Array<{ lag_days: number; conversions: number; pct: number }>;
+  total_conversions: number;
+  cohorts_analysed: number;
+}
+
+export interface DailyConversionsResult {
+  analysis_type: 'daily_conversions';
+  data: Array<{ date: string; conversions: number }>;
+  total_conversions: number;
+  date_range: { from: string | null; to: string | null };
+}
+
+export interface SnapshotAnalysisResponse {
+  success: boolean;
+  error?: string;
+  result?: LagHistogramResult | DailyConversionsResult;
 }
 
 // ============================================================

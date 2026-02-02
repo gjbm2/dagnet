@@ -1,24 +1,31 @@
 import React, { useMemo, useState } from 'react';
 
-import type { AnalysisResult } from '../../lib/graphComputeClient';
+import type { AnalysisResult, LagHistogramResult, DailyConversionsResult } from '../../lib/graphComputeClient';
 import { FunnelChartPreview } from './FunnelChartPreview';
 import { BridgeChartPreview } from './BridgeChartPreview';
 import { FunnelBridgeChartPreview } from './FunnelBridgeChartPreview';
+import { SnapshotHistogramChart } from './SnapshotHistogramChart';
+import { SnapshotDailyConversionsChart } from './SnapshotDailyConversionsChart';
 
-type ChartKind = 'funnel' | 'bridge' | 'bridge_horizontal';
+type ChartKind = 'funnel' | 'bridge' | 'bridge_horizontal' | 'histogram' | 'daily_conversions';
 
 function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (!kind) return null;
   if (kind === 'funnel') return 'funnel';
   if (kind === 'bridge') return 'bridge';
   if (kind === 'bridge_horizontal') return 'bridge_horizontal';
+  if (kind === 'histogram' || kind === 'lag_histogram') return 'histogram';
+  if (kind === 'daily_conversions') return 'daily_conversions';
   return null;
 }
 
 function labelForChartKind(kind: ChartKind): string {
   if (kind === 'funnel') return 'Funnel';
   if (kind === 'bridge') return 'Bridge';
-  return 'Bridge (Horizontal)';
+  if (kind === 'bridge_horizontal') return 'Bridge (Horizontal)';
+  if (kind === 'histogram') return 'Lag Histogram';
+  if (kind === 'daily_conversions') return 'Daily Conversions';
+  return kind;
 }
 
 export function AnalysisChartContainer(props: {
@@ -40,6 +47,8 @@ export function AnalysisChartContainer(props: {
   const inferredChartKind = useMemo((): ChartKind | null => {
     const t = (result as any)?.analysis_type;
     if (t === 'conversion_funnel') return 'funnel';
+    if (t === 'lag_histogram') return 'histogram';
+    if (t === 'daily_conversions') return 'daily_conversions';
     if (typeof t === 'string' && t.includes('bridge')) return 'bridge';
     // Default to bridge so we never render an empty chart area for valid analysis results
     // that don't include `semantics.chart` (common in share/live flows).
@@ -129,7 +138,17 @@ export function AnalysisChartContainer(props: {
         </div>
       ) : null}
 
-      {kind === 'funnel' ? (
+      {kind === 'histogram' ? (
+        <SnapshotHistogramChart
+          data={result as unknown as LagHistogramResult}
+          height={height}
+        />
+      ) : kind === 'daily_conversions' ? (
+        <SnapshotDailyConversionsChart
+          data={result as unknown as DailyConversionsResult}
+          height={height}
+        />
+      ) : kind === 'funnel' ? (
         <FunnelChartPreview
           result={result}
           visibleScenarioIds={visibleScenarioIds}

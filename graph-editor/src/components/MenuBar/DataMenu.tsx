@@ -13,6 +13,7 @@ import { Database, DatabaseZap, Folders, TrendingUpDown, Trash2, FileText } from
 import { useOpenFile } from '../../hooks/useOpenFile';
 import { RemoveOverridesMenubarItem } from '../RemoveOverridesMenuItem';
 import { useClearDataFile } from '../../hooks/useClearDataFile';
+import { useDeleteSnapshots } from '../../hooks/useDeleteSnapshots';
 import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
 import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
 import { useRetrieveAllSlicesRequestListener } from '../../hooks/useRetrieveAllSlicesRequestListener';
@@ -508,6 +509,15 @@ export function DataMenu() {
     return getAllDataSections(selectedNodeId, selectedEdgeId, graph);
   }, [selectedNodeUuids, selectedEdgeUuids, selectedNodeId, selectedEdgeId, graph]);
   
+  // Snapshot deletion hook - get objectIds from parameter sections
+  const parameterObjectIds = React.useMemo(() => 
+    dataOperationSections
+      .filter(s => s.objectType === 'parameter')
+      .map(s => s.objectId),
+    [dataOperationSections]
+  );
+  const { snapshotCounts, deleteSnapshots } = useDeleteSnapshots(parameterObjectIds);
+  
   // For batch operations: gather sections from ALL edges in the graph (not just selected)
   // This enables "Clear all data files" to work on the entire graph
   const allGraphSections = React.useMemo(() => {
@@ -803,6 +813,23 @@ export function DataMenu() {
                     >
                       <span>Clear data file</span>
                       <Trash2 size={12} style={{ color: '#666' }} />
+                    </Menubar.Item>
+                  )}
+                  {section.objectType === 'parameter' && (
+                    <Menubar.Item 
+                      className="menubar-item" 
+                      onSelect={(snapshotCounts[section.objectId] ?? 0) > 0 ? () => deleteSnapshots(section.objectId) : undefined}
+                      disabled={(snapshotCounts[section.objectId] ?? 0) === 0}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '16px',
+                        opacity: (snapshotCounts[section.objectId] ?? 0) > 0 ? 1 : 0.4,
+                      }}
+                    >
+                      <span>Delete snapshots ({snapshotCounts[section.objectId] ?? 0})</span>
+                      <Database size={12} style={{ color: (snapshotCounts[section.objectId] ?? 0) > 0 ? '#dc2626' : '#999' }} />
                     </Menubar.Item>
                   )}
                 </Menubar.SubContent>

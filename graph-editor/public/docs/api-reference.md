@@ -398,6 +398,148 @@ await dataConnectionService.updateAllParamsFromGraph(graphId);
 await dataConnectionService.retrieveLatestForAll(graphId);
 ```
 
+## Snapshot Database API
+
+The Snapshot API provides endpoints for storing and querying historical conversion data.
+
+### Append Snapshots
+
+Store time-series data for a parameter.
+
+**Endpoint:** `POST /api/snapshots/append`
+
+```typescript
+interface AppendSnapshotsRequest {
+  param_id: string;         // Workspace-prefixed parameter ID
+  core_hash: string;        // Query signature hash
+  slice_key: string;        // Context slice ('' for uncontexted)
+  retrieved_at: string;     // ISO timestamp
+  rows: SnapshotRow[];      // Daily data rows
+}
+
+interface SnapshotRow {
+  anchor_day: string;       // ISO date (cohort entry date)
+  A?: number;               // Anchor count (cohort mode)
+  X: number;                // Denominator (users who could convert)
+  Y: number;                // Numerator (users who converted)
+  median_lag_days?: number; // Median conversion lag
+  mean_lag_days?: number;   // Mean conversion lag
+  anchor_median_lag_days?: number;
+  anchor_mean_lag_days?: number;
+  onset_delta_days?: number;
+}
+
+// Response
+interface AppendSnapshotsResponse {
+  success: boolean;
+  inserted: number;         // Rows inserted (excludes duplicates)
+  diagnostic?: {
+    has_anchor: boolean;
+    has_latency: boolean;
+    date_range: string;
+  };
+}
+```
+
+### Query Snapshots Inventory
+
+Get snapshot availability for multiple parameters.
+
+**Endpoint:** `POST /api/snapshots/inventory`
+
+```typescript
+interface InventoryRequest {
+  param_ids: string[];      // List of workspace-prefixed param IDs
+}
+
+interface InventoryResponse {
+  success: boolean;
+  inventory: SnapshotInventory[];
+}
+
+interface SnapshotInventory {
+  param_id: string;
+  row_count: number;
+  earliest_anchor: string | null;  // ISO date
+  latest_anchor: string | null;    // ISO date
+  total_days: number;              // Days with data
+  expected_days: number;           // Days in range
+}
+```
+
+### Delete Snapshots
+
+Remove all snapshots for a parameter.
+
+**Endpoint:** `POST /api/snapshots/delete`
+
+```typescript
+interface DeleteRequest {
+  param_id: string;         // Exact param_id to delete
+}
+
+interface DeleteResponse {
+  success: boolean;
+  deleted: number;          // Rows deleted
+}
+```
+
+### Snapshot Analysis
+
+Run analytics on stored snapshot data.
+
+**Endpoint:** `POST /api/runner/analyze` (with `snapshot_query`)
+
+```typescript
+interface SnapshotAnalysisRequest {
+  snapshot_query: {
+    param_id: string;
+    core_hash?: string;
+    anchor_from: string;    // ISO date
+    anchor_to: string;      // ISO date
+    slice_keys?: string[];
+  };
+  analysis_type: 'lag_histogram' | 'daily_conversions';
+}
+
+// Lag Histogram Response
+interface LagHistogramResult {
+  analysis_type: 'lag_histogram';
+  data: Array<{
+    lag_days: number;
+    conversions: number;
+    pct: number;
+  }>;
+  total_conversions: number;
+  cohorts_analysed: number;
+}
+
+// Daily Conversions Response
+interface DailyConversionsResult {
+  analysis_type: 'daily_conversions';
+  data: Array<{
+    date: string;
+    conversions: number;
+  }>;
+  total_conversions: number;
+  date_range: { from: string; to: string };
+}
+```
+
+### Health Check
+
+Check database connectivity.
+
+**Endpoint:** `GET /api/snapshots/health`
+
+```typescript
+interface HealthResponse {
+  status: 'ok' | 'error';
+  database: 'connected' | 'unavailable';
+  message?: string;
+}
+```
+
 ## Credentials Management API
 
 ### Loading Credentials
