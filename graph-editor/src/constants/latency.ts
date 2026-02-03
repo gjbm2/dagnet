@@ -51,14 +51,17 @@ export const LATENCY_MIN_MEAN_MEDIAN_RATIO = 0.9;
 
 /**
  * Maximum acceptable mean/median ratio for log-normal fitting.
- * 
- * Very high ratios indicate extreme right-skew (heavy tails) which may
- * make the log-normal model inappropriate.
- * 
- * Rationale: Ratio of 3.0 corresponds to σ ≈ 1.48, which is already
- * quite heavy-tailed. Beyond this, consider investigating the data.
+ *
+ * NOTE (Feb 2026):
+ * This is intentionally set very large by default so the guardrail is effectively OFF
+ * unless explicitly lowered via forecasting settings.
+ *
+ * Rationale:
+ * - With onset shifting, medianX can become very small while the histogram still has a real tail,
+ *   making meanX/medianX legitimately large.
+ * - The previous default (3.0) was suppressing real tails and harming fit quality.
  */
-export const LATENCY_MAX_MEAN_MEDIAN_RATIO = 3.0;
+export const LATENCY_MAX_MEAN_MEDIAN_RATIO = 999999;
 
 // =============================================================================
 // Implicit Baseline Window Clamps

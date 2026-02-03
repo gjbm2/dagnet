@@ -29,6 +29,13 @@ forecasting:
   # β=0.5 behaves like a robust median and avoids single-slice outliers.
   ONSET_AGGREGATION_BETA: 0.5
 
+  # Lag fit guardrail: maximum acceptable mean/median ratio when fitting a lognormal from moments.
+  #
+  # Setting this very large effectively disables the guardrail (σ will be inferred from moments even
+  # for very heavy-tailed cases). This is useful when onset shifting makes medianX small, and real
+  # tails would otherwise be incorrectly suppressed.
+  LATENCY_MAX_MEAN_MEDIAN_RATIO: 999999
+
 development:
   debugGitOperations: false
 

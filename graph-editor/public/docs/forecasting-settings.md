@@ -133,4 +133,59 @@ where \(x\) is the effective number of forecast conversions supporting the obser
 - Too low: noisy / partial anchor-lag measurements can cause completeness to jump around.
 - Too high: the system may ignore real observed anchor-delay information longer than it should.
 
+## Onset Mass Fraction α — `ONSET_MASS_FRACTION_ALPHA`
+
+**What it controls**  
+How `onset_delta_days` is derived from **window() lag histograms** (dead‑time detection).
+
+**Definition**  
+Let \(H(t)\) be the empirical CDF of conversion lag (from the window() lag histogram). We define onset \(\delta\) as the earliest day such that:
+
+\[
+H(\delta) \ge \alpha
+\]
+
+Intuition: choose the earliest time by which an \(\alpha\) fraction of conversion mass has occurred. This makes the onset estimate robust to noise in the very first bins (and robust to “zero‑mass” early bins).
+
+**Indicative values**  
+- **0.005–0.02**: typical range (default **0.01**)
+- Smaller: more sensitive (onset tends to be earlier)
+- Larger: more conservative (onset tends to be later)
+
+**Failure modes**  
+- Too low: onset may collapse to ~0 due to tiny early noise, even when there is real dead‑time.
+- Too high: onset may be overstated, shifting too much mass into the post‑onset model and making completeness overly conservative.
+
+## Onset Aggregation β — `ONSET_AGGREGATION_BETA`
+
+**What it controls**  
+How per‑slice `onset_delta_days` values are aggregated across **window() slice families** in the LAG topo pass.
+
+**Definition**  
+Given slice‑family onset values, DAGNet computes a **weighted β‑quantile** (weights are based on the number of dates in each slice family).  
+
+**Indicative values**  
+- **0.5**: robust median (default)
+- Lower than 0.5: more aggressive (prefers smaller onset)
+- Higher than 0.5: more conservative (prefers larger onset)
+
+**Failure modes**  
+- Too low: a single slice family with near‑zero onset can dominate, re‑introducing early false mass.
+- Too high: a single outlier slice family can push onset too large, making completeness too conservative.
+
+## Lag Fit Guardrail: Max mean/median ratio — `LATENCY_MAX_MEAN_MEDIAN_RATIO`
+
+**What it controls**  
+A guardrail used when fitting a lognormal from moments (median + mean). If the implied \(\text{mean}/\text{median}\) ratio exceeds this threshold, the fit is treated as unreliable and falls back to a default \(\sigma\).
+
+**Why it exists**  
+Very heavy‑tailed moment pairs can imply extremely large \(\sigma\), which can destabilise downstream calculations.
+
+**Current shipped default**  
+The default is **999999**, which effectively disables the guardrail (i.e. the fit will infer \(\sigma\) from moments even for very heavy tails). This was chosen because onset shifting can make the post‑onset median very small while the histogram still contains a real tail.
+
+**Failure modes**  
+- Too low: real heavy tails get suppressed (tail “cut‑off”), which can break completeness and horizons.
+- Too high: pathological inputs can produce very large \(\sigma\) and unstable fits (use with care if changing from the shipped default).
+
 

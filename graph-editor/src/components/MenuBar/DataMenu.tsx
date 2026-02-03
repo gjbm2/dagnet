@@ -9,11 +9,11 @@ import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import type { BatchOperationType } from '../modals/BatchOperationsModal';
 import { getAllDataSections, type DataOperationSection } from '../DataOperationsSections';
-import { Database, DatabaseZap, Folders, TrendingUpDown, Trash2, FileText } from 'lucide-react';
+import { Camera, Database, DatabaseZap, Download, Folders, TrendingUpDown, Trash2, FileText } from 'lucide-react';
 import { useOpenFile } from '../../hooks/useOpenFile';
 import { RemoveOverridesMenubarItem } from '../RemoveOverridesMenuItem';
 import { useClearDataFile } from '../../hooks/useClearDataFile';
-import { useDeleteSnapshots } from '../../hooks/useDeleteSnapshots';
+import { useSnapshotsMenu } from '../../hooks/useSnapshotsMenu';
 import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
 import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
 import { useRetrieveAllSlicesRequestListener } from '../../hooks/useRetrieveAllSlicesRequestListener';
@@ -516,7 +516,7 @@ export function DataMenu() {
       .map(s => s.objectId),
     [dataOperationSections]
   );
-  const { snapshotCounts, deleteSnapshots } = useDeleteSnapshots(parameterObjectIds);
+  const { inventories, snapshotCounts, deleteSnapshots, downloadSnapshotData } = useSnapshotsMenu(parameterObjectIds);
   
   // For batch operations: gather sections from ALL edges in the graph (not just selected)
   // This enables "Clear all data files" to work on the entire graph
@@ -816,21 +816,51 @@ export function DataMenu() {
                     </Menubar.Item>
                   )}
                   {section.objectType === 'parameter' && (
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={(snapshotCounts[section.objectId] ?? 0) > 0 ? () => deleteSnapshots(section.objectId) : undefined}
-                      disabled={(snapshotCounts[section.objectId] ?? 0) === 0}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '16px',
-                        opacity: (snapshotCounts[section.objectId] ?? 0) > 0 ? 1 : 0.4,
-                      }}
-                    >
-                      <span>Delete snapshots ({snapshotCounts[section.objectId] ?? 0})</span>
-                      <Database size={12} style={{ color: (snapshotCounts[section.objectId] ?? 0) > 0 ? '#dc2626' : '#999' }} />
-                    </Menubar.Item>
+                    <Menubar.Sub>
+                      <Menubar.SubTrigger className="menubar-item" disabled={(inventories[section.objectId]?.row_count ?? 0) === 0}>
+                        <span>Snapshots</span>
+                        <div className="menubar-right-slot">
+                          <Camera size={12} />
+                          <span style={{ marginLeft: 6 }}>›</span>
+                        </div>
+                      </Menubar.SubTrigger>
+                      <Menubar.Portal>
+                        <Menubar.SubContent className="menubar-content" alignOffset={-4}>
+                          <Menubar.Item
+                            className="menubar-item"
+                            disabled={(inventories[section.objectId]?.row_count ?? 0) === 0}
+                            onSelect={() => void downloadSnapshotData(section.objectId)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '16px',
+                            }}
+                          >
+                            <span>Download snapshot data</span>
+                            <Download size={12} style={{ color: '#666' }} />
+                          </Menubar.Item>
+                          <Menubar.Item
+                            className="menubar-item"
+                            disabled={(snapshotCounts[section.objectId] ?? 0) === 0}
+                            onSelect={() => void deleteSnapshots(section.objectId)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '16px',
+                              color: (snapshotCounts[section.objectId] ?? 0) > 0 ? '#dc2626' : '#999',
+                              opacity: (snapshotCounts[section.objectId] ?? 0) > 0 ? 1 : 0.4,
+                            }}
+                          >
+                            <span>
+                              Delete {snapshotCounts[section.objectId] ?? 0} snapshot{(snapshotCounts[section.objectId] ?? 0) !== 1 ? 's' : ''}
+                            </span>
+                            <Database size={12} style={{ color: (snapshotCounts[section.objectId] ?? 0) > 0 ? '#dc2626' : '#999' }} />
+                          </Menubar.Item>
+                        </Menubar.SubContent>
+                      </Menubar.Portal>
+                    </Menubar.Sub>
                   )}
                 </Menubar.SubContent>
               </Menubar.Sub>

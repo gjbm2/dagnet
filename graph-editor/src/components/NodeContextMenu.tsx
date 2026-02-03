@@ -111,7 +111,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
     submenuTimeoutRef.current = setTimeout(() => {
       setOpenSubmenu(null);
       submenuTimeoutRef.current = null;
-    }, 150);
+    }, 300);
   };
   
   const handleSubmenuContentEnter = () => {
@@ -123,12 +123,17 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   };
   
   const handleSubmenuContentLeave = () => {
-    // Close immediately when leaving submenu content
-    setOpenSubmenu(null);
+    // DO NOT close immediately: fixed-position flyouts (e.g. Snapshots submenu)
+    // sit outside the submenu DOM tree, so the pointer will "leave" this content
+    // momentarily while the user moves into the flyout. Use a short delay instead.
     if (submenuTimeoutRef.current) {
       clearTimeout(submenuTimeoutRef.current);
       submenuTimeoutRef.current = null;
     }
+    submenuTimeoutRef.current = setTimeout(() => {
+      setOpenSubmenu(null);
+      submenuTimeoutRef.current = null;
+    }, 300);
   };
   
   // Get selected nodes

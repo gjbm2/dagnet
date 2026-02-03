@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render } from '@testing-library/react';
+import { render, fireEvent, act } from '@testing-library/react';
 import { LAG_ANCHOR_SELECTED_OPACITY } from '@/lib/nodeEdgeConstants';
 
 // ============================================================================
@@ -39,7 +39,7 @@ vi.mock('../../../contexts/GraphStoreContext', () => ({
           id: 'edge-id',
           from: 'node-a',
           to: 'node-b',
-          p: { mean: 0.5, evidence: { mean: 0.2 }, forecast: { mean: 0.7 } },
+          p: { id: 'param-1', mean: 0.5, evidence: { mean: 0.2 }, forecast: { mean: 0.7 } },
         },
       ],
       metadata: { name: 'g' },
@@ -97,6 +97,47 @@ vi.mock('../../../contexts/NavigatorContext', () => ({
       selectedBranch: 'main',
     },
   }),
+}));
+
+vi.mock('../../../contexts/DialogContext', () => ({
+  useDialog: () => ({
+    showConfirm: vi.fn(async () => true),
+  }),
+}));
+
+vi.mock('../../../services/snapshotWriteService', () => ({
+  getBatchInventory: vi.fn(async (paramIds: string[]) => {
+    const inv: any = {};
+    for (const pid of paramIds) {
+      // Provide snapshot data for a single param id, empty for others.
+      inv[pid] = pid.endsWith('-param-1')
+        ? {
+            has_data: true,
+            param_id: pid,
+            earliest: '2025-12-01',
+            latest: '2025-12-10',
+            row_count: 10,
+            unique_days: 10,
+            unique_slices: 1,
+            unique_hashes: 1,
+            unique_retrievals: 2,
+          }
+        : {
+            has_data: false,
+            param_id: pid,
+            earliest: null,
+            latest: null,
+            row_count: 0,
+            unique_days: 0,
+            unique_slices: 0,
+            unique_hashes: 0,
+            unique_retrievals: 0,
+          };
+    }
+    return inv;
+  }),
+  deleteSnapshots: vi.fn(async () => ({ success: true, deleted: 0 })),
+  querySnapshotsFull: vi.fn(async () => ({ success: true, rows: [], count: 0 })),
 }));
 
 vi.mock('../../../services/dataOperationsService', () => ({
@@ -204,6 +245,70 @@ describe('ConversionEdge Sankey parity', () => {
     const sankeyAnchor = container.querySelector('#edge-id-lag-anchor-sankey') as SVGPathElement | null;
     expect(sankeyAnchor).toBeTruthy();
     expect(sankeyAnchor!.style.strokeOpacity).toBe(String(LAG_ANCHOR_SELECTED_OPACITY));
+  });
+
+  it('includes snapshot date range in edge tooltip when DB inventory exists', async () => {
+    vi.useFakeTimers();
+    const { default: ConversionEdge } = await import('../ConversionEdge');
+
+    const rendered = render(
+      <svg>
+        <ConversionEdge
+          id="edge-id"
+          source="from"
+          target="to"
+          sourceX={0}
+          sourceY={0}
+          targetX={100}
+          targetY={0}
+          sourcePosition={'Right' as any}
+          targetPosition={'Left' as any}
+          selected={false}
+          data={{
+            scenarioOverlay: false,
+            useSankeyView: false,
+            strokeOpacity: 1,
+            scenarioColour: '#10B981',
+            edgeLatencyDisplay: {
+              enabled: true,
+              mode: 'f+e',
+              p_mean: 0.5,
+              p_evidence: 0.2,
+              p_forecast: 0.7,
+              completeness_pct: 100,
+              median_days: 2.5,
+              isDashed: false,
+              useNoEvidenceOpacity: false,
+              showLatencyBead: false,
+              showCompletenessOnly: false,
+              evidenceIsDerived: false,
+              forecastIsDerived: false,
+            },
+            // Ensure tooltip builds edgeId consistently
+            id: 'edge-id',
+          }}
+        />
+      </svg>
+    );
+
+    const edgePath = rendered.container.querySelector('path.react-flow__edge-path') as SVGPathElement | null;
+    expect(edgePath).toBeTruthy();
+
+    // Trigger hover, then advance the tooltip delay.
+    await act(async () => {
+      fireEvent.mouseEnter(edgePath!, { clientX: 10, clientY: 10 });
+      vi.advanceTimersByTime(550);
+      // Allow async inventory fetch + state updates to settle
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Tooltip is rendered as a portal; assert the snapshot label exists.
+    expect(document.body.textContent || '').toContain('snapshots:');
+    // Date format: d-MMM-yy
+    expect(document.body.textContent || '').toContain('1-Dec-25 — 10-Dec-25');
+
+    vi.useRealTimers();
   });
 });
 

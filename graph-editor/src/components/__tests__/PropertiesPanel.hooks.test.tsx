@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, fireEvent, act } from '@testing-library/react';
 
 let currentGraph: any | undefined = {
   nodes: [],
@@ -11,6 +11,12 @@ let currentGraph: any | undefined = {
 vi.mock('../../contexts/GraphStoreContext', () => {
   return {
     useGraphStore: () => ({
+      graph: currentGraph,
+      setGraph: vi.fn(),
+      saveHistoryState: vi.fn(),
+      currentDSL: '',
+    }),
+    useGraphStoreOptional: () => ({
       graph: currentGraph,
       setGraph: vi.fn(),
       saveHistoryState: vi.fn(),
@@ -30,6 +36,7 @@ vi.mock('../../contexts/TabContext', () => {
     }),
     fileRegistry: {
       getFile: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
     },
   };
 });
@@ -52,6 +59,12 @@ vi.mock('../../hooks/useFetchData', () => {
   };
 });
 
+vi.mock('../../contexts/ValidationContext', () => {
+  return {
+    useValidationMode: () => ({ mode: 'none' }),
+  };
+});
+
 vi.mock('../../contexts/DialogContext', () => {
   return {
     useDialog: () => ({
@@ -60,7 +73,22 @@ vi.mock('../../contexts/DialogContext', () => {
   };
 });
 
+vi.mock('../../contexts/NavigatorContext', () => {
+  return {
+    useNavigatorContext: () => ({
+      state: {
+        selectedRepo: 'r',
+        selectedBranch: 'b',
+      },
+      operations: {
+        refreshItems: vi.fn(),
+      },
+    }),
+  };
+});
+
 import PropertiesPanel from '../PropertiesPanel';
+import PropertiesPanelWrapper from '../panels/PropertiesPanelWrapper';
 
 describe('PropertiesPanel hooks safety', () => {
   it('does not crash if graph becomes undefined between renders', () => {
@@ -86,6 +114,78 @@ describe('PropertiesPanel hooks safety', () => {
         />
       );
     }).not.toThrow();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// PropertiesPanelWrapper snapshots badge
+// -----------------------------------------------------------------------------
+
+vi.mock('../editors/GraphEditor', () => ({
+  useSelectionContext: () => ({
+    selectedNodeId: null,
+    selectedEdgeId: 'e-1',
+    onSelectedNodeChange: vi.fn(),
+    onSelectedEdgeChange: vi.fn(),
+  }),
+}));
+
+vi.mock('../../hooks/useRemoveOverrides', () => ({
+  useRemoveOverrides: () => ({ hasOverrides: false, removeOverrides: vi.fn() }),
+}));
+
+vi.mock('../../hooks/useSnapshotsMenu', () => ({
+  useSnapshotsMenu: () => ({
+    inventories: {
+      'param-1': {
+        has_data: true,
+        param_id: 'r-b-param-1',
+        earliest: '2025-12-01',
+        latest: '2025-12-10',
+        row_count: 10,
+        unique_days: 10,
+        unique_slices: 1,
+        unique_hashes: 1,
+        unique_retrievals: 2,
+      },
+    },
+    snapshotCounts: { 'param-1': 2 },
+    isDeleting: false,
+    isDownloading: false,
+    refresh: vi.fn(async () => {}),
+    deleteSnapshots: vi.fn(async () => true),
+    deleteSnapshotsMany: vi.fn(async () => true),
+    downloadSnapshotData: vi.fn(async () => true),
+    downloadSnapshotDataMany: vi.fn(async () => true),
+  }),
+}));
+
+describe('PropertiesPanelWrapper snapshots badge', () => {
+  it('shows a camera badge with tooltip and a menu including download/delete all', () => {
+    currentGraph = {
+      nodes: [],
+      edges: [
+        { uuid: 'e-1', from: 'A', to: 'B', p: { id: 'param-1' } },
+      ],
+      metadata: {},
+    };
+
+    const rendered = render(<PropertiesPanelWrapper tabId="t" />);
+
+    // Badge tooltip should include date range.
+    const badge = rendered.container.querySelector('.properties-panel-header-badges .properties-panel-badge[title*="Snapshots in DB"]');
+    expect(badge).toBeTruthy();
+    expect(badge!.getAttribute('title') || '').toContain('1-Dec-25 — 10-Dec-25');
+
+    // Open menu
+    act(() => {
+      fireEvent.pointerDown(badge!);
+    });
+
+    // Radix DropdownMenu renders via a portal; assert menu content appears.
+    expect(document.body.textContent || '').toContain('param-1');
+    expect(document.body.textContent || '').toContain('Download all');
+    expect(document.body.textContent || '').toContain('Delete all');
   });
 });
 

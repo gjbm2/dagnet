@@ -214,6 +214,7 @@ This document is the canonical reference for LAG statistics and convolution logi
 │   │   latency: {                                       ── EDGE-LEVEL SUMMARY    │   │
 │   │     median_lag_days: 2,                                                     │   │
 │   │     mean_lag_days: 2.1,                                                     │   │
+│   │     onset_delta_days: 0.0,   (dead-time before conversions can occur)        │   │
 │   │     t95: 4.6    (computed from μ,σ or fallback to DEFAULT_T95_DAYS)        │   │
 │   │   }                                                                         │   │
 │   │                                                                             │   │
@@ -252,8 +253,9 @@ NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
 │                                                                                     │
 │   INPUTS                                                                            │
 │   ──────                                                                            │
-│   median_lag_days      (from per-cohort or slice-level summary)                     │
-│   mean_lag_days        (from per-cohort or slice-level summary)                     │
+│   median_lag_days      (user-space total time, from per-cohort or slice-level)      │
+│   mean_lag_days        (user-space total time, from per-cohort or slice-level)      │
+│   onset_delta_days     (dead-time shift, derived from lag histogram; may be 0)      │
 │   DEFAULT_T95_DAYS     (fallback if no empirical lag data)                           │
 │   total_k              (total converters – for quality gate)                        │
 │                                                                                     │
@@ -262,18 +264,27 @@ NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
 │   FIT LOGIC                                                                         │
 │   ─────────                                                                         │
 │                                                                                     │
-│   CASE 1: median_lag_days valid AND total_k >= MIN_CONVERTERS                       │
-│       μ = ln(median_lag_days)                                                       │
-│       σ = sqrt(2 × ln(mean_lag_days / median_lag_days))   (if mean available)       │
+│   MODEL (shifted lognormal)                                                         │
+│       T = δ + X                                                                     │
+│       where δ = onset_delta_days and X ~ LogNormal(μ, σ)                            │
+│                                                                                     │
+│   Convert user-space (T) into model-space (X):                                      │
+│       median_X = max(ε, median_lag_days - δ)                                        │
+│       mean_X   = max(ε, mean_lag_days   - δ)                                        │
+│       (ε is a tiny positive guardrail to avoid ln(0) / degenerate fits)             │
+│                                                                                     │
+│   CASE 1: median_X valid AND total_k >= MIN_CONVERTERS                              │
+│       μ = ln(median_X)                                                              │
+│       σ = sqrt(2 × ln(mean_X / median_X))   (if mean available)                     │
 │       σ = DEFAULT_SIGMA (0.5)                              (if mean unavailable)    │
 │       empirical_quality_ok = true                                                   │
 │                                                                                     │
-│   CASE 2: median_lag_days valid BUT total_k < MIN_CONVERTERS                        │
-│       μ = ln(median_lag_days)       ← use available median, still informative       │
+│   CASE 2: median_X valid BUT total_k < MIN_CONVERTERS                               │
+│       μ = ln(median_X)             ← use available median, still informative        │
 │       σ = DEFAULT_SIGMA (0.5)                                                       │
 │       empirical_quality_ok = false  ← but t95 falls back to DEFAULT_T95_DAYS        │
 │                                                                                     │
-│   CASE 3: median_lag_days invalid (missing, NaN, ≤0)                                │
+│   CASE 3: median_X invalid (missing, NaN, ≤0)                                       │
 │       μ = 0                                                                         │
 │       σ = DEFAULT_SIGMA (0.5)                                                       │
 │       empirical_quality_ok = false  ← t95 falls back to DEFAULT_T95_DAYS            │
@@ -284,7 +295,8 @@ NOTE (15-Dec-25): Amplitude conversion window (`cs`) policy:
 │   ───────────────                                                                   │
 │                                                                                     │
 │   IF empirical_quality_ok:                                                          │
-│       t95 = logNormalInverseCDF(LATENCY_T95_PERCENTILE, μ, σ)                       │
+│       t95_X = logNormalInverseCDF(LATENCY_T95_PERCENTILE, μ, σ)                     │
+│       t95   = δ + t95_X     (persisted/displayed as user-space total time)          │
 │                                                                                     │
 │   ELSE:                                                                             │
 │       t95 = DEFAULT_T95_DAYS  ← fallback to configured value                        │
@@ -382,7 +394,7 @@ These constants are part of the statistical constants set and should be referenc
 │   FORMULA                                                                           │
 │   ───────                                                                           │
 │                                                                                     │
-│                      Σ n[d] × F(effective_age[d]; μ, σ)                            │
+│                      Σ n[d] × F(max(0, effective_age[d] - δ); μ, σ)                │
 │   completeness = ─────────────────────────────────────────                         │
 │                              Σ n[d]                                                 │
 │                                                                                     │
@@ -390,6 +402,11 @@ These constants are part of the statistical constants set and should be referenc
 │     F(t; μ, σ) = log-normal CDF at time t                                          │
 │     μ, σ = fitted from this edge's median/mean lag                                  │
 │     effective_age[d] = computed per §4 above                                        │
+│     δ = onset_delta_days (dead-time)                                                │
+│                                                                                     │
+│   DEAD-TIME:                                                                         │
+│     If effective_age[d] ≤ δ then the shifted age is 0 and that cohort contributes   │
+│     0 completeness (conversions are treated as impossible before onset).            │
 │                                                                                     │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                     │
@@ -941,6 +958,7 @@ When deriving `p.forecast.mean`, **recent mature days are weighted more heavily*
 │  p.latency.latency_parameter│  Enablement flag for latency tracking (boolean)      │
 │  p.latency.median_lag_days  │  Observed median lag for this edge only              │
 │  p.latency.mean_lag_days    │  Observed mean lag for this edge only                │
+│  p.latency.onset_delta_days │  Dead-time onset shift δ (days) for this edge        │
 └─────────────────────────────┴──────────────────────────────────────────────────────┘
 ```
 
@@ -962,6 +980,7 @@ When deriving `p.forecast.mean`, **recent mature days are weighted more heavily*
 │                             │                                                      │
 │  latency.median_lag_days    │  Slice-level median lag summary (this edge)          │
 │  latency.mean_lag_days      │  Slice-level mean lag summary (this edge)            │
+│  latency.onset_delta_days   │  Slice-level onset shift δ summary (this edge)       │
 │  latency.t95                │  Slice-level 95th percentile lag                     │
 └─────────────────────────────┴──────────────────────────────────────────────────────┘
 ```
@@ -1270,4 +1289,7 @@ Key defaults used in LAG calculations:
 | `ANCHOR_DELAY_BLEND_K_CONVERSIONS` | 50 | Credibility threshold for anchor-delay soft transition (cohort completeness) |
 | `LATENCY_DEFAULT_SIGMA` | 0.5 | Default log-normal σ when insufficient data (§3) |
 | `LATENCY_MIN_FIT_CONVERTERS` | 30 | Minimum k for reliable empirical fit (§3) |
+| `ONSET_MASS_FRACTION_ALPHA` | 0.01 | α-mass threshold used when deriving `onset_delta_days` from lag histograms |
+| `ONSET_AGGREGATION_BETA` | 0.5 | Weighted β-quantile used when aggregating onset across slice families |
+| `LATENCY_MAX_MEAN_MEDIAN_RATIO` | 999999 | Max mean/median ratio guardrail for lognormal moment fits (effectively disabled by default) |
 | `PRECISION_DECIMAL_PLACES` | 4 | Decimal precision for probability values |

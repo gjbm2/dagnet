@@ -73,3 +73,68 @@
   overflow-y: auto;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Snapshots badge menu (Radix DropdownMenu)                                   */
+/* -------------------------------------------------------------------------- */
+
+.properties-snapshots-menu {
+  min-width: 220px;
+  max-width: min(420px, calc(100vw - 40px));
+  background-color: white;
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0px 4px 16px rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  z-index: 99999;
+}
+
+.properties-snapshots-item {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #333;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+  white-space: nowrap;
+}
+
+.properties-snapshots-item:hover {
+  background-color: #f0f0f0;
+}
+
+.properties-snapshots-item[data-highlighted] {
+  background-color: #0066cc;
+  color: white;
+}
+
+.properties-snapshots-item[data-disabled] {
+  color: #aaa;
+  cursor: default;
+}
+
+.properties-snapshots-item--danger {
+  color: #dc2626;
+}
+
+.properties-snapshots-right-slot {
+  margin-left: 24px;
+  color: #666;
+  font-size: 12px;
+}
+
+.properties-snapshots-item[data-highlighted] .properties-snapshots-right-slot {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.properties-snapshots-separator {
+  height: 1px;
+  background-color: #e0e0e0;
+  margin: 4px 0;
+}
+

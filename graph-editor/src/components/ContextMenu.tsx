@@ -1,4 +1,4 @@
-import React, { useEffect, ReactNode, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 export interface ContextMenuItem {
   label: string;
@@ -21,13 +21,25 @@ interface ContextMenuProps {
  * Reusable for tabs, navigator items, etc.
  */
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ left: x, top: y });
+  const rootMenuRef = useRef<HTMLDivElement>(null);
+  const [rootPosition, setRootPosition] = useState({ left: x, top: y });
+  // Indices of the currently open submenu at each level
+  const [openPath, setOpenPath] = useState<number[]>([]);
+
+  const minWidthPx = 200;
+  const maxWidthPx = 420;
+  const estimateMenuHeight = useCallback((menuItems: ContextMenuItem[]) => {
+    // Rough heuristic to keep submenu in viewport. (We avoid measuring for simplicity.)
+    const itemHeight = 30;
+    const dividerHeight = 9;
+    const nDividers = menuItems.filter(i => i.divider).length;
+    return Math.min(600, (menuItems.length - nDividers) * itemHeight + nDividers * dividerHeight + 12);
+  }, []);
 
   // Calculate constrained position on mount
   useEffect(() => {
-    if (menuRef.current) {
-      const rect = menuRef.current.getBoundingClientRect();
+    if (rootMenuRef.current) {
+      const rect = rootMenuRef.current.getBoundingClientRect();
       const menuWidth = rect.width;
       const menuHeight = rect.height;
       
@@ -58,7 +70,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
         top = 20;
       }
       
-      setPosition({ left, top });
+      setRootPosition({ left, top });
     }
   }, [x, y]);
 
@@ -82,85 +94,158 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     };
   }, [onClose]);
 
-  const renderItem = (item: ContextMenuItem, index: number) => {
-    if (item.divider) {
-      return (
-        <div 
-          key={`divider-${index}`}
-          style={{ height: '1px', background: '#e9ecef', margin: '4px 0' }} 
-        />
-      );
-    }
+  const isPrefix = (prefix: number[], path: number[]) => prefix.every((v, i) => path[i] === v);
 
-    if (item.submenu) {
-      return (
-        <div
-          key={index}
-          style={{
-            padding: '8px 12px',
-            cursor: item.disabled ? 'not-allowed' : 'pointer',
-            borderRadius: '2px',
-            opacity: item.disabled ? 0.5 : 1,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-          }}
-          onMouseEnter={(e) => !item.disabled && (e.currentTarget.style.background = '#f8f9fa')}
-          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-        >
-          <span>{item.label}</span>
-          <span>›</span>
-        </div>
-      );
-    }
+  const MenuLevel: React.FC<{
+    level: number;
+    prefix: number[];
+    levelItems: ContextMenuItem[];
+    position: { left: number; top: number };
+    menuRef?: React.RefObject<HTMLDivElement>;
+  }> = ({ level, prefix, levelItems, position, menuRef }) => {
+    const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
+
+    const activeIndex = useMemo(() => {
+      if (!isPrefix(prefix, openPath)) return undefined;
+      return openPath[level];
+    }, [prefix.join(','), openPath.join(','), level]);
+
+    const activeSubmenu = (typeof activeIndex === 'number' && levelItems[activeIndex]?.submenu)
+      ? levelItems[activeIndex]!.submenu!
+      : null;
+
+    const activeAnchorRect = useMemo(() => {
+      if (typeof activeIndex !== 'number') return null;
+      const el = itemRefs.current[activeIndex];
+      if (!el) return null;
+      return el.getBoundingClientRect();
+    }, [activeIndex, levelItems.length, openPath.join(',')]);
+
+    const submenuPosition = useMemo(() => {
+      if (!activeSubmenu || !activeAnchorRect) return null;
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const estHeight = estimateMenuHeight(activeSubmenu);
+      let left = activeAnchorRect.right + 4;
+      let top = activeAnchorRect.top;
+
+      // Use maxWidthPx as a safe upper bound (long labels can widen menus).
+      if (left + maxWidthPx > viewportWidth - 20) {
+        left = Math.max(20, activeAnchorRect.left - maxWidthPx - 4);
+      }
+      if (top + estHeight > viewportHeight - 20) {
+        top = Math.max(20, viewportHeight - estHeight - 20);
+      }
+      if (top < 20) top = 20;
+      return { left, top };
+    }, [activeSubmenu, activeAnchorRect, estimateMenuHeight]);
 
     return (
-      <div
-        key={index}
-        onClick={(e) => {
-          if (!item.disabled) {
-            e.stopPropagation();
-            item.onClick();
-            if (!item.keepMenuOpen) {
-              onClose();
+      <>
+        <div
+          ref={menuRef}
+          style={{
+            position: 'fixed',
+            left: position.left,
+            top: position.top,
+            background: '#fff',
+            border: '1px solid #dee2e6',
+            borderRadius: '6px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            minWidth: `${minWidthPx}px`,
+            maxWidth: `min(${maxWidthPx}px, calc(100vw - 40px))`,
+            padding: '4px',
+            zIndex: 10000 + level,
+            fontSize: '13px',
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {levelItems.map((item, index) => {
+            if (item.divider) {
+              return (
+                <div
+                  key={`divider-${level}-${index}`}
+                  style={{ height: '1px', background: '#e9ecef', margin: '4px 0' }}
+                />
+              );
             }
-          }
-        }}
-        style={{
-          padding: '8px 12px',
-          cursor: item.disabled ? 'not-allowed' : 'pointer',
-          borderRadius: '2px',
-          opacity: item.disabled ? 0.5 : 1
-        }}
-        onMouseEnter={(e) => !item.disabled && (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-      >
-        {item.label}
-      </div>
+
+            const isActive = typeof activeIndex === 'number' && index === activeIndex;
+            const hasSubmenu = Array.isArray(item.submenu) && item.submenu.length > 0;
+
+            return (
+              <div
+                key={`${level}-${index}`}
+                ref={(el) => { itemRefs.current[index] = el; }}
+                onMouseEnter={(e) => {
+                  if (item.disabled) return;
+                  if (hasSubmenu) {
+                    setOpenPath((prev) => [...prefix, index]);
+                  } else {
+                    // Clear any deeper submenus when hovering a leaf item
+                    setOpenPath(prefix);
+                  }
+                  e.currentTarget.style.background = '#f8f9fa';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = isActive ? '#f8f9fa' : 'transparent';
+                }}
+                onClick={(e) => {
+                  if (item.disabled) return;
+                  if (hasSubmenu) return; // submenu triggers are hover-only
+                  e.stopPropagation();
+                  item.onClick();
+                  if (!item.keepMenuOpen) onClose();
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: item.disabled ? 'not-allowed' : (hasSubmenu ? 'default' : 'pointer'),
+                  borderRadius: '2px',
+                  opacity: item.disabled ? 0.5 : 1,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  background: isActive ? '#f8f9fa' : 'transparent',
+                }}
+              >
+                <span
+                  title={item.label}
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    maxWidth: '320px',
+                  }}
+                >
+                  {item.label}
+                </span>
+                {hasSubmenu ? <span style={{ color: '#6B7280' }}>›</span> : null}
+              </div>
+            );
+          })}
+        </div>
+
+        {activeSubmenu && submenuPosition && (
+          <MenuLevel
+            level={level + 1}
+            prefix={[...prefix, activeIndex!]}
+            levelItems={activeSubmenu}
+            position={submenuPosition}
+          />
+        )}
+      </>
     );
   };
 
   return (
-    <div
-      ref={menuRef}
-      style={{
-        position: 'fixed',
-        left: position.left,
-        top: position.top,
-        background: '#fff',
-        border: '1px solid #dee2e6',
-        borderRadius: '6px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-        minWidth: '200px',
-        padding: '4px',
-        zIndex: 10000,
-        fontSize: '13px'
-      }}
-      onClick={(e) => e.stopPropagation()}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {items.map((item, index) => renderItem(item, index))}
-    </div>
+    <MenuLevel
+      level={0}
+      prefix={[]}
+      levelItems={items}
+      position={rootPosition}
+      menuRef={rootMenuRef}
+    />
   );
 }
 

@@ -175,7 +175,8 @@ export function logNormalInverseCDF(p: number, mu: number, sigma: number): numbe
 export function fitLagDistribution(
   medianLag: number,
   meanLag: number | undefined,
-  totalK: number
+  totalK: number,
+  maxMeanMedianRatioOverride?: number
 ): LagDistributionFit {
   if (!Number.isFinite(medianLag)) {
     return {
@@ -233,13 +234,20 @@ export function fitLagDistribution(
     };
   }
 
-  if (ratio > LATENCY_MAX_MEAN_MEDIAN_RATIO) {
+  const maxMeanMedianRatio =
+    (typeof maxMeanMedianRatioOverride === 'number' &&
+      Number.isFinite(maxMeanMedianRatioOverride) &&
+      maxMeanMedianRatioOverride > 0)
+      ? maxMeanMedianRatioOverride
+      : LATENCY_MAX_MEAN_MEDIAN_RATIO;
+
+  if (ratio > maxMeanMedianRatio) {
     return {
       mu,
       sigma: LATENCY_DEFAULT_SIGMA,
       empirical_quality_ok: false,
       total_k: totalK,
-      quality_failure_reason: `Mean/median ratio too high: ${ratio.toFixed(3)} > ${LATENCY_MAX_MEAN_MEDIAN_RATIO}`,
+      quality_failure_reason: `Mean/median ratio too high: ${ratio.toFixed(3)} > ${maxMeanMedianRatio}`,
     };
   }
 
@@ -261,6 +269,88 @@ export function fitLagDistribution(
     empirical_quality_ok: true,
     total_k: totalK,
   };
+}
+
+// =============================================================================
+// Onset conversion helper (user-space ↔ model-space)
+// =============================================================================
+
+/**
+ * Small positive clamp (days) to prevent degenerate log operations after onset subtraction.
+ *
+ * Rationale:
+ * - Model-space lag values are used inside ln(·) and must be > 0.
+ * - If onset ≥ observed horizon, the correct limiting behaviour is "almost immediate" post-onset
+ *   conversion with a very negative μ (but still finite), not NaN/Infinity.
+ *
+ * This value is deliberately tiny relative to "days" semantics.
+ */
+const ONSET_EPSILON_DAYS = 1e-6;
+
+function normaliseOnsetDeltaDays(onsetDeltaDays?: number): number {
+  if (typeof onsetDeltaDays !== 'number' || !Number.isFinite(onsetDeltaDays)) return 0;
+  return Math.max(0, onsetDeltaDays);
+}
+
+function clampPositiveDays(valueDays: number): number {
+  if (!Number.isFinite(valueDays)) return ONSET_EPSILON_DAYS;
+  return valueDays > ONSET_EPSILON_DAYS ? valueDays : ONSET_EPSILON_DAYS;
+}
+
+export type ToModelSpaceResult = {
+  onsetDeltaDays: number;
+  medianXDays: number;
+  meanXDays?: number;
+  t95XDays?: number;
+  ageXDays?: number;
+};
+
+/**
+ * Convert a user-space positive day value (lag/horizon) into model-space (post-onset) days.
+ * Result is clamped to a small positive epsilon.
+ */
+export function toModelSpaceLagDays(onsetDeltaDays: number | undefined, valueTDays: number): number {
+  const delta = normaliseOnsetDeltaDays(onsetDeltaDays);
+  return clampPositiveDays(valueTDays - delta);
+}
+
+/**
+ * Convert a user-space cohort age (days since cohort start) into model-space age (post-onset).
+ * Result is clamped at 0 (dead-time).
+ */
+export function toModelSpaceAgeDays(onsetDeltaDays: number | undefined, ageTDays: number): number {
+  const delta = normaliseOnsetDeltaDays(onsetDeltaDays);
+  if (!Number.isFinite(ageTDays)) return 0;
+  return Math.max(0, ageTDays - delta);
+}
+
+/**
+ * Convert user-space (T-space) latency values into model-space (X-space) values.
+ *
+ * Definitions:
+ * - T = δ + X, where δ = onset_delta_days (dead-time), X is the post-onset stochastic lag.
+ * - User-space values (persisted/displayed) are in T-space and include δ.
+ * - Model-space values (used for fitting/CDF evaluation) are in X-space and exclude δ.
+ *
+ * Behaviour:
+ * - median/mean/t95 are shifted by subtracting δ and clamped to a small positive epsilon.
+ * - age is shifted by subtracting δ and clamped at 0 (dead-time → exactly 0 completeness).
+ */
+export function toModelSpace(
+  onsetDeltaDays: number | undefined,
+  medianTDays: number,
+  meanTDays?: number,
+  t95TDays?: number,
+  ageTDays?: number
+): ToModelSpaceResult {
+  const delta = normaliseOnsetDeltaDays(onsetDeltaDays);
+
+  const medianXDays = toModelSpaceLagDays(delta, medianTDays);
+  const meanXDays = typeof meanTDays === 'number' ? toModelSpaceLagDays(delta, meanTDays) : undefined;
+  const t95XDays = typeof t95TDays === 'number' ? toModelSpaceLagDays(delta, t95TDays) : undefined;
+  const ageXDays = typeof ageTDays === 'number' ? toModelSpaceAgeDays(delta, ageTDays) : undefined;
+
+  return { onsetDeltaDays: delta, medianXDays, meanXDays, t95XDays, ageXDays };
 }
 
 

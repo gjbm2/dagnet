@@ -1,0 +1,69 @@
+{
+  "fixture": "param-registry/test/amplitude/window-paid-social-day2.json",
+  "alpha": 0.01,
+  "onset_days": 4.635,
+  "total_mass": 6,
+  "median_T_days": 7.000364583333333,
+  "mean_T_days": 6.24573880787037,
+  "unshifted": {
+    "mu": 1.945962231032357,
+    "sigma": 0.5,
+    "mse": 0.09646859236076534
+  },
+  "shifted": {
+    "mu": 0.8609321679204409,
+    "sigma": 0.5,
+    "mse": 0.11140761868302233
+  },
+  "improvement": {
+    "abs_mse": -0.014939026322256993,
+    "rel_fraction": -0.1548589645258764,
+    "rel_percent": -15.48589645258764
+  },
+  "points": [
+    {
+      "i": 0,
+      "start_days": 4.625,
+      "end_days": 4.791666666666667,
+      "mid_days": 4.708333333333334,
+      "mass": 1,
+      "empirical_cdf_at_end": 0.16666666666666666,
+      "predicted_cdf_at_end": 0.2241751807685255,
+      "predicted_cdf_unshifted_at_end": 0.2241751807685255,
+      "predicted_cdf_shifted_at_end": 2.8379954442048216e-8
+    },
+    {
+      "i": 1,
+      "start_days": 4.791666666666667,
+      "end_days": 4.833333333333333,
+      "mid_days": 4.8125,
+      "mass": 1,
+      "empirical_cdf_at_end": 0.3333333333333333,
+      "predicted_cdf_at_end": 0.22939160102047834,
+      "predicted_cdf_unshifted_at_end": 0.22939160102047834,
+      "predicted_cdf_shifted_at_end": 3.576148173700666e-7
+    },
+    {
+      "i": 54,
+      "start_days": 7,
+      "end_days": 7.041666666666667,
+      "mid_days": 7.020833333333334,
+      "mass": 3,
+      "empirical_cdf_at_end": 0.8333333333333334,
+      "predicted_cdf_at_end": 0.504693596665516,
+      "predicted_cdf_unshifted_at_end": 0.504693596665516,
+      "predicted_cdf_shifted_at_end": 0.5138090767940706
+    },
+    {
+      "i": 55,
+      "start_days": 7.041666666666667,
+      "end_days": 7.083333333333333,
+      "mid_days": 7.0625,
+      "mass": 1,
+      "empirical_cdf_at_end": 1,
+      "predicted_cdf_at_end": 0.5094001511385127,
+      "predicted_cdf_unshifted_at_end": 0.5094001511385127,
+      "predicted_cdf_shifted_at_end": 0.5274856409292161
+    }
+  ]
+}

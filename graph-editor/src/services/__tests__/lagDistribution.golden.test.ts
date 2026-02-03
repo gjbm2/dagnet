@@ -19,6 +19,7 @@ import {
   logNormalCDF,
   logNormalInverseCDF,
   fitLagDistribution,
+  toModelSpace,
 } from '../statisticalEnhancementService';
 import { LATENCY_DEFAULT_SIGMA } from '../../constants/latency';
 
@@ -95,6 +96,39 @@ describe('lag distribution maths (golden)', () => {
     expect(Number.isFinite(fit.mu)).toBe(true);
     expect(Number.isFinite(fit.sigma)).toBe(true);
     expect(fit.sigma).toBeGreaterThan(0);
+  });
+
+  it('toModelSpace shifts user-space (T) values into model-space (X) values', () => {
+    const { onsetDeltaDays, medianXDays, meanXDays, t95XDays, ageXDays } = toModelSpace(
+      2,
+      10, // medianT
+      12, // meanT
+      20, // t95T
+      9 // ageT
+    );
+    expect(onsetDeltaDays).toBe(2);
+    expect(medianXDays).toBeCloseTo(8, 12);
+    expect(meanXDays).toBeCloseTo(10, 12);
+    expect(t95XDays).toBeCloseTo(18, 12);
+    expect(ageXDays).toBeCloseTo(7, 12);
+  });
+
+  it('toModelSpace clamps model-space age at 0 during dead-time (ageT ≤ onset)', () => {
+    const r = toModelSpace(5, 10, 12, 20, 5);
+    expect(r.ageXDays).toBe(0);
+  });
+
+  it('toModelSpace clamps shifted lag values to a small positive epsilon when onset ≥ value', () => {
+    const r = toModelSpace(100, 10, 12, 20, 9);
+    // We do not assert the epsilon literal here; just assert it is > 0 and finite.
+    expect(r.medianXDays).toBeGreaterThan(0);
+    expect(Number.isFinite(r.medianXDays)).toBe(true);
+    expect(r.meanXDays!).toBeGreaterThan(0);
+    expect(Number.isFinite(r.meanXDays!)).toBe(true);
+    expect(r.t95XDays!).toBeGreaterThan(0);
+    expect(Number.isFinite(r.t95XDays!)).toBe(true);
+    // Age still clamps to 0.
+    expect(r.ageXDays).toBe(0);
   });
 });
 

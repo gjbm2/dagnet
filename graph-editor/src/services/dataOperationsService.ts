@@ -58,7 +58,7 @@ import { computeCohortRetrievalHorizon } from './cohortRetrievalHorizon';
 import { 
   statisticalEnhancementService,
 } from './statisticalEnhancementService';
-import { approximateLogNormalSumPercentileDays, fitLagDistribution } from './statisticalEnhancementService';
+import { approximateLogNormalSumPercentileDays, fitLagDistribution, toModelSpaceLagDays } from './statisticalEnhancementService';
 import type { ParameterValue } from '../types/parameterData';
 import type { TimeSeriesPoint } from '../types';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
@@ -3692,6 +3692,7 @@ class DataOperationsService {
     forecasting?: {
       RECENCY_HALF_LIFE_DAYS?: number;
       DEFAULT_T95_DAYS?: number;
+      LATENCY_MAX_MEAN_MEDIAN_RATIO?: number;
     };
   }): Promise<GetFromSourceResult> {
       const {
@@ -5130,9 +5131,33 @@ class DataOperationsService {
                     const edgeLag = aggregateLatencyStats(cohorts, halfLife);
                     const totalWK = cohorts.reduce((sum, c) => sum + (c.k ?? 0) * w(c.age ?? 0), 0);
                     if (edgeLag?.median_lag_days && edgeLag.median_lag_days > 0) {
-                      const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalWNForAnchor);
-                      const edgeFit = fitLagDistribution(edgeLag.median_lag_days, edgeLag.mean_lag_days, totalWK);
-                      const estimate = approximateLogNormalSumPercentileDays(anchorFit, edgeFit, LATENCY_PATH_T95_PERCENTILE);
+                      const anchorFit = fitLagDistribution(
+                        anchorMedian,
+                        anchorMean,
+                        totalWNForAnchor,
+                        options?.forecasting?.LATENCY_MAX_MEAN_MEDIAN_RATIO
+                      );
+                      // Onset-aware moment matching:
+                      // - FW operates on post-onset (model-space) X components.
+                      // - Total path horizon is shifted back into user-space by adding δ.
+                      const onsetDeltaDays =
+                        typeof (latencyConfig as any)?.onset_delta_days === 'number' &&
+                        Number.isFinite((latencyConfig as any).onset_delta_days)
+                          ? (latencyConfig as any).onset_delta_days
+                          : 0;
+                      const edgeMedianX = toModelSpaceLagDays(onsetDeltaDays, edgeLag.median_lag_days);
+                      const edgeMeanX =
+                        typeof edgeLag.mean_lag_days === 'number'
+                          ? toModelSpaceLagDays(onsetDeltaDays, edgeLag.mean_lag_days)
+                          : undefined;
+                      const edgeFit = fitLagDistribution(
+                        edgeMedianX,
+                        edgeMeanX,
+                        totalWK,
+                        options?.forecasting?.LATENCY_MAX_MEAN_MEDIAN_RATIO
+                      );
+                      const estimateX = approximateLogNormalSumPercentileDays(anchorFit, edgeFit, LATENCY_PATH_T95_PERCENTILE);
+                      const estimate = estimateX !== undefined ? (estimateX + onsetDeltaDays) : undefined;
                       if (estimate !== undefined && Number.isFinite(estimate) && estimate > 0) {
                         effectivePathT95 = estimate;
                         effectivePathT95Source = 'moment-matched';

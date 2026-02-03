@@ -8,6 +8,8 @@
  * @vitest-environment node
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import {
   statisticalEnhancementService,
@@ -24,6 +26,7 @@ import {
   estimatePInfinity,
   calculateCompleteness,
   computeEdgeLatencyStats,
+  toModelSpaceLagDays,
   // FW approximation functions
   approximateLogNormalSumFit,
   approximateLogNormalSumPercentileDays,
@@ -49,7 +52,9 @@ import {
   LATENCY_DEFAULT_SIGMA,
   LATENCY_T95_PERCENTILE,
   RECENCY_HALF_LIFE_DAYS,
+  ONSET_MASS_FRACTION_ALPHA,
 } from '../../constants/latency';
+import { deriveOnsetDeltaDaysFromLagHistogram } from '../onsetDerivationService';
 
 describe('StatisticalEnhancementService', () => {
   const createMockRawAggregation = (
@@ -523,7 +528,9 @@ describe('LAG Lag Distribution Fitting (§5.4)', () => {
 
     it('should fail quality gate if mean/median ratio > 3', () => {
       // Extremely skewed distribution
-      const fit = fitLagDistribution(5, 20, 100);
+      // The max-ratio guardrail is OFF by default (configurable via forecasting settings),
+      // so we only expect a failure when explicitly configured to a small threshold.
+      const fit = fitLagDistribution(5, 20, 100, 3);
 
       expect(fit.empirical_quality_ok).toBe(false);
       expect(fit.quality_failure_reason).toContain('ratio too high');
@@ -732,6 +739,25 @@ describe('LAG Completeness Calculation (§5.5)', () => {
       // Should be around (0.99 + 0.5 + 0) / 3 ≈ 0.5
       expect(completeness).toBeGreaterThan(0.4);
       expect(completeness).toBeLessThan(0.6);
+    });
+
+    it('applies onset dead-time: completeness is exactly 0 when ageT ≤ onset', () => {
+      const cohorts: CohortData[] = [
+        { date: '1-Dec-25', n: 100, k: 0, age: 5 },
+      ];
+      const onsetDeltaDays = 5;
+      const completeness = calculateCompleteness(cohorts, mu, sigma, onsetDeltaDays);
+      expect(completeness).toBe(0);
+    });
+
+    it('shifts ages into model-space: completeness(ageT=onset+medianX) ≈ 0.5', () => {
+      // medianX = 5 days for (mu=ln(5), sigma from mean=7)
+      const onsetDeltaDays = 3;
+      const cohorts: CohortData[] = [
+        { date: '1-Dec-25', n: 100, k: 0, age: onsetDeltaDays + 5 },
+      ];
+      const completeness = calculateCompleteness(cohorts, mu, sigma, onsetDeltaDays);
+      expect(completeness).toBeCloseTo(0.5, 4);
     });
   });
 });
@@ -1833,6 +1859,117 @@ describe('LAG computeEdgeLatencyStats (baseline characterisation)', () => {
     expect(stats.forecast_available).toBe(true);
     expect(stats.completeness_cdf.mu).toBeCloseTo(1.6094, 4);
     expect(stats.completeness_cdf.sigma).toBeCloseTo(0.8203, 4);
+  });
+});
+
+/**
+ * Phase 6 test: Fit-quality improvement on real Amplitude histogram fixtures
+ *
+ * Intent:
+ * - Use a repo-captured window() lag histogram fixture that exhibits a dead-time onset.
+ * - Show that modelling it as a shifted lognormal (T = δ + X) improves fit vs unshifted lognormal.
+ *
+ * Metric:
+ * - Weighted mean squared error (MSE) between predicted CDF and empirical CDF at histogram bin ends,
+ *   weighted by bin mass.
+ */
+describe('LAG onset fit-quality improvement (Amplitude fixtures)', () => {
+  const MS_PER_DAY = 86_400_000;
+
+  function loadJson(pathFromRepoRoot: string): any {
+    const abs = join(process.cwd(), '..', pathFromRepoRoot);
+    return JSON.parse(readFileSync(abs, 'utf8'));
+  }
+
+  function getHistogramForStep2(payload: any): { bins: Array<{ start: number; end?: number; bin_dist?: { totals?: number; uniques?: number } }> } {
+    const d0 = payload?.data?.[0];
+    const stepBins = d0?.stepTransTimeDistribution?.step_bins;
+    const bins = stepBins?.[1]?.bins; // transition step 2: step1 → step2
+    if (!Array.isArray(bins)) return { bins: [] };
+    return { bins };
+  }
+
+  function totalMass(hist: { bins: any[] }): number {
+    return hist.bins.reduce((s, b) => {
+      const totals = b?.bin_dist?.totals;
+      const uniques = b?.bin_dist?.uniques;
+      const m = (typeof totals === 'number' && Number.isFinite(totals))
+        ? totals
+        : (typeof uniques === 'number' && Number.isFinite(uniques) ? uniques : 0);
+      return s + Math.max(0, m);
+    }, 0);
+  }
+
+  function weightedMseCdf(
+    hist: { bins: any[] },
+    predictedCdfAtDays: (tDays: number) => number
+  ): number {
+    const bins = [...hist.bins].sort((a, b) => (a?.start ?? 0) - (b?.start ?? 0));
+    const masses = bins.map((b) => {
+      const totals = b?.bin_dist?.totals;
+      const uniques = b?.bin_dist?.uniques;
+      const m = (typeof totals === 'number' && Number.isFinite(totals))
+        ? totals
+        : (typeof uniques === 'number' && Number.isFinite(uniques) ? uniques : 0);
+      return Math.max(0, m);
+    });
+    const tot = masses.reduce((s, m) => s + m, 0);
+    if (!(tot > 0)) return Infinity;
+
+    let cum = 0;
+    let se = 0;
+    for (let i = 0; i < bins.length; i++) {
+      const m = masses[i];
+      if (!(m > 0)) continue;
+      cum += m;
+      const endMs = (typeof bins[i]?.end === 'number' && Number.isFinite(bins[i].end)) ? bins[i].end : bins[i].start;
+      const tDays = endMs / MS_PER_DAY;
+      const empirical = cum / tot;
+      const predicted = predictedCdfAtDays(tDays);
+      const err = predicted - empirical;
+      se += m * err * err;
+    }
+
+    return se / tot;
+  }
+
+  it('shifted model improves weighted CDF MSE vs unshifted model (window-other-day2)', () => {
+    const payload = loadJson('param-registry/test/amplitude/window-other-day2.json');
+    const hist = getHistogramForStep2(payload);
+    expect(hist.bins.length).toBeGreaterThan(0);
+
+    const d0 = payload?.data?.[0];
+    const medianMs = d0?.medianTransTimes?.[1];
+    const meanMs = d0?.avgTransTimes?.[1];
+    expect(typeof medianMs).toBe('number');
+    expect(typeof meanMs).toBe('number');
+
+    const medianTDays = medianMs / MS_PER_DAY;
+    const meanTDays = meanMs / MS_PER_DAY;
+    const onset = deriveOnsetDeltaDaysFromLagHistogram(hist, ONSET_MASS_FRACTION_ALPHA);
+    expect(onset).not.toBeNull();
+    expect(onset as number).toBeGreaterThanOrEqual(0);
+
+    const totK = totalMass(hist);
+    expect(totK).toBeGreaterThan(0);
+
+    const fitUnshifted = fitLagDistribution(medianTDays, meanTDays, totK);
+    const onsetDays = onset as number;
+    const fitShifted = fitLagDistribution(
+      toModelSpaceLagDays(onsetDays, medianTDays),
+      toModelSpaceLagDays(onsetDays, meanTDays),
+      totK
+    );
+
+    const mseUnshifted = weightedMseCdf(hist, (tDays) => logNormalCDF(tDays, fitUnshifted.mu, fitUnshifted.sigma));
+    const mseShifted = weightedMseCdf(hist, (tDays) => {
+      if (tDays <= onsetDays) return 0;
+      return logNormalCDF(tDays - onsetDays, fitShifted.mu, fitShifted.sigma);
+    });
+
+    expect(Number.isFinite(mseUnshifted)).toBe(true);
+    expect(Number.isFinite(mseShifted)).toBe(true);
+    expect(mseShifted).toBeLessThan(mseUnshifted);
   });
 });
 

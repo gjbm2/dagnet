@@ -1661,6 +1661,61 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       // §0.3: onset_delta_days should be extracted from window slice and included in EdgeLAGValues
       expect(e1Result!.latency.onset_delta_days).toBe(3);
     });
+
+    it('t95 and path_t95 are inclusive of onset (user-space horizons)', () => {
+      const helpers = createLAGHelpers();
+
+      const makeGraph = (): GraphForPath => ({
+        nodes: [
+          { id: 'A', type: 'start' },
+          { id: 'B', type: 'end' },
+        ],
+        edges: [
+          {
+            id: 'e1', uuid: 'e1', from: 'A', to: 'B',
+            p: {
+              mean: 0.5,
+              latency: { latency_parameter: true },
+              forecast: { mean: 0.5 },
+              evidence: { mean: 0.5, n: 1000, k: 500 },
+            },
+          },
+        ],
+      });
+
+      const dates = ['20-Nov-25', '21-Nov-25', '22-Nov-25', '23-Nov-25', '24-Nov-25'];
+      const queryDate = new Date('2025-11-24');
+      const cohortWindow = {
+        start: new Date('2025-11-20'),
+        end: new Date('2025-11-24'),
+      };
+
+      // Case A: onset = 0, user-space median lag = 5
+      const paramLookupA = new Map();
+      paramLookupA.set('e1', [
+        createCohortSlice(dates, [200, 200, 200, 200, 200], [100, 100, 100, 100, 100], [5, 5, 5, 5, 5]),
+        createWindowSliceWithOnset('1-Nov-25:19-Nov-25', 1100, 550, 0.50, 0, 19),
+      ]);
+      const resultA = enhanceGraphLatencies(makeGraph(), paramLookupA, queryDate, helpers, cohortWindow);
+      const e1A = resultA.edgeValues.find(v => v.edgeUuid === 'e1');
+      expect(e1A).toBeDefined();
+      expect(e1A!.latency.onset_delta_days).toBe(0);
+
+      // Case B: onset = 3, but keep model-space distribution fixed by shifting user-space median lag by +3.
+      const paramLookupB = new Map();
+      paramLookupB.set('e1', [
+        createCohortSlice(dates, [200, 200, 200, 200, 200], [100, 100, 100, 100, 100], [8, 8, 8, 8, 8]),
+        createWindowSliceWithOnset('1-Nov-25:19-Nov-25', 1100, 550, 0.50, 3, 19),
+      ]);
+      const resultB = enhanceGraphLatencies(makeGraph(), paramLookupB, queryDate, helpers, cohortWindow);
+      const e1B = resultB.edgeValues.find(v => v.edgeUuid === 'e1');
+      expect(e1B).toBeDefined();
+      expect(e1B!.latency.onset_delta_days).toBe(3);
+
+      // t95 and path_t95 are stored/displayed in user-space (T-space), so they must increase by δ.
+      expect(e1B!.latency.t95).toBeCloseTo(e1A!.latency.t95 + 3, 6);
+      expect(e1B!.latency.path_t95).toBeCloseTo(e1A!.latency.path_t95 + 3, 6);
+    });
     
     it('aggregates onset_delta_days via weighted β-quantile across window slices (weighted by dates.length)', () => {
       const graph: GraphForPath = {
