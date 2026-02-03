@@ -6,7 +6,7 @@ import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
-import { useEdgeSnapshotInventory } from '../../hooks/useEdgeSnapshotInventory';
+import { useSnapshotsMenu } from '../../hooks/useSnapshotsMenu';
 import toast from 'react-hot-toast';
 import Tooltip from '@/components/Tooltip';
 import { getConditionalColour, getConditionalProbabilityColour, isConditionalEdge } from '@/lib/conditionalColours';
@@ -218,10 +218,34 @@ export default function ConversionEdge({
   const scenariosContext = useScenariosContextOptional();
   const { operations: tabOps, tabs, activeTabId } = useTabContext();
   const currentTab = tabs.find(t => t.id === activeTabId);
+
+  const { graph, setGraph, saveHistoryState } = useGraphStore();
+
+  // For overlay edges, use originalEdgeId stored in data.
+  const lookupId = data?.originalEdgeId || id;
+  const snapshotsEdge = useMemo(() => {
+    return graph?.edges?.find((e: any) =>
+      e.uuid === lookupId || e.id === lookupId || `${e.from}->${e.to}` === lookupId
+    );
+  }, [graph, lookupId, graph?.metadata?.updated_at]);
   
-  // Snapshot inventory for tooltip (centralised in hook)
-  const edgeIdForInventory = data?.id || id;
-  const { inventory: snapshotInventory, fetchInventory } = useEdgeSnapshotInventory(edgeIdForInventory);
+  // Snapshots inventory for tooltip (all params on this edge)
+  const snapshotParamIds = React.useMemo(() => {
+    const ids: string[] = [];
+    if (typeof snapshotsEdge?.p?.id === 'string' && snapshotsEdge.p.id.trim()) ids.push(snapshotsEdge.p.id.trim());
+    if (typeof snapshotsEdge?.cost_gbp?.id === 'string' && snapshotsEdge.cost_gbp.id.trim()) ids.push(snapshotsEdge.cost_gbp.id.trim());
+    if (typeof snapshotsEdge?.labour_cost?.id === 'string' && snapshotsEdge.labour_cost.id.trim()) ids.push(snapshotsEdge.labour_cost.id.trim());
+    if (Array.isArray(snapshotsEdge?.conditional_p)) {
+      for (const cp of snapshotsEdge.conditional_p) {
+        const pid = cp?.p?.id;
+        if (typeof pid === 'string' && pid.trim()) ids.push(pid.trim());
+      }
+    }
+    return Array.from(new Set(ids));
+  }, [snapshotsEdge]);
+
+  // Avoid eager fetch: tooltip should fetch on hover.
+  const snapshots = useSnapshotsMenu(snapshotParamIds, { autoFetch: false });
   const scenarioState = currentTab?.editorState?.scenarioState;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
@@ -270,13 +294,13 @@ export default function ConversionEdge({
     setTooltipPos({ x: e.clientX, y: e.clientY });
     
     // Trigger snapshot inventory fetch (hook handles caching)
-    fetchInventory();
+    void snapshots.refresh();
     
     // Show tooltip after delay (500ms)
     tooltipTimeoutRef.current = setTimeout(() => {
       setShowTooltip(true);
     }, 500);
-  }, [data?.scenarioOverlay, fetchInventory]);
+  }, [data?.scenarioOverlay, snapshots.refresh]);
 
   // Handle mouse move to update tooltip position
   const handleTooltipMouseMove = useCallback((e: React.MouseEvent<SVGPathElement>) => {
@@ -458,24 +482,26 @@ export default function ConversionEdge({
       if (data.labour_cost?.mean) lines.push(`labour_cost: ${data.labour_cost.mean.toFixed(0)}d`);
     }
     
-    // Snapshot availability
-    if (snapshotInventory && snapshotInventory.row_count > 0) {
+    // Snapshot availability (any param on this edge)
+    const fmtDate = (d: string) => {
+      const date = new Date(d);
+      return `${date.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][date.getMonth()]}-${date.getFullYear().toString().slice(-2)}`;
+    };
+    const snapshotParamsWithData = snapshotParamIds.filter((pid) => (snapshots.inventories[pid]?.row_count ?? 0) > 0);
+    if (snapshotParamsWithData.length > 0) {
       lines.push('');
       lines.push('snapshots:');
-      const fmtDate = (d: string) => {
-        const date = new Date(d);
-        return `${date.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][date.getMonth()]}-${date.getFullYear().toString().slice(-2)}`;
-      };
-      if (snapshotInventory.earliest && snapshotInventory.latest) {
-        lines.push(`  ${fmtDate(snapshotInventory.earliest)} — ${fmtDate(snapshotInventory.latest)}`);
+      for (const pid of snapshotParamsWithData) {
+        const inv = snapshots.inventories[pid];
+        if (!inv) continue;
+        const range = inv.earliest && inv.latest ? `${fmtDate(inv.earliest)} — ${fmtDate(inv.latest)}` : '(range unknown)';
+        lines.push(`  ${pid}: ${range}`);
       }
-      lines.push(`  ${snapshotInventory.row_count.toLocaleString()} rows, ${snapshotInventory.unique_days} days`);
     }
     
     return lines.join('\n');
   };
   const { deleteElements, setEdges, getNodes, getEdges, screenToFlowPosition } = useReactFlow();
-  const { graph, setGraph, saveHistoryState } = useGraphStore();
   const viewPrefs = useViewPreferencesContext();
   
   // Handle drag over for drop target (added to existing path elements)
@@ -594,7 +620,6 @@ export default function ConversionEdge({
   // Find edge in graph (check both uuid and human-readable id after Phase 0.0 migration)
   // For overlay edges, use originalEdgeId stored in data
   // Memoize to ensure it updates when graph changes
-  const lookupId = data?.originalEdgeId || id;
   // Create a string key that changes when any relevant edge data changes
   // This ensures fullEdge updates when evidence, mean, etc. change
   const edgeDataKey = useMemo(() => {

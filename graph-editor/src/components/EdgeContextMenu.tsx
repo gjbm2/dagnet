@@ -21,7 +21,7 @@ import { getAllDataSections, type DataOperationSection } from './DataOperationsS
 import { DataSectionSubmenu } from './DataSectionSubmenu';
 import { copyVarsToClipboard } from '../services/copyVarsService';
 import { useClearDataFile } from '../hooks/useClearDataFile';
-import { useDeleteSnapshots } from '../hooks/useDeleteSnapshots';
+import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
 import { useCopyPaste } from '../hooks/useCopyPaste';
@@ -113,7 +113,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     submenuTimeoutRef.current = setTimeout(() => {
       setOpenSubmenu(null);
       submenuTimeoutRef.current = null;
-    }, 150);
+    }, 300);
   };
   
   const handleSubmenuContentEnter = () => {
@@ -125,12 +125,17 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   };
   
   const handleSubmenuContentLeave = () => {
-    // Close immediately when leaving submenu content
-    setOpenSubmenu(null);
+    // DO NOT close immediately: fixed-position flyouts (e.g. Snapshots submenu)
+    // sit outside the submenu DOM tree, so the pointer will "leave" this content
+    // momentarily while the user moves into the flyout. Use a short delay instead.
     if (submenuTimeoutRef.current) {
       clearTimeout(submenuTimeoutRef.current);
       submenuTimeoutRef.current = null;
     }
+    submenuTimeoutRef.current = setTimeout(() => {
+      setOpenSubmenu(null);
+      submenuTimeoutRef.current = null;
+    }, 300);
   };
   
   // Create a setGraph wrapper that calls onUpdateGraph (which updates the tab-specific graph)
@@ -183,11 +188,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   // Get all data operation sections using single source of truth
   const dataOperationSections = getAllDataSections(null, edgeId, graph);
   
-  // Snapshot deletion hook - handles batch inventory and deletion
+  // Snapshot menu hook - inventory + delete + download
   const parameterObjectIds = dataOperationSections
     .filter(s => s.objectType === 'parameter')
     .map(s => s.objectId);
-  const { snapshotCounts, deleteSnapshots } = useDeleteSnapshots(parameterObjectIds);
+  const { snapshotCounts, deleteSnapshots, downloadSnapshotData } = useSnapshotsMenu(parameterObjectIds);
   
   // Centralized fetch hook - all fetch operations go through this
   // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
@@ -727,7 +732,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onClearDataFile={handleSectionClearDataFile}
               onOpenFile={handleSectionOpenFile}
               snapshotCount={section.objectType === 'parameter' ? snapshotCounts[section.objectId] : undefined}
-              onDeleteSnapshots={section.objectType === 'parameter' ? (s) => { deleteSnapshots(s.objectId); onClose(); } : undefined}
+              onDownloadSnapshotData={section.objectType === 'parameter' ? (s) => { void downloadSnapshotData(s.objectId); onClose(); } : undefined}
+              onDeleteSnapshots={section.objectType === 'parameter' ? (s) => { void deleteSnapshots(s.objectId); onClose(); } : undefined}
             />
           ))}
         </>

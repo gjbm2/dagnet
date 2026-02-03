@@ -238,6 +238,100 @@ export interface DeleteSnapshotsResult {
   error?: string;
 }
 
+// -----------------------------------------------------------------------------
+// Phase 2: Read Path — Query Full (download/export + analytics)
+// -----------------------------------------------------------------------------
+
+export interface SnapshotQueryRow {
+  param_id: string;
+  core_hash: string;
+  slice_key: string;
+  /** Anchor day in ISO date format (YYYY-MM-DD) */
+  anchor_day: string;
+  /** Retrieval timestamp in ISO date-time format */
+  retrieved_at: string;
+  /** Anchor entrants (cohort mode only) */
+  a?: number | null;
+  /** From-step count (n) */
+  x?: number | null;
+  /** To-step count / conversions (k) */
+  y?: number | null;
+  /** Median conversion lag in days */
+  median_lag_days?: number | null;
+  /** Mean conversion lag in days */
+  mean_lag_days?: number | null;
+  /** Anchor-relative median lag in days */
+  anchor_median_lag_days?: number | null;
+  /** Anchor-relative mean lag in days */
+  anchor_mean_lag_days?: number | null;
+  /** Onset delay before conversions begin (from histogram) */
+  onset_delta_days?: number | null;
+}
+
+export interface QuerySnapshotsFullParams {
+  /** Exact workspace-prefixed parameter ID */
+  param_id: string;
+  core_hash?: string;
+  slice_keys?: string[];
+  anchor_from?: string; // ISO date
+  anchor_to?: string; // ISO date
+  as_at?: string; // ISO datetime
+  /** Max rows to return (default backend: 10000) */
+  limit?: number;
+}
+
+export interface QuerySnapshotsFullResult {
+  success: boolean;
+  rows: SnapshotQueryRow[];
+  count: number;
+  error?: string;
+}
+
+/**
+ * Query snapshot rows with full filtering support.
+ *
+ * This is the client for `POST /api/snapshots/query-full`.
+ * It is used for exporting "full rows" as CSV and for snapshot-based analytics.
+ */
+export async function querySnapshotsFull(params: QuerySnapshotsFullParams): Promise<QuerySnapshotsFullResult> {
+  if (!SNAPSHOTS_ENABLED) {
+    return { success: true, rows: [], count: 0 };
+  }
+
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/query-full`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        param_id: params.param_id,
+        core_hash: params.core_hash,
+        slice_keys: params.slice_keys,
+        anchor_from: params.anchor_from,
+        anchor_to: params.anchor_to,
+        as_at: params.as_at,
+        limit: params.limit,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[SnapshotQueryFull] Failed:', response.status, errorText);
+      return { success: false, rows: [], count: 0, error: errorText };
+    }
+
+    const body = await response.json();
+    return {
+      success: !!body.success,
+      rows: Array.isArray(body.rows) ? body.rows : [],
+      count: typeof body.count === 'number' ? body.count : (Array.isArray(body.rows) ? body.rows.length : 0),
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[SnapshotQueryFull] Error:', errorMessage);
+    return { success: false, rows: [], count: 0, error: errorMessage };
+  }
+}
+
 /**
  * Get snapshot inventory for multiple parameters in one request.
  * 

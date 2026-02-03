@@ -1,0 +1,58 @@
+[
+  {
+    "fixture": "param-registry/test/amplitude/window-other-day2.json",
+    "onset_days": 5.33,
+    "total_mass": 33,
+    "mse_unshifted": 0.007306551642192559,
+    "mse_shifted": 0.0033543439020730743,
+    "abs_mse": 0.003952207740119485,
+    "rel_percent": 54.09128592614041,
+    "out_json": "graph-editor/tmp/onset-fit-quality/window-other-day2.plot.json",
+    "out_csv": "graph-editor/tmp/onset-fit-quality/window-other-day2.plot.csv",
+    "out_daybins10_json": "graph-editor/tmp/onset-fit-quality/window-other-day2.daybins10.json",
+    "out_daybins10_csv": "graph-editor/tmp/onset-fit-quality/window-other-day2.daybins10.csv",
+    "out_daybins10_wide_csv": "graph-editor/tmp/onset-fit-quality/window-other-day2.daybins10.wide.csv"
+  },
+  {
+    "fixture": "param-registry/test/amplitude/window-paid-social-day2.json",
+    "onset_days": 4.635,
+    "total_mass": 6,
+    "mse_unshifted": 0.09646859236076534,
+    "mse_shifted": 0.11140761868302233,
+    "abs_mse": -0.014939026322256993,
+    "rel_percent": -15.48589645258764,
+    "out_json": "graph-editor/tmp/onset-fit-quality/window-paid-social-day2.plot.json",
+    "out_csv": "graph-editor/tmp/onset-fit-quality/window-paid-social-day2.plot.csv",
+    "out_daybins10_json": "graph-editor/tmp/onset-fit-quality/window-paid-social-day2.daybins10.json",
+    "out_daybins10_csv": "graph-editor/tmp/onset-fit-quality/window-paid-social-day2.daybins10.csv",
+    "out_daybins10_wide_csv": "graph-editor/tmp/onset-fit-quality/window-paid-social-day2.daybins10.wide.csv"
+  },
+  {
+    "fixture": "param-registry/test/amplitude/window-influencer-day2.json",
+    "onset_days": 4.178333333333334,
+    "total_mass": 28,
+    "mse_unshifted": 0.005669294330926653,
+    "mse_shifted": 0.023131337338966298,
+    "abs_mse": -0.017462043008039645,
+    "rel_percent": -308.01087381867245,
+    "out_json": "graph-editor/tmp/onset-fit-quality/window-influencer-day2.plot.json",
+    "out_csv": "graph-editor/tmp/onset-fit-quality/window-influencer-day2.plot.csv",
+    "out_daybins10_json": "graph-editor/tmp/onset-fit-quality/window-influencer-day2.daybins10.json",
+    "out_daybins10_csv": "graph-editor/tmp/onset-fit-quality/window-influencer-day2.daybins10.csv",
+    "out_daybins10_wide_csv": "graph-editor/tmp/onset-fit-quality/window-influencer-day2.daybins10.wide.csv"
+  },
+  {
+    "fixture": "param-registry/test/amplitude/window-paid-search-day2.json",
+    "onset_days": 4.045,
+    "total_mass": 9,
+    "mse_unshifted": 0.0034636060927546895,
+    "mse_shifted": 0.014555869170630096,
+    "abs_mse": -0.011092263077875406,
+    "rel_percent": -320.25186412157683,
+    "out_json": "graph-editor/tmp/onset-fit-quality/window-paid-search-day2.plot.json",
+    "out_csv": "graph-editor/tmp/onset-fit-quality/window-paid-search-day2.plot.csv",
+    "out_daybins10_json": "graph-editor/tmp/onset-fit-quality/window-paid-search-day2.daybins10.json",
+    "out_daybins10_csv": "graph-editor/tmp/onset-fit-quality/window-paid-search-day2.daybins10.csv",
+    "out_daybins10_wide_csv": "graph-editor/tmp/onset-fit-quality/window-paid-search-day2.daybins10.wide.csv"
+  }
+]

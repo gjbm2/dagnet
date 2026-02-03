@@ -1,0 +1,370 @@
+/**
+ * useSnapshotsMenu Hook
+ *
+ * Centralised hook for snapshot inventory + delete + download operations.
+ * UI components should only call this hook and render results.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import toast from 'react-hot-toast';
+import { useDialog } from '../contexts/DialogContext';
+import { useNavigatorContext } from '../contexts/NavigatorContext';
+import {
+  deleteSnapshots as deleteSnapshotsApi,
+  getBatchInventory,
+  querySnapshotsFull,
+  type SnapshotInventory,
+  type SnapshotQueryRow,
+} from '../services/snapshotWriteService';
+import { downloadTextFile } from '../services/downloadService';
+import { sessionLogService } from '../services/sessionLogService';
+import { invalidateInventoryCache } from './useEdgeSnapshotInventory';
+
+export interface UseSnapshotsMenuResult {
+  /** Snapshot inventories keyed by objectId (unprefixed, e.g. parameter ID) */
+  inventories: Record<string, SnapshotInventory>;
+  /** Snapshot counts (unique retrievals) keyed by objectId */
+  snapshotCounts: Record<string, number>;
+  /** Whether a delete operation is in flight */
+  isDeleting: boolean;
+  /** Whether a download operation is in flight */
+  isDownloading: boolean;
+  /** Refresh all inventories and counts */
+  refresh: () => Promise<void>;
+  /** Delete snapshots for a single objectId (with confirm) */
+  deleteSnapshots: (objectId: string) => Promise<boolean>;
+  /** Delete snapshots for multiple objectIds (single confirm) */
+  deleteSnapshotsMany: (objectIds: string[]) => Promise<boolean>;
+  /** Download a CSV containing FULL rows for an objectId */
+  downloadSnapshotData: (objectId: string) => Promise<boolean>;
+  /** Download a single CSV for multiple objectIds (concatenated rows) */
+  downloadSnapshotDataMany: (objectIds: string[], filenameHint: string) => Promise<boolean>;
+}
+
+export interface UseSnapshotsMenuOptions {
+  /**
+   * If true (default), inventories are fetched automatically when inputs change.
+   * If false, caller must invoke `refresh()` (e.g. on hover).
+   */
+  autoFetch?: boolean;
+}
+
+function buildDbParamId(objectId: string, repo: string, branch: string): string {
+  return `${repo}-${branch}-${objectId}`;
+}
+
+function sanitiseFilenamePart(input: string): string {
+  return input.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const s = String(value);
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+const SNAPSHOT_EXPORT_COLUMNS: Array<keyof SnapshotQueryRow> = [
+  'param_id',
+  'core_hash',
+  'slice_key',
+  'anchor_day',
+  'retrieved_at',
+  'a',
+  'x',
+  'y',
+  'median_lag_days',
+  'mean_lag_days',
+  'anchor_median_lag_days',
+  'anchor_mean_lag_days',
+  'onset_delta_days',
+];
+
+function rowsToCsv(rows: SnapshotQueryRow[]): string {
+  const header = SNAPSHOT_EXPORT_COLUMNS.join(',');
+  const lines = rows.map((row) => SNAPSHOT_EXPORT_COLUMNS.map((k) => csvCell((row as any)[k])).join(','));
+  return [header, ...lines].join('\n');
+}
+
+async function queryAllRowsForParam(dbParamId: string, expectedRowCount: number): Promise<{
+  ok: boolean;
+  rows: SnapshotQueryRow[];
+  truncated: boolean;
+  error?: string;
+}> {
+  // Safety: keep downloads bounded in the browser.
+  const hardCap = 500_000;
+  const limit = Math.max(0, Math.min(expectedRowCount || 0, hardCap));
+  const truncated = (expectedRowCount || 0) > hardCap;
+
+  const resp = await querySnapshotsFull({
+    param_id: dbParamId,
+    limit: limit > 0 ? limit : undefined,
+  });
+
+  if (!resp.success) {
+    return { ok: false, rows: [], truncated: false, error: resp.error || 'query failed' };
+  }
+  return { ok: true, rows: resp.rows, truncated };
+}
+
+/**
+ * Hook to manage snapshot operations for multiple object IDs (typically parameter IDs).
+ */
+export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuOptions = {}): UseSnapshotsMenuResult {
+  const ids = useMemo(() => Array.from(new Set(objectIds.filter(Boolean))), [objectIds.join(',')]);
+  const autoFetch = options.autoFetch !== false;
+
+  const [inventories, setInventories] = useState<Record<string, SnapshotInventory>>({});
+  const [snapshotCounts, setSnapshotCounts] = useState<Record<string, number>>({});
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const { showConfirm } = useDialog();
+  const { state: navState } = useNavigatorContext();
+  const repo = navState.selectedRepo;
+  const branch = navState.selectedBranch || 'main';
+
+  const refresh = useCallback(async () => {
+    if (!repo || ids.length === 0) {
+      setInventories({});
+      setSnapshotCounts({});
+      return;
+    }
+
+    const dbParamIds = ids.map((id) => buildDbParamId(id, repo, branch));
+    try {
+      const invByDbParamId = await getBatchInventory(dbParamIds);
+      const nextInventories: Record<string, SnapshotInventory> = {};
+      const nextCounts: Record<string, number> = {};
+
+      for (const objectId of ids) {
+        const dbParamId = buildDbParamId(objectId, repo, branch);
+        const inv = invByDbParamId[dbParamId];
+        if (inv) {
+          nextInventories[objectId] = inv;
+          nextCounts[objectId] = inv.unique_retrievals ?? 0;
+        } else {
+          nextInventories[objectId] = {
+            has_data: false,
+            param_id: dbParamId,
+            earliest: null,
+            latest: null,
+            row_count: 0,
+            unique_days: 0,
+            unique_slices: 0,
+            unique_hashes: 0,
+            unique_retrievals: 0,
+          };
+          nextCounts[objectId] = 0;
+        }
+      }
+
+      setInventories(nextInventories);
+      setSnapshotCounts(nextCounts);
+    } catch (error) {
+      console.error('[useSnapshotsMenu] Failed to fetch inventory:', error);
+    }
+  }, [repo, branch, ids.join(',')]);
+
+  useEffect(() => {
+    if (!autoFetch) return;
+    void refresh();
+  }, [refresh, autoFetch]);
+
+  const deleteSnapshotsMany = useCallback(
+    async (toDelete: string[]): Promise<boolean> => {
+      if (!repo) return false;
+      const unique = Array.from(new Set((toDelete || []).filter(Boolean)));
+      if (unique.length === 0) return false;
+
+      const counts = unique.map((id) => snapshotCounts[id] ?? 0);
+      const totalRetrievals = counts.reduce((a, b) => a + b, 0);
+      const anyWithData = counts.some((c) => c > 0);
+      if (!anyWithData) return false;
+
+      const messageLines: string[] = [];
+      for (let i = 0; i < unique.length; i++) {
+        const id = unique[i];
+        const c = counts[i];
+        if (c > 0) {
+          messageLines.push(`- ${id}: ${c} snapshot retrieval${c !== 1 ? 's' : ''}`);
+        }
+      }
+
+      const confirmed = await showConfirm({
+        title: unique.length === 1 ? 'Delete Snapshots' : 'Delete All Snapshots',
+        message:
+          (unique.length === 1
+            ? `Delete ${totalRetrievals} snapshot retrieval${totalRetrievals !== 1 ? 's' : ''} for "${unique[0]}"?\n\n`
+            : `Delete ${totalRetrievals} snapshot retrieval${totalRetrievals !== 1 ? 's' : ''} across ${unique.length} parameter${unique.length !== 1 ? 's' : ''}?\n\n`) +
+          messageLines.join('\n') +
+          `\n\nThis removes historical time-series data and cannot be undone.`,
+        confirmLabel: 'Delete',
+        cancelLabel: 'Cancel',
+        confirmVariant: 'danger',
+      });
+
+      if (!confirmed) return false;
+
+      setIsDeleting(true);
+      const opId = sessionLogService.startOperation(
+        'info',
+        'data-update',
+        unique.length === 1 ? 'SNAPSHOT_DELETE' : 'SNAPSHOT_DELETE_ALL',
+        unique.length === 1 ? `Deleting snapshots for ${unique[0]}` : `Deleting snapshots for ${unique.length} parameters`
+      );
+
+      try {
+        let deletedTotal = 0;
+        for (const objectId of unique) {
+          const expected = snapshotCounts[objectId] ?? 0;
+          if (!expected) continue;
+
+          const dbParamId = buildDbParamId(objectId, repo, branch);
+          sessionLogService.addChild(opId, 'info', 'SNAPSHOT_DELETE_PARAM', `Deleting snapshots for ${objectId}`, undefined, {
+            dbParamId,
+            expectedCount: expected,
+          });
+
+          const result = await deleteSnapshotsApi(dbParamId);
+          if (!result.success) {
+            sessionLogService.addChild(opId, 'error', 'SNAPSHOT_DELETE_PARAM_FAILED', `Failed to delete snapshots for ${objectId}`, result.error, {
+              dbParamId,
+            });
+            toast.error(`Failed to delete snapshots for ${objectId}: ${result.error || 'unknown error'}`);
+            continue;
+          }
+
+          deletedTotal += result.deleted || 0;
+          invalidateInventoryCache(dbParamId);
+          setSnapshotCounts((prev) => ({ ...prev, [objectId]: 0 }));
+        }
+
+        // Refresh inventories so badges/menus update cleanly
+        await refresh();
+
+        toast.success(
+          unique.length === 1
+            ? `Deleted snapshots for ${unique[0]}`
+            : `Deleted snapshots for ${unique.length} parameters`
+        );
+
+        sessionLogService.endOperation(opId, 'success', `Deleted ${deletedTotal} snapshot row${deletedTotal !== 1 ? 's' : ''}`);
+        return true;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        sessionLogService.endOperation(opId, 'error', `Snapshot delete error: ${errorMessage}`);
+        toast.error(`Failed to delete snapshots: ${errorMessage}`);
+        return false;
+      } finally {
+        setIsDeleting(false);
+      }
+    },
+    [repo, branch, snapshotCounts, showConfirm, refresh]
+  );
+
+  const deleteSnapshots = useCallback(
+    async (objectId: string): Promise<boolean> => {
+      return deleteSnapshotsMany([objectId]);
+    },
+    [deleteSnapshotsMany]
+  );
+
+  const downloadSnapshotDataMany = useCallback(
+    async (toDownload: string[], filenameHint: string): Promise<boolean> => {
+      if (!repo) return false;
+      const unique = Array.from(new Set((toDownload || []).filter(Boolean)));
+      if (unique.length === 0) return false;
+
+      // Only download params that actually have data
+      const candidates = unique.filter((id) => (inventories[id]?.row_count ?? 0) > 0);
+      if (candidates.length === 0) return false;
+
+      setIsDownloading(true);
+      const opId = sessionLogService.startOperation(
+        'info',
+        'data-fetch',
+        unique.length === 1 ? 'SNAPSHOT_DOWNLOAD' : 'SNAPSHOT_DOWNLOAD_ALL',
+        unique.length === 1 ? `Downloading snapshots for ${unique[0]}` : `Downloading snapshots for ${candidates.length} parameters`
+      );
+
+      try {
+        const allRows: SnapshotQueryRow[] = [];
+        let anyTruncated = false;
+
+        for (const objectId of candidates) {
+          const inv = inventories[objectId];
+          const expectedRows = inv?.row_count ?? 0;
+          const dbParamId = buildDbParamId(objectId, repo, branch);
+
+          sessionLogService.addChild(opId, 'info', 'SNAPSHOT_QUERY_FULL', `Querying snapshot rows for ${objectId}`, undefined, {
+            dbParamId,
+            expectedRows,
+          });
+
+          const q = await queryAllRowsForParam(dbParamId, expectedRows);
+          if (!q.ok) {
+            sessionLogService.addChild(opId, 'error', 'SNAPSHOT_QUERY_FULL_FAILED', `Query failed for ${objectId}`, q.error, {
+              dbParamId,
+            });
+            toast.error(`Failed to download snapshots for ${objectId}: ${q.error || 'query failed'}`);
+            continue;
+          }
+
+          allRows.push(...q.rows);
+          anyTruncated = anyTruncated || q.truncated;
+        }
+
+        const csv = rowsToCsv(allRows);
+        const safeHint = sanitiseFilenamePart(filenameHint) || 'snapshots';
+        const safeRepo = sanitiseFilenamePart(repo);
+        const safeBranch = sanitiseFilenamePart(branch);
+        const filename = `${safeRepo}-${safeBranch}-${safeHint}.csv`;
+
+        downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+
+        if (anyTruncated) {
+          toast.error('Snapshot export truncated (too many rows)');
+          sessionLogService.addChild(opId, 'warning', 'SNAPSHOT_DOWNLOAD_TRUNCATED', 'Snapshot export truncated due to row cap');
+        } else {
+          toast.success('Downloaded snapshot CSV');
+        }
+
+        sessionLogService.endOperation(opId, 'success', `Downloaded ${allRows.length} row${allRows.length !== 1 ? 's' : ''}`);
+        return true;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        sessionLogService.endOperation(opId, 'error', `Snapshot download error: ${errorMessage}`);
+        toast.error(`Failed to download snapshot CSV: ${errorMessage}`);
+        return false;
+      } finally {
+        setIsDownloading(false);
+      }
+    },
+    [repo, branch, inventories]
+  );
+
+  const downloadSnapshotData = useCallback(
+    async (objectId: string): Promise<boolean> => {
+      const safeId = sanitiseFilenamePart(objectId) || 'param';
+      return downloadSnapshotDataMany([objectId], `snapshots-${safeId}`);
+    },
+    [downloadSnapshotDataMany]
+  );
+
+  return {
+    inventories,
+    snapshotCounts,
+    isDeleting,
+    isDownloading,
+    refresh,
+    deleteSnapshots,
+    deleteSnapshotsMany,
+    downloadSnapshotData,
+    downloadSnapshotDataMany,
+  };
+}
+

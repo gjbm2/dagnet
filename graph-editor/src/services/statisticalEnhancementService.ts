@@ -49,6 +49,9 @@ import {
   logNormalInverseCDF,
   logNormalSurvival,
   fitLagDistribution,
+  toModelSpace,
+  toModelSpaceAgeDays,
+  toModelSpaceLagDays,
 } from './lagDistributionUtils';
 import type { ForecastingModelSettings } from './forecastingSettingsService';
 
@@ -61,6 +64,9 @@ export {
   logNormalInverseCDF,
   logNormalSurvival,
   fitLagDistribution,
+  toModelSpace,
+  toModelSpaceAgeDays,
+  toModelSpaceLagDays,
 };
 
 // =============================================================================
@@ -749,7 +755,8 @@ export function estimatePInfinity(
 export function calculateCompleteness(
   cohorts: CohortData[],
   mu: number,
-  sigma: number
+  sigma: number,
+  onsetDeltaDays?: number
 ): number {
   let totalN = 0;
   let weightedSum = 0;
@@ -758,29 +765,14 @@ export function calculateCompleteness(
 
   for (const cohort of cohorts) {
     if (cohort.n === 0) continue;
-    const F_age = logNormalCDF(cohort.age, mu, sigma);
+    const ageXDays = toModelSpaceAgeDays(onsetDeltaDays, cohort.age);
+    const F_age = logNormalCDF(ageXDays, mu, sigma);
     totalN += cohort.n;
     weightedSum += cohort.n * F_age;
     cohortDetails.push({ date: cohort.date, age: cohort.age, n: cohort.n, F_age });
   }
 
   const completeness = totalN > 0 ? weightedSum / totalN : 0;
-  
-  console.log('[LAG_DEBUG] COMPLETENESS calculation:', {
-    mu: mu.toFixed(3),
-    sigma: sigma.toFixed(3),
-    totalN,
-    completeness: completeness.toFixed(3),
-    cohortCount: cohorts.length,
-    ageRange: cohorts.length > 0 
-      ? `${Math.min(...cohorts.map(c => c.age))}-${Math.max(...cohorts.map(c => c.age))} days`
-      : 'no cohorts',
-    sampleCohorts: cohortDetails.slice(0, 5).map(c => ({
-      date: c.date,
-      age: c.age,
-      F_age: c.F_age.toFixed(3),
-    })),
-  });
 
   return completeness;
 }
@@ -790,10 +782,11 @@ function calculateCompletenessWithTailConstraint(
   mu: number,
   sigmaMoments: number,
   sigmaConstrained: number,
-  tailConstraintApplied: boolean
+  tailConstraintApplied: boolean,
+  onsetDeltaDays?: number
 ): number {
   if (!tailConstraintApplied) {
-    return calculateCompleteness(cohorts, mu, sigmaMoments);
+    return calculateCompleteness(cohorts, mu, sigmaMoments, onsetDeltaDays);
   }
 
   let totalN = 0;
@@ -801,8 +794,9 @@ function calculateCompletenessWithTailConstraint(
 
   for (const cohort of cohorts) {
     if (cohort.n === 0) continue;
-    const F_moments = logNormalCDF(cohort.age, mu, sigmaMoments);
-    const F_constrained = logNormalCDF(cohort.age, mu, sigmaConstrained);
+    const ageXDays = toModelSpaceAgeDays(onsetDeltaDays, cohort.age);
+    const F_moments = logNormalCDF(ageXDays, mu, sigmaMoments);
+    const F_constrained = logNormalCDF(ageXDays, mu, sigmaConstrained);
     // One-way safety: do not allow the tail constraint to INCREASE completeness.
     const F_age = Math.min(F_moments, F_constrained);
     totalN += cohort.n;
@@ -884,10 +878,15 @@ function improveFitWithT95(
 function getCompletenessCdfParams(
   fit: LagDistributionFit,
   medianLagDays: number,
-  authoritativeT95Days: number
+  authoritativeT95Days: number,
+  onsetDeltaDays?: number
 ): EdgeLatencyStats['completeness_cdf'] {
   const mu = fit.mu;
   const sigmaMoments = fit.sigma;
+  const authoritativeT95ModelDays =
+    typeof onsetDeltaDays === 'number' && Number.isFinite(onsetDeltaDays) && onsetDeltaDays > 0
+      ? toModelSpaceLagDays(onsetDeltaDays, authoritativeT95Days)
+      : authoritativeT95Days;
 
   // Guard rails: keep sigma finite and positive
   const sigmaMomentsSafe =
@@ -899,12 +898,12 @@ function getCompletenessCdfParams(
     z > 0 &&
     Number.isFinite(medianLagDays) &&
     medianLagDays > 0 &&
-    Number.isFinite(authoritativeT95Days) &&
-    authoritativeT95Days > 0;
+    Number.isFinite(authoritativeT95ModelDays) &&
+    authoritativeT95ModelDays > 0;
 
   const sigmaMinFromT95 =
-    canComputeSigmaMin && authoritativeT95Days > medianLagDays
-      ? Math.log(authoritativeT95Days / medianLagDays) / z
+    canComputeSigmaMin && authoritativeT95ModelDays > medianLagDays
+      ? Math.log(authoritativeT95ModelDays / medianLagDays) / z
       : undefined;
 
   const tailConstraintApplied =
@@ -928,6 +927,8 @@ function getCompletenessCdfParams(
         valuesAfter: {
           median_lag_days: medianLagDays,
           t95_authoritative_days: authoritativeT95Days,
+          onset_delta_days: onsetDeltaDays,
+          t95_authoritative_model_days: authoritativeT95ModelDays,
           percentile: LATENCY_T95_PERCENTILE,
           sigma_moments: sigmaMomentsSafe,
           sigma_min_from_t95: sigmaMinFromT95,
@@ -987,34 +988,14 @@ export function computeEdgeLatencyStats(
   fitTotalKOverride?: number,
   pInfinityCohortsOverride?: CohortData[],
   edgeT95?: number,
-  recencyHalfLifeDays: number = RECENCY_HALF_LIFE_DAYS
+  recencyHalfLifeDays: number = RECENCY_HALF_LIFE_DAYS,
+  onsetDeltaDays: number = 0,
+  maxMeanMedianRatioOverride?: number
 ): EdgeLatencyStats {
   // Calculate total k for quality gate
   const totalK = cohorts.reduce((sum, c) => sum + c.k, 0);
   const totalN = cohorts.reduce((sum, c) => sum + c.n, 0);
   const fitTotalK = fitTotalKOverride ?? totalK;
-
-  // DEBUG: Log input values
-  console.log('[LAG_DEBUG] COMPUTE_STATS input:', {
-    cohortsCount: cohorts.length,
-    aggregateMedianLag,
-    aggregateMeanLag,
-    defaultT95Days,
-    edgeT95,
-    anchorMedianLag,
-    totalK,
-    fitTotalK,
-    totalN,
-    sampleCohort: cohorts[0] ? {
-      date: cohorts[0].date,
-      n: cohorts[0].n,
-      k: cohorts[0].k,
-      age: cohorts[0].age,
-      median_lag_days: cohorts[0].median_lag_days,
-      mean_lag_days: cohorts[0].mean_lag_days,
-      anchor_median_lag_days: cohorts[0].anchor_median_lag_days,
-    } : 'no cohorts'
-  });
 
   // For downstream edges, adjust cohort ages by subtracting anchor_median_lag.
   // This reflects the OBSERVED central tendency of how long users take to reach
@@ -1035,56 +1016,41 @@ export function computeEdgeLatencyStats(
         };
       })
     : cohorts;
-  
-  if (anchorMedianLag > 0 || cohorts.some(c => c.anchor_median_lag_days)) {
-    console.log('[LAG_DEBUG] Anchor-adjusted ages:', {
-      anchorMedianLag,
-      hasPerCohortAnchorLag: cohorts.some(c => c.anchor_median_lag_days),
-      originalAges: cohorts.slice(0, 3).map(c => c.age),
-      adjustedAges: adjustedCohorts.slice(0, 3).map(c => c.age),
-      perCohortLags: cohorts.slice(0, 3).map(c => c.anchor_median_lag_days),
-    });
-  }
 
   // Step 1: Fit lag distribution from median/mean
-  const fitInitial = fitLagDistribution(aggregateMedianLag, aggregateMeanLag, fitTotalK);
-  
-  // DEBUG: Log initial fit result
-  console.log('[LAG_DEBUG] COMPUTE_FIT result:', {
-    mu: fitInitial.mu,
-    sigma: fitInitial.sigma,
-    empirical_quality_ok: fitInitial.empirical_quality_ok,
-    quality_failure_reason: fitInitial.quality_failure_reason,
-    total_k: fitInitial.total_k,
-  });
+  const model = toModelSpace(onsetDeltaDays, aggregateMedianLag, aggregateMeanLag, undefined, undefined);
+  const fitInitial = fitLagDistribution(model.medianXDays, model.meanXDays, fitTotalK, maxMeanMedianRatioOverride);
 
   // Step 2: Derive t95 from initial fit
-  const t95FromFit = fitInitial.empirical_quality_ok
+  const t95FromFitX = fitInitial.empirical_quality_ok
     ? logNormalInverseCDF(LATENCY_T95_PERCENTILE, fitInitial.mu, fitInitial.sigma)
-    : defaultT95Days;
+    : toModelSpaceLagDays(onsetDeltaDays, defaultT95Days);
+  const t95FromFitT = model.onsetDeltaDays + t95FromFitX;
   
   // Step 3: Determine authoritative t95 for fit improvement
   // If edge.p.latency.t95 is set (from graph/file), use it to constrain the fit.
   // Otherwise, use the derived t95 from the moment-fit.
   // This authoritative value will be used to "drag" the lognormal tail out (increase sigma).
-  const authoritativeT95Days =
+  const authoritativeT95TDays =
     (typeof edgeT95 === 'number' && Number.isFinite(edgeT95) && edgeT95 > 0)
       ? edgeT95
-      : (Number.isFinite(t95FromFit) && t95FromFit > 0 ? t95FromFit : defaultT95Days);
+      : (Number.isFinite(t95FromFitT) && t95FromFitT > 0 ? t95FromFitT : defaultT95Days);
+  const authoritativeT95XDays = toModelSpaceLagDays(model.onsetDeltaDays, authoritativeT95TDays);
 
   // Step 4: Improve fit using authoritative t95 constraint
   // If authoritative t95 > moment-fit t95, adjust sigma to match authoritative t95.
   // This "drags" the lognormal tail out to the right, improving the fit.
   // The improved fit will be used for all calculations (completeness, blending, evidence shaping).
-  const fit = improveFitWithT95(fitInitial, aggregateMedianLag, authoritativeT95Days);
+  const fit = improveFitWithT95(fitInitial, model.medianXDays, authoritativeT95XDays);
   
   // Step 5: Compute final t95 from improved fit
   // This is the t95 that will be written to graph/file (unless overridden).
   // If we improved the fit using edgeT95, this should match authoritativeT95Days.
   // If we used derived t95, this is the improved fit's t95.
-  const t95 = fit.empirical_quality_ok
+  const t95X = fit.empirical_quality_ok
     ? logNormalInverseCDF(LATENCY_T95_PERCENTILE, fit.mu, fit.sigma)
-    : authoritativeT95Days;
+    : authoritativeT95XDays;
+  const t95 = fit.empirical_quality_ok ? (model.onsetDeltaDays + t95X) : authoritativeT95TDays;
 
   // Completeness CDF parameters:
   //
@@ -1109,14 +1075,14 @@ export function computeEdgeLatencyStats(
     const canComputeSigmaMin =
       Number.isFinite(z) &&
       z > 0 &&
-      Number.isFinite(aggregateMedianLag) &&
-      aggregateMedianLag > 0 &&
-      Number.isFinite(authoritativeT95Days) &&
-      authoritativeT95Days > 0;
+      Number.isFinite(model.medianXDays) &&
+      model.medianXDays > 0 &&
+      Number.isFinite(authoritativeT95XDays) &&
+      authoritativeT95XDays > 0;
 
     const sigmaMinFromT95 =
-      canComputeSigmaMin && authoritativeT95Days > aggregateMedianLag
-        ? Math.log(authoritativeT95Days / aggregateMedianLag) / z
+      canComputeSigmaMin && authoritativeT95XDays > model.medianXDays
+        ? Math.log(authoritativeT95XDays / model.medianXDays) / z
         : undefined;
 
     // Track whether the constraint materially increased sigma vs the moment estimate.
@@ -1144,7 +1110,8 @@ export function computeEdgeLatencyStats(
     completenessCdf.mu,
     completenessCdf.sigma_moments,
     completenessCdf.sigma,
-    completenessCdf.tail_constraint_applied
+    completenessCdf.tail_constraint_applied,
+    model.onsetDeltaDays
   );
 
   // If no mature cohorts, forecast fallback is not available
@@ -1785,6 +1752,7 @@ export function enhanceGraphLatencies(
     ANCHOR_DELAY_BLEND_K_CONVERSIONS: forecasting?.ANCHOR_DELAY_BLEND_K_CONVERSIONS ?? ANCHOR_DELAY_BLEND_K_CONVERSIONS,
     ONSET_MASS_FRACTION_ALPHA: forecasting?.ONSET_MASS_FRACTION_ALPHA ?? ONSET_MASS_FRACTION_ALPHA,
     ONSET_AGGREGATION_BETA: forecasting?.ONSET_AGGREGATION_BETA ?? ONSET_AGGREGATION_BETA,
+    LATENCY_MAX_MEAN_MEDIAN_RATIO: forecasting?.LATENCY_MAX_MEAN_MEDIAN_RATIO ?? LATENCY_MAX_MEAN_MEDIAN_RATIO,
   };
 
   const weightedQuantile = (
@@ -2208,6 +2176,30 @@ export function enhanceGraphLatencies(
         totalCohortsInScope,
       });
 
+      // Aggregate onset_delta_days from window() slices only.
+      //
+      // Policy:
+      // - Use weighted β-quantile across window slice families.
+      // - Weight is the number of dates in the window() series (dates.length).
+      // - Cohort slices have truncated histogram data (~10 days) - onset unreliable.
+      //
+      // This value is an edge-local dead-time δ and is threaded into all stats calculations
+      // (fit, completeness, and path horizons) via model-space conversions.
+      let edgeOnsetDeltaDays: number | undefined;
+      const windowSlicesWithOnset = paramValues.filter((v: any) => {
+        const dsl = v.sliceDSL ?? '';
+        return dsl.includes('window(') && typeof v.latency?.onset_delta_days === 'number';
+      });
+      if (windowSlicesWithOnset.length > 0) {
+        edgeOnsetDeltaDays = weightedQuantile(
+          windowSlicesWithOnset.map((v: any) => ({
+            value: v.latency.onset_delta_days,
+            weight: (Array.isArray(v.dates) && v.dates.length > 0) ? v.dates.length : 1,
+          })),
+          MODEL.ONSET_AGGREGATION_BETA
+        );
+      }
+
       // Compute edge LAG stats with anchor-adjusted ages (NOT path_t95!)
       // For local latency edges, pass edgeT95 if available (authoritative) and DEFAULT_T95_DAYS as default.
       // For downstream edges, effectiveHorizonDays is path_t95 (used as horizon, not as edge t95).
@@ -2220,7 +2212,9 @@ export function enhanceGraphLatencies(
         totalKForFit,     // Fit quality gate should consider full-history converters when available
         cohortsAll.length > 0 ? cohortsAll : cohortsScoped, // p∞ estimation should use full-history mature cohorts
         edgeT95,  // Authoritative t95 from edge.p.latency.t95 if set
-        MODEL.RECENCY_HALF_LIFE_DAYS
+        MODEL.RECENCY_HALF_LIFE_DAYS,
+        edgeOnsetDeltaDays ?? 0,
+        MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO
       );
 
       // ---------------------------------------------------------------------
@@ -2297,18 +2291,21 @@ export function enhanceGraphLatencies(
           );
 
           if (combinedT95 !== undefined && Number.isFinite(combinedT95) && combinedT95 > 0) {
+        const combinedT95T = combinedT95 + (edgeOnsetDeltaDays ?? 0);
             // Safety: never let the empirical/moment-matched estimate shrink below the edge-local horizon.
             // This preserves the guarantee that path_t95(A→Y) ≥ t95(X→Y), while still allowing the
             // moment-matched estimate to be smaller than the conservative topo sum (avoids compounding
             // conservatism with depth).
-            edgePathT95 = Math.max(latencyStats.t95, combinedT95);
+        edgePathT95 = Math.max(latencyStats.t95, combinedT95T);
             console.log('[LAG_TOPO_PATH_T95] Using anchor+edge moment-matched t95:', {
               edgeId,
               anchorMedian: anchorMedian.toFixed(2),
               anchorMean: anchorMean.toFixed(2),
               anchorFitOk: anchorFit.empirical_quality_ok,
               edgeFitOk: latencyStats.fit.empirical_quality_ok,
-              combinedT95: combinedT95.toFixed(2),
+          combinedT95: combinedT95.toFixed(2),
+          edgeOnsetDeltaDays,
+          combinedT95T: combinedT95T.toFixed(2),
               topoFallback: (pathT95ToNode + latencyStats.t95).toFixed(2),
             });
           }
@@ -2391,7 +2388,12 @@ export function enhanceGraphLatencies(
                 0
               ) / (totalNForAnchor || 1);
 
-            const anchorFit = fitLagDistribution(anchorMedian, anchorMean, totalNForAnchor);
+            const anchorFit = fitLagDistribution(
+              anchorMedian,
+              anchorMean,
+              totalNForAnchor,
+              MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO
+            );
             const ayFit = approximateLogNormalSumFit(anchorFit, latencyStats.fit);
 
             if (ayFit) {
@@ -2404,7 +2406,8 @@ export function enhanceGraphLatencies(
                   total_k: totalKForFit,
                 },
                 ayMedianDays,
-                completenessAuthoritativeT95Days
+                completenessAuthoritativeT95Days,
+                edgeOnsetDeltaDays ?? 0
               );
 
               const ayCompleteness = calculateCompletenessWithTailConstraint(
@@ -2413,7 +2416,8 @@ export function enhanceGraphLatencies(
                 ayCdfParams.mu,
                 ayCdfParams.sigma_moments,
                 ayCdfParams.sigma,
-                ayCdfParams.tail_constraint_applied
+                ayCdfParams.tail_constraint_applied,
+                edgeOnsetDeltaDays ?? 0
               );
 
               if (Number.isFinite(ayCompleteness)) {
@@ -2454,28 +2458,6 @@ export function enhanceGraphLatencies(
         const dsl = v.sliceDSL ?? '';
         return dsl.includes('window(') && !dsl.includes('cohort(');
       }).length;
-      
-      // Aggregate onset_delta_days from window() slices only.
-      //
-      // Policy:
-      // - Use weighted β-quantile across window slice families.
-      // - Weight is the number of dates in the window() series (dates.length).
-      // - This replaces the old min() rule, which was too aggressive and often collapsed to 0.
-      // NOTE: Cohort slices have truncated histogram data (~10 days) - onset unreliable
-      let edgeOnsetDeltaDays: number | undefined;
-      const windowSlicesWithOnset = paramValues.filter((v: any) => {
-        const dsl = v.sliceDSL ?? '';
-        return dsl.includes('window(') && typeof v.latency?.onset_delta_days === 'number';
-      });
-      if (windowSlicesWithOnset.length > 0) {
-        edgeOnsetDeltaDays = weightedQuantile(
-          windowSlicesWithOnset.map((v: any) => ({
-            value: v.latency.onset_delta_days,
-            weight: (Array.isArray(v.dates) && v.dates.length > 0) ? v.dates.length : 1,
-          })),
-          MODEL.ONSET_AGGREGATION_BETA
-        );
-      }
       
       const edgeLAGValues: EdgeLAGValues = {
         edgeUuid,
@@ -2973,23 +2955,6 @@ export function enhanceGraphLatencies(
         const cpMedianLag = cpLagStats?.median_lag_days ?? effectiveHorizonDays / 2;
         const cpMeanLag = cpLagStats?.mean_lag_days;
         
-        // Compute t95 and completeness using same logic as base edge
-        const cpEdgeT95 = cp.p?.latency?.t95;
-        const cpLatencyStats = computeEdgeLatencyStats(
-          cpCohortsScoped,
-          cpMedianLag,
-          cpMeanLag,
-          MODEL.DEFAULT_T95_DAYS,
-          anchorMedianLag,
-          undefined, // fitTotalKOverride
-          cpCohortsAll.length > 0 ? cpCohortsAll : cpCohortsScoped, // p∞ estimation
-          cpEdgeT95, // Authoritative t95 if set
-          MODEL.RECENCY_HALF_LIFE_DAYS
-        );
-        
-        // Use the computed completeness from cpLatencyStats
-        const cpCompleteness = cpLatencyStats.completeness;
-        
         // Aggregate onset from window slices (same logic as base edge)
         let cpOnsetDeltaDays: number | undefined;
         const cpWindowSlicesWithOnset = cpParamValues.filter((v: any) => {
@@ -3005,6 +2970,25 @@ export function enhanceGraphLatencies(
             MODEL.ONSET_AGGREGATION_BETA
           );
         }
+
+        // Compute t95 and completeness using same logic as base edge (thread onset)
+        const cpEdgeT95 = cp.p?.latency?.t95;
+        const cpLatencyStats = computeEdgeLatencyStats(
+          cpCohortsScoped,
+          cpMedianLag,
+          cpMeanLag,
+          MODEL.DEFAULT_T95_DAYS,
+          anchorMedianLag,
+          undefined, // fitTotalKOverride
+          cpCohortsAll.length > 0 ? cpCohortsAll : cpCohortsScoped, // p∞ estimation
+          cpEdgeT95, // Authoritative t95 if set
+          MODEL.RECENCY_HALF_LIFE_DAYS,
+          cpOnsetDeltaDays ?? 0,
+          MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO
+        );
+        
+        // Use the computed completeness from cpLatencyStats
+        const cpCompleteness = cpLatencyStats.completeness;
         
         // Build EdgeLAGValues for conditional probability
         const cpEdgeLAGValues: EdgeLAGValues = {

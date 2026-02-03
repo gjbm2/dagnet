@@ -1,0 +1,91 @@
+{
+  "fixture": "param-registry/test/amplitude/window-paid-search-day2.json",
+  "alpha": 0.01,
+  "onset_days": 4.045,
+  "total_mass": 9,
+  "median_T_days": 7.000405092592593,
+  "mean_T_days": 9.358326898148148,
+  "unshifted": {
+    "mu": 1.9459680177512584,
+    "sigma": 0.5,
+    "mse": 0.0034636060927546895
+  },
+  "shifted": {
+    "mu": 1.0836357286342482,
+    "sigma": 0.5,
+    "mse": 0.014555869170630096
+  },
+  "improvement": {
+    "abs_mse": -0.011092263077875406,
+    "rel_fraction": -3.2025186412157685,
+    "rel_percent": -320.25186412157683
+  },
+  "points": [
+    {
+      "i": 0,
+      "start_days": 4,
+      "end_days": 5,
+      "mid_days": 4.5,
+      "mass": 2,
+      "empirical_cdf_at_end": 0.2222222222222222,
+      "predicted_cdf_at_end": 0.25045442677113566,
+      "predicted_cdf_unshifted_at_end": 0.25045442677113566,
+      "predicted_cdf_shifted_at_end": 0.011930484004006425
+    },
+    {
+      "i": 1,
+      "start_days": 5,
+      "end_days": 6,
+      "mid_days": 5.5,
+      "mass": 1,
+      "empirical_cdf_at_end": 0.3333333333333333,
+      "predicted_cdf_at_end": 0.3788825558642162,
+      "predicted_cdf_unshifted_at_end": 0.3788825558642162,
+      "predicted_cdf_shifted_at_end": 0.20426273726444266
+    },
+    {
+      "i": 3,
+      "start_days": 7,
+      "end_days": 8,
+      "mid_days": 7.5,
+      "mass": 3,
+      "empirical_cdf_at_end": 0.6666666666666666,
+      "predicted_cdf_at_end": 0.605244972731231,
+      "predicted_cdf_unshifted_at_end": 0.605244972731231,
+      "predicted_cdf_shifted_at_end": 0.7199489524815865
+    },
+    {
+      "i": 4,
+      "start_days": 8,
+      "end_days": 9,
+      "mid_days": 8.5,
+      "mass": 1,
+      "empirical_cdf_at_end": 0.7777777777777778,
+      "predicted_cdf_at_end": 0.6923466896049977,
+      "predicted_cdf_unshifted_at_end": 0.6923466896049977,
+      "predicted_cdf_shifted_at_end": 0.849320342665726
+    },
+    {
+      "i": 15,
+      "start_days": 19,
+      "end_days": 20,
+      "mid_days": 19.5,
+      "mass": 1,
+      "empirical_cdf_at_end": 0.8888888888888888,
+      "predicted_cdf_at_end": 0.9821148939273711,
+      "predicted_cdf_unshifted_at_end": 0.9821148939273711,
+      "predicted_cdf_shifted_at_end": 0.9996271939838117
+    },
+    {
+      "i": 16,
+      "start_days": 20,
+      "end_days": 21,
+      "mid_days": 20.5,
+      "mass": 1,
+      "empirical_cdf_at_end": 1,
+      "predicted_cdf_at_end": 0.9859937116006592,
+      "predicted_cdf_unshifted_at_end": 0.9859937116006592,
+      "predicted_cdf_shifted_at_end": 0.9997619046745587
+    }
+  ]
+}

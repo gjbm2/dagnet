@@ -21,7 +21,7 @@ import { usePullAll } from '../hooks/usePullAll';
 import { useRenameFile } from '../hooks/useRenameFile';
 import { useViewHistory } from '../hooks/useViewHistory';
 import { useClearDataFile } from '../hooks/useClearDataFile';
-import { useDeleteSnapshots } from '../hooks/useDeleteSnapshots';
+import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
 import { useWhereUsed } from '../hooks/useWhereUsed';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { HistoryModal } from './modals/HistoryModal';
@@ -94,8 +94,10 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   
   // Snapshot deletion hook (only for parameters)
   const paramIds = item.type === 'parameter' && item.id ? [item.id] : [];
-  const { snapshotCounts, deleteSnapshots } = useDeleteSnapshots(paramIds);
+  const { inventories, snapshotCounts, deleteSnapshots, downloadSnapshotData } = useSnapshotsMenu(paramIds);
   const snapshotCount = item.type === 'parameter' ? snapshotCounts[item.id] : undefined;
+  const snapshotRowCount = item.type === 'parameter' ? inventories[item.id]?.row_count : undefined;
+  const hasSnapshots = (snapshotRowCount ?? 0) > 0;
 
   // Where used hook
   const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(fileId);
@@ -325,15 +327,30 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     });
   }
   
-  // Delete snapshots (for parameters - disabled when count is 0 or loading)
+  // Snapshots submenu (for parameters)
   if (item.type === 'parameter') {
     menuItems.push({
-      label: `Delete snapshots (${snapshotCount ?? 0})`,
-      onClick: (snapshotCount ?? 0) > 0 ? async () => {
-        await deleteSnapshots(item.id);
-        onClose();
-      } : () => {},
-      disabled: (snapshotCount ?? 0) === 0,
+      label: 'Snapshots',
+      onClick: () => {},
+      disabled: !hasSnapshots,
+      submenu: [
+        {
+          label: 'Download snapshot data',
+          disabled: !hasSnapshots,
+          onClick: async () => {
+            await downloadSnapshotData(item.id);
+            onClose();
+          },
+        },
+        {
+          label: `Delete ${snapshotCount ?? 0} snapshot${(snapshotCount ?? 0) !== 1 ? 's' : ''}`,
+          disabled: (snapshotCount ?? 0) === 0,
+          onClick: async () => {
+            await deleteSnapshots(item.id);
+            onClose();
+          },
+        },
+      ],
     });
   }
 

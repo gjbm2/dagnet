@@ -53,25 +53,19 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
       
       // Initial position
       let top = rect.bottom + 4;
-      let left = rect.right;
+      let left = rect.left;
       
       // If menu is already rendered, apply viewport constraints
       if (menuRef.current) {
         const menuRect = menuRef.current.getBoundingClientRect();
         const menuWidth = menuRect.width;
         const menuHeight = menuRect.height;
-        
-        // Account for the translateX(-100%) transform
-        const actualLeft = left - menuWidth;
-        
-        // Constrain horizontally (menu is right-aligned to button)
-        if (actualLeft < 20) {
-          // Not enough space on left, position to right of button instead
-          left = rect.left;
-        } else if (left > globalThis.innerWidth - 20) {
-          // Button too far right
-          left = globalThis.innerWidth - 20;
+
+        // Constrain horizontally
+        if (left + menuWidth > globalThis.innerWidth - 20) {
+          left = Math.max(20, globalThis.innerWidth - menuWidth - 20);
         }
+        if (left < 20) left = 20;
         
         // Constrain vertically
         if (top + menuHeight > globalThis.innerHeight - 20) {
@@ -98,19 +92,19 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
       const menuHeight = menuRect.height;
       
       let top = rect.bottom + 4;
-      let left = rect.right;
-      
-      // Account for the translateX(-100%) transform
-      const actualLeft = left - menuWidth;
-      
-      // Constrain horizontally (menu is right-aligned to button)
-      if (actualLeft < 20) {
-        // Not enough space on left, position to right of button instead
+      // Right-align menu to the button WITHOUT using CSS transforms.
+      // (A transformed ancestor breaks position: fixed descendants, which our flyouts use.)
+      let left = rect.right - menuWidth;
+
+      // Constrain horizontally
+      if (left < 20) {
+        // Not enough space to the left; fall back to left-align to the button.
         left = rect.left;
-      } else if (left > globalThis.innerWidth - 20) {
-        // Button too far right
-        left = globalThis.innerWidth - 20;
       }
+      if (left + menuWidth > globalThis.innerWidth - 20) {
+        left = Math.max(20, globalThis.innerWidth - menuWidth - 20);
+      }
+      if (left < 20) left = 20;
       
       // Constrain vertically
       if (top + menuHeight > globalThis.innerHeight - 20) {
@@ -152,7 +146,6 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         position: 'fixed',
         top: `${dropdownPosition.top}px`,
         left: `${dropdownPosition.left}px`,
-        transform: 'translateX(-100%)',
         zIndex: 99999
       }}
     >
