@@ -416,6 +416,38 @@ To avoid “Phase 0 completed” being interpreted loosely, the following minimu
 
 If any additional baseline tests are added beyond this list, that is encouraged; but **this list is the minimum gate**.
 
+#### 4.0.6 Which baseline tests are expected to fail once onset is implemented (and why)
+
+Once onset support is added, we *expect* some Phase 0 characterisation tests to fail because the correct statistical behaviour changes. This is intentional: the failures act as a precise “change detector” that forces explicit review of every numeric delta.
+
+This section enumerates, at a practical level, what we expect to change.
+
+**Baseline tests that should remain invariant (should stay green even after onset support is added):**
+
+- In `graph-editor/src/services/__tests__/lagDistribution.golden.test.ts`:
+  - Standard normal anchors (`standardNormalInverseCDF`).
+  - Lognormal CDF / inverse-CDF anchors (`logNormalCDF`, `logNormalInverseCDF`) for fixed (μ,σ).
+  - `fitLagDistribution` golden cases for fixed (median, mean, totalK). (The fit-from-moments formula itself does not change; only what inputs we feed it will change elsewhere.)
+- In `graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts`:
+  - FW/lognormal-sum approximation function anchors (`approximateLogNormalSumFit`, `approximateLogNormalSumPercentileDays`) for fixed component fits in model-space.
+
+**Baseline tests that are expected to fail during onset implementation (and will be updated deliberately as part of the onset changes):**
+
+- In `graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts`:
+  - Baseline completeness characterisation:
+    - Any test that locks completeness for fixed cohorts will change, because the effective age is shifted to model-space as \( \max(0, \mathrm{age} - \delta) \).
+  - Baseline tail-constraint characterisation:
+    - Values may change because the authoritative horizon becomes a model-space horizon for constraint logic (and then results are converted back to user-space where relevant).
+  - Baseline `computeEdgeLatencyStats` end-to-end characterisation:
+    - `t95` becomes inclusive of onset (user-space), and the internal fit will be performed on onset-subtracted values (model-space). Completeness and any downstream flags derived from completeness may therefore change.
+  - Baseline `path_t95` / “path horizon” characterisation:
+    - The FW convolution continues to operate in model-space, but the total path horizon becomes inclusive of deterministic onset terms (sum of onsets along the path). Therefore any hard-locked path horizon values are expected to change once onset is threaded into the path computation.
+
+**Policy for updating baseline tests once onset is implemented:**
+
+- We update only the baselines that are *supposed* to change, in the same PR that introduces the onset behaviour, and we document each change in the PR summary using this list as a checklist.
+- If an “invariant” baseline test changes, treat that as a potential bug or unintended regression and investigate before updating expected values.
+
 ### 4.1 Immediate fixes required (before onset work)
 
 | File | Issue | Fix |
@@ -495,7 +527,7 @@ Only after Phase 0 is complete do we begin onset implementation. The baseline te
 3. Update `getCompletenessCdfParams` to handle t95 in X-space
 4. Add onset-specific tests for shifted completeness behaviour
 
-**Exit criteria:** All baseline tests from §4.0 remain green; new onset completeness tests pass; the fit-quality test in §6.6 is implemented and passing.
+**Exit criteria:** Baseline tests behave as expected per §4.0.6 (invariant baselines remain green; any intentional baseline updates are explicit and justified); new onset completeness tests pass; the fit-quality test in §6.6 is implemented and passing.
 
 ### Phase 3: `computeEdgeLatencyStats`
 1. Add `onsetDeltaDays` parameter
@@ -505,7 +537,7 @@ Only after Phase 0 is complete do we begin onset implementation. The baseline te
 5. Pass onset to completeness functions
 6. Add onset-specific tests for edge stats
 
-**Exit criteria:** All baseline tests remain green; new onset edge stats tests pass.
+**Exit criteria:** Baseline tests behave as expected per §4.0.6 (invariant baselines remain green; any intentional baseline updates are explicit and justified); new onset edge stats tests pass.
 
 ### Phase 4: Topo Pass Integration
 1. Thread `edgeOnsetDeltaDays` into `computeEdgeLatencyStats` call
@@ -513,14 +545,14 @@ Only after Phase 0 is complete do we begin onset implementation. The baseline te
 3. Update `path_t95` computation with onset shift
 4. Add onset-specific tests for topo pass
 
-**Exit criteria:** All baseline tests remain green; topo pass with onset tests pass.
+**Exit criteria:** Baseline tests behave as expected per §4.0.6 (invariant baselines remain green; any intentional baseline updates are explicit and justified); topo pass with onset tests pass.
 
 ### Phase 5: Secondary Paths
 1. Update `dataOperationsService.ts` cohort bounding
 2. Review `lagMixtureAggregationService.ts` for onset handling
 3. Add onset-specific tests for secondary paths
 
-**Exit criteria:** All baseline tests remain green; secondary path onset tests pass.
+**Exit criteria:** Baseline tests behave as expected per §4.0.6 (invariant baselines remain green; any intentional baseline updates are explicit and justified); secondary path onset tests pass.
 
 ### Phase 6: Cleanup & Verification
 1. Audit all `logNormalCDF` calls for "forgotten shift"

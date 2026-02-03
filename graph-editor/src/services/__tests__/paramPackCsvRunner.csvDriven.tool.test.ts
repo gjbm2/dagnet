@@ -461,7 +461,7 @@ describe('Tool: CSV → TS stats → param-pack CSV', () => {
           const anchorLagDays = abLag[i] ?? 0;
           const adjustedAge = Math.max(0, age - anchorLagDays);
 
-          const fit = fitLagDistribution(bcLag[i], bcMeanLag[i]);
+          const fit = fitLagDistribution(bcLag[i], bcMeanLag[i], sum(bcKUltimate));
           const mu = fit.mu;
           const sigma = fit.sigma;
           const cdf = logNormalCDF(adjustedAge, mu, sigma);

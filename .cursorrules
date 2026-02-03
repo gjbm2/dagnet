@@ -472,6 +472,16 @@ Then ensure `new_field` follows the SAME patterns in ALL the same places.
 ### Running Tests
 **CRITICAL: Only run RELEVANT tests, not the full suite.**
 
+**CRITICAL (Cursor sandbox)**: The default Cursor sandbox **hides `node_modules`** (mounts it as empty tmpfs). You **MUST** use `required_permissions: ["all"]` on Shell tool calls that run npm/vitest, otherwise you get "vitest: not found" or similar errors. This applies to ALL npm test commands.
+
+**Standard invocation (with correct permissions)**:
+```
+Shell tool call with:
+  command: cd /home/reg/dev/dagnet/graph-editor && npm test -- --run src/services/__tests__/yourFile.test.ts
+  required_permissions: ["all"]
+  block_until_ms: 120000
+```
+
 - **Default behavior**: Run only tests related to files you changed
   - **ALWAYS use file paths, NOT patterns** - patterns are extremely slow in Vitest
   - Use `npm test -- --run path/to/specific.test.ts` for specific file(s)
@@ -483,8 +493,8 @@ Then ensure `new_field` follows the SAME patterns in ALL the same places.
 - **Never run all tests** just to "verify" - it wastes time
 
 When asked to "run tests":
-- **Frontend**: Run `npm test -- --run path/to/file.test.ts` (Vitest with specific files)
-- **Python**: Run `pytest tests/specific_test.py` or `pytest -k "pattern"` 
+- **Frontend**: Run `npm test -- --run path/to/file.test.ts` (Vitest with specific files) — **remember `required_permissions: ["all"]`**
+- **Python**: Run `pytest tests/specific_test.py` or `pytest -k "pattern"` (activate venv first)
 - Run BOTH only if changes affect both frontend and Python
 
 ### Running Playwright E2E Tests (DagNet)

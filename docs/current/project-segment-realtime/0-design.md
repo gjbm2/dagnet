@@ -105,6 +105,81 @@ There are two materially different interpretations of “realtime”:
 
 Both can coexist, but they have very different complexity and risk profiles.
 
+### 6.0 Schematic (remote realtime, push)
+
+This schematic shows the simplest “production firehose” shape: Segment forwards events to *something that can publish*, which then pushes to connected DagNet clients via a managed realtime provider (e.g. Pusher).
+
+```
+                    ┌───────────────────────────┐
+                    │   Production apps/sites   │
+                    │  (Segment SDK installed)  │
+                    └─────────────┬─────────────┘
+                                  │ track/identify/page
+                                  ▼
+                    ┌───────────────────────────┐
+                    │         Segment            │
+                    │ (collects prod event stream│
+                    │  and fans out to outputs)  │
+                    └─────────────┬─────────────┘
+                                  │ near-realtime forward
+                                  │ (webhook destination or
+                                  │  destination function)
+                                  ▼
+               ┌────────────────────────────────────────┐
+               │     Publisher / Router (server-side)    │
+               │  - could be Segment Destination Function │
+               │  - or a tiny web service you host        │
+               │  (no filtering required for MVP)         │
+               └─────────────┬───────────────────────────┘
+                             │ publish(event)
+                             ▼
+                    ┌───────────────────────────┐
+                    │   Realtime provider        │
+                    │   (Pusher / Ably / etc.)   │
+                    │   - channels               │
+                    │   - fanout + reconnect     │
+                    └─────────────┬─────────────┘
+                                  │ subscribe(stream)
+                                  ▼
+                    ┌───────────────────────────┐
+                    │     DagNet client (UI)     │
+                    │  - accumulates from toggle │
+                    │  - filters locally         │
+                    │  - lights nodes / traces   │
+                    └───────────────────────────┘
+```
+
+Notes:
+- The **Publisher / Router** exists because Segment can forward to HTTP/function handlers, and the realtime provider expects a server-side publish call.
+- The DagNet client is responsible for deciding “which events matter for this graph”.
+
+### 6.0.1 Schematic (private channel subscription)
+
+If channels are **private** (recommended for production), the client cannot subscribe without an auth signature from an **auth endpoint** you control.
+
+```
+┌──────────────────────┐               ┌─────────────────────────┐
+│  DagNet client (UI)   │               │   Auth endpoint (HTTP)   │
+│  wants to subscribe   │               │  (anywhere you host it)  │
+└──────────┬───────────┘               └──────────┬──────────────┘
+           │ 1) request channel auth               │
+           │    (workspace/env, user session)      │
+           ├──────────────────────────────────────▶│
+           │                                       │ verify user allowed
+           │                                       │ sign subscription
+           │ 2) signed auth payload                 │ using provider secret
+           │◀──────────────────────────────────────┤
+           │
+           │ 3) subscribe(private-channel, signed payload)
+           ▼
+┌───────────────────────────┐
+│   Realtime provider        │
+│   (Pusher private channel) │
+└───────────────────────────┘
+```
+
+This auth endpoint does **not** need to ingest Segment events. It only needs to authorise subscriptions.
+
 ### 6.1 Pattern A — Local realtime interception (lowest friction)
 
 **Flow**:

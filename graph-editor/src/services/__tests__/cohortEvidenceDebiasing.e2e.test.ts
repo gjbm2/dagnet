@@ -262,7 +262,7 @@ describe('Cohort path-anchored evidence de-biasing (right-censor correction)', (
     const wEvidence: number[] = [];
 
     const daysBetween = (a: Date, b: Date) => (a.getTime() - b.getTime()) / (1000 * 60 * 60 * 24);
-    const fit = fitLagDistribution(5, 6);
+    const fit = fitLagDistribution(5, 6, 100);
     const mu = fit.mu;
     const sigma = fit.sigma;
 
