@@ -1890,10 +1890,32 @@ export async function persistGraphMasteredLatencyToParameterFiles(args: {
  * the graph renders a stale completeness value after a fetch.
  */
 export function selectLatencyToApplyForTopoPass(
-  computed: { median_lag_days?: number; mean_lag_days?: number; t95: number; completeness: number; path_t95: number },
-  existing: { median_lag_days?: number; mean_lag_days?: number; t95?: number; completeness?: number } | undefined,
+  computed: {
+    median_lag_days?: number;
+    mean_lag_days?: number;
+    t95: number;
+    completeness: number;
+    path_t95: number;
+    onset_delta_days?: number;
+  },
+  existing:
+    | {
+        median_lag_days?: number;
+        mean_lag_days?: number;
+        t95?: number;
+        completeness?: number;
+        onset_delta_days?: number;
+      }
+    | undefined,
   preserveLatencySummaryFromFile: boolean
-): { median_lag_days?: number; mean_lag_days?: number; t95: number; completeness: number; path_t95: number } {
+): {
+  median_lag_days?: number;
+  mean_lag_days?: number;
+  t95: number;
+  completeness: number;
+  path_t95: number;
+  onset_delta_days?: number;
+} {
   if (!preserveLatencySummaryFromFile) {
     return computed;
   }
@@ -1918,6 +1940,9 @@ export function selectLatencyToApplyForTopoPass(
     completeness: computed.completeness,
     // Still apply computed path_t95 (UpdateManager will respect path_t95_overridden).
     path_t95: computed.path_t95,
+    // onset_delta_days is aggregated in the topo pass from window() slice histograms and should
+    // still be applied, even when we preserve median/mean from the file.
+    onset_delta_days: computed.onset_delta_days,
   };
 }
 

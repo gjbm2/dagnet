@@ -228,6 +228,8 @@ export interface SnapshotInventory {
   unique_slices: number;
   /** Number of unique core_hashes */
   unique_hashes: number;
+  /** Number of unique retrieval instances (distinct retrieved_at timestamps) */
+  unique_retrievals: number;
 }
 
 export interface DeleteSnapshotsResult {
@@ -260,11 +262,12 @@ export async function getBatchInventory(
         unique_days: 0,
         unique_slices: 0,
         unique_hashes: 0,
+        unique_retrievals: 0,
       };
     }
     return result;
   }
-  
+
   try {
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/inventory`, {
       method: 'POST',
@@ -294,6 +297,7 @@ export async function getBatchInventory(
         unique_days: 0,
         unique_slices: 0,
         unique_hashes: 0,
+        unique_retrievals: 0,
       };
     }
     return result;

@@ -33,6 +33,8 @@ import {
   PRECISION_DECIMAL_PLACES,
   ANCHOR_DELAY_BLEND_K_CONVERSIONS,
   DEFAULT_T95_DAYS,
+  ONSET_MASS_FRACTION_ALPHA,
+  ONSET_AGGREGATION_BETA,
 } from '../constants/latency';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
@@ -1781,6 +1783,38 @@ export function enhanceGraphLatencies(
     FORECAST_BLEND_LAMBDA: forecasting?.FORECAST_BLEND_LAMBDA ?? FORECAST_BLEND_LAMBDA,
     LATENCY_BLEND_COMPLETENESS_POWER: forecasting?.LATENCY_BLEND_COMPLETENESS_POWER ?? LATENCY_BLEND_COMPLETENESS_POWER,
     ANCHOR_DELAY_BLEND_K_CONVERSIONS: forecasting?.ANCHOR_DELAY_BLEND_K_CONVERSIONS ?? ANCHOR_DELAY_BLEND_K_CONVERSIONS,
+    ONSET_MASS_FRACTION_ALPHA: forecasting?.ONSET_MASS_FRACTION_ALPHA ?? ONSET_MASS_FRACTION_ALPHA,
+    ONSET_AGGREGATION_BETA: forecasting?.ONSET_AGGREGATION_BETA ?? ONSET_AGGREGATION_BETA,
+  };
+
+  const weightedQuantile = (
+    items: Array<{ value: number; weight: number }>,
+    beta: number
+  ): number | undefined => {
+    const b =
+      (typeof beta === 'number' && Number.isFinite(beta))
+        ? Math.max(0, Math.min(1, beta))
+        : 0.5;
+
+    const filtered = items
+      .filter((x) => typeof x.value === 'number' && Number.isFinite(x.value))
+      .map((x) => ({
+        value: x.value,
+        weight: (typeof x.weight === 'number' && Number.isFinite(x.weight) && x.weight > 0) ? x.weight : 1,
+      }))
+      .sort((a, c) => a.value - c.value);
+
+    if (filtered.length === 0) return undefined;
+
+    const totalW = filtered.reduce((s, x) => s + x.weight, 0);
+    if (!(totalW > 0)) return undefined;
+
+    let cum = 0;
+    for (const x of filtered) {
+      cum += x.weight;
+      if ((cum / totalW) >= b) return x.value;
+    }
+    return filtered[filtered.length - 1]?.value;
   };
   const result: GraphLatencyEnhancementResult = {
     edgesProcessed: 0,
@@ -2421,8 +2455,12 @@ export function enhanceGraphLatencies(
         return dsl.includes('window(') && !dsl.includes('cohort(');
       }).length;
       
-      // Aggregate onset_delta_days from window() slices only
-      // Precedence: uncontexted window slice > min(contexted window slices)
+      // Aggregate onset_delta_days from window() slices only.
+      //
+      // Policy:
+      // - Use weighted β-quantile across window slice families.
+      // - Weight is the number of dates in the window() series (dates.length).
+      // - This replaces the old min() rule, which was too aggressive and often collapsed to 0.
       // NOTE: Cohort slices have truncated histogram data (~10 days) - onset unreliable
       let edgeOnsetDeltaDays: number | undefined;
       const windowSlicesWithOnset = paramValues.filter((v: any) => {
@@ -2430,19 +2468,13 @@ export function enhanceGraphLatencies(
         return dsl.includes('window(') && typeof v.latency?.onset_delta_days === 'number';
       });
       if (windowSlicesWithOnset.length > 0) {
-        // Prefer uncontexted slice if available
-        const uncontextedSlice = windowSlicesWithOnset.find((v: any) => {
-          const dsl = v.sliceDSL ?? '';
-          return !dsl.includes('context(');
-        });
-        if (uncontextedSlice) {
-          edgeOnsetDeltaDays = (uncontextedSlice as any).latency.onset_delta_days;
-        } else {
-          // Fall back to min across contexted slices
-          edgeOnsetDeltaDays = Math.min(
-            ...windowSlicesWithOnset.map((v: any) => v.latency.onset_delta_days)
-          );
-        }
+        edgeOnsetDeltaDays = weightedQuantile(
+          windowSlicesWithOnset.map((v: any) => ({
+            value: v.latency.onset_delta_days,
+            weight: (Array.isArray(v.dates) && v.dates.length > 0) ? v.dates.length : 1,
+          })),
+          MODEL.ONSET_AGGREGATION_BETA
+        );
       }
       
       const edgeLAGValues: EdgeLAGValues = {
@@ -2965,17 +2997,13 @@ export function enhanceGraphLatencies(
           return dsl.includes('window(') && typeof v.latency?.onset_delta_days === 'number';
         });
         if (cpWindowSlicesWithOnset.length > 0) {
-          const uncontextedSlice = cpWindowSlicesWithOnset.find((v: any) => {
-            const dsl = v.sliceDSL ?? '';
-            return !dsl.includes('context(');
-          });
-          if (uncontextedSlice) {
-            cpOnsetDeltaDays = (uncontextedSlice as any).latency.onset_delta_days;
-          } else {
-            cpOnsetDeltaDays = Math.min(
-              ...cpWindowSlicesWithOnset.map((v: any) => v.latency.onset_delta_days)
-            );
-          }
+          cpOnsetDeltaDays = weightedQuantile(
+            cpWindowSlicesWithOnset.map((v: any) => ({
+              value: v.latency.onset_delta_days,
+              weight: (Array.isArray(v.dates) && v.dates.length > 0) ? v.dates.length : 1,
+            })),
+            MODEL.ONSET_AGGREGATION_BETA
+          );
         }
         
         // Build EdgeLAGValues for conditional probability

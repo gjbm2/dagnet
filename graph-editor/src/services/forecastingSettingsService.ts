@@ -6,6 +6,8 @@ import {
   FORECAST_BLEND_LAMBDA,
   LATENCY_BLEND_COMPLETENESS_POWER,
   ANCHOR_DELAY_BLEND_K_CONVERSIONS,
+  ONSET_MASS_FRACTION_ALPHA,
+  ONSET_AGGREGATION_BETA,
 } from '../constants/latency';
 
 export type ForecastingModelSettings = {
@@ -15,6 +17,8 @@ export type ForecastingModelSettings = {
   FORECAST_BLEND_LAMBDA: number;
   LATENCY_BLEND_COMPLETENESS_POWER: number;
   ANCHOR_DELAY_BLEND_K_CONVERSIONS: number;
+  ONSET_MASS_FRACTION_ALPHA: number;
+  ONSET_AGGREGATION_BETA: number;
 };
 
 function numOr<T extends number>(value: unknown, fallback: T): number {
@@ -45,6 +49,8 @@ class ForecastingSettingsService {
         FORECAST_BLEND_LAMBDA,
         LATENCY_BLEND_COMPLETENESS_POWER,
         ANCHOR_DELAY_BLEND_K_CONVERSIONS,
+        ONSET_MASS_FRACTION_ALPHA,
+        ONSET_AGGREGATION_BETA,
       };
     }
     try {
@@ -57,6 +63,8 @@ class ForecastingSettingsService {
         FORECAST_BLEND_LAMBDA: numOr(forecasting.FORECAST_BLEND_LAMBDA, FORECAST_BLEND_LAMBDA),
         LATENCY_BLEND_COMPLETENESS_POWER: numOr(forecasting.LATENCY_BLEND_COMPLETENESS_POWER, LATENCY_BLEND_COMPLETENESS_POWER),
         ANCHOR_DELAY_BLEND_K_CONVERSIONS: numOr(forecasting.ANCHOR_DELAY_BLEND_K_CONVERSIONS, ANCHOR_DELAY_BLEND_K_CONVERSIONS),
+        ONSET_MASS_FRACTION_ALPHA: numOr(forecasting.ONSET_MASS_FRACTION_ALPHA, ONSET_MASS_FRACTION_ALPHA),
+        ONSET_AGGREGATION_BETA: numOr(forecasting.ONSET_AGGREGATION_BETA, ONSET_AGGREGATION_BETA),
       };
     } catch {
       return {
@@ -66,6 +74,8 @@ class ForecastingSettingsService {
         FORECAST_BLEND_LAMBDA,
         LATENCY_BLEND_COMPLETENESS_POWER,
         ANCHOR_DELAY_BLEND_K_CONVERSIONS,
+        ONSET_MASS_FRACTION_ALPHA,
+        ONSET_AGGREGATION_BETA,
       };
     }
   }

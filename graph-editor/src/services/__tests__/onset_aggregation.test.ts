@@ -2,12 +2,13 @@
  * Onset Delta Days Aggregation Tests
  * 
  * Tests the onset_delta_days aggregation logic in the LAG topo pass.
- * Onset is aggregated from window() slices only, using min() across values.
+ * Onset is aggregated from window() slices only, using a weighted β-quantile across values,
+ * weighted by number of dates in each window() series (dates.length).
  * 
  * Test Case Matrix (from implementation-plan.md §0.3.6 J):
  * - AGG-001: window:uncontexted onset=2 → 2 (Single uncontexted)
- * - AGG-002: window:ctx:A onset=3, window:ctx:B onset=5 → 3 (min of contexted)
- * - AGG-003: window:uncontexted onset=4, window:ctx:A onset=2 → 4 (uncontexted takes precedence)
+ * - AGG-002: window:ctx:A onset=3, window:ctx:B onset=5 → 3 (weighted median with equal weights)
+ * - AGG-003: window:uncontexted onset=4 (many dates), window:ctx:A onset=2 (few dates) → 4 (weight dominates)
  * - AGG-004: cohort:date1 onset=1, window:ctx:A onset=5 → 5 (cohort excluded)
  * - AGG-005: No window slices → undefined (No onset available)
  * 
@@ -125,7 +126,7 @@ describe('onset_delta_days Aggregation', () => {
   });
 
   describe('AGG-002: Multiple contexted window slices', () => {
-    it('should use min() across contexted window slices when no uncontexted exists', () => {
+    it('should use a weighted β-quantile across contexted window slices when no uncontexted exists', () => {
       const graph = createSimpleGraph();
       const paramLookup = new Map<string, ParameterValueForLAG[]>([
         ['start-to-a', [
@@ -138,17 +139,18 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(3); // min(3, 5) = 3
+      // Default β is 0.5 (weighted median). With equal weights, this selects the smaller value (3).
+      expect(edgeResult!.latency.onset_delta_days).toBe(3);
     });
   });
 
-  describe('AGG-003: Uncontexted takes precedence over contexted', () => {
-    it('should use uncontexted onset even when contexted has lower value', () => {
+  describe('AGG-003: Weighted by window date-count', () => {
+    it('should select onset using date-count weights (not a hard uncontexted precedence rule)', () => {
       const graph = createSimpleGraph();
       const paramLookup = new Map<string, ParameterValueForLAG[]>([
         ['start-to-a', [
-          createParamValue('window(30d)', 4),                              // uncontexted
-          createParamValue('window(30d,context(channel:paid))', 2),        // contexted with lower value
+          createParamValue('window(30d)', 4, createDates(100)),                     // many dates (dominant weight)
+          createParamValue('window(30d,context(channel:paid))', 2, createDates(1)), // few dates
         ]],
       ]);
 
@@ -156,7 +158,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(4); // uncontexted takes precedence
+      expect(edgeResult!.latency.onset_delta_days).toBe(4);
     });
   });
 
@@ -230,8 +232,8 @@ describe('onset_delta_days Aggregation', () => {
       const paramLookup = new Map<string, ParameterValueForLAG[]>([
         ['start-to-a', [
           createParamValue('cohort(1-Jan-25)', 1),                          // excluded
-          createParamValue('window(30d)', 3),                               // uncontexted - used
-          createParamValue('window(30d,context(channel:paid))', 2),         // contexted - ignored (uncontexted exists)
+          createParamValue('window(30d)', 3, createDates(50)),                         // dominant weight
+          createParamValue('window(30d,context(channel:paid))', 2, createDates(1)),    // tiny weight
           createParamValue('cohort(15-Jan-25)', 0),                         // excluded
         ]],
       ]);
@@ -240,7 +242,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(3); // uncontexted window slice
+      expect(edgeResult!.latency.onset_delta_days).toBe(3);
     });
   });
 });

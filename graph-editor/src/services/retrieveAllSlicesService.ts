@@ -93,6 +93,15 @@ export interface RetrieveAllSlicesOptions {
    */
   simulate?: boolean;
 
+  /**
+   * If true, this is an automated (cron) run. On rate limit:
+   * - Automated: wait 61 minutes and retry
+   * - Manual (false/undefined): abort immediately with explanation
+   * 
+   * Set automatically by executeRetrieveAllSlicesWithProgressToast().
+   */
+  isAutomated?: boolean;
+
   /** Return true to abort ASAP (checked between items and slices). */
   shouldAbort?: () => boolean;
 
@@ -200,6 +209,7 @@ class RetrieveAllSlicesService {
       slices,
       bustCache = false,
       simulate = false,
+      isAutomated = false,
       shouldAbort,
       onProgress,
       postRunRefreshDsl,
@@ -527,34 +537,62 @@ class RetrieveAllSlicesService {
           } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             
-            // Check if this is a rate limit error - if so, wait and retry
+            // Check if this is a rate limit error
             if (rateLimiter.isRateLimitError(errorMessage)) {
-              const cooldownMinutes = getEffectiveRateLimitCooloffMinutes();
-              sessionLogService.addChild(
-                logOpId,
-                'warning',
-                'RATE_LIMIT_HIT',
-                `[${sliceDSL}] ${planItem.itemKey} hit rate limit - initiating ${cooldownMinutes}min cooldown`,
-                errorMessage,
-                { itemKey: planItem.itemKey, cooldownMinutes }
-              );
-              
-              // Run cooldown with countdown
-              const cooldownResult = await runRateLimitCooldown({
-                cooldownMinutes,
-                shouldStop: shouldAbort ?? (() => false),
-                logOpId,
-              });
-              
-              if (cooldownResult === 'aborted') {
+              if (isAutomated) {
+                // Automated (cron) run: wait 61 minutes and retry
+                const cooldownMinutes = getEffectiveRateLimitCooloffMinutes();
+                sessionLogService.addChild(
+                  logOpId,
+                  'warning',
+                  'RATE_LIMIT_HIT',
+                  `[${sliceDSL}] ${planItem.itemKey} hit rate limit - initiating ${cooldownMinutes}min cooldown`,
+                  errorMessage,
+                  { itemKey: planItem.itemKey, cooldownMinutes }
+                );
+                
+                // Run cooldown with countdown
+                const cooldownResult = await runRateLimitCooldown({
+                  cooldownMinutes,
+                  shouldStop: shouldAbort ?? (() => false),
+                  logOpId,
+                });
+                
+                if (cooldownResult === 'aborted') {
+                  aborted = true;
+                  break;
+                }
+                
+                // Retry the same item by decrementing the index
+                // The loop will increment it back, effectively retrying this item
+                itemIdx--;
+                continue;
+              } else {
+                // Manual run: abort immediately with clear explanation
+                const remainingInSlice = fetchPlan.items.length - itemIdx - 1;
+                const remainingSlices = effectiveSlices.length - sliceIdx - 1;
+                
+                sessionLogService.addChild(
+                  logOpId,
+                  'error',
+                  'RATE_LIMIT_ABORT',
+                  `Hit Amplitude rate limit - aborting`,
+                  `Amplitude limits API requests per day. ${remainingInSlice} items remaining in this slice, ${remainingSlices} slices not yet started.\n\n` +
+                  `All data fetched so far has been saved to files and the snapshot DB. ` +
+                  `Run "Retrieve All" again later to continue from where you left off (already-fetched items will be skipped).\n\n` +
+                  `Error: ${errorMessage}`,
+                  { 
+                    itemKey: planItem.itemKey, 
+                    remainingInSlice,
+                    remainingSlices,
+                    completedSlices: sliceIdx,
+                  }
+                );
+                
+                sliceErrors++;
                 aborted = true;
                 break;
               }
-              
-              // Retry the same item by decrementing the index
-              // The loop will increment it back, effectively retrying this item
-              itemIdx--;
-              continue;
             }
             
             // Not a rate limit error - record the failure and continue
@@ -1001,6 +1039,7 @@ export async function executeRetrieveAllSlicesWithProgressToast(
   try {
     const result = await retrieveAllSlicesService.execute({
       ...rest,
+      isAutomated: true,  // Toast wrapper is used by automated runs - use 61-min cooldown on rate limit
       onProgress: handleProgress,
     });
 

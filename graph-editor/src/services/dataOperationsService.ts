@@ -69,6 +69,7 @@ import { sessionLogService } from './sessionLogService';
 import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
 import { serialiseSignature } from './signatureMatchingService';
 import { forecastingSettingsService } from './forecastingSettingsService';
+import { deriveOnsetDeltaDaysFromLagHistogram, roundTo1dp } from './onsetDerivationService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
 import { contextRegistry } from './contextRegistry';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
@@ -5725,6 +5726,11 @@ class DataOperationsService {
       let didAttemptExternalFetch = false;
       let expectedDaysAttempted = 0;
 
+      // Lazily loaded shared forecasting knobs for this call (avoid repeated IDB reads).
+      let forecastingSettingsForThisRun:
+        | import('./forecastingSettingsService').ForecastingModelSettings
+        | undefined;
+
       if (shouldPersistPerGap) {
         paramFileForGapWrites = fileRegistry.getFile(`parameter-${objectId}`);
         if (paramFileForGapWrites) {
@@ -5777,6 +5783,12 @@ class DataOperationsService {
               sliceDSLForGapWrites,
               {
                 isCohortMode: isCohortQuery,
+                // LAG (§0.3): persist onset_delta_days for window() slices (cohort() onset is unreliable).
+                ...(!isCohortQuery && lastOnsetDeltaDays !== undefined && {
+                  latencySummary: {
+                    onset_delta_days: lastOnsetDeltaDays,
+                  },
+                }),
                 ...(shouldRecomputeForecastForGapWrites && {
                   latencyConfig: {
                     latency_parameter: latencyConfigForGapWrites?.latency_parameter,
@@ -5818,6 +5830,12 @@ class DataOperationsService {
               sliceDSLForGapWrites,
               {
                 isCohortMode: isCohortQuery,
+                // LAG (§0.3): persist onset_delta_days for window() slices (cohort() onset is unreliable).
+                ...(!isCohortQuery && lastOnsetDeltaDays !== undefined && {
+                  latencySummary: {
+                    onset_delta_days: lastOnsetDeltaDays,
+                  },
+                }),
                 ...(shouldRecomputeForecastForGapWrites && {
                   latencyConfig: {
                     latency_parameter: latencyConfigForGapWrites?.latency_parameter,
@@ -5836,6 +5854,40 @@ class DataOperationsService {
 
           const updatedFileData = structuredClone(paramFileForGapWrites.data);
           updatedFileData.values = existingValuesForGapWrites;
+
+          // Diagnostic: confirm onset made it into values[].latency for this slice family.
+          if (sessionLogService.getDiagnosticLoggingEnabled() && !isCohortQuery) {
+            try {
+              // We only ever write onset to window-mode values via mergeOptions.latencySummary.
+              // Find any window value for this slice family that carries onset.
+              const targetDims = extractSliceDimensions(sliceDSLForGapWrites);
+              const candidates = (existingValuesForGapWrites || []).filter((v: any) => {
+                const s = v?.sliceDSL;
+                if (typeof s !== 'string') return false;
+                if (!s.includes('window(')) return false;
+                return extractSliceDimensions(s) === targetDims;
+              });
+              const onsets = candidates
+                .map((v: any) => v?.latency?.onset_delta_days)
+                .filter((v: any) => typeof v === 'number' && Number.isFinite(v));
+              sessionLogService.addChild(
+                logOpId,
+                'info',
+                'ONSET_FILE_PERSIST',
+                onsets.length > 0
+                  ? `Onset written to file (slice family): ${[...new Set(onsets)].sort((a: number, b: number) => a - b).join(', ')}`
+                  : 'Onset not present in file values[] after merge',
+                undefined,
+                {
+                  sliceDSL: sliceDSLForGapWrites,
+                  candidates: candidates.length,
+                  onset_delta_days: lastOnsetDeltaDays ?? null,
+                }
+              );
+            } catch {
+              // non-fatal
+            }
+          }
 
           // Keep query/n_query synced from graph master on every persisted write.
           if (queryString) {
@@ -6750,9 +6802,65 @@ class DataOperationsService {
               });
               allTimeSeriesData.push(timeSeries as { date: string; n: number; k: number; p: number });
             }
-            // LAG: Capture onset_delta_days from histogram (window slices only)
-            if (typeof (result.raw as any)?.onset_delta_days === 'number') {
-              lastOnsetDeltaDays = (result.raw as any).onset_delta_days;
+            // LAG: Derive onset_delta_days from histogram (window slices only).
+            // Policy: α-mass day (α from settings/settings.yaml) rounded to 1 d.p.
+            {
+              const rawAny = result.raw as any;
+              const isWindowMode = !isCohortQuery;
+              // Reset per-gap: onset must correspond to THIS fetch window.
+              let onset: number | undefined;
+
+              if (isWindowMode) {
+                if (!forecastingSettingsForThisRun) {
+                  forecastingSettingsForThisRun = await forecastingSettingsService.getForecastingModelSettings();
+                }
+                const alpha = forecastingSettingsForThisRun.ONSET_MASS_FRACTION_ALPHA;
+                const onsetDays = deriveOnsetDeltaDaysFromLagHistogram(rawAny?.lag_histogram, alpha);
+                if (typeof onsetDays === 'number' && Number.isFinite(onsetDays)) {
+                  onset = roundTo1dp(onsetDays);
+                }
+              }
+
+              // Persist onset for this gap (used by per-gap file persistence).
+              lastOnsetDeltaDays = onset;
+              if (typeof onset === 'number' && Number.isFinite(onset)) {
+                if (sessionLogService.getDiagnosticLoggingEnabled()) {
+                  sessionLogService.addChild(
+                    logOpId,
+                    'info',
+                    'ONSET_CAPTURED',
+                    `Onset derived: ${onset} day${onset === 1 ? '' : 's'}`,
+                    undefined,
+                    {
+                      onset_delta_days: onset,
+                      has_lag_histogram: !!rawAny?.lag_histogram,
+                      lag_histogram_bins: Array.isArray(rawAny?.lag_histogram?.bins) ? rawAny.lag_histogram.bins.length : undefined,
+                      sliceDSL: targetSlice || extractSliceDimensions(currentDSL || ''),
+                      mode: isCohortQuery ? 'cohort' : 'window',
+                      alpha: forecastingSettingsForThisRun?.ONSET_MASS_FRACTION_ALPHA,
+                    }
+                  );
+                }
+              } else if (sessionLogService.getDiagnosticLoggingEnabled()) {
+                // Important for debugging: distinguish "not present" vs "present but null".
+                const hasKey = rawAny && Object.prototype.hasOwnProperty.call(rawAny, 'onset_delta_days');
+                sessionLogService.addChild(
+                  logOpId,
+                  'info',
+                  'ONSET_NOT_DERIVED',
+                  `Onset not derived (${hasKey ? 'present-but-null' : 'missing'})`,
+                  undefined,
+                  {
+                    onset_delta_days: onset ?? null,
+                    has_onset_key: hasKey,
+                    has_lag_histogram: !!rawAny?.lag_histogram,
+                    lag_histogram_bins: Array.isArray(rawAny?.lag_histogram?.bins) ? rawAny.lag_histogram.bins.length : undefined,
+                    sliceDSL: targetSlice || extractSliceDimensions(currentDSL || ''),
+                    mode: isCohortQuery ? 'cohort' : 'window',
+                    alpha: forecastingSettingsForThisRun?.ONSET_MASS_FRACTION_ALPHA,
+                  }
+                );
+              }
             }
             await persistGapIfNeeded(fetchWindow);
           }

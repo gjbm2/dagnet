@@ -311,7 +311,6 @@ export async function computePlannerQuerySignaturesForGraph(input: {
           ...(queryPayload as any).cohort,
           start: startIso,
           end: endIso,
-          anchor_event_id: merged.cohort?.anchor,
         };
       }
 
