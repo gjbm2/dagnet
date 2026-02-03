@@ -56,28 +56,47 @@ export function deriveOnsetDeltaDaysFromLagHistogram(
   const total = masses.reduce((s, m) => s + m, 0);
   if (!(total > 0)) return null;
 
+  // If alpha is 0, define onset as 0 days (immediate).
+  if (a <= 0) return 0;
+
+  // Onset policy (as specified):
+  //
+  // - Iterate bins (in time order) accumulating mass fraction.
+  // - FIRST non-zero bin: treat onset time candidate as the UPPER bound (end).
+  // - Subsequent non-zero bins: treat onset time candidate as the MIDPOINT of the bin.
+  // - Stop at the first point where cumulative mass fraction >= α.
+  //
+  // This treats Amplitude's adaptive bins as informative: the earliest non-zero bin is assumed
+  // to be shaped to contain the first conversion, so its size carries information.
   const threshold = a * total;
-  let cum = 0;
+  let cumMass = 0;
+  let seenFirstNonZero = false;
 
   for (let i = 0; i < sorted.length; i++) {
     const m = masses[i];
     if (!(m > 0)) continue;
 
-    const next = cum + m;
-    if (next >= threshold) {
-      const start = finiteNumberOr(sorted[i].start, 0);
-      const end = finiteNumberOr(sorted[i].end, start);
-      const span = Math.max(0, end - start);
+    const start = finiteNumberOr(sorted[i].start, 0);
+    const end = finiteNumberOr(sorted[i].end, start);
+    const span = Math.max(0, end - start);
 
-      // Fraction of this bin needed to reach the threshold.
-      const frac = m > 0 ? clamp01((threshold - cum) / m) : 0;
-      const t = start + frac * span;
-      return t / MS_PER_DAY;
+    let xMs: number;
+    if (!seenFirstNonZero) {
+      // First non-zero bin: use the upper bound as the de facto first conversion time.
+      xMs = end;
+      seenFirstNonZero = true;
+    } else {
+      // Subsequent non-zero bins: use bin midpoint.
+      xMs = start + span / 2;
     }
-    cum = next;
+
+    cumMass += m;
+    if (cumMass >= threshold) {
+      return xMs / MS_PER_DAY;
+    }
   }
 
-  // If alpha is 1.0 and numerical issues prevent threshold crossing, return end-of-mass.
+  // If α is 1.0 (or numerical issues prevent threshold crossing), return end-of-mass.
   const last = sorted[sorted.length - 1];
   const fallbackT = finiteNumberOr(last.end, finiteNumberOr(last.start, 0));
   return fallbackT / MS_PER_DAY;
