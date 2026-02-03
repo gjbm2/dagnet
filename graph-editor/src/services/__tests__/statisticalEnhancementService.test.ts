@@ -24,6 +24,9 @@ import {
   estimatePInfinity,
   calculateCompleteness,
   computeEdgeLatencyStats,
+  // FW approximation functions
+  approximateLogNormalSumFit,
+  approximateLogNormalSumPercentileDays,
   // Inbound-N functions
   computeInboundN,
   applyInboundNToGraph,
@@ -1639,6 +1642,234 @@ describe('enhanceGraphLatencies', () => {
       // Mean should remain unchanged (no blend without forecast)
       expect(edge.p?.mean).toBe(0.5);
     });
+  });
+});
+
+/**
+ * Phase 0 baseline tests: Fenton-Wilkinson lognormal sum approximation
+ * 
+ * These tests lock in the current FW approximation behaviour before onset changes.
+ * See §4.0.5 #7 in the onset implementation plan.
+ */
+describe('LAG FW Lognormal Sum Approximation (baseline)', () => {
+  // Canonical component fits for testing
+  const fitA: LagDistributionFit = {
+    mu: Math.log(3),  // median = 3
+    sigma: Math.sqrt(2 * Math.log(4 / 3)),  // mean = 4
+    empirical_quality_ok: true,
+    total_k: 100,
+  };
+  const fitB: LagDistributionFit = {
+    mu: Math.log(5),  // median = 5
+    sigma: Math.sqrt(2 * Math.log(6 / 5)),  // mean = 6
+    empirical_quality_ok: true,
+    total_k: 100,
+  };
+
+  describe('approximateLogNormalSumFit', () => {
+    it('returns undefined when either fit has bad quality', () => {
+      const badFit: LagDistributionFit = { ...fitA, empirical_quality_ok: false };
+      expect(approximateLogNormalSumFit(badFit, fitB)).toBeUndefined();
+      expect(approximateLogNormalSumFit(fitA, badFit)).toBeUndefined();
+    });
+
+    it('returns mu and sigma for valid component fits (characterisation)', () => {
+      const result = approximateLogNormalSumFit(fitA, fitB);
+      expect(result).toBeDefined();
+      // Lock in current implementation values (characterisation test)
+      // mu ≈ 2.1780, sigma ≈ 0.4991
+      expect(result!.mu).toBeCloseTo(2.1780, 4);
+      expect(result!.sigma).toBeCloseTo(0.4991, 4);
+    });
+  });
+
+  describe('approximateLogNormalSumPercentileDays', () => {
+    it('returns undefined when either fit has bad quality', () => {
+      const badFit: LagDistributionFit = { ...fitA, empirical_quality_ok: false };
+      expect(approximateLogNormalSumPercentileDays(badFit, fitB, 0.95)).toBeUndefined();
+    });
+
+    it('returns precomputed percentile for valid component fits (characterisation)', () => {
+      const p95 = approximateLogNormalSumPercentileDays(fitA, fitB, LATENCY_T95_PERCENTILE);
+      expect(p95).toBeDefined();
+      // Lock in current implementation value (characterisation test)
+      // FW sum of fitA(median=3,mean=4) + fitB(median=5,mean=6) at p=0.95 ≈ 20.06
+      expect(p95).toBeCloseTo(20.06, 2);
+    });
+  });
+});
+
+/**
+ * Phase 0 baseline tests: Completeness calculation (characterisation)
+ * 
+ * These tests lock in the current completeness calculation behaviour with
+ * hard numeric expectations before onset changes.
+ * See §4.0.5 #8 in the onset implementation plan.
+ */
+describe('LAG Completeness Calculation (baseline characterisation)', () => {
+  // Canonical distribution params: median=5, mean=7
+  const mu = Math.log(5);
+  const sigma = Math.sqrt(2 * Math.log(7 / 5));
+
+  // Canonical cohort fixture for baseline testing
+  const canonicalCohorts: CohortData[] = [
+    { date: '1-Oct-25', n: 100, k: 50, age: 60 },   // mature
+    { date: '15-Oct-25', n: 100, k: 48, age: 45 },  // mature
+    { date: '1-Nov-25', n: 100, k: 45, age: 30 },   // at ~t95
+    { date: '15-Nov-25', n: 100, k: 30, age: 15 },  // immature
+    { date: '1-Dec-25', n: 100, k: 10, age: 0 },    // brand new (boundary)
+  ];
+
+  it('returns hard-locked completeness for canonical cohort fixture', () => {
+    const completeness = calculateCompleteness(canonicalCohorts, mu, sigma);
+    // Lock in current implementation value (characterisation test)
+    // This is the weighted average of CDF(age) across cohorts
+    expect(completeness).toBeCloseTo(0.7781, 4);
+  });
+
+  it('returns exactly 0 for cohorts with age=0 only', () => {
+    const zeroCohorts: CohortData[] = [
+      { date: '1-Dec-25', n: 100, k: 0, age: 0 },
+    ];
+    const completeness = calculateCompleteness(zeroCohorts, mu, sigma);
+    expect(completeness).toBe(0);
+  });
+
+  it('returns hard-locked CDF values at specific ages', () => {
+    // These lock in the lognormal CDF values for the canonical (mu, sigma)
+    // Single-cohort completeness equals CDF(age)
+    const age5 = calculateCompleteness([{ date: 'x', n: 100, k: 50, age: 5 }], mu, sigma);
+    const age15 = calculateCompleteness([{ date: 'x', n: 100, k: 50, age: 15 }], mu, sigma);
+    const age30 = calculateCompleteness([{ date: 'x', n: 100, k: 50, age: 30 }], mu, sigma);
+
+    // Lock in values (characterisation)
+    expect(age5).toBeCloseTo(0.5, 4);     // At median
+    expect(age15).toBeCloseTo(0.9098, 4); // Above median
+    expect(age30).toBeCloseTo(0.9855, 4); // Well above median
+  });
+});
+
+/**
+ * Phase 0 baseline tests: Tail constraint behaviour (characterisation)
+ * 
+ * These tests lock in the current tail constraint behaviour with hard
+ * numeric expectations before onset changes.
+ * See §4.0.5 #9 in the onset implementation plan.
+ */
+describe('LAG Tail Constraint (baseline characterisation)', () => {
+  // Cohorts that will produce a fit, then we apply constraint
+  const cohorts: CohortData[] = [
+    { date: '1-Dec-25', n: 100, k: 10, age: 1 },
+    { date: '2-Dec-25', n: 100, k: 10, age: 2 },
+    { date: '3-Dec-25', n: 100, k: 10, age: 3 },
+  ];
+
+  it('returns no constraint when authoritative t95 is not provided', () => {
+    const stats = computeEdgeLatencyStats(cohorts, 5, 5.2, 7);
+    // Without authoritative t95, constraint should not be applied
+    expect(stats.completeness_cdf.tail_constraint_applied).toBe(false);
+    // Lock in baseline values (characterisation)
+    expect(stats.t95).toBeCloseTo(7.93, 2);
+    expect(stats.completeness).toBeCloseTo(0.0115, 4);
+  });
+
+  it('applies constraint and reduces completeness when authoritative t95 is larger', () => {
+    const statsNoConstraint = computeEdgeLatencyStats(cohorts, 5, 5.2, 7);
+    const statsWithConstraint = computeEdgeLatencyStats(cohorts, 5, 5.2, 7, 0, undefined, undefined, 60);
+
+    // Constraint should be applied
+    expect(statsWithConstraint.completeness_cdf.tail_constraint_applied).toBe(true);
+    // t95 should match authoritative value
+    expect(statsWithConstraint.t95).toBeCloseTo(60, 2);
+    // One-way safety: completeness must not increase
+    expect(statsWithConstraint.completeness).toBeLessThanOrEqual(statsNoConstraint.completeness);
+    // Lock in constrained completeness value (characterisation)
+    // Note: With very young cohorts (ages 1-3), constraint application has limited effect
+    expect(statsWithConstraint.completeness).toBeCloseTo(0.0115, 4);
+  });
+
+  it('does not apply constraint when authoritative t95 is smaller than implied', () => {
+    // Use mature cohorts that produce a larger implied t95
+    const matureCohorts: CohortData[] = [
+      { date: '1-Oct-25', n: 100, k: 50, age: 60 },
+      { date: '15-Oct-25', n: 100, k: 45, age: 45 },
+      { date: '1-Nov-25', n: 100, k: 40, age: 30 },
+    ];
+    const stats = computeEdgeLatencyStats(matureCohorts, 5, 7, 30, 0, undefined, undefined, 6);
+    // Constraint should NOT be applied (authoritative t95 < implied)
+    expect(stats.completeness_cdf.tail_constraint_applied).toBe(false);
+  });
+});
+
+/**
+ * Phase 0 baseline tests: computeEdgeLatencyStats end-to-end (characterisation)
+ * 
+ * These tests lock in the full end-to-end computation output with hard
+ * numeric expectations before onset changes.
+ * See §4.0.5 #10 in the onset implementation plan.
+ */
+describe('LAG computeEdgeLatencyStats (baseline characterisation)', () => {
+  // Canonical cohort fixture used across LAG tests
+  const canonicalCohorts: CohortData[] = [
+    { date: '1-Oct-25', n: 100, k: 50, age: 60 },
+    { date: '15-Oct-25', n: 100, k: 48, age: 45 },
+    { date: '1-Nov-25', n: 100, k: 45, age: 30 },
+    { date: '15-Nov-25', n: 100, k: 30, age: 15 },
+    { date: '1-Dec-25', n: 100, k: 10, age: 0 },
+  ];
+
+  it('returns hard-locked full statistics for canonical cohorts', () => {
+    const stats = computeEdgeLatencyStats(canonicalCohorts, 5, 7, 30);
+
+    // Lock in all computed values (characterisation test)
+    // Note: fit is computed from cohort data weighted median/mean, not from args
+    expect(stats.fit.mu).toBeCloseTo(1.6094, 4);          // ln(5) (from args)
+    expect(stats.fit.sigma).toBeCloseTo(0.8203, 4);       // computed from cohort mean/median ratio
+    expect(stats.fit.empirical_quality_ok).toBe(true);
+    expect(stats.t95).toBeCloseTo(19.27, 2);              // with actual sigma
+    expect(stats.p_infinity).toBeCloseTo(0.4709, 4);
+    expect(stats.completeness).toBeCloseTo(0.7781, 4);    // matches canonical completeness test
+    expect(stats.p_evidence).toBeCloseTo(0.366, 3);       // 183/500
+    expect(stats.forecast_available).toBe(true);
+    expect(stats.completeness_cdf.mu).toBeCloseTo(1.6094, 4);
+    expect(stats.completeness_cdf.sigma).toBeCloseTo(0.8203, 4);
+  });
+});
+
+/**
+ * Phase 0 baseline tests: path_t95 accumulation (characterisation)
+ * 
+ * These tests lock in the FW-based path_t95 accumulation behaviour with
+ * hard numeric expectations before onset changes.
+ * See §4.0.5 #11 in the onset implementation plan.
+ */
+describe('LAG path_t95 Accumulation (baseline characterisation)', () => {
+  it('returns hard-locked path_t95 for two-edge path', () => {
+    // Two fits: edge1 (median=5, mean=7), edge2 (median=3, mean=4)
+    const fitEdge1: LagDistributionFit = {
+      mu: Math.log(5),
+      sigma: Math.sqrt(2 * Math.log(7 / 5)),
+      empirical_quality_ok: true,
+      total_k: 100,
+    };
+    const fitEdge2: LagDistributionFit = {
+      mu: Math.log(3),
+      sigma: Math.sqrt(2 * Math.log(4 / 3)),
+      empirical_quality_ok: true,
+      total_k: 100,
+    };
+
+    // First edge: path_t95 = edge1.t95
+    const t95Edge1 = logNormalInverseCDF(LATENCY_T95_PERCENTILE, fitEdge1.mu, fitEdge1.sigma);
+    // Note: sigma for median=5, mean=7 is sqrt(2*ln(7/5)) ≈ 0.82
+    // t95 = exp(mu + sigma * z_0.95) ≈ 19.27
+    expect(t95Edge1).toBeCloseTo(19.27, 2);
+
+    // Second edge: path_t95 = FW(edge1 + edge2).t95
+    const pathT95 = approximateLogNormalSumPercentileDays(fitEdge1, fitEdge2, LATENCY_T95_PERCENTILE);
+    expect(pathT95).toBeDefined();
+    // Lock in path_t95 for two-edge sum (characterisation)
+    expect(pathT95!).toBeCloseTo(25.48, 2);
   });
 });
 

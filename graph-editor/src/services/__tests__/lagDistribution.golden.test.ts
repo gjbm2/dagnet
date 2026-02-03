@@ -6,6 +6,11 @@
  * - prove behaviour is unchanged,
  * - delete the old in-service implementations.
  *
+ * IMPORTANT (Phase 0 baseline): These tests form the "hard coverage" gate
+ * before any onset-related stats changes. All tests must pass with current
+ * code before onset implementation begins. See §4.0.5 in the onset
+ * implementation plan.
+ *
  * @vitest-environment node
  */
 import { describe, it, expect } from 'vitest';
@@ -15,6 +20,7 @@ import {
   logNormalInverseCDF,
   fitLagDistribution,
 } from '../statisticalEnhancementService';
+import { LATENCY_DEFAULT_SIGMA } from '../../constants/latency';
 
 describe('lag distribution maths (golden)', () => {
   it('standardNormalInverseCDF has known anchor values', () => {
@@ -22,6 +28,14 @@ describe('lag distribution maths (golden)', () => {
     expect(standardNormalInverseCDF(0.5)).toBeCloseTo(0, 12);
     expect(standardNormalInverseCDF(0.841344746)).toBeCloseTo(1, 6);
     expect(standardNormalInverseCDF(0.977249868)).toBeCloseTo(2, 6);
+  });
+
+  it('logNormalCDF returns 0 for t <= 0', () => {
+    const mu = Math.log(3);
+    const sigma = 0.8;
+    expect(logNormalCDF(0, mu, sigma)).toBe(0);
+    expect(logNormalCDF(-1, mu, sigma)).toBe(0);
+    expect(logNormalCDF(-100, mu, sigma)).toBe(0);
   });
 
   it('logNormalCDF and inverseCDF are consistent at the median', () => {
@@ -32,6 +46,24 @@ describe('lag distribution maths (golden)', () => {
     expect(t50).toBeCloseTo(3, 12);
     // Numerical implementation has small floating error; keep tolerance tight but realistic.
     expect(logNormalCDF(3, mu, sigma)).toBeCloseTo(0.5, 8);
+  });
+
+  it('logNormalCDF returns precomputed value at non-median point (t=5)', () => {
+    // Canonical params: mu = ln(3), sigma = 0.8
+    // Precomputed using scipy: lognorm.cdf(5, s=0.8, scale=3) ≈ 0.7384362945
+    const mu = Math.log(3);
+    const sigma = 0.8;
+    // Tolerance: 6 decimal places (tight enough to catch drift, realistic for floating point)
+    expect(logNormalCDF(5, mu, sigma)).toBeCloseTo(0.7384362945, 6);
+  });
+
+  it('logNormalInverseCDF returns precomputed value at p=0.95', () => {
+    // Canonical params: mu = ln(3), sigma = 0.8
+    // Characterisation test: locks in current implementation value
+    const mu = Math.log(3);
+    const sigma = 0.8;
+    // Current implementation returns 11.184123061400983
+    expect(logNormalInverseCDF(0.95, mu, sigma)).toBeCloseTo(11.1841, 4);
   });
 
   it('fitLagDistribution implements the moments formula for typical inputs', () => {
@@ -50,9 +82,9 @@ describe('lag distribution maths (golden)', () => {
     const median = 5;
     const fit = fitLagDistribution(median, undefined, 500);
     expect(fit.mu).toBeCloseTo(Math.log(5), 12);
-    // sigma is a constant; we just assert it is finite and > 0 (exact value is in constants).
-    expect(Number.isFinite(fit.sigma)).toBe(true);
-    expect(fit.sigma).toBeGreaterThan(0);
+    // sigma must be exactly the default value from constants
+    expect(fit.sigma).toBe(LATENCY_DEFAULT_SIGMA);
+    expect(fit.empirical_quality_ok).toBe(true);
   });
 
   it('fitLagDistribution fails quality gate when totalK is below threshold (but remains stable)', () => {
