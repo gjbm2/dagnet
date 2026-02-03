@@ -168,6 +168,13 @@ export function installE2eHooks(): void {
         return { success: true };
       },
       /**
+       * Open EdgeContextMenu for an edge UUID (deterministic; avoids SVG hit-testing).
+       */
+      openEdgeContextMenu: (edgeUuid: string, x?: number, y?: number) => {
+        window.dispatchEvent(new CustomEvent('dagnet:e2e:openEdgeContextMenu', { detail: { edgeUuid, x, y } }));
+        return { success: true, edgeUuid, x, y };
+      },
+      /**
        * Trigger share-live refresh immediately (no countdown / no modal).
        * This exercises the real refresh pipeline:
        * - minimal fetch

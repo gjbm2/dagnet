@@ -680,7 +680,30 @@ export default function PropertiesPanel({
       if (_noHistory) {
         setGraph(next);
       } else {
-        await graphMutationService.updateGraph(oldGraph, next, setGraph, {
+        // Ergonomic behaviour: when the user commits a manual edge p.mean edit, automatically
+        // rebalance sibling edges from the same source node (unless overridden/locked).
+        //
+        // This mirrors the service-layer "fetch" auto-rebalance behaviour, but in normal mode:
+        // - preserve the origin edge value
+        // - respect sibling override flags
+        // - respect parameter locks (param id / connection)
+        let nextForMutation = next;
+        try {
+          if (
+            paramSlot === 'p' &&
+            Object.prototype.hasOwnProperty.call(actualChanges, 'mean') &&
+            typeof (actualChanges as any).mean === 'number' &&
+            Number.isFinite((actualChanges as any).mean)
+          ) {
+            const { updateManager } = await import('../services/UpdateManager');
+            nextForMutation = updateManager.rebalanceEdgeProbabilities(nextForMutation, selectedEdgeId, false);
+          }
+        } catch (e) {
+          console.warn('[PropertiesPanel] Auto-rebalance after p.mean commit failed (continuing without rebalance):', e);
+          nextForMutation = next;
+        }
+
+        await graphMutationService.updateGraph(oldGraph, nextForMutation, setGraph, {
           source: `PropertiesPanel.updateEdgeParam(${paramSlot})`,
         });
       }
@@ -2229,7 +2252,7 @@ export default function PropertiesPanel({
                       if (!graph || !selectedEdgeId) return;
                       const next = structuredClone(graph);
                       const edgeIndex = next.edges.findIndex((e: any) =>
-                        e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                        e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
                       );
                       if (edgeIndex >= 0) {
                         next.edges[edgeIndex].description_overridden = false;
@@ -2241,15 +2264,17 @@ export default function PropertiesPanel({
                     <textarea
                       data-field="description"
                       value={localEdgeData.description || ''}
-                      onChange={(e) => setLocalEdgeData({...localEdgeData, description: e.target.value})}
-                      onBlur={() => {
+                      onChange={(e) => setLocalEdgeData((prev: any) => ({ ...prev, description: e.target.value }))}
+                      onBlur={(e) => {
                         if (!graph || !selectedEdgeId) return;
+                        const committedDescription = e.currentTarget.value;
+                        setLocalEdgeData((prev: any) => ({ ...prev, description: committedDescription }));
                         const next = structuredClone(graph);
                         const edgeIndex = next.edges.findIndex((e: any) =>
-                          e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
+                          e.uuid === selectedEdgeId || e.id === selectedEdgeId || `${e.from}->${e.to}` === selectedEdgeId
                         );
                         if (edgeIndex >= 0) {
-                          next.edges[edgeIndex].description = localEdgeData.description;
+                          next.edges[edgeIndex].description = committedDescription;
                           next.edges[edgeIndex].description_overridden = true;
                           if (next.metadata) {
                             next.metadata.updated_at = new Date().toISOString();

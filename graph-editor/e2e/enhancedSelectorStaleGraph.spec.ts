@@ -333,6 +333,29 @@ async function getEdgeParamId(page: Page, edgeUuid: string): Promise<string | nu
   }, { edgeUuid });
 }
 
+async function selectEdgeOrSkip(page: Page, edgeUuid: string) {
+  // Prefer dev-only E2E hook (fast + deterministic)
+  const usedHook = await page.evaluate((id) => {
+    const e2e = (window as any).dagnetE2e;
+    if (e2e?.selectEdge) {
+      e2e.selectEdge(id);
+      return true;
+    }
+    return false;
+  }, edgeUuid);
+
+  if (usedHook) return;
+
+  // Fallback: click ReactFlow edge element
+  const edgeEl = page.locator(`[data-testid="rf__edge-${edgeUuid}"]`).first();
+  if (await edgeEl.isVisible().catch(() => false)) {
+    await edgeEl.click({ force: true });
+    return;
+  }
+
+  test.skip(true, `Cannot select edge ${edgeUuid} (no hook; edge element not visible)`);
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -464,5 +487,212 @@ test.describe('EnhancedSelector stale graph regression', () => {
     await page.waitForTimeout(200);
     const finalState = await getEdgeParamId(page, 'edge-1');
     expect(finalState).toBe('target-param');
+  });
+});
+
+// ============================================================================
+// Registry index notification regression (workspace load from IDB)
+// ============================================================================
+
+async function seedWorkspaceForRegistryWarningRegression(page: Page, graphData: any = TEST_GRAPH) {
+  await page.evaluate(async (graphData) => {
+    const db = (window as any).db;
+    if (!db) throw new Error('db not available');
+
+    // Ensure workspace exists so NavigatorContext takes the "load from IDB" path.
+    await db.workspaces.put({
+      id: 'repo-1-main',
+      repository: 'repo-1',
+      branch: 'main',
+      lastSynced: Date.now(),
+      fileIds: [],
+    });
+
+    // Seed registry index file into IDB (this will later be loaded into fileRegistry memory).
+    await db.files.put({
+      fileId: 'parameter-index',
+      type: 'parameter',
+      viewTabs: [],
+      data: {
+        version: '1.0.0',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        parameters: [
+          {
+            id: 'initial-param',
+            file_path: 'parameters/initial-param.yaml',
+            type: 'probability',
+            status: 'active',
+          },
+          {
+            id: 'target-param',
+            file_path: 'parameters/target-param.yaml',
+            type: 'probability',
+            status: 'active',
+          },
+        ],
+      },
+      source: { repository: 'repo-1', branch: 'main', path: 'parameters-index.yaml' },
+      isDirty: false,
+      isLoaded: true,
+      isLocal: false,
+      lastModified: Date.now(),
+      lastSynced: Date.now(),
+    });
+
+    // Seed the graph file (opened in a tab on reload).
+    await db.files.put({
+      fileId: 'graph-e2e-selector-test',
+      type: 'graph',
+      viewTabs: [],
+      data: graphData,
+      source: { repository: 'repo-1', branch: 'main', path: 'graphs/e2e-selector-test.json' },
+      isDirty: false,
+      isLoaded: true,
+      isLocal: false,
+      lastModified: Date.now(),
+      lastSynced: Date.now(),
+    });
+
+    // Seed parameter files (exist in IDB and should be treated as in-registry).
+    await db.files.put({
+      fileId: 'parameter-initial-param',
+      type: 'parameter',
+      viewTabs: [],
+      data: {
+        id: 'initial-param',
+        name: 'Initial Parameter',
+        type: 'probability',
+        values: [{ mean: 0.5, n: 100, k: 50 }],
+      },
+      source: { repository: 'repo-1', branch: 'main', path: 'parameters/initial-param.yaml' },
+      isDirty: false,
+      isLoaded: true,
+      isLocal: false,
+      lastModified: Date.now(),
+      lastSynced: Date.now(),
+    });
+
+    await db.files.put({
+      fileId: 'parameter-target-param',
+      type: 'parameter',
+      viewTabs: [],
+      data: {
+        id: 'target-param',
+        name: 'Target Parameter',
+        type: 'probability',
+        values: [{ mean: 0.75, n: 200, k: 150 }],
+      },
+      source: { repository: 'repo-1', branch: 'main', path: 'parameters/target-param.yaml' },
+      isDirty: false,
+      isLoaded: true,
+      isLocal: false,
+      lastModified: Date.now(),
+      lastSynced: Date.now(),
+    });
+
+    // Add lots of extra workspace files to make loadWorkspaceFromIDB non-trivial.
+    // This increases the chance that the selector renders before the index is loaded into memory.
+    const now = Date.now();
+    for (let i = 0; i < 400; i++) {
+      await db.files.put({
+        fileId: `node-dummy-${i}`,
+        type: 'node',
+        viewTabs: [],
+        data: { id: `dummy-${i}`, name: `Dummy ${i}`, type: 'generic' },
+        source: { repository: 'repo-1', branch: 'main', path: `nodes/dummy-${i}.yaml` },
+        isDirty: false,
+        isLoaded: true,
+        isLocal: false,
+        lastModified: now,
+        lastSynced: now,
+      });
+    }
+
+    // Open a tab for the graph and make it active.
+    await db.tabs.put({
+      id: 'tab-graph-1',
+      fileId: 'graph-e2e-selector-test',
+      viewMode: 'interactive',
+      title: 'E2E Selector Test',
+      icon: '',
+      closable: true,
+      group: 'main-content',
+    });
+
+    if (typeof db.saveAppState === 'function') {
+      await db.saveAppState({ activeTabId: 'tab-graph-1', updatedAt: Date.now() });
+    }
+  }, graphData);
+}
+
+test.describe('EnhancedSelector registry index notification regression', () => {
+  test('registry warning: hidden for indexed param; visible for unknown param (two edges)', async ({ page, baseURL }) => {
+    // This should fail fast if broken; long waits usually mean a dead boot.
+    test.setTimeout(15_000);
+
+    // Stub GitHub + compute to avoid any accidental network dependency.
+    await installGitHubStubs(page);
+
+    // Single graph with two edges:
+    // - edge-1 uses a registered parameter (must NOT show warning after hydration)
+    // - edge-2 uses an unregistered parameter (must show warning)
+    const twoEdgeGraph = structuredClone(TEST_GRAPH) as any;
+    twoEdgeGraph.edges = [
+      {
+        uuid: 'edge-1',
+        id: 'test-edge',
+        from: 'node-1',
+        to: 'node-2',
+        p: { id: 'initial-param', mean: 0.5 },
+      },
+      {
+        uuid: 'edge-2',
+        id: 'test-edge-2',
+        from: 'node-1',
+        to: 'node-2',
+        p: { id: 'missing-param', mean: 0.5 },
+      },
+    ];
+
+    // 1) Boot once to ensure DB is ready, then seed workspace + files.
+    await page.goto(
+      // Provide ?secret so CredentialsManager can load env-provided test creds
+      // (NavigatorContext needs credentials to load workspace from IndexedDB).
+      new URL('/?e2e=1&secret=test-secret&repo=repo-1&branch=main&graph=e2e-selector-test', baseURL!).toString(),
+      { waitUntil: 'domcontentloaded' }
+    );
+    await seedWorkspaceForRegistryWarningRegression(page, twoEdgeGraph);
+
+    // 2) Reload to force normal app hydration paths (tabs + NavigatorContext workspace load).
+    await page.reload({ waitUntil: 'domcontentloaded' });
+
+    // Wait for graph canvas to render (app is interactive, selector can mount).
+    await expect(page.locator('.react-flow')).toBeVisible({ timeout: 10_000 });
+
+    // Select an edge first so the properties panel becomes visible.
+    await selectEdgeOrSkip(page, 'edge-1');
+
+    const propsPanel = page.locator('.properties-panel, [data-testid="properties-panel"]').first();
+    await expect(propsPanel).toBeVisible({ timeout: 10_000 });
+
+    const selectorInput = propsPanel.getByPlaceholder('Select or enter probability parameter ID...');
+    const selectorRoot = selectorInput.locator('xpath=ancestor::div[contains(@class,"enhanced-selector")]');
+    const warning = selectorRoot.locator('.enhanced-selector-message.warning');
+
+    // Edge 1: registered param -> warning should clear after hydration
+    await expect(selectorInput).toHaveValue('initial-param', { timeout: 10_000 });
+
+    // Expected behaviour: once the workspace finishes hydrating, EnhancedSelector should refresh and clear the warning.
+    // Regression: workspace bulk-load does not notify index subscribers, so warning stays stuck indefinitely.
+    //
+    // NOTE: This assertion intentionally relies only on UI state (no internal window.fileRegistry access),
+    // to keep the repro robust across builds.
+    await expect(warning).toBeHidden({ timeout: 2_000 });
+
+    // Edge 2: unknown param -> warning should be shown
+    await selectEdgeOrSkip(page, 'edge-2');
+    await expect(selectorInput).toHaveValue('missing-param', { timeout: 10_000 });
+    await expect(warning).toBeVisible({ timeout: 2_000 });
   });
 });

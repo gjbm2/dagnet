@@ -427,12 +427,17 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     if (!graph) return;
     // Use unified UpdateManager code path for probability updates (consistent rounding)
     const { updateManager } = await import('../services/UpdateManager');
-    const nextGraph = updateManager.updateEdgeProbability(
+    let nextGraph = updateManager.updateEdgeProbability(
       graph,
       edgeId,
       { mean: value },
       { setOverrideFlag: true }
     );
+    // Ergonomic behaviour: on commit (not during drag), auto-rebalance siblings in normal mode
+    // (respect overrides + locks). Origin value is preserved by UpdateManager.
+    if (!skipHistory) {
+      nextGraph = updateManager.rebalanceEdgeProbabilities(nextGraph, edgeId, false);
+    }
     // Only save history if not skipping (for slider dragging)
     const historyLabel = skipHistory ? undefined : 'Update edge probability';
     onUpdateGraph(nextGraph, historyLabel, edgeId);

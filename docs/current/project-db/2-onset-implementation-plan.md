@@ -451,6 +451,23 @@ This phase is explicit and must be done before any behavioural onset changes:
 | Test coverage gap | Pre-commit checklist in §4 |
 | Breaking existing behaviour | Run full test suite after each phase |
 
+### 7.3 Risk register (what can go wrong, and how we mitigate it)
+
+This is the concrete risk register for onset integration. Each item includes a mitigation that is **reasonably achievable** in the current codebase: either (a) a tests-first assertion in an existing suite, (b) a guardrail in the single conversion helper, or (c) an integration-level invariant check.
+
+| Failure mode | Why it matters | Mitigation (implementation guardrails) | Mitigation (tests) |
+|---|---|---|---|
+| **Mixed-domain maths (T-space vs X-space)** | Silent correctness drift: completeness and tail-constraints disagree on “time” | Enforce a single choke-point (`toModelSpace`) and ensure *all* fit/constraint/completeness code uses it | Add explicit tests that would fail if any of the known code paths use raw ages/moments when onset is non-zero (`onset_shifted_completeness.test.ts`, `statisticalEnhancementService.test.ts`, `lagStatsFlow.integration.test.ts`) |
+| **Tail constraint computed using `t95_T` instead of `t95_X`** | Over-inflates σ when onset is non-zero; changes completeness and blend weight | In `getCompletenessCdfParams` and any sigma-min logic, derive `t95_X = max(ε, t95_T - δ)` and use that consistently | Add a test that checks sigma-min is computed from the onset-subtracted `t95_X` when onset is present (`statisticalEnhancementService.test.ts`) |
+| **“Compare to median” mismatch (median and t95 compared in different spaces)** | Constraint may apply when it should not, or fail to apply when it should | Space discipline: comparisons used to decide constraint applicability must compare X-to-X (i.e. `median_X` vs `t95_X`) | Add a test case where `t95_T > median_T` but `t95_X` is not materially greater than `median_X` (or vice versa) and assert correct `tail_constraint_applied` behaviour |
+| **Double shifting of ages (anchor adjustment + onset applied twice, or in wrong order)** | Completeness is too low; blend over-favours forecast; downstream propagation errors | Explicit sequencing: apply anchor-lag age adjustment first (existing behaviour), then onset shift once | Add a cohort-mode integration test that includes non-zero anchor lag and non-zero onset and checks shifted completeness equals the lognormal CDF evaluated at the correctly adjusted age |
+| **Path horizon (`path_t95`) underestimates because onset not added back after FW** | Fetch bounding becomes overly aggressive; inconsistent horizons between topo and data-ops | After FW in X-space, add onset back so persisted/displayed horizons remain inclusive | Add a cross-check test: topo-derived path horizon and data-ops moment-matched estimate agree on inclusive behaviour when onset is non-zero (`lagHorizonsService.integration.test.ts`, `dataOperations.integration.test.ts`) |
+| **Degenerate values when δ ≈ median/mean/t95 (ε clamp regime)** | NaNs / infinities; discontinuous behaviour around onset rounding boundaries | `toModelSpace` clamps: `median_X`, `mean_X`, `t95_X` to ε; shifted age clamps at 0 | Add unit tests for clamp behaviour and “no NaNs” invariants in the conversion helper suite |
+| **Missing onset treated inconsistently across services** | “Random” behaviour: some edges appear shifted, others not | Treat missing onset as 0 uniformly at the conversion helper boundary | Add at least one test that runs onset-aware code paths with onset undefined and asserts parity with onset=0 |
+| **Secondary-path omission (data-ops horizon estimate not onset-aware)** | Behavioural mismatch: displayed horizons vs fetch bounding differ | Require data-ops horizon estimate to use edge onset from the same latency config object used for t95/path_t95 decisions | Add an end-to-end test that forces the “moment-matched estimate” path and asserts the estimate increases by δ when onset is added |
+| **Fetch volume increases due to larger inclusive horizons** | Performance and rate-limit risk | No semantic caps in V1; instead ensure bounding never widens beyond user window and add diagnostic logging | Add tests asserting cohort retrieval horizon never widens beyond requested window, and that trimming remains monotone (`cohortRetrievalHorizon.test.ts`, `cohortHorizonIntegration.test.ts`) |
+| **Refetch policy becomes more aggressive** | More network calls; “flappy” refresh behaviour | Ensure refetch policy remains monotone and explainable as horizons increase | Add regression tests for refetch decisions under increased horizons (`fetchRefetchPolicy.test.ts`, `windowFetchPlannerService.test.ts`) |
+
 #### 7.2.1 Aggregation-model mismatch risk (context pools with different onset)
 
 We aggregate `onset_delta_days` (weighted β-quantile) and we aggregate median/mean lag days (mixture/weighted aggregation) potentially across different context pools. When context pools have materially different onset values, “aggregate median/mean” and “aggregate onset” may not correspond to any single true shifted lognormal.
@@ -476,6 +493,9 @@ Before marking onset integration complete:
 - [ ] All tests in `onset_shifted_completeness.test.ts` enabled and passing
 - [ ] Tail constraint tests with onset in `statisticalEnhancementService.test.ts` passing
 - [ ] `lagStatsFlow.integration.test.ts` onset scenarios passing
+- [ ] Cohort bounding horizon estimate is onset-inclusive and consistent with topo `path_t95` (`dataOperations.integration.test.ts` and/or `dataOperationsService.integration.test.ts`)
+- [ ] Cohort retrieval horizon never widens user window; trimming remains monotone under larger horizons (`cohortRetrievalHorizon.test.ts`, `cohortHorizonIntegration.test.ts`)
+- [ ] Refetch policy and fetch planning remain stable/monotone under larger horizons (`fetchRefetchPolicy.test.ts`, `windowFetchPlannerService.test.ts`)
 - [ ] Manual verification: known-onset fixture produces expected completeness curve
 - [ ] Audit confirms no unshifted `logNormalCDF` calls remain for maturity/completeness
 - [ ] Code review confirms `toModelSpace()` is the sole user→model conversion path

@@ -1,8 +1,6 @@
 # TODO
 
-## Snapshot DB — Open Design Point (BLOCKING)
-
-**Must resolve before implementation:** Analytics response shape for mature cohorts / non-latency edges where full snapshot history isn't available. See `docs/current/project-db/snapshot-db-design.md` §24.1 for options under discussion.
+## Concerning issue: t95 and path_t95 ls coming back MUCH too large for some edges. Need to investigate for nous-conversion and understand why.
 
 ---
 

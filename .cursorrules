@@ -487,6 +487,29 @@ When asked to "run tests":
 - **Python**: Run `pytest tests/specific_test.py` or `pytest -k "pattern"` 
 - Run BOTH only if changes affect both frontend and Python
 
+### Running Playwright E2E Tests (DagNet)
+**CRITICAL: Playwright tests MUST be brisk. If a single Playwright spec does not complete in ~10–15s, treat that as a PROBLEM WITH THE TEST (or environment), not a cue to increase timeouts.**
+
+**Default posture**:
+- **Run a single spec** (or a small set) by file path, not the full suite, unless explicitly asked.
+- **Hard cap the run** with `--global-timeout` so it cannot silently hang.
+- **Never “fix” flakiness by inflating timeouts**; instead reduce work (fewer page reloads, fewer waits), improve determinism, or add targeted E2E hooks (DEV + `?e2e=1` only).
+
+**Standard invocation (single spec, hard cap, single worker, no retries)**:
+- Ensure Node is available via `graph-editor/.nvmrc` (see Node section above).
+- Then run:
+  - `cd graph-editor`
+  - `CI= PLAYWRIGHT_BROWSERS_PATH="$HOME/.cache/ms-playwright" npm run -s e2e -- e2e/yourSpec.spec.ts --workers=1 --retries=0 --reporter=line --timeout=10000 --global-timeout=15000`
+
+**Key rules**:
+- **Always run in the foreground** (do not background long runs).
+- **Reuse server**: when running locally, ensure `CI` is unset (`CI=`) so Playwright can reuse the existing dev server (`reuseExistingServer: true`).
+- **Browser path sanity**: if Playwright complains a browser executable is missing but you know it is installed, check for a **bad `PLAYWRIGHT_BROWSERS_PATH`** pointing at a sandbox/tmp directory. Prefer `"$HOME/.cache/ms-playwright"` in this repo’s environment.
+
+**If a spec is slow (>15s)**:
+- First assume the test is doing too much: too many reloads, slow selectors, unnecessary waits, or nondeterministic UI interactions (especially SVG hit-testing).
+- Make the test smaller and more deterministic; if needed, add a **dev-only** E2E hook behind `import.meta.env.DEV` + `?e2e=1` to avoid brittle UI gestures.
+
 ### Building
 - **DO NOT** run `npm run build` unless explicitly instructed
 - Build is slow and usually unnecessary during development

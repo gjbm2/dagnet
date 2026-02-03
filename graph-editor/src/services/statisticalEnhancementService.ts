@@ -1908,7 +1908,7 @@ export function enhanceGraphLatencies(
   const nodeArrivingMass = new Map<string, number>();
   for (const startId of startNodes) {
     // If a start node has an entry weight, respect it; otherwise treat as 1.
-    const startNode = graph.nodes.find((n) => n.id === startId);
+    const startNode = graph.nodes.find((n) => n.uuid === startId || n.id === startId);
     const w = (startNode as any)?.entry?.entry_weight;
     const ww = typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : 1;
     nodeArrivingMass.set(startId, ww);

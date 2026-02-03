@@ -2358,65 +2358,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     let edgesWithScenarios = baseEdges;
     
-    // TODO: Scenario rendering disabled for now - causes infinite loop
-    // Need to refactor to not trigger re-render on every frame
-    /*
-    if (scenariosContext && visibleScenarioIds.length > 0 && graph) {
-      const scenarios = scenariosContext.scenarios;
-      const baseParams = scenariosContext.baseParams;
-      const colourMap = assignColours(visibleScenarioIds, visibleColourOrderIds);
-      
-      const overlayEdges: any[] = [];
-      
-      // For each visible scenario, create overlay edges
-      for (const scenarioId of visibleScenarioIds) {
-        const scenario = scenarios.find(s => s.id === scenarioId);
-        if (!scenario) continue;
-        
-        const colour = colourMap.get(scenarioId) || scenario.colour;
-        
-        // Scenario layer - use centralized composition
-        const composedParams = getComposedParamsForLayer(
-          scenarioId,
-          baseParams,
-          baseParams, // currentParams not needed here
-          scenarios,
-          visibleScenarioIds
-        );
-        
-        // Create overlay edge for each base edge (not graph edge)
-        baseEdges.forEach(edge => {
-          const graphEdge = graph.edges.find(ge => ge.id === edge.id || ge.uuid === edge.data?.uuid);
-          if (!graphEdge) return;
-          
-          // Use edge.id first (human-readable), fall back to uuid
-          const edgeKey = graphEdge.id || graphEdge.uuid;
-          const edgeParams = composedParams.edges?.[edgeKey];
-          if (!edgeParams) return;
-          
-          overlayEdges.push({
-            ...edge,
-            id: `scenario-overlay-${scenarioId}-${edge.id}`,
-            selectable: false,
-            data: {
-              ...edge.data,
-              scenarioOverlay: true,
-              scenarioColour: colour,
-              scenarioParams: edgeParams,
-            },
-            style: {
-              stroke: colour,
-              strokeOpacity: 0.3,
-              pointerEvents: 'none',
-            },
-            zIndex: -1,
-          });
-        });
-      }
-      
-      edgesWithScenarios = [...baseEdges, ...overlayEdges];
-    }
-    */
     
     // GEOMETRY MERGE: Preserve key geometry fields (scaledWidth, offsets) from previous RENDER edges
     // when topology hasn't changed, to avoid visual flicker during slow-path rebuilds
@@ -4798,21 +4739,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     });
   }, []);
 
-  // Handle edge right-click
-  const onEdgeContextMenu = useCallback((event: React.MouseEvent, edge: any) => {
-    event.preventDefault();
-    event.stopPropagation();
-    
+  // Shared: open edge context menu by edge ID (used by real right-click and E2E hooks)
+  const openEdgeContextMenuById = useCallback((edgeId: string, clientX: number, clientY: number) => {
     // edge.id is ReactFlow ID (uuid), check both uuid and human-readable id
-    const edgeData = graph?.edges?.find((e: any) => e.uuid === edge.id || e.id === edge.id);
-    
+    const edgeData = graph?.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
+
     // Select the edge so properties panel shows the correct data
-    onSelectedEdgeChange(edge.id);
-    
+    onSelectedEdgeChange(edgeId);
+
     setEdgeContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      edgeId: edge.id
+      x: clientX,
+      y: clientY,
+      edgeId: edgeId
     });
     setContextMenuLocalData({
       probability: edgeData?.p?.mean || 0,
@@ -4820,6 +4758,35 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       variantWeight: 0
     });
   }, [graph, onSelectedEdgeChange]);
+
+  // Handle edge right-click
+  const onEdgeContextMenu = useCallback((event: React.MouseEvent, edge: any) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openEdgeContextMenuById(edge.id, event.clientX, event.clientY);
+  }, [openEdgeContextMenuById]);
+
+  // Dev-only E2E hook: open edge context menu deterministically (no SVG hit-testing quirks).
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has('e2e')) return;
+    } catch {
+      return;
+    }
+
+    const handler = (e: any) => {
+      const edgeUuid: string | undefined = e?.detail?.edgeUuid;
+      const x: number = typeof e?.detail?.x === 'number' ? e.detail.x : 200;
+      const y: number = typeof e?.detail?.y === 'number' ? e.detail.y : 200;
+      if (!edgeUuid) return;
+      openEdgeContextMenuById(edgeUuid, x, y);
+    };
+
+    window.addEventListener('dagnet:e2e:openEdgeContextMenu' as any, handler);
+    return () => window.removeEventListener('dagnet:e2e:openEdgeContextMenu' as any, handler);
+  }, [openEdgeContextMenuById]);
 
   // Delete specific node (called from context menu)
   // Note: This receives a React Flow node ID (which is the UUID)
