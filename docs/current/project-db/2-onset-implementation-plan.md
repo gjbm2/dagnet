@@ -308,11 +308,113 @@ This is the exhaustive inventory of files that either:
 
 This is a **hard gate**: we do not implement onset semantics in production code until this phase is completed.
 
-What “completed” means here:
+**Two categories of tests:**
 
-- All “spec tests” for shifted completeness, inclusive horizons, and tail constraint safety exist in the relevant suites.
-- Tests may initially fail locally (“red”) while implementing, but we do not proceed to later phases until the tests for the current phase are written and passing (“green”).
-- No reliance on `it.todo(...)` as the primary safety mechanism. If a scenario is critical, it should become an active assertion in the same phase it is implemented.
+1. **Baseline tests (§4.0)** — characterisation tests that lock in current behaviour. These must **pass now** before any onset code is written. They catch regressions.
+
+2. **Onset-specific tests (§4.2)** — tests for the new shifted behaviour. Written during implementation phases; each phase must have its onset tests passing before proceeding.
+
+### 4.0 Baseline tests that MUST PASS before any onset code is written
+
+These are **characterisation tests** that lock in the *existing* statistical calculations (fit, CDF/quantiles, completeness, tail-constraint logic, lognormal-sum approximation, path horizons, and cohort bounding). They must **pass now** with the current code.
+
+This is the core of the brief: **we will shortly make subtle stats logic changes**, so we need a high-signal test net that exercises the maths directly (not only higher-level flows).
+
+#### 4.0.1 Coverage map (what must be “hard-locked”)
+
+Baseline tests must include **hard numeric expectations** (goldens) for:
+
+- The standard normal CDF / inverse CDF anchors used by lognormal functions.
+- Lognormal CDF behaviour at multiple points (not only at the median) and inverse-CDF consistency.
+- `fitLagDistribution` behaviour across:
+  - typical “good” inputs (quality gate passes),
+  - low-k inputs (quality gate fails),
+  - missing-mean inputs (default sigma path),
+  - degenerate/invalid inputs (median non-positive; mean ≤ 0; mean < median edge cases).
+- `calculateCompleteness` behaviour for a small, explicit cohort set with fixed ages and weights (including boundary ages such as 0 and “exactly at horizon”).
+- `calculateCompletenessWithTailConstraint` behaviour that locks in:
+  - the decision of whether a constraint is applied,
+  - the “one-way safety” invariant (conservatism) *for the current implementation*.
+- `getCompletenessCdfParams` behaviour (deriving mu/sigma from median and an authoritative horizon).
+- The lognormal-sum approximation functions (Fenton–Wilkinson flow):
+  - `approximateLogNormalSumFit`,
+  - `approximateLogNormalSumPercentileDays`.
+- At least one end-to-end “edge stats” baseline that exercises `computeEdgeLatencyStats` using a fixed cohort set and fixed lag inputs.
+- At least one “path horizon” baseline that exercises the `path_t95` computation for a small graph.
+- Cohort bounding behaviour (never widens beyond user window; monotone trimming as horizons increase).
+
+#### 4.0.2 Where these baseline tests live (extend existing suites; no new test files)
+
+Use/extend the existing suites below so we don’t create a parallel testing taxonomy:
+
+- `graph-editor/src/services/__tests__/lagDistribution.golden.test.ts`
+  - Owns: standard normal anchors; lognormal CDF/inverse-CDF anchors; `fitLagDistribution` golden cases.
+- `graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts`
+  - Owns: completeness, tail-constraint, and `computeEdgeLatencyStats` baseline cases that directly touch the orchestration logic.
+- `graph-editor/src/services/__tests__/lagHorizonsService.integration.test.ts` and/or `graph-editor/src/services/__tests__/pathT95Computation.test.ts`
+  - Owns: path horizon (`path_t95`) baseline cases.
+- `graph-editor/src/services/__tests__/cohortRetrievalHorizon.test.ts` (and any existing cohort-horizon integration suite already present)
+  - Owns: cohort bounding invariants and monotonicity.
+
+#### 4.0.3 Golden values policy (how we choose hard expected numbers without “testing the implementation with itself”)
+
+Baseline tests must not simply “call function X and assert it equals function X”.
+
+Instead, expected values must be produced by one of the following approaches:
+
+- **Closed-form derivation** (preferred when available):
+  - For `fitLagDistribution`, mu and sigma are derived directly from median and mean using the documented moments formula. These can be computed in the test without depending on `fitLagDistribution` itself.
+  - For lognormal median / quantile identities at the 50th percentile, use the exact identity that the median equals the exponential of mu.
+- **Precomputed constants** (for CDF / inverse-CDF and FW approximation where closed form is not practical):
+  - Choose a small number of canonical parameter sets and precompute expected outputs once using a high-precision method (for example, a Python/SciPy one-off calculation), then paste the resulting numbers as literals in the test.
+  - The intent is to lock behaviour so refactors don’t silently change results.
+- **Invariants + boundary cases** (for safety properties):
+  - For cohort bounding and monotonic trimming, use hard boolean expectations and fixed small fixtures.
+
+#### 4.0.4 Tolerance policy (how strict is “hard”)
+
+We need to lock behaviour while still respecting floating point reality:
+
+- For “anchor” values (for example standard-normal inverse at common probabilities), use very tight tolerances.
+- For lognormal CDF/inverse-CDF consistency checks away from anchors, use tight-but-realistic tolerances that do not flap.
+- For FW approximation functions, use fixed precomputed constants plus a tolerance justified by the approximation nature (still tight enough to detect meaningful drift).
+
+**Exit criterion for §4.0:** All baseline tests pass with current code before any onset implementation begins. The baseline suite must meaningfully exercise the stats calculations directly, not only high-level orchestration.
+
+#### 4.0.5 Minimum baseline test inventory (non-negotiable checklist)
+
+To avoid “Phase 0 completed” being interpreted loosely, the following minimum baseline tests must exist (in the named existing suites) and must be green **before any onset code changes**.
+
+1. **Standard normal inverse anchors** (`lagDistribution.golden.test.ts`):
+   - Hard-lock at least 3 anchor values for Φ⁻¹(p) (including p=0.5 and two non-trivial anchors).
+2. **Lognormal CDF anchors** (`lagDistribution.golden.test.ts`):
+   - Hard-lock CDF at t≤0 (returns 0) and at the median (returns 0.5) for a canonical (μ,σ).
+   - Hard-lock at least one additional non-median point for the same canonical (μ,σ) using a precomputed constant.
+3. **Lognormal inverse-CDF anchors** (`lagDistribution.golden.test.ts`):
+   - Hard-lock inverse-CDF at p=0.5 (returns exp(μ)) and at one non-trivial percentile (e.g. the configured t95 percentile) using a precomputed constant.
+4. **`fitLagDistribution` “typical good inputs”** (`lagDistribution.golden.test.ts`):
+   - Hard-lock mu and sigma derived from a canonical (median, mean, totalK above gate) using closed-form derivation (not calling the function-under-test to compute expected values).
+5. **`fitLagDistribution` “low-k gate fail”** (`lagDistribution.golden.test.ts`):
+   - Hard-lock that the quality flag fails and sigma falls back to the default for totalK below gate.
+6. **`fitLagDistribution` “missing mean”** (`lagDistribution.golden.test.ts`):
+   - Hard-lock that mu is derived from median and sigma uses the default path when mean is undefined.
+7. **FW/lognormal-sum approximation** (`statisticalEnhancementService.test.ts` or an existing FW-focused suite if present):
+   - Hard-lock at least one `approximateLogNormalSumFit` output (μ,σ) for two canonical component fits (precomputed constants).
+   - Hard-lock at least one `approximateLogNormalSumPercentileDays` output for a canonical percentile (precomputed constant).
+8. **Baseline completeness on a fixed cohort fixture** (`statisticalEnhancementService.test.ts`):
+   - A small cohort set with fixed ages/n/k that produces a fixed expected completeness at the current implementation.
+9. **Baseline tail-constraint behaviour** (`statisticalEnhancementService.test.ts`):
+   - A fixture where the constraint is not applied (hard-lock outputs).
+   - A fixture where the constraint is applied (hard-lock key outputs and the one-way safety invariant for the current implementation).
+10. **Baseline `computeEdgeLatencyStats` end-to-end** (`statisticalEnhancementService.test.ts` and/or `lagStatsFlow.integration.test.ts`):
+   - Hard-lock returned fit quality, t95, completeness, and any “constraint applied” flags for a canonical cohort fixture.
+11. **Baseline path horizon (`path_t95`)** (`pathT95Computation.test.ts` and/or `lagHorizonsService.integration.test.ts`):
+   - Hard-lock a canonical small graph fixture’s path horizon result.
+12. **Baseline cohort bounding invariants** (`cohortRetrievalHorizon.test.ts`):
+   - Hard-lock “never widens beyond requested window”.
+   - Hard-lock trimming monotonicity as horizons increase.
+
+If any additional baseline tests are added beyond this list, that is encouraged; but **this list is the minimum gate**.
 
 ### 4.1 Immediate fixes required (before onset work)
 
@@ -323,44 +425,77 @@ What “completed” means here:
 
 These tests currently bypass the quality gate because `totalK` defaults to a passing value. They must be corrected to reflect production semantics.
 
-### 4.2 Test file assignments
+### 4.2 Onset-specific tests (added during implementation)
 
-| Test File | Scenarios to Add/Enable |
-|-----------|-------------------------|
-| `onset_shifted_completeness.test.ts` | Un-todo dead-time clamp, boundary, shift equivalence, monotonicity tests |
-| `statisticalEnhancementService.test.ts` | Tail constraint safety under onset; blend weight = 0 during dead-time |
-| `lagStatsFlow.integration.test.ts` | Inclusive horizon persistence; stored t95 increases by δ when onset increases |
-| `lagHorizonsService.integration.test.ts` | Path horizon consistency with onset (FW + shift) |
-| `dataOperations.integration.test.ts` | Cohort bounding horizon consistency with onset (end-to-end) |
-| `dataOperationsService.integration.test.ts` | Moment-matched `path_t95` estimate includes onset when available |
-| `cohortHorizonIntegration.test.ts` | Cohort window bounding uses inclusive horizons and remains monotone/safe |
-| `cohortRetrievalHorizon.test.ts` | Bounding logic never widens user window; trimming logic stable under larger horizons |
-| `fetchRefetchPolicy.test.ts` | Refetch policy remains monotone when horizons increase due to onset |
-| `windowFetchPlannerService.test.ts` | Planning remains stable with larger horizons; no pathological over-fetch |
+These tests are written during Phases 1-5 to verify the new onset behaviour works correctly. They are distinct from the baseline tests in §4.0.
+
+| Test File | Onset-Specific Scenarios |
+|-----------|--------------------------|
+| `onset_shifted_completeness.test.ts` | Dead-time clamp (completeness=0 when age ≤ onset); shift equivalence; monotonicity as onset increases |
+| `statisticalEnhancementService.test.ts` | Tail constraint in X-space; one-way safety; blend weight during dead-time |
+| `statisticalEnhancementService.test.ts` | **Fit-quality improvement (expected)**: on an onset-present fixture, the shifted model must reduce a simple error metric vs the pre-shift model (see §6.6) |
+| `lagStatsFlow.integration.test.ts` | Stored t95 is inclusive; t95 increases by δ when onset increases |
+| `lagHorizonsService.integration.test.ts` | path_t95 includes onset (FW + shift) |
+| `dataOperations.integration.test.ts` | Cohort bounding with onset; moment-matched path_t95 includes onset |
+| `cohortRetrievalHorizon.test.ts` | Bounding safety preserved with onset; trimming stable under larger horizons |
+| `fetchRefetchPolicy.test.ts` | Refetch policy stable when horizons increase due to onset |
+| `windowFetchPlannerService.test.ts` | Planning stable with larger horizons |
 
 ---
 
 ## 5. Implementation Order
 
-### Phase 0: Tests-first (pre-requisite)
+### Phase 0: Baseline test coverage (pre-requisite)
 
-This phase is explicit and must be done before any behavioural onset changes:
+This phase locks in current behaviour before any onset code is written.
 
-- Fix the `fitLagDistribution` test hygiene issues (2-arg calls).
-- Add/enable shifted-onset tests in existing suites (see §6) as active assertions as soon as the relevant code exists.
-- Add coverage that proves “no unshifted completeness remains” across both:
-  - the topo pass (`statisticalEnhancementService.ts`), and
-  - the cohort bounding horizon estimate path (`dataOperationsService.ts`).
+**Deliverables (fully scoped):**
+
+- Fix the `fitLagDistribution` test hygiene issues (2-arg calls in test files) so baseline tests reflect production semantics.
+- Extend the existing “golden maths” suite to include:
+  - at least three standard-normal inverse anchors,
+  - at least two lognormal CDF anchors (including median and one non-median point),
+  - at least one inverse-CDF anchor beyond the median,
+  - at least four `fitLagDistribution` golden cases covering the “coverage map” above.
+- Add baseline completeness and tail-constraint characterisation tests that:
+  - use a small, explicit cohort fixture with fixed ages and weights,
+  - include at least one boundary case and one typical case,
+  - assert numeric outputs (not only monotonicity).
+- Add one baseline “edge stats” test that runs `computeEdgeLatencyStats` end-to-end on a fixed cohort fixture and asserts key outputs (fit quality flag, t95, completeness, and any flags that influence downstream behaviour).
+- Add one baseline “path horizon” test for a small graph fixture that produces a stable `path_t95` expectation.
+- Add or strengthen cohort bounding tests to assert:
+  - bounding never widens beyond user window,
+  - trimming monotonicity as horizons increase.
+
+**Non-negotiable:** Phase 0 deliverables must satisfy the minimum inventory in §4.0.5.
+
+**Phase 0 runbook (test execution discipline):**
+
+- Run only the relevant test files touched/relied upon by this phase (explicit list in the PR/commit notes), not the entire suite.
+- Phase 0 is complete only when the relevant tests are all green.
+
+**Exit criteria for Phase 0:**
+
+- Baseline tests in §4.0 exist and **pass** with current code.
+- The 2-arg `fitLagDistribution` hygiene issues are fixed.
+- The baseline suite materially covers the statistical calculations (as per §4.0.1), providing confidence to proceed with subtle onset-driven changes.
+
+Only after Phase 0 is complete do we begin onset implementation. The baseline tests then serve as regression detection throughout Phases 1-6.
+
 
 ### Phase 1: Core Conversion Helper
 1. Implement `toModelSpace()` in `lagDistributionUtils.ts`
-2. Add unit tests for `toModelSpace()` (guard rails, ε handling) in an existing maths-focused suite (prefer `lagDistribution.golden.test.ts`).
+2. Add unit tests for `toModelSpace()` (guard rails, ε handling).
+
+**Exit criteria:** `toModelSpace()` tests pass; no other tests broken.
 
 ### Phase 2: Completeness Functions
 1. Update `calculateCompleteness` signature + logic
 2. Update `calculateCompletenessWithTailConstraint` signature + logic
 3. Update `getCompletenessCdfParams` to handle t95 in X-space
-4. Enable shifted completeness tests in `onset_shifted_completeness.test.ts`
+4. Add onset-specific tests for shifted completeness behaviour
+
+**Exit criteria:** All baseline tests from §4.0 remain green; new onset completeness tests pass; the fit-quality test in §6.6 is implemented and passing.
 
 ### Phase 3: `computeEdgeLatencyStats`
 1. Add `onsetDeltaDays` parameter
@@ -368,22 +503,28 @@ This phase is explicit and must be done before any behavioural onset changes:
 3. Apply onset shift to tail constraint
 4. Convert returned `t95` back to T-space
 5. Pass onset to completeness functions
-6. Add integration tests for edge stats with onset
+6. Add onset-specific tests for edge stats
+
+**Exit criteria:** All baseline tests remain green; new onset edge stats tests pass.
 
 ### Phase 4: Topo Pass Integration
 1. Thread `edgeOnsetDeltaDays` into `computeEdgeLatencyStats` call
 2. Update A→Y completeness block with onset
 3. Update `path_t95` computation with onset shift
-4. Add integration tests for full topo pass with onset
+4. Add onset-specific tests for topo pass
+
+**Exit criteria:** All baseline tests remain green; topo pass with onset tests pass.
 
 ### Phase 5: Secondary Paths
 1. Update `dataOperationsService.ts` cohort bounding
 2. Review `lagMixtureAggregationService.ts` for onset handling
-3. Add integration tests
+3. Add onset-specific tests for secondary paths
+
+**Exit criteria:** All baseline tests remain green; secondary path onset tests pass.
 
 ### Phase 6: Cleanup & Verification
 1. Audit all `logNormalCDF` calls for "forgotten shift"
-2. Run full LAG test suite
+2. Run the explicit LAG/statistical test suites touched by this work (and the behaviourally affected suites listed in §3.1), not the full repo test suite
 3. Manual verification with known-onset test fixtures
 
 ---
@@ -392,45 +533,113 @@ This phase is explicit and must be done before any behavioural onset changes:
 
 ### 6.1 Unit: `toModelSpace()` helper
 
-| Scenario | Input | Expected Output |
-|----------|-------|-----------------|
-| Zero onset | `(0, 5, 6, 15, 10)` | `(5, 6, 15, 10)` — no change |
-| Positive onset | `(2, 5, 6, 15, 10)` | `(3, 4, 13, 8)` — all shifted |
-| Onset = median | `(5, 5, 6, 15, 10)` | `(ε, 1, 10, 5)` — guard rail on median |
-| Onset > median | `(7, 5, 6, 15, 10)` | `(ε, ε, 8, 3)` — guard rail on both |
-| Age < onset | `(5, 5, 6, 15, 3)` | `ageX = 0` (clamped, not negative) |
+Scenarios to cover:
+
+- Zero onset: model-space equals user-space for median/mean/horizons and cohort ages.
+- Positive onset: median/mean/horizons are reduced by the onset amount, and ages are reduced by the same onset (with age clamped at zero when younger than onset).
+- Onset equal to or larger than the median/mean/horizon: conversion clamps the model-space values to a small positive epsilon to avoid degenerate log operations.
+- Age younger than onset: shifted age is clamped to zero (never negative).
 
 ### 6.2 Unit: Shifted completeness
 
-| Scenario | Cohort Age | Onset | Expected |
-|----------|------------|-------|----------|
-| Dead-time clamp | 3 | 5 | 0 |
-| Boundary (age = onset) | 5 | 5 | 0 |
-| Shifted equivalence | 10 | 3 | `CDF(7, μ, σ)` |
-| Monotonicity | 10 | 0→5 | Completeness decreases |
+Scenarios to cover:
+
+- Dead-time clamp: completeness is zero when all cohort ages are less than or equal to onset.
+- Boundary case: completeness is zero when cohort age equals onset.
+- Shift equivalence: when age is greater than onset, completeness equals the lognormal CDF evaluated at the onset-subtracted age (using the same mu/sigma as the post-onset model).
+- Monotonicity: for fixed cohort ages and distribution parameters, completeness decreases as onset increases.
 
 ### 6.3 Integration: Tail constraint under onset
 
-| Scenario | Setup | Expected |
-|----------|-------|----------|
-| Constraint in X-space | `onset=3, t95_T=20` | Sigma-min computed from `t95_X=17` |
-| One-way safety | `onset>0, constraint increases σ` | Completeness ≤ unconstrained |
-| Degenerate (onset ≥ t95) | `onset=25, t95_T=20` | `t95_X=ε`, conservative sigma, finite completeness |
+Scenarios to cover:
+
+- Constraint computed in model-space: when onset is present, the tail constraint uses the onset-subtracted horizon (model-space) when deriving any sigma-min or constraint logic.
+- One-way safety: when a constraint increases sigma to satisfy an authoritative horizon, completeness must not increase relative to the unconstrained case (conservatism).
+- Degenerate horizons: when onset is greater than or equal to an authoritative horizon, the model-space horizon is clamped (epsilon), sigma remains finite, and completeness remains finite and conservative.
 
 ### 6.4 Integration: Path horizons
 
-| Scenario | Setup | Expected |
-|----------|-------|----------|
-| Edge t95 inclusive | `onset=3, fit implies t95_X=12` | Stored `t95=15` |
-| Path t95 inclusive | `anchor t95=10, edge onset=3, edge t95_X=8` | `path_t95 ≥ 10+3+8 = 21` (FW may differ slightly) |
-| Cohort bounding consistency | Same edge in topo vs data-ops | Same inclusive horizon |
+Scenarios to cover:
+
+- Edge horizons are inclusive: the stored/displayed edge t95 equals onset plus the post-onset (model-space) t95.
+- Path horizons are inclusive: the stored/displayed path t95 reflects inclusive edge horizons along the path.
+- Cohort bounding consistency: the horizon used for cohort retrieval/bounding remains consistent between topo-derived horizons and any data-ops “moment-matched” secondary estimates.
 
 ### 6.5 Integration: Blend during dead-time
 
-| Scenario | Setup | Expected |
-|----------|-------|----------|
-| All cohorts in dead-time | `max(cohort.age) < onset` | `completeness ≈ 0`, blend favours forecast |
-| Mixed ages | Some cohorts in dead-time, some past | Appropriate weighted blend |
+Scenarios to cover:
+
+- All cohorts in dead-time: completeness is approximately zero and the blend behaviour is stable (no NaNs; weights remain valid).
+- Mixed cohort ages: cohorts in dead-time contribute zero completeness; cohorts past onset contribute shifted completeness; overall blend remains stable and explainable.
+
+### 6.6 Fit-quality improvement test (onset-present fixtures)
+
+Rationale: introducing onset should change only a small number of calculations, but it should **improve model fidelity** in cases where there is real dead-time (no conversions can occur before onset). We can and should assert this improvement in at least one deterministic fixture.
+
+Approach (deterministic; no random simulation):
+
+- Construct or reuse a small cohort fixture where:
+  - onset is non-zero,
+  - cohort ages include some points younger than onset and some older than onset,
+  - the empirical conversion fractions (or maturity/completeness evidence used by the pipeline) clearly exhibit dead-time.
+- Define a simple, stable goodness-of-fit metric comparing **empirical evidence** to **model predictions**, for example:
+  - a weighted mean squared error between observed conversion fraction and predicted conversion fraction at each cohort age, or
+  - a weighted absolute error between an “empirical completeness proxy” and predicted completeness.
+- Compute the metric under:
+  - the “pre-shift” interpretation (treating total-time inputs as if they were post-onset), and
+  - the onset-shifted interpretation (the new behaviour).
+- Assert that the onset-shifted metric is **strictly lower** than the pre-shift metric by a meaningful margin (to avoid flapping on tiny numeric drift).
+
+Important constraints:
+
+- The fixture and metric must be chosen so the test is stable (no stochasticity; no dependence on external data).
+- This test is an **onset-specific** test: it is expected to pass only once onset logic is implemented, and it should be placed in `statisticalEnhancementService.test.ts` alongside the other onset maths assertions.
+
+#### 6.6.1 Prefer using repo-captured real Amplitude fixtures (deterministic, CI-safe)
+
+We already have real Amplitude response snapshots checked into the repo. Prefer using these for the fit-quality improvement test, because:
+
+- they exercise realistic shapes and edge cases in the Amplitude payloads,
+- they are deterministic (no network; stable over time),
+- they are suitable for CI and for a hard tests-first gate.
+
+Fixture sources already present:
+
+- `param-registry/test/amplitude/*.amplitude-response.json`
+  - Example: `param-registry/test/amplitude/ab-smooth-lag.amplitude-response.json`
+  - Example: `param-registry/test/amplitude/bc-smooth-lag.amplitude-response.json`
+- `param-registry/test/amplitude/window-*.json` and `param-registry/test/amplitude/cohort-*.json`
+  - These are the same fixture family already used for fixture-based snapshot write tests, and they include lag histograms used to derive onset.
+- `docs/current/project-lag/test-data/amplitude_response.json` and `docs/current/project-lag/test-data/amplitude_daily_test.json`
+
+Implementation note (test plumbing): `graph-editor/src/services/__tests__/snapshotWritePath.fixture.test.ts` already demonstrates how to run the DAGNet pipeline with **mocked Amplitude HTTP** backed by these fixtures. Reuse that approach so the test:
+
+- uses the same parsing/aggregation path as production,
+- derives onset evidence and lag moments from captured payloads,
+- then computes the before/after fit-quality metric deterministically.
+
+#### 6.6.3 Pinned fixture + pinned metric (to avoid bikeshedding)
+
+To keep this test concrete and stable, we pin:
+
+- **Fixture family**: `param-registry/test/amplitude/window-*.json` and `param-registry/test/amplitude/cohort-*.json`, using the same channel segmentation already present:
+  - paid-search (`window-paid-search.json`, `cohort-paid-search.json`)
+  - paid-social (`window-paid-social.json`, `cohort-paid-social.json`)
+  - influencer (`window-influencer.json`, `cohort-influencer.json`)
+  - other (`window-other.json`, `cohort-other.json`)
+- **Onset signal**: onset is derived from the lag histogram present in the captured payloads (via `deriveOnsetDeltaDaysFromLagHistogram`), and the selected fixture set must have non-zero onset for at least one channel.
+- **Metric**: weighted mean squared error (weighted MSE) between:
+  - an empirical completeness proxy derived from the captured cohorts (using observed cumulative conversion fraction as a function of age), and
+  - the model-predicted completeness curve implied by the fitted lognormal parameters.
+
+We then assert that, on this fixed fixture family:
+
+- the onset-shifted model achieves a strictly lower weighted MSE than the pre-shift model, and
+- the improvement clears a small absolute margin to avoid flapping on tiny numeric drift.
+
+#### 6.6.2 Optional: local-only “real API” confirmation (not part of the hard gate)
+
+We do have local-only tests that hit the real Amplitude API when credentials are present (for example `graph-editor/src/services/__tests__/cohortAxy.meceSum.vsAmplitude.local.e2e.test.ts`). These are useful for manual validation, but **must not** be relied upon for Phase 0/CI gating because they depend on credentials and on Amplitude being stable.
 
 ---
 
@@ -449,7 +658,7 @@ This phase is explicit and must be done before any behavioural onset changes:
 | Forgotten shift in secondary path | Phase 6 audit of all `logNormalCDF` calls |
 | Degenerate numerics when onset ≈ median | Guard rails (ε) in `toModelSpace()` |
 | Test coverage gap | Pre-commit checklist in §4 |
-| Breaking existing behaviour | Run full test suite after each phase |
+| Breaking existing behaviour | Keep §4.0 baseline tests green throughout; run only the explicitly relevant suites after each phase |
 
 ### 7.3 Risk register (what can go wrong, and how we mitigate it)
 
