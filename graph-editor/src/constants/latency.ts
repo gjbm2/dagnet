@@ -119,6 +119,31 @@ export const LATENCY_T95_PERCENTILE = 0.95
  */
 export const LATENCY_PATH_T95_PERCENTILE = 0.95
 
+// =============================================================================
+// Onset (`onset_delta_days`) controls
+// =============================================================================
+
+/**
+ * Default mass fraction used when deriving onset from a window() lag histogram.
+ *
+ * Interpretation: onset is the earliest day by which this fraction of conversion mass has occurred.
+ * The UI and modelling still use a single scalar (`onset_delta_days`) per slice family.
+ *
+ * Note: This is overridable via `settings/settings.yaml` (forecasting.ONSET_MASS_FRACTION_ALPHA).
+ */
+export const ONSET_MASS_FRACTION_ALPHA = 0.01;
+
+/**
+ * Default β used when aggregating onset across window() slice families in the LAG topo pass.
+ *
+ * Interpretation: choose the weighted β-quantile of slice-family onset values, weighted by
+ * `dates.length` (window series length). β=0.5 behaves like a robust median and avoids a single
+ * outlier slice forcing onset to 0.
+ *
+ * Note: This is overridable via `settings/settings.yaml` (forecasting.ONSET_AGGREGATION_BETA).
+ */
+export const ONSET_AGGREGATION_BETA = 0.5;
+
 /**
  * Decimal places to use when persisting latency horizon values (days).
  *

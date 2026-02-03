@@ -501,6 +501,226 @@ class TestOnsetAndCohortMode:
 
 
 # =============================================================================
+# IC-*: Insert Count Accuracy Tests
+# =============================================================================
+
+class TestInsertCountAccuracy:
+    """
+    Tests that verify the 'inserted' count returned by append_snapshots
+    is accurate and not the buggy psycopg2 rowcount.
+    
+    These tests are critical because the session log displays this count.
+    """
+    
+    def test_IC_001_inserted_count_matches_rows_written(self):
+        """
+        IC-001: Inserted count matches actual rows written to DB.
+        
+        Write N rows, verify inserted == N, verify DB has N rows.
+        """
+        param_id = make_test_param_id('ic001')
+        
+        rows = [
+            {'anchor_day': f'2025-12-{str(i).zfill(2)}', 'X': 100 + i, 'Y': 10 + i}
+            for i in range(1, 21)  # 20 rows
+        ]
+        
+        result = append_snapshots(
+            param_id=param_id,
+            core_hash='ic001-hash',
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=TEST_TIMESTAMP,
+            rows=rows,
+            diagnostic=True
+        )
+        
+        assert result['success'] is True
+        assert result['inserted'] == 20, f"Expected 20 inserted, got {result['inserted']}"
+        assert result['diagnostic']['rows_attempted'] == 20
+        assert result['diagnostic']['rows_inserted'] == 20
+        assert result['diagnostic']['duplicates_skipped'] == 0
+        
+        # Verify DB has exactly 20 rows
+        stored = query_snapshots(param_id)
+        assert len(stored) == 20, f"Expected 20 rows in DB, got {len(stored)}"
+    
+    def test_IC_002_duplicate_rows_not_counted(self):
+        """
+        IC-002: Duplicate rows (ON CONFLICT DO NOTHING) not counted in inserted.
+        
+        Write N rows, then write the same N rows again.
+        Second write should report 0 inserted.
+        """
+        param_id = make_test_param_id('ic002')
+        
+        rows = [
+            {'anchor_day': '2025-12-01', 'X': 100, 'Y': 10},
+            {'anchor_day': '2025-12-02', 'X': 110, 'Y': 12},
+            {'anchor_day': '2025-12-03', 'X': 120, 'Y': 14},
+        ]
+        
+        # First write
+        result1 = append_snapshots(
+            param_id=param_id,
+            core_hash='ic002-hash',
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=TEST_TIMESTAMP,
+            rows=rows,
+            diagnostic=True
+        )
+        
+        assert result1['success'] is True
+        assert result1['inserted'] == 3
+        
+        # Second write with same data (same retrieved_at = same unique key)
+        result2 = append_snapshots(
+            param_id=param_id,
+            core_hash='ic002-hash',
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=TEST_TIMESTAMP,  # Same timestamp
+            rows=rows,
+            diagnostic=True
+        )
+        
+        assert result2['success'] is True
+        assert result2['inserted'] == 0, f"Expected 0 inserted (duplicates), got {result2['inserted']}"
+        assert result2['diagnostic']['duplicates_skipped'] == 3
+        
+        # DB should still have only 3 rows
+        stored = query_snapshots(param_id)
+        assert len(stored) == 3
+    
+    def test_IC_003_partial_duplicates_counted_correctly(self):
+        """
+        IC-003: Mix of new and duplicate rows counted correctly.
+        
+        Write 3 rows, then write 5 rows (3 duplicates + 2 new).
+        Second write should report 2 inserted.
+        """
+        param_id = make_test_param_id('ic003')
+        
+        # First write: days 1-3
+        rows1 = [
+            {'anchor_day': '2025-12-01', 'X': 100, 'Y': 10},
+            {'anchor_day': '2025-12-02', 'X': 110, 'Y': 12},
+            {'anchor_day': '2025-12-03', 'X': 120, 'Y': 14},
+        ]
+        
+        result1 = append_snapshots(
+            param_id=param_id,
+            core_hash='ic003-hash',
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=TEST_TIMESTAMP,
+            rows=rows1,
+        )
+        assert result1['inserted'] == 3
+        
+        # Second write: days 1-5 (1-3 are duplicates, 4-5 are new)
+        rows2 = [
+            {'anchor_day': '2025-12-01', 'X': 100, 'Y': 10},  # duplicate
+            {'anchor_day': '2025-12-02', 'X': 110, 'Y': 12},  # duplicate
+            {'anchor_day': '2025-12-03', 'X': 120, 'Y': 14},  # duplicate
+            {'anchor_day': '2025-12-04', 'X': 130, 'Y': 16},  # new
+            {'anchor_day': '2025-12-05', 'X': 140, 'Y': 18},  # new
+        ]
+        
+        result2 = append_snapshots(
+            param_id=param_id,
+            core_hash='ic003-hash',
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=TEST_TIMESTAMP,
+            rows=rows2,
+            diagnostic=True
+        )
+        
+        assert result2['success'] is True
+        assert result2['inserted'] == 2, f"Expected 2 inserted (2 new), got {result2['inserted']}"
+        assert result2['diagnostic']['rows_attempted'] == 5
+        assert result2['diagnostic']['duplicates_skipped'] == 3
+        
+        # DB should have 5 rows total
+        stored = query_snapshots(param_id)
+        assert len(stored) == 5
+    
+    def test_IC_004_large_batch_count_accurate(self):
+        """
+        IC-004: Large batch (100+ rows) has accurate count.
+        
+        This tests that execute_values with RETURNING works for larger batches.
+        """
+        param_id = make_test_param_id('ic004')
+        
+        # 101 rows to exceed typical page sizes
+        rows = [
+            {'anchor_day': f'2025-{str((i // 28) + 1).zfill(2)}-{str((i % 28) + 1).zfill(2)}', 
+             'X': 100 + i, 'Y': 10 + i}
+            for i in range(101)
+        ]
+        
+        result = append_snapshots(
+            param_id=param_id,
+            core_hash='ic004-hash',
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=TEST_TIMESTAMP,
+            rows=rows,
+            diagnostic=True
+        )
+        
+        assert result['success'] is True
+        assert result['inserted'] == 101, f"Expected 101 inserted, got {result['inserted']}"
+        
+        stored = query_snapshots(param_id)
+        assert len(stored) == 101
+    
+    def test_IC_005_different_retrieved_at_not_duplicates(self):
+        """
+        IC-005: Same data with different retrieved_at is NOT a duplicate.
+        
+        The unique constraint includes retrieved_at, so same anchor_day
+        with different retrieved_at should insert as new rows.
+        """
+        param_id = make_test_param_id('ic005')
+        from datetime import timedelta
+        
+        rows = [
+            {'anchor_day': '2025-12-01', 'X': 100, 'Y': 10},
+            {'anchor_day': '2025-12-02', 'X': 110, 'Y': 12},
+        ]
+        
+        # First write at T
+        result1 = append_snapshots(
+            param_id=param_id,
+            core_hash='ic005-hash',
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=TEST_TIMESTAMP,
+            rows=rows,
+        )
+        assert result1['inserted'] == 2
+        
+        # Second write at T+1 hour (different retrieved_at = different unique key)
+        result2 = append_snapshots(
+            param_id=param_id,
+            core_hash='ic005-hash',
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=TEST_TIMESTAMP + timedelta(hours=1),
+            rows=rows,
+        )
+        assert result2['inserted'] == 2, f"Expected 2 inserted (new retrieved_at), got {result2['inserted']}"
+        
+        # DB should have 4 rows (2 from each write)
+        stored = query_snapshots(param_id)
+        assert len(stored) == 4
+
+
+# =============================================================================
 # AMP-*: Real Amplitude Fixture Tests
 # =============================================================================
 

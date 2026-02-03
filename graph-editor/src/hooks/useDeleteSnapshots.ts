@@ -64,7 +64,7 @@ export function useDeleteSnapshots(objectIds: string[]): UseDeleteSnapshotsResul
       const counts: Record<string, number> = {};
       for (const objectId of objectIds) {
         const dbParamId = buildDbParamId(objectId, repo, branch);
-        counts[objectId] = inventory[dbParamId]?.row_count ?? 0;
+        counts[objectId] = inventory[dbParamId]?.unique_retrievals ?? 0;
       }
       setSnapshotCounts(counts);
     } catch (error) {
@@ -88,7 +88,7 @@ export function useDeleteSnapshots(objectIds: string[]): UseDeleteSnapshotsResul
     
     const confirmed = await showConfirm({
       title: 'Delete Snapshots',
-      message: `Delete ${count} snapshot row${count !== 1 ? 's' : ''} for "${objectId}"?\n\n` +
+      message: `Delete ${count} snapshot retrieval${count !== 1 ? 's' : ''} for "${objectId}"?\n\n` +
         `This removes historical time-series data and cannot be undone.`,
       confirmLabel: 'Delete',
       cancelLabel: 'Cancel',

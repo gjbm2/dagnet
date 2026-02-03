@@ -1740,6 +1740,17 @@ export function mergeTimeSeriesIntoParameter(
     addExistingFromValue(v);
   }
 
+  // Preserve any existing latency summary for this slice family (window mode).
+  // This is critical so incremental merges do not drop previously stored onset_delta_days.
+  const preservedLatencyCandidates = existingForSliceSorted
+    .map(v => (v as any).latency)
+    .filter((l: any) => l && typeof l === 'object');
+  const preservedLatencySummary = preservedLatencyCandidates.length > 0
+    ? preservedLatencyCandidates[preservedLatencyCandidates.length - 1]
+    : undefined;
+
+  const existingDateCountBeforeMerge = dateMap.size;
+
   // 3) Overlay new time-series data (new fetch wins for overlapping dates)
   for (const point of sortedTimeSeries) {
     const ukDate = normalizeDate(point.date);
@@ -1851,6 +1862,53 @@ export function mergeTimeSeriesIntoParameter(
     ? existingForecastCandidates[existingForecastCandidates.length - 1]
     : undefined;
 
+  // §0.3 onset merge policy:
+  // - Derive an onset value for the *incoming* incremental window (mergeOptions.latencySummary.onset_delta_days).
+  // - Do NOT overwrite existing onset in the file.
+  // - Blend onset using weights based only on number of dates in the window() series:
+  //     w_old = existing.dates.length (before this merge)
+  //     w_new = incoming.dates.length
+  // - Round to 1 d.p.
+  const mergeLatencySummary = (() => {
+    const incoming = mergeOptions?.latencySummary;
+    const incomingOnset = (incoming as any)?.onset_delta_days;
+    const existingOnset = (preservedLatencySummary as any)?.onset_delta_days;
+
+    const wOld = existingDateCountBeforeMerge;
+    const wNew = dates.length;
+
+    const round1dp = (x: number): number => Math.round(x * 10) / 10;
+
+    // If we have neither, keep unset.
+    if (incomingOnset === undefined && existingOnset === undefined) return undefined;
+
+    // If incoming is missing, preserve existing latency summary (do not drop).
+    if (!(typeof incomingOnset === 'number' && Number.isFinite(incomingOnset))) {
+      return preservedLatencySummary;
+    }
+
+    // If existing is missing, adopt incoming (and preserve any other incoming latency fields).
+    if (!(typeof existingOnset === 'number' && Number.isFinite(existingOnset))) {
+      return {
+        ...(preservedLatencySummary || {}),
+        ...(incoming || {}),
+        onset_delta_days: round1dp(incomingOnset),
+      };
+    }
+
+    const denom = wOld + wNew;
+    const blended =
+      denom > 0
+        ? ((wOld * existingOnset) + (wNew * incomingOnset)) / denom
+        : incomingOnset;
+
+    return {
+      ...(preservedLatencySummary || {}),
+      ...(incoming || {}),
+      onset_delta_days: round1dp(blended),
+    };
+  })();
+
   const mergedValue: ParameterValue = {
     mean: mergedMean,
     n: mergedTotalN,
@@ -1879,8 +1937,9 @@ export function mergeTimeSeriesIntoParameter(
             : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})
         )
       : (preservedForecast !== undefined ? { forecast: preservedForecast } : {})),
-    // §0.3: Propagate latency summary for window mode (includes onset_delta_days)
-    ...(mergeOptions?.latencySummary && { latency: mergeOptions.latencySummary }),
+    // §0.3: Propagate latency summary for window mode (includes onset_delta_days),
+    // but preserve/blend existing onset under incremental merges.
+    ...(mergeLatencySummary && { latency: mergeLatencySummary }),
     data_source: {
       type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
       retrieved_at: new Date().toISOString(),

@@ -19,6 +19,16 @@ forecasting:
   # Credibility threshold (conversions) for trusting observed anchor-delay evidence (cohort completeness on downstream edges).
   ANCHOR_DELAY_BLEND_K_CONVERSIONS: 50
 
+  # Onset derivation: α mass threshold for window() lag histograms.
+  # Interpretation: onset is the earliest day by which α of conversion mass has occurred.
+  # Stored as `onset_delta_days` rounded to 1 d.p.
+  ONSET_MASS_FRACTION_ALPHA: 0.01
+
+  # Onset aggregation: β for weighted quantile across window() slice families in the topo pass.
+  # Weighted by number of dates in each window() series (dates.length).
+  # β=0.5 behaves like a robust median and avoids single-slice outliers.
+  ONSET_AGGREGATION_BETA: 0.5
+
 development:
   debugGitOperations: false
 

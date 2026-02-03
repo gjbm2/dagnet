@@ -36,7 +36,7 @@ This implementation plan is part of a documentation suite. Each document has a s
 |----------|-------|-------------------|
 | **`snapshot-db-design.md`** | Comprehensive design reference (schema, data flow, signatures, derivation algorithms) | For technical details, algorithms, rationale |
 | **`3-asat.md`** | Historical query (`asAt()`) design and implementation | Phase 4 implementation; DSL parsing, fork logic, UI |
-| **`onset.md`** | Onset delay (`onset_delta_days`) for shifted lognormal latency fitting | Latency improvement; schema extension, completeness integration |
+| **`1-onset.md`** | Onset delay (`onset_delta_days`) for shifted lognormal latency fitting | Latency improvement; schema extension, completeness integration |
 | **`time-series-charting.md`** | Advanced charting (fan charts, evidence/forecast, aggregation) | Phase 5+ (deferred); charting enhancements |
 | **`initial-thinking.md`** | Original problem statement and commercial requirements | Context and motivation |
 
@@ -918,10 +918,10 @@ The existing `REFERENCE-axy-funnel-response.json` contains `stepTransTimeDistrib
 | All §0.3 service items complete | `[x]` | 2-Feb-26 | |
 | All §0.3 LAG topo pass items complete | `[~]` | 2-Feb-26 | Shifted completeness deferred |
 | All §0.3.8 conditional_p parity complete | `[x]` | 2-Feb-26 | Major defect fix |
-| All §0.3 UI items complete | `[ ]` | | Out of scope per onset.md |
+| All §0.3 UI items complete | `[ ]` | | Out of scope per 1-onset.md |
 | All §0.3 test items complete | `[x]` | 2-Feb-26 | 35+ new tests; all extensions complete |
 | Existing LAG/latency tests still pass | `[x]` | 2-Feb-26 | 387+ tests verified |
-| **PHASE 0 COMPLETE** | `[x]` | 2-Feb-26 | 206 tests pass; UI deferred per onset.md |
+| **PHASE 0 COMPLETE** | `[x]` | 2-Feb-26 | 206 tests pass; UI deferred per 1-onset.md |
 
 ---
 

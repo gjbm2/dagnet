@@ -185,7 +185,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
   });
 
   describe('Mixed cohort and window slices', () => {
-    it('should use min of window slices when multiple cohort and window slices exist', () => {
+    it('should aggregate onset from window slices (ignoring cohort slices)', () => {
       const graph = createSimpleGraph();
       const paramLookup = new Map<string, ParameterValueForLAG[]>([
         ['start-to-a', [
@@ -201,7 +201,8 @@ describe('onset_delta_days Cohort Exclusion', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(3); // min of window slices (3, 5)
+      // Default β is 0.5 (weighted median). With equal weights, this selects the smaller value (3).
+      expect(edgeResult!.latency.onset_delta_days).toBe(3);
     });
   });
 
@@ -238,8 +239,8 @@ describe('onset_delta_days Cohort Exclusion', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      // Uncontexted window slice (onset=2) should take precedence
-      expect(edgeResult!.latency.onset_delta_days).toBe(2);
+      // No hard "uncontexted precedence": weighted median across all window slices.
+      expect(edgeResult!.latency.onset_delta_days).toBe(3);
     });
   });
 });

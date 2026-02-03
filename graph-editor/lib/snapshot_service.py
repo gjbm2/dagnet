@@ -120,7 +120,9 @@ def append_snapshots(
             for row in rows
         ]
         
-        execute_values(
+        # Use RETURNING with fetch=True to get accurate insert count
+        # (rowcount is unreliable with execute_values + ON CONFLICT DO NOTHING)
+        result_rows = execute_values(
             cur,
             """
             INSERT INTO snapshots (
@@ -132,11 +134,13 @@ def append_snapshots(
             ) VALUES %s
             ON CONFLICT (param_id, core_hash, slice_key, anchor_day, retrieved_at)
             DO NOTHING
+            RETURNING 1
             """,
-            values
+            values,
+            fetch=True
         )
         
-        inserted = cur.rowcount
+        inserted = len(result_rows) if result_rows else 0
         conn.commit()
         
         sql_time_ms = (time.time() - start_time) * 1000
@@ -309,7 +313,15 @@ def get_snapshot_inventory(
     try:
         cur = conn.cursor()
         
-        query = """
+        # Build WHERE clause
+        where_clause = "WHERE param_id = %s"
+        params: List[Any] = [param_id]
+        if core_hash is not None:
+            where_clause += " AND core_hash = %s"
+            params.append(core_hash)
+        
+        # Get basic stats
+        cur.execute(f"""
             SELECT 
                 MIN(anchor_day) as earliest,
                 MAX(anchor_day) as latest,
@@ -318,15 +330,8 @@ def get_snapshot_inventory(
                 COUNT(DISTINCT slice_key) as unique_slices,
                 COUNT(DISTINCT core_hash) as unique_hashes
             FROM snapshots
-            WHERE param_id = %s
-        """
-        params: List[Any] = [param_id]
-        
-        if core_hash is not None:
-            query += " AND core_hash = %s"
-            params.append(core_hash)
-        
-        cur.execute(query, params)
+            {where_clause}
+        """, params)
         row = cur.fetchone()
         
         if not row or row[0] is None:
@@ -339,7 +344,31 @@ def get_snapshot_inventory(
                 'unique_days': 0,
                 'unique_slices': 0,
                 'unique_hashes': 0,
+                'unique_retrievals': 0,
             }
+        
+        # Get unique retrievals using gap detection
+        cur.execute(f"""
+            WITH distinct_times AS (
+                SELECT retrieved_at
+                FROM snapshots
+                {where_clause}
+                GROUP BY retrieved_at
+            ),
+            marked AS (
+                SELECT
+                    CASE
+                        WHEN LAG(retrieved_at) OVER (ORDER BY retrieved_at) IS NULL THEN 1
+                        WHEN retrieved_at - LAG(retrieved_at) OVER (ORDER BY retrieved_at) > INTERVAL '5 minutes' THEN 1
+                        ELSE 0
+                    END AS is_new_group
+                FROM distinct_times
+            )
+            SELECT COALESCE(SUM(is_new_group), 0) AS unique_retrievals
+            FROM marked
+        """, params)
+        retrieval_row = cur.fetchone()
+        unique_retrievals = retrieval_row[0] if retrieval_row else 0
         
         return {
             'has_data': True,
@@ -350,6 +379,7 @@ def get_snapshot_inventory(
             'unique_days': row[3],
             'unique_slices': row[4],
             'unique_hashes': row[5],
+            'unique_retrievals': unique_retrievals,
         }
         
     finally:
@@ -375,6 +405,7 @@ def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
     try:
         cur = conn.cursor()
         
+        # Get basic stats
         cur.execute("""
             SELECT 
                 param_id,
@@ -389,6 +420,33 @@ def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
             GROUP BY param_id
         """, (param_ids,))
         
+        basic_stats = {row[0]: row for row in cur.fetchall()}
+        
+        # Get unique retrievals using gap detection (sessions separated by >5 min)
+        cur.execute("""
+            WITH distinct_times AS (
+                SELECT param_id, retrieved_at
+                FROM snapshots
+                WHERE param_id = ANY(%s)
+                GROUP BY param_id, retrieved_at
+            ),
+            marked AS (
+                SELECT
+                    param_id,
+                    CASE
+                        WHEN LAG(retrieved_at) OVER (PARTITION BY param_id ORDER BY retrieved_at) IS NULL THEN 1
+                        WHEN retrieved_at - LAG(retrieved_at) OVER (PARTITION BY param_id ORDER BY retrieved_at) > INTERVAL '5 minutes' THEN 1
+                        ELSE 0
+                    END AS is_new_group
+                FROM distinct_times
+            )
+            SELECT param_id, SUM(is_new_group) AS unique_retrievals
+            FROM marked
+            GROUP BY param_id
+        """, (param_ids,))
+        
+        retrieval_counts = {row[0]: row[1] for row in cur.fetchall()}
+        
         results = {}
         
         # Initialize all requested param_ids with empty inventory
@@ -402,11 +460,11 @@ def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
                 'unique_days': 0,
                 'unique_slices': 0,
                 'unique_hashes': 0,
+                'unique_retrievals': 0,
             }
         
         # Fill in actual data for params that have snapshots
-        for row in cur.fetchall():
-            pid = row[0]
+        for pid, row in basic_stats.items():
             results[pid] = {
                 'has_data': True,
                 'param_id': pid,
@@ -416,6 +474,7 @@ def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
                 'unique_days': row[4],
                 'unique_slices': row[5],
                 'unique_hashes': row[6],
+                'unique_retrievals': retrieval_counts.get(pid, 0),
             }
         
         return results

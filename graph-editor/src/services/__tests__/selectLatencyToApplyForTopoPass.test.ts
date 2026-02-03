@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { selectLatencyToApplyForTopoPass } from '../fetchDataService';
+import { UpdateManager } from '../UpdateManager';
 
 describe('selectLatencyToApplyForTopoPass', () => {
   it('preserves existing median/mean lag but always takes computed completeness in from-file mode', () => {
@@ -10,6 +11,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
+      onset_delta_days: 3,
     };
 
     const existing = {
@@ -17,6 +19,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       mean_lag_days: 6.8,
       t95: 13.12,
       completeness: 0.6032414791916322,
+      onset_delta_days: 9,
     };
 
     const selected = selectLatencyToApplyForTopoPass(computed, existing, true);
@@ -26,6 +29,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
     expect(selected.t95).toBe(computed.t95);
     expect(selected.path_t95).toBe(computed.path_t95);
     expect(selected.completeness).toBe(computed.completeness);
+    expect(selected.onset_delta_days).toBe(computed.onset_delta_days);
   });
 
   it('returns computed latency unchanged when not preserving from-file summary', () => {
@@ -35,6 +39,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
+      onset_delta_days: 0,
     };
 
     const selected = selectLatencyToApplyForTopoPass(computed, { completeness: 0.1 }, false);
@@ -48,10 +53,73 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
+      onset_delta_days: 2,
     };
 
     const selected = selectLatencyToApplyForTopoPass(computed, { completeness: 0.2 }, true);
     expect(selected).toEqual(computed);
+  });
+
+  it('from-file topo pass: selected onset persists onto graph via UpdateManager', () => {
+    // This reproduces the exact app flow:
+    // - Stage‑2 (from-file) chooses which latency fields to apply
+    // - UpdateManager.applyBatchLAGValues writes onto edge.p.latency (respecting overrides)
+    const graph: any = {
+      nodes: [{ id: 'A' }, { id: 'B' }],
+      edges: [
+        {
+          id: 'e1',
+          uuid: 'e1',
+          from: 'A',
+          to: 'B',
+          p: {
+            mean: 0.5,
+            latency: {
+              latency_parameter: true,
+              // Crucially, onset is not already on the graph.
+              onset_delta_days_overridden: false,
+            },
+          },
+        },
+      ],
+    };
+
+    const computed = {
+      median_lag_days: 2.5,
+      mean_lag_days: 2.7,
+      t95: 6.1,
+      completeness: 0.91,
+      path_t95: 8.43,
+      onset_delta_days: 3,
+    };
+
+    // Existing (file-derived) latency summary that we preserve in from-file mode.
+    const existing = {
+      median_lag_days: 6.4,
+      mean_lag_days: 6.8,
+      t95: 13.12,
+      completeness: 0.6032414791916322,
+      // Existing onset should NOT be preserved; topo pass computed onset must apply.
+      onset_delta_days: 9,
+    };
+
+    const selected = selectLatencyToApplyForTopoPass(computed, existing, true);
+
+    const um = new UpdateManager();
+    const next = um.applyBatchLAGValues(
+      graph,
+      [
+        {
+          edgeId: 'e1',
+          latency: selected,
+        },
+      ],
+      // from-file pipeline typically does not write horizons unless explicitly requested
+      { writeHorizonsToGraph: false }
+    );
+
+    const e1 = next.edges.find((e: any) => e.uuid === 'e1' || e.id === 'e1');
+    expect(e1?.p?.latency?.onset_delta_days).toBe(3);
   });
 });
 

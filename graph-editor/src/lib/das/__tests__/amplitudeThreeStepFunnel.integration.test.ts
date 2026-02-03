@@ -358,7 +358,7 @@ describe('Amplitude 3-Step Funnel Integration', () => {
       expect(raw.mean_lag_days).toBeCloseTo(expectedMeanDays, 1);
     });
 
-    it('should extract onset_delta_days from histogram data (§0.3)', async () => {
+    it('should expose lag_histogram bins for onset derivation (§0.3)', async () => {
       mockHttpExecutor.mockResponse = MOCK_TWO_STEP_RESPONSE;
       
       const result = await runner.execute('amplitude-prod', {
@@ -382,14 +382,14 @@ describe('Amplitude 3-Step Funnel Integration', () => {
       // Diagnostics
       console.log('[TEST] onset_delta_days extraction:', {
         lag_histogram: raw.lag_histogram,
-        onset_delta_days: raw.onset_delta_days,
         to_step_index: raw._debug_to_step_index
       });
       
-      // The mock histogram has first non-zero bin at 259200000ms (day 3)
-      // onset_delta_days = floor(259200000 / 86400000) = 3
-      expect(typeof raw.onset_delta_days).toBe('number');
-      expect(raw.onset_delta_days).toBe(3);
+      // Onset is derived in the app (not the adapter) using α-mass day.
+      // The adapter must still expose histogram bins so the app can compute onset deterministically.
+      expect(raw.lag_histogram).toBeTruthy();
+      expect(Array.isArray(raw.lag_histogram?.bins)).toBe(true);
+      expect(raw.lag_histogram.bins.length).toBeGreaterThan(0);
     });
 
     // NOTE: Per-day latency (median_lag_days/mean_lag_days in time_series)

@@ -32,6 +32,7 @@ import {
   type EdgeLAGValues,
 } from '../statisticalEnhancementService';
 import { aggregateCohortData, aggregateLatencyStats } from '../windowAggregationService';
+import { UpdateManager } from '../UpdateManager';
 
 // ============================================================================
 // Test Helpers
@@ -1593,7 +1594,8 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       n: number,
       k: number,
       forecast: number,
-      onsetDeltaDays: number
+      onsetDeltaDays: number,
+      datesWeight: number = 1
     ): ParameterValueForLAG {
       return {
         sliceDSL: `window(${dateRange})`,
@@ -1601,6 +1603,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
         k,
         mean: k / n,
         forecast,
+        dates: Array.from({ length: Math.max(0, datesWeight) }, () => '1-Nov-25'),
         latency: {
           onset_delta_days: onsetDeltaDays,
         },
@@ -1632,7 +1635,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       const paramLookup = new Map();
       paramLookup.set('e1', [
         createCohortSlice(dates, [200, 200, 200, 200, 200], [100, 100, 100, 100, 100], [5, 5, 5, 5, 5]),
-        createWindowSliceWithOnset('1-Nov-25:19-Nov-25', 1100, 550, 0.50, 3), // onset = 3 days
+        createWindowSliceWithOnset('1-Nov-25:19-Nov-25', 1100, 550, 0.50, 3, 19), // onset = 3 days (19d weight)
       ]);
       
       const queryDate = new Date('2025-11-24');
@@ -1659,7 +1662,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       expect(e1Result!.latency.onset_delta_days).toBe(3);
     });
     
-    it('aggregates onset_delta_days as min() across multiple contexted window slices', () => {
+    it('aggregates onset_delta_days via weighted β-quantile across window slices (weighted by dates.length)', () => {
       const graph: GraphForPath = {
         nodes: [
           { id: 'A', type: 'start' },
@@ -1687,7 +1690,8 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
         n: number,
         k: number,
         forecast: number,
-        onsetDeltaDays: number
+        onsetDeltaDays: number,
+        datesWeight: number
       ): ParameterValueForLAG {
         return {
           sliceDSL: `window(${dateRange}).context(${context})`,
@@ -1695,18 +1699,19 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
           k,
           mean: k / n,
           forecast,
+          dates: Array.from({ length: Math.max(0, datesWeight) }, () => '1-Nov-25'),
           latency: { onset_delta_days: onsetDeltaDays },
           data_source: { retrieved_at: '2025-12-10T00:00:00Z', type: 'test' },
         } as ParameterValueForLAG;
       }
       
-      // Two CONTEXTED window slices with different onset values - should take min
-      // Per design: min() is used when all slices are contexted
+      // Two contexted window slices with different onsets.
+      // Default β is 0.5 (weighted median). Weight uses number of dates in each window series.
       const paramLookup = new Map();
       paramLookup.set('e1', [
         createCohortSlice(dates, [200, 200, 200, 200, 200], [100, 100, 100, 100, 100], [5, 5, 5, 5, 5]),
-        createContextedWindowSliceWithOnset('1-Nov-25:10-Nov-25', 'channel:google', 500, 250, 0.50, 5),   // onset = 5
-        createContextedWindowSliceWithOnset('11-Nov-25:19-Nov-25', 'channel:paid', 600, 300, 0.50, 2),    // onset = 2 (min!)
+        createContextedWindowSliceWithOnset('1-Nov-25:10-Nov-25', 'channel:google', 500, 250, 0.50, 5, 100), // onset = 5 (dominant weight)
+        createContextedWindowSliceWithOnset('11-Nov-25:19-Nov-25', 'channel:paid', 600, 300, 0.50, 2, 1),     // onset = 2 (tiny weight)
       ]);
       
       const queryDate = new Date('2025-11-24');
@@ -1726,11 +1731,29 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       const e1Result = result.edgeValues.find(v => v.edgeUuid === 'e1');
       expect(e1Result).toBeDefined();
       
-      // §0.3: Should take min(5, 2) = 2 across contexted slices
-      expect(e1Result!.latency.onset_delta_days).toBe(2);
+      // §0.3: Weighted median should select the dominant slice onset (5), not the min (2).
+      expect(e1Result!.latency.onset_delta_days).toBe(5);
+
+      // And ensure that this min() result is what is written onto the graph edge
+      // (this is what the frontend UI reads: edge.p.latency.onset_delta_days).
+      const um = new UpdateManager();
+      const nextGraph = um.applyBatchLAGValues(
+        graph as any,
+        result.edgeValues.map((ev) => ({
+          edgeId: ev.edgeUuid,
+          conditionalIndex: ev.conditionalIndex,
+          latency: ev.latency as any,
+          blendedMean: ev.blendedMean,
+          forecast: ev.forecast,
+          evidence: ev.evidence,
+        })),
+        { writeHorizonsToGraph: true }
+      );
+      const e1 = (nextGraph as any).edges.find((e: any) => e.uuid === 'e1' || e.id === 'e1');
+      expect(e1?.p?.latency?.onset_delta_days).toBe(5);
     });
     
-    it('prefers uncontexted onset_delta_days over contexted slices', () => {
+    it('does not blindly prefer uncontexted slices; weighting by window date-count controls aggregation', () => {
       const graph: GraphForPath = {
         nodes: [
           { id: 'A', type: 'start' },
@@ -1757,7 +1780,8 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
         n: number,
         k: number,
         forecast: number,
-        onsetDeltaDays: number
+        onsetDeltaDays: number,
+        datesWeight: number
       ): ParameterValueForLAG {
         return {
           sliceDSL: `window(${dateRange}).context(${context})`,
@@ -1765,6 +1789,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
           k,
           mean: k / n,
           forecast,
+          dates: Array.from({ length: Math.max(0, datesWeight) }, () => '1-Nov-25'),
           latency: { onset_delta_days: onsetDeltaDays },
           data_source: { retrieved_at: '2025-12-10T00:00:00Z', type: 'test' },
         } as ParameterValueForLAG;
@@ -1774,8 +1799,8 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       const paramLookup = new Map();
       paramLookup.set('e1', [
         createCohortSlice(dates, [200, 200, 200, 200, 200], [100, 100, 100, 100, 100], [5, 5, 5, 5, 5]),
-        createWindowSliceWithOnset('1-Nov-25:19-Nov-25', 1100, 550, 0.50, 4),  // UNCONTEXTED: onset = 4
-        createContextedWindowSliceWithOnset('1-Nov-25:10-Nov-25', 'channel:google', 500, 250, 0.50, 1),  // contexted: onset = 1 (smaller but ignored)
+        createWindowSliceWithOnset('1-Nov-25:19-Nov-25', 1100, 550, 0.50, 4, 100), // onset = 4 (dominant weight)
+        createContextedWindowSliceWithOnset('1-Nov-25:10-Nov-25', 'channel:google', 500, 250, 0.50, 1, 1), // onset = 1 (tiny weight)
       ]);
       
       const queryDate = new Date('2025-11-24');
@@ -1795,7 +1820,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       const e1Result = result.edgeValues.find(v => v.edgeUuid === 'e1');
       expect(e1Result).toBeDefined();
       
-      // §0.3: Should use uncontexted value (4), not min across contexted (1)
+      // §0.3: Weighted median should select the dominant-weight slice onset (4).
       expect(e1Result!.latency.onset_delta_days).toBe(4);
     });
   });

@@ -203,3 +203,4 @@ class TestReadIntegrity:
         assert inventory['row_count'] == 9
         assert inventory['unique_days'] == 5  # Oct 1-5
         assert inventory['unique_slices'] == 3  # '', google, facebook
+        assert inventory['unique_retrievals'] == 1  # All inserted with same retrieved_at

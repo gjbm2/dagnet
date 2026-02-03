@@ -114,6 +114,9 @@ export function ParameterSection({
   const [localPathT95, setLocalPathT95] = useState<string>(
     formatOptionalNumber(param?.latency?.path_t95, LATENCY_HORIZON_DECIMAL_PLACES)
   );
+  const [localOnsetDeltaDays, setLocalOnsetDeltaDays] = useState<string>(
+    formatOptionalNumber(param?.latency?.onset_delta_days, 0)
+  );
   // Note: isSettingsModalOpen state moved into ConnectionControl component
   
   // Sync local state when param changes externally
@@ -128,6 +131,10 @@ export function ParameterSection({
   useEffect(() => {
     setLocalPathT95(formatOptionalNumber(param?.latency?.path_t95, LATENCY_HORIZON_DECIMAL_PLACES));
   }, [param?.latency?.path_t95]);
+
+  useEffect(() => {
+    setLocalOnsetDeltaDays(formatOptionalNumber(param?.latency?.onset_delta_days, 0));
+  }, [param?.latency?.onset_delta_days]);
 
   const handleRefreshCohortAnchor = async () => {
     if (objectType !== 'edge') return;
@@ -553,6 +560,54 @@ export function ParameterSection({
                     style={{ width: '70px' }}
                     placeholder="(computed)"
                     title="Cumulative path latency from anchor to this edge (computed from topo pass or set manually)"
+                  />
+                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
+                </div>
+              </AutomatableField>
+
+              {/* Onset delay (days) */}
+              <AutomatableField
+                label=""
+                value={param?.latency?.onset_delta_days ?? ''}
+                overridden={param?.latency?.onset_delta_days_overridden || false}
+                onClearOverride={() => {
+                  onUpdate({
+                    latency: {
+                      ...param?.latency,
+                      onset_delta_days_overridden: false,
+                    },
+                  });
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Onset</label>
+                  <input
+                    type="number"
+                    value={localOnsetDeltaDays}
+                    onChange={(e) => setLocalOnsetDeltaDays(e.target.value)}
+                    onBlur={() => {
+                      const value = parseFloat(localOnsetDeltaDays);
+                      const onsetRaw = isNaN(value) || value < 0 ? undefined : value;
+                      const onset_delta_days =
+                        onsetRaw === undefined
+                          ? undefined
+                          : roundToDecimalPlaces(onsetRaw, 0);
+                      setLocalOnsetDeltaDays(onset_delta_days === undefined ? '' : String(onset_delta_days));
+                      onUpdate({
+                        latency: {
+                          ...param?.latency,
+                          onset_delta_days,
+                          onset_delta_days_overridden: true,
+                        },
+                      });
+                    }}
+                    min={0}
+                    step={1}
+                    disabled={disabled}
+                    className="parameter-input"
+                    style={{ width: '70px' }}
+                    placeholder="(computed)"
+                    title="Onset delay before conversions begin, derived from the first non-zero histogram bin (window slices only) or set manually"
                   />
                   <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
                 </div>
