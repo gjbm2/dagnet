@@ -56,9 +56,32 @@ vi.mock('../sessionLogService', () => ({
     startOperation: vi.fn(() => 'mock-op'),
     endOperation: vi.fn(),
     addChild: vi.fn(),
+    getDiagnosticLoggingEnabled: vi.fn(() => false),
     info: vi.fn(),
     error: vi.fn()
   }
+}));
+
+// Mock DAS runner so tests can target dual-query merge behaviour deterministically.
+// IMPORTANT: This must be declared BEFORE importing dataOperationsService.
+const dasExecuteMock = vi.fn(async () => ({
+  success: true,
+  updates: [],
+  raw: { n: 0, k: 0, p_mean: 0, time_series: [] },
+}));
+
+vi.mock('../../lib/das', () => ({
+  createDASRunner: () => ({
+    connectionProvider: {
+      getConnection: vi.fn(async () => ({
+        provider: 'amplitude',
+        requires_event_ids: true,
+        capabilities: { supports_daily_time_series: true, supports_native_exclude: true },
+      })),
+    },
+    execute: (...args: any[]) => dasExecuteMock(...args),
+    getExecutionHistory: vi.fn(() => []),
+  }),
 }));
 
 // Import after mocks are set up
@@ -370,25 +393,18 @@ describe('No-Graph Scenarios', () => {
       
       vi.spyOn(fileRegistry, 'updateFile').mockResolvedValue(undefined);
       
-      // Mock the DAS runner to capture the query payload
-      let capturedQueryPayload: any = null;
-      vi.mock('../../lib/das', async () => {
-        return {
-          createDASRunner: () => ({
-            connectionProvider: {
-              getConnection: async () => ({
-                provider: 'amplitude',
-                requires_event_ids: false, // Skip event ID requirement for this test
-                capabilities: {}
-              })
-            },
-            execute: async (query: any, context: any) => {
-              capturedQueryPayload = query;
-              return { n: 100, k: 50, p: 0.5 };
-            }
-          })
-        };
-      });
+      // Use the global DAS runner mock (declared at top of file).
+      // This must NOT use vi.mock() inside the test because module mocks are hoisted.
+      dasExecuteMock.mockImplementation(async () => ({
+        success: true,
+        updates: [],
+        raw: {
+          n: 100,
+          k: 50,
+          p_mean: 0.5,
+          time_series: [{ date: '2025-10-01', n: 100, k: 50, p: 0.5 }],
+        },
+      }));
       
       // Call with graph = null
       try {
@@ -495,6 +511,153 @@ describe('No-Graph Scenarios', () => {
       // Verify n_query was read from file (check logs)
       const { sessionLogService } = await import('../sessionLogService');
       expect(sessionLogService.addChild).toHaveBeenCalled();
+    });
+
+    it('dual query merge preserves anchor lag fields (explicit n_query)', async () => {
+      // This is the regression for the path_t95 ballooning bug:
+      // dual query merging used to rebuild {date,n,k,p} and DROP anchor_*_lag_days.
+      const paramFile = {
+        id: 'with-nquery-param',
+        connection: 'amplitude-prod',
+        query: 'from(a).to(b).visited(x)',
+        n_query: 'from(x).to(a)',
+        values: [],
+      };
+
+      vi.spyOn(fileRegistry, 'getFile').mockImplementation((fileId: string) => {
+        if (fileId === 'parameter-with-nquery-param') {
+          return { data: paramFile, isDirty: false };
+        }
+        // Event files (minimal for resolver)
+        if (fileId.startsWith('event-')) {
+          const eventId = fileId.replace('event-', '');
+          return { data: { id: eventId, provider_event_names: { amplitude: `Mapped ${eventId}` } } };
+        }
+        return null;
+      });
+
+      let updatedParamData: any | null = null;
+      vi.spyOn(fileRegistry, 'updateFile').mockImplementation(async (...args: any[]) => {
+        // Signature is (id, data, isDirty?) - capture the data object.
+        updatedParamData = args[1];
+        return undefined as any;
+      });
+
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Base (n_query) then conditioned (k query).
+      let call = 0;
+      dasExecuteMock.mockImplementation(async () => {
+        call += 1;
+        if (call === 1) {
+          return {
+            success: true,
+            updates: [],
+            raw: {
+              // For explicit n_query the service uses k as baseN.
+              n: 999,
+              k: 100,
+              p_mean: 0.1001001001,
+              time_series: [
+                { date: '2025-10-01T00:00:00Z', n: 999, k: 100, p: 0.1001001001 },
+              ],
+            },
+          };
+        }
+        return {
+          success: true,
+          updates: [],
+          raw: {
+            n: 200,
+            k: 20,
+            p_mean: 0.1,
+            time_series: [
+              {
+                date: '2025-10-01T00:00:00Z',
+                n: 200,
+                k: 20,
+                p: 0.1,
+                median_lag_days: 5,
+                mean_lag_days: 6,
+                anchor_median_lag_days: 10,
+                anchor_mean_lag_days: 11,
+              },
+            ],
+          },
+        };
+      });
+
+      const graph: any = {
+        schema_version: '1.0.0',
+        id: 'g1',
+        name: 'Test',
+        description: '',
+        nodes: [
+          { id: 'household-created', uuid: 'n-anchor', label: 'A', event_id: 'household-created', layout: { x: 0, y: 0 } },
+          { id: 'a', uuid: 'n-a', label: 'X', event_id: 'a', layout: { x: 0, y: 0 } },
+          { id: 'b', uuid: 'n-b', label: 'Y', event_id: 'b', layout: { x: 0, y: 0 } },
+          { id: 'x', uuid: 'n-x', label: 'NQ', event_id: 'x', layout: { x: 0, y: 0 } },
+        ],
+        edges: [
+          {
+            id: 'e1',
+            uuid: 'e1',
+            from: 'n-a',
+            to: 'n-b',
+            p: {
+              id: 'with-nquery-param',
+              connection: 'amplitude-prod',
+              latency: { latency_parameter: true, anchor_node_id: 'household-created', t95: 15 },
+            },
+            query: 'from(a).to(b).visited(x)',
+            n_query: 'from(x).to(a)',
+          },
+        ],
+      };
+
+      await dataOperationsService.getFromSourceDirect({
+        objectType: 'parameter',
+        objectId: 'with-nquery-param',
+        targetId: 'e1',
+        graph,
+        setGraph: undefined,
+        writeToFile: true,
+        bustCache: true,
+        // Cohort mode ensures mergeTimeSeriesIntoParameter stores anchor_* arrays.
+        currentDSL: 'cohort(household-created,1-Oct-25:1-Oct-25)',
+        overrideFetchWindows: [{ start: '2025-10-01T00:00:00Z', end: '2025-10-01T00:00:00Z' }],
+      });
+
+      if (!updatedParamData) {
+        const errSample = consoleErrorSpy.mock.calls.slice(0, 3).map(c => c.map(String).join(' ')).join('\n');
+        const warnSample = consoleWarnSpy.mock.calls.slice(0, 3).map(c => c.map(String).join(' ')).join('\n');
+        throw new Error(
+          `Expected parameter file to be updated, but fileRegistry.updateFile was not called.\n` +
+          `console.error sample:\n${errSample || '(none)'}\n` +
+          `console.warn sample:\n${warnSample || '(none)'}\n`
+        );
+      }
+
+      expect(updatedParamData).toBeTruthy();
+      expect(Array.isArray(updatedParamData.values)).toBe(true);
+      expect(updatedParamData.values.length).toBeGreaterThan(0);
+
+      const latest = updatedParamData.values[updatedParamData.values.length - 1];
+      // Stored arrays should include anchor lags (not dropped by dual-query merge).
+      expect(Array.isArray(latest.anchor_median_lag_days)).toBe(true);
+      expect(Array.isArray(latest.anchor_mean_lag_days)).toBe(true);
+      expect(latest.anchor_median_lag_days[0]).toBe(10);
+      expect(latest.anchor_mean_lag_days[0]).toBe(11);
+      expect(Array.isArray(latest.median_lag_days)).toBe(true);
+      expect(latest.median_lag_days[0]).toBe(5);
+
+      // And denominator should come from base series (k=100 from the n_query),
+      // while k remains from conditioned series (20).
+      expect(Array.isArray(latest.n_daily)).toBe(true);
+      expect(Array.isArray(latest.k_daily)).toBe(true);
+      expect(latest.n_daily[0]).toBe(100);
+      expect(latest.k_daily[0]).toBe(20);
     });
     
     it('should build n_query payload without graph using event files', async () => {
