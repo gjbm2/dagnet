@@ -14,6 +14,7 @@ import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { DevConsoleMirrorControls } from './DevConsoleMirrorControls';
 import { ShareLinkModal } from '../modals/ShareLinkModal';
 import { APP_VERSION } from '../../version';
+import { useHealthStatus } from '../../hooks/useHealthStatus';
 import './MenuBar.css';
 
 /**
@@ -25,6 +26,7 @@ export function MenuBarComponent() {
   const { operations } = useTabContext();
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const { mode: healthMode, tooltip: healthTooltip } = useHealthStatus({ pollIntervalMs: 5 * 60_000 });
 
   const handleBrandClick = async () => {
     toggleDashboardMode({ updateUrl: true });
@@ -54,9 +56,9 @@ export function MenuBarComponent() {
           </button>
         )}
         <div
-          className="dagnet-brand"
+          className={`dagnet-brand dagnet-brand--health-${healthMode}`}
           onClick={handleBrandClick}
-          title={`Dagnet v${APP_VERSION}`}
+          title={`Dagnet v${APP_VERSION}\n\n${healthTooltip}`}
         >
           <img src="/dagnet-icon.png" alt="" className="dagnet-logo" />
           <span>Dagnet</span>

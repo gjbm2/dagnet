@@ -27,6 +27,39 @@ sys.path.insert(0, lib_path)
 
 
 class handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        """Route GET requests based on path (health checks, etc.)."""
+        try:
+            path = self.path.split('?')[0]
+
+            # Check for original path header (Vercel may or may not set this)
+            original_path = self.headers.get('x-vercel-original-path') or self.headers.get('x-original-path')
+            if original_path:
+                path = original_path.split('?')[0]
+
+            # Support rewrites to /api/python-api with endpoint query param
+            if path == '/api/python-api':
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(self.path)
+                query_params = parse_qs(parsed.query)
+                endpoint = query_params.get('endpoint', [None])[0]
+                if endpoint == 'snapshots-health':
+                    path = '/api/snapshots/health'
+                else:
+                    # For now, GET is only used for lightweight health checks.
+                    self.send_error_response(400, "Missing/unsupported endpoint for GET. Supported: snapshots-health")
+                    return
+
+            if path == '/api/snapshots/health':
+                # Match the contract described in docs and used by the frontend.
+                # Note: handler logic lives in lib/api_handlers.py
+                self.handle_snapshots_health({})
+                return
+
+            self.send_error_response(404, f"Unknown endpoint: {path}")
+        except Exception as e:
+            self.send_error_response(500, str(e))
+
     def do_POST(self):
         """Route POST requests based on path."""
         try:
