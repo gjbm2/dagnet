@@ -6,6 +6,7 @@ to add it to the production Vercel API.
 """
 
 import re
+import json
 from pathlib import Path
 
 # Get paths relative to this test file (tests/ is at graph-editor/tests/)
@@ -14,6 +15,23 @@ GRAPH_EDITOR_DIR = TESTS_DIR.parent
 LIB_DIR = GRAPH_EDITOR_DIR / 'lib'
 DEV_SERVER_PATH = GRAPH_EDITOR_DIR / 'dev-server.py'
 PYTHON_API_PATH = GRAPH_EDITOR_DIR / 'api' / 'python-api.py'
+VERCEL_CONFIG_PATH = GRAPH_EDITOR_DIR / 'vercel.json'
+
+
+def extract_vercel_rewrite_sources(content: str) -> set:
+    """
+    Extract rewrite sources from graph-editor/vercel.json.
+
+    Important: this MUST be valid JSON (no comments). If it isn't, this test fails.
+    """
+    cfg = json.loads(content)
+    rewrites = cfg.get('rewrites') or []
+    sources = set()
+    for r in rewrites:
+        src = r.get('source')
+        if isinstance(src, str):
+            sources.add(src.rstrip('/'))
+    return sources
 
 
 def extract_dev_server_routes(content: str) -> set:
@@ -104,6 +122,49 @@ def test_route_parity():
     # Success - print what we validated
     print(f"✓ Route parity verified: {len(dev_api_routes)} routes match")
     print(f"  Routes: {sorted(dev_api_routes)}")
+
+
+def test_vercel_rewrites_cover_prod_routes():
+    """
+    Verify that every prod API route (as modelled by python-api.py) is reachable
+    via a rewrite rule in graph-editor/vercel.json.
+
+    This catches the recurring failure mode:
+    - route exists in dev-server.py and python-api.py
+    - but Vercel does not rewrite /api/... -> /api/python-api, so prod 404s
+    """
+    vercel_content = VERCEL_CONFIG_PATH.read_text()
+    rewrite_sources = extract_vercel_rewrite_sources(vercel_content)
+
+    python_api_content = PYTHON_API_PATH.read_text()
+    prod_routes = extract_python_api_routes(python_api_content)
+
+    # Only consider public /api/* routes (exclude the unified internal handler).
+    prod_api_routes = {r for r in prod_routes if r.startswith('/api/')}
+    prod_api_routes.discard('/api/python-api')
+
+    # Vercel rewrites define which public sources are routed to the unified handler.
+    missing = sorted(prod_api_routes - rewrite_sources)
+    if missing:
+        raise AssertionError(
+            "Missing Vercel rewrites for prod API routes:\n"
+            + "\n".join(f"- {r}" for r in missing)
+            + "\n\nTo fix: add rewrite entries in graph-editor/vercel.json."
+        )
+
+
+def test_snapshot_health_supports_get_in_prod_handler():
+    """
+    The frontend calls GET /api/snapshots/health. Ensure python-api.py supports it.
+    This is a method-level parity check that route name parity alone cannot catch.
+    """
+    python_api_content = PYTHON_API_PATH.read_text()
+
+    # Light-weight check: do_GET exists, and it has an explicit handler for the health path.
+    if 'def do_GET' not in python_api_content:
+        raise AssertionError("python-api.py is missing do_GET; GET /api/snapshots/health will 404 in prod")
+    if "/api/snapshots/health" not in python_api_content:
+        raise AssertionError("python-api.py does not reference /api/snapshots/health; GET health is likely not routed")
 
 
 def test_api_handlers_imported():

@@ -35,6 +35,27 @@
   transition: all 0.15s ease;
 }
 
+.dagnet-brand--health-ok {
+  /* Healthy: subtle green glow */
+  box-shadow:
+    0 0 0 1px rgba(16, 185, 129, 0.25),
+    0 0 10px rgba(16, 185, 129, 0.35);
+  border-color: rgba(16, 185, 129, 0.55);
+}
+
+.dagnet-brand--health-error {
+  /* Online but unhealthy: red glow */
+  box-shadow:
+    0 0 0 1px rgba(239, 68, 68, 0.25),
+    0 0 10px rgba(239, 68, 68, 0.35);
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.dagnet-brand--health-offline {
+  /* Offline: no glow + slightly muted */
+  opacity: 0.7;
+}
+
 .dagnet-dev-console-controls {
   display: flex;
   align-items: center;
@@ -314,6 +335,24 @@
     color: #e0e0e0;
     background: linear-gradient(135deg, #3d3d3d 0%, #333 100%);
     border-color: #555;
+  }
+
+  .dagnet-brand--health-ok {
+    box-shadow:
+      0 0 0 1px rgba(16, 185, 129, 0.25),
+      0 0 10px rgba(16, 185, 129, 0.35);
+    border-color: rgba(16, 185, 129, 0.55);
+  }
+
+  .dagnet-brand--health-error {
+    box-shadow:
+      0 0 0 1px rgba(239, 68, 68, 0.25),
+      0 0 10px rgba(239, 68, 68, 0.35);
+    border-color: rgba(239, 68, 68, 0.55);
+  }
+
+  .dagnet-brand--health-offline {
+    opacity: 0.75;
   }
 
   .dagnet-brand:hover {

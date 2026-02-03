@@ -19,6 +19,30 @@
     {
       "source": "/api/runner/available-analyses",
       "destination": "/api/python-api"
+    },
+    {
+      "source": "/api/compile-exclude",
+      "destination": "/api/python-api"
+    },
+    {
+      "source": "/api/snapshots/append",
+      "destination": "/api/python-api?endpoint=snapshots-append"
+    },
+    {
+      "source": "/api/snapshots/health",
+      "destination": "/api/python-api?endpoint=snapshots-health"
+    },
+    {
+      "source": "/api/snapshots/inventory",
+      "destination": "/api/python-api?endpoint=snapshots-inventory"
+    },
+    {
+      "source": "/api/snapshots/delete",
+      "destination": "/api/python-api?endpoint=snapshots-delete"
+    },
+    {
+      "source": "/api/snapshots/query-full",
+      "destination": "/api/python-api?endpoint=snapshots-query-full"
     }
   ]
 }
