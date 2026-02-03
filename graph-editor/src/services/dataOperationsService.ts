@@ -6601,42 +6601,68 @@ class DataOperationsService {
             // Build combined time series
             // For conditional probability: n comes from conditioned query (users at 'from' who visited upstream)
             // unless there's an explicit n_query, in which case n comes from that
-            const combinedTimeSeries: Array<{ date: string; n: number; k: number; p: number }> = [];
+            //
+            // CRITICAL (3-Feb-26): Preserve latency + anchor lag fields from the conditioned query.
+            // Dual-query exists only to source the denominator (n) correctly; it must not discard
+            // `median_lag_days` / `mean_lag_days` / `anchor_*_lag_days` which are required for LAG.
+            const combinedTimeSeries: Array<
+              { date: string; n: number; k: number; p: number } & Record<string, any>
+            > = [];
             
             if (explicitNQuery && baseTimeSeries) {
-              // With explicit n_query: use base (n_query) for n, conditioned for k
-              const dateMap = new Map<string, { n: number; k: number }>();
-              
-              for (const day of baseTimeSeries) {
-                dateMap.set(day.date, { n: day.n, k: 0 });
-              }
-              
+              // With explicit n_query: use base (n_query) for n, conditioned for k.
+              // Start from conditioned rows (carry latency), then overwrite n by date from base series.
+              const baseNByDate = new Map<string, number>(
+                baseTimeSeries
+                  .filter((d: any) => d && typeof d.date === 'string')
+                  .map((d: any) => [d.date, Number(d.n ?? 0)])
+              );
+
+              const combinedByDate = new Map<
+                string,
+                { date: string; n: number; k: number; p: number } & Record<string, any>
+              >();
+
               for (const day of condTimeSeries) {
-                const existing = dateMap.get(day.date);
-                if (existing) {
-                  existing.k = day.k;
-                } else {
-                  dateMap.set(day.date, { n: 0, k: day.k });
-                }
-              }
-              
-              for (const [date, { n, k }] of dateMap) {
-                combinedTimeSeries.push({
-                  date,
-                  n,  // From n_query
-                  k,  // From conditioned query
-                  p: n > 0 ? k / n : 0
+                if (!day || typeof day.date !== 'string') continue;
+                const k = Number(day.k ?? 0);
+                const nFromBase = baseNByDate.get(day.date);
+                const n = Number.isFinite(nFromBase as number) ? Number(nFromBase) : Number(day.n ?? 0);
+                combinedByDate.set(day.date, {
+                  ...day,
+                  date: day.date,
+                  n,
+                  k,
+                  p: n > 0 ? k / n : 0,
                 });
               }
+
+              // Ensure we include base-only dates as well (k=0, no latency fields).
+              for (const [date, nVal] of baseNByDate.entries()) {
+                if (combinedByDate.has(date)) continue;
+                const n = Number(nVal ?? 0);
+                combinedByDate.set(date, {
+                  date,
+                  n,
+                  k: 0,
+                  p: 0,
+                });
+              }
+
+              combinedTimeSeries.push(...combinedByDate.values());
             } else {
               // Without explicit n_query: use conditioned query for BOTH n and k
               // This is the correct conditional probability P(to | from, visited)
+              // Preserve any latency + anchor lag fields present on the conditioned rows.
               for (const day of condTimeSeries) {
+                if (!day || typeof day.date !== 'string') continue;
+                const n = Number(day.n ?? 0);
+                const k = Number(day.k ?? 0);
                 combinedTimeSeries.push({
-                  date: day.date,
-                  n: day.n,  // Users at 'from' who visited upstream
-                  k: day.k,  // Users who converted after visiting upstream
-                  p: day.n > 0 ? day.k / day.n : 0
+                  ...day,
+                  n, // Users at 'from' who visited upstream
+                  k, // Users who converted after visiting upstream
+                  p: n > 0 ? k / n : 0,
                 });
               }
             }
