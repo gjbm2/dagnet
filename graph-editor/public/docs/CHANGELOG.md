@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.4.0b
+**Released:** 3-Feb-26
+
+DBS added; data snapshots, and improveemnet to onset / lognormal distro fitting.
+
+---
+
 ## Version 1.4.0
 **Released:** 2-Feb-26
 
