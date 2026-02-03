@@ -471,7 +471,7 @@ export function calculateProbabilities(
   
   console.log('  ↳ Top 5 node probabilities with costs:');
   for (const [nodeId, prob] of topNodes) {
-    const node = graph.nodes.find(n => n.id === nodeId);
+    const node = graph.nodes.find(n => n.uuid === nodeId || n.id === nodeId);
     const cost = nodeCosts.get(nodeId);
     if (cost && cost.monetary > 0) {
       console.log(`    • ${node?.label || node?.id || nodeId}: ${(prob * 100).toFixed(1)}% (£${cost.monetary.toFixed(2)} per arrival)`);

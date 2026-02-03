@@ -695,6 +695,28 @@ class WorkspaceService {
       (fileRegistry as any).files.set(actualFileId, cleanFileState);
       console.log(`✅ WorkspaceService: Loaded ${actualFileId} into FileRegistry (type: ${file.type}, path: ${file.source?.path})`);
     }
+
+    // CRITICAL: Notify index file subscribers after bulk load.
+    //
+    // EnhancedSelector / ParameterSelector subscribe to `${type}-index` to know when to refresh their cached
+    // registry item lists. Bulk-loading via direct Map.set bypasses FileRegistry notifications, causing
+    // selectors to frequently show "Not in registry" for valid IDs until a later unrelated index mutation.
+    //
+    // We keep this narrowly scoped to index files to minimise re-render churn during load.
+    try {
+      const notify = (fileRegistry as any).notifyListeners?.bind(fileRegistry);
+      if (typeof notify === 'function') {
+        const indexIds = ['parameter-index', 'context-index', 'case-index', 'node-index', 'event-index'];
+        for (const indexId of indexIds) {
+          const f = (fileRegistry as any).files.get(indexId);
+          if (f) {
+            notify(indexId, f);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[WorkspaceService] Failed to notify index subscribers after bulk load:', e);
+    }
     
     console.log(`✅ WorkspaceService: FileRegistry now has ${(fileRegistry as any).files.size} files loaded`);
     

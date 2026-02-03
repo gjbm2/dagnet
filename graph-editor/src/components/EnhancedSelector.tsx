@@ -155,10 +155,16 @@ export function EnhancedSelector({
   // Subscribe to index file changes - triggers reload when index file is loaded/updated
   useEffect(() => {
     const indexFileId = `${type}-index`;
-    const unsubscribe = fileRegistry.subscribe(indexFileId, () => {
-      // Index file changed - increment version to trigger items reload
-      setIndexVersion(v => v + 1);
-    });
+    const bumpIndexVersion = () => setIndexVersion(v => v + 1);
+    const unsubscribe = fileRegistry.subscribe(indexFileId, bumpIndexVersion);
+
+    // IMPORTANT: selectors are often mounted *after* workspace load has already populated FileRegistry.
+    // In that case, we won't receive a notification for the already-present index file, and the selector
+    // can remain stuck with an empty registryItems cache (showing "Not in registry" for valid IDs).
+    // Force a one-time bump when the index file is already available.
+    if (fileRegistry.getFile(indexFileId)) {
+      bumpIndexVersion();
+    }
     
     return unsubscribe;
   }, [type]);

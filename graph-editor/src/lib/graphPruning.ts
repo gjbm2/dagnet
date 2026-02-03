@@ -38,7 +38,9 @@ function getNodesImpliedByCaseOverrides(
     // Find all edges from this case node with the selected variant
     graph.edges.forEach((edge: any) => {
       if (edge.case_id && edge.from) {
-        const caseNode = graph.nodes.find((n: any) => n.id === edge.from && n.case?.id === edge.case_id);
+        const caseNode = graph.nodes.find(
+          (n: any) => (n.uuid === edge.from || n.id === edge.from) && n.case?.id === edge.case_id
+        );
         if (caseNode?.id === caseNodeId && edge.case_variant === selectedVariant) {
           impliedNodes.add(edge.to);
         }
