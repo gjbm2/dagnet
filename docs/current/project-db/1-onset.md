@@ -1,28 +1,40 @@
-# Onset Delay: Surfacing and Usage (`onset_delta_days`)
+# Onset Delay: Design Decisions (`onset_delta_days`)
 
 Date: 2-Feb-26  
 Last updated: 3-Feb-26
 
-## Implementation status (as of 3-Feb-26)
+**Document type:** Design decisions and semantic definitions
 
-**Implemented (tracking/storage is now working):**
-- **Onset derivation (window slices)**: onset is derived in the app from the returned `lag_histogram` using **\(\alpha\)-mass day** and stored as `onset_delta_days` rounded to **1 d.p.**
-- **Incremental merge stability (file persistence)**: incremental `window()` updates **blend** new onset into the existing onset using weights based only on **`dates.length`** (no overwrite).
-- **Edge-level aggregation (topo pass)**: edge onset is aggregated using a **weighted \(\beta\)-quantile**, weighted by **`dates.length`** (replaces `min()`).
-- **Settings knobs**: `forecasting.ONSET_MASS_FRACTION_ALPHA` and `forecasting.ONSET_AGGREGATION_BETA` are read from `settings/settings.yaml` with safe fallbacks.
-- **Test coverage**: targeted TS test suites for merge + topo aggregation + fixture write-path were updated and are passing.
+**Related documents:**
+- `2-onset-implementation-plan.md` — Precise code paths, file changes, and implementation order
+- `0-implementation-plan.md` §0.3 — Extraction, aggregation, and storage
 
-**Not yet implemented (stats machinery integration):**
-- **Shifted completeness / fitting**: the statistical model still needs to *use* `onset_delta_days` in the core latency/completeness machinery (shifted lognormal integration and any downstream fitting logic).
+---
 
-**Scope:** This document covers UI surfacing and statistical usage of `onset_delta_days`. Extraction, aggregation, and storage are part of the core implementation plan (`implementation-plan.md` §0.3).
+## Document Structure
 
-**Key constraints (see implementation-plan.md for details):**
+This design document covers:
+
+1. **Problem Statement** — Why onset matters
+2. **Solution** — Mathematical foundation (shifted lognormal)
+3. **UI Surfacing** — How onset appears to users
+4. **Semantic Definitions** — Authoritative field meanings (§4)
+5. **Implementation Strategy** — High-level approach (§5)
+6. **Resolved Decisions** — Formerly open questions
+
+For precise code paths, file changes, and test requirements, see `2-onset-implementation-plan.md`.
+
+---
+
+## Key Design Constraints
+
+These constraints govern all implementation work:
+
 - Onset is only derived from **window() slices** (cohort() histogram data is unreliable)
-- Onset derivation uses a **mass threshold** (defaults to **1%** of histogram mass), not “first non-zero bin”
-- Onset is stored and maintained as a **single scalar per window() slice family** (no histogram retention)
-- Incremental fetches **must not overwrite** onset; they **blend** new onset into existing onset using a simple weight: **number of dates in the window() series**
-- Edge-level onset is aggregated in the LAG topo pass using a **weighted \(\beta\)-quantile** across window() slice families, weighted by **number of dates**, not `min()`
+- Onset derivation uses a **mass threshold** (defaults to **1%** of histogram mass), not "first non-zero bin"
+- Onset is stored as a **single scalar per window() slice family** (no histogram retention)
+- Incremental fetches **blend** new onset into existing onset (weighted by `dates.length`), never overwrite
+- Edge-level onset is aggregated using a **weighted β-quantile**, not `min()`
 - No `anchor_onset_delta_days` — window slices have no anchor component
 
 ---
@@ -36,6 +48,8 @@ In practice, many edges exhibit a **dead-time** where conversions are effectivel
 1. **Overstated early completeness**: Lognormal CDF is non-zero at \(t=0\)
 2. **Premature evidence weighting**: Blending gives too much weight to structurally right-censored evidence
 3. **Downstream propagation**: Small completeness errors compound on deep paths
+
+---
 
 ## 2. Solution: Shifted Lognormal Model
 
@@ -58,63 +72,48 @@ F(t) = LogNormalCDF(t - δ; μ, σ)   if t > δ
 
 Completeness remains exactly 0 during the dead-time, then follows the shifted CDF.
 
-### 2.3 Deriving and Maintaining `onset_delta_days` (Practical Incremental Policy)
+### 2.3 Deriving and Maintaining `onset_delta_days`
 
-DagNet fetches `window()` slices incrementally (often only a few days per run). This means the *latest* histogram can be a small, recent cross-section and can produce a noisy onset estimate (especially near day 0).
+DagNet fetches `window()` slices incrementally (often only a few days per run). To keep onset stable:
 
-To keep onset stable and meaningful under incremental updates, we separate:
+#### 2.3.1 Per-fetch onset estimation (α-mass threshold, 1 d.p.)
 
-- **Per-fetch onset estimation** (from the latest `window()` histogram), and
-- **On-file onset maintenance** (how we merge that estimate into the existing mature `window()` slice series).
+For each `window()` slice returned by Amplitude:
+- **α** = onset mass fraction threshold (default: **0.01** = 1%)
+- Onset is the earliest time where cumulative histogram mass reaches α of total mass
+- Convert to **days**, round to **1 decimal place**
 
-#### 2.3.1 Per-fetch onset estimation (mass threshold, 1 d.p.)
+This replaces "first non-zero bin", which is too sensitive to early noise.
 
-For each `window()` slice returned by Amplitude, we compute:
+#### 2.3.2 Incremental merge (weighted average by window date-count)
 
-- **\(\alpha\)** = onset mass fraction threshold, read from `settings/settings.yaml` (see below). Default: **0.01** (1%).
-- Onset is the earliest time where cumulative histogram mass reaches \(\alpha\) of total mass.
-- Convert to **days**, and round to **1 decimal place**.
-
-This intentionally replaces “first non-zero bin”, which is too sensitive to tiny early noise.
-
-#### 2.3.2 On-file onset maintenance during incremental merges (simple weighted average by window date-count)
-
-When merging an incremental `window()` update into an existing `window()` slice family in the parameter file, we do **not** overwrite onset.
-
-Instead, we blend the new onset estimate into the existing stored onset using weights based only on the **number of dates in the window series**:
-
-- **Old weight** \(w_{old}\) = `existing.dates.length` for that slice family
-- **New weight** \(w_{new}\) = `incoming.dates.length` being merged for that slice family
-
-Then:
+When merging an incremental `window()` update into an existing slice family:
 
 \[
 onset_{updated}=\frac{w_{old}\,onset_{old}+w_{new}\,onset_{new}}{w_{old}+w_{new}}
 \]
 
-Round to **1 decimal place**.
+Where weights are `dates.length` for each slice family. Round to **1 d.p.**
 
-This is the intended “incremental stabiliser”: small daily updates cannot reset a mature onset estimate to 0.
+Small daily updates cannot reset a mature onset estimate.
 
-#### 2.3.3 Edge-level aggregation across slices (weighted \(\beta\)-quantile by window date-count)
+#### 2.3.3 Edge-level aggregation (weighted β-quantile)
 
-Edges may have multiple `window()` slice families (e.g. `context(channel=...)`). To surface a single edge-level onset used in modelling:
+Edges may have multiple `window()` slice families. To aggregate:
+- **β** = quantile selector (default: **0.5**)
+- Use a **weighted β-quantile** across slice families, weighted by `dates.length`
 
-- **\(\beta\)** controls which onset is selected from the weighted distribution of slice-family onsets. It is read from `settings/settings.yaml`. Default: **0.5**.
-- We aggregate slice-family onset values using a **weighted \(\beta\)-quantile**, weighted by each slice family’s **`dates.length`**.
-- This intentionally replaces the previous `min()` behaviour, which was too aggressive and tended to collapse to 0.
+This replaces `min()`, which was too aggressive.
 
-#### 2.3.4 Manual override behaviour
+#### 2.3.4 Manual override
 
-If `onset_delta_days_overridden` is true (user-set):
+If `onset_delta_days_overridden` is true:
+- Estimation may compute for diagnostics, but must not overwrite stored value
+- Standard DagNet permission pattern applies
 
-- Per-fetch onset estimation may still be computed for diagnostics, but it must not overwrite file or graph onset.
-- Merge and topo aggregation must respect the override flag (standard DagNet permission pattern).
+#### 2.3.5 Settings knobs
 
-#### 2.3.5 Forecasting settings knobs
-
-These are shared, repo-committed settings in `settings/settings.yaml`:
-
+In `settings/settings.yaml`:
 - `forecasting.ONSET_MASS_FRACTION_ALPHA` (default `0.01`)
 - `forecasting.ONSET_AGGREGATION_BETA` (default `0.5`)
 
@@ -133,13 +132,9 @@ Display `onset_delta_days` alongside existing latency summary fields:
 | t95 | 18.5 days | ☑ |
 | **Onset Delay** | **2.0 days** | ☐ |
 
-The `_overridden` companion field follows the standard pattern:
-- Unchecked: Value derived from Amplitude data, may refresh on pull
-- Checked: Manually set by user, persists through data refreshes
-
 ### 3.2 Conditional Props (Per-Slice View)
 
-When viewing per-context-slice latency summaries (window slices only — cohort slices don't have reliable onset):
+Window slices show onset; cohort slices do not (unreliable histogram data):
 
 | Slice | Median | Mean | t95 | Onset |
 |-------|--------|------|-----|-------|
@@ -157,212 +152,193 @@ Standard blur-to-save override pattern:
 
 ---
 
-## 4. Completeness Integration
+## 4. Semantic Definitions (Authoritative)
 
-### 4.1 statisticalEnhancementService.ts Changes
+This section resolves "what do these fields *mean*?" questions that affect correctness.
 
-The LAG topo pass (`enhanceGraphLatencies`) aggregates onset from window slices using the policy above (weighted \(\beta\)-quantile, weighted by `window().dates.length`). Use this aggregated value in completeness calculation:
+### 4.1 Inclusive Horizons: `t95` and `path_t95` Include Onset
 
-```typescript
-// edgeOnsetDeltaDays is already aggregated earlier in this topo pass
-// (weighted β-quantile across window slice families, weighted by dates.length)
-const delta = edgeOnsetDeltaDays ?? 0;
+**Decision:** `t95` and `path_t95` are defined as *total-time* horizons **inclusive of onset**.
 
-// Shifted age
-const shiftedAge = Math.max(0, effectiveAge - delta);
+- `t95`: the edge's 95th percentile time-to-conversion, in **days**, **including** onset dead-time
+- `path_t95`: the path horizon (A→Y), in **days**, **including** onset effects
 
-// Completeness is 0 during dead-time, then shifted CDF
-const completeness = shiftedAge > 0 
-  ? logNormalCDF(shiftedAge, mu, sigma)
-  : 0;
-```
+**Rationale:**
+- Users reason about "how long until 95% of conversions have happened?" — this should not require mental onset adjustment
+- Keeping horizons "user-space" (inclusive) avoids off-by-δ UI confusion
 
-### 4.2 Horizon Reconciliation with t95
+**Non-goal:** No explicit "path onset" scalar (e.g. `path_onset_delta_days`). Onset is **edge-local**. Path-level impact is expressed via `path_t95` and completeness, not a separate accumulator.
 
-When `onset_delta_days` is present, horizons apply to total time \(T\), not post-onset time \(X\):
+### 4.2 Onset is Edge-Local (Not Cumulative)
 
-1. Convert `t95` to X-percentile: `x95 = max(ε, t95 - delta)`
-2. Apply one-way sigma increase to ensure model-implied percentile meets `x95`
-3. Report total horizon as `t95` (including \(\delta\)) for graph-visible values
+Onset is derived from **window() histogram slices** and aggregated to an edge-level `onset_delta_days`. It is an **edge attribute** that shifts the edge's distribution.
 
-This preserves "one-way pull only" semantics (never shrink tails).
+Important clarification:
+- Physically, summing shifted random variables adds the deterministic shifts
+- **However**, we do not track "cumulative onset" as a separate field
+- Path maturity is expressed via the single inclusive `path_t95` horizon
 
-### 4.3 Blending Impact
+This keeps the model simple: "each edge can have a dead-time; horizons already include it."
 
-Shifted completeness feeds into the blend formula:
+### 4.3 Amplitude Lag Moments are Total-Time (Not Post-Onset)
 
+**Key point:** Amplitude's reported lag statistics (median/mean/t95) are statistics of **total time-to-conversion** \(T\), not post-onset time \(X\).
+
+Under a shifted model: \(T = \delta + X\)
+
+Therefore, if we want \((\mu,\sigma)\) for \(X\), we must convert:
+- `median_X_days = max(ε, median_T_days - δ)`
+- `mean_X_days   = max(ε, mean_T_days   - δ)`
+- `t95_X_days    = max(ε, t95_T_days    - δ)`
+
+Where ε > 0 is a small numerical guard.
+
+**Why this matters:** Without conversion, we would mix two parameterisations — shifted completeness using \(F_X(age-\delta)\) but fitted parameters corresponding to \(T\). This is mathematically inconsistent.
+
+### 4.4 Stored `median_lag_days` / `mean_lag_days` are Total-Time
+
+**Decision:** Stored `median_lag_days` and `mean_lag_days` remain **total-time** moments for \(T\) (inclusive of onset).
+
+- These values represent observed conversion-time among converters
+- They are **user-space** values ("typical time to convert")
+- They are *not* parameters of the post-onset component \(X\)
+
+**Operationally:**
+- Store median/mean as received from Amplitude (plus aggregation)
+- Statistical machinery converts to `median_X_days` / `mean_X_days` when needed
+
+**Why total-time semantics:** Keeps UI and debugging intuitive — all displayed values share the same "clock" (days since X-entry).
+
+### 4.5 Stored `t95` / `path_t95` are Inclusive
+
+**Edge `t95` policy:**
+1. Fit the post-onset component \(X\) using converted moments
+2. Compute implied \(t95_X\) from that fit
+3. Store/display: \(t95_T = \delta + t95_X\) (inclusive)
+
+**Tail-constraint policy:**
+- Authoritative `t95` is interpreted as \(t95_T\) (inclusive)
+- Sigma-min logic operates on: \(t95_X = \max(\epsilon, t95_T - \delta)\)
+
+**`path_t95` policy:**
+- Stored as inclusive horizon (same user-space clock)
+- Reflects onset effects because component horizons are themselves inclusive
+
+### 4.6 Numerical Guard Rails
+
+Subtracting onset can create unstable ratios. Guard rails:
+- `median_X_days = max(ε, median_T_days - δ)`
+- `mean_X_days   = max(ε, mean_T_days - δ)`
+- `t95_X_days    = max(ε, t95_T_days - δ)`
+
+If post-onset moments become degenerate, fitting falls back to conservative defaults.
+
+### 4.7 User-Facing Interpretation
+
+Graph-visible fields read intuitively:
+- **Onset delay δ**: "conversions effectively begin after δ days"
+- **Typical lag** (median/mean): "conversions typically happen around this many days"
+- **t95 (inclusive)**: "by ~t95 days, conversions are typically complete (95% matured)"
+
+All displayed fields (`median_lag_days`, `mean_lag_days`, `t95`, `path_t95`) are **user-space total-time** values. Internal post-onset quantities are implementation details.
+
+### 4.8 Decision Record: Persist User-Space Only
+
+**Decision:** Persist **only user-space semantics** (total-time, inclusive-of-onset). **Always** convert to model-space before statistical calculations.
+
+**Persisted (authoritative):**
+- `onset_delta_days` = δ (edge-local dead-time)
+- `median_lag_days` = median(T) (user-space)
+- `mean_lag_days` = E[T] (user-space)
+- `t95` = t95(T) (user-space)
+- `path_t95` = user-space path horizon
+
+**Not persisted:**
+- Post-onset derived quantities (`median_X_days`, `mean_X_days`, `t95_X_days`)
+- Fitted parameters for \(X\) (μ, σ)
+
+**Rationale:**
+- One intuitive "clock" for all stored/displayed numbers
+- Avoids dual-truth drift (model-space quantity becoming inconsistent after onset changes)
+- Modelling approach evolvable without schema churn
+
+**Critical requirement:** Any lognormal fit or CDF evaluation for \(X\) MUST pass through a single, audited conversion helper (see §5.1).
+
+---
+
+## 5. Implementation Strategy
+
+This section describes the high-level approach. For precise code paths, see `2-onset-implementation-plan.md`.
+
+### 5.1 Single Conversion Codepath ("Stats Mode" Conversion)
+
+To prevent bugs where some call sites shift by onset and others don't, we mandate a single conversion helper.
+
+**Core helper:** `toModelSpace(onset, medianT, meanT?, t95T?, ageT?) → { medianX, meanX?, t95X?, ageX? }`
+
+**Location:** `lagDistributionUtils.ts` (the "pure maths" source of truth)
+
+**Design invariants (must be enforced by tests):**
+1. **Completeness dead-time:** If `ageT ≤ δ`, completeness contribution is exactly 0
+2. **Shift correctness:** For `ageT > δ`, shifted completeness equals unshifted completeness at `ageX = ageT - δ`
+3. **Inclusive horizons:** Persisted/displayed values remain in T-space; constraints operate in X-space
+4. **One-way safety:** If tail constraint increases σ, completeness must not increase
+
+**Failure mode prevented:** Having both shifted and unshifted paths co-exist (e.g. blend weights using shifted completeness but horizon logic using unshifted CDF).
+
+### 5.2 Completeness Shift
+
+**Required behaviour:**
+- If `age ≤ δ`: completeness = 0
+- If `age > δ`: completeness = \(F_X(age - \delta)\)
+
+The "one-way safety" rule for tail constraints must hold under shifting: if sigma is increased (tail constrained), completeness must not increase.
+
+### 5.3 Tail Constraint in X-Space
+
+Authoritative `t95` (stored) is in T-space. Conversion:
+- \(t95_X = \max(\epsilon, t95_T - \delta)\)
+
+Sigma-min constraint operates on `t95_X`, not `t95_T`.
+
+### 5.4 Fenton-Wilkinson with Onset
+
+FW approximates \(X_1 + X_2\). With onset:
+- \(T_{path} = (\delta_1 + X_1) + (\delta_2 + X_2) = (\delta_1 + \delta_2) + (X_1 + X_2)\)
+
+So FW still applies to the \(X\) components. Percentiles shift by summed onset:
+- \(t_p(T_{path}) = (\delta_1 + \delta_2) + t_p(X_1 + X_2)\)
+
+**V1 simplification:** We treat anchor onset as 0 (onset is only derived from window slices, not anchor legs). Only edge onset shifts the path horizon.
+
+### 5.5 Blending Impact
+
+Shifted completeness feeds into blend weights:
 ```
 c_w = completeness^η
 n_eff = c_w × p.n
 ```
 
-With accurate completeness:
+With shifted completeness:
 - During dead-time: `completeness ≈ 0`, so `n_eff ≈ 0`, blend relies on forecast
 - After dead-time: Completeness grows per shifted CDF, evidence gradually dominates
 
-This reduces "sag" in evidence-dominated downstream means caused by miscalibrated maturity.
-
 ---
 
-## 9. Detailed implementation analysis: integrating onset into lognormal fitting/completeness
+## 6. Resolved Decisions
 
-This section describes **all** remaining work required to *use* onset in the statistical machinery (shifted lognormal model). As of 3-Feb-26 we are correctly **deriving**, **persisting**, and **aggregating** `onset_delta_days`, but the core lognormal fit and completeness logic still treats lag as unshifted.
+**Path accumulation:** Onset is **edge-local** (does not accumulate as a separate field). Path maturity is expressed via `path_t95`.
 
-### 9.1 Definitions (single-edge)
+**Minimum sample size:** A **single data point suffices** for onset estimation (no minimum beyond "no mass → onset undefined").
 
-We model time-to-conversion as:
-
-- \(T = \delta + X\)
-- \(\delta = onset\_delta\_days \ge 0\)
-- \(X \sim \text{LogNormal}(\mu,\sigma)\) (post-onset lag)
-
-So:
-
-- \(F_T(t)=0\) for \(t \le \delta\)
-- \(F_T(t)=F_X(t-\delta)\) for \(t > \delta\)
-- Percentiles shift: \(t_p(T) = \delta + t_p(X)\)
-u
-### 9.2 Current code map (where lognormal machinery is used)
-
-Frontend (primary):
-
-- `graph-editor/src/services/statisticalEnhancementService.ts`
-  - Fits: `fitLagDistribution(...)`, `computeEdgeLatencyStats(...)`
-  - Completeness: `calculateCompleteness(...)`, `calculateCompletenessWithTailConstraint(...)`
-  - Tail constraints for completeness CDF: `getCompletenessCdfParams(...)` and the “one-way sigma increase” rule
-  - Path sums: `approximateLogNormalSumFit(...)` / `approximateLogNormalSumPercentileDays(...)` (Fenton–Wilkinson)
-
-Fetch/window bounding (secondary but important for behaviour):
-
-- `graph-editor/src/services/dataOperationsService.ts`
-  - Uses FW-based `path_t95` estimation for cohort bounding (`approximateLogNormalSumPercentileDays(...)`)
-
-### 9.3 Required change set (by responsibility)
-
-#### 9.3.1 Completeness must be shifted by onset (core requirement)
-
-**Problem today:** completeness uses `logNormalCDF(age, mu, sigma)` which assumes \(\delta=0\).
-
-**Required behaviour:** use \(F_T(age)\):
-
-- If \(age \le \delta\): completeness contribution is 0
-- Else: contribution is \(F_X(age-\delta)\)
-
-**Concrete changes (frontend):**
-
-- Extend completeness helpers to accept `onset_delta_days`:
-  - `calculateCompleteness(...)`: accept `onsetDeltaDays?: number`
-  - `calculateCompletenessWithTailConstraint(...)`: accept `onsetDeltaDays?: number`
-- Ensure both “moments” and “constrained sigma” CDF evaluations apply the same shift.
-- Ensure the tail-constraint safety rule still holds under shifting:
-  - If sigma is increased (tail constrained), completeness must not increase (one-way safety).
-
-#### 9.3.2 The t95 tail-constraint must be applied in the post-onset domain
-
-We store/communicate `t95` as a total-time horizon of \(T\). The fit is for \(X\). Therefore:
-
-- Convert authoritative `t95` to an implied post-onset percentile:
-  - \(t95_X = \max(\epsilon, t95_T - \delta)\)
-
-**Concrete changes (frontend):**
-
-- Any place that uses an “authoritative t95” to infer a minimum sigma (or apply a constraint) must operate on \(t95_X\), not \(t95_T\).
-- The displayed/stored `t95` remains the total-time value (including onset); the constraint logic must not silently reinterpret the stored field.
-
-#### 9.3.3 Fenton–Wilkinson (lognormal sum) must incorporate onset shifts explicitly
-
-FW approximates \(X_1 + X_2\) as another lognormal by moment matching. With onset shifts:
-
-- \(T_{path} = (\delta_1 + X_1) + (\delta_2 + X_2) = (\delta_1+\delta_2) + (X_1+X_2)\)
-
-So FW still applies, but percentiles must be shifted by the summed onset:
-
-- \(t_p(T_{path}) = (\delta_1+\delta_2) + t_p(X_1+X_2)\)
-
-**Concrete changes (frontend):**
-
-- When computing `path_t95` from FW:
-  - Keep FW moment matching for the \(X\) fits as-is.
-  - Add the appropriate onset shift afterward.
-
-**Important: anchor onset**
-
-We do not currently define/derive an “anchor onset” (\(\delta_{AX}\)) because onset is derived from window slices, and anchor legs come from cohort mode anchor_* arrays.
-
-To ship a first version safely:
-
-- Treat \(\delta_{AX}=0\) (no anchor onset) and only shift by edge onset \(\delta_{XY}\).
-
-This makes the change monotonic and preserves existing anchor semantics while still fixing the dominant “edge dead-time” effect.
-
-#### 9.3.4 Cohort path-anchored completeness must also shift correctly
-
-In cohort path-anchored mode we already adjust effective age by subtracting anchor lag (reachability). With onset:
-
-1. Compute reachability-adjusted age at the edge
-2. Then apply onset shift: \(age_{eff}=\max(0, age_{reach}-\delta)\)
-
-The key requirement is not to double-count pre-edge time as onset.
-
-#### 9.3.5 Blending (evidence vs forecast) must use the shifted completeness
-
-Once completeness is shifted, the blending weight will correctly stay near 0 during dead-time and rise after onset.
-
-Concrete requirement: ensure **every** blend-weight computation uses the shifted completeness value (no parallel “unshifted completeness” path).
-
-### 9.4 Test impact (what must be updated/added when implementing §9)
-
-When the above is implemented, tests must confirm:
-
-- Completeness is exactly 0 when \(age \le \delta\)
-- For \(age > \delta\), shifted completeness equals unshifted completeness evaluated at \(age-\delta\)
-- Tail-constraint “one-way safety” still holds under shifting
-- FW path percentiles increase by the expected onset shift (at least \(\delta_{XY}\) given \(\delta_{AX}=0\) in V1)
-
-## 5. Files to Modify (Surfacing & Usage Only)
-
-| File | Change |
-|------|--------|
-| `graph-editor/src/components/PropertiesPanel.tsx` | Display/edit in latency section |
-| `graph-editor/src/services/dataOperationsService.ts` | During incremental window() persistence, blend onset using window date-count weights (do not overwrite) |
-| `graph-editor/src/services/statisticalEnhancementService.ts` | Aggregate edge onset using weighted \(\beta\)-quantile (weighted by window date-count), and use onset in shifted completeness calculation |
-| `graph-editor/src/services/forecastingSettingsService.ts` | Read `ONSET_MASS_FRACTION_ALPHA` and `ONSET_AGGREGATION_BETA` from settings/settings.yaml with safe fallbacks |
-| `graph-editor/public/docs/lag-statistics-reference.md` | Document shifted formula |
-
-**Note:** UpdateManager sync and LAG topo pass aggregation are covered in `implementation-plan.md` §0.3.
-
----
-
-## 6. Test Coverage
-
-| Test | Description |
-|------|-------------|
-| `onset_delta_overridden.test.ts` | Manual override flow in UI |
-| `onset_estimation_alpha_mass.test.ts` | Per-fetch onset estimation uses \(\alpha\) mass threshold (1 d.p.) |
-| `onset_merge_weighted_by_window_dates.test.ts` | Incremental window merges blend onset using date-count weights (do not overwrite) |
-| `onset_aggregation_beta_quantile.test.ts` | Topo aggregation uses weighted \(\beta\)-quantile (weighted by date-count), not min() |
-| `shifted_completeness.test.ts` | Completeness = 0 during dead-time |
-| `shifted_completeness_blend.test.ts` | Evidence weight = 0 when completeness = 0 |
-| `horizon_reconciliation.test.ts` | t95 with onset shift |
+**Anchor latency:** `onset_delta_days` does **not** apply to anchor latency. Window slices (the onset source) have no anchor component. `anchor_latency` only exists for cohort() queries, which have unreliable histogram data.
 
 ---
 
 ## 7. Related Documents
 
-- `docs/current/project-db/implementation-plan.md` — Extraction and storage (§0.3)
+- `docs/current/project-db/2-onset-implementation-plan.md` — Precise code paths and test requirements
+- `docs/current/project-db/0-implementation-plan.md` — Core implementation plan (§0.3 covers onset storage)
 - `docs/current/project-db/snapshot-db-design.md` — Database column definition (§3.2, §3.3)
 - `docs/current/project-lag/histogram-fitting.md` — Original shifted lognormal analysis
 - `graph-editor/public/docs/lag-statistics-reference.md` — Canonical completeness/blending formulas
-
----
-
-## 8. Open Questions
-
-1. **Path accumulation**: Should onset delays accumulate along paths, or remain edge-local?
-2. **Minimum sample size**: Should V1 derivation require minimum converters before setting non-zero onset?
-
-**Resolved:**
-- **Path accumulation**: onset is **edge-local** (does not accumulate along paths).
-- **Minimum sample size**: a **single data point suffices** (no minimum sample size gate beyond “no mass → onset undefined”).
-- ~~**Anchor latency**: Should `onset_delta_days` apply to `anchor_latency` as well?~~
-  **Answer: No.** Window slices (the only source of reliable onset data) have no anchor component. `anchor_latency` only exists for cohort() queries, which have unreliable histogram data (~10 day limit).
