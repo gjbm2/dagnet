@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.4.1b
+**Released:** 3-Feb-26
+
+Routes fix. Added health indicator.
+
+---
+
 ## Version 1.4.0b
 **Released:** 3-Feb-26
 
