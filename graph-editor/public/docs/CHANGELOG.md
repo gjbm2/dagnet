@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.4.6b
+**Released:** 4-Feb-26
+
+Basic .asat() functionality working...UI additions to follow
+
+---
+
 ## Version 1.4.4b
 **Released:** 4-Feb-26
 
