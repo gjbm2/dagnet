@@ -6,6 +6,16 @@ Fix to widnow() completeness logic
 
 ---
 
+## Version 1.4.5b
+**Released:** 4-Feb-26
+
+Historical queries via `asat(...)` / `at(...)`
+
+- Added `asat(...)` / `at(...)` DSL support for point-in-time snapshot reads (read-only)
+- Added `POST /api/snapshots/query-virtual` for latest-per-day virtual snapshots as-of `as_at`
+
+---
+
 ## Version 1.4.1b
 **Released:** 3-Feb-26
 

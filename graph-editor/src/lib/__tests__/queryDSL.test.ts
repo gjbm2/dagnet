@@ -26,8 +26,8 @@ describe('Query DSL Constants', () => {
   // ============================================================
 
   describe('Schema Authority', () => {
-    it('should have exactly 12 functions', () => {
-      expect(QUERY_FUNCTIONS).toHaveLength(12);
+    it('should have exactly 14 functions', () => {
+      expect(QUERY_FUNCTIONS).toHaveLength(14);
     });
 
     it('should contain all required functions in correct order', () => {
@@ -43,7 +43,9 @@ describe('Query DSL Constants', () => {
         'window',
         'cohort',
         'minus',
-        'plus'
+        'plus',
+        'asat',
+        'at'  // Sugar for asat
       ]);
     });
 
@@ -53,7 +55,7 @@ describe('Query DSL Constants', () => {
       // This test just verifies the array exists and has the right type
       const arr: readonly string[] = QUERY_FUNCTIONS;
       expect(arr).toBeDefined();
-      expect(arr.length).toBe(12);
+      expect(arr.length).toBe(14);
     });
 
     it('should match schema definition exactly', () => {
@@ -66,7 +68,7 @@ describe('Query DSL Constants', () => {
       const schemaFunctions = schema.$defs?.QueryFunction?.properties?.name?.enum;
       
       expect(schemaFunctions).toBeDefined();
-      expect(schemaFunctions).toHaveLength(12); // Updated: added contextAny, window, cohort
+      expect(schemaFunctions).toHaveLength(14); // Updated: added asat, at for historical queries
       
       // Check that all schema functions are in QUERY_FUNCTIONS
       schemaFunctions.forEach((func: string) => {
@@ -124,7 +126,7 @@ describe('Query DSL Constants', () => {
       
       expect(functionSet.has('from')).toBe(true);
       expect(functionSet.has('invalid' as any)).toBe(false);
-      expect(functionSet.size).toBe(12);
+      expect(functionSet.size).toBe(14);
       
       const filtered = functionsCopy.filter(f => f.startsWith('c'));
       expect(filtered).toContain('context');
@@ -158,7 +160,7 @@ describe('Query DSL Constants', () => {
       // Verify the constant can be imported and used
       expect(QUERY_FUNCTIONS).toBeDefined();
       expect(Array.isArray(QUERY_FUNCTIONS)).toBe(true);
-      expect(QUERY_FUNCTIONS.length).toBe(12);
+      expect(QUERY_FUNCTIONS.length).toBe(14);
     });
   });
 
@@ -345,7 +347,8 @@ describe('DSL Parsing Functions', () => {
         visitedAny: [],
         contextAny: [],
         window: null,
-        cohort: null
+        cohort: null,
+        asat: null
       });
       expect(parseConstraints(undefined)).toEqual({
         visited: [],
@@ -355,8 +358,48 @@ describe('DSL Parsing Functions', () => {
         visitedAny: [],
         contextAny: [],
         window: null,
-        cohort: null
+        cohort: null,
+        asat: null
       });
+    });
+
+    // ============================================================
+    // asat() Historical Query Tests
+    // ============================================================
+    
+    it('should parse asat constraint with UK date', () => {
+      const result = parseConstraints('asat(5-Nov-25)');
+      expect(result.asat).toBe('5-Nov-25');
+    });
+
+    it('should parse at constraint (sugar for asat)', () => {
+      const result = parseConstraints('at(15-Dec-24)');
+      expect(result.asat).toBe('15-Dec-24');
+    });
+
+    it('should parse asat in complex constraint (order indifferent)', () => {
+      const result = parseConstraints('window(1-Nov-25:30-Nov-25).context(channel:google).asat(25-Nov-25)');
+      expect(result.asat).toBe('25-Nov-25');
+      expect(result.window).toEqual({ start: '1-Nov-25', end: '30-Nov-25' });
+      expect(result.context).toEqual([{ key: 'channel', value: 'google' }]);
+    });
+
+    it('should parse asat at start of constraint chain', () => {
+      const result = parseConstraints('asat(1-Jan-26).cohort(1-Dec-25:31-Dec-25)');
+      expect(result.asat).toBe('1-Jan-26');
+      expect(result.cohort).toEqual({ start: '1-Dec-25', end: '31-Dec-25' });
+    });
+
+    it('should parse asat with relative date', () => {
+      const result = parseConstraints('asat(-7d)');
+      expect(result.asat).toBe('-7d');
+    });
+
+    it('should parse asat with double-dash relative date (typo handling)', () => {
+      // Double-dash is a common typo that should be preserved in parsing
+      // (normalisation/resolution happens at a later stage)
+      const result = parseConstraints('asat(--1d)');
+      expect(result.asat).toBe('--1d');
     });
 
     it('should deduplicate visited nodes', () => {
@@ -541,6 +584,38 @@ describe('DSL Parsing Functions', () => {
       const input1 = 'visited(node-b, node-a)';
       const input2 = 'visited(node-a, node-b)';
       expect(normalizeConstraintString(input1)).toBe(normalizeConstraintString(input2));
+    });
+
+    // ============================================================
+    // asat() Normalization Tests
+    // ============================================================
+    
+    it('should normalize asat to canonical form', () => {
+      const result = normalizeConstraintString('asat(5-Nov-25)');
+      expect(result).toBe('asat(5-Nov-25)');
+    });
+
+    it('should normalize at() sugar to asat()', () => {
+      const result = normalizeConstraintString('at(15-Dec-24)');
+      expect(result).toBe('asat(15-Dec-24)');
+    });
+
+    it('should preserve asat position in canonical order', () => {
+      // asat should appear after window/cohort in canonical order
+      const result = normalizeConstraintString('asat(25-Nov-25).window(1-Nov-25:30-Nov-25).visited(node-a)');
+      expect(result).toBe('visited(node-a).window(1-Nov-25:30-Nov-25).asat(25-Nov-25)');
+    });
+
+    it('should normalize asat date format', () => {
+      // If the date is parseable as a different format, it should be normalised to d-MMM-yy
+      // For now, we just preserve the input if it's already UK format
+      const result = normalizeConstraintString('asat(5-Nov-25)');
+      expect(result).toBe('asat(5-Nov-25)');
+    });
+
+    it('should preserve relative date in asat', () => {
+      const result = normalizeConstraintString('asat(-7d)');
+      expect(result).toBe('asat(-7d)');
     });
   });
 

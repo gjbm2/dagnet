@@ -509,3 +509,163 @@ def delete_snapshots(param_id: str) -> Dict[str, Any]:
         return {'success': False, 'deleted': 0, 'error': str(e)}
     finally:
         conn.close()
+
+
+# =============================================================================
+# Phase 3: Virtual Snapshot (asat) — Latest-per-anchor_day as-of
+# =============================================================================
+
+def query_virtual_snapshot(
+    param_id: str,
+    as_at: datetime,
+    anchor_from: date,
+    anchor_to: date,
+    core_hash: str,
+    slice_keys: Optional[List[str]] = None,
+    limit: int = 10000
+) -> Dict[str, Any]:
+    """
+    Query a "virtual snapshot" from the database: the latest row per anchor_day
+    (and per slice_key) as-of a given timestamp.
+    
+    This implements the asat() DSL function for historical queries.
+    
+    Performance invariant: executes at most ONE SQL query per param_id (not per slice).
+    
+    Args:
+        param_id: Workspace-prefixed parameter ID (required)
+        as_at: Point-in-time for snapshot retrieval (required)
+        anchor_from: Start of anchor date range (required)
+        anchor_to: End of anchor date range (required)
+        core_hash: Query signature hash (REQUIRED for semantic integrity)
+        slice_keys: List of slice keys to include (optional, None = all)
+        limit: Maximum rows to return (default 10000)
+    
+    Returns:
+        Dict with:
+        - success: bool
+        - rows: List of virtual snapshot rows (one per anchor_day × slice_key)
+        - count: int (number of rows)
+        - latest_retrieved_at_used: str | None (max retrieved_at among selected rows)
+        - has_anchor_to: bool (whether anchor_to is covered in the result)
+        - error: str (if success=False)
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        
+        # Build WHERE clause for base filter.
+        where_clauses = [
+            "param_id = %s",
+            "retrieved_at <= %s",
+            "anchor_day >= %s",
+            "anchor_day <= %s"
+        ]
+        params: List[Any] = [param_id, as_at, anchor_from, anchor_to]
+
+        if slice_keys is not None:
+            where_clauses.append("slice_key = ANY(%s)")
+            params.append(slice_keys)
+
+        where_sql = " AND ".join(where_clauses)
+        where_match_sql = where_sql + " AND core_hash = %s"
+
+        # Single-query virtual snapshot + mismatch detection.
+        # ranked: latest row per (anchor_day, slice_key) as-of as_at.
+        # We then select only rows matching the requested core_hash, but we also compute:
+        # - has_any_rows: whether ANY virtual rows exist for this param/window (any core_hash)
+        # - has_matching_core_hash: whether ANY virtual rows exist for the requested core_hash
+        # This allows the caller to treat signature mismatch as a hard failure.
+        query = f"""
+            WITH ranked_match AS (
+                SELECT
+                    anchor_day,
+                    slice_key,
+                    core_hash,
+                    retrieved_at,
+                    A as a, X as x, Y as y,
+                    median_lag_days,
+                    mean_lag_days,
+                    anchor_median_lag_days,
+                    anchor_mean_lag_days,
+                    onset_delta_days,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY anchor_day, slice_key
+                        ORDER BY retrieved_at DESC
+                    ) AS rn
+                FROM snapshots
+                WHERE {where_match_sql}
+            )
+            SELECT
+                COALESCE(
+                    jsonb_agg((to_jsonb(rm) - 'rn') ORDER BY rm.anchor_day, rm.slice_key)
+                        FILTER (WHERE rm.rn = 1),
+                    '[]'::jsonb
+                ) AS rows,
+                (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_sql}) AS has_any_rows,
+                (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_match_sql}) AS has_matching_core_hash,
+                MAX(rm.retrieved_at) FILTER (WHERE rm.rn = 1) AS latest_retrieved_at_used,
+                COALESCE(BOOL_OR(rm.rn = 1 AND rm.anchor_day = %s), false) AS has_anchor_to
+            FROM ranked_match rm
+        """
+
+        # Params:
+        # - ranked_match WHERE: base params + core_hash
+        # - has_any_rows subquery: base params
+        # - has_matching_core_hash subquery: base params + core_hash
+        # - has_anchor_to comparison: anchor_to
+        params2 = (
+            params + [core_hash] +
+            params +
+            params + [core_hash] +
+            [anchor_to]
+        )
+
+        cur.execute(query, params2)
+        row = cur.fetchone()
+        if not row:
+            return {
+                'success': True,
+                'rows': [],
+                'count': 0,
+                'latest_retrieved_at_used': None,
+                'has_anchor_to': False,
+                'has_any_rows': False,
+                'has_matching_core_hash': False,
+            }
+
+        rows_json, has_any_rows, has_matching_core_hash, latest_retrieved_at_used, has_anchor_to = row
+        # psycopg2 may return jsonb as str unless JSON adapters are registered.
+        if isinstance(rows_json, (bytes, bytearray)):
+            rows_json = rows_json.decode('utf-8')
+        if isinstance(rows_json, str):
+            try:
+                rows_out = json.loads(rows_json)
+            except Exception:
+                rows_out = []
+        elif isinstance(rows_json, list):
+            rows_out = rows_json
+        else:
+            rows_out = rows_json or []
+
+        return {
+            'success': True,
+            'rows': rows_out,
+            'count': len(rows_out),
+            'latest_retrieved_at_used': latest_retrieved_at_used.isoformat() if hasattr(latest_retrieved_at_used, 'isoformat') else latest_retrieved_at_used,
+            'has_anchor_to': bool(has_anchor_to),
+            'has_any_rows': bool(has_any_rows),
+            'has_matching_core_hash': bool(has_matching_core_hash),
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'rows': [],
+            'count': 0,
+            'latest_retrieved_at_used': None,
+            'has_anchor_to': False,
+            'error': str(e)
+        }
+    finally:
+        conn.close()

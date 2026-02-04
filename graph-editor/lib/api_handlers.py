@@ -731,3 +731,73 @@ def handle_snapshots_delete(data: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing 'param_id' field")
     
     return delete_snapshots(param_id)
+
+
+def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle virtual snapshot query endpoint for asat() DSL.
+    
+    Returns the "virtual snapshot": latest row per anchor_day (and slice_key)
+    as-of a given timestamp. This supports historical queries without
+    returning raw snapshot rows.
+    
+    Performance invariant: executes at most ONE SQL query per param_id.
+    
+    Args:
+        data: Request body containing:
+            - param_id: Parameter ID (required)
+            - as_at: ISO datetime string for point-in-time (required)
+            - anchor_from: Start date ISO string (required)
+            - anchor_to: End date ISO string (required)
+            - core_hash: Query signature (REQUIRED)
+            - slice_keys: List of slice keys (optional)
+            - limit: Max rows (optional, default 10000)
+    
+    Returns:
+        Response dict with:
+        - success: bool
+        - rows: List of virtual snapshot rows
+        - count: int
+        - latest_retrieved_at_used: str | None
+        - has_anchor_to: bool
+        - error: str (if failed)
+    """
+    from datetime import date, datetime
+    from snapshot_service import query_virtual_snapshot
+    
+    param_id = data.get('param_id')
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+
+    # Semantic integrity requirement:
+    # virtual snapshot reads MUST be keyed by the underlying query signature (core_hash).
+    core_hash = data.get('core_hash')
+    if not core_hash:
+        raise ValueError("Missing 'core_hash' field (required for semantic integrity)")
+    
+    as_at_str = data.get('as_at')
+    if not as_at_str:
+        raise ValueError("Missing 'as_at' field")
+    
+    anchor_from_str = data.get('anchor_from')
+    if not anchor_from_str:
+        raise ValueError("Missing 'anchor_from' field")
+    
+    anchor_to_str = data.get('anchor_to')
+    if not anchor_to_str:
+        raise ValueError("Missing 'anchor_to' field")
+    
+    # Parse dates
+    as_at = datetime.fromisoformat(as_at_str.replace('Z', '+00:00'))
+    anchor_from = date.fromisoformat(anchor_from_str)
+    anchor_to = date.fromisoformat(anchor_to_str)
+    
+    return query_virtual_snapshot(
+        param_id=param_id,
+        as_at=as_at,
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        core_hash=core_hash,
+        slice_keys=data.get('slice_keys'),
+        limit=data.get('limit', 10000)
+    )

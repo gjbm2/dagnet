@@ -332,6 +332,117 @@ export async function querySnapshotsFull(params: QuerySnapshotsFullParams): Prom
   }
 }
 
+// -----------------------------------------------------------------------------
+// Phase 3: Virtual Snapshot (asat) — Latest-per-anchor_day as-of
+// -----------------------------------------------------------------------------
+
+export interface QuerySnapshotsVirtualParams {
+  /** Exact workspace-prefixed parameter ID */
+  param_id: string;
+  /** Point-in-time for snapshot retrieval (ISO datetime) */
+  as_at: string;
+  /** Start of anchor date range (ISO date) */
+  anchor_from: string;
+  /** End of anchor date range (ISO date) */
+  anchor_to: string;
+  /** Query signature hash (REQUIRED for semantic integrity) */
+  core_hash: string;
+  /** List of slice keys to include (optional, undefined = all) */
+  slice_keys?: string[];
+  /** Max rows to return (default backend: 10000) */
+  limit?: number;
+}
+
+export interface VirtualSnapshotRow {
+  anchor_day: string;
+  slice_key: string;
+  core_hash: string;
+  retrieved_at: string;
+  a?: number | null;
+  x?: number | null;
+  y?: number | null;
+  median_lag_days?: number | null;
+  mean_lag_days?: number | null;
+  anchor_median_lag_days?: number | null;
+  anchor_mean_lag_days?: number | null;
+  onset_delta_days?: number | null;
+}
+
+export interface QuerySnapshotsVirtualResult {
+  success: boolean;
+  rows: VirtualSnapshotRow[];
+  count: number;
+  /** Max retrieved_at among selected rows (ISO datetime or null if no rows) */
+  latest_retrieved_at_used: string | null;
+  /** Whether the result includes the requested anchor_to date */
+  has_anchor_to: boolean;
+  /** Whether ANY virtual rows exist for this param/window (any core_hash) */
+  has_any_rows?: boolean;
+  /** Whether ANY virtual rows exist for the requested core_hash */
+  has_matching_core_hash?: boolean;
+  error?: string;
+}
+
+/**
+ * Query a "virtual snapshot": latest row per anchor_day (and slice_key) as-of a timestamp.
+ *
+ * This is the client for `POST /api/snapshots/query-virtual`.
+ * It is used by the asat() DSL function for historical queries.
+ *
+ * Performance note: the backend executes at most one SQL query per param_id.
+ */
+export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams): Promise<QuerySnapshotsVirtualResult> {
+  if (!SNAPSHOTS_ENABLED) {
+    return {
+      success: true,
+      rows: [],
+      count: 0,
+      latest_retrieved_at_used: null,
+      has_anchor_to: false,
+      has_any_rows: false,
+      has_matching_core_hash: false,
+    };
+  }
+
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/query-virtual`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        param_id: params.param_id,
+        as_at: params.as_at,
+        anchor_from: params.anchor_from,
+        anchor_to: params.anchor_to,
+        core_hash: params.core_hash,
+        slice_keys: params.slice_keys,
+        limit: params.limit,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[SnapshotQueryVirtual] Failed:', response.status, errorText);
+      return { success: false, rows: [], count: 0, latest_retrieved_at_used: null, has_anchor_to: false, error: errorText };
+    }
+
+    const body = await response.json();
+    return {
+      success: !!body.success,
+      rows: Array.isArray(body.rows) ? body.rows : [],
+      count: typeof body.count === 'number' ? body.count : (Array.isArray(body.rows) ? body.rows.length : 0),
+      latest_retrieved_at_used: body.latest_retrieved_at_used ?? null,
+      has_anchor_to: !!body.has_anchor_to,
+      has_any_rows: typeof body.has_any_rows === 'boolean' ? body.has_any_rows : undefined,
+      has_matching_core_hash: typeof body.has_matching_core_hash === 'boolean' ? body.has_matching_core_hash : undefined,
+      error: body.error,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[SnapshotQueryVirtual] Error:', errorMessage);
+    return { success: false, rows: [], count: 0, latest_retrieved_at_used: null, has_anchor_to: false, error: errorMessage };
+  }
+}
+
 /**
  * Get snapshot inventory for multiple parameters in one request.
  * 

@@ -1,6 +1,6 @@
 # Historical Query Mode: `asat()` — Design and Implementation
 
-**Status**: Phase 1 plan (stepping stone)  
+**Status**: Phase 1 implemented (Phase 2 pending)  
 **Prerequisite**: Snapshot write path working; snapshot DB reachable from python-api  
 **Date**: 4-Feb-26
 
@@ -1285,17 +1285,17 @@ ScenariosContext.tsx → regenerateScenario()
 
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| `queryDSL.ts`: asat/at parsing + canonical normalisation | `[ ]` | | |
-| `QueryExpressionEditor.tsx`: chips/diagnostics recognise asat/at | `[ ]` | | |
-| `snapshotWriteService.ts`: `querySnapshotsVirtual(...)` client | `[ ]` | | |
-| Python: `POST /api/snapshots/query-virtual` implemented | `[ ]` | | latest-per-anchor_day-as-of + metadata |
-| `dataOperationsService.ts`: asat fork (DB virtual snapshot, read-only) | `[ ]` | | no writes (files/IDB/DB append) |
-| Warning A (no snapshot within 24h) wired to toast | `[ ]` | | uses `latest_retrieved_at_used` |
-| Warning B (missing anchor_to) wired to toast | `[ ]` | | based on `has_anchor_to` |
+| `queryDSL.ts`: asat/at parsing + canonical normalisation | `[x]` | 4-Feb-26 | `parseConstraints()` extracts `asat/at` order-indifferently; normalisation emits `asat(...)` only |
+| `QueryExpressionEditor.tsx`: chips/diagnostics recognise asat/at | `[x]` | 4-Feb-26 | Monaco suggestions + diagnostics accept `asat/at` (no “unknown function”) |
+| `snapshotWriteService.ts`: `querySnapshotsVirtual(...)` client | `[x]` | 4-Feb-26 | Client for `POST /api/snapshots/query-virtual` |
+| Python: `POST /api/snapshots/query-virtual` implemented | `[x]` | 4-Feb-26 | latest-per-(anchor_day,slice_key) as-of + metadata (`latest_retrieved_at_used`, `has_anchor_to`) |
+| `dataOperationsService.ts`: asat fork (DB virtual snapshot, read-only) | `[x]` | 4-Feb-26 | Fork in central fetch path + read-only invariants enforced |
+| Warning A (no snapshot within 24h) wired to toast | `[x]` | 4-Feb-26 | Uses end-of-day `as_at` semantics + `latest_retrieved_at_used` |
+| Warning B (missing anchor_to) wired to toast | `[x]` | 4-Feb-26 | Based on `has_anchor_to` |
 | Phase 2: `POST /api/snapshots/retrievals` implemented | `[ ]` | | distinct retrieval times for highlighting |
 | Phase 2: WindowSelector `@` calendar + truncate + remove | `[ ]` | | one-way truncation; removal does not restore |
-| Unit/integration tests updated and passing | `[ ]` | | see §13 + §18 |
-| User docs updated (`asat`, `at`, `@` UI) | `[ ]` | | see §20 |
+| Unit/integration tests updated and passing | `[x]` | 4-Feb-26 | TS: queryDSL + QueryExpressionEditor + pattern/sanitisation suites. Py: snapshot virtual integrity suite is present; may skip when snapshot DB is not configured in the environment. |
+| User docs updated (`asat`, `at`, `@` UI) | `[x]` | 4-Feb-26 | Added `asat/at` docs + `query-virtual` API docs (Phase 2 `@` UI still pending) |
 
 ---
 

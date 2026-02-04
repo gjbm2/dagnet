@@ -107,9 +107,11 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/snapshots/delete'
                 elif endpoint == 'snapshots-query-full':
                     path = '/api/snapshots/query-full'
+                elif endpoint == 'snapshots-query-virtual':
+                    path = '/api/snapshots/query-virtual'
                 # If no endpoint param and no original path header, this is an error
                 elif not original_path:
-                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health, snapshots-inventory, snapshots-delete, snapshots-query-full")
+                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health, snapshots-inventory, snapshots-delete, snapshots-query-full, snapshots-query-virtual")
                     return
             
             if path == '/api/parse-query':
@@ -134,6 +136,8 @@ class handler(BaseHTTPRequestHandler):
                 self.handle_snapshots_delete(data)
             elif path == '/api/snapshots/query-full':
                 self.handle_snapshots_query_full(data)
+            elif path == '/api/snapshots/query-virtual':
+                self.handle_snapshots_query_virtual(data)
             else:
                 self.send_error_response(404, f"Unknown endpoint: {path}")
                 
@@ -254,6 +258,17 @@ class handler(BaseHTTPRequestHandler):
         """Handle snapshots/query-full endpoint - query with filters."""
         try:
             from api_handlers import handle_snapshots_query_full as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+    
+    def handle_snapshots_query_virtual(self, data):
+        """Handle snapshots/query-virtual endpoint - virtual snapshot (asat)."""
+        try:
+            from api_handlers import handle_snapshots_query_virtual as handler_func
             response = handler_func(data)
             self.send_success_response(response)
         except ValueError as e:

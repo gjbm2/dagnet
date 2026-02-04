@@ -14,11 +14,22 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
 
 # Read configuration from environment
+#
+# NOTE (E2E + local dev):
+# - Vite dev commonly runs on 5173.
+# - Our Playwright E2E dev server runs on 4173 (`npm run dev:e2e`).
+# If `ALLOWED_ORIGINS` is not explicitly set, include both ports to avoid
+# spurious CORS failures when the frontend origin differs from VITE_PORT.
 FRONTEND_PORT = os.environ.get("VITE_PORT", "5173")
-ALLOWED_ORIGINS = os.environ.get(
-    "ALLOWED_ORIGINS",
-    f"http://localhost:{FRONTEND_PORT},http://127.0.0.1:{FRONTEND_PORT}"
-).split(",")
+allowed_origins_env = os.environ.get("ALLOWED_ORIGINS")
+if allowed_origins_env:
+    ALLOWED_ORIGINS = allowed_origins_env.split(",")
+else:
+    ports = {str(FRONTEND_PORT), "5173", "4173"}
+    ALLOWED_ORIGINS = []
+    for p in sorted(ports):
+        ALLOWED_ORIGINS.append(f"http://localhost:{p}")
+        ALLOWED_ORIGINS.append(f"http://127.0.0.1:{p}")
 
 app = FastAPI(
     title="DagNet Graph Compute (Local Dev)",
@@ -136,6 +147,23 @@ async def snapshots_query_full(request: Request):
         import traceback
         print(f"[snapshots/query-full] Error: {e}")
         print(f"[snapshots/query-full] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Virtual snapshot query endpoint (for asat() DSL)
+@app.post("/api/snapshots/query-virtual")
+async def snapshots_query_virtual(request: Request):
+    """Query virtual snapshot: latest-per-anchor_day as-of a timestamp."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_query_virtual
+        return handle_snapshots_query_virtual(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/query-virtual] Error: {e}")
+        print(f"[snapshots/query-virtual] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

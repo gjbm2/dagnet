@@ -16,6 +16,7 @@ from snapshot_service import (
     query_snapshots, 
     get_snapshot_inventory, 
     append_snapshots,
+    query_virtual_snapshot,
     get_db_connection
 )
 
@@ -204,3 +205,107 @@ class TestReadIntegrity:
         assert inventory['unique_days'] == 5  # Oct 1-5
         assert inventory['unique_slices'] == 3  # '', google, facebook
         assert inventory['unique_retrievals'] == 1  # All inserted with same retrieved_at
+
+    def test_ri005_signature_is_part_of_key(self):
+        """
+        RI-005: signature_keying
+
+        Same param_id, different core_hash => isolated rows.
+        """
+        other_hash = 'test-hash-OTHER-999'
+        append_snapshots(
+            param_id=self.param_id,
+            core_hash=other_hash,
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-01', 'X': 999, 'Y': 99},
+            ]
+        )
+
+        rows_a = query_snapshots(param_id=self.param_id, core_hash=self.core_hash)
+        assert all(r['core_hash'] == self.core_hash for r in rows_a)
+        assert all(r.get('x') != 999 for r in rows_a)
+
+        rows_b = query_snapshots(param_id=self.param_id, core_hash=other_hash)
+        assert len(rows_b) == 1
+        assert rows_b[0]['core_hash'] == other_hash
+        assert rows_b[0]['x'] == 999
+
+    def test_ri006_query_virtual_latest_per_day_keyed_by_signature(self):
+        """
+        RI-006: query_virtual_snapshot
+
+        - latest-per-(anchor_day,slice_key) as-of works
+        - keyed by (param_id, core_hash, slice_key, anchor_day) identity
+        """
+        pid = f'{TEST_PREFIX}param-virtual'
+        sig_a = 'sig-A'
+        sig_b = 'sig-B'
+
+        # Day 0 retrieval (older)
+        append_snapshots(
+            param_id=pid,
+            core_hash=sig_a,
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-01', 'X': 1, 'Y': 1},
+                {'anchor_day': '2025-10-02', 'X': 2, 'Y': 2},
+            ]
+        )
+        # Day 1 retrieval (newer) only overlaps one day
+        append_snapshots(
+            param_id=pid,
+            core_hash=sig_a,
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-02', 'X': 222, 'Y': 22},
+            ]
+        )
+        # Another signature under same param_id (should not be returned when querying sig_a)
+        append_snapshots(
+            param_id=pid,
+            core_hash=sig_b,
+            context_def_hashes=None,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-01', 'X': 999, 'Y': 99},
+            ]
+        )
+
+        res = query_virtual_snapshot(
+            param_id=pid,
+            as_at=datetime(2025, 10, 12, 0, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 2),
+            core_hash=sig_a,
+            slice_keys=[''],
+            limit=10000,
+        )
+        assert res['success'] is True
+        assert res['count'] == 2
+        # 10-01 comes from older retrieval (only row), 10-02 from newer retrieval
+        by_day = {r['anchor_day']: r for r in res['rows']}
+        assert by_day['2025-10-01']['x'] == 1
+        assert by_day['2025-10-02']['x'] == 222
+
+        # Wrong signature => empty rows, but has_any_rows should be true
+        res_wrong = query_virtual_snapshot(
+            param_id=pid,
+            as_at=datetime(2025, 10, 12, 0, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 2),
+            core_hash='sig-NOT-THERE',
+            slice_keys=[''],
+            limit=10000,
+        )
+        assert res_wrong['success'] is True
+        assert res_wrong['count'] == 0
+        assert res_wrong['has_any_rows'] is True
+        assert res_wrong['has_matching_core_hash'] is False

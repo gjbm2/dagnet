@@ -16,6 +16,19 @@ describe('Query DSL Validation', () => {
       expect(QUERY_PATTERN.test('from(a).to(b)')).toBe(true);
     });
 
+    test('historical queries: asat()/at() accepted anywhere in chain', () => {
+      expect(QUERY_PATTERN.test('from(a).to(b).asat(5-Nov-25)')).toBe(true);
+      expect(QUERY_PATTERN.test('from(a).asat(5-Nov-25).to(b)')).toBe(true);
+      expect(QUERY_PATTERN.test('asat(5-Nov-25).from(a).to(b)')).toBe(true);
+      expect(QUERY_PATTERN.test('from(a).to(b).at(15-Dec-24)')).toBe(true);
+    });
+
+    test('window/cohort/contextAny accepted by structural validator', () => {
+      expect(QUERY_PATTERN.test('from(a).to(b).window(1-Nov-25:30-Nov-25)')).toBe(true);
+      expect(QUERY_PATTERN.test('from(a).to(b).cohort(1-Nov-25:30-Nov-25)')).toBe(true);
+      expect(QUERY_PATTERN.test('from(a).to(b).contextAny(channel:google,channel:organic)')).toBe(true);
+    });
+
     test('query with hyphens in node IDs', () => {
       expect(QUERY_PATTERN.test('from(node-1).to(node-2)')).toBe(true);
       expect(QUERY_PATTERN.test('from(saw-WA-details-page).to(straight-to-dashboard)')).toBe(true);

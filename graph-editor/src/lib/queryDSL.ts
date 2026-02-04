@@ -22,8 +22,7 @@ import { formatDateUK } from './dateFormat';
 /**
  * Valid query DSL function names.
  * 
- * MUST match schema: query-dsl-1.1.0.json → $defs.QueryFunctionName.enum
- * (Schema 1.1.0 adds 'cohort' function for latency-tracked edges)
+ * MUST match schema: /public/schemas/query-dsl-1.0.0.json → $defs.QueryFunctionName.enum
  */
 export const QUERY_FUNCTIONS = [
   'from',
@@ -37,7 +36,9 @@ export const QUERY_FUNCTIONS = [
   'window',
   'cohort',
   'minus',
-  'plus'
+  'plus',
+  'asat',
+  'at'  // Sugar for asat (canonical form is asat)
 ] as const;
 
 export type QueryFunctionName = typeof QUERY_FUNCTIONS[number];
@@ -75,6 +76,7 @@ export interface ParsedConstraints {
   contextAny: Array<{ pairs: Array<{key: string; value: string}> }>;  // OR over values within/across keys
   window: { start?: string; end?: string } | null;  // Time window for data retrieval (X-anchored)
   cohort: { anchor?: string; start?: string; end?: string } | null;  // Cohort entry window (A-anchored for latency edges)
+  asat: string | null;  // Historical query: snapshot retrieval as-at date (UK format: d-MMM-yy)
 }
 
 export type ContextCombination = Record<string, string>; // NEW: e.g. {channel: 'google', 'browser-type': 'chrome'}
@@ -93,7 +95,16 @@ export interface ParsedFullQuery extends ParsedConstraints {
  * Basic query pattern for validation.
  * Must start with from() or to(), then have any number of functions.
  */
-export const QUERY_PATTERN = /^(from|to)\([a-zA-Z0-9_-]+\)\.(from|to|visited|visitedAny|exclude|context|case|minus|plus)\([^)]*\)(\.(visited|visitedAny|exclude|context|case|minus|plus)\([^)]*\))*$/;
+export const QUERY_PATTERN = new RegExp(
+  // Must include from() and to() somewhere in the chain.
+  // This is order-indifferent: constraints (including asat/at) may appear anywhere.
+  // NOTE: This is a structural validator only; semantic validation happens elsewhere.
+  '^(?=.*\\bfrom\\([^)]*\\))(?=.*\\bto\\([^)]*\\))' +
+    // Chain of function calls separated by dots.
+    // Guardrail: disallow nested parentheses inside args (rejects malformed strings like "from(a.to(b)").
+    '((from|to|visited|visitedAny|exclude|context|contextAny|case|window|cohort|minus|plus|asat|at)\\([^()]+\\))' +
+    '(\\.((from|to|visited|visitedAny|exclude|context|contextAny|case|window|cohort|minus|plus|asat|at)\\([^()]+\\)))*$'
+);
 
 /**
  * Validate query string structure.
@@ -169,7 +180,8 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
       visitedAny: [],
       contextAny: [],
       window: null,
-      cohort: null
+      cohort: null,
+      asat: null
     };
   }
   
@@ -182,6 +194,7 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
   const contextAny: Array<{ pairs: Array<{key: string; value: string}> }> = [];
   let window: { start?: string; end?: string } | null = null;
   let cohort: { anchor?: string; start?: string; end?: string } | null = null;
+  let asat: string | null = null;
   
   // Match visited(...) - can appear multiple times
   const visitedMatches = constraint.matchAll(/visited\(([^)]+)\)/g);
@@ -293,6 +306,14 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
     }
   }
   
+  // Match asat(date) or at(date) - historical query snapshot retrieval date
+  // Both forms are supported; normalisation emits asat() only
+  // Order-indifferent: can appear anywhere in the constraint chain
+  const asatMatch = constraint.match(/(?:asat|at)\(([^)]+)\)/);
+  if (asatMatch) {
+    asat = asatMatch[1].trim();
+  }
+  
   // Deduplicate visited/exclude preserving order
   const visitedDeduped: string[] = [];
   const visitedSeen = new Set<string>();
@@ -341,7 +362,8 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
     visitedAny,
     contextAny,
     window,
-    cohort
+    cohort,
+    asat
   };
 }
 
@@ -362,6 +384,7 @@ export function parseDSL(dsl: string | null | undefined): ParsedFullQuery {
       contextAny: [],
       window: null,
       cohort: null,
+      asat: null,
       raw: ''
     };
   }
@@ -532,6 +555,20 @@ export function normalizeConstraintString(constraint: string): string {
       parts.push(`cohort(${start}:${end})`);
     }
   }
+  // asat: Always emit as asat(...) (never at(...)) for canonical form
+  // Normalize date to d-MMM-yy format if it's an absolute date
+  if (parsed.asat) {
+    let normalizedAsatDate = parsed.asat;
+    // If not a relative offset, try to normalise to d-MMM-yy
+    if (!parsed.asat.match(/^-?\d+[dwmy]$/)) {
+      try {
+        normalizedAsatDate = formatDateUK(parsed.asat);
+      } catch {
+        // If parse fails, keep original
+      }
+    }
+    parts.push(`asat(${normalizedAsatDate})`);
+  }
   
   return parts.join('.');
 }
@@ -612,6 +649,9 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   const mergedCohort =
     hasNewCohort ? newParsed.cohort : (hasNewWindow ? null : existing.cohort);
   
+  // For asat: new layer overrides existing (same inheritance pattern as window/cohort)
+  const mergedAsat = newParsed.asat ?? existing.asat;
+  
   // Rebuild DSL using normalize (ensures canonical order)
   const merged: ParsedConstraints = {
     visited: mergedVisited,
@@ -621,7 +661,8 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
     visitedAny: mergedVisitedAny,
     contextAny: mergedContextAny,
     window: mergedWindow,
-    cohort: mergedCohort
+    cohort: mergedCohort,
+    asat: mergedAsat
   };
   
   // Use normalizeConstraintString to rebuild (ensures canonical order)
@@ -656,6 +697,9 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
     } else {
       parts.push(`cohort(${merged.cohort.start || ''}:${merged.cohort.end || ''})`);
     }
+  }
+  if (merged.asat) {
+    parts.push(`asat(${merged.asat})`);
   }
   
   return parts.join('.');

@@ -110,6 +110,25 @@ async function assertFullyWithinViewport(page: Page, locator: any) {
   }
 }
 
+async function hoverByBoundingBox(page: Page, locator: any): Promise<void> {
+  // Playwright's locator.hover() is strict about DOM stability; our menus re-render
+  // when opening submenus, which can cause "element was detached" flake.
+  // Instead, compute the current bounding box and move the mouse there with quick retries.
+  const maxAttempts = 6;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await expect(locator).toBeVisible();
+      const box = await locator.boundingBox();
+      if (!box) throw new Error('no bounding box');
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      return;
+    } catch (e) {
+      if (attempt === maxAttempts - 1) throw e;
+      await page.waitForTimeout(50);
+    }
+  }
+}
+
 test('Snapshots submenus open and stay within viewport', async ({ page, baseURL }) => {
   await installComputeAndSnapshotStubs(page);
 
@@ -135,12 +154,15 @@ test('Snapshots submenus open and stay within viewport', async ({ page, baseURL 
     e2e.openEdgeContextMenu('edge-start-b', 320, 240);
   });
 
-  await expect(page.getByText('Probability parameter', { exact: true })).toBeVisible();
-  await page.getByText('Probability parameter', { exact: true }).hover();
-  await expect(page.getByText('Snapshots', { exact: true })).toBeVisible();
+  const probLabel = page.getByText('Probability parameter', { exact: true });
+  await expect(probLabel).toBeVisible();
+  await hoverByBoundingBox(page, probLabel);
+  const probRoot = probLabel.locator('..').locator('..');
+  const sectionSnapshotsItem = probRoot.getByText('Snapshots', { exact: true });
+  await expect(sectionSnapshotsItem).toBeVisible();
 
-  await page.getByText('Snapshots', { exact: true }).hover();
-  const flyout1 = page.getByTestId('snapshots-flyout').first();
+  await hoverByBoundingBox(page, sectionSnapshotsItem);
+  const flyout1 = probRoot.getByTestId('snapshots-flyout').first();
   await expect(page.getByText('Download snapshot data', { exact: true })).toBeVisible();
   // Critical regression: the flyout must remain open when moving into it.
   // This previously failed because the parent submenu closed immediately on mouseleave.
@@ -163,16 +185,18 @@ test('Snapshots submenus open and stay within viewport', async ({ page, baseURL 
 
   const zapButton = propsPanel.locator('.lightning-menu-button').first();
   await zapButton.click();
-  await expect(page.getByText('Put to file', { exact: true })).toBeVisible();
+  const lightningMenu = page.locator('.lightning-menu-dropdown').first();
+  await expect(lightningMenu.getByText('Put to file', { exact: true })).toBeVisible();
 
-  await page.getByText('Snapshots', { exact: true }).hover();
-  const flyout2 = page.getByTestId('snapshots-flyout').first();
-  await expect(page.getByText('Download snapshot data', { exact: true })).toBeVisible();
+  const lightningSnapshotsTrigger = lightningMenu.getByTestId('snapshots-trigger').first();
+  await hoverByBoundingBox(page, lightningSnapshotsTrigger);
+  const flyout2 = lightningMenu.getByTestId('snapshots-flyout').first();
+  await expect(lightningMenu.getByText('Download snapshot data', { exact: true })).toBeVisible();
   const flyout2Box = await flyout2.boundingBox();
   expect(flyout2Box, 'expected flyout2 bounding box').toBeTruthy();
   await page.mouse.move(flyout2Box!.x + 10, flyout2Box!.y + 10);
   await page.waitForTimeout(250);
-  await expect(page.getByText('Download snapshot data', { exact: true })).toBeVisible();
+  await expect(lightningMenu.getByText('Download snapshot data', { exact: true })).toBeVisible();
   await assertFullyWithinViewport(page, flyout2);
 });
 
