@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.4.4b
+**Released:** 4-Feb-26
+
+Fix to widnow() completeness logic
+
+---
+
 ## Version 1.4.1b
 **Released:** 3-Feb-26
 
