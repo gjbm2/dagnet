@@ -1422,6 +1422,80 @@ describe('enhanceGraphLatencies', () => {
     expect(bToC?.latency.completeness).toBeLessThanOrEqual(aToB?.latency.completeness || 1);
   });
 
+  it('window() mode: should NOT apply anchor lag age adjustment (completeness should not collapse to ~0)', () => {
+    const graph: GraphForPath = {
+      nodes: [
+        { id: 'start', entry: { is_start: true } },
+        { id: 'a' },
+        { id: 'b' },
+      ],
+      edges: [
+        { id: 'start-to-a', from: 'start', to: 'a', p: { mean: 0.8, latency: { latency_parameter: true, t95: 30 } } },
+        { id: 'a-to-b', from: 'a', to: 'b', p: { mean: 0.6, latency: { latency_parameter: true, t95: 30 } } },
+      ],
+    };
+
+    const now = new Date();
+    const dates = [
+      new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    ];
+
+    // Craft a downstream edge whose cohorts include very large anchor_median_lag_days.
+    // If anchor adjustment is (incorrectly) applied in window mode, effective ages clamp to 0,
+    // driving completeness to ~0. In correct window semantics, completeness is computed on raw ages.
+    const paramLookup: Map<string, ParameterValueForLAG[]> = new Map([
+      [
+        'start-to-a',
+        [
+          {
+            mean: 0.8,
+            n: 300,
+            k: 240,
+            dates,
+            n_daily: [100, 100, 100],
+            k_daily: [80, 80, 80],
+            median_lag_days: [5, 5, 5],
+            mean_lag_days: [7, 7, 7],
+          },
+        ],
+      ],
+      [
+        'a-to-b',
+        [
+          {
+            mean: 0.6,
+            n: 240,
+            k: 144,
+            dates,
+            n_daily: [80, 80, 80],
+            k_daily: [48, 48, 48],
+            median_lag_days: [5, 5, 5],
+            mean_lag_days: [7, 7, 7],
+            // Huge upstream travel-time (would incorrectly zero-out window-mode ages if applied)
+            anchor_median_lag_days: [40, 40, 40],
+          },
+        ],
+      ],
+    ]);
+
+    const result = enhanceGraphLatencies(
+      graph,
+      paramLookup,
+      now,
+      mockHelpers,
+      undefined,
+      undefined,
+      undefined,
+      'window'
+    );
+
+    const aToB = result.edgeValues.find(v => v.edgeUuid === 'a-to-b');
+    expect(aToB).toBeDefined();
+    expect(aToB!.latency.completeness).toBeGreaterThan(0.5);
+  });
+
   it('should skip edges without latency_parameter', () => {
     const graph: GraphForPath = {
       nodes: [

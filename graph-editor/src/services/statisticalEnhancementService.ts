@@ -990,7 +990,8 @@ export function computeEdgeLatencyStats(
   edgeT95?: number,
   recencyHalfLifeDays: number = RECENCY_HALF_LIFE_DAYS,
   onsetDeltaDays: number = 0,
-  maxMeanMedianRatioOverride?: number
+  maxMeanMedianRatioOverride?: number,
+  applyAnchorAgeAdjustment: boolean = true
 ): EdgeLatencyStats {
   // Calculate total k for quality gate
   const totalK = cohorts.reduce((sum, c) => sum + c.k, 0);
@@ -1001,21 +1002,28 @@ export function computeEdgeLatencyStats(
   // This reflects the OBSERVED central tendency of how long users take to reach
   // this edge from the anchor, NOT the conservative 95th percentile (path_t95).
   //
+  // IMPORTANT (window() mode):
+  // Window-mode cohorts are anchored to the window itself (not to graph entry at A),
+  // so applying anchor travel-time adjustment here is a semantic mismatch and can
+  // collapse effective ages to ~0, incorrectly driving completeness to ~0.
+  // The caller must disable this adjustment for window() queries.
+  //
   // Design (stats-convolution-schematic.md §4):
   //   effective_age[d] = max(0, anchor_age[d] - anchor_median_lag[d])
   //
   // We use per-cohort anchor_median_lag_days if available, otherwise the
   // aggregate anchorMedianLag passed as parameter.
-  const adjustedCohorts: CohortData[] = anchorMedianLag > 0 || cohorts.some(c => c.anchor_median_lag_days)
-    ? cohorts.map(c => {
-        // Prefer per-cohort anchor_median_lag_days, fall back to aggregate
-        const lagToSubtract = c.anchor_median_lag_days ?? anchorMedianLag;
-        return {
-          ...c,
-          age: Math.max(0, c.age - lagToSubtract),
-        };
-      })
-    : cohorts;
+  const adjustedCohorts: CohortData[] =
+    applyAnchorAgeAdjustment && (anchorMedianLag > 0 || cohorts.some(c => c.anchor_median_lag_days))
+      ? cohorts.map(c => {
+          // Prefer per-cohort anchor_median_lag_days, fall back to aggregate
+          const lagToSubtract = c.anchor_median_lag_days ?? anchorMedianLag;
+          return {
+            ...c,
+            age: Math.max(0, c.age - lagToSubtract),
+          };
+        })
+      : cohorts;
 
   // Step 1: Fit lag distribution from median/mean
   const model = toModelSpace(onsetDeltaDays, aggregateMedianLag, aggregateMeanLag, undefined, undefined);
@@ -2214,7 +2222,9 @@ export function enhanceGraphLatencies(
         edgeT95,  // Authoritative t95 from edge.p.latency.t95 if set
         MODEL.RECENCY_HALF_LIFE_DAYS,
         edgeOnsetDeltaDays ?? 0,
-        MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO
+        MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO,
+        // Window mode cohorts are not anchored at A, so do NOT apply anchor travel-time adjustment.
+        !isWindowMode
       );
 
       // ---------------------------------------------------------------------
@@ -2984,7 +2994,9 @@ export function enhanceGraphLatencies(
           cpEdgeT95, // Authoritative t95 if set
           MODEL.RECENCY_HALF_LIFE_DAYS,
           cpOnsetDeltaDays ?? 0,
-          MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO
+          MODEL.LATENCY_MAX_MEAN_MEDIAN_RATIO,
+          // Window mode cohorts are not anchored at A, so do NOT apply anchor travel-time adjustment.
+          !isWindowMode
         );
         
         // Use the computed completeness from cpLatencyStats
