@@ -213,8 +213,9 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         }
 
         // Unified cache-only pipeline: build plan (for observability) + from-file refresh (Stage‑2 enabled).
+        // Skip signature computation as contexts may not be seeded yet during share boot.
         try {
-          fetchOrchestratorService.buildPlan({ graph: g0 as any, dsl: currentDsl, parentLogId });
+          await fetchOrchestratorService.buildPlan({ graph: g0 as any, dsl: currentDsl, parentLogId, skipSignatureComputation: true });
         } catch {
           // Best-effort: do not block hydration if plan build fails (e.g. invalid DSL).
         }

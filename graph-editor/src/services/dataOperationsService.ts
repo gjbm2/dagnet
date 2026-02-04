@@ -873,14 +873,28 @@ export async function computeQuerySignature(
     const structuredSig = serialiseSignature({ coreHash, contextDefHashes });
     
     // ===== DIAGNOSTIC: Show what went into the signature =====
-    console.log('[computeQuerySignature] Structured signature computed:', {
-      coreHash: coreHash.substring(0, 12) + '...',
-      contextKeys: Object.keys(contextDefHashes),
-      originalQuery: rawOriginalQuery || 'N/A',
-      normalizedOriginalQuery: normalizedOriginalQuery || 'N/A',
-      eventDefHashCount: Object.keys(eventDefHashes).length,
-      latencyAnchorEventId: latencyAnchorEventId || 'N/A',
-    });
+    if (sessionLogService.getDiagnosticLoggingEnabled()) {
+      sessionLogService.info('data-fetch', 'SIGNATURE_COMPUTED', 
+        `Computed signature: ${coreHash.substring(0, 12)}... (${Object.keys(eventDefHashes).length} events)`,
+        undefined,
+        {
+          coreHash: coreHash.substring(0, 16),
+          contextKeys: Object.keys(contextDefHashes),
+          originalQuery: rawOriginalQuery || 'N/A',
+          normalizedOriginalQuery: normalizedOriginalQuery || 'N/A',
+          eventDefHashes,
+          eventDefinitionsLoaded: Object.fromEntries(
+            Object.entries(eventDefinitions || {}).map(([id, def]) => [
+              id,
+              {
+                provider_event_names: (def as any)?.provider_event_names,
+                amplitude_filters: (def as any)?.amplitude_filters,
+              }
+            ])
+          ),
+        }
+      );
+    }
     // =========================================================
     
     return structuredSig;
@@ -1449,12 +1463,32 @@ class DataOperationsService {
                 const eventLoader = async (eventId: string) => {
                   const fileId = `event-${eventId}`;
                   const file = fileRegistry.getFile(fileId);
+                  const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
                   
                   if (file && file.data) {
+                    if (diagnosticOn) {
+                      sessionLogService.info('data-fetch', 'EVENT_LOADED', 
+                        `Loaded event "${eventId}" for signature`,
+                        undefined,
+                        {
+                          eventId,
+                          source: 'getParameterFromFile',
+                          provider_event_names: file.data.provider_event_names,
+                          amplitude_filters: file.data.amplitude_filters,
+                        }
+                      );
+                    }
                     return file.data;
                   }
                   
                   // Fallback: return minimal event without mapping
+                  if (diagnosticOn) {
+                    sessionLogService.warning('data-fetch', 'EVENT_FALLBACK', 
+                      `Event "${eventId}" not in fileRegistry - using empty fallback`,
+                      undefined,
+                      { eventId, source: 'getParameterFromFile' }
+                    );
+                  }
                   return {
                     id: eventId,
                     name: eventId,
@@ -1573,19 +1607,44 @@ class DataOperationsService {
                 // (This handles the case where event definitions changed)
                 const signatureToUse = latestQuerySignature || expectedQuerySignature;
                 
+                // DIAGNOSTIC: Log signature comparison result
+                const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
+                if (diagnosticOn) {
+                  sessionLogService.info('data-fetch', 'SIGNATURE_COMPARISON', 
+                    `Comparing signatures for ${paramId}`,
+                    undefined,
+                    {
+                      paramId,
+                      expectedSignature: expectedQuerySignature,
+                      latestCachedSignature: latestQuerySignature,
+                      signatureToUse,
+                      hasAnySignatures,
+                      totalCachedValues: valuesWithDaily.length,
+                      mismatchDetected: querySignatureMismatch || (latestQuerySignature && latestQuerySignature !== expectedQuerySignature),
+                      mismatchedEntryCount: mismatchedEntries.length,
+                    }
+                  );
+                }
+                
                 if (
                   isSignatureCheckingEnabled() &&
                   (querySignatureMismatch || (latestQuerySignature && latestQuerySignature !== expectedQuerySignature))
                 ) {
                   // Log for debugging, but don't toast - file having old signatures is normal
                   // and the system handles it correctly by using latest signature data
-                  console.log('[DataOperationsService] Query signature mismatch detected (using latest):', {
-                    expectedSignature: expectedQuerySignature,
-                    latestSignature: latestQuerySignature,
-                    signatureToUse,
-                    mismatchedEntries: mismatchedEntries.length,
-                    totalEntries: valuesWithDaily.length,
-                  });
+                  if (diagnosticOn) {
+                    sessionLogService.warning('data-fetch', 'SIGNATURE_MISMATCH', 
+                      `Signature mismatch for ${paramId}: expected differs from cached`,
+                      undefined,
+                      {
+                        paramId,
+                        expectedSignature: expectedQuerySignature,
+                        latestCachedSignature: latestQuerySignature,
+                        mismatchedEntries: mismatchedEntries.slice(0, 5), // First 5 for brevity
+                        totalMismatched: mismatchedEntries.length,
+                      }
+                    );
+                  }
                   // NOTE: No toast - this is informational, not actionable by user
                   // The file may have accumulated entries from different event configs over time
                   // We use the latest signature and the data is still correct
@@ -1598,8 +1657,17 @@ class DataOperationsService {
                     v.query_signature && v.query_signature !== signatureToUse
                   );
                   
-                  if (staleValues.length > 0) {
-                    console.warn(`[DataOperationsService] ${staleValues.length} values have stale signatures (query config may have changed)`);
+                  if (staleValues.length > 0 && diagnosticOn) {
+                    sessionLogService.warning('data-fetch', 'STALE_VALUES_DETECTED', 
+                      `${staleValues.length} values have stale signatures for ${paramId}`,
+                      undefined,
+                      {
+                        paramId,
+                        staleCount: staleValues.length,
+                        signatureToUse,
+                        staleSampleSignatures: staleValues.slice(0, 3).map(v => v.query_signature),
+                      }
+                    );
                   }
                   
                   // Note: We still USE the data (keyed by sliceDSL), but warn about staleness
@@ -4124,14 +4192,32 @@ class DataOperationsService {
               const eventLoader = async (eventId: string) => {
                 const fileId = `event-${eventId}`;
                 const file = fileRegistry.getFile(fileId);
+                const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
                 
                 if (file && file.data) {
-                  console.log(`Loaded event "${eventId}" from IDB:`, file.data);
+                  if (diagnosticOn) {
+                    sessionLogService.info('data-fetch', 'EVENT_LOADED', 
+                      `Loaded event "${eventId}" for fetch`,
+                      undefined,
+                      {
+                        eventId,
+                        source: 'fetch',
+                        provider_event_names: file.data.provider_event_names,
+                        amplitude_filters: file.data.amplitude_filters,
+                      }
+                    );
+                  }
                   return file.data;
                 }
                 
                 // Fallback: return minimal event without mapping
-                console.warn(`Event "${eventId}" not found in IDB, using fallback`);
+                if (diagnosticOn) {
+                  sessionLogService.warning('data-fetch', 'EVENT_FALLBACK', 
+                    `Event "${eventId}" not in fileRegistry - using empty fallback`,
+                    undefined,
+                    { eventId, source: 'fetch' }
+                  );
+                }
                 return {
                   id: eventId,
                   name: eventId,
@@ -4287,8 +4373,28 @@ class DataOperationsService {
               const eventLoader = async (eventId: string) => {
                 const fileId = `event-${eventId}`;
                 const file = fileRegistry.getFile(fileId);
+                const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
                 if (file && file.data) {
+                  if (diagnosticOn) {
+                    sessionLogService.info('data-fetch', 'EVENT_LOADED', 
+                      `Loaded event "${eventId}" for fetch (fallback path)`,
+                      undefined,
+                      {
+                        eventId,
+                        source: 'fetch-fallback',
+                        provider_event_names: file.data.provider_event_names,
+                        amplitude_filters: file.data.amplitude_filters,
+                      }
+                    );
+                  }
                   return file.data;
+                }
+                if (diagnosticOn) {
+                  sessionLogService.warning('data-fetch', 'EVENT_FALLBACK', 
+                    `Event "${eventId}" not in fileRegistry - using empty fallback (fallback path)`,
+                    undefined,
+                    { eventId, source: 'fetch-fallback' }
+                  );
                 }
                 return {
                   id: eventId,
@@ -4417,10 +4523,30 @@ class DataOperationsService {
             if (parsedQuery.from && parsedQuery.to) {
               const eventLoader = async (eventId: string) => {
                 const file = fileRegistry.getFile(`event-${eventId}`);
+                const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
                 if (file?.data) {
+                  if (diagnosticOn) {
+                    sessionLogService.info('data-fetch', 'EVENT_LOADED', 
+                      `Loaded event "${eventId}" for direct query`,
+                      undefined,
+                      {
+                        eventId,
+                        source: 'direct-query',
+                        provider_event_names: file.data.provider_event_names,
+                        amplitude_filters: file.data.amplitude_filters,
+                      }
+                    );
+                  }
                   return file.data;
                 }
                 // Fallback: use ID as event name
+                if (diagnosticOn) {
+                  sessionLogService.warning('data-fetch', 'EVENT_FALLBACK', 
+                    `Event "${eventId}" not in fileRegistry - using empty fallback (direct query)`,
+                    undefined,
+                    { eventId, source: 'direct-query' }
+                  );
+                }
                 return { id: eventId, name: eventId, provider_event_names: {} };
               };
               

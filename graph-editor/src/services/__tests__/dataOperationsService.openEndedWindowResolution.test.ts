@@ -43,6 +43,7 @@ vi.mock('../sessionLogService', () => ({
     warning: vi.fn(),
     error: vi.fn(),
     success: vi.fn(),
+    getDiagnosticLoggingEnabled: vi.fn(() => false),
   },
 }));
 

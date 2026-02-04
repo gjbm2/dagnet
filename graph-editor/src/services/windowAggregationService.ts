@@ -23,6 +23,7 @@ import { resolveMECEPartitionForImplicitUncontextedSync, findBestMECEPartitionCa
 import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
 import { canCacheSatisfyQuery } from './signatureMatchingService';
 import { tryDimensionalReduction } from './dimensionalReductionService';
+import { sessionLogService } from './sessionLogService';
 
 /**
  * Compute recency weight for a cohort-day using true half-life semantics.
@@ -977,6 +978,26 @@ export function calculateIncrementalFetch(
     signatureDiagnostics.matchType = 'superset'; // Superset matching is the default now
   } else {
     signatureDiagnostics.matchType = 'no_match';
+  }
+  
+  // Log signature filtering decision (verbose details only when diagnostics enabled)
+  if (effectiveQuerySignature) {
+    const diagnosticsOn = sessionLogService.getDiagnosticLoggingEnabled();
+    const details = diagnosticsOn 
+      ? JSON.stringify({
+          targetSlice,
+          querySignature: effectiveQuerySignature,
+          cachedSignatures: [...new Set(allValues.filter(v => v.query_signature).map(v => v.query_signature))].slice(0, 3),
+          totalValues: allValues.length,
+          signatureFilteredCount: signatureFilteredValues.length,
+          matchType: signatureDiagnostics.matchType,
+          bustCache,
+        }, null, 2)
+      : undefined;
+    sessionLogService.info('data-fetch', 'SIGNATURE_FILTER_DECISION', 
+      `Signature filtering: ${signatureDiagnostics.matchType} (${signatureFilteredValues.length}/${allValues.length} values passed)`,
+      details
+    );
   }
 
   // Normalize requested window dates

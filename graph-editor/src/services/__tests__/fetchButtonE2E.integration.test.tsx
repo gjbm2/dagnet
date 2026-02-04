@@ -558,7 +558,7 @@ describe('AllSlicesModal → WindowSelector Cache Flow', () => {
       }
 
       // Sanity: the plan builder must look up the signature using the SAME key.
-      const built = buildFetchPlanProduction(
+      const built = await buildFetchPlanProduction(
         graph,
         dsl,
         { start: '19-Nov-25', end: '24-Nov-25' },
@@ -571,6 +571,340 @@ describe('AllSlicesModal → WindowSelector Cache Flow', () => {
 
       expect(result.outcome).toBe('not_covered');
       expect(result.fetchPlanItems.length).toBeGreaterThan(0);
+      }
+    );
+  });
+
+  describe('Signature Invalidation on Event Definition Change', () => {
+    /**
+     * CRITICAL: These tests verify that when an event definition changes,
+     * cached data with the old signature is treated as stale and refetch is triggered.
+     * 
+     * This is the core regression that was fixed: retrieveAllSlicesService and other
+     * callers of buildFetchPlanProduction were not computing signatures, causing
+     * stale-signature cache to be incorrectly classified as "covered".
+     */
+
+    (isSignatureCheckingEnabled() ? it : it.skip)(
+      'buildFetchPlanProduction auto-computes signatures when not provided',
+      async () => {
+        const graph: any = {
+          nodes: [
+            { id: 'a', uuid: 'a', event_id: 'reg-event' },
+            { id: 'b', uuid: 'b', event_id: 'success-event' },
+          ],
+          edges: [
+            {
+              id: 'edge-1',
+              uuid: 'edge-1',
+              from: 'a',
+              to: 'b',
+              p: { id: 'test-param', connection: 'amplitude-prod' },
+              query: 'from(a).to(b)',
+            },
+          ],
+        };
+
+        // Register event files
+        await fileRegistry.registerFile('event-reg-event', {
+          fileId: 'event-reg-event',
+          type: 'event',
+          data: { id: 'reg-event', provider_event_names: { amplitude: 'Registration' } },
+          originalData: { id: 'reg-event', provider_event_names: { amplitude: 'Registration' } },
+          isDirty: false,
+          isInitializing: false,
+          source: { type: 'local' } as any,
+          viewTabs: [],
+          lastModified: Date.now(),
+        } as any);
+        await fileRegistry.registerFile('event-success-event', {
+          fileId: 'event-success-event',
+          type: 'event',
+          data: { id: 'success-event', provider_event_names: { amplitude: 'Success' } },
+          originalData: { id: 'success-event', provider_event_names: { amplitude: 'Success' } },
+          isDirty: false,
+          isInitializing: false,
+          source: { type: 'local' } as any,
+          viewTabs: [],
+          lastModified: Date.now(),
+        } as any);
+
+        // Create cached values with a WRONG signature (simulating stale cache)
+        const values: ParameterValue[] = [
+          {
+            window_from: '2025-11-01',
+            window_to: '2025-12-01',
+            n: 100,
+            k: 50,
+            p_estimate: 0.5,
+            query_signature: 'deadbeef-stale-signature', // Wrong signature
+            data_source: { retrieved_at: '2025-11-15T12:00:00Z' },
+          } as any,
+        ];
+
+        await fileRegistry.registerFile('parameter-test-param', {
+          fileId: 'parameter-test-param',
+          type: 'parameter',
+          data: { id: 'test-param', type: 'probability', values },
+          originalData: { id: 'test-param', type: 'probability', values },
+          isDirty: false,
+          isInitializing: false,
+          source: { type: 'local' } as any,
+          viewTabs: [],
+          lastModified: Date.now(),
+        } as any);
+
+        const dsl = 'window(1-Nov-25:1-Dec-25)';
+
+        // Call buildFetchPlanProduction WITHOUT passing querySignatures
+        // It should auto-compute them and detect the signature mismatch
+        const result = await buildFetchPlanProduction(
+          graph,
+          dsl,
+          { start: '1-Nov-25', end: '1-Dec-25' },
+          { referenceNow: '2025-12-01T12:00:00Z' }
+          // NOTE: No querySignatures passed - should auto-compute
+        );
+
+        // Because signatures don't match, the item should need fetch
+        expect(result.plan.items.length).toBe(1);
+        expect(result.plan.items[0].classification).toBe('fetch');
+      }
+    );
+
+    (isSignatureCheckingEnabled() ? it : it.skip)(
+      'event definition change invalidates cache: old signature rejected, fetch demanded',
+      async () => {
+        const graph: any = {
+          nodes: [
+            { id: 'a', uuid: 'a', event_id: 'switch-event' },
+            { id: 'b', uuid: 'b', event_id: 'success-event' },
+          ],
+          edges: [
+            {
+              id: 'edge-1',
+              uuid: 'edge-1',
+              from: 'a',
+              to: 'b',
+              p: { id: 'switch-to-success', connection: 'amplitude-prod' },
+              query: 'from(a).to(b)',
+            },
+          ],
+        };
+
+        // Register events with ORIGINAL definitions
+        await fileRegistry.registerFile('event-switch-event', {
+          fileId: 'event-switch-event',
+          type: 'event',
+          data: { id: 'switch-event', provider_event_names: { amplitude: 'OldSwitchEvent' } },
+          originalData: { id: 'switch-event', provider_event_names: { amplitude: 'OldSwitchEvent' } },
+          isDirty: false,
+          isInitializing: false,
+          source: { type: 'local' } as any,
+          viewTabs: [],
+          lastModified: Date.now(),
+        } as any);
+        await fileRegistry.registerFile('event-success-event', {
+          fileId: 'event-success-event',
+          type: 'event',
+          data: { id: 'success-event', provider_event_names: { amplitude: 'SuccessEvent' } },
+          originalData: { id: 'success-event', provider_event_names: { amplitude: 'SuccessEvent' } },
+          isDirty: false,
+          isInitializing: false,
+          source: { type: 'local' } as any,
+          viewTabs: [],
+          lastModified: Date.now(),
+        } as any);
+
+        const dsl = 'window(1-Nov-25:1-Dec-25)';
+
+        // Compute signature with ORIGINAL event definitions
+        const originalSigs = await computePlannerQuerySignaturesForGraph({ graph, dsl });
+        const itemKey = Object.keys(originalSigs)[0];
+        const originalSig = originalSigs[itemKey];
+        expect(typeof originalSig).toBe('string');
+
+        // Create cached values with the ORIGINAL signature
+        const values: ParameterValue[] = [
+          {
+            window_from: '2025-11-01',
+            window_to: '2025-12-01',
+            n: 100,
+            k: 50,
+            p_estimate: 0.5,
+            query_signature: originalSig, // Signature from original event def
+            data_source: { retrieved_at: '2025-11-15T12:00:00Z' },
+          } as any,
+        ];
+
+        await fileRegistry.registerFile('parameter-switch-to-success', {
+          fileId: 'parameter-switch-to-success',
+          type: 'parameter',
+          data: { id: 'switch-to-success', type: 'probability', values },
+          originalData: { id: 'switch-to-success', type: 'probability', values },
+          isDirty: false,
+          isInitializing: false,
+          source: { type: 'local' } as any,
+          viewTabs: [],
+          lastModified: Date.now(),
+        } as any);
+
+        // VERIFY: With original event definition, cache should be valid
+        const resultBefore = await buildFetchPlanProduction(
+          graph,
+          dsl,
+          { start: '1-Nov-25', end: '1-Dec-25' },
+          { referenceNow: '2025-12-01T12:00:00Z' }
+        );
+        expect(resultBefore.plan.items[0].classification).toBe('covered');
+
+        // NOW: Simulate user editing the event definition
+        await fileRegistry.registerFile('event-switch-event', {
+          fileId: 'event-switch-event',
+          type: 'event',
+          data: { id: 'switch-event', provider_event_names: { amplitude: 'NewSwitchEventName' } }, // CHANGED!
+          originalData: { id: 'switch-event', provider_event_names: { amplitude: 'OldSwitchEvent' } },
+          isDirty: true,
+          isInitializing: false,
+          source: { type: 'local' } as any,
+          viewTabs: [],
+          lastModified: Date.now(),
+        } as any);
+
+        // Invalidate planner cache to force fresh analysis
+        windowFetchPlannerService.invalidateCache();
+
+        // VERIFY: After event definition change, cache should be STALE
+        const resultAfter = await buildFetchPlanProduction(
+          graph,
+          dsl,
+          { start: '1-Nov-25', end: '1-Dec-25' },
+          { referenceNow: '2025-12-01T12:00:00Z' }
+        );
+        
+        // The new signature won't match the cached signature, so fetch is demanded
+        expect(resultAfter.plan.items[0].classification).toBe('fetch');
+      }
+    );
+
+    (isSignatureCheckingEnabled() ? it : it.skip)(
+      'multiple parameters: signature change on one does not affect others',
+      async () => {
+        const graph: any = {
+          nodes: [
+            { id: 'a', uuid: 'a', event_id: 'event-a' },
+            { id: 'b', uuid: 'b', event_id: 'event-b' },
+            { id: 'c', uuid: 'c', event_id: 'event-c' },
+          ],
+          edges: [
+            {
+              id: 'edge-ab',
+              uuid: 'edge-ab',
+              from: 'a',
+              to: 'b',
+              p: { id: 'param-ab', connection: 'amplitude-prod' },
+              query: 'from(a).to(b)',
+            },
+            {
+              id: 'edge-bc',
+              uuid: 'edge-bc',
+              from: 'b',
+              to: 'c',
+              p: { id: 'param-bc', connection: 'amplitude-prod' },
+              query: 'from(b).to(c)',
+            },
+          ],
+        };
+
+        // Register all events
+        for (const eventId of ['event-a', 'event-b', 'event-c']) {
+          await fileRegistry.registerFile(`event-${eventId}`, {
+            fileId: `event-${eventId}`,
+            type: 'event',
+            data: { id: eventId, provider_event_names: { amplitude: eventId.toUpperCase() } },
+            originalData: { id: eventId, provider_event_names: { amplitude: eventId.toUpperCase() } },
+            isDirty: false,
+            isInitializing: false,
+            source: { type: 'local' } as any,
+            viewTabs: [],
+            lastModified: Date.now(),
+          } as any);
+        }
+
+        const dsl = 'window(1-Nov-25:1-Dec-25)';
+
+        // Compute signatures for BOTH parameters
+        const sigs = await computePlannerQuerySignaturesForGraph({ graph, dsl });
+        const keyAB = Object.keys(sigs).find(k => k.includes('param-ab'))!;
+        const keyBC = Object.keys(sigs).find(k => k.includes('param-bc'))!;
+        expect(keyAB).toBeDefined();
+        expect(keyBC).toBeDefined();
+
+        // Register both parameters with their correct signatures
+        for (const [paramId, sigKey] of [['param-ab', keyAB], ['param-bc', keyBC]] as const) {
+          const values: ParameterValue[] = [
+            {
+              window_from: '2025-11-01',
+              window_to: '2025-12-01',
+              n: 100,
+              k: 50,
+              p_estimate: 0.5,
+              query_signature: sigs[sigKey],
+              data_source: { retrieved_at: '2025-11-15T12:00:00Z' },
+            } as any,
+          ];
+          await fileRegistry.registerFile(`parameter-${paramId}`, {
+            fileId: `parameter-${paramId}`,
+            type: 'parameter',
+            data: { id: paramId, type: 'probability', values },
+            originalData: { id: paramId, type: 'probability', values },
+            isDirty: false,
+            isInitializing: false,
+            source: { type: 'local' } as any,
+            viewTabs: [],
+            lastModified: Date.now(),
+          } as any);
+        }
+
+        // VERIFY: Both should be covered initially
+        const resultBefore = await buildFetchPlanProduction(
+          graph, dsl,
+          { start: '1-Nov-25', end: '1-Dec-25' },
+          { referenceNow: '2025-12-01T12:00:00Z' }
+        );
+        expect(resultBefore.plan.items.length).toBe(2);
+        expect(resultBefore.plan.items.every(i => i.classification === 'covered')).toBe(true);
+
+        // NOW: Change event-a (only affects param-ab, not param-bc)
+        await fileRegistry.registerFile('event-event-a', {
+          fileId: 'event-event-a',
+          type: 'event',
+          data: { id: 'event-a', provider_event_names: { amplitude: 'CHANGED_EVENT_A' } }, // CHANGED!
+          originalData: { id: 'event-a', provider_event_names: { amplitude: 'EVENT-A' } },
+          isDirty: true,
+          isInitializing: false,
+          source: { type: 'local' } as any,
+          viewTabs: [],
+          lastModified: Date.now(),
+        } as any);
+
+        windowFetchPlannerService.invalidateCache();
+
+        const resultAfter = await buildFetchPlanProduction(
+          graph, dsl,
+          { start: '1-Nov-25', end: '1-Dec-25' },
+          { referenceNow: '2025-12-01T12:00:00Z' }
+        );
+
+        expect(resultAfter.plan.items.length).toBe(2);
+        
+        // param-ab should need fetch (uses event-a which changed)
+        const itemAB = resultAfter.plan.items.find(i => i.itemKey.includes('param-ab'));
+        expect(itemAB?.classification).toBe('fetch');
+        
+        // param-bc should still be covered (uses event-b and event-c, unchanged)
+        const itemBC = resultAfter.plan.items.find(i => i.itemKey.includes('param-bc'));
+        expect(itemBC?.classification).toBe('covered');
       }
     );
   });

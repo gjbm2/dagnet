@@ -693,13 +693,28 @@ export function createProductionConnectionChecker(): ConnectionChecker {
 
 /**
  * Build a FetchPlan using production dependencies.
+ * 
+ * IMPORTANT: If signature checking is enabled and querySignatures is not provided,
+ * this function computes them automatically. This ensures signature isolation is
+ * always enforced when enabled, regardless of caller.
+ * 
+ * Use skipSignatureComputation for observability-only calls (e.g. share boot)
+ * where contexts may not yet be available.
  */
-export function buildFetchPlanProduction(
+export async function buildFetchPlanProduction(
   graph: Graph,
   dsl: string,
   window: DateRange,
-  options?: { bustCache?: boolean; referenceNow?: string; querySignatures?: Record<string, string> }
-): FetchPlanBuilderResult {
+  options?: { bustCache?: boolean; referenceNow?: string; querySignatures?: Record<string, string>; skipSignatureComputation?: boolean }
+): Promise<FetchPlanBuilderResult> {
+  // Compute signatures if checking enabled and caller didn't provide them
+  // (unless explicitly skipped for observability-only paths)
+  let querySignatures = options?.querySignatures;
+  if (isSignatureCheckingEnabled() && !querySignatures && !options?.skipSignatureComputation) {
+    const { computePlannerQuerySignaturesForGraph } = await import('./plannerQuerySignatureService');
+    querySignatures = await computePlannerQuerySignaturesForGraph({ graph, dsl });
+  }
+
   return buildFetchPlan({
     graph,
     dsl,
@@ -708,7 +723,7 @@ export function buildFetchPlanProduction(
     fileState: createProductionFileStateAccessor(),
     connectionChecker: createProductionConnectionChecker(),
     bustCache: options?.bustCache,
-    querySignatures: options?.querySignatures,
+    querySignatures,
   });
 }
 

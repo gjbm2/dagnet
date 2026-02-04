@@ -865,7 +865,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         { scenarioId: id, effectiveFetchDSL, allowFetchFromSource, skipStage2: options?.skipStage2 ?? false }
       );
       try {
-        const { plan } = fetchOrchestratorService.buildPlan({
+        const { plan } = await fetchOrchestratorService.buildPlan({
           graph: scenarioGraph as any,
           dsl: effectiveFetchDSL,
           bustCache: false,
