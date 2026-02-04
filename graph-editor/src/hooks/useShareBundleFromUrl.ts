@@ -313,7 +313,8 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
               try {
                 const g0 = graphStore.getState().graph as any;
                 if (g0) {
-                  fetchOrchestratorService.buildPlan({ graph: g0, dsl: currentDsl, parentLogId: opId });
+                  // Skip signature computation as contexts may not be seeded yet during share boot.
+                  await fetchOrchestratorService.buildPlan({ graph: g0, dsl: currentDsl, parentLogId: opId, skipSignatureComputation: true });
                   await fetchOrchestratorService.refreshFromFilesWithRetries({
                     graphGetter: () => (graphStore.getState().graph as any) || null,
                     setGraph: (g) => graphStore.getState().setGraph(g as any),

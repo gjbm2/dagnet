@@ -17,7 +17,7 @@
 import { gitService } from './gitService';
 import { credentialsManager } from '../lib/credentials';
 import { sessionLogService } from './sessionLogService';
-import { collectGraphDependencies, getMinimalParameterIds } from '../lib/dependencyClosure';
+import { collectGraphDependencies, getMinimalParameterIds, extractContextKeysFromDSL } from '../lib/dependencyClosure';
 import { getShareBootConfig, ShareBootConfig } from '../lib/shareBootResolver';
 import { decodeSharePayloadFromUrl } from '../lib/sharePayload';
 import { parseConstraints } from '../lib/queryDSL';
@@ -395,12 +395,86 @@ export async function fetchLiveShareBundle(
       return settings;
     };
 
-    const [parameters, contexts, settings, remoteHeadSha] = await Promise.all([
+    // Fetch parameters FIRST so we can extract additional context keys from their sliceDSLs.
+    // This is necessary because parameter data can reference contexts that aren't visible
+    // in the graph DSL or share payload scenario DSLs.
+    const [parameters, settings, remoteHeadSha] = await Promise.all([
       fetchParameters(),
-      fetchContexts(),
       fetchSettings(),
       remoteHeadShaPromise,
     ]);
+
+    // Extract additional context keys from parameter sliceDSLs
+    const contextKeysFromParams = new Set<string>();
+    for (const [, paramData] of parameters) {
+      const values = paramData?.data?.values;
+      if (Array.isArray(values)) {
+        for (const v of values) {
+          const sliceDSL = v?.sliceDSL;
+          if (typeof sliceDSL === 'string') {
+            for (const k of extractContextKeysFromDSL(sliceDSL)) {
+              contextKeysFromParams.add(k);
+            }
+          }
+        }
+      }
+    }
+
+    // Merge all context keys and fetch contexts
+    const allContextKeys = Array.from(new Set([...contextKeys, ...contextKeysFromParams]));
+    if (contextKeysFromParams.size > 0) {
+      sessionLogService.addChild(logOpId, 'info', 'CONTEXT_KEYS_FROM_PARAMS', 
+        `Found ${contextKeysFromParams.size} additional context keys from parameter sliceDSLs: ${[...contextKeysFromParams].join(', ')}`);
+    }
+
+    // Now fetch contexts with the complete key list
+    const fetchContextsWithKeys = async (keys: string[]) => {
+      const contexts = new Map<string, { data: any; sha?: string; path: string }>();
+      if (keys.length === 0) return contexts;
+
+      let contextsIndex: any | null = null;
+      try {
+        const indexPath = toRepoPath('contexts-index.yaml');
+        if (pathToBlob.has(indexPath)) {
+          sessionLogService.addChild(logOpId, 'info', 'CONTEXT_INDEX_FETCH', 'Fetching contexts-index.yaml...');
+          const indexRes = await readTextFileFromTree('contexts-index.yaml');
+          contextsIndex = YAML.parse(indexRes.content);
+          sessionLogService.addChild(logOpId, 'success', 'CONTEXT_INDEX_FETCH_SUCCESS', 'Fetched contexts-index.yaml');
+        } else {
+          sessionLogService.addChild(logOpId, 'warning', 'CONTEXT_INDEX_FETCH_MISSING', 'No contexts-index.yaml (falling back to conventional paths)');
+        }
+      } catch {
+        sessionLogService.addChild(logOpId, 'warning', 'CONTEXT_INDEX_FETCH_ERROR', 'Failed to fetch contexts-index.yaml (falling back to conventional paths)');
+      }
+
+      const resolveContextPathFromIndex = (contextId: string, index: any | null | undefined, fallback: string): string => {
+        const entries = (index && Array.isArray((index as any).contexts)) ? (index as any).contexts : [];
+        const match = entries.find((e: any) => e?.id === contextId);
+        const p = match?.file_path;
+        if (typeof p === 'string' && p.trim()) return p.trim();
+        return fallback;
+      };
+
+      sessionLogService.addChild(logOpId, 'info', 'CONTEXT_FETCH', `Fetching ${keys.length} contexts...`);
+      await mapWithConcurrency(keys, CONCURRENCY_FILES, async (contextId) => {
+        const contextsDir = (gitCreds as any)?.contextsPath ? String((gitCreds as any).contextsPath) : 'contexts';
+        const fallbackPath = `${contextsDir}/${contextId}.yaml`;
+        const rawCtxPath = resolveContextPathFromIndex(contextId, contextsIndex, fallbackPath);
+        const repoCtxPath = toRepoPath(rawCtxPath);
+        try {
+          const result = await readTextFileFromTree(repoCtxPath);
+          const data = YAML.parse(result.content);
+          contexts.set(contextId, { data, sha: result.sha, path: result.path });
+        } catch (e) {
+          console.warn(`[LiveShareBoot] Failed to fetch context ${contextId}:`, e);
+        }
+      });
+
+      sessionLogService.addChild(logOpId, 'success', 'CONTEXT_FETCH_SUCCESS', `Fetched ${contexts.size}/${keys.length} contexts`);
+      return contexts;
+    };
+
+    const contexts = await fetchContextsWithKeys(allContextKeys);
     
     sessionLogService.endOperation(logOpId, 'success', 
       `Live boot complete: graph + ${parameters.size} parameters + ${contexts.size} contexts`);

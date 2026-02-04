@@ -318,7 +318,7 @@ class RetrieveAllSlicesService {
           continue;
         }
 
-        const { plan: fetchPlan, diagnostics: planDiagnostics } = buildFetchPlanProduction(
+        const { plan: fetchPlan, diagnostics: planDiagnostics } = await buildFetchPlanProduction(
           graphForSlice as any,
           sliceDSL,
           window,

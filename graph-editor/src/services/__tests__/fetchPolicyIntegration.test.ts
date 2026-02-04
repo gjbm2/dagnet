@@ -863,7 +863,7 @@ describe('FetchPlan Builder', () => {
       vi.spyOn(fileRegistry, 'getFile').mockReturnValue(undefined as any);
 
       const { buildFetchPlanProduction } = await import('../fetchPlanBuilderService');
-      const result = buildFetchPlanProduction(
+      const result = await buildFetchPlanProduction(
         graph,
         'window(1-Dec-25:9-Dec-25)',
         { start: '1-Dec-25', end: '9-Dec-25' },

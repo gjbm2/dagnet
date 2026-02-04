@@ -237,7 +237,10 @@ export function AllSlicesModal({
       } else if (result.totalErrors > 0) {
         toast(`Completed: ${result.totalSuccess} succeeded, ${result.totalErrors} failed`, { icon: '⚠️', duration: 4000 });
       } else {
-        toast.success(`All ${result.totalSuccess} operations completed successfully`);
+        const durationStr = (result.durationMs / 1000).toFixed(1);
+        toast.success(
+          `Retrieve All complete (${durationStr}s)\n${result.totalCacheHits} cached, ${result.totalApiFetches} fetched (${result.totalDaysFetched}d new)`
+        );
       }
     } catch (error) {
       toast.dismiss(progressToastId);

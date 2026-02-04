@@ -28,6 +28,7 @@ import { isCohortModeValue } from './windowAggregationService';
 import { extractSliceDimensions } from './sliceIsolation';
 import type { ParameterValue } from '../types/parameterData';
 import { isSignatureCheckingEnabled } from './signaturePolicyService';
+import { sessionLogService } from './sessionLogService';
 
 type ParamSlot = 'p' | 'cost_gbp' | 'labour_cost';
 
@@ -267,12 +268,28 @@ export async function computePlannerQuerySignaturesForGraph(input: {
           }
         }
       }
-    } catch {
-      // ignore: signatures are best-effort
+    } catch (err) {
+      // Warn but continue: context caching is best-effort enhancement
+      sessionLogService.warning(
+        'data-fetch',
+        'PLANNER_SIG_CONTEXT_CACHE_FAILED',
+        `Failed to cache contexts for signature computation: ${t.objectId}`,
+        undefined,
+        { objectId: t.objectId, targetId: t.targetId, error: String(err) }
+      );
     }
 
     const provider = await getProvider(connectionName);
-    if (!provider) continue;
+    if (!provider) {
+      sessionLogService.warning(
+        'data-fetch',
+        'PLANNER_SIG_NO_PROVIDER',
+        `Cannot compute signature for ${t.objectId}: no provider for connection "${connectionName}"`,
+        undefined,
+        { objectId: t.objectId, targetId: t.targetId, connectionName }
+      );
+      continue;
+    }
 
     // Build the same queryPayload as execution would.
     try {
@@ -340,9 +357,22 @@ export async function computePlannerQuerySignaturesForGraph(input: {
         buildResult.eventDefinitions  // Pass event definitions for hashing
       );
       out[itemKey] = sig;
-    } catch {
-      // If signature cannot be computed (missing events/contexts), planner should fall back to header coverage.
-      // Do not invent a non-deterministic signature here.
+    } catch (err) {
+      // CRITICAL: Signature computation failed - this item will use header-only coverage (no signature isolation).
+      // This is a potential cache validity issue that MUST be visible.
+      sessionLogService.warning(
+        'data-fetch',
+        'PLANNER_SIG_COMPUTATION_FAILED',
+        `Signature computation failed for ${t.objectId}: ${err instanceof Error ? err.message : String(err)}`,
+        undefined,
+        {
+          objectId: t.objectId,
+          targetId: t.targetId,
+          connectionName,
+          effectiveQuery,
+          error: err instanceof Error ? err.message : String(err),
+        }
+      );
       continue;
     }
   }

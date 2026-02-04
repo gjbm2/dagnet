@@ -61,20 +61,21 @@ class FetchOrchestratorService {
     }
   }
 
-  buildPlan(input: {
+  async buildPlan(input: {
     graph: Graph;
     dsl: string;
     bustCache?: boolean;
     referenceNow?: string;
     parentLogId?: string;
-  }): FetchOrchestratorBuildPlanResult {
-    const { graph, dsl, bustCache, referenceNow, parentLogId } = input;
+    skipSignatureComputation?: boolean;
+  }): Promise<FetchOrchestratorBuildPlanResult> {
+    const { graph, dsl, bustCache, referenceNow, parentLogId, skipSignatureComputation } = input;
     const window = this.extractWindowFromDSL(dsl);
     if (!window) {
       throw new Error('Cannot build plan: no window/cohort range in DSL');
     }
     const now = referenceNow ?? new Date().toISOString();
-    const { plan } = buildFetchPlanProduction(graph, dsl, window, { bustCache, referenceNow: now });
+    const { plan } = await buildFetchPlanProduction(graph, dsl, window, { bustCache, referenceNow: now, skipSignatureComputation });
 
     if (parentLogId) {
       const s = summarisePlan(plan);

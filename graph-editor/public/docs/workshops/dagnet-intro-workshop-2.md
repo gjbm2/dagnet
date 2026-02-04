@@ -420,6 +420,50 @@ When something looks wrong, teach participants to do these three steps first:
 
 ---
 
+## Section 7.7: Snapshots (Data History)
+
+**Duration**: ~5 minutes  
+**Mode**: Demo
+
+### What Are Snapshots?
+
+Every time DagNet retrieves data from Amplitude, it stores a **snapshot** — a timestamped record of the daily time-series values at that moment.
+
+### When Snapshots Are Created
+
+Snapshots are created automatically on every successful data retrieval:
+
+- Manual **Fetch** (button or menu)
+- **Retrieve All Slices** from the Data menu
+- Scheduled automation (if configured)
+
+Each retrieval appends new rows — it does not overwrite previous data.
+
+### Where Snapshots Are Stored
+
+Snapshots are stored in a **server-side database** (not in your browser).
+
+Each snapshot row includes: anchor day, n, k, latency stats (median lag, mean lag, onset), retrieval timestamp, and query signature.
+
+### Managing Snapshots
+
+Access snapshot actions via the **Snapshots** submenu:
+
+- **Edge context menu** → Probability parameter → Snapshots
+- **⚡ Lightning menu** (in Properties panel) → Snapshots
+
+| Action | What it does |
+|--------|--------------|
+| **Download snapshot data** | Export all snapshot rows for this parameter as CSV |
+| **Delete snapshots (N)** | Permanently remove all N snapshot retrievals for this parameter |
+
+### Coming Soon
+
+- **As-at queries**: DSL syntax `.asAt(15-Jan-26)` to view evidence as it was known at a historical date
+- **Time-series charting**: Visualise how conversion rates have changed over time
+
+---
+
 ## Section 8: Putting It Together
 
 **Duration**: ~25 minutes  
@@ -660,5 +704,5 @@ After the workshop, collect feedback on:
 
 ---
 
-*Document version: 1.0 | Created: 15-Jan-26*
+*Document version: 1.1 | Created: 15-Jan-26 | Updated: 4-Feb-26*
 
