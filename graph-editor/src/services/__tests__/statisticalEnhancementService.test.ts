@@ -2009,4 +2009,3 @@ describe('LAG path_t95 Accumulation (baseline characterisation)', () => {
     expect(pathT95!).toBeCloseTo(25.48, 2);
   });
 });
-
