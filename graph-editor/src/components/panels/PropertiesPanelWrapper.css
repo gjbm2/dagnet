@@ -75,9 +75,7 @@
 
 /* -------------------------------------------------------------------------- */
 /* Snapshots badge menu (Radix DropdownMenu)                                   */
-/* -------------------------------------------------------------------------- */
-
-.properties-snapshots-menu {
+/* -------------------------------------------------------------------------- */.properties-snapshots-menu {
   min-width: 220px;
   max-width: min(420px, calc(100vw - 40px));
   background-color: white;

@@ -1,21 +1,53 @@
-# Historical Query Mode: `asAt()` — Design and Implementation
+# Historical Query Mode: `asat()` — Design and Implementation
 
-**Status**: Phase 4 (Deferred until Phases 1-3 complete)  
-**Prerequisite**: Snapshot write/read path working  
-**Date**: 1-Feb-26
+**Status**: Phase 1 plan (stepping stone)  
+**Prerequisite**: Snapshot write path working; snapshot DB reachable from python-api  
+**Date**: 4-Feb-26
 
 ---
 
 ## 1. Overview
 
-The `asAt()` DSL extension enables **historical queries** — viewing conversion data "as it was known at a specific past date" rather than the current state.
+The `asat()` DSL extension enables **historical queries** — viewing conversion data "as it was known at a specific past date" rather than the current state.
 
 **Example:**
 ```
-from(A).to(B).window(1-Oct-25:31-Oct-25).asAt(15-Oct-25)
+from(A).to(B).window(1-Oct-25:31-Oct-25).asat(15-Oct-25)
 ```
 
 **Semantics:** Return time-series data for the window, but **as it would have appeared on 15-Oct-25** — i.e., retrieve from the snapshot DB with `retrieved_at <= 15-Oct-25`, not from Amplitude.
+
+### 1.1 Requirements (Phase 1)
+
+This Phase 1 plan incorporates the clarified requirements:
+
+1. **Canonical function name** is `asat` (lowercase). We may also permit `at` as sugar.
+2. `asat(5-Nov-25)` takes a **UK-style** date token (`d-MMM-yy`) at the DSL layer.
+3. DSL is **order-indifferent** for constraints: `asat(...)` may appear anywhere in the chain.
+4. Phase 1 can ship **without any dedicated UI**: users can manually type the `asat` clause.
+5. The Monaco query editors must handle the syntax properly (no “unknown function” diagnostics; sensible chips).
+6. When dedicated UI is added later, we must surface “available snapshots” by date/time (requires a route that returns distinct retrieval times).
+7. The Python “virtual snapshot” read must scope over the full requested anchor range and select **latest-per-anchor_day as-of** `as_at` (not be biased to a single incremental retrieval session).
+
+### 1.2 Naming + sugar
+
+- **Canonical**: `asat(...)`
+- **Alias**: `at(...)` is accepted as sugar for `asat(...)`
+- **Normalisation**: `normalizeConstraintString()` should emit `asat(...)` only (never `at(...)`), so there is one canonical form.
+
+### 1.3 Date literal format + boundary conversion
+
+- DSL accepts UK tokens: `asat(5-Nov-25)`
+- At the API/DB boundary we use ISO:
+  - `anchor_from` / `anchor_to`: ISO dates (`YYYY-MM-DD`)
+  - `as_at`: ISO datetime (what python currently parses)
+- Interpretation policy for a **date-only** `asat(d-MMM-yy)` literal:
+  - Treat it as “as at the end of that day” and convert to ISO as `YYYY-MM-DDT23:59:59Z` (or `...59.999Z` if we want inclusive end-of-day).
+  - The “no snapshot within 24 hours” warning window is computed relative to this `as_at` timestamp.
+
+### 1.4 Terminology note (legacy)
+
+Some existing sections below still refer to `asAt` (camelCase) in examples/headings. In Phase 1 the canonical DSL function is `asat` (lowercase); treat any `asAt` mention as legacy spelling to be migrated.
 
 ---
 
@@ -23,24 +55,24 @@ from(A).to(B).window(1-Oct-25:31-Oct-25).asAt(15-Oct-25)
 
 | Use Case | DSL Example | Business Value |
 |----------|-------------|----------------|
-| **Audit trail** | `.asAt(1-Nov-25)` | "What did the dashboard show on 1-Nov?" |
-| **Debugging** | `.asAt(report_date)` | "Why did the report show X on that day?" |
-| **Trend analysis** | Compare `.asAt(T1)` vs `.asAt(T2)` | "How did our view evolve?" |
-| **Immature cohort replay** | `.asAt(cohort_date + 7d)` | "What did we know after 1 week?" |
-| **Scenario comparison** | Live vs asAt(T) side-by-side | "How much has our view changed?" |
+| **Audit trail** | `.asat(1-Nov-25)` | "What did the dashboard show on 1-Nov?" |
+| **Debugging** | `.asat(report_date)` | "Why did the report show X on that day?" |
+| **Trend analysis** | Compare `.asat(T1)` vs `.asat(T2)` | "How did our view evolve?" |
+| **Immature cohort replay** | `.asat(cohort_date + 7d)` | "What did we know after 1 week?" |
+| **Scenario comparison** | Live vs asat(T) side-by-side | "How much has our view changed?" |
 
 ---
 
 ## 3. Core Principles
 
-### 3.1 `asAt` is a Retrieval Filter, Not a Query Identity
+### 3.1 `asat` is a Retrieval Filter, Not a Query Identity
 
 ```
 from(A).to(B).window(1-Oct:31-Oct)              → core_hash = abc123
-from(A).to(B).window(1-Oct:31-Oct).asAt(15-Oct) → core_hash = abc123 (SAME)
+from(A).to(B).window(1-Oct:31-Oct).asat(15-Oct) → core_hash = abc123 (SAME)
 ```
 
-The `asAt` date filters **which snapshots to return**, not **what the query means**.
+The `asat` date filters **which snapshots to return**, not **what the query means**.
 
 ### 3.2 Signature Validation is MANDATORY
 
@@ -54,14 +86,14 @@ Before returning historical data, we MUST verify the computed `core_hash` matche
 
 | Query Type | File Cache | Memory Cache | DB |
 |------------|------------|--------------|-----|
-| Live (no asAt) | Write | Write | Shadow-write |
-| Historical (asAt) | **Read-only** | **Read-only** | **Read-only** |
+| Live (no asat) | Write | Write | Shadow-write |
+| Historical (asat) | **Read-only** | **Read-only** | **Read-only** |
 
-No writes to files, IndexedDB, or snapshot DB for `asAt` queries.
+No writes to files, IndexedDB, or snapshot DB for `asat` queries.
 
 ### 3.4 Uses Current Graph for Signature
 
-For V1, `asAt` queries compute signatures using the **current** graph definition:
+For V1, `asat` queries compute signatures using the **current** graph definition:
 
 - If query definition has changed since snapshots were stored → signature mismatch
 - Clear error message: "Query configuration has changed since snapshots were stored"
@@ -71,7 +103,7 @@ For V1, `asAt` queries compute signatures using the **current** graph definition
 
 ## 4. Data Flow
 
-### 4.1 Without `asAt` (Current Behaviour)
+### 4.1 Without `asat` (Current Behaviour)
 
 ```
 DSL: from(A).to(B).window(1-Oct:31-Oct)
@@ -80,14 +112,14 @@ DSL: from(A).to(B).window(1-Oct:31-Oct)
     → Return current state
 ```
 
-### 4.2 With `asAt` (New Behaviour)
+### 4.2 With `asat` (New Behaviour)
 
 ```
-DSL: from(A).to(B).window(1-Oct:31-Oct).asAt(15-Oct-25)
-    → Parse DSL, extract asAt date
+DSL: from(A).to(B).window(1-Oct:31-Oct).asat(15-Oct-25)
+    → Parse DSL, extract asat date
     → Compute signature (same as live query)
     → Query DB: WHERE core_hash = %s AND retrieved_at <= '2025-10-15'
-    → Return most recent snapshot per anchor_day as of that date
+    → Return a virtual snapshot: latest-per-anchor_day as-of that date
     → NO write to file, NO shadow-write to DB (read-only)
 ```
 
@@ -97,7 +129,7 @@ DSL: from(A).to(B).window(1-Oct:31-Oct).asAt(15-Oct-25)
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ SIGNATURE-VALIDATED HISTORICAL QUERY                                         │
 │                                                                              │
-│   1. Parse DSL: from(A).to(B).window(1-Oct:31-Oct).asAt(15-Oct)             │
+│   1. Parse DSL: from(A).to(B).window(1-Oct:31-Oct).asat(15-Oct)            │
 │                                                                              │
 │   2. Compute core_hash using CURRENT query definition (same as live query)  │
 │                                                                              │
@@ -108,8 +140,9 @@ DSL: from(A).to(B).window(1-Oct:31-Oct).asAt(15-Oct-25)
 │        AND anchor_day BETWEEN %s AND %s                                     │
 │        AND retrieved_at <= %s    ←── AS-AT FILTER                           │
 │                                                                              │
-│   4. If rows found → return time-series                                     │
-│   5. If no rows → "No historical data matching current query configuration" │
+│   4. Reduce to virtual snapshot (latest-per-anchor_day as-of `as_at`)       │
+│   5. If rows found → return time-series                                     │
+│   6. If no rows → "No historical data matching current query configuration" │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -129,17 +162,17 @@ DSL: from(A).to(B).window(1-Oct:31-Oct).asAt(15-Oct-25)
 
 | Scenario | What Happens |
 |----------|--------------|
-| **Full coverage** | `window(1-Oct:31-Oct).asAt(15-Nov)` with daily snapshots → One row per anchor_day |
-| **Partial coverage** | `asAt(15-Oct)` but snapshots started 10-Oct → Rows only for available dates |
-| **No coverage** | `asAt(9-Oct)` but snapshots started 10-Oct → Empty result |
-| **Sparse snapshots** | `asAt(15-Oct)` with snapshots on 10th, 12th, 15th → Most recent per anchor ≤ 15-Oct |
+| **Full coverage** | `window(1-Oct:31-Oct).asat(15-Nov)` with daily snapshots → One row per anchor_day |
+| **Partial coverage** | `asat(15-Oct)` but snapshots started 10-Oct → Rows only for available dates |
+| **No coverage** | `asat(9-Oct)` but snapshots started 10-Oct → Empty result |
+| **Sparse snapshots** | `asat(15-Oct)` with snapshots on 10th, 12th, 15th → Most recent per anchor ≤ 15-Oct |
 
 ### 5.3 Edge Cases
 
 | Edge Case | Handling |
 |-----------|----------|
-| asAt date before first snapshot | Error: "No data as of {date}" |
-| asAt date in future | Behave as live query (use latest available) |
+| asat date before first snapshot | Error: "No data as of {date}" |
+| asat date in future | Behave as live query (use latest available) |
 | Anchor range extends beyond data | Return partial result with coverage metadata |
 | DB unavailable | Error: "Historical data requires database connection" |
 | Python server unavailable | Error: "Historical data unavailable" |
@@ -177,18 +210,31 @@ interface AsAtResult {
     daysRequested: number;
     daysReturned: number;
     oldestSnapshot: string;  // earliest retrieved_at
-    newestSnapshot: string;  // latest retrieved_at (≤ asAt)
+    newestSnapshot: string;  // latest retrieved_at (≤ asat)
   };
   warnings?: string[];  // e.g., "Partial coverage: 25/31 days"
 }
 ```
+
+### 6.3 Warning policy (Phase 1)
+
+We distinguish between:
+
+- **Missing days inside the daily series**: do **not** warn by default.
+- **Staleness vs the requested `asat`**: warn if no snapshot within 24 hours of the requested `asat` timestamp.
+- **Missing coverage of the requested window end (`anchor_to`)**: warn if the virtual snapshot does not include a point for the requested `anchor_to` day.
+
+This yields two warnings in the motivating example:
+
+- Warn A: “No snapshot within 24 hours of \[asat date\]”
+- Warn B: “Missing data for \[anchor_to\] (requested window end not covered)”
 
 ---
 
 ## 7. DB Query
 
 ```sql
--- Get most recent snapshot per anchor_day as of the asAt date
+-- Get most recent snapshot per anchor_day as of the asat date
 WITH ranked AS (
   SELECT *,
     ROW_NUMBER() OVER (
@@ -216,11 +262,15 @@ WHERE rn = 1
 ORDER BY anchor_day
 ```
 
-Returns **one row per anchor_day** — the most recent snapshot as of the `asAt` date.
+Returns **one row per anchor_day** — the most recent snapshot as of the `asat` date.
 
 ---
 
-## 8. Implementation: File-by-File Trace
+## 8. Legacy (superseded) file-by-file trace
+
+This section and the downstream impact-analysis tables were written against an earlier camelCase `asAt(...)` draft and earlier endpoint naming.
+
+For implementation, treat **§12 (Phases 1–2)** as authoritative. We will either migrate or remove the legacy material below as the implementation proceeds.
 
 ### 8.1 DSL Parsing — TypeScript
 
@@ -716,42 +766,207 @@ if (asAtDate) {
 
 ## 12. Implementation Phases
 
-### Phase 4A: Core DSL Support (1 day)
+### Phase 1: Manual `asat(...)` + central fork to DB virtual snapshot (no dedicated UI)
 
-- [ ] Update `queryDSL.ts`: QUERY_FUNCTIONS, ParsedConstraints, parseConstraints()
-- [ ] Update `query_dsl.py`: ParsedQuery, parse_query()
-- [ ] Unit tests for DSL parsing
+#### 12.1 Frontend: DSL parsing + normalisation (TypeScript)
 
-### Phase 4B: Python Endpoint (0.5 day)
+- **File**: `graph-editor/src/lib/queryDSL.ts`
+- **Changes**:
+  - Add `asat` and `at` to recognised function names
+  - Extend `ParsedConstraints` with `asat: string | null`
+  - Update `parseConstraints()` to extract `asat(...)` / `at(...)` regardless of ordering
+  - Update `normalizeConstraintString()` to emit canonical `asat(...)` only (never `at(...)`)
+  - Ensure any structure validators / patterns do not reject `asat(...)` and do not require it to be last
+- **Date policy**:
+  - Keep the DSL literal as UK token (`d-MMM-yy`)
+  - Convert to ISO at the boundary when building the python request payload
 
-- [ ] Add `/api/snapshots/query` endpoint
-- [ ] Integration tests with test DB
+#### 12.2 Frontend: Monaco query editors (required because Phase 1 has no UI)
 
-### Phase 4C: Data Operations Fork (1 day)
+- **File**: `graph-editor/src/components/QueryExpressionEditor.tsx`
+- **Changes**:
+  - Extend chip parsing to recognise `asat(...)` and `at(...)`
+  - Add chip config so the clause is rendered and not flagged as unknown
+  - Ensure allowed function lists include `asat`/`at` via `QUERY_FUNCTIONS`
+- **Acceptance**:
+  - Typing `.asat(5-Nov-25)` does not produce “Unknown function” warnings
+  - Editor parsing/chips are order-indifferent (clause may appear anywhere)
 
-- [ ] Add `querySnapshots()` to graphComputeClient
-- [ ] Implement fork in `getFromSourceDirect()`
-- [ ] Verify signature exclusion
-- [ ] Integration tests
+#### 12.3 Frontend: Centralised fork point (DB instead of DAS)
 
-### Phase 4D: UI Integration (0.5 day)
+- **File**: `graph-editor/src/services/dataOperationsService.ts`
+- **Location**: inside `getFromSourceDirect()`, after signature computation and slice planning, before DAS execution
+- **Behaviour**:
+  - Detect `asat` in the effective DSL
+  - Compute the query signature (`core_hash`) exactly as today, ensuring `asat` is excluded
+  - Resolve slice set exactly as today (explicit slice or MECE fulfilment set)
+  - If `asat` present:
+    - Call python “virtual snapshot” read (see 12.4) with:
+      - `param_id` (workspace-prefixed)
+      - `core_hash` (mandatory for signature validation)
+      - `slice_key` (explicit) or slice key set (MECE)
+      - `anchor_from` / `anchor_to`
+      - `as_at` (ISO datetime derived from the UK token)
+    - Convert returned rows to the standard time-series shape
+    - Enforce read-only: skip file writes, skip IDB writes, skip snapshot append
 
-- [ ] Add asAt mode to WindowSelector
-- [ ] Add visual indicators to ScenariosPanel
-- [ ] E2E tests
+- **Frontend client location (Phase 1)**:
+  - Add a dedicated client helper alongside the existing snapshot clients:
+    - **File**: `graph-editor/src/services/snapshotWriteService.ts`
+    - **New function**: `querySnapshotsVirtual(...)` calling `POST /api/snapshots/query-virtual`
+  - This avoids introducing a second parallel HTTP client surface unless we explicitly decide to.
 
-### Phase 4E: Scenario Composition (0.5 day)
+#### 12.4 Backend: Virtual snapshot query (requirement #7)
 
-- [ ] Update FetchParts and related functions
-- [ ] Test scenario inheritance with asAt
+Today, `/api/snapshots/query-full` returns raw rows and is suitable for export/debug. Phase 1 requires a “virtual snapshot” shape:
 
-### Phase 4F: Documentation (0.5 day)
+- **New route** (recommended): `POST /api/snapshots/query-virtual`
+  - Purpose: return the virtual snapshot “as of” a given `as_at`
+  - Query must:
+    - filter by `retrieved_at <= as_at`
+    - select the **latest** row per `anchor_day` (and per `slice_key`) within the requested `anchor_from` / `anchor_to` range
+    - therefore scope over all incremental retrieval sessions up to `as_at` (not just the last incremental window)
+  - Response must include:
+    - the virtual snapshot rows
+    - `latest_retrieved_at_used` (max `retrieved_at` used by the virtual snapshot)
+    - `has_anchor_to` (whether the virtual snapshot contains `anchor_day == anchor_to`)
 
-- [ ] Update user-guide.md
-- [ ] Update query-expressions.md
-- [ ] Add CHANGELOG entry
+- **Performance invariant (Phase 1)**:
+  - The backend must execute **at most one SQL query per `param_id` per request** (per endpoint call).
+  - The SQL must support multiple slices in one query via `slice_key = ANY(%s)` (or equivalent).
+  - Explicitly: **do not** execute one query per slice key, or one query per `(param_id × slice_key)`; this would add unacceptable latency.
 
-**Total: 4 days**
+- **Backend implementation locations (Phase 1)**:
+  - HTTP routing:
+    - `graph-editor/api/python-api.py` (prod routing)
+    - `graph-editor/dev-server.py` (dev routing)
+  - Handler:
+    - `graph-editor/lib/api_handlers.py` (new `handle_snapshots_query_virtual(...)`)
+  - DB query function:
+    - `graph-editor/lib/snapshot_service.py` (new `query_virtual_snapshot(...)`)
+
+This supports the warning policy in §6.3 without needing any interpolation or “fill missing days”.
+
+#### 12.5 Warnings (two toasts)
+
+Using the backend metadata from 12.4:
+
+- **Warn A** if `latest_retrieved_at_used < as_at - 24 hours`
+- **Warn B** if `has_anchor_to` is false (requested window end not covered)
+
+Do not warn for other missing anchor-day points in the returned series.
+
+#### 12.6 Future UI (not required for Phase 1): snapshot availability by date/time (requirement #6)
+
+When we add dedicated UI, we will need an endpoint that returns the set of available snapshot retrieval times (distinct `retrieved_at`) for a subject so the UI can present an “available snapshots” picker and explain freshness precisely.
+
+The existing `/api/snapshots/inventory` is summary-only (counts/min/max) and is not sufficient for that UI by itself.
+
+When we implement dedicated UI, we should add a bounded endpoint that returns available retrieval times, for example:
+
+- `POST /api/snapshots/retrievals`
+  - Inputs: `param_id`, optional `core_hash`, optional `slice_keys`, optional `anchor_from/anchor_to`, optional `limit`
+  - Output: distinct `retrieved_at` timestamps (descending), plus a “latest within 24h of as_at” convenience boolean if useful for UI.
+
+### Phase 2: Dedicated `@` UI + “available snapshots” routing
+
+Phase 2 adds a dedicated UX for selecting and clearing the `asat(...)` clause, backed by a python route that returns the set of available snapshot retrieval dates for the **currently effective slice set**.
+
+#### 12.7 Backend: route to return available snapshots (by date/time)
+
+We need a route that returns “what snapshots are available” for the *current* request coordinates. This is distinct from `/api/snapshots/inventory` (summary-only).
+
+- **New route**: `POST /api/snapshots/retrievals`
+  - **Purpose**: return a bounded set of available snapshot retrieval timestamps (and/or retrieval days) for the subject currently being edited in the WindowSelector.
+  - **Inputs** (minimum viable):
+    - `param_id` (workspace-prefixed)
+    - `core_hash` (recommended when signature policy is enabled; optional if not)
+    - `slice_keys` (must reflect the currently effective contexts; for MECE fulfilment this can be a set)
+    - optional `anchor_from` / `anchor_to` (so the calendar can be scoped to the visible window/cohort range)
+    - optional `limit` (hard cap for safety)
+  - **Output**:
+    - `retrieved_at` values (distinct, sorted descending) and/or retrieval “days” derived from those timestamps (for calendar highlighting)
+    - include a `latest_retrieved_at` convenience field
+  - **Implementation locations**:
+    - HTTP routing: `graph-editor/api/python-api.py` and `graph-editor/dev-server.py`
+    - Handler: `graph-editor/lib/api_handlers.py`
+    - DB query: `graph-editor/lib/snapshot_service.py` (distinct retrieval times; bounded; indexed-friendly)
+
+- **Performance invariant (Phase 2)**:
+  - **One SQL query per `param_id`** (per call), returning distinct retrieval times (bounded by `limit`).
+  - Never query once per slice to discover retrievals; if slice filtering is needed, filter with `slice_key = ANY(%s)` in a single query.
+
+#### 12.8 Frontend: WindowSelector `@` control (date picker companion)
+
+We add a dedicated icon immediately to the right of the date selector in the WindowSelector.
+
+- **File**: `graph-editor/src/components/WindowSelector.tsx`
+- **UI element**: an `@` icon/button (visually treated as a toggle)
+  - **Highlighted state**: when `asat` is active in the effective DSL
+  - **Opens**: a dropdown (similar interaction model to existing date selection UI), containing a calendar view
+  - **Calendar highlighting**:
+    - each day is visually highlighted when a snapshot exists for the currently effective coordinates
+    - “currently effective coordinates” means:
+      - effective `param_id` for the subject
+      - effective `slice_keys` derived from current context constraints (including the current selection/MECE policy used by the fetch path)
+      - optional `core_hash` if enforced
+    - the dropdown retrieves these via `POST /api/snapshots/retrievals`
+
+#### 12.9 Frontend: `@` dropdown behaviours
+
+- **Selecting a date**:
+  - adds `asat(<selected date>)` to the effective query (UK date token; `d-MMM-yy`)
+  - `@` icon becomes highlighted
+  - if the selected `asat` date is **before** the current window/cohort end date, the window/cohort end date is truncated to the selected date.
+    - Example: user has `window(1-Nov-25:30-Nov-25)`, clicks `@`, selects `15-Nov-25`
+      - resulting query is `window(1-Nov-25:15-Nov-25).asat(15-Nov-25)`
+  - The full query remains editable in the extended view of the WindowSelector (no restrictions vs today).
+
+- **Cancel / remove `@` clause**:
+  - the dropdown must include a clear “Cancel” / “Remove @” affordance which removes the `asat(...)` clause entirely
+  - removing `asat` also removes the highlighted state from `@`
+  - **Policy**: do not restore the prior window/cohort end date on removal.
+    - Truncation is intentionally one-way: it is rarely meaningful to request an `asat` date that is earlier than the window/cohort upper bound.
+    - Removing `asat` therefore only removes the clause; the window/cohort end date remains as currently set.
+
+#### 12.10 Phase 2 tests (high level)
+
+- **Backend**:
+  - retrieval list is bounded, stable ordering, and respects the current effective coordinates (`param_id` + `slice_keys` + optional `core_hash` + optional anchor range)
+  - query count invariant: one SQL query per `param_id`
+
+- **Frontend**:
+  - `@` icon highlights iff `asat(...)` is present
+  - calendar highlights days with available snapshots for the currently effective coordinates
+  - selecting an `@` date inserts `asat(d-MMM-yy)` and truncates window/cohort end if needed
+  - remove action clears `asat` and unhighlights `@` (no restoration of prior end date)
+  - extended query editor remains fully editable and round-trips correctly
+
+#### 12.11 Phase 1–2 hardening tests (robustness)
+
+These are “must-have” tests to catch the subtle regressions that are easy to introduce when wiring `asat` through the central fetch path.
+
+- **Date boundary semantics**:
+  - `asat(5-Nov-25)` is interpreted as end-of-day for `as_at` (ISO `...T23:59:59Z` per policy), and warning windows are computed relative to that.
+
+- **Order-indifference (real-world constraint mixes)**:
+  - `...context(...).asat(...)` and `...asat(...).context(...)` behave identically
+  - combinations involving `contextAny`, `visitedAny`, and `minus/plus` still parse and normalise correctly
+
+- **Slice-set correctness**:
+  - explicit contexted slice → `slice_keys` contains exactly that slice key
+  - uncontexted semantic series fulfilled by MECE → `slice_keys` is the MECE set (not empty, and not one-by-one queries)
+
+- **Virtual snapshot row-shape guard**:
+  - `query-virtual` returns at most one row per `(anchor_day, slice_key)` (catches regressions back to “raw rows”)
+
+- **Warning correctness (no noisy UX)**:
+  - Warn A triggers only when `latest_retrieved_at_used < as_at - 24h`
+  - Warn B triggers only when `anchor_to` is not covered
+  - internal gaps in daily series do not produce warnings
+
+- **Read-only invariants**:
+  - `asat` fetch produces no file writes, no IDB writes, and no snapshot append writes
 
 ---
 
@@ -761,38 +976,38 @@ if (asAtDate) {
 
 | Test | Description |
 |------|-------------|
-| `asAt_parsing_typescript` | Parse `asAt(15-Oct-25)` correctly |
-| `asAt_parsing_python` | Parse asAt in Python |
-| `asAt_excluded_from_signature` | core_hash unchanged with/without asAt |
-| `asAt_dsl_roundtrip` | Parse → normalize → same DSL |
+| `asat_parsing_typescript` | Parse `asat(15-Oct-25)` and `at(15-Oct-25)` correctly |
+| `asat_parsing_python` | Parse asat/at in Python (only if Python-side parsing is required) |
+| `asat_excluded_from_signature` | core_hash unchanged with/without asat |
+| `asat_dsl_roundtrip` | Parse → normalise → canonical `asat(...)` |
 
 ### 13.2 Integration Tests
 
 | Test | Description |
 |------|-------------|
-| `asAt_returns_historical` | Query with asAt returns snapshot with `retrieved_at <= asAt` |
-| `asAt_latest_per_anchor` | Multiple snapshots per anchor_day → returns most recent as of asAt |
-| `asAt_no_data` | asAt before any snapshots → graceful error |
-| `asAt_signature_mismatch` | Data exists but different hash → clear error |
-| `asAt_no_side_effects` | Historical query → no file writes, no DB writes |
+| `asat_returns_historical` | Query with asat returns virtual snapshot with `retrieved_at <= as_at` |
+| `asat_latest_per_anchor` | Multiple retrieval sessions → latest-per-anchor_day as-of asat |
+| `asat_no_data` | asat before any snapshots → graceful error |
+| `asat_signature_mismatch` | Data exists but different hash → clear error |
+| `asat_no_side_effects` | Historical query → no file writes, no DB writes |
 
 ### 13.3 E2E Tests
 
 | Test | Description |
 |------|-------------|
-| `asAt_ui_toggle` | Enable asAt mode in WindowSelector |
-| `asAt_scenario_badge` | asAt scenario shows visual indicator |
-| `asAt_regeneration_disabled` | Cannot regenerate asAt scenario |
-| `asAt_shape_matches_live` | Result shape identical to live query |
+| `asat_ui_toggle` | (Future UI) Enable asat mode via dedicated UI |
+| `asat_scenario_badge` | (Future UI) Scenario shows asat visual indicator |
+| `asat_regeneration_disabled` | (If enforced) Cannot regenerate asat scenario |
+| `asat_shape_matches_live` | Result shape identical to live query |
 
 ### 13.4 Test File Locations
 
 | File | Contents |
 |------|----------|
-| `src/lib/__tests__/queryDSL.asAt.test.ts` | TypeScript parsing |
-| `lib/tests/test_query_dsl_asat.py` | Python parsing |
-| `src/services/__tests__/dataOperations.asAt.test.ts` | Fork logic |
-| `lib/tests/test_snapshot_handlers.py` | Python endpoint tests (add asAt cases) |
+| `src/lib/__tests__/queryDSL.asat.test.ts` | TypeScript parsing |
+| `lib/tests/test_query_dsl_asat.py` | Python parsing (if needed) |
+| `src/services/__tests__/dataOperations.asat.test.ts` | Fork logic |
+| `lib/tests/test_snapshot_handlers.py` | Python endpoint tests (add asat cases) |
 
 ---
 
@@ -800,9 +1015,9 @@ if (asAtDate) {
 
 **No schema changes required.**
 
-The existing schema supports `asAt` queries:
+The existing schema supports `asat` queries:
 - `retrieved_at` is already stored per row
-- Query filters by `retrieved_at <= asAt_date`
+- Query filters by `retrieved_at <= as_at`
 - `ROW_NUMBER()` window function selects latest-as-of
 
 ---
@@ -1058,13 +1273,11 @@ ScenariosContext.tsx → regenerateScenario()
 
 | Test File | Scope | Updates Needed |
 |-----------|-------|----------------|
-| `src/lib/__tests__/queryDSL.test.ts` | DSL parsing | Add asAt parsing tests |
-| `src/lib/__tests__/queryDSL.asAt.test.ts` | asAt-specific | **CREATE**: Dedicated asAt parsing tests |
-| `src/services/__tests__/dataOperationsService.integration.test.ts` | Data ops | Add asAt fork tests |
-| `src/services/__tests__/scenarioRegenerationService.test.ts` | Scenarios | Add asAt scenario tests |
-| `src/contexts/__tests__/ScenariosContext.liveScenarios.test.tsx` | Scenarios | Add asAt composition tests |
-| `src/components/__tests__/WindowSelector.coverage.test.ts` | WindowSelector | Add asAt mode tests |
-| `lib/tests/test_query_dsl_asat.py` | Python DSL | **CREATE**: Python asAt parsing tests |
+| `src/lib/__tests__/queryDSL.test.ts` | DSL parsing | Add asat/at parsing + normalisation tests |
+| `src/components/__tests__/QueryExpressionEditor.test.tsx` | Monaco editor | Ensure `asat(...)` / `at(...)` are recognised (chips/diagnostics) |
+| `src/services/__tests__/dataOperationsService.integration.test.ts` | Data ops | Add asat fork tests (read-only; no DAS; no writes) |
+| `lib/tests/test_snapshot_read_integrity.py` (or similar existing suite) | Python | Add tests for `query-virtual` latest-per-anchor_day-as-of |
+| `e2e/*` | UI | Phase 2 `@` UI behaviour (calendar highlight + truncate + remove) |
 
 ---
 
@@ -1072,50 +1285,48 @@ ScenariosContext.tsx → regenerateScenario()
 
 | Item | Status | Date | Notes |
 |------|--------|------|-------|
-| queryDSL.ts: asAt parsing | `[ ]` | | |
-| query_dsl.py: asAt parsing | `[ ]` | | |
-| graphComputeClient: querySnapshots() | `[ ]` | | |
-| /api/snapshots/query endpoint (asAt) | `[ ]` | | |
-| dataOperationsService: asAt fork | `[ ]` | | |
-| WindowSelector: asAt mode UI | `[ ]` | | |
-| ScenariosPanel: asAt badge | `[ ]` | | |
-| scenarioRegenerationService: asAt composition | `[ ]` | | |
-| DSL parsing tests passing | `[ ]` | | |
-| Signature exclusion test passing | `[ ]` | | |
-| Round-trip asAt test passing | `[ ]` | | |
-| GD-004 (asAt DB unavailable) passing | `[ ]` | | |
-| User documentation updated | `[ ]` | | |
-| Query expressions docs updated | `[ ]` | | |
-| **PHASE 4 COMPLETE** | `[ ]` | | |
+| `queryDSL.ts`: asat/at parsing + canonical normalisation | `[ ]` | | |
+| `QueryExpressionEditor.tsx`: chips/diagnostics recognise asat/at | `[ ]` | | |
+| `snapshotWriteService.ts`: `querySnapshotsVirtual(...)` client | `[ ]` | | |
+| Python: `POST /api/snapshots/query-virtual` implemented | `[ ]` | | latest-per-anchor_day-as-of + metadata |
+| `dataOperationsService.ts`: asat fork (DB virtual snapshot, read-only) | `[ ]` | | no writes (files/IDB/DB append) |
+| Warning A (no snapshot within 24h) wired to toast | `[ ]` | | uses `latest_retrieved_at_used` |
+| Warning B (missing anchor_to) wired to toast | `[ ]` | | based on `has_anchor_to` |
+| Phase 2: `POST /api/snapshots/retrievals` implemented | `[ ]` | | distinct retrieval times for highlighting |
+| Phase 2: WindowSelector `@` calendar + truncate + remove | `[ ]` | | one-way truncation; removal does not restore |
+| Unit/integration tests updated and passing | `[ ]` | | see §13 + §18 |
+| User docs updated (`asat`, `at`, `@` UI) | `[ ]` | | see §20 |
 
 ---
 
-## 20. Documentation Updates (Phase 4)
+## 20. Documentation Updates
 
 ### 20.1 User Documentation
 
 **File:** `graph-editor/public/docs/user-guide.md`
 
-Add new section: "Viewing Historical Data (`asAt`)" with examples
+Add new section: "Viewing Historical Data (`asat` / `@`)" with examples
 
 ### 20.2 Query Reference
 
 **File:** `graph-editor/public/docs/query-expressions.md`
 
-- Add `asAt(date)` function documentation with syntax and examples
+- Add `asat(date)` function documentation with syntax and examples
+- Document `at(date)` as sugar (canonical normalisation is `asat`)
 - Add "Historical Queries" section explaining signature validation
 
 ### 20.3 API Reference
 
 **File:** `graph-editor/public/docs/api-reference.md`
 
-- Add `/api/snapshots/query` endpoint documentation (asAt variant)
+- Add `/api/snapshots/query-virtual` endpoint documentation (virtual snapshot as-of)
+- Add `/api/snapshots/retrievals` endpoint documentation (available snapshots by retrieval time)
 
 ### 20.4 CHANGELOG
 
 **File:** `graph-editor/public/docs/CHANGELOG.md`
 
-Add entry: "Added: Historical queries via `asAt()` DSL function"
+Add entry: "Added: Historical queries via `asat()` (`@` selector UI in Phase 2)"
 
 ---
 
