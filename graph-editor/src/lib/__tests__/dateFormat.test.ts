@@ -203,6 +203,23 @@ describe('Date Formatting (d-MMM-yy)', () => {
     it('should handle edge case: 0m (today)', () => {
       expect(resolveRelativeDate('0m')).toBe('3-Dec-25');
     });
+
+    // ========================================================================
+    // Double-dash typo normalization (--1d → -1d)
+    // ========================================================================
+    
+    it('should normalize double-dash to single-dash', () => {
+      // Common typo: --1d should work as -1d
+      expect(resolveRelativeDate('--1d')).toBe('2-Dec-25');
+      expect(resolveRelativeDate('--7d')).toBe('26-Nov-25');
+      expect(resolveRelativeDate('--2w')).toBe('19-Nov-25');
+      expect(resolveRelativeDate('--1m')).toBe('3-Nov-25');
+    });
+
+    it('should normalize triple-dash to single-dash', () => {
+      // Even more dashes should be normalized
+      expect(resolveRelativeDate('---1d')).toBe('2-Dec-25');
+    });
   });
 });
 

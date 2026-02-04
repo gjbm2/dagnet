@@ -199,8 +199,11 @@ export function isRelativeDate(dateStr: string): boolean {
 export function resolveRelativeDate(dateStr: string): string {
   if (!dateStr) return dateStr;
   
+  // Normalize common typos: double-dash to single-dash (e.g., "--1d" → "-1d")
+  let normalized = dateStr.replace(/^--+/, '-');
+  
   // Match relative date patterns: -14d, -2m, -1y, etc.
-  const relativeMatch = dateStr.match(/^(-?\d+)([dwmy])$/);
+  const relativeMatch = normalized.match(/^(-?\d+)([dwmy])$/);
   if (!relativeMatch) return dateStr;
   
   const offset = parseInt(relativeMatch[1], 10);

@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, FileText, Calendar, ChevronDown, Minus, Plus, Zap } from 'lucide-react';
+import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, FileText, Calendar, ChevronDown, Minus, Plus, Zap, Clock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import './QueryExpressionEditor.css';
 import { QUERY_FUNCTIONS } from '../lib/queryDSL';
@@ -36,7 +36,7 @@ interface QueryExpressionEditorProps {
 }
 
 interface ParsedQueryChip {
-  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'contextAny' | 'window' | 'cohort' | 'minus' | 'plus';
+  type: 'from' | 'to' | 'exclude' | 'visited' | 'visitedAny' | 'case' | 'context' | 'contextAny' | 'window' | 'cohort' | 'minus' | 'plus' | 'asat' | 'at';
   values: string[];
   rawText: string;
   /** Text that appears before this chip (operators, parens, etc.) */
@@ -101,6 +101,14 @@ const outerChipConfig = {
   plus: {
     label: 'plus',
     icon: Plus  // Lucide plus icon
+  },
+  asat: {
+    label: 'asat',
+    icon: Clock  // Historical query: snapshot as-at date
+  },
+  at: {
+    label: 'at',
+    icon: Clock  // Sugar for asat (normalises to asat)
   }
 };
 
@@ -135,7 +143,7 @@ function parseQueryToChipsWithStructure(query: string): ParsedQueryResult {
   const chips: ParsedQueryChip[] = [];
   
   // Match ALL function calls in order they appear
-  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context|contextAny|window|cohort|minus|plus)\(([^)]+)\)/g;
+  const functionRegex = /(from|to|exclude|visited|visitedAny|case|context|contextAny|window|cohort|minus|plus|asat|at)\(([^)]+)\)/g;
   let match;
   let lastIndex = 0;
   
@@ -750,6 +758,67 @@ export function QueryExpressionEditor({
           })();
         }
         
+        // After asat( or at( → suggest date formats (historical query date)
+        if (/(asat|at)\([^)]*$/.test(textUntilPosition)) {
+          return (async () => {
+            const suggestions: any[] = [
+              {
+                label: '📅 Yesterday (-1d)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-1d',
+                documentation: 'View data as it was yesterday',
+                range,
+                sortText: '1'
+              },
+              {
+                label: '📅 1 week ago (-7d)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-7d',
+                documentation: 'View data as it was 1 week ago',
+                range,
+                sortText: '2'
+              },
+              {
+                label: '📅 2 weeks ago (-14d)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-14d',
+                documentation: 'View data as it was 2 weeks ago',
+                range,
+                sortText: '3'
+              },
+              {
+                label: '📅 1 month ago (-30d)',
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: '-30d',
+                documentation: 'View data as it was 1 month ago',
+                range,
+                sortText: '4'
+              }
+            ];
+            
+            // Add example with absolute date (shows d-MMM-yy format)
+            try {
+              const { formatDateUK } = await import('../lib/dateFormat');
+              const today = new Date();
+              const weekAgo = new Date(today);
+              weekAgo.setDate(today.getDate() - 7);
+              
+              suggestions.push({
+                label: `📆 Example: ${formatDateUK(weekAgo)}`,
+                kind: monaco.languages.CompletionItemKind.Value,
+                insertText: formatDateUK(weekAgo),
+                documentation: 'Use d-MMM-yy format for specific dates (e.g., 5-Nov-25)',
+                range,
+                sortText: '5'
+              });
+            } catch (err) {
+              // Ignore if date formatting fails
+            }
+            
+            return { suggestions };
+          })();
+        }
+        
         // After . (dot) → suggest constraint types OR from/to/case
         if (/\.$/.test(textUntilPosition) || /\)\.$/.test(textUntilPosition)) {
           const hasSuggestions: any[] = [];
@@ -863,6 +932,26 @@ export function QueryExpressionEditor({
               detail: '.cohort(start:end) or .cohort(anchor,start:end)',
               range,
               sortText: '8'
+            },
+            {
+              label: 'asat',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'asat($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Historical query: view data as it was at a past date (snapshot retrieval)',
+              detail: '.asat(d-MMM-yy) - e.g. asat(5-Nov-25)',
+              range,
+              sortText: '9'
+            },
+            {
+              label: 'at',
+              kind: monaco.languages.CompletionItemKind.Function,
+              insertText: 'at($0)',
+              insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+              documentation: 'Historical query (sugar for asat): view data as it was at a past date',
+              detail: '.at(d-MMM-yy) - e.g. at(5-Nov-25)',
+              range,
+              sortText: '9.1'
             },
             {
               label: 'minus',

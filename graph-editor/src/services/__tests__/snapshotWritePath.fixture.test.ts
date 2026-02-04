@@ -217,6 +217,55 @@ async function querySnapshotRows(paramId: string): Promise<any[]> {
   return body.rows || [];
 }
 
+async function queryVirtualSnapshot(params: {
+  param_id: string;
+  core_hash: string;
+  anchor_from: string;
+  anchor_to: string;
+  as_at: string;
+  slice_keys?: string[];
+}): Promise<any> {
+  const resp = await undiciFetch('http://localhost:9000/api/snapshots/query-virtual', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`snapshots/query-virtual HTTP ${resp.status}: ${text}`);
+  }
+  return JSON.parse(text);
+}
+
+async function appendSnapshotsDirect(params: {
+  param_id: string;
+  core_hash: string;
+  slice_key: string;
+  retrieved_at: string;
+  rows: Array<{ anchor_day: string; X: number; Y: number }>;
+}): Promise<void> {
+  const resp = await undiciFetch('http://localhost:9000/api/snapshots/append', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      param_id: params.param_id,
+      core_hash: params.core_hash,
+      context_def_hashes: null,
+      slice_key: params.slice_key,
+      retrieved_at: params.retrieved_at,
+      rows: params.rows,
+    }),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`snapshots/append HTTP ${resp.status}: ${text}`);
+  }
+  const body = JSON.parse(text);
+  if (!body?.success) {
+    throw new Error(`snapshots/append failed: ${text}`);
+  }
+}
+
 async function isPythonReachable(): Promise<boolean> {
   try {
     await undiciFetch('http://localhost:9000/api/snapshots/inventory', {
@@ -276,8 +325,34 @@ async function withFixedDate<T>(isoDateTime: string, fn: () => Promise<T>): Prom
   const fixedMs = new RealDate(isoDateTime).getTime();
   class MockDate extends RealDate {
     constructor(...args: any[]) {
-      if (args.length === 0) return new RealDate(fixedMs) as any;
-      return new RealDate(...args) as any;
+      // TS/JS constraint: derived class constructors must call super().
+      // Avoid variadic spread to satisfy TS' tuple typing.
+      switch (args.length) {
+        case 0:
+          super(fixedMs);
+          break;
+        case 1:
+          super(args[0] as any);
+          break;
+        case 2:
+          super(args[0] as any, args[1] as any);
+          break;
+        case 3:
+          super(args[0] as any, args[1] as any, args[2] as any);
+          break;
+        case 4:
+          super(args[0] as any, args[1] as any, args[2] as any, args[3] as any);
+          break;
+        case 5:
+          super(args[0] as any, args[1] as any, args[2] as any, args[3] as any, args[4] as any);
+          break;
+        case 6:
+          super(args[0] as any, args[1] as any, args[2] as any, args[3] as any, args[4] as any, args[5] as any);
+          break;
+        default:
+          super(args[0] as any, args[1] as any, args[2] as any, args[3] as any, args[4] as any, args[5] as any, args[6] as any);
+          break;
+      }
     }
     static now() { return fixedMs; }
   }
@@ -325,6 +400,89 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
 
   afterEach(() => {
     restoreFetch?.();
+  });
+
+  it('treats signature as part of the snapshot lookup key (query-virtual)', async () => {
+    // This test is intentionally simple and direct:
+    // - same param_id
+    // - same slice_key, same days, same retrieved_at
+    // - two different signatures (core_hash strings)
+    // - query-virtual must return rows ONLY for the requested signature
+    const pid = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-sig-key-test`;
+    const sigA = '{"c":"sig-A","x":{}}';
+    const sigB = '{"c":"sig-B","x":{}}';
+    const retrievedAt = '2026-01-15T10:00:00Z';
+
+    await appendSnapshotsDirect({
+      param_id: pid,
+      core_hash: sigA,
+      slice_key: '',
+      retrieved_at: retrievedAt,
+      rows: [
+        { anchor_day: '2026-01-01', X: 1, Y: 1 },
+        { anchor_day: '2026-01-02', X: 2, Y: 2 },
+      ],
+    });
+
+    await appendSnapshotsDirect({
+      param_id: pid,
+      core_hash: sigB,
+      slice_key: '',
+      retrieved_at: retrievedAt,
+      rows: [
+        { anchor_day: '2026-01-01', X: 100, Y: 10 },
+        { anchor_day: '2026-01-02', X: 200, Y: 20 },
+      ],
+    });
+
+    const asAt = '2026-01-20T23:59:59Z';
+    const resA = await queryVirtualSnapshot({
+      param_id: pid,
+      core_hash: sigA,
+      as_at: asAt,
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-02',
+      slice_keys: [''],
+    });
+
+    expect(resA.success).toBe(true);
+    expect(resA.count).toBe(2);
+    expect(resA.rows.map((r: any) => ({ d: r.anchor_day, x: r.x, y: r.y }))).toEqual([
+      { d: '2026-01-01', x: 1, y: 1 },
+      { d: '2026-01-02', x: 2, y: 2 },
+    ]);
+
+    const resB = await queryVirtualSnapshot({
+      param_id: pid,
+      core_hash: sigB,
+      as_at: asAt,
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-02',
+      slice_keys: [''],
+    });
+
+    expect(resB.success).toBe(true);
+    expect(resB.count).toBe(2);
+    expect(resB.rows.map((r: any) => ({ d: r.anchor_day, x: r.x, y: r.y }))).toEqual([
+      { d: '2026-01-01', x: 100, y: 10 },
+      { d: '2026-01-02', x: 200, y: 20 },
+    ]);
+
+    // Wrong signature => no rows for that key (but data exists for other sigs)
+    const resWrong = await queryVirtualSnapshot({
+      param_id: pid,
+      core_hash: '{"c":"sig-NOT-THERE","x":{}}',
+      as_at: asAt,
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-02',
+      slice_keys: [''],
+    });
+
+    expect(resWrong.success).toBe(true);
+    expect(resWrong.count).toBe(0);
+    expect(Array.isArray(resWrong.rows)).toBe(true);
+    expect(resWrong.has_any_rows).toBe(true);
+    expect(resWrong.has_matching_core_hash).toBe(false);
   });
 
   it('writes correct row counts for 2-day serial cron simulation', async () => {

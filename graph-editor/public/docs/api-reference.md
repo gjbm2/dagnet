@@ -484,6 +484,50 @@ interface DeleteResponse {
 }
 ```
 
+### Query Virtual Snapshot (as-at)
+
+Retrieve the **virtual snapshot** for a parameter “as of” a point-in-time. This is used by the query DSL `asat(...)` / `at(...)` historical query mode.
+
+The virtual snapshot returns **at most one row per** `(anchor_day, slice_key)` — selecting the latest available snapshot row with `retrieved_at <= as_at` — and includes metadata for UI warnings.
+
+**Endpoint:** `POST /api/snapshots/query-virtual`
+
+```typescript
+interface QueryVirtualRequest {
+  param_id: string;         // Workspace-prefixed parameter ID
+  as_at: string;            // ISO datetime (e.g. "2026-02-04T23:59:59.999Z")
+  anchor_from: string;      // ISO date (YYYY-MM-DD)
+  anchor_to: string;        // ISO date (YYYY-MM-DD)
+  core_hash: string;        // Query signature (required for semantic integrity)
+  slice_keys?: string[];    // Optional slice keys ('' for uncontexted)
+  limit?: number;           // Optional max rows (default backend: 10000)
+}
+
+interface QueryVirtualResponse {
+  success: boolean;
+  rows: Array<{
+    anchor_day: string;     // ISO date
+    slice_key: string;
+    core_hash: string;
+    retrieved_at: string;   // ISO datetime
+    a?: number | null;
+    x?: number | null;
+    y?: number | null;
+    median_lag_days?: number | null;
+    mean_lag_days?: number | null;
+    anchor_median_lag_days?: number | null;
+    anchor_mean_lag_days?: number | null;
+    onset_delta_days?: number | null;
+  }>;
+  count: number;
+  latest_retrieved_at_used: string | null;
+  has_anchor_to: boolean;
+  has_any_rows?: boolean;
+  has_matching_core_hash?: boolean;
+  error?: string;
+}
+```
+
 ### Snapshot Analysis
 
 Run analytics on stored snapshot data.

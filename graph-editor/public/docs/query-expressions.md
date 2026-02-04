@@ -448,6 +448,43 @@ After cohort aggregation, edges contain:
 
 ---
 
+## Historical Queries (as-at snapshots)
+
+DagNet supports **historical query mode** via the `asat(...)` clause, which retrieves data from the snapshot database **as it was known at a past date**.
+
+### Syntax
+
+- **Canonical**: `asat(d-MMM-yy)`
+- **Alias (sugar)**: `at(d-MMM-yy)` (normalised to `asat(...)`)
+- **Order-indifferent**: `asat(...)` may appear anywhere in the query chain.
+
+### Examples
+
+**Basic historical query:**
+
+```
+from(homepage).to(checkout).asat(5-Nov-25)
+```
+
+**With a window:**
+
+```
+from(homepage).to(checkout).window(1-Oct-25:31-Oct-25).asat(15-Oct-25)
+```
+
+**Order-indifferent placement:**
+
+```
+from(homepage).asat(15-Oct-25).to(checkout).window(1-Oct-25:31-Oct-25)
+```
+
+### Behaviour
+
+- **Read-only**: `asat(...)` queries do not write to files, IndexedDB, or the snapshot DB.
+- **Signature integrity**: historical reads are keyed by the query signature; if the query definition has changed since snapshots were stored, DagNet will not return mismatched data.
+
+---
+
 ## Validation & Errors
 
 ### Valid References

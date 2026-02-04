@@ -67,7 +67,7 @@ import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImpl
 import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
 import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
-import { serialiseSignature } from './signatureMatchingService';
+import { parseSignature, serialiseSignature } from './signatureMatchingService';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { deriveOnsetDeltaDaysFromLagHistogram, roundTo1dp } from './onsetDerivationService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
@@ -77,6 +77,7 @@ import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
+import { querySnapshotsVirtual, type VirtualSnapshotRow } from './snapshotWriteService';
 import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 import { normalizeWindow } from './fetchDataService';
 import { LATENCY_T95_PERCENTILE, LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
@@ -1005,6 +1006,140 @@ function applyChanges(target: any, changes: Array<{ field: string; newValue: any
   }
 }
 
+// =============================================================================
+// asat() Historical Query Support
+// =============================================================================
+
+/**
+ * Convert virtual snapshot rows to TimeSeriesPoint format.
+ * Virtual snapshot rows come from the DB with lowercase column names (x, y, a).
+ * TimeSeriesPoint uses n, k, p.
+ */
+export function convertVirtualSnapshotToTimeSeries(
+  rows: VirtualSnapshotRow[],
+  sliceKey: string,
+  options?: { workspace?: { repository: string; branch: string } }
+): TimeSeriesPoint[] {
+  // 1) Exact slice match (normal path)
+  const exact = rows.filter((row) => row.slice_key === sliceKey);
+  const toPoints = (filtered: VirtualSnapshotRow[]): TimeSeriesPoint[] => {
+    return filtered
+      .map((row) => {
+        const n = row.x ?? 0;
+        const k = row.y ?? 0;
+        const p = n > 0 ? k / n : 0;
+        return {
+          date: row.anchor_day,
+          n,
+          k,
+          p,
+          median_lag_days: row.median_lag_days ?? undefined,
+          mean_lag_days: row.mean_lag_days ?? undefined,
+          anchor_median_lag_days: row.anchor_median_lag_days ?? undefined,
+          anchor_mean_lag_days: row.anchor_mean_lag_days ?? undefined,
+        } as TimeSeriesPoint;
+      })
+      .sort((a, b) => a.date.localeCompare(b.date));
+  };
+
+  if (exact.length > 0) return toPoints(exact);
+
+  // 2) Implicit uncontexted aggregation:
+  // If query sliceKey is '' (uncontexted) but DB returns only contexted MECE slices,
+  // attempt to aggregate across slices (sum X/Y per day) after MECE validation.
+  if (sliceKey !== '') return [];
+
+  const nonEmptyRows = rows.filter((r) => typeof r.slice_key === 'string' && r.slice_key.trim().length > 0);
+  if (nonEmptyRows.length === 0) return [];
+
+  // Determine the implied context key (support single-dimension MECE only).
+  const sliceKeysUnique = Array.from(new Set(nonEmptyRows.map((r) => r.slice_key)));
+  const parsedPairs = sliceKeysUnique.map((sk) => {
+    try {
+      const parsed = parseConstraints(sk);
+      const ctx = parsed.context || [];
+      if (ctx.length !== 1) return null;
+      return { sliceDSL: sk, key: ctx[0].key, value: ctx[0].value };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean) as Array<{ sliceDSL: string; key: string; value: string }>;
+
+  if (parsedPairs.length !== sliceKeysUnique.length) return [];
+  const keys = Array.from(new Set(parsedPairs.map((p) => p.key)));
+  if (keys.length !== 1) return [];
+  const contextKey = keys[0];
+
+  const mece = contextRegistry.detectMECEPartitionSync(
+    parsedPairs.map((p) => ({ sliceDSL: p.sliceDSL })),
+    contextKey,
+    options?.workspace ? { workspace: options.workspace } : undefined
+  );
+  if (!mece.canAggregate) return [];
+
+  // Aggregate across all slices for each anchor_day.
+  const byDay = new Map<string, { n: number; k: number }>();
+  for (const r of nonEmptyRows) {
+    const prev = byDay.get(r.anchor_day) || { n: 0, k: 0 };
+    prev.n += r.x ?? 0;
+    prev.k += r.y ?? 0;
+    byDay.set(r.anchor_day, prev);
+  }
+
+  return Array.from(byDay.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, v]) => ({
+      date,
+      n: v.n,
+      k: v.k,
+      p: v.n > 0 ? v.k / v.n : 0,
+    }));
+}
+
+/**
+ * Fire warnings for asat() queries per the warning policy.
+ * 
+ * - Warn A: Snapshot freshness (if latest_retrieved_at_used is > 24h before asat date)
+ * - Warn B: Missing anchor_to coverage (if has_anchor_to is false)
+ */
+export function fireAsatWarnings(
+  asAtDate: string,
+  latestRetrievedAt: string | null,
+  hasAnchorTo: boolean,
+  anchorToStr: string,
+  entityLabel: string
+): void {
+  // Warn A: Snapshot freshness
+  if (latestRetrievedAt) {
+    // Policy (docs/current/project-db/3-asat.md §1.3 + §6.3):
+    // Treat a date-only asat(d-MMM-yy) token as "end of that day" in UTC.
+    const asAtDateObj = parseUKDate(asAtDate);
+    asAtDateObj.setUTCHours(23, 59, 59, 999);
+    const latestRetrievedObj = new Date(latestRetrievedAt);
+    
+    // Calculate hours difference
+    const hoursDiff = (asAtDateObj.getTime() - latestRetrievedObj.getTime()) / (1000 * 60 * 60);
+    
+    if (hoursDiff > 24) {
+      toast(`Historical data for ${entityLabel} uses snapshot from ${latestRetrievedAt.split('T')[0]} (${Math.floor(hoursDiff / 24)} days before requested asat date)`, {
+        icon: '⏱️',
+        duration: 6000,
+      });
+    }
+  } else {
+    // No snapshot data at all for this asat date
+    toast.error(`No snapshot data available for ${entityLabel} as-at ${asAtDate}`);
+  }
+  
+  // Warn B: Missing anchor_to coverage
+  if (!hasAnchorTo) {
+    toast(`Historical data for ${entityLabel} does not include the window end date ${anchorToStr}`, {
+      icon: '⚠️',
+      duration: 5000,
+    });
+  }
+}
+
 class DataOperationsService {
   /**
    * Get data from parameter file → graph edge
@@ -1061,6 +1196,221 @@ class DataOperationsService {
       
       // Check for cohort() first - cohort evidence window
       const todayUK = formatDateUK(new Date());
+
+      // ============================================================================
+      // asat() Historical Query Fork Point (getParameterFromFile)
+      // ============================================================================
+      // If asat is present, route to snapshot DB instead of reading from file.
+      // Per §3.2 of 3-asat.md: Signature validation is MANDATORY.
+      if (parsed.asat) {
+        console.log(`[DataOperationsService] Detected asat(${parsed.asat}) in getParameterFromFile - routing to snapshot DB`);
+        
+        // Build workspace-prefixed param_id from parameter file source metadata
+        const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
+        const workspaceRepo = paramFile?.source?.repository;
+        const workspaceBranch = paramFile?.source?.branch;
+        // Signature is part of the DB lookup key, and param_id is workspace-prefixed.
+        // If we can't form the workspace prefix, we can't query snapshots. Treat as "no data".
+        if (!workspaceRepo || !workspaceBranch) {
+          console.warn('[DataOperationsService] asat: missing parameter file source metadata (repository/branch); snapshot lookup skipped');
+          return { success: true, warning: 'No snapshot data (missing workspace metadata)' };
+        }
+        const dbParamId = `${workspaceRepo}-${workspaceBranch}-${paramId}`;
+        
+        // Resolve window/cohort dates
+        let anchorFrom: string | undefined;
+        let anchorTo: string | undefined;
+        
+        if (parsed.cohort?.start || parsed.cohort?.end) {
+          anchorFrom = parsed.cohort.start ? resolveRelativeDate(parsed.cohort.start) : undefined;
+          anchorTo = parsed.cohort.end ? resolveRelativeDate(parsed.cohort.end) : todayUK;
+        } else if (parsed.window?.start || parsed.window?.end) {
+          anchorFrom = parsed.window.start ? resolveRelativeDate(parsed.window.start) : undefined;
+          anchorTo = parsed.window.end ? resolveRelativeDate(parsed.window.end) : todayUK;
+        } else {
+          // Default window
+          anchorFrom = resolveRelativeDate('-60d');
+          anchorTo = todayUK;
+        }
+        
+        if (!anchorFrom || !anchorTo) {
+          console.warn('[DataOperationsService] asat query missing valid date range');
+          return { success: false, warning: 'Historical query requires a valid date range' };
+        }
+        
+        // Convert UK dates to ISO for API
+        const anchorFromISO = parseUKDate(anchorFrom).toISOString().split('T')[0];
+        const anchorToISO = parseUKDate(anchorTo).toISOString().split('T')[0];
+        
+        // Convert asat date to ISO datetime (end of day, UTC)
+        const asatDateUK = resolveRelativeDate(parsed.asat);
+        const asatDateObj = parseUKDate(asatDateUK);
+        asatDateObj.setUTCHours(23, 59, 59, 999);
+        const asAtISO = asatDateObj.toISOString();
+        
+        // Extract slice_keys from context
+        const sliceKeys = extractSliceDimensions(targetSlice);
+        const sliceKeyArray = sliceKeys ? [sliceKeys] : undefined;
+        
+        // ========================================================================
+        // MANDATORY: Compute query signature (core_hash) per §3.2
+        // ========================================================================
+        // The signature MUST match what was stored when the data was fetched.
+        // We need to compute it the same way as the normal fetch path.
+        let coreHash: string | undefined;
+        
+        if (graph && edgeId) {
+          const targetEdge: any = graph.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
+          if (targetEdge) {
+            try {
+              // Build DSL without the asat clause (asat is a retrieval filter, not query identity)
+              const dslWithoutAsat = targetSlice.replace(/\.?(?:asat|at)\([^)]+\)/g, '').replace(/^\./, '');
+              const constraintsWithoutAsat = parseConstraints(dslWithoutAsat);
+              
+              // Get connection name from edge or default to 'amplitude'
+              const connectionName = targetEdge.p?.connection || 
+                                   targetEdge.cost_gbp?.connection || 
+                                   targetEdge.labour_cost?.connection ||
+                                   'amplitude';
+              
+              // Build query payload using the same path as normal fetch
+              const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
+              const { queryPayload } = await buildDslFromEdge(
+                targetEdge,
+                graph,
+                connectionName,
+                undefined,
+                constraintsWithoutAsat
+              );
+              
+              // Compute signature (match the exact path used when data is stored)
+              //
+              // IMPORTANT:
+              // For uncontexted queries, we may still need a context-keyed signature if the
+              // cached snapshot data is stored as a MECE partition over pinned dimensions
+              // (e.g. channel). In that case, the context *definition* hash must be part of
+              // the signature so we can safely aggregate.
+              const contextKeys = (() => {
+                const explicit = constraintsWithoutAsat.context?.map((c) => c.key) || [];
+                if (explicit.length > 0) return explicit;
+                try {
+                  const pinned = (graph as any)?.dataInterestsDSL || '';
+                  if (!pinned) return [];
+                  return extractContextKeysFromConstraints(parseConstraints(pinned));
+                } catch {
+                  return [];
+                }
+              })();
+              const workspaceForSignature = {
+                repository: workspaceRepo,
+                branch: workspaceBranch,
+              };
+              const signature = await computeQuerySignature(
+                queryPayload,
+                connectionName,
+                graph,
+                targetEdge,
+                contextKeys,
+                workspaceForSignature
+              );
+              
+              // Validate signature is well-formed and use the existing stored shape (serialised signature string).
+              // Sigs are mandatory; mismatch is fatal; do not change the stored representation here.
+              const sigParsed = parseSignature(signature);
+              if (!sigParsed.coreHash) {
+                throw new Error('Invalid signature (empty core hash)');
+              }
+              coreHash = signature;
+              
+              console.log('[DataOperationsService] asat query computed core_hash:', coreHash);
+            } catch (sigError) {
+              console.warn('[DataOperationsService] asat: failed to compute signature; snapshot lookup skipped', sigError);
+              return { success: true, warning: 'No snapshot data (could not compute signature)' };
+            }
+          }
+        }
+        
+        if (!coreHash) {
+          console.warn('[DataOperationsService] asat: no signature available; snapshot lookup skipped');
+          return { success: true, warning: 'No snapshot data (missing signature)' };
+        }
+        
+        console.log('[DataOperationsService] asat query params:', {
+          dbParamId, anchorFromISO, anchorToISO, asAtISO, sliceKeyArray, coreHash
+        });
+        
+        // Call virtual snapshot query with MANDATORY core_hash
+        const virtualResult = await querySnapshotsVirtual({
+          param_id: dbParamId,
+          as_at: asAtISO,
+          anchor_from: anchorFromISO,
+          anchor_to: anchorToISO,
+          slice_keys: sliceKeyArray,
+          core_hash: coreHash,
+        });
+        
+        if (!virtualResult.success) {
+          console.error('[DataOperationsService] Virtual snapshot query failed:', virtualResult.error);
+          return { success: false, warning: `Snapshot query failed: ${virtualResult.error}` };
+        }
+        
+        console.log('[DataOperationsService] Virtual snapshot returned', virtualResult.count, 'rows');
+        
+        // Fire warnings per §6.3
+        const entityLabel = paramId;
+        fireAsatWarnings(
+          asatDateUK,
+          virtualResult.latest_retrieved_at_used,
+          virtualResult.has_anchor_to,
+          anchorTo,
+          entityLabel
+        );
+        
+        // Convert to time series and apply to graph
+        const targetSliceKey = sliceKeys || '';
+        const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {
+          workspace: { repository: workspaceRepo, branch: workspaceBranch },
+        });
+        
+        if (graph && setGraph && edgeId) {
+          const targetEdge: any = graph.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
+          if (targetEdge) {
+            // Simple aggregation
+            const totalN = timeSeries.reduce((sum, pt) => sum + pt.n, 0);
+            const totalK = timeSeries.reduce((sum, pt) => sum + pt.k, 0);
+            
+            const newGraph = { ...graph };
+            const newEdges = [...(newGraph.edges || [])];
+            const edgeIndex = newEdges.findIndex((e: any) => e.uuid === edgeId || e.id === edgeId);
+            
+            if (edgeIndex >= 0) {
+              const newEdge = { ...newEdges[edgeIndex] };
+              const paramObj = conditionalIndex !== undefined 
+                ? newEdge.conditional_p?.[conditionalIndex]?.p 
+                : newEdge.p;
+              
+              if (paramObj && typeof paramObj === 'object') {
+                (paramObj as any).n = totalN;
+                (paramObj as any).k = totalK;
+                (paramObj as any).n_daily = timeSeries.map(pt => pt.n);
+                (paramObj as any).k_daily = timeSeries.map(pt => pt.k);
+                (paramObj as any).dates = timeSeries.map(pt => pt.date);
+                (paramObj as any)._asat = parsed.asat;
+                (paramObj as any)._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
+              }
+              
+              newEdges[edgeIndex] = newEdge;
+              newGraph.edges = newEdges;
+              setGraph(newGraph);
+            }
+          }
+        }
+        
+        return { success: true };
+      }
+      // ============================================================================
+      // End asat() Fork
+      // ============================================================================
 
       if (parsed.cohort?.start) {
         cohortWindow = {
@@ -3892,6 +4242,201 @@ class DataOperationsService {
     };
     
     try {
+      // ============================================================================
+      // asat() Historical Query Fork Point
+      // ============================================================================
+      // Check for asat() clause in DSL. If present, route to snapshot DB instead of DAS.
+      // This is read-only: no file mutations, no DAS requests.
+      const effectiveDSL = targetSlice || currentDSL || '';
+      const parsedDSLForAsat = parseConstraints(effectiveDSL);
+      
+      if (parsedDSLForAsat.asat && objectType === 'parameter' && objectId) {
+        sessionLogService.addChild(logOpId, 'info', 'ASAT_FORK', 
+          `Detected asat(${parsedDSLForAsat.asat}) - routing to snapshot DB`,
+          effectiveDSL,
+          { asat: parsedDSLForAsat.asat });
+        
+        // Build workspace-prefixed param_id from parameter file source metadata
+        const paramFile = fileRegistry.getFile(`parameter-${objectId}`);
+        const workspaceRepo = paramFile?.source?.repository;
+        const workspaceBranch = paramFile?.source?.branch;
+        if (!workspaceRepo || !workspaceBranch) {
+          // Can't form DB param_id → treat as no-data for this key.
+          sessionLogService.endOperation(logOpId, 'warning', 'asat: missing workspace metadata (snapshot lookup skipped)');
+          return errorResult;
+        }
+        const paramId = `${workspaceRepo}-${workspaceBranch}-${objectId}`;
+
+        // MANDATORY: signature integrity. Use the existing stored query_signature from the parameter file.
+        // This is the canonical signature produced by the normal fetch path.
+        const signatureStr = (() => {
+          const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
+          const withSig = values.filter(v => typeof v?.query_signature === 'string' && v.query_signature.trim());
+          if (withSig.length === 0) return undefined;
+          // Prefer the most recent signature by retrieved_at/window_to/window_from.
+          const getTs = (v: any) => String(v?.data_source?.retrieved_at || v?.window_to || v?.window_from || '');
+          withSig.sort((a, b) => getTs(b).localeCompare(getTs(a)));
+          return String(withSig[0].query_signature);
+        })();
+        if (!signatureStr) {
+          // No signature available → cannot form lookup key → no-data.
+          sessionLogService.endOperation(logOpId, 'warning', 'asat: missing query_signature (snapshot lookup skipped)');
+          return errorResult;
+        }
+        const parsedSig = parseSignature(signatureStr);
+        if (!parsedSig.coreHash) {
+          sessionLogService.endOperation(logOpId, 'warning', 'asat: invalid query_signature (snapshot lookup skipped)');
+          return errorResult;
+        }
+        
+        // Resolve window/cohort dates
+        const todayUK = formatDateUK(new Date());
+        let anchorFrom: string | undefined;
+        let anchorTo: string | undefined;
+        
+        if (parsedDSLForAsat.cohort?.start || parsedDSLForAsat.cohort?.end) {
+          // Cohort mode (A-anchored)
+          anchorFrom = parsedDSLForAsat.cohort.start 
+            ? resolveRelativeDate(parsedDSLForAsat.cohort.start) 
+            : undefined;
+          anchorTo = parsedDSLForAsat.cohort.end 
+            ? resolveRelativeDate(parsedDSLForAsat.cohort.end) 
+            : todayUK;
+        } else if (parsedDSLForAsat.window?.start || parsedDSLForAsat.window?.end) {
+          // Window mode (X-anchored)
+          anchorFrom = parsedDSLForAsat.window.start 
+            ? resolveRelativeDate(parsedDSLForAsat.window.start) 
+            : undefined;
+          anchorTo = parsedDSLForAsat.window.end 
+            ? resolveRelativeDate(parsedDSLForAsat.window.end) 
+            : todayUK;
+        } else {
+          // No window/cohort specified - use default window
+          const defaultStart = resolveRelativeDate('-60d');
+          anchorFrom = defaultStart;
+          anchorTo = todayUK;
+        }
+        
+        if (!anchorFrom || !anchorTo) {
+          sessionLogService.endOperation(logOpId, 'warning', 'asat: missing valid window/cohort range (snapshot lookup skipped)');
+          return errorResult;
+        }
+        
+        // Convert UK dates to ISO for API
+        const anchorFromISO = parseUKDate(anchorFrom).toISOString().split('T')[0];
+        const anchorToISO = parseUKDate(anchorTo).toISOString().split('T')[0];
+        
+        // Convert asat date to ISO datetime (end of day, UTC)
+        const asatDateUK = resolveRelativeDate(parsedDSLForAsat.asat);
+        const asatDateObj = parseUKDate(asatDateUK);
+        asatDateObj.setUTCHours(23, 59, 59, 999);
+        const asAtISO = asatDateObj.toISOString();
+        
+        // Extract slice_keys from context constraints
+        const sliceKeys = extractSliceDimensions(effectiveDSL);
+        const sliceKeyArray = sliceKeys ? [sliceKeys] : undefined; // Empty string = uncontexted
+        
+        sessionLogService.addChild(logOpId, 'info', 'ASAT_QUERY', 
+          `Querying virtual snapshot: ${anchorFromISO} to ${anchorToISO} as-at ${asatDateUK}`,
+          undefined,
+          { paramId, anchorFrom: anchorFromISO, anchorTo: anchorToISO, asAt: asAtISO, sliceKeys: sliceKeyArray });
+        
+        // Call virtual snapshot query
+        const virtualResult = await querySnapshotsVirtual({
+          param_id: paramId,
+          as_at: asAtISO,
+          anchor_from: anchorFromISO,
+          anchor_to: anchorToISO,
+          slice_keys: sliceKeyArray,
+          core_hash: signatureStr,
+        });
+        
+        if (!virtualResult.success) {
+          sessionLogService.endOperation(logOpId, 'error', `Virtual snapshot query failed: ${virtualResult.error}`);
+          toast.error(`Historical query failed: ${virtualResult.error}`);
+          return errorResult;
+        }
+        
+        sessionLogService.addChild(logOpId, 'info', 'ASAT_RESULT', 
+          `Virtual snapshot returned ${virtualResult.count} rows`,
+          undefined,
+          { 
+            count: virtualResult.count, 
+            latestRetrievedAt: virtualResult.latest_retrieved_at_used,
+            hasAnchorTo: virtualResult.has_anchor_to 
+          });
+        
+        // Fire warnings per §6.3
+        fireAsatWarnings(
+          asatDateUK,
+          virtualResult.latest_retrieved_at_used,
+          virtualResult.has_anchor_to,
+          anchorTo,
+          entityLabel
+        );
+        
+        // Convert virtual snapshot rows to time series format
+        const targetSliceKey = sliceKeys || '';
+        const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {
+          workspace: { repository: workspaceRepo, branch: workspaceBranch },
+        });
+        
+        // If we have a graph and setGraph, apply the data to the graph
+        if (graph && setGraph && targetId) {
+          const targetEdge: any = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
+          if (targetEdge) {
+            // Simple aggregation: sum n and k from time series
+            const totalN = timeSeries.reduce((sum, pt) => sum + pt.n, 0);
+            const totalK = timeSeries.reduce((sum, pt) => sum + pt.k, 0);
+            const aggregatedP = totalN > 0 ? totalK / totalN : 0;
+            
+            // Apply to graph edge
+            const newGraph = { ...graph };
+            const newEdges = [...(newGraph.edges || [])];
+            const edgeIndex = newEdges.findIndex((e: any) => e.uuid === targetId || e.id === targetId);
+            
+            if (edgeIndex >= 0) {
+              const newEdge = { ...newEdges[edgeIndex] };
+              const paramObj = conditionalIndex !== undefined 
+                ? newEdge.conditional_p?.[conditionalIndex]?.p 
+                : (paramSlot ? newEdge[paramSlot as keyof typeof newEdge] : newEdge.p);
+              
+              if (paramObj && typeof paramObj === 'object') {
+                // Apply aggregated values
+                (paramObj as any).n = totalN;
+                (paramObj as any).k = totalK;
+                
+                // Store daily data for display
+                (paramObj as any).n_daily = timeSeries.map(pt => pt.n);
+                (paramObj as any).k_daily = timeSeries.map(pt => pt.k);
+                (paramObj as any).dates = timeSeries.map(pt => pt.date);
+                
+                // Mark as from asat query (read-only, no writes)
+                (paramObj as any)._asat = parsedDSLForAsat.asat;
+                (paramObj as any)._asat_retrieved_at = virtualResult.latest_retrieved_at_used;
+              }
+              
+              newEdges[edgeIndex] = newEdge;
+              newGraph.edges = newEdges;
+              setGraph(newGraph);
+            }
+          }
+        }
+        
+        sessionLogService.endOperation(logOpId, 'success', 
+          `Historical query complete: ${timeSeries.length} data points from snapshot as-at ${asatDateUK}`);
+        
+        return {
+          success: true,
+          cacheHit: true, // Virtual snapshot is effectively a "cache hit" from DB
+          daysFetched: 0,
+          daysFromCache: timeSeries.length,
+        };
+      }
+      // ============================================================================
+      // End asat() Fork - Continue normal DAS path
+      // ============================================================================
+      
       let connectionName: string | undefined;
       let connectionString: any = {};
       
@@ -7358,8 +7903,14 @@ class DataOperationsService {
                 
                 const result = await appendSnapshots({
                   param_id: dbParamId,
-                  core_hash: typeof querySignature === 'string' ? querySignature : (querySignature as any).coreHash || querySignature,
-                  context_def_hashes: typeof querySignature === 'object' ? (querySignature as any).contextDefHashes : undefined,
+                  // Store the serialised signature string as core_hash (existing storage format).
+                  // Signature integrity is enforced on read; do not change stored shape here.
+                  core_hash: typeof querySignature === 'string'
+                    ? querySignature
+                    : (querySignature as any).coreHash || querySignature,
+                  context_def_hashes: typeof querySignature === 'object'
+                    ? (querySignature as any).contextDefHashes
+                    : undefined,
                   slice_key: sliceDSL || '',
                   retrieved_at: new Date(),
                   rows: snapshotRows,
@@ -7629,12 +8180,18 @@ class DataOperationsService {
                 // Dynamic import to avoid circular deps and enable tree-shaking
                 const { appendSnapshots } = await import('./snapshotWriteService');
                 
-                // Per §3.8.6: Store both coreHash and contextDefHashes
+                // Snapshot DB write: store query signature alongside rows
                 // Pass diagnostic flag so backend returns detailed info for session log
                 const result = await appendSnapshots({
                   param_id: dbParamId,
-                  core_hash: typeof querySignature === 'string' ? querySignature : (querySignature as any).coreHash || querySignature,
-                  context_def_hashes: typeof querySignature === 'object' ? (querySignature as any).contextDefHashes : undefined,
+                  // Store the serialised signature string as core_hash (existing storage format).
+                  // Signature integrity is enforced on read; do not change stored shape here.
+                  core_hash: typeof querySignature === 'string'
+                    ? querySignature
+                    : (querySignature as any).coreHash || querySignature,
+                  context_def_hashes: typeof querySignature === 'object'
+                    ? (querySignature as any).contextDefHashes
+                    : undefined,
                   slice_key: sliceDSL || '',
                   retrieved_at: new Date(),
                   rows: snapshotRows,

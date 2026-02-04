@@ -25,6 +25,12 @@ describe('Input Validation: Early Detection', () => {
       'from(a).to(b).exclude(c)',
       'from(a).to(b).minus(c)',
       'from(a).to(b).plus(c)',
+      'from(a).to(b).window(1-Nov-25:30-Nov-25)',
+      'from(a).to(b).cohort(1-Nov-25:30-Nov-25)',
+      'from(a).to(b).contextAny(channel:google,channel:organic)',
+      'from(a).to(b).asat(5-Nov-25)',
+      'from(a).asat(5-Nov-25).to(b)',
+      'asat(5-Nov-25).from(a).to(b)',
       'from(ABC).to(XYZ)',  // Uppercase
       'from(a-b-c).to(x-y-z)',  // Hyphens
       'from(a_b_c).to(x_y_z)',  // Underscores

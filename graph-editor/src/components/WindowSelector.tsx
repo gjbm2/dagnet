@@ -249,9 +249,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     const effectiveMode = mode ?? queryMode;
     const dateRangePart = `${effectiveMode}(${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`;
     
-    return contextParts.length > 0 
-      ? `${contextParts.join('.')}.${dateRangePart}` 
-      : dateRangePart;
+    // Preserve asat clause if present in current DSL
+    const asatPart = parsed.asat ? `asat(${parsed.asat})` : '';
+    
+    const parts = [contextParts.join('.'), dateRangePart, asatPart].filter(p => p);
+    return parts.join('.');
   }, [graph?.currentQueryDSL, queryMode]);
   
     // Update CSS variable for scenario legend positioning when height changes
@@ -592,10 +594,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     // Build window/cohort part with d-MMM-yy format (using current queryMode)
     const dateRangePart = `${queryMode}(${startUK}:${endUK})`;
     
+    // Preserve asat clause if present in current DSL
+    const asatPart = parsed.asat ? `asat(${parsed.asat})` : '';
+    
     // Combine
-    const newDSL = contextParts.length > 0 
-      ? `${contextParts.join('.')}.${dateRangePart}`
-      : dateRangePart;
+    const parts = [contextParts.join('.'), dateRangePart, asatPart].filter(p => p);
+    const newDSL = parts.join('.');
     
     console.log('[WindowSelector] DSL update:', {
       previousGraphDSL: currentGraph?.currentQueryDSL,
@@ -889,7 +893,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                     dateRangePart = `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`;
                   }
                   
-                  const fullDSL = [newContextParts.join('.'), dateRangePart].filter(p => p).join('.');
+                  // Preserve asat clause if present in old DSL
+                  const asatPart = oldParsed.asat ? `asat(${oldParsed.asat})` : '';
+                  
+                  const fullDSL = [newContextParts.join('.'), dateRangePart, asatPart].filter(p => p).join('.');
                   
                   // CRITICAL: Update AUTHORITATIVE DSL on graphStore
                   setCurrentDSL(fullDSL || '');
@@ -1003,8 +1010,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                     dateRangePart = `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})`;
                   }
                   
+                  // Preserve asat clause if present in existing DSL
+                  const existingParsed = parseConstraints(currentGraph.currentQueryDSL || '');
+                  const asatPart = existingParsed.asat ? `asat(${existingParsed.asat})` : '';
+                  
                   // Combine
-                  const newDSL = [contextPart, dateRangePart].filter(p => p).join('.');
+                  const newDSL = [contextPart, dateRangePart, asatPart].filter(p => p).join('.');
                   
                   // CRITICAL: Update AUTHORITATIVE DSL on graphStore
                   setCurrentDSL(newDSL || '');
@@ -1064,8 +1075,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   ? `${queryMode}(${normalizeToUK(window.start)}:${normalizeToUK(window.end)})` 
                   : '';
                 
+                // Preserve asat clause if present in the current DSL
+                const asatPart = parsed.asat ? `asat(${parsed.asat})` : '';
+                
                 // Combine
-                const parts = [...contextParts, dateRangePart].filter(p => p);
+                const parts = [...contextParts, dateRangePart, asatPart].filter(p => p);
                 return parts.join('.');
               })()}
               readonly={false}
