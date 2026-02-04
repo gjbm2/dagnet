@@ -5,14 +5,14 @@ import { renderHook, act } from '@testing-library/react';
 // Mocks
 // ------------------------------------------------------------
 
-const getBatchInventoryMock = vi.fn();
+const getBatchInventoryRichMock = vi.fn();
 const deleteSnapshotsMock = vi.fn();
 const querySnapshotsFullMock = vi.fn();
 const downloadTextFileMock = vi.fn();
 const showConfirmMock = vi.fn(async () => true);
 
 vi.mock('../../services/snapshotWriteService', () => ({
-  getBatchInventory: (...args: any[]) => getBatchInventoryMock(...args),
+  getBatchInventoryRich: (...args: any[]) => getBatchInventoryRichMock(...args),
   deleteSnapshots: (...args: any[]) => deleteSnapshotsMock(...args),
   querySnapshotsFull: (...args: any[]) => querySnapshotsFullMock(...args),
 }));
@@ -34,6 +34,18 @@ vi.mock('../../contexts/DialogContext', () => ({
   useDialog: () => ({
     showConfirm: (...args: any[]) => showConfirmMock(...args),
   }),
+}));
+
+vi.mock('../../contexts/TabContext', () => ({
+  fileRegistry: {
+    getFile: () => ({
+      data: {
+        values: [
+          { query_signature: '{"c":"sig-core","x":{}}', data_source: { retrieved_at: '2026-02-04T00:00:00Z' } },
+        ],
+      },
+    }),
+  },
 }));
 
 vi.mock('../../services/sessionLogService', () => ({
@@ -62,17 +74,32 @@ import { useSnapshotsMenu } from '../useSnapshotsMenu';
 describe('useSnapshotsMenu', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getBatchInventoryMock.mockResolvedValue({
+    getBatchInventoryRichMock.mockResolvedValue({
       'r-b-param-a': {
-        has_data: true,
-        param_id: 'r-b-param-a',
-        earliest: '2025-12-01',
-        latest: '2025-12-10',
-        row_count: 10,
-        unique_days: 10,
-        unique_slices: 1,
-        unique_hashes: 1,
-        unique_retrievals: 2,
+        overall: {
+          has_data: true,
+          param_id: 'r-b-param-a',
+          earliest: '2025-12-01',
+          latest: '2025-12-10',
+          row_count: 10,
+          unique_days: 10,
+          unique_slices: 1,
+          unique_hashes: 1,
+          unique_retrievals: 2,
+          unique_retrieved_days: 10,
+        },
+        by_core_hash: [
+          {
+            core_hash: '{"c":"sig-core","x":{}}',
+            earliest: '2025-12-01',
+            latest: '2025-12-10',
+            row_count: 10,
+            unique_days: 10,
+            unique_slices: 1,
+            unique_retrieved_days: 10,
+            by_slice_key: [],
+          },
+        ],
       },
     });
     deleteSnapshotsMock.mockResolvedValue({ success: true, deleted: 10 });
@@ -105,8 +132,8 @@ describe('useSnapshotsMenu', () => {
     // Allow effect to run
     await act(async () => {});
 
-    expect(getBatchInventoryMock).toHaveBeenCalledWith(['r-b-param-a']);
-    expect(result.current.snapshotCounts['param-a']).toBe(2);
+    expect(getBatchInventoryRichMock).toHaveBeenCalledWith(['r-b-param-a']);
+    expect(result.current.snapshotCounts['param-a']).toBe(10);
     expect(result.current.inventories['param-a']?.row_count).toBe(10);
   });
 

@@ -691,23 +691,69 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
             - param_ids: List of parameter IDs (required)
     
     Returns:
-        Response dict with inventory per param_id
+        Response dict with inventory per param_id (rich shape):
+        inventory[param_id] = {
+          overall: <legacy flat summary>,
+          by_core_hash: [
+            { core_hash, ... , by_slice_key: [...] },
+            ...
+          ]
+        }
     """
-    from snapshot_service import get_batch_inventory
-    
-    param_ids = data.get('param_ids')
+    param_ids = data.get("param_ids")
     if not param_ids:
         raise ValueError("Missing 'param_ids' field")
-    
+
     if not isinstance(param_ids, list):
         raise ValueError("'param_ids' must be a list")
-    
-    inventory = get_batch_inventory(param_ids)
-    
-    return {
-        'success': True,
-        'inventory': inventory
-    }
+
+    from snapshot_service import get_batch_inventory_rich
+    inventory = get_batch_inventory_rich(param_ids)
+    return {"success": True, "inventory": inventory}
+
+
+def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle snapshot retrievals endpoint.
+
+    Return distinct snapshot retrieval timestamps (`retrieved_at`) for a given subject.
+    Used by Phase 2 `@` UI to highlight available snapshot days.
+
+    Args:
+        data: Request body containing:
+            - param_id: Parameter ID (required)
+            - core_hash: Query signature (optional)
+            - slice_keys: List of slice keys (optional)
+            - anchor_from: Start date ISO string (optional)
+            - anchor_to: End date ISO string (optional)
+            - limit: Max timestamps (optional, default 200)
+
+    Returns:
+        Response dict with retrieved_at + derived retrieved_days.
+    """
+    from datetime import date
+    from snapshot_service import query_snapshot_retrievals
+
+    param_id = data.get('param_id')
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+
+    anchor_from = None
+    if data.get('anchor_from'):
+        anchor_from = date.fromisoformat(data['anchor_from'])
+
+    anchor_to = None
+    if data.get('anchor_to'):
+        anchor_to = date.fromisoformat(data['anchor_to'])
+
+    return query_snapshot_retrievals(
+        param_id=param_id,
+        core_hash=data.get('core_hash'),
+        slice_keys=data.get('slice_keys'),
+        anchor_from=anchor_from,
+        anchor_to=anchor_to,
+        limit=data.get('limit', 200)
+    )
 
 
 def handle_snapshots_delete(data: Dict[str, Any]) -> Dict[str, Any]:

@@ -483,6 +483,177 @@ def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         conn.close()
 
 
+def get_batch_inventory_rich(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Rich inventory for debugging + UI flexibility.
+
+    Returns BOTH:
+    - overall: the existing aggregate inventory (same shape as get_batch_inventory)
+    - by_core_hash: per-signature aggregates, each with per-slice aggregates
+
+    This intentionally does NOT decide what is "relevant" for a given UI surface.
+    The frontend can choose:
+    - general view: overall.unique_days across overall.unique_slices
+    - relevant view: pick a signature (e.g. latest query_signature) and slice(s)
+    """
+    if not param_ids:
+        return {}
+
+    overall = get_batch_inventory(param_ids)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Distinct retrieval days (UTC) per param_id, and per (param_id, core_hash).
+        cur.execute(
+            """
+            SELECT
+                param_id,
+                COUNT(DISTINCT (retrieved_at AT TIME ZONE 'UTC')::date) AS unique_retrieved_days
+            FROM snapshots
+            WHERE param_id = ANY(%s)
+            GROUP BY param_id
+            """,
+            (param_ids,),
+        )
+        overall_retrieved_days = {row[0]: int(row[1] or 0) for row in cur.fetchall()}
+
+        cur.execute(
+            """
+            SELECT
+                param_id,
+                core_hash,
+                COUNT(DISTINCT (retrieved_at AT TIME ZONE 'UTC')::date) AS unique_retrieved_days
+            FROM snapshots
+            WHERE param_id = ANY(%s)
+            GROUP BY param_id, core_hash
+            """,
+            (param_ids,),
+        )
+        sig_retrieved_days = {(row[0], row[1]): int(row[2] or 0) for row in cur.fetchall()}
+
+        # Per-(param_id, core_hash) aggregates.
+        cur.execute(
+            """
+            SELECT
+                param_id,
+                core_hash,
+                MIN(anchor_day) AS earliest,
+                MAX(anchor_day) AS latest,
+                COUNT(*) AS row_count,
+                COUNT(DISTINCT anchor_day) AS unique_days,
+                COUNT(DISTINCT slice_key) AS unique_slices
+            FROM snapshots
+            WHERE param_id = ANY(%s)
+            GROUP BY param_id, core_hash
+            """,
+            (param_ids,),
+        )
+        core_rows = cur.fetchall()
+
+        # Per-(param_id, core_hash, slice_key) aggregates.
+        cur.execute(
+            """
+            SELECT
+                param_id,
+                core_hash,
+                slice_key,
+                MIN(anchor_day) AS earliest,
+                MAX(anchor_day) AS latest,
+                COUNT(*) AS row_count,
+                COUNT(DISTINCT anchor_day) AS unique_days
+            FROM snapshots
+            WHERE param_id = ANY(%s)
+            GROUP BY param_id, core_hash, slice_key
+            """,
+            (param_ids,),
+        )
+        slice_rows = cur.fetchall()
+
+        # Assemble.
+        by_param: Dict[str, Dict[str, Any]] = {}
+        for pid in param_ids:
+            # Augment overall with unique_retrieved_days (one "snapshot" per retrieved day).
+            ov = overall.get(
+                pid,
+                {
+                    "has_data": False,
+                    "param_id": pid,
+                    "earliest": None,
+                    "latest": None,
+                    "row_count": 0,
+                    "unique_days": 0,
+                    "unique_slices": 0,
+                    "unique_hashes": 0,
+                    "unique_retrievals": 0,
+                },
+            )
+            try:
+                ov["unique_retrieved_days"] = overall_retrieved_days.get(pid, 0)
+            except Exception:
+                pass
+            by_param[pid] = {
+                "overall": ov,
+                "by_core_hash": [],
+            }
+
+        # Index slice aggregates by (pid, core_hash).
+        slices_by_sig: Dict[str, List[Dict[str, Any]]] = {}
+        for pid, ch, slice_key, earliest, latest, row_count, unique_days in slice_rows:
+            key = f"{pid}\n{ch}"
+            if key not in slices_by_sig:
+                slices_by_sig[key] = []
+            slices_by_sig[key].append(
+                {
+                    "slice_key": slice_key,
+                    "earliest": earliest.isoformat() if earliest else None,
+                    "latest": latest.isoformat() if latest else None,
+                    "row_count": int(row_count or 0),
+                    "unique_days": int(unique_days or 0),
+                }
+            )
+
+        # Build by_core_hash list.
+        for pid, ch, earliest, latest, row_count, unique_days, unique_slices in core_rows:
+            sig_key = f"{pid}\n{ch}"
+            by_param[pid]["by_core_hash"].append(
+                {
+                    "core_hash": ch,
+                    "earliest": earliest.isoformat() if earliest else None,
+                    "latest": latest.isoformat() if latest else None,
+                    "row_count": int(row_count or 0),
+                    "unique_days": int(unique_days or 0),
+                    "unique_slices": int(unique_slices or 0),
+                    # The user-facing "snapshot count": number of distinct retrieval days for this signature,
+                    # deduped across slice keys.
+                    "unique_retrieved_days": sig_retrieved_days.get((pid, ch), 0),
+                    "by_slice_key": sorted(
+                        slices_by_sig.get(sig_key, []),
+                        key=lambda x: str(x.get("slice_key") or ""),
+                    ),
+                }
+            )
+
+        # Stable ordering: biggest row_count first (most relevant to humans when debugging).
+        for pid in by_param.keys():
+            by_param[pid]["by_core_hash"].sort(key=lambda x: int(x.get("row_count") or 0), reverse=True)
+
+        return by_param
+
+    finally:
+        conn.close()
+
+
+# =============================================================================
+# Phase 2: Read Path — Smart Inventory (overall + signature/slice matching)
+# =============================================================================
+
+# NOTE: We intentionally removed the old "smart matching inventory" helper.
+# Inventory is now reported as a rich breakdown keyed by param_id; the frontend
+# decides what it considers "relevant" for display and debugging.
+
+
 def delete_snapshots(param_id: str) -> Dict[str, Any]:
     """
     Delete all snapshots for a specific parameter.
@@ -507,6 +678,110 @@ def delete_snapshots(param_id: str) -> Dict[str, Any]:
         return {'success': True, 'deleted': deleted}
     except Exception as e:
         return {'success': False, 'deleted': 0, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+# =============================================================================
+# Phase 2: Snapshot Retrieval Inventory — Distinct retrieved_at values
+# =============================================================================
+
+def query_snapshot_retrievals(
+    param_id: str,
+    core_hash: Optional[str] = None,
+    slice_keys: Optional[List[str]] = None,
+    anchor_from: Optional[date] = None,
+    anchor_to: Optional[date] = None,
+    limit: int = 200
+) -> Dict[str, Any]:
+    """
+    Return available snapshot retrieval timestamps for a given subject.
+
+    This backs the Phase 2 `@` UI: highlight calendar days where a snapshot exists
+    for the currently effective coordinates.
+
+    Performance invariant: ONE SQL query per param_id per call (never per slice).
+
+    Args:
+        param_id: Workspace-prefixed parameter ID (required)
+        core_hash: Structured signature string (optional filter)
+        slice_keys: Slice key filters (optional, None = all slices)
+        anchor_from: Optional anchor_day lower bound (inclusive)
+        anchor_to: Optional anchor_day upper bound (inclusive)
+        limit: Hard cap on distinct timestamps (default 200)
+
+    Returns:
+        Dict with:
+        - success: bool
+        - retrieved_at: List[str] (distinct ISO datetimes, descending)
+        - retrieved_days: List[str] (distinct ISO dates, descending; derived from retrieved_at)
+        - latest_retrieved_at: str | None
+        - count: int (number of retrieved_at values)
+        - error: str (if success=False)
+    """
+    # Defensive clamp: avoid pathological result sizes.
+    try:
+        limit_i = int(limit)
+    except Exception:
+        limit_i = 200
+    limit_i = max(1, min(limit_i, 2000))
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        where_clauses = ["param_id = %s"]
+        params: List[Any] = [param_id]
+
+        if core_hash:
+            where_clauses.append("core_hash = %s")
+            params.append(core_hash)
+
+        if slice_keys is not None:
+            where_clauses.append("slice_key = ANY(%s)")
+            params.append(slice_keys)
+
+        if anchor_from is not None:
+            where_clauses.append("anchor_day >= %s")
+            params.append(anchor_from)
+
+        if anchor_to is not None:
+            where_clauses.append("anchor_day <= %s")
+            params.append(anchor_to)
+
+        where_sql = " AND ".join(where_clauses)
+
+        # Distinct retrievals bounded by limit, most recent first.
+        cur.execute(
+            f"""
+            SELECT DISTINCT retrieved_at
+            FROM snapshots
+            WHERE {where_sql}
+            ORDER BY retrieved_at DESC
+            LIMIT %s
+            """,
+            tuple(params + [limit_i])
+        )
+
+        retrieved_ats = [row[0].isoformat() for row in cur.fetchall() if row and row[0] is not None]
+        retrieved_days = sorted({ts.split('T')[0] for ts in retrieved_ats}, reverse=True)
+
+        return {
+            'success': True,
+            'retrieved_at': retrieved_ats,
+            'retrieved_days': retrieved_days,
+            'latest_retrieved_at': retrieved_ats[0] if retrieved_ats else None,
+            'count': len(retrieved_ats),
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'retrieved_at': [],
+            'retrieved_days': [],
+            'latest_retrieved_at': None,
+            'count': 0,
+            'error': str(e),
+        }
     finally:
         conn.close()
 
