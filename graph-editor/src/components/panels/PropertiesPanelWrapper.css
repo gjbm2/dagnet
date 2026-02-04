@@ -102,9 +102,7 @@
   user-select: none;
   outline: none;
   white-space: nowrap;
-}
-
-.properties-snapshots-item:hover {
+}.properties-snapshots-item:hover {
   background-color: #f0f0f0;
 }
 
