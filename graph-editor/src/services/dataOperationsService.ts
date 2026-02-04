@@ -1275,11 +1275,31 @@ class DataOperationsService {
               
               // Build query payload using the same path as normal fetch
               const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
-              const { queryPayload } = await buildDslFromEdge(
+              const eventLoader = async (eventId: string) => {
+                const fileId = `event-${eventId}`;
+
+                // Prefer hydrated in-memory fileRegistry.
+                const frFile: any = fileRegistry.getFile(fileId);
+                if (frFile?.data) return frFile.data;
+
+                // Fall back to IndexedDB so asat() works even when event files aren't
+                // currently in memory.
+                try {
+                  const dbFile: any = await db.files.get(fileId);
+                  if (dbFile?.data) return dbFile.data;
+                } catch {
+                  // ignore DB errors, will throw below
+                }
+
+                // HARD FAIL: Event files MUST be available. If not, this is a bug.
+                throw new Error(`[computeSignatureContext] Event file "${eventId}" not found in fileRegistry or IndexedDB. This indicates a workspace/clone issue.`);
+              };
+
+              const { queryPayload, eventDefinitions } = await buildDslFromEdge(
                 targetEdge,
                 graph,
                 connectionName,
-                undefined,
+                eventLoader,
                 constraintsWithoutAsat
               );
               
@@ -1311,7 +1331,8 @@ class DataOperationsService {
                 graph,
                 targetEdge,
                 contextKeys,
-                workspaceForSignature
+                workspaceForSignature,
+                eventDefinitions
               );
               
               // Validate signature is well-formed and use the existing stored shape (serialised signature string).
@@ -1830,20 +1851,31 @@ class DataOperationsService {
                     }
                     return file.data;
                   }
-                  
-                  // Fallback: return minimal event without mapping
-                  if (diagnosticOn) {
-                    sessionLogService.warning('data-fetch', 'EVENT_FALLBACK', 
-                      `Event "${eventId}" not in fileRegistry - using empty fallback`,
-                      undefined,
-                      { eventId, source: 'getParameterFromFile' }
-                    );
+
+                  // Fall back to IndexedDB (source of truth) if not hydrated in FileRegistry.
+                  try {
+                    const dbFile: any = await db.files.get(fileId);
+                    if (dbFile?.data) {
+                      if (diagnosticOn) {
+                        sessionLogService.info('data-fetch', 'EVENT_LOADED',
+                          `Loaded event "${eventId}" for signature (IndexedDB fallback)`,
+                          undefined,
+                          {
+                            eventId,
+                            source: 'getParameterFromFile:indexeddb',
+                            provider_event_names: dbFile.data.provider_event_names,
+                            amplitude_filters: dbFile.data.amplitude_filters,
+                          }
+                        );
+                      }
+                      return dbFile.data;
+                    }
+                  } catch {
+                    // ignore DB errors, will throw below
                   }
-                  return {
-                    id: eventId,
-                    name: eventId,
-                    provider_event_names: {}
-                  };
+                  
+                  // HARD FAIL: Event files MUST be available. If not, this is a bug.
+                  throw new Error(`[getParameterFromFile] Event file "${eventId}" not found in fileRegistry or IndexedDB. This indicates a workspace/clone issue.`);
                 };
                 
                 // Parse and merge constraints from graph-level and edge-specific queries
@@ -4754,20 +4786,31 @@ class DataOperationsService {
                   }
                   return file.data;
                 }
-                
-                // Fallback: return minimal event without mapping
-                if (diagnosticOn) {
-                  sessionLogService.warning('data-fetch', 'EVENT_FALLBACK', 
-                    `Event "${eventId}" not in fileRegistry - using empty fallback`,
-                    undefined,
-                    { eventId, source: 'fetch' }
-                  );
+
+                // Fall back to IndexedDB (source of truth) if not hydrated in FileRegistry.
+                try {
+                  const dbFile: any = await db.files.get(fileId);
+                  if (dbFile?.data) {
+                    if (diagnosticOn) {
+                      sessionLogService.info('data-fetch', 'EVENT_LOADED',
+                        `Loaded event "${eventId}" for fetch (IndexedDB fallback)`,
+                        undefined,
+                        {
+                          eventId,
+                          source: 'fetch:indexeddb',
+                          provider_event_names: dbFile.data.provider_event_names,
+                          amplitude_filters: dbFile.data.amplitude_filters,
+                        }
+                      );
+                    }
+                    return dbFile.data;
+                  }
+                } catch {
+                  // ignore DB errors, will throw below
                 }
-                return {
-                  id: eventId,
-                  name: eventId,
-                  provider_event_names: {}
-                };
+                
+                // HARD FAIL: Event files MUST be available. If not, this is a bug.
+                throw new Error(`[fetch] Event file "${eventId}" not found in fileRegistry or IndexedDB. This indicates a workspace/clone issue.`);
               };
               
               // Parse and merge constraints from graph-level and edge-specific queries
@@ -4934,18 +4977,31 @@ class DataOperationsService {
                   }
                   return file.data;
                 }
-                if (diagnosticOn) {
-                  sessionLogService.warning('data-fetch', 'EVENT_FALLBACK', 
-                    `Event "${eventId}" not in fileRegistry - using empty fallback (fallback path)`,
-                    undefined,
-                    { eventId, source: 'fetch-fallback' }
-                  );
+                
+                // Fall back to IndexedDB (source of truth).
+                try {
+                  const dbFile: any = await db.files.get(fileId);
+                  if (dbFile?.data) {
+                    if (diagnosticOn) {
+                      sessionLogService.info('data-fetch', 'EVENT_LOADED',
+                        `Loaded event "${eventId}" for fetch (fallback path - IndexedDB)`,
+                        undefined,
+                        {
+                          eventId,
+                          source: 'fetch-fallback:indexeddb',
+                          provider_event_names: dbFile.data.provider_event_names,
+                          amplitude_filters: dbFile.data.amplitude_filters,
+                        }
+                      );
+                    }
+                    return dbFile.data;
+                  }
+                } catch {
+                  // ignore DB errors, will throw below
                 }
-                return {
-                  id: eventId,
-                  name: eventId,
-                  provider_event_names: {}
-                };
+                
+                // HARD FAIL: Event files MUST be available. If not, this is a bug.
+                throw new Error(`[fetch-fallback] Event file "${eventId}" not found in fileRegistry or IndexedDB. This indicates a workspace/clone issue.`);
               };
               
               // Parse and merge constraints from graph-level and edge-specific queries (fallback path)
@@ -5067,7 +5123,8 @@ class DataOperationsService {
             // This assumes node IDs in query can be resolved via eventLoader
             if (parsedQuery.from && parsedQuery.to) {
               const eventLoader = async (eventId: string) => {
-                const file = fileRegistry.getFile(`event-${eventId}`);
+                const fileId = `event-${eventId}`;
+                const file = fileRegistry.getFile(fileId);
                 const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
                 if (file?.data) {
                   if (diagnosticOn) {
@@ -5084,15 +5141,30 @@ class DataOperationsService {
                   }
                   return file.data;
                 }
-                // Fallback: use ID as event name
-                if (diagnosticOn) {
-                  sessionLogService.warning('data-fetch', 'EVENT_FALLBACK', 
-                    `Event "${eventId}" not in fileRegistry - using empty fallback (direct query)`,
-                    undefined,
-                    { eventId, source: 'direct-query' }
-                  );
+                // IndexedDB fallback (source of truth) if not hydrated in FileRegistry.
+                try {
+                  const dbFile: any = await db.files.get(fileId);
+                  if (dbFile?.data) {
+                    if (diagnosticOn) {
+                      sessionLogService.info('data-fetch', 'EVENT_LOADED',
+                        `Loaded event "${eventId}" for direct query (IndexedDB fallback)`,
+                        undefined,
+                        {
+                          eventId,
+                          source: 'direct-query:indexeddb',
+                          provider_event_names: dbFile.data.provider_event_names,
+                          amplitude_filters: dbFile.data.amplitude_filters,
+                        }
+                      );
+                    }
+                    return dbFile.data;
+                  }
+                } catch {
+                  // ignore DB errors, will throw below
                 }
-                return { id: eventId, name: eventId, provider_event_names: {} };
+                
+                // HARD FAIL: Event files MUST be available. If not, this is a bug.
+                throw new Error(`[direct-query] Event file "${eventId}" not found in fileRegistry or IndexedDB. This indicates a workspace/clone issue.`);
               };
               
               // Load event data for from/to nodes
@@ -5250,11 +5322,23 @@ class DataOperationsService {
           // Load events for n_query
           const nQueryEventLoader = async (eventId: string) => {
             const fileId = `event-${eventId}`;
+            
+            // Prefer hydrated in-memory fileRegistry.
             const file = fileRegistry.getFile(fileId);
             if (file && file.data) {
               return file.data;
             }
-            return { id: eventId, name: eventId, provider_event_names: {} };
+            
+            // Fall back to IndexedDB (source of truth).
+            try {
+              const dbFile: any = await db.files.get(fileId);
+              if (dbFile?.data) return dbFile.data;
+            } catch {
+              // ignore DB errors, will throw below
+            }
+            
+            // HARD FAIL: Event files MUST be available. If not, this is a bug.
+            throw new Error(`[n_query] Event file "${eventId}" not found in fileRegistry or IndexedDB. This indicates a workspace/clone issue.`);
           };
           
           // Parse constraints for n_query (same as main query)

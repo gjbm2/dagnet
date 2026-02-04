@@ -102,9 +102,7 @@
   white-space: nowrap;
 }.properties-snapshots-item:hover {
   background-color: #f0f0f0;
-}
-
-.properties-snapshots-item[data-highlighted] {
+}.properties-snapshots-item[data-highlighted] {
   background-color: #0066cc;
   color: white;
 }

@@ -116,6 +116,23 @@ async def snapshots_inventory(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Snapshot retrievals endpoint (Phase 2 @ UI)
+@app.post("/api/snapshots/retrievals")
+async def snapshots_retrievals(request: Request):
+    """Get distinct snapshot retrieval timestamps for a parameter."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_retrievals
+        return handle_snapshots_retrievals(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/retrievals] Error: {e}")
+        print(f"[snapshots/retrievals] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Snapshot delete endpoint (for "Delete snapshots (X)" UI)
 @app.post("/api/snapshots/delete")
 async def snapshots_delete(request: Request):

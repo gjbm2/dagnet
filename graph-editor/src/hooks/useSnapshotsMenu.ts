@@ -11,19 +11,21 @@ import { useDialog } from '../contexts/DialogContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import {
   deleteSnapshots as deleteSnapshotsApi,
-  getBatchInventory,
+  getBatchInventoryRich,
   querySnapshotsFull,
   type SnapshotInventory,
+  type SnapshotInventoryRich,
   type SnapshotQueryRow,
 } from '../services/snapshotWriteService';
 import { downloadTextFile } from '../services/downloadService';
 import { sessionLogService } from '../services/sessionLogService';
 import { invalidateInventoryCache } from './useEdgeSnapshotInventory';
+import { fileRegistry } from '../contexts/TabContext';
 
 export interface UseSnapshotsMenuResult {
   /** Snapshot inventories keyed by objectId (unprefixed, e.g. parameter ID) */
   inventories: Record<string, SnapshotInventory>;
-  /** Snapshot counts (unique retrievals) keyed by objectId */
+  /** Snapshot counts (distinct retrieval DAYS) keyed by objectId */
   snapshotCounts: Record<string, number>;
   /** Whether a delete operation is in flight */
   isDeleting: boolean;
@@ -51,6 +53,29 @@ export interface UseSnapshotsMenuOptions {
 
 function buildDbParamId(objectId: string, repo: string, branch: string): string {
   return `${repo}-${branch}-${objectId}`;
+}
+
+function latestQuerySignatureForParam(objectId: string): string | undefined {
+  const pf = fileRegistry.getFile(`parameter-${objectId}`) as any;
+  const values: any[] = Array.isArray(pf?.data?.values) ? pf.data.values : [];
+  const withSig = values.filter((v) => typeof v?.query_signature === 'string' && v.query_signature.trim());
+  if (withSig.length === 0) return undefined;
+  const getTs = (v: any) => String(v?.data_source?.retrieved_at || v?.window_to || v?.window_from || '');
+  withSig.sort((a, b) => getTs(b).localeCompare(getTs(a)));
+  return String(withSig[0].query_signature);
+}
+
+function coreHashFromStructuredSignature(sig: string | undefined): string | undefined {
+  if (!sig || typeof sig !== 'string') return undefined;
+  const s = sig.trim();
+  if (!s.startsWith('{')) return undefined;
+  try {
+    const parsed = JSON.parse(s);
+    const c = parsed?.c;
+    return typeof c === 'string' && c.trim() ? c.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function sanitiseFilenamePart(input: string): string {
@@ -136,16 +161,32 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
 
     const dbParamIds = ids.map((id) => buildDbParamId(id, repo, branch));
     try {
-      const invByDbParamId = await getBatchInventory(dbParamIds);
+      const richByDbParamId = await getBatchInventoryRich(dbParamIds);
       const nextInventories: Record<string, SnapshotInventory> = {};
       const nextCounts: Record<string, number> = {};
 
       for (const objectId of ids) {
         const dbParamId = buildDbParamId(objectId, repo, branch);
-        const inv = invByDbParamId[dbParamId];
-        if (inv) {
-          nextInventories[objectId] = inv;
-          nextCounts[objectId] = inv.unique_retrievals ?? 0;
+        const rich = richByDbParamId[dbParamId] as SnapshotInventoryRich | undefined;
+        const overall = rich?.overall;
+        if (overall) {
+          nextInventories[objectId] = overall;
+
+          // User meaning of "snapshots": one per retrieved DAY, filtered to relevant signature when available.
+          const expectedSig = latestQuerySignatureForParam(objectId);
+          const expectedCore = coreHashFromStructuredSignature(expectedSig);
+          const bySig = Array.isArray(rich?.by_core_hash) ? rich!.by_core_hash : [];
+          const sigEntry =
+            (expectedSig ? bySig.find((s) => s.core_hash === expectedSig) : undefined) ||
+            (expectedCore ? bySig.find((s) => s.core_hash === expectedCore) : undefined);
+
+          if (sigEntry) {
+            nextCounts[objectId] = sigEntry.unique_retrieved_days ?? 0;
+          } else {
+            // No signature available / no match => fewer (0) by design.
+            // If signature is unknown, fall back to overall retrieved-day count.
+            nextCounts[objectId] = expectedSig ? 0 : (overall.unique_retrieved_days ?? 0);
+          }
         } else {
           nextInventories[objectId] = {
             has_data: false,

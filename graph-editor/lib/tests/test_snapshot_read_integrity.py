@@ -17,6 +17,7 @@ from snapshot_service import (
     get_snapshot_inventory, 
     append_snapshots,
     query_virtual_snapshot,
+    query_snapshot_retrievals,
     get_db_connection
 )
 
@@ -309,3 +310,71 @@ class TestReadIntegrity:
         assert res_wrong['count'] == 0
         assert res_wrong['has_any_rows'] is True
         assert res_wrong['has_matching_core_hash'] is False
+
+    def test_ri007_retrievals_distinct_bounded_and_filtered(self):
+        """
+        RI-007: query_snapshot_retrievals
+
+        - returns distinct retrieved_at values (desc)
+        - supports core_hash and slice_key filtering without per-slice queries
+        - supports anchor_day scoping
+        """
+        pid = f'{TEST_PREFIX}param-retrievals'
+        sig_a = 'sig-A'
+        sig_b = 'sig-B'
+
+        # Two retrievals for sig_a (same slice)
+        append_snapshots(
+            param_id=pid,
+            core_hash=sig_a,
+            context_def_hashes=None,
+            slice_key='context(channel:google)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-01', 'X': 10, 'Y': 1},
+            ]
+        )
+        append_snapshots(
+            param_id=pid,
+            core_hash=sig_a,
+            context_def_hashes=None,
+            slice_key='context(channel:google)',
+            retrieved_at=datetime(2025, 10, 12, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-02', 'X': 20, 'Y': 2},
+            ]
+        )
+
+        # A different signature (should be excluded when core_hash filter applied)
+        append_snapshots(
+            param_id=pid,
+            core_hash=sig_b,
+            context_def_hashes=None,
+            slice_key='context(channel:google)',
+            retrieved_at=datetime(2025, 10, 13, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-02', 'X': 999, 'Y': 99},
+            ]
+        )
+
+        # Unfiltered: should include all distinct retrievals (3)
+        res_all = query_snapshot_retrievals(param_id=pid, limit=10)
+        assert res_all['success'] is True
+        assert res_all['count'] == 3
+        assert res_all['retrieved_at'][0].startswith('2025-10-13')
+        assert res_all['retrieved_at'][1].startswith('2025-10-12')
+        assert res_all['retrieved_at'][2].startswith('2025-10-10')
+
+        # Filtered by signature: only sig_a's retrievals (2)
+        res_sig = query_snapshot_retrievals(param_id=pid, core_hash=sig_a, limit=10)
+        assert res_sig['success'] is True
+        assert res_sig['count'] == 2
+        assert res_sig['retrieved_at'][0].startswith('2025-10-12')
+        assert res_sig['retrieved_at'][1].startswith('2025-10-10')
+
+        # Anchor scoping: only rows with anchor_day >= 2025-10-02 should keep 10-12/10-13
+        res_anchor = query_snapshot_retrievals(param_id=pid, anchor_from=date(2025, 10, 2), limit=10)
+        assert res_anchor['success'] is True
+        assert res_anchor['count'] == 2
+        assert res_anchor['retrieved_at'][0].startswith('2025-10-13')
+        assert res_anchor['retrieved_at'][1].startswith('2025-10-12')

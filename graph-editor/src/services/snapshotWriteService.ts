@@ -230,6 +230,36 @@ export interface SnapshotInventory {
   unique_hashes: number;
   /** Number of unique retrieval instances (distinct retrieved_at timestamps) */
   unique_retrievals: number;
+  /**
+   * Number of distinct retrieval DAYS (UTC) for this param_id.
+   * This corresponds to "how many days did snapshotting operate?" and is what most users mean by "number of snapshots".
+   */
+  unique_retrieved_days?: number;
+}
+
+export interface SnapshotInventorySliceBreakdown {
+  slice_key: string;
+  earliest: string | null;
+  latest: string | null;
+  row_count: number;
+  unique_days: number;
+}
+
+export interface SnapshotInventorySignatureBreakdown {
+  core_hash: string;
+  earliest: string | null;
+  latest: string | null;
+  row_count: number;
+  unique_days: number;
+  unique_slices: number;
+  /** Distinct retrieval DAYS (UTC), deduped across slice_key for this signature */
+  unique_retrieved_days: number;
+  by_slice_key: SnapshotInventorySliceBreakdown[];
+}
+
+export interface SnapshotInventoryRich {
+  overall: SnapshotInventory;
+  by_core_hash: SnapshotInventorySignatureBreakdown[];
 }
 
 export interface DeleteSnapshotsResult {
@@ -383,6 +413,30 @@ export interface QuerySnapshotsVirtualResult {
   error?: string;
 }
 
+export interface QuerySnapshotRetrievalsParams {
+  /** Exact workspace-prefixed parameter ID */
+  param_id: string;
+  /** Structured signature string; optional filter */
+  core_hash?: string;
+  /** Slice keys (context/case dimensions only), or omit to include all */
+  slice_keys?: string[];
+  /** ISO date (YYYY-MM-DD) lower bound on anchor_day, inclusive */
+  anchor_from?: string;
+  /** ISO date (YYYY-MM-DD) upper bound on anchor_day, inclusive */
+  anchor_to?: string;
+  /** Hard cap on timestamps returned (default 200) */
+  limit?: number;
+}
+
+export interface QuerySnapshotRetrievalsResult {
+  success: boolean;
+  retrieved_at: string[];
+  retrieved_days: string[];
+  latest_retrieved_at: string | null;
+  count: number;
+  error?: string;
+}
+
 /**
  * Query a "virtual snapshot": latest row per anchor_day (and slice_key) as-of a timestamp.
  *
@@ -444,6 +498,58 @@ export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams)
 }
 
 /**
+ * Query distinct snapshot retrieval timestamps for a subject (Phase 2 `@` UI).
+ *
+ * This is the client for `POST /api/snapshots/retrievals`.
+ */
+export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsParams): Promise<QuerySnapshotRetrievalsResult> {
+  if (!SNAPSHOTS_ENABLED) {
+    return {
+      success: true,
+      retrieved_at: [],
+      retrieved_days: [],
+      latest_retrieved_at: null,
+      count: 0,
+    };
+  }
+
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/retrievals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        param_id: params.param_id,
+        core_hash: params.core_hash,
+        slice_keys: params.slice_keys,
+        anchor_from: params.anchor_from,
+        anchor_to: params.anchor_to,
+        limit: params.limit,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[SnapshotRetrievals] Failed:', response.status, errorText);
+      return { success: false, retrieved_at: [], retrieved_days: [], latest_retrieved_at: null, count: 0, error: errorText };
+    }
+
+    const body = await response.json();
+    return {
+      success: !!body.success,
+      retrieved_at: Array.isArray(body.retrieved_at) ? body.retrieved_at : [],
+      retrieved_days: Array.isArray(body.retrieved_days) ? body.retrieved_days : [],
+      latest_retrieved_at: body.latest_retrieved_at ?? null,
+      count: typeof body.count === 'number' ? body.count : (Array.isArray(body.retrieved_at) ? body.retrieved_at.length : 0),
+      error: body.error,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[SnapshotRetrievals] Error:', errorMessage);
+    return { success: false, retrieved_at: [], retrieved_days: [], latest_retrieved_at: null, count: 0, error: errorMessage };
+  }
+}
+
+/**
  * Get snapshot inventory for multiple parameters in one request.
  * 
  * Efficient batch query for UI that needs to show snapshot counts.
@@ -486,7 +592,22 @@ export async function getBatchInventory(
     }
     
     const data = await response.json();
-    return data.inventory;
+    const inv = (data.inventory || {}) as Record<string, SnapshotInventoryRich>;
+    const out: Record<string, SnapshotInventory> = {};
+    for (const pid of paramIds) {
+      out[pid] = inv?.[pid]?.overall ?? {
+        has_data: false,
+        param_id: pid,
+        earliest: null,
+        latest: null,
+        row_count: 0,
+        unique_days: 0,
+        unique_slices: 0,
+        unique_hashes: 0,
+        unique_retrievals: 0,
+      };
+    }
+    return out;
     
   } catch (error) {
     console.error('[SnapshotInventory] Error:', error);
@@ -506,6 +627,39 @@ export async function getBatchInventory(
       };
     }
     return result;
+  }
+}
+
+/**
+ * Get rich inventory (overall + breakdown by core_hash and slice_key).
+ *
+ * This is the "debuggable" inventory shape: the backend reports what exists,
+ * and the frontend decides what is relevant to show.
+ */
+export async function getBatchInventoryRich(
+  paramIds: string[]
+): Promise<Record<string, SnapshotInventoryRich>> {
+  if (!SNAPSHOTS_ENABLED || paramIds.length === 0) {
+    return {};
+  }
+
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/inventory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ param_ids: paramIds }),
+    });
+
+    if (!response.ok) {
+      console.error('[SnapshotInventoryRich] Failed:', response.status);
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.inventory as Record<string, SnapshotInventoryRich>;
+  } catch (error) {
+    console.error('[SnapshotInventoryRich] Error:', error);
+    return {};
   }
 }
 

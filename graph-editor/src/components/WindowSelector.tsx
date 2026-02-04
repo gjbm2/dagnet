@@ -11,9 +11,9 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import type { DateRange } from '../types';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
-import { FileText, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
+import { AtSign, ChevronLeft, ChevronRight, FileText, X, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
 import { parseConstraints } from '../lib/queryDSL';
-import { formatDateUK, resolveRelativeDate, normalizeToUK } from '../lib/dateFormat';
+import { formatDateUK, resolveRelativeDate, normalizeToUK, parseUKDate, toISO } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
 import { validatePinnedDataInterestsDSL } from '../services/slicePlanValidationService';
 import './WindowSelector.css';
@@ -26,6 +26,8 @@ import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useBulkScenarioCreation } from '../hooks/useBulkScenarioCreation';
 import { windowFetchPlannerService, type PlannerResult } from '../services/windowFetchPlannerService';
 import { useIsReadOnlyShare } from '../contexts/ShareModeContext';
+import { getSnapshotRetrievalsForEdge } from '../services/snapshotRetrievalsService';
+import { parseDate } from '../services/windowAggregationService';
 
 
 interface WindowSelectorProps {
@@ -34,7 +36,7 @@ interface WindowSelectorProps {
 
 export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const graphStore = useGraphStore();
-  const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow, setCurrentDSL } = graphStore;
+  const { graph, window, setWindow, setGraph, lastAggregatedWindow, setLastAggregatedWindow, currentDSL, setCurrentDSL } = graphStore;
   // Use getState() in callbacks to avoid stale closure issues
   const getLatestGraph = () => (graphStore as any).getState?.()?.graph ?? graph;
   const { tabs, operations } = useTabContext();
@@ -104,6 +106,20 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const [queryMode, setQueryMode] = useState<'cohort' | 'window'>('cohort');
   const [isUnrolled, setIsUnrolled] = useState(false);
   const [showPinnedQueryModal, setShowPinnedQueryModal] = useState(false);
+
+  // Phase 2: asat() `@` UI
+  const [isAsatDropdownOpen, setIsAsatDropdownOpen] = useState(false);
+  const [isAsatLoading, setIsAsatLoading] = useState(false);
+  const [asatDays, setAsatDays] = useState<string[]>([]);
+  const [asatError, setAsatError] = useState<string | null>(null);
+  const [asatMonthCursor, setAsatMonthCursor] = useState<Date>(() => {
+    const d = new Date();
+    d.setUTCDate(1);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  });
+  const asatButtonRef = useRef<HTMLButtonElement>(null);
+  const asatDropdownRef = useRef<HTMLDivElement>(null);
   
   // Preset context menu state
   const [presetContextMenu, setPresetContextMenu] = useState<{
@@ -129,6 +145,229 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const contextDropdownRef = useRef<HTMLDivElement>(null);
   const windowSelectorRef = useRef<HTMLDivElement>(null);
 
+  const selectedEdgeId = useMemo(() => {
+    if (!tabId) return null;
+    const tab = tabs.find((t) => t.id === tabId);
+    return (tab as any)?.editorState?.selectedEdgeId ?? null;
+  }, [tabId, tabs]);
+
+  const parsedAuthoritative = useMemo(() => {
+    try {
+      return parseConstraints(currentDSL || '');
+    } catch {
+      return parseConstraints('');
+    }
+  }, [currentDSL]);
+
+  const activeAsat = parsedAuthoritative.asat || null;
+
+  // Calculate default window dates (last 7 days) - needed early for initialization
+  // NOTE: Must be declared before any callbacks that reference it.
+  const defaultWindowDates = useMemo(() => {
+    const defaultEnd = new Date();
+    const defaultStart = new Date();
+    defaultStart.setDate(defaultEnd.getDate() - 7);
+    return {
+      start: formatDateUK(defaultStart),
+      end: formatDateUK(defaultEnd)
+    };
+  }, []);
+
+  // Keep the calendar month cursor aligned to the active asat date.
+  useEffect(() => {
+    if (!activeAsat) return;
+    try {
+      const uk = resolveRelativeDate(activeAsat);
+      const d = parseUKDate(uk);
+      const cursor = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+      setAsatMonthCursor(cursor);
+    } catch {
+      // ignore
+    }
+  }, [activeAsat]);
+
+  const stripAsatClause = useCallback((dsl: string): string => {
+    return (dsl || '').replace(/\.?(?:asat|at)\([^)]+\)/g, '').replace(/^\./, '');
+  }, []);
+
+  // Build DSL from AUTHORITATIVE sources: window state + context from UI
+  // NEVER use graph.currentQueryDSL directly for queries - it's just a record
+  // Uses queryMode to determine cohort() vs window() function
+  const buildDSLFromState = useCallback((windowState: DateRange, mode?: 'cohort' | 'window'): string => {
+    // Get context from graph.currentQueryDSL (this IS where user's selection is stored)
+    const parsed = parseConstraints(graph?.currentQueryDSL || '');
+
+    const contextParts: string[] = [];
+    for (const ctx of parsed.context) {
+      contextParts.push(`context(${ctx.key}:${ctx.value})`);
+    }
+    for (const ctxAny of parsed.contextAny) {
+      const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
+      contextParts.push(`contextAny(${pairs})`);
+    }
+
+    // Build window/cohort from AUTHORITATIVE window state (not from graph.currentQueryDSL)
+    // Use provided mode or fall back to current queryMode state
+    const effectiveMode = mode ?? queryMode;
+    const dateRangePart = `${effectiveMode}(${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`;
+
+    // Preserve asat clause if present in current DSL
+    const asatPart = parsed.asat ? `asat(${parsed.asat})` : '';
+
+    const parts = [contextParts.join('.'), dateRangePart, asatPart].filter(p => p);
+    return parts.join('.');
+  }, [graph?.currentQueryDSL, queryMode]);
+
+  const applyAsatToDSL = useCallback((selectedAsatUK: string) => {
+    if (!graph || !setGraph) return;
+
+    const base = stripAsatClause(currentDSL || '');
+    const parsedBase = parseConstraints(base);
+    const range = parsedBase.cohort ?? parsedBase.window;
+
+    // Compute updated window end (one-way truncation policy).
+    const currentWindow = window || defaultWindowDates;
+    let nextEnd = currentWindow.end;
+    try {
+      const chosenISO = toISO(selectedAsatUK);
+      const curEndResolved = resolveRelativeDate(currentWindow.end);
+      const endISO = parseDate(curEndResolved).toISOString().split('T')[0];
+
+      // Truncate only when the chosen day is strictly before the current end day.
+      if (chosenISO < endISO) {
+        // Keep end values in ISO-with-time form (GraphStore normalises end-of-day).
+        nextEnd = `${chosenISO}T23:59:59Z`;
+      }
+    } catch {
+      // best-effort truncation only
+    }
+
+    // Keep start as-is (authoritative window state), update end if truncated.
+    const nextWindow = { start: currentWindow.start, end: nextEnd };
+    if (setWindow) setWindow(nextWindow);
+
+    // Rebuild DSL core from state (contexts + window/cohort), then append asat.
+    const core = stripAsatClause(buildDSLFromState(nextWindow));
+    const finalDSL = `${core}.asat(${selectedAsatUK})`.replace(/^\./, '');
+
+    setCurrentDSL(finalDSL);
+    const currentGraph = getLatestGraph();
+    if (currentGraph && setGraph) {
+      setGraph({ ...currentGraph, currentQueryDSL: finalDSL });
+    }
+
+    // Keep month cursor in sync for UX.
+    try {
+      const d = parseUKDate(selectedAsatUK);
+      const cursor = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+      setAsatMonthCursor(cursor);
+    } catch {
+      // ignore
+    }
+  }, [currentDSL, defaultWindowDates, getLatestGraph, graph, setCurrentDSL, setGraph, setWindow, stripAsatClause, window, buildDSLFromState]);
+
+  const clearAsatFromDSL = useCallback(() => {
+    if (!graph || !setGraph) return;
+    const base = stripAsatClause(currentDSL || '');
+    setCurrentDSL(base);
+    const currentGraph = getLatestGraph();
+    if (currentGraph && setGraph) {
+      setGraph({ ...currentGraph, currentQueryDSL: base });
+    }
+  }, [currentDSL, getLatestGraph, graph, setCurrentDSL, setGraph, stripAsatClause]);
+
+  // Close asat dropdown on outside click
+  useEffect(() => {
+    if (!isAsatDropdownOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        asatDropdownRef.current &&
+        !asatDropdownRef.current.contains(target) &&
+        asatButtonRef.current &&
+        !asatButtonRef.current.contains(target)
+      ) {
+        setIsAsatDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isAsatDropdownOpen]);
+
+  const loadAsatDays = useCallback(async () => {
+    if (!graph || !selectedEdgeId) return;
+    setIsAsatLoading(true);
+    setAsatError(null);
+    try {
+      const res = await getSnapshotRetrievalsForEdge({
+        graph,
+        edgeId: selectedEdgeId,
+        effectiveDSL: currentDSL || '',
+        workspace: workspaceForContextRegistry,
+      });
+      if (!res.success) {
+        setAsatDays([]);
+        setAsatError(res.error || 'Failed to load snapshots');
+        return;
+      }
+      setAsatDays(res.retrieved_days || []);
+    } catch (e) {
+      setAsatDays([]);
+      setAsatError(String(e));
+    } finally {
+      setIsAsatLoading(false);
+    }
+  }, [graph, selectedEdgeId, currentDSL, workspaceForContextRegistry]);
+
+  const openAsatDropdown = useCallback(async () => {
+    if (isReadOnlyShare) return;
+    setIsAsatDropdownOpen((v) => {
+      const next = !v;
+      if (next && !activeAsat) {
+        try {
+          const w = window || defaultWindowDates;
+          const endUK = resolveRelativeDate(w.end);
+          const d = parseUKDate(endUK);
+          setAsatMonthCursor(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)));
+        } catch {
+          // ignore
+        }
+      }
+      return next;
+    });
+  }, [isReadOnlyShare, activeAsat, window, defaultWindowDates]);
+
+  // When dropdown opens, fetch availability
+  useEffect(() => {
+    if (!isAsatDropdownOpen) return;
+    void loadAsatDays();
+  }, [isAsatDropdownOpen, loadAsatDays]);
+
+  const asatDaysSet = useMemo(() => new Set(asatDays), [asatDays]);
+
+  const calendarCells = useMemo(() => {
+    // Build a 6x7 grid for the current UTC month cursor.
+    const year = asatMonthCursor.getUTCFullYear();
+    const month = asatMonthCursor.getUTCMonth();
+    const firstOfMonth = new Date(Date.UTC(year, month, 1));
+    const firstWeekday = firstOfMonth.getUTCDay(); // 0=Sun
+    const start = new Date(Date.UTC(year, month, 1 - firstWeekday));
+
+    const cells: Array<{ iso: string; day: number; inMonth: boolean; hasSnapshot: boolean }> = [];
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start.getTime() + i * 86400000);
+      const iso = d.toISOString().split('T')[0];
+      const inMonth = d.getUTCMonth() === month;
+      cells.push({
+        iso,
+        day: d.getUTCDate(),
+        inMonth,
+        hasSnapshot: asatDaysSet.has(iso),
+      });
+    }
+    return cells;
+  }, [asatMonthCursor, asatDaysSet]);
+
   // DEBUG: Log core state whenever WindowSelector renders
   useEffect(() => {
     const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
@@ -139,17 +378,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       lastAggregatedWindow,
     });
   }, [graphStore, graph?.currentQueryDSL, window, lastAggregatedWindow]);
-  
-  // Calculate default window dates (last 7 days) - needed early for initialization
-  const defaultWindowDates = useMemo(() => {
-    const defaultEnd = new Date();
-    const defaultStart = new Date();
-    defaultStart.setDate(defaultEnd.getDate() - 7);
-    return {
-      start: formatDateUK(defaultStart),
-      end: formatDateUK(defaultEnd)
-    };
-  }, []);
   
   // Initialize window state in store if not set
   useEffect(() => {
@@ -227,34 +455,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     }
     return undefined;
   }, [graph?.currentQueryDSL]);
-  
-  // Build DSL from AUTHORITATIVE sources: window state + context from UI
-  // NEVER use graph.currentQueryDSL directly for queries - it's just a record
-  // Uses queryMode to determine cohort() vs window() function
-  const buildDSLFromState = useCallback((windowState: DateRange, mode?: 'cohort' | 'window'): string => {
-    // Get context from graph.currentQueryDSL (this IS where user's selection is stored)
-    const parsed = parseConstraints(graph?.currentQueryDSL || '');
-    
-    const contextParts: string[] = [];
-    for (const ctx of parsed.context) {
-      contextParts.push(`context(${ctx.key}:${ctx.value})`);
-    }
-    for (const ctxAny of parsed.contextAny) {
-      const pairs = ctxAny.pairs.map(p => `${p.key}:${p.value}`).join(',');
-      contextParts.push(`contextAny(${pairs})`);
-    }
-    
-    // Build window/cohort from AUTHORITATIVE window state (not from graph.currentQueryDSL)
-    // Use provided mode or fall back to current queryMode state
-    const effectiveMode = mode ?? queryMode;
-    const dateRangePart = `${effectiveMode}(${formatDateUK(windowState.start)}:${formatDateUK(windowState.end)})`;
-    
-    // Preserve asat clause if present in current DSL
-    const asatPart = parsed.asat ? `asat(${parsed.asat})` : '';
-    
-    const parts = [contextParts.join('.'), dateRangePart, asatPart].filter(p => p);
-    return parts.join('.');
-  }, [graph?.currentQueryDSL, queryMode]);
   
     // Update CSS variable for scenario legend positioning when height changes
   // Set on the container element (not document root) so it's scoped to this tab
@@ -835,6 +1035,150 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
           onChange={handleDateRangeChange}
           maxDate={formatDateUK(new Date())}
         />
+
+        {/* Phase 2: `@` asat() picker */}
+        <div className="window-selector-asat">
+          <button
+            ref={asatButtonRef}
+            type="button"
+            data-testid="asat-toggle"
+            className={`window-selector-asat-toggle ${activeAsat ? 'active' : ''}`}
+            onClick={() => {
+              void openAsatDropdown();
+            }}
+            disabled={isReadOnlyShare}
+            title={
+              isReadOnlyShare
+                ? 'Disabled in static share mode'
+                : selectedEdgeId
+                  ? (activeAsat ? `asat(${activeAsat})` : 'Choose as-at snapshot date')
+                  : 'Select an edge to show snapshot availability'
+            }
+            aria-pressed={!!activeAsat}
+          >
+            <AtSign size={16} />
+          </button>
+
+          {isAsatDropdownOpen && (
+            <div
+              ref={asatDropdownRef}
+              className="window-selector-asat-dropdown"
+              data-testid="asat-dropdown"
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="asat-dropdown-header">
+                <div className="asat-dropdown-title">As-at snapshot</div>
+                <div className="asat-dropdown-actions">
+                  {activeAsat && (
+                    <button
+                      type="button"
+                      data-testid="asat-remove"
+                      className="asat-dropdown-remove"
+                      onClick={() => {
+                        clearAsatFromDSL();
+                        setIsAsatDropdownOpen(false);
+                      }}
+                      title="Remove asat(...) clause"
+                    >
+                      <X size={14} />
+                      Remove @
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {!selectedEdgeId && (
+                <div className="asat-dropdown-message">
+                  Select an edge to show available snapshot days.
+                </div>
+              )}
+
+              {selectedEdgeId && (
+                <>
+                  {isAsatLoading && <div className="asat-dropdown-message">Loading snapshot days…</div>}
+                  {!isAsatLoading && asatError && (
+                    <div className="asat-dropdown-error">{asatError}</div>
+                  )}
+
+                  {!isAsatLoading && !asatError && (
+                    <>
+                      <div className="asat-calendar-nav">
+                        <button
+                          type="button"
+                          className="asat-calendar-nav-btn"
+                          onClick={() => {
+                            const d = new Date(asatMonthCursor.getTime());
+                            d.setUTCMonth(d.getUTCMonth() - 1);
+                            d.setUTCDate(1);
+                            setAsatMonthCursor(d);
+                          }}
+                          title="Previous month"
+                        >
+                          <ChevronLeft size={14} />
+                        </button>
+                        <div className="asat-calendar-month">
+                          {asatMonthCursor.toLocaleString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' })}
+                        </div>
+                        <button
+                          type="button"
+                          className="asat-calendar-nav-btn"
+                          onClick={() => {
+                            const d = new Date(asatMonthCursor.getTime());
+                            d.setUTCMonth(d.getUTCMonth() + 1);
+                            d.setUTCDate(1);
+                            setAsatMonthCursor(d);
+                          }}
+                          title="Next month"
+                        >
+                          <ChevronRight size={14} />
+                        </button>
+                      </div>
+
+                      <div className="asat-calendar-grid">
+                        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((label) => (
+                          <div key={label} className="asat-calendar-dow">{label}</div>
+                        ))}
+                        {calendarCells.map((c) => (
+                          <button
+                            key={c.iso}
+                            type="button"
+                            data-testid={`asat-day-${c.iso}`}
+                            className={[
+                              'asat-calendar-day',
+                              c.inMonth ? 'in-month' : 'out-month',
+                              c.hasSnapshot ? 'has-snapshot' : '',
+                              activeAsat && (() => {
+                                try {
+                                  const iso = parseUKDate(resolveRelativeDate(activeAsat)).toISOString().split('T')[0];
+                                  return iso === c.iso ? 'selected' : '';
+                                } catch {
+                                  return '';
+                                }
+                              })(),
+                            ].filter(Boolean).join(' ')}
+                            onClick={() => {
+                              const selectedUK = formatDateUK(new Date(`${c.iso}T00:00:00Z`));
+                              applyAsatToDSL(selectedUK);
+                              setIsAsatDropdownOpen(false);
+                            }}
+                            title={c.hasSnapshot ? 'Snapshot available' : 'No snapshot recorded for this day'}
+                          >
+                            {c.day}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="asat-dropdown-footnote">
+                        Highlighted days have at least one snapshot for the selected edge under the current effective query.
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
         
         {/* Context area: chips + add button - wrapped together to prevent line break between them */}
         <div className="window-selector-context-group">
