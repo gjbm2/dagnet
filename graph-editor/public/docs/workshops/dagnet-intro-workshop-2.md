@@ -1,4 +1,4 @@
-# DagNet Introduction Workshop -- PART 2 (of 2)
+# DagNet Introduction Workshop -- PART 2 (of 3)
 
 **Audience**: New DagNet users  
 **Duration**: ~90–120 minutes (flexible based on interactivity)  
@@ -227,48 +227,6 @@ Each scenario can show:
 - If participants see a change: “Is it a real behavioural difference or a maturity/forecast difference?”
 - If they don’t: “What would you change to make a difference detectable? (window length, context slice, target node)”
 
-### What‑If and conditional probabilities (first-class)
-
-This is where DagNet goes beyond “segmenting a funnel”.
-
-#### Conditional probabilities (what they mean)
-
-Sometimes an edge behaves differently depending on what the user did earlier. Example:
-
-- “Conversion from `pricing → signup` is higher if the user visited `promo`.”
-
-In DagNet this is expressed as a conditional probability on an edge, using conditions like:
-
-- `visited(node-id)`
-- `exclude(node-id)`
-- `context(key:value)` (slice behaviour by a context)
-- `case(experiment:variant)` (model behaviour by experiment variant)
-
-#### What‑If (what it means)
-
-What‑If lets you answer questions like:
-
-- “What if everyone went through node X?”
-- “What if we force the path to include Y (and exclude alternative siblings)?”
-
-Practically, What‑If can:
-
-- **activate conditionals** (treat as if `visited(...)` were true)
-- **prune and renormalise** the graph (re-route probability mass through the forced path)
-
-#### Hands-on mini‑lab: conditional + what‑if
-
-> **Task**:
->
-> - Pick one edge (e.g., `middle → exit`) and add a conditional probability:
->   - Base p.mean = baseline
->   - Conditional p.mean when `visited(entry)` (or another upstream node) = higher
-> - Use the What‑If panel to force the visited condition on/off and observe:
->   - the edge probability changes
->   - downstream reach changes
->
-> **Discussion**: “Is this slicing evidence, or changing the model?”
-
 ---
 
 ## Section 7: Analysis & Charting
@@ -327,100 +285,7 @@ Bridge charts decompose **why** reach changed between two scenarios:
 
 ---
 
-## Section 7.5: Graph Issues (Integrity Checking)
-
-**Duration**: ~10 minutes  
-**Mode**: Demo + Mini-lab
-
-### Learning objectives
-
-- Understand what “Graph Issues” is (and what it is not)
-- Learn how issues are discovered and kept up to date
-- Learn how to use the Issues viewer to navigate straight to the broken node/edge/file
-- Learn a practical “fix loop”: make a change → check issues → fix → refresh → repeat
-
-### What Graph Issues is
-
-Graph Issues is DagNet’s built-in **integrity checker** — an IDE-style linter for your workspace.
-
-It scans graphs and related files (nodes, parameters, contexts, cases, etc.) and surfaces problems as:
-- **Errors**: things that will likely break analysis/retrieval or make the graph invalid
-- **Warnings**: suspicious or inconsistent states that might still “work” but are risky
-- **Info**: helpful notices and hygiene checks
-
-### Mass conservation (the biggest thing to internalise)
-
-If participants remember only one “graph correctness” concept, it should be **mass conservation**:
-
-- At each node, the outgoing edges represent a partition of what happens next, so the outgoing probabilities/weights should be well-defined and interpretable.
-- In practice, problems show up as:
-  - **Leak**: outgoing probabilities/weights sum to less than expected (missing “exit/other” path, or missing an edge entirely).
-  - **Over-commit**: outgoing probabilities/weights sum to more than expected (double counting, overlapping conditionals, or inconsistent evidence).
-
-Graph Issues is designed to catch the common mass-conservation failures early. Two particularly important messages it can surface:
-
-- **Sibling edges sum over 100% (evidence)**: reported as an **Error** (this should never happen under standard funnel semantics).
-- **Sibling edges sum over 100% (mean)**: reported as **Info** when it’s likely a **forecasting artefact for immature data** (the modelled \(p\) can temporarily look “too high” even when evidence is coherent).
-
-Practical fixes to teach:
-
-- If you see a leak: add or verify an explicit **exit / other** edge so the node’s outcomes are complete.
-- If you see over-commit: look for overlapping edges/conditionals, and ensure sibling edges are mutually exclusive and collectively exhaustive (MECE) at the user level.
-- If conditionals are involved: ensure sibling edges from the same node define the same conditional groups (otherwise interpretation/conservation silently breaks).
-
-### What Graph Issues is not
-
-- It is **not** a data-quality or statistical validity judgement (“this conversion rate is wrong”).
-- It does **not** replace domain review; it focuses on **structure, references, and integrity**.
-
-### Where to find it in the UI
-
-- Open it from **View → Graph Issues**.
-- Optional: when a graph has debugging enabled, you may also see an **issues indicator overlay** on the graph canvas (top-right). Clicking it opens Graph Issues scoped to that graph.
-
-### How it works (simple mental model)
-
-- It runs a workspace integrity scan in the background and updates the viewer as results change.
-- It is **debounced** (changes are grouped) to avoid re-checking on every single keystroke.
-- You can always hit **Refresh** in the Graph Issues viewer to force a re-check.
-
-### How to use it (the “three filters” habit)
-
-When something looks wrong, teach participants to do these three steps first:
-
-1. **Filter to the graph** they care about (Graph dropdown).
-2. Keep **Include refs** on (so you see issues in referenced files, not just the graph YAML).
-3. Start with **Errors only**, then expand to Warnings/Info once errors are cleared.
-
-### Demo (recommended flow)
-
-1. Make a small “controlled mistake”:
-   - Example: rename a node/case/context file (or change an ID) without updating the graph references.
-2. Open **View → Graph Issues**.
-3. Filter to the current graph and show:
-   - The issue grouping by file
-   - The category icon + severity counts
-   - The suggestion/detail text (when present)
-4. Click an issue row to **jump directly** to the affected node/edge in the graph (when deep linking is available).
-5. Fix the issue, refresh, and show the issue disappearing.
-
-### Mini-lab (2–3 minutes)
-
-> **Task**: Each participant should introduce one tiny break and recover using Graph Issues.
->
-> - Break something small (a missing reference, a naming mismatch, a schema typo).
-> - Find the issue, navigate to it, and fix it.
-> - Confirm Graph Issues returns to “✅ No issues found”.
-
-### Discussion prompts
-
-- “If the issue is on a referenced file, why might the graph still ‘look fine’ until you run retrieval/analysis?”
-- “Which issues would you treat as a ‘hard stop’ before sharing a chart?”
-- “What patterns of edits tend to create issues? (renames, copy/paste, changing IDs, moving files)”
-
----
-
-## Section 7.7: Snapshots (Data History)
+## Section 7.5: Snapshots (Data History)
 
 **Duration**: ~5 minutes  
 **Mode**: Demo
@@ -457,10 +322,7 @@ Access snapshot actions via the **Snapshots** submenu:
 | **Download snapshot data** | Export all snapshot rows for this parameter as CSV |
 | **Delete snapshots (N)** | Permanently remove all N snapshot retrievals for this parameter |
 
-### Coming Soon
-
-- **As-at queries**: DSL syntax `.asAt(15-Jan-26)` to view evidence as it was known at a historical date
-- **Time-series charting**: Visualise how conversion rates have changed over time
+*See Part 3 for as-at queries and time-series charting (coming features).*
 
 ---
 
@@ -624,7 +486,6 @@ Before running this workshop, verify each step works in the current build:
 - [ ] **Context file handling**: Can create/update context files and use in DSL
 - [ ] **Scenario DSL with context**: `context(key:value)` filters work in scenarios
 - [ ] **ActiveGates context**: A context mapping `activeGates.<gate>` works in Amplitude funnels as a user segment (DagNet emits `gp:activeGates.<gate>`)
-- [ ] **Graph Issues**: Can open `View > Graph Issues`, filter to the current graph, and navigate to a deliberately broken reference (then fix it)
 - [ ] **Bridge analysis**: Works with context-based scenario pairs
 - [ ] **Live chart share**: Generates valid URL and loads in dashboard mode
 - [ ] **Notion embed**: Live link loads correctly in Notion iframe
@@ -672,25 +533,29 @@ If live share is unavailable:
 
 ## Follow-Up Resources
 
-- [User Guide](../graph-editor/public/docs/user-guide.md)
-- [Query DSL Reference](../graph-editor/public/docs/query-expressions.md)
-- [Keyboard Shortcuts](../graph-editor/public/docs/keyboard-shortcuts.md)
-- [Share Links Design](../docs/current/share-graph.md)
+- **Part 3**: [dagnet-intro-workshop-3.md](./dagnet-intro-workshop-3.md) — What‑If, conditionals, Graph Issues, Session Log, as-at queries
+- [User Guide](../user-guide.md)
+- [Query DSL Reference](../query-expressions.md)
+- [Keyboard Shortcuts](../keyboard-shortcuts.md)
 
 ---
 
-## Other key areas to explore (5 minutes)
+## Other key areas to explore
 
-This workshop covers the “core loop” (model → retrieve → compare → explain → share). DagNet has more depth; here are the next areas most users should explore, depending on their role:
+This workshop covers the "core loop" (model → retrieve → compare → explain → share). DagNet has more depth:
 
+**Covered in Part 3**:
+- What‑If + conditional probabilities
+- Graph Issues (integrity checking)
+- Session Log (diagnostics)
+- Snapshot as-at queries and time-series charting
+
+**Reference documentation**:
 - **Contexts in depth (MECE, otherPolicy, aggregation behaviour)**: `graph-editor/public/docs/contexts.md`
 - **Scenarios in depth (snapshot types, YAML/JSON editor, flatten)**: `graph-editor/public/docs/scenarios.md`
-- **What‑If + conditionals (semantics, pruning/renormalisation intuition)**: `graph-editor/public/docs/what-ifs-with-conditionals.md`
 - **Forecast tuning (repo-wide settings, what the knobs mean)**: `graph-editor/public/docs/forecasting-settings.md`
 - **Data connections (how retrieval is configured conceptually)**: `graph-editor/public/docs/data-connections.md`
 - **Glossary (shared language for the team)**: `graph-editor/public/docs/glossary.md`
-
-We intentionally did **not** cover admin/ops topics (automation scheduling, deep URL parameters, share boot internals) beyond what’s needed for everyday usage.
 
 ## Session Feedback
 
