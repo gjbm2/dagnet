@@ -1,4 +1,4 @@
-# DagNet Introduction Workshop -- PART 1 (of 2)
+# DagNet Introduction Workshop -- PART 1 (of 3)
 
 **Audience**: New DagNet users  
 **Duration**: ~90–120 minutes (flexible based on interactivity)  
