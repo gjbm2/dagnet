@@ -1,12 +1,9 @@
 # TODO
 
-## Concerning issue: t95 and path_t95 ls coming back MUCH too large for some edges. Need to investigate for nous-conversion and understand why.
-
----
 
 - ## Snapshot DB — CRITICAL missing integration vs design (2-Feb-26)
 -
-- **Design intent (explicit):** `docs/current/project-db/snapshot-db-design.md` §2  
+- **Design intent (explicit):** `docs/current/project-db/completed/snapshot-db-design.md` §2  
 - **Core principle:** **Frontend resolves everything** (DSL parse, slice plan, MECE verification, signature set) and **Python only queries DB + derives**.
 -
 - **What we discovered:** the core wiring is missing in production UI:
