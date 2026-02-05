@@ -31,7 +31,13 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
 
   // Load all graphs from IDB on open
   useEffect(() => {
-    if (!isOpen || !workspace) {
+    const repo = workspace?.repository ?? null;
+    const branch = workspace?.branch ?? null;
+
+    // IMPORTANT: `workspace` is often passed as a freshly-created object literal from callers.
+    // Never depend on its identity, only on repo/branch primitives, otherwise this effect re-runs
+    // during unrelated parent re-renders and can clobber user selections (flaky "Save Changes" disabled).
+    if (!isOpen || !repo || !branch) {
       setAllGraphs([]);
       setPendingChanges(new Map());
       setSelectedLeft(new Set());
@@ -39,22 +45,30 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
       return;
     }
 
+    let cancelled = false;
     setLoading(true);
-    dailyFetchService.getGraphsForWorkspace(workspace)
+    dailyFetchService.getGraphsForWorkspace({ repository: repo, branch })
       .then((items) => {
+        if (cancelled) return;
         setAllGraphs(items);
         setPendingChanges(new Map());
         setSelectedLeft(new Set());
         setSelectedRight(new Set());
       })
       .catch((err) => {
+        if (cancelled) return;
         console.error('[DailyFetchManagerModal] Failed to load graphs:', err);
         setAllGraphs([]);
       })
       .finally(() => {
+        if (cancelled) return;
         setLoading(false);
       });
-  }, [isOpen, workspace]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, workspace?.repository, workspace?.branch]);
 
   // Derive current state (original + pending changes)
   const getEffectiveDailyFetch = (item: GraphListItem): boolean => {
