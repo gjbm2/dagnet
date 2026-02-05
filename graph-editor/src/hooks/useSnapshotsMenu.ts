@@ -11,10 +11,10 @@ import { useDialog } from '../contexts/DialogContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import {
   deleteSnapshots as deleteSnapshotsApi,
-  getBatchInventoryRich,
+  getBatchInventoryV2,
   querySnapshotsFull,
   type SnapshotInventory,
-  type SnapshotInventoryRich,
+  type SnapshotInventoryV2Param,
   type SnapshotQueryRow,
 } from '../services/snapshotWriteService';
 import { downloadTextFile } from '../services/downloadService';
@@ -63,19 +63,6 @@ function latestQuerySignatureForParam(objectId: string): string | undefined {
   const getTs = (v: any) => String(v?.data_source?.retrieved_at || v?.window_to || v?.window_from || '');
   withSig.sort((a, b) => getTs(b).localeCompare(getTs(a)));
   return String(withSig[0].query_signature);
-}
-
-function coreHashFromStructuredSignature(sig: string | undefined): string | undefined {
-  if (!sig || typeof sig !== 'string') return undefined;
-  const s = sig.trim();
-  if (!s.startsWith('{')) return undefined;
-  try {
-    const parsed = JSON.parse(s);
-    const c = parsed?.c;
-    return typeof c === 'string' && c.trim() ? c.trim() : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function sanitiseFilenamePart(input: string): string {
@@ -161,31 +148,46 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
 
     const dbParamIds = ids.map((id) => buildDbParamId(id, repo, branch));
     try {
-      const richByDbParamId = await getBatchInventoryRich(dbParamIds);
+      const current_signatures: Record<string, string> = {};
+      for (const objectId of ids) {
+        const dbParamId = buildDbParamId(objectId, repo, branch);
+        const sig = latestQuerySignatureForParam(objectId);
+        if (sig) current_signatures[dbParamId] = sig;
+      }
+
+      const invByDbParamId = await getBatchInventoryV2(dbParamIds, { current_signatures });
       const nextInventories: Record<string, SnapshotInventory> = {};
       const nextCounts: Record<string, number> = {};
 
       for (const objectId of ids) {
         const dbParamId = buildDbParamId(objectId, repo, branch);
-        const rich = richByDbParamId[dbParamId] as SnapshotInventoryRich | undefined;
-        const overall = rich?.overall;
-        if (overall) {
-          nextInventories[objectId] = overall;
+        const inv = invByDbParamId[dbParamId] as SnapshotInventoryV2Param | undefined;
+        const overallAll = inv?.overall_all_families;
+        if (overallAll) {
+          nextInventories[objectId] = {
+            has_data: overallAll.row_count > 0,
+            param_id: dbParamId,
+            earliest: overallAll.earliest_anchor_day,
+            latest: overallAll.latest_anchor_day,
+            row_count: overallAll.row_count,
+            unique_days: overallAll.unique_anchor_days,
+            unique_slices: 0,
+            unique_hashes: 0,
+            unique_retrievals: overallAll.unique_retrievals,
+            unique_retrieved_days: overallAll.unique_retrieved_days,
+          };
 
-          // User meaning of "snapshots": one per retrieved DAY, filtered to relevant signature when available.
-          const expectedSig = latestQuerySignatureForParam(objectId);
-          const expectedCore = coreHashFromStructuredSignature(expectedSig);
-          const bySig = Array.isArray(rich?.by_core_hash) ? rich!.by_core_hash : [];
-          const sigEntry =
-            (expectedSig ? bySig.find((s) => s.core_hash === expectedSig) : undefined) ||
-            (expectedCore ? bySig.find((s) => s.core_hash === expectedCore) : undefined);
+          // User meaning of "snapshots": one per retrieved DAY, prefer the family matching current signature.
+          const current = inv?.current;
+          const matchedFamilyId = current?.matched_family_id || null;
+          const families = Array.isArray(inv?.families) ? inv!.families : [];
+          const matchedFamily = matchedFamilyId ? families.find((f) => f.family_id === matchedFamilyId) : undefined;
 
-          if (sigEntry) {
-            nextCounts[objectId] = sigEntry.unique_retrieved_days ?? 0;
+          if (matchedFamily && matchedFamily.overall) {
+            nextCounts[objectId] = matchedFamily.overall.unique_retrieved_days ?? 0;
           } else {
-            // No signature available / no match => fewer (0) by design.
-            // If signature is unknown, fall back to overall retrieved-day count.
-            nextCounts[objectId] = expectedSig ? 0 : (overall.unique_retrieved_days ?? 0);
+            // If we have history but current signature does not match, do NOT show 0.
+            nextCounts[objectId] = overallAll.unique_retrieved_days ?? 0;
           }
         } else {
           nextInventories[objectId] = {

@@ -12,13 +12,19 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from datetime import date, datetime
+from dotenv import load_dotenv
+
+# Load DB_CONNECTION for integration tests (local dev / CI secrets).
+load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 from snapshot_service import (
     query_snapshots, 
-    get_snapshot_inventory, 
     append_snapshots,
     query_virtual_snapshot,
     query_snapshot_retrievals,
-    get_db_connection
+    get_db_connection,
+    get_batch_inventory_v2,
+    short_core_hash_from_canonical_signature,
+    create_equivalence_link,
 )
 
 # Skip all tests if DB_CONNECTION not available
@@ -30,12 +36,36 @@ pytestmark = pytest.mark.skipif(
 # Test prefix for cleanup
 TEST_PREFIX = 'pytest-ri-'
 
+SIG_ALGO = "sig_v1_sha256_trunc128_b64url"
+
+
+def append_snapshots_for_test(*, param_id: str, canonical_signature: str, slice_key: str, retrieved_at: datetime, rows, diagnostic: bool = False):
+    """
+    Test helper: append snapshots using the flexi-sigs write contract.
+    """
+    return append_snapshots(
+        param_id=param_id,
+        canonical_signature=canonical_signature,
+        inputs_json={
+            "schema": "pytest_flexi_sigs_v1",
+            "param_id": param_id,
+            "canonical_signature": canonical_signature,
+        },
+        sig_algo=SIG_ALGO,
+        slice_key=slice_key,
+        retrieved_at=retrieved_at,
+        rows=rows,
+        diagnostic=diagnostic,
+    )
+
 
 def cleanup_test_data():
     """Delete all test data with our prefix."""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
+        cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
         conn.close()
@@ -59,7 +89,8 @@ class TestReadIntegrity:
         """Insert test data before each test."""
         # Insert test data for querying
         self.param_id = f'{TEST_PREFIX}param-a'
-        self.core_hash = 'test-hash-abc123'
+        self.canonical_signature = '{"c":"pytest-ri","x":{}}'
+        self.core_hash = short_core_hash_from_canonical_signature(self.canonical_signature)
         
         # Insert rows with different dates and slices
         rows_uncontexted = [
@@ -70,13 +101,12 @@ class TestReadIntegrity:
             {'anchor_day': '2025-10-05', 'X': 140, 'Y': 20},
         ]
         
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=self.param_id,
-            core_hash=self.core_hash,
-            context_def_hashes=None,
             slice_key='',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
-            rows=rows_uncontexted
+            canonical_signature=self.canonical_signature,
+            rows=rows_uncontexted,
         )
         
         # Insert slice data
@@ -85,13 +115,12 @@ class TestReadIntegrity:
             {'anchor_day': '2025-10-02', 'X': 55, 'Y': 6},
         ]
         
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=self.param_id,
-            core_hash=self.core_hash,
-            context_def_hashes=None,
             slice_key='context(channel:google)',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
-            rows=rows_google
+            canonical_signature=self.canonical_signature,
+            rows=rows_google,
         )
         
         rows_facebook = [
@@ -99,13 +128,12 @@ class TestReadIntegrity:
             {'anchor_day': '2025-10-02', 'X': 55, 'Y': 6},
         ]
         
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=self.param_id,
-            core_hash=self.core_hash,
-            context_def_hashes=None,
             slice_key='context(channel:facebook)',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
-            rows=rows_facebook
+            canonical_signature=self.canonical_signature,
+            rows=rows_facebook,
         )
         
         yield
@@ -114,6 +142,8 @@ class TestReadIntegrity:
         try:
             conn = get_db_connection()
             cur = conn.cursor()
+            cur.execute("DELETE FROM signature_equivalence WHERE param_id = %s", (self.param_id,))
+            cur.execute("DELETE FROM signature_registry WHERE param_id = %s", (self.param_id,))
             cur.execute("DELETE FROM snapshots WHERE param_id = %s", (self.param_id,))
             conn.commit()
             conn.close()
@@ -199,13 +229,20 @@ class TestReadIntegrity:
         """
         Inventory returns correct summary stats.
         """
-        inventory = get_snapshot_inventory(self.param_id)
-        
-        assert inventory['has_data'] == True
-        assert inventory['row_count'] == 9
-        assert inventory['unique_days'] == 5  # Oct 1-5
-        assert inventory['unique_slices'] == 3  # '', google, facebook
-        assert inventory['unique_retrievals'] == 1  # All inserted with same retrieved_at
+        inv = get_batch_inventory_v2(
+            param_ids=[self.param_id],
+            current_signatures={self.param_id: self.canonical_signature},
+            slice_keys_by_param={self.param_id: ['', 'context(channel:google)', 'context(channel:facebook)']},
+            include_equivalents=True,
+            limit_families_per_param=10,
+            limit_slices_per_family=10,
+        )
+        pid_inv = inv[self.param_id]
+        overall = pid_inv["overall_all_families"]
+
+        assert overall["row_count"] == 9
+        assert overall["unique_anchor_days"] == 5  # Oct 1-5
+        assert overall["unique_retrievals"] == 1  # All inserted with same retrieved_at
 
     def test_ri005_signature_is_part_of_key(self):
         """
@@ -213,16 +250,16 @@ class TestReadIntegrity:
 
         Same param_id, different core_hash => isolated rows.
         """
-        other_hash = 'test-hash-OTHER-999'
-        append_snapshots(
+        other_sig = '{"c":"pytest-ri-other","x":{}}'
+        other_hash = short_core_hash_from_canonical_signature(other_sig)
+        append_snapshots_for_test(
             param_id=self.param_id,
-            core_hash=other_hash,
-            context_def_hashes=None,
             slice_key='',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            canonical_signature=other_sig,
             rows=[
                 {'anchor_day': '2025-10-01', 'X': 999, 'Y': 99},
-            ]
+            ],
         )
 
         rows_a = query_snapshots(param_id=self.param_id, core_hash=self.core_hash)
@@ -242,42 +279,41 @@ class TestReadIntegrity:
         - keyed by (param_id, core_hash, slice_key, anchor_day) identity
         """
         pid = f'{TEST_PREFIX}param-virtual'
-        sig_a = 'sig-A'
-        sig_b = 'sig-B'
+        sig_a = '{"c":"sig-A","x":{}}'
+        sig_b = '{"c":"sig-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
 
         # Day 0 retrieval (older)
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=pid,
-            core_hash=sig_a,
-            context_def_hashes=None,
             slice_key='',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            canonical_signature=sig_a,
             rows=[
                 {'anchor_day': '2025-10-01', 'X': 1, 'Y': 1},
                 {'anchor_day': '2025-10-02', 'X': 2, 'Y': 2},
-            ]
+            ],
         )
         # Day 1 retrieval (newer) only overlaps one day
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=pid,
-            core_hash=sig_a,
-            context_def_hashes=None,
             slice_key='',
             retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            canonical_signature=sig_a,
             rows=[
                 {'anchor_day': '2025-10-02', 'X': 222, 'Y': 22},
-            ]
+            ],
         )
         # Another signature under same param_id (should not be returned when querying sig_a)
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=pid,
-            core_hash=sig_b,
-            context_def_hashes=None,
             slice_key='',
             retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            canonical_signature=sig_b,
             rows=[
                 {'anchor_day': '2025-10-01', 'X': 999, 'Y': 99},
-            ]
+            ],
         )
 
         res = query_virtual_snapshot(
@@ -285,8 +321,9 @@ class TestReadIntegrity:
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
-            core_hash=sig_a,
+            core_hash=hash_a,
             slice_keys=[''],
+            include_equivalents=False,
             limit=10000,
         )
         assert res['success'] is True
@@ -302,8 +339,9 @@ class TestReadIntegrity:
             as_at=datetime(2025, 10, 12, 0, 0, 0),
             anchor_from=date(2025, 10, 1),
             anchor_to=date(2025, 10, 2),
-            core_hash='sig-NOT-THERE',
+            core_hash=short_core_hash_from_canonical_signature('{"c":"sig-NOT-THERE","x":{}}'),
             slice_keys=[''],
+            include_equivalents=False,
             limit=10000,
         )
         assert res_wrong['success'] is True
@@ -320,41 +358,40 @@ class TestReadIntegrity:
         - supports anchor_day scoping
         """
         pid = f'{TEST_PREFIX}param-retrievals'
-        sig_a = 'sig-A'
-        sig_b = 'sig-B'
+        sig_a = '{"c":"sig-A","x":{}}'
+        sig_b = '{"c":"sig-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
 
         # Two retrievals for sig_a (same slice)
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=pid,
-            core_hash=sig_a,
-            context_def_hashes=None,
             slice_key='context(channel:google)',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            canonical_signature=sig_a,
             rows=[
                 {'anchor_day': '2025-10-01', 'X': 10, 'Y': 1},
-            ]
+            ],
         )
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=pid,
-            core_hash=sig_a,
-            context_def_hashes=None,
             slice_key='context(channel:google)',
             retrieved_at=datetime(2025, 10, 12, 12, 0, 0),
+            canonical_signature=sig_a,
             rows=[
                 {'anchor_day': '2025-10-02', 'X': 20, 'Y': 2},
-            ]
+            ],
         )
 
         # A different signature (should be excluded when core_hash filter applied)
-        append_snapshots(
+        append_snapshots_for_test(
             param_id=pid,
-            core_hash=sig_b,
-            context_def_hashes=None,
             slice_key='context(channel:google)',
             retrieved_at=datetime(2025, 10, 13, 12, 0, 0),
+            canonical_signature=sig_b,
             rows=[
                 {'anchor_day': '2025-10-02', 'X': 999, 'Y': 99},
-            ]
+            ],
         )
 
         # Unfiltered: should include all distinct retrievals (3)
@@ -366,7 +403,7 @@ class TestReadIntegrity:
         assert res_all['retrieved_at'][2].startswith('2025-10-10')
 
         # Filtered by signature: only sig_a's retrievals (2)
-        res_sig = query_snapshot_retrievals(param_id=pid, core_hash=sig_a, limit=10)
+        res_sig = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, include_equivalents=False, limit=10)
         assert res_sig['success'] is True
         assert res_sig['count'] == 2
         assert res_sig['retrieved_at'][0].startswith('2025-10-12')
@@ -378,3 +415,143 @@ class TestReadIntegrity:
         assert res_anchor['count'] == 2
         assert res_anchor['retrieved_at'][0].startswith('2025-10-13')
         assert res_anchor['retrieved_at'][1].startswith('2025-10-12')
+
+    def test_ri008_equivalence_closure_affects_virtual_and_retrievals(self):
+        """
+        RI-008: equivalence closure affects signature-keyed reads.
+
+        - With include_equivalents=False, reads are strict by core_hash.
+        - With include_equivalents=True, an equivalence link expands matching to the closure.
+        """
+        pid = f'{TEST_PREFIX}param-eq'
+        sig_a = '{"c":"eq-A","x":{}}'
+        sig_b = '{"c":"eq-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        append_snapshots_for_test(
+            param_id=pid,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+        append_snapshots_for_test(
+            param_id=pid,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 999, 'Y': 99}],
+        )
+
+        # Strict: core_hash A should NOT return B rows.
+        strict = query_virtual_snapshot(
+            param_id=pid,
+            as_at=datetime(2025, 10, 12, 0, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 1),
+            core_hash=hash_a,
+            slice_keys=[''],
+            include_equivalents=False,
+            limit=1000,
+        )
+        assert strict["success"] is True
+        assert strict["count"] == 1
+        assert strict["rows"][0]["x"] == 1
+
+        # Link A ≡ B, then closure-enabled read should include B.
+        res_link = create_equivalence_link(
+            param_id=pid,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="equivalence closure integration test",
+        )
+        assert res_link["success"] is True
+
+        closure = query_virtual_snapshot(
+            param_id=pid,
+            as_at=datetime(2025, 10, 12, 0, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 1),
+            core_hash=hash_a,
+            slice_keys=[''],
+            include_equivalents=True,
+            limit=1000,
+        )
+        assert closure["success"] is True
+        # Both signatures have a row for the same day; virtual query returns latest-per-day as-of,
+        # so the newer retrieval (sig_b, x=999) should win.
+        assert closure["count"] == 1
+        assert closure["rows"][0]["x"] == 999
+
+        # Retrievals: strict filter should only see sig_a's retrieval; closure should see both.
+        strict_r = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, include_equivalents=False, limit=10)
+        assert strict_r["success"] is True
+        assert strict_r["count"] == 1
+        assert strict_r["retrieved_at"][0].startswith("2025-10-10")
+
+        closure_r = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, include_equivalents=True, limit=10)
+        assert closure_r["success"] is True
+        assert closure_r["count"] == 2
+        assert closure_r["retrieved_at"][0].startswith("2025-10-11")
+        assert closure_r["retrieved_at"][1].startswith("2025-10-10")
+
+    def test_ri009_inventory_v2_groups_equivalent_signatures_into_one_family(self):
+        """
+        RI-009: inventory V2 groups equivalence closure into a signature family.
+        """
+        pid = f'{TEST_PREFIX}param-inv-eq'
+        sig_a = '{"c":"inv-eq-A","x":{}}'
+        sig_b = '{"c":"inv-eq-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        append_snapshots_for_test(
+            param_id=pid,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-01', 'X': 1, 'Y': 1},
+                {'anchor_day': '2025-10-02', 'X': 2, 'Y': 2},
+            ],
+        )
+        append_snapshots_for_test(
+            param_id=pid,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-01', 'X': 10, 'Y': 10},
+            ],
+        )
+
+        res_link = create_equivalence_link(
+            param_id=pid,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="inventory family integration test",
+        )
+        assert res_link["success"] is True
+
+        inv = get_batch_inventory_v2(
+            param_ids=[pid],
+            current_signatures={pid: sig_a},
+            slice_keys_by_param={pid: ['']},
+            include_equivalents=True,
+            limit_families_per_param=10,
+            limit_slices_per_family=10,
+        )
+        pid_inv = inv[pid]
+        families = pid_inv.get("families") or []
+        assert len(families) == 1
+        fam = families[0]
+        # Family should contain both hashes (order not important)
+        member = set(fam.get("member_core_hashes") or [])
+        assert hash_a in member
+        assert hash_b in member
+        assert fam["family_size"] == 2
+        # Total row_count across both signatures: 2 + 1 = 3
+        assert fam["overall"]["row_count"] == 3

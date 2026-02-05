@@ -43,6 +43,38 @@
     {
       "source": "/api/snapshots/query-full",
       "destination": "/api/python-api?endpoint=snapshots-query-full"
+    },
+    {
+      "source": "/api/snapshots/query-virtual",
+      "destination": "/api/python-api?endpoint=snapshots-query-virtual"
+    },
+    {
+      "source": "/api/snapshots/retrievals",
+      "destination": "/api/python-api?endpoint=snapshots-retrievals"
+    },
+    {
+      "source": "/api/sigs/list",
+      "destination": "/api/python-api?endpoint=sigs-list"
+    },
+    {
+      "source": "/api/sigs/get",
+      "destination": "/api/python-api?endpoint=sigs-get"
+    },
+    {
+      "source": "/api/sigs/links/list",
+      "destination": "/api/python-api?endpoint=sigs-links-list"
+    },
+    {
+      "source": "/api/sigs/links/create",
+      "destination": "/api/python-api?endpoint=sigs-links-create"
+    },
+    {
+      "source": "/api/sigs/links/deactivate",
+      "destination": "/api/python-api?endpoint=sigs-links-deactivate"
+    },
+    {
+      "source": "/api/sigs/resolve",
+      "destination": "/api/python-api?endpoint=sigs-resolve"
     }
   ]
 }

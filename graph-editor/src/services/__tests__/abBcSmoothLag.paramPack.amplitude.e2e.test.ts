@@ -738,7 +738,9 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     
     const result = await appendSnapshots({
       param_id: testParamId,
-      core_hash: 'direct-test-hash',
+      canonical_signature: '{"c":"direct-test-hash","x":{}}',
+      inputs_json: { schema: 'pytest_flexi_sigs_v1', param_id: testParamId, canonical_signature: '{"c":"direct-test-hash","x":{}}' },
+      sig_algo: 'sig_v1_sha256_trunc128_b64url',
       slice_key: '',
       retrieved_at: new Date(),
       rows: testRows,
@@ -944,7 +946,9 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     // First write
     const r1 = await appendSnapshots({
       param_id: testParamId,
-      core_hash: 'upsert-test-hash',
+      canonical_signature: '{"c":"upsert-test-hash","x":{}}',
+      inputs_json: { schema: 'pytest_flexi_sigs_v1', param_id: testParamId, canonical_signature: '{"c":"upsert-test-hash","x":{}}' },
+      sig_algo: 'sig_v1_sha256_trunc128_b64url',
       slice_key: '',
       retrieved_at: fixedTimestamp,
       rows: testRows,
@@ -958,7 +962,9 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     // Second write with SAME timestamp - should be idempotent
     const r2 = await appendSnapshots({
       param_id: testParamId,
-      core_hash: 'upsert-test-hash',
+      canonical_signature: '{"c":"upsert-test-hash","x":{}}',
+      inputs_json: { schema: 'pytest_flexi_sigs_v1', param_id: testParamId, canonical_signature: '{"c":"upsert-test-hash","x":{}}' },
+      sig_algo: 'sig_v1_sha256_trunc128_b64url',
       slice_key: '',
       retrieved_at: fixedTimestamp,
       rows: testRows,

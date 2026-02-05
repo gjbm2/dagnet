@@ -102,8 +102,15 @@ async function seedProductionDatabase(signatureStr: string): Promise<{ success: 
       const response = await apiContext.post('/api/snapshots/append', {
         data: {
           param_id: TEST_PARAM_ID,
-          core_hash: signatureStr,
-          context_def_hashes: { channel: 'e2e-channel-def-hash' },
+          canonical_signature: signatureStr,
+          inputs_json: {
+            kind: 'playwright_seed',
+            test: 'asatHistoricalQuery',
+            param_id: TEST_PARAM_ID,
+            // Note: signature is stored separately; this is a minimal audit blob.
+            mece_context_key: 'channel',
+          },
+          sig_algo: 'sig_v1_sha256_trunc128_b64url',
           slice_key,
           rows: rows.map(r => ({
             ...r,
@@ -171,7 +178,7 @@ async function verifyDataInDatabase(signatureStr: string): Promise<{ success: bo
         as_at: '2026-01-20T23:59:59Z',
         anchor_from: '2026-01-01',
         anchor_to: '2026-01-10',
-        core_hash: signatureStr,
+        canonical_signature: signatureStr,
       },
     });
     
@@ -392,6 +399,36 @@ test.describe('asat() Historical Query - Real E2E', () => {
     console.log('\n=== SEEDING PRODUCTION DATABASE (core_hash computed) ===');
     console.log('param_id:', TEST_PARAM_ID);
     console.log('core_hash:', computedSignature);
+
+    // Ensure the parameter file is "signed" so the asat() code path can retrieve the
+    // canonical signature from file (the same invariant as real workspaces).
+    await page.evaluate(async ({ paramName, signature }) => {
+      const db = (window as any).db;
+      const fr = (window as any).fileRegistry;
+      if (!db) throw new Error('[E2E] db not available');
+
+      const fileId = `parameter-${paramName}`;
+      const paramFile = await db.files.get(fileId);
+      if (!paramFile) throw new Error(`[E2E] param file not found in IndexedDB: ${fileId}`);
+
+      paramFile.data = paramFile.data || {};
+      paramFile.data.values = [
+        {
+          query_signature: signature,
+          data_source: { retrieved_at: '2026-01-15T10:00:00Z' },
+        },
+      ];
+
+      await db.files.put(paramFile);
+      console.log('[E2E] Seeded query_signature into param file:', fileId);
+
+      // Keep fileRegistry in sync (asat path reads source metadata from fileRegistry)
+      if (fr?.registerFile) {
+        fr.registerFile(fileId, paramFile);
+      } else if (fr?.updateFile) {
+        await fr.updateFile(fileId, paramFile.data);
+      }
+    }, { paramName: TEST_PARAM_NAME, signature: computedSignature });
 
     // Clean up again (defensive: ensure no leftover rows from a previous failed run)
     await cleanupProductionDatabase();

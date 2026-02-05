@@ -130,8 +130,13 @@ async function seedSnapshots(signatureStr: string): Promise<void> {
       const response = await apiContext.post('/api/snapshots/append', {
         data: {
           param_id: TEST_PARAM_ID,
-          core_hash: signatureStr,
-          context_def_hashes: {},
+          canonical_signature: signatureStr,
+          inputs_json: {
+            kind: 'playwright_seed',
+            test: 'asatAtPicker',
+            param_id: TEST_PARAM_ID,
+          },
+          sig_algo: 'sig_v1_sha256_trunc128_b64url',
           slice_key: '',
           retrieved_at,
           rows: [

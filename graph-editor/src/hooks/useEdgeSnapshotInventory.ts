@@ -10,11 +10,42 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
-import { getInventory, type SnapshotInventory } from '../services/snapshotWriteService';
+import { getBatchInventoryV2, type SnapshotInventory, type SnapshotInventoryV2Param } from '../services/snapshotWriteService';
+import { sessionLogService } from '../services/sessionLogService';
 
 // Module-level cache to avoid refetching across component instances
 const inventoryCache = new Map<string, SnapshotInventory>();
 const pendingFetches = new Map<string, Promise<SnapshotInventory>>();
+
+function toLegacyInventory(dbParamId: string, inv: SnapshotInventoryV2Param | undefined): SnapshotInventory {
+  const overallAll = inv?.overall_all_families;
+  if (!overallAll) {
+    return {
+      has_data: false,
+      param_id: dbParamId,
+      earliest: null,
+      latest: null,
+      row_count: 0,
+      unique_days: 0,
+      unique_slices: 0,
+      unique_hashes: 0,
+      unique_retrievals: 0,
+      unique_retrieved_days: 0,
+    };
+  }
+  return {
+    has_data: overallAll.row_count > 0,
+    param_id: dbParamId,
+    earliest: overallAll.earliest_anchor_day,
+    latest: overallAll.latest_anchor_day,
+    row_count: overallAll.row_count,
+    unique_days: overallAll.unique_anchor_days,
+    unique_slices: 0,
+    unique_hashes: 0,
+    unique_retrievals: overallAll.unique_retrievals,
+    unique_retrieved_days: overallAll.unique_retrieved_days,
+  };
+}
 
 export interface UseEdgeSnapshotInventoryResult {
   /** Snapshot inventory for this edge (null if not yet fetched or no data) */
@@ -92,7 +123,10 @@ export function useEdgeSnapshotInventory(edgeId: string | undefined): UseEdgeSna
     
     // Start new fetch
     fetchedRef.current = dbParamId;
-    const fetchPromise = getInventory(dbParamId);
+    const fetchPromise = (async (): Promise<SnapshotInventory> => {
+      const invByParam = await getBatchInventoryV2([dbParamId], { include_equivalents: true });
+      return toLegacyInventory(dbParamId, invByParam[dbParamId]);
+    })();
     pendingFetches.set(dbParamId, fetchPromise);
     
     fetchPromise
@@ -103,9 +137,17 @@ export function useEdgeSnapshotInventory(edgeId: string | undefined): UseEdgeSna
           setInventory(inv);
         }
       })
-      .catch(() => {
-        // Silently ignore errors - snapshot info is optional
+      .catch((error) => {
         pendingFetches.delete(dbParamId);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error('[useEdgeSnapshotInventory] Failed to fetch inventory:', errorMessage);
+        sessionLogService.warning(
+          'data-fetch',
+          'SNAPSHOT_INVENTORY_EDGE_ERROR',
+          `Failed to fetch snapshot inventory for ${dbParamId}`,
+          errorMessage,
+          { dbParamId }
+        );
       });
   }, [dbParamId]);
   

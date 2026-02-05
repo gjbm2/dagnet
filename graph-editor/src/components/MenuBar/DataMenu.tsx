@@ -14,6 +14,7 @@ import { useOpenFile } from '../../hooks/useOpenFile';
 import { RemoveOverridesMenubarItem } from '../RemoveOverridesMenuItem';
 import { useClearDataFile } from '../../hooks/useClearDataFile';
 import { useSnapshotsMenu } from '../../hooks/useSnapshotsMenu';
+import { signatureLinksTabService } from '../../services/signatureLinksTabService';
 import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
 import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
 import { useRetrieveAllSlicesRequestListener } from '../../hooks/useRetrieveAllSlicesRequestListener';
@@ -338,6 +339,10 @@ export function DataMenu() {
 
   const handleForecastingSettings = async () => {
     await dataOperationsService.openForecastingSettings();
+  };
+
+  const handleSignatureLinks = async () => {
+    await signatureLinksTabService.openSignatureLinksTab();
   };
 
   // Section-based handlers for data operations
@@ -930,6 +935,15 @@ export function DataMenu() {
             onSelect={handleForecastingSettings}
           >
             Forecasting settings...
+          </Menubar.Item>
+
+          <Menubar.Separator className="menubar-separator" />
+
+          <Menubar.Item
+            className="menubar-item"
+            onSelect={handleSignatureLinks}
+          >
+            Signature Links...
           </Menubar.Item>
           
           <Menubar.Separator className="menubar-separator" />

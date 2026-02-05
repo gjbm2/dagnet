@@ -219,7 +219,7 @@ async function querySnapshotRows(paramId: string): Promise<any[]> {
 
 async function queryVirtualSnapshot(params: {
   param_id: string;
-  core_hash: string;
+  canonical_signature: string;
   anchor_from: string;
   anchor_to: string;
   as_at: string;
@@ -239,7 +239,7 @@ async function queryVirtualSnapshot(params: {
 
 async function appendSnapshotsDirect(params: {
   param_id: string;
-  core_hash: string;
+  canonical_signature: string;
   slice_key: string;
   retrieved_at: string;
   rows: Array<{ anchor_day: string; X: number; Y: number }>;
@@ -249,8 +249,13 @@ async function appendSnapshotsDirect(params: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       param_id: params.param_id,
-      core_hash: params.core_hash,
-      context_def_hashes: null,
+      canonical_signature: params.canonical_signature,
+      inputs_json: {
+        schema: 'test_fixture_v1',
+        param_id: params.param_id,
+        canonical_signature: params.canonical_signature,
+      },
+      sig_algo: 'sig_v1_sha256_trunc128_b64url',
       slice_key: params.slice_key,
       retrieved_at: params.retrieved_at,
       rows: params.rows,
@@ -415,7 +420,7 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
 
     await appendSnapshotsDirect({
       param_id: pid,
-      core_hash: sigA,
+      canonical_signature: sigA,
       slice_key: '',
       retrieved_at: retrievedAt,
       rows: [
@@ -426,7 +431,7 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
 
     await appendSnapshotsDirect({
       param_id: pid,
-      core_hash: sigB,
+      canonical_signature: sigB,
       slice_key: '',
       retrieved_at: retrievedAt,
       rows: [
@@ -438,7 +443,7 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
     const asAt = '2026-01-20T23:59:59Z';
     const resA = await queryVirtualSnapshot({
       param_id: pid,
-      core_hash: sigA,
+      canonical_signature: sigA,
       as_at: asAt,
       anchor_from: '2026-01-01',
       anchor_to: '2026-01-02',
@@ -454,7 +459,7 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
 
     const resB = await queryVirtualSnapshot({
       param_id: pid,
-      core_hash: sigB,
+      canonical_signature: sigB,
       as_at: asAt,
       anchor_from: '2026-01-01',
       anchor_to: '2026-01-02',
@@ -471,7 +476,7 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
     // Wrong signature => no rows for that key (but data exists for other sigs)
     const resWrong = await queryVirtualSnapshot({
       param_id: pid,
-      core_hash: '{"c":"sig-NOT-THERE","x":{}}',
+      canonical_signature: '{"c":"sig-NOT-THERE","x":{}}',
       as_at: asAt,
       anchor_from: '2026-01-01',
       anchor_to: '2026-01-02',

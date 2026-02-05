@@ -477,8 +477,9 @@ def handle_snapshots_append(data: Dict[str, Any]) -> Dict[str, Any]:
     Args:
         data: Request body containing:
             - param_id: Workspace-prefixed parameter ID (required)
-            - core_hash: Query signature hash (required)
-            - context_def_hashes: Dict of context def hashes (optional)
+            - canonical_signature: Canonical semantic signature string (required; frontend `query_signature`)
+            - inputs_json: Evidence blob for audit + diff UI (required; JSON object)
+            - sig_algo: Signature algorithm identifier (required)
             - slice_key: Context slice DSL or '' (required)
             - retrieved_at: ISO timestamp string (required)
             - rows: List of daily data points (required)
@@ -491,12 +492,12 @@ def handle_snapshots_append(data: Dict[str, Any]) -> Dict[str, Any]:
             - diagnostic: dict (only if diagnostic=true in request)
     """
     from datetime import datetime
-    import json
     from snapshot_service import append_snapshots
     
     param_id = data.get('param_id')
-    core_hash = data.get('core_hash')
-    context_def_hashes = data.get('context_def_hashes')
+    canonical_signature = data.get('canonical_signature')
+    inputs_json = data.get('inputs_json')
+    sig_algo = data.get('sig_algo')
     slice_key = data.get('slice_key', '')
     retrieved_at_str = data.get('retrieved_at')
     rows = data.get('rows', [])
@@ -504,21 +505,23 @@ def handle_snapshots_append(data: Dict[str, Any]) -> Dict[str, Any]:
     
     if not param_id:
         raise ValueError("Missing 'param_id' field")
-    if not core_hash:
-        raise ValueError("Missing 'core_hash' field")
+    if not canonical_signature:
+        raise ValueError("Missing 'canonical_signature' field")
+    if inputs_json is None or not isinstance(inputs_json, dict):
+        raise ValueError("Missing/invalid 'inputs_json' field (must be a JSON object)")
+    if not sig_algo:
+        raise ValueError("Missing 'sig_algo' field")
     if not retrieved_at_str:
         raise ValueError("Missing 'retrieved_at' field")
     
     # Parse ISO timestamp
     retrieved_at = datetime.fromisoformat(retrieved_at_str.replace('Z', '+00:00'))
     
-    # Convert context_def_hashes dict to JSON string if provided
-    context_def_hashes_json = json.dumps(context_def_hashes) if context_def_hashes else None
-    
     result = append_snapshots(
         param_id=param_id,
-        core_hash=core_hash,
-        context_def_hashes=context_def_hashes_json,
+        canonical_signature=canonical_signature,
+        inputs_json=inputs_json,
+        sig_algo=sig_algo,
         slice_key=slice_key,
         retrieved_at=retrieved_at,
         rows=rows,
@@ -691,14 +694,7 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
             - param_ids: List of parameter IDs (required)
     
     Returns:
-        Response dict with inventory per param_id (rich shape):
-        inventory[param_id] = {
-          overall: <legacy flat summary>,
-          by_core_hash: [
-            { core_hash, ... , by_slice_key: [...] },
-            ...
-          ]
-        }
+        Response dict with inventory per param_id (V2: signature families).
     """
     param_ids = data.get("param_ids")
     if not param_ids:
@@ -707,9 +703,16 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(param_ids, list):
         raise ValueError("'param_ids' must be a list")
 
-    from snapshot_service import get_batch_inventory_rich
-    inventory = get_batch_inventory_rich(param_ids)
-    return {"success": True, "inventory": inventory}
+    from snapshot_service import get_batch_inventory_v2
+    inventory = get_batch_inventory_v2(
+        param_ids=param_ids,
+        current_signatures=data.get("current_signatures") or None,
+        slice_keys_by_param=data.get("slice_keys") or None,
+        include_equivalents=bool(data.get("include_equivalents", True)),
+        limit_families_per_param=int(data.get("limit_families_per_param", 50)),
+        limit_slices_per_family=int(data.get("limit_slices_per_family", 200)),
+    )
+    return {"success": True, "inventory_version": 2, "inventory": inventory}
 
 
 def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -722,17 +725,18 @@ def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
     Args:
         data: Request body containing:
             - param_id: Parameter ID (required)
-            - core_hash: Query signature (optional)
+            - canonical_signature: Canonical signature (optional; frontend `query_signature`)
             - slice_keys: List of slice keys (optional)
             - anchor_from: Start date ISO string (optional)
             - anchor_to: End date ISO string (optional)
+            - include_equivalents: bool (optional; default True)
             - limit: Max timestamps (optional, default 200)
 
     Returns:
         Response dict with retrieved_at + derived retrieved_days.
     """
     from datetime import date
-    from snapshot_service import query_snapshot_retrievals
+    from snapshot_service import query_snapshot_retrievals, short_core_hash_from_canonical_signature
 
     param_id = data.get('param_id')
     if not param_id:
@@ -746,12 +750,16 @@ def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
     if data.get('anchor_to'):
         anchor_to = date.fromisoformat(data['anchor_to'])
 
+    canonical_signature = data.get('canonical_signature')
+    core_hash = short_core_hash_from_canonical_signature(canonical_signature) if canonical_signature else None
+
     return query_snapshot_retrievals(
         param_id=param_id,
-        core_hash=data.get('core_hash'),
+        core_hash=core_hash,
         slice_keys=data.get('slice_keys'),
         anchor_from=anchor_from,
         anchor_to=anchor_to,
+        include_equivalents=bool(data.get('include_equivalents', True)),
         limit=data.get('limit', 200)
     )
 
@@ -795,8 +803,9 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
             - as_at: ISO datetime string for point-in-time (required)
             - anchor_from: Start date ISO string (required)
             - anchor_to: End date ISO string (required)
-            - core_hash: Query signature (REQUIRED)
+            - canonical_signature: Canonical semantic signature string (REQUIRED; frontend `query_signature`)
             - slice_keys: List of slice keys (optional)
+            - include_equivalents: bool (optional; default True)
             - limit: Max rows (optional, default 10000)
     
     Returns:
@@ -809,17 +818,17 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
         - error: str (if failed)
     """
     from datetime import date, datetime
-    from snapshot_service import query_virtual_snapshot
+    from snapshot_service import query_virtual_snapshot, short_core_hash_from_canonical_signature
     
     param_id = data.get('param_id')
     if not param_id:
         raise ValueError("Missing 'param_id' field")
 
-    # Semantic integrity requirement:
-    # virtual snapshot reads MUST be keyed by the underlying query signature (core_hash).
-    core_hash = data.get('core_hash')
-    if not core_hash:
-        raise ValueError("Missing 'core_hash' field (required for semantic integrity)")
+    # Semantic integrity requirement: historical reads MUST be keyed by the canonical signature.
+    canonical_signature = data.get('canonical_signature')
+    if not canonical_signature:
+        raise ValueError("Missing 'canonical_signature' field (required for semantic integrity)")
+    core_hash = short_core_hash_from_canonical_signature(canonical_signature)
     
     as_at_str = data.get('as_at')
     if not as_at_str:
@@ -845,5 +854,118 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
         anchor_to=anchor_to,
         core_hash=core_hash,
         slice_keys=data.get('slice_keys'),
+        include_equivalents=bool(data.get('include_equivalents', True)),
         limit=data.get('limit', 10000)
+    )
+
+
+# =============================================================================
+# Flexible signatures: Signature Links UI routes
+# =============================================================================
+
+
+def handle_sigs_list(data: Dict[str, Any]) -> Dict[str, Any]:
+    """List signature registry rows for a param_id."""
+    from snapshot_service import list_signatures
+    param_id = data.get("param_id")
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    limit = data.get("limit", 200)
+    include_inputs = bool(data.get("include_inputs", False))
+    return list_signatures(param_id=param_id, limit=limit, include_inputs=include_inputs)
+
+
+def handle_sigs_get(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Get a single signature registry row."""
+    from snapshot_service import get_signature
+    param_id = data.get("param_id")
+    core_hash = data.get("core_hash")
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    if not core_hash:
+        raise ValueError("Missing 'core_hash' field")
+    return get_signature(param_id=param_id, core_hash=core_hash)
+
+
+def handle_sigs_links_list(data: Dict[str, Any]) -> Dict[str, Any]:
+    """List equivalence links for a param_id (optionally filtered to core_hash)."""
+    from snapshot_service import list_equivalence_links
+    param_id = data.get("param_id")
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    return list_equivalence_links(
+        param_id=param_id,
+        core_hash=data.get("core_hash"),
+        include_inactive=bool(data.get("include_inactive", False)),
+        limit=int(data.get("limit", 500)),
+    )
+
+
+def handle_sigs_links_create(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Create/activate an equivalence link."""
+    from snapshot_service import create_equivalence_link
+    param_id = data.get("param_id")
+    core_hash = data.get("core_hash")
+    equivalent_to = data.get("equivalent_to")
+    created_by = data.get("created_by")
+    reason = data.get("reason")
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    if not core_hash:
+        raise ValueError("Missing 'core_hash' field")
+    if not equivalent_to:
+        raise ValueError("Missing 'equivalent_to' field")
+    if not created_by:
+        raise ValueError("Missing 'created_by' field")
+    if not reason:
+        raise ValueError("Missing 'reason' field")
+    return create_equivalence_link(
+        param_id=param_id,
+        core_hash=core_hash,
+        equivalent_to=equivalent_to,
+        created_by=created_by,
+        reason=reason,
+    )
+
+
+def handle_sigs_links_deactivate(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Deactivate (soft delete) an equivalence link."""
+    from snapshot_service import deactivate_equivalence_link
+    param_id = data.get("param_id")
+    core_hash = data.get("core_hash")
+    equivalent_to = data.get("equivalent_to")
+    created_by = data.get("created_by")
+    reason = data.get("reason")
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    if not core_hash:
+        raise ValueError("Missing 'core_hash' field")
+    if not equivalent_to:
+        raise ValueError("Missing 'equivalent_to' field")
+    if not created_by:
+        raise ValueError("Missing 'created_by' field")
+    if not reason:
+        raise ValueError("Missing 'reason' field")
+    return deactivate_equivalence_link(
+        param_id=param_id,
+        core_hash=core_hash,
+        equivalent_to=equivalent_to,
+        created_by=created_by,
+        reason=reason,
+    )
+
+
+def handle_sigs_resolve(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve equivalence closure for a signature."""
+    from snapshot_service import resolve_equivalent_hashes
+    param_id = data.get("param_id")
+    core_hash = data.get("core_hash")
+    if not param_id:
+        raise ValueError("Missing 'param_id' field")
+    if not core_hash:
+        raise ValueError("Missing 'core_hash' field")
+    return resolve_equivalent_hashes(
+        param_id=param_id,
+        core_hash=core_hash,
+        include_equivalents=bool(data.get("include_equivalents", True)),
     )

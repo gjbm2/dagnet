@@ -39,10 +39,15 @@ export interface SnapshotRow {
 export interface AppendSnapshotsParams {
   /** Workspace-prefixed parameter ID (e.g., 'repo-branch-param-id') */
   param_id: string;
-  /** Query signature hash for semantic matching */
-  core_hash: string;
-  /** Context definition hashes for future strict matching */
-  context_def_hashes?: Record<string, string>;
+  /**
+   * Canonical semantic signature string (frontend `query_signature`).
+   * Backend derives the short `core_hash` content-address from this.
+   */
+  canonical_signature: string;
+  /** Evidence blob for audit + diff UI (must be a JSON object). */
+  inputs_json: Record<string, any>;
+  /** Signature algorithm identifier (see flexi_sigs.md). */
+  sig_algo: string;
   /** Context slice DSL or '' for uncontexted */
   slice_key: string;
   /** Timestamp of data retrieval */
@@ -79,6 +84,8 @@ export interface AppendSnapshotsResult {
   success: boolean;
   /** Number of rows inserted (excludes duplicates) */
   inserted: number;
+  /** Short DB core_hash used for inserts (content-address of canonical_signature) */
+  core_hash?: string;
   /** Error message if failed */
   error?: string;
   /** Diagnostic details (only present if diagnostic=true in request) */
@@ -150,8 +157,9 @@ export async function appendSnapshots(params: AppendSnapshotsParams): Promise<Ap
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         param_id: params.param_id,
-        core_hash: params.core_hash,
-        context_def_hashes: params.context_def_hashes || null,
+        canonical_signature: params.canonical_signature,
+        inputs_json: params.inputs_json,
+        sig_algo: params.sig_algo,
         slice_key: params.slice_key,
         retrieved_at: params.retrieved_at.toISOString(),
         rows: params.rows,
@@ -169,6 +177,7 @@ export async function appendSnapshots(params: AppendSnapshotsParams): Promise<Ap
     return {
       success: result.success,
       inserted: result.inserted,
+      core_hash: result.core_hash,
       diagnostic: result.diagnostic,
     };
     
@@ -235,6 +244,58 @@ export interface SnapshotInventory {
    * This corresponds to "how many days did snapshotting operate?" and is what most users mean by "number of snapshots".
    */
   unique_retrieved_days?: number;
+}
+
+// -----------------------------------------------------------------------------
+// Phase 2+: Inventory V2 (signature families)
+// -----------------------------------------------------------------------------
+
+export interface SnapshotInventoryOverallAllFamiliesV2 {
+  row_count: number;
+  unique_anchor_days: number;
+  unique_retrievals: number;
+  unique_retrieved_days: number;
+  earliest_anchor_day: string | null;
+  latest_anchor_day: string | null;
+  earliest_retrieved_at: string | null;
+  latest_retrieved_at: string | null;
+}
+
+export interface SnapshotInventoryFamilySliceV2 extends SnapshotInventoryOverallAllFamiliesV2 {
+  slice_key: string;
+}
+
+export interface SnapshotInventoryFamilyV2 {
+  family_id: string;
+  family_size: number;
+  member_core_hashes: string[];
+  created_at_min: string | null;
+  created_at_max: string | null;
+  overall: SnapshotInventoryOverallAllFamiliesV2;
+  by_slice_key: SnapshotInventoryFamilySliceV2[];
+}
+
+export interface SnapshotInventoryCurrentMatchV2 {
+  provided_signature?: string;
+  provided_core_hash?: string | null;
+  matched_family_id?: string | null;
+  match_mode: 'strict' | 'equivalent' | 'none';
+  matched_core_hashes: string[];
+}
+
+export interface SnapshotInventoryV2Param {
+  param_id: string;
+  overall_all_families: SnapshotInventoryOverallAllFamiliesV2;
+  current: SnapshotInventoryCurrentMatchV2;
+  families: SnapshotInventoryFamilyV2[];
+  unlinked_core_hashes: string[];
+  warnings: string[];
+}
+
+export interface SnapshotInventoryV2Response {
+  success: boolean;
+  inventory_version: 2;
+  inventory: Record<string, SnapshotInventoryV2Param>;
 }
 
 export interface SnapshotInventorySliceBreakdown {
@@ -375,8 +436,8 @@ export interface QuerySnapshotsVirtualParams {
   anchor_from: string;
   /** End of anchor date range (ISO date) */
   anchor_to: string;
-  /** Query signature hash (REQUIRED for semantic integrity) */
-  core_hash: string;
+  /** Canonical semantic signature (frontend `query_signature`) */
+  canonical_signature: string;
   /** List of slice keys to include (optional, undefined = all) */
   slice_keys?: string[];
   /** Max rows to return (default backend: 10000) */
@@ -416,14 +477,16 @@ export interface QuerySnapshotsVirtualResult {
 export interface QuerySnapshotRetrievalsParams {
   /** Exact workspace-prefixed parameter ID */
   param_id: string;
-  /** Structured signature string; optional filter */
-  core_hash?: string;
+  /** Canonical semantic signature (`query_signature`); optional filter */
+  canonical_signature?: string;
   /** Slice keys (context/case dimensions only), or omit to include all */
   slice_keys?: string[];
   /** ISO date (YYYY-MM-DD) lower bound on anchor_day, inclusive */
   anchor_from?: string;
   /** ISO date (YYYY-MM-DD) upper bound on anchor_day, inclusive */
   anchor_to?: string;
+  /** If true, expand equivalence links when filtering by signature (default true) */
+  include_equivalents?: boolean;
   /** Hard cap on timestamps returned (default 200) */
   limit?: number;
 }
@@ -467,8 +530,9 @@ export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams)
         as_at: params.as_at,
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
-        core_hash: params.core_hash,
+        canonical_signature: params.canonical_signature,
         slice_keys: params.slice_keys,
+        include_equivalents: true,
         limit: params.limit,
       }),
     });
@@ -519,10 +583,11 @@ export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsPar
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         param_id: params.param_id,
-        core_hash: params.core_hash,
+        canonical_signature: params.canonical_signature,
         slice_keys: params.slice_keys,
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
+        include_equivalents: params.include_equivalents ?? true,
         limit: params.limit,
       }),
     });
@@ -551,17 +616,12 @@ export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsPar
 
 /**
  * Get snapshot inventory for multiple parameters in one request.
- * 
- * Efficient batch query for UI that needs to show snapshot counts.
- * 
- * @param paramIds - List of workspace-prefixed parameter IDs
- * @returns Map of param_id to inventory
+ *
+ * Legacy wrapper maintained for existing call sites.
+ * Internally adapts from Inventory V2 (signature families) into the older `SnapshotInventory` shape.
  */
-export async function getBatchInventory(
-  paramIds: string[]
-): Promise<Record<string, SnapshotInventory>> {
+export async function getBatchInventory(paramIds: string[]): Promise<Record<string, SnapshotInventory>> {
   if (!SNAPSHOTS_ENABLED || paramIds.length === 0) {
-    // Return empty inventory for all requested params
     const result: Record<string, SnapshotInventory> = {};
     for (const pid of paramIds) {
       result[pid] = {
@@ -574,44 +634,48 @@ export async function getBatchInventory(
         unique_slices: 0,
         unique_hashes: 0,
         unique_retrievals: 0,
+        unique_retrieved_days: 0,
       };
     }
     return result;
   }
 
   try {
-    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/inventory`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ param_ids: paramIds }),
-    });
-    
-    if (!response.ok) {
-      console.error('[SnapshotInventory] Failed:', response.status);
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    const data = await response.json();
-    const inv = (data.inventory || {}) as Record<string, SnapshotInventoryRich>;
+    const v2 = await getBatchInventoryV2(paramIds, { include_equivalents: true });
     const out: Record<string, SnapshotInventory> = {};
+
     for (const pid of paramIds) {
-      out[pid] = inv?.[pid]?.overall ?? {
-        has_data: false,
-        param_id: pid,
-        earliest: null,
-        latest: null,
-        row_count: 0,
-        unique_days: 0,
-        unique_slices: 0,
-        unique_hashes: 0,
-        unique_retrievals: 0,
-      };
+      const overallAll = v2?.[pid]?.overall_all_families;
+      out[pid] = overallAll
+        ? {
+            has_data: overallAll.row_count > 0,
+            param_id: pid,
+            earliest: overallAll.earliest_anchor_day,
+            latest: overallAll.latest_anchor_day,
+            row_count: overallAll.row_count,
+            unique_days: overallAll.unique_anchor_days,
+            unique_slices: 0,
+            unique_hashes: 0,
+            unique_retrievals: overallAll.unique_retrievals,
+            unique_retrieved_days: overallAll.unique_retrieved_days,
+          }
+        : {
+            has_data: false,
+            param_id: pid,
+            earliest: null,
+            latest: null,
+            row_count: 0,
+            unique_days: 0,
+            unique_slices: 0,
+            unique_hashes: 0,
+            unique_retrievals: 0,
+            unique_retrieved_days: 0,
+          };
     }
+
     return out;
-    
   } catch (error) {
     console.error('[SnapshotInventory] Error:', error);
-    // Return empty inventory on error
     const result: Record<string, SnapshotInventory> = {};
     for (const pid of paramIds) {
       result[pid] = {
@@ -624,6 +688,7 @@ export async function getBatchInventory(
         unique_slices: 0,
         unique_hashes: 0,
         unique_retrievals: 0,
+        unique_retrieved_days: 0,
       };
     }
     return result;
@@ -631,14 +696,20 @@ export async function getBatchInventory(
 }
 
 /**
- * Get rich inventory (overall + breakdown by core_hash and slice_key).
+ * Get inventory V2 (signature families) for multiple parameters.
  *
- * This is the "debuggable" inventory shape: the backend reports what exists,
- * and the frontend decides what is relevant to show.
+ * This is the canonical inventory shape for flexi_sigs.
  */
-export async function getBatchInventoryRich(
+export async function getBatchInventoryV2(
   paramIds: string[]
-): Promise<Record<string, SnapshotInventoryRich>> {
+  , options?: {
+    current_signatures?: Record<string, string>;
+    slice_keys?: Record<string, string[]>;
+    include_equivalents?: boolean;
+    limit_families_per_param?: number;
+    limit_slices_per_family?: number;
+  }
+): Promise<Record<string, SnapshotInventoryV2Param>> {
   if (!SNAPSHOTS_ENABLED || paramIds.length === 0) {
     return {};
   }
@@ -647,7 +718,14 @@ export async function getBatchInventoryRich(
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/inventory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ param_ids: paramIds }),
+      body: JSON.stringify({
+        param_ids: paramIds,
+        current_signatures: options?.current_signatures,
+        slice_keys: options?.slice_keys,
+        include_equivalents: options?.include_equivalents ?? true,
+        limit_families_per_param: options?.limit_families_per_param,
+        limit_slices_per_family: options?.limit_slices_per_family,
+      }),
     });
 
     if (!response.ok) {
@@ -655,8 +733,8 @@ export async function getBatchInventoryRich(
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const data = await response.json();
-    return data.inventory as Record<string, SnapshotInventoryRich>;
+    const data = (await response.json()) as SnapshotInventoryV2Response;
+    return (data.inventory || {}) as Record<string, SnapshotInventoryV2Param>;
   } catch (error) {
     console.error('[SnapshotInventoryRich] Error:', error);
     return {};
@@ -665,11 +743,8 @@ export async function getBatchInventoryRich(
 
 /**
  * Get snapshot inventory for a single parameter.
- * 
- * Convenience wrapper around getBatchInventory for single-param use.
- * 
- * @param paramId - Workspace-prefixed parameter ID
- * @returns Inventory for the parameter
+ *
+ * Legacy wrapper maintained for existing call sites.
  */
 export async function getInventory(paramId: string): Promise<SnapshotInventory> {
   const batch = await getBatchInventory([paramId]);

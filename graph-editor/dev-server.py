@@ -219,6 +219,101 @@ async def snapshots_append(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# Flexible signatures: Signature Links UI routes
+# =============================================================================
+
+
+@app.post("/api/sigs/list")
+async def sigs_list(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_sigs_list
+        return handle_sigs_list(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[sigs/list] Error: {e}")
+        print(f"[sigs/list] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sigs/get")
+async def sigs_get(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_sigs_get
+        return handle_sigs_get(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[sigs/get] Error: {e}")
+        print(f"[sigs/get] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sigs/links/list")
+async def sigs_links_list(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_sigs_links_list
+        return handle_sigs_links_list(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[sigs/links/list] Error: {e}")
+        print(f"[sigs/links/list] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sigs/links/create")
+async def sigs_links_create(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_sigs_links_create
+        return handle_sigs_links_create(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[sigs/links/create] Error: {e}")
+        print(f"[sigs/links/create] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sigs/links/deactivate")
+async def sigs_links_deactivate(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_sigs_links_deactivate
+        return handle_sigs_links_deactivate(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[sigs/links/deactivate] Error: {e}")
+        print(f"[sigs/links/deactivate] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/sigs/resolve")
+async def sigs_resolve(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_sigs_resolve
+        return handle_sigs_resolve(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[sigs/resolve] Error: {e}")
+        print(f"[sigs/resolve] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Simple roundtrip test endpoint: Parse DSL query string
 @app.post("/api/parse-query")
 async def parse_query_endpoint(request: Request):

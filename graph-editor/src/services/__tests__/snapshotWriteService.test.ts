@@ -24,7 +24,9 @@ import { appendSnapshots, checkSnapshotHealth } from '../snapshotWriteService';
 // Test fixtures
 const BASE_PARAMS: Omit<AppendSnapshotsParams, 'rows'> = {
   param_id: 'test-repo-test-branch-checkout-conversion',
-  core_hash: 'abc123def456',
+  canonical_signature: '{"c":"pytest-snapshotWriteService","x":{}}',
+  inputs_json: { schema: 'pytest_flexi_sigs_v1', note: 'unit test' },
+  sig_algo: 'sig_v1_sha256_trunc128_b64url',
   slice_key: '',
   retrieved_at: new Date('2025-12-10T12:00:00Z'),
 };
@@ -168,7 +170,9 @@ describe('Snapshot Write Service', () => {
       
       await appendSnapshots({
         param_id: 'my-repo-feature-branch-checkout-param',
-        core_hash: 'xyz789',
+        canonical_signature: '{"c":"xyz789","x":{}}',
+        inputs_json: { schema: 'pytest_flexi_sigs_v1' },
+        sig_algo: 'sig_v1_sha256_trunc128_b64url',
         slice_key: '',
         retrieved_at: new Date(),
         rows,
@@ -201,84 +205,68 @@ describe('Snapshot Write Service', () => {
   // ===========================================================================
   
   describe('Signature Integrity (SI-*)', () => {
-    it('SI-001: signature_matches_file - core_hash is passed correctly', async () => {
+    it('SI-001: canonical_signature passed correctly', async () => {
       const rows = createTestRows(3);
-      const coreHash = 'unique-hash-for-this-query';
+      const canonicalSignature = '{"c":"unique-sig","x":{}}';
       
       await appendSnapshots({
         ...BASE_PARAMS,
-        core_hash: coreHash,
+        canonical_signature: canonicalSignature,
         rows,
       });
       
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.core_hash).toBe(coreHash);
+      expect(body.canonical_signature).toBe(canonicalSignature);
+      expect(body.core_hash).toBeUndefined(); // backend derives short hash; frontend must not send it
     });
 
-    it('SI-002: signature_cohort_vs_window - different modes should have different hashes', async () => {
-      // This test validates that the caller should use different hashes for different modes
-      // The service just passes through whatever hash it receives
-      const cohortHash = 'cohort-mode-hash';
-      const windowHash = 'window-mode-hash';
+    it('SI-002: cohort vs window should have different canonical_signature', async () => {
+      const cohortSig = '{"c":"cohort-mode","x":{}}';
+      const windowSig = '{"c":"window-mode","x":{}}';
       
       await appendSnapshots({
         ...BASE_PARAMS,
-        core_hash: cohortHash,
+        canonical_signature: cohortSig,
         rows: [{ anchor_day: '2025-12-01', A: 100, X: 80, Y: 10 }],
       });
       
       await appendSnapshots({
         ...BASE_PARAMS,
-        core_hash: windowHash,
+        canonical_signature: windowSig,
         rows: [{ anchor_day: '2025-12-01', X: 80, Y: 10 }],
       });
       
       const body1 = JSON.parse(mockFetch.mock.calls[0][1].body);
       const body2 = JSON.parse(mockFetch.mock.calls[1][1].body);
       
-      expect(body1.core_hash).toBe(cohortHash);
-      expect(body2.core_hash).toBe(windowHash);
-      expect(body1.core_hash).not.toBe(body2.core_hash);
+      expect(body1.canonical_signature).toBe(cohortSig);
+      expect(body2.canonical_signature).toBe(windowSig);
+      expect(body1.canonical_signature).not.toBe(body2.canonical_signature);
     });
 
-    it('SI-003: signature_stable_across_writes - same query produces same hash', async () => {
-      const stableHash = 'stable-query-hash';
+    it('SI-003: signature_stable_across_writes - same query produces same canonical_signature', async () => {
+      const stableSig = '{"c":"stable-query","x":{}}';
       const rows = createTestRows(3);
       
-      await appendSnapshots({ ...BASE_PARAMS, core_hash: stableHash, rows });
-      await appendSnapshots({ ...BASE_PARAMS, core_hash: stableHash, rows });
+      await appendSnapshots({ ...BASE_PARAMS, canonical_signature: stableSig, rows });
+      await appendSnapshots({ ...BASE_PARAMS, canonical_signature: stableSig, rows });
       
       const body1 = JSON.parse(mockFetch.mock.calls[0][1].body);
       const body2 = JSON.parse(mockFetch.mock.calls[1][1].body);
       
-      expect(body1.core_hash).toBe(body2.core_hash);
+      expect(body1.canonical_signature).toBe(body2.canonical_signature);
     });
 
-    it('SI-004: context_def_hashes stored for future strict matching', async () => {
-      const contextDefHashes = {
-        channel: 'hash-of-channel-context-def',
-        region: 'hash-of-region-context-def',
-      };
-      
-      await appendSnapshots({
-        ...BASE_PARAMS,
-        context_def_hashes: contextDefHashes,
-        rows: createTestRows(3),
-      });
-      
+    it('SI-004: inputs_json is sent (JSON object)', async () => {
+      await appendSnapshots({ ...BASE_PARAMS, inputs_json: { schema: 'pytest_flexi_sigs_v1', a: 1 }, rows: createTestRows(1) });
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.context_def_hashes).toEqual(contextDefHashes);
+      expect(body.inputs_json).toEqual({ schema: 'pytest_flexi_sigs_v1', a: 1 });
     });
 
-    it('SI-005: null context_def_hashes when not provided', async () => {
-      await appendSnapshots({
-        ...BASE_PARAMS,
-        // No context_def_hashes
-        rows: createTestRows(3),
-      });
-      
+    it('SI-005: sig_algo is sent', async () => {
+      await appendSnapshots({ ...BASE_PARAMS, sig_algo: 'sig_v1_sha256_trunc128_b64url', rows: createTestRows(1) });
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.context_def_hashes).toBeNull();
+      expect(body.sig_algo).toBe('sig_v1_sha256_trunc128_b64url');
     });
   });
 
