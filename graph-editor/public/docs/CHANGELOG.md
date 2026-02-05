@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.4.7b
+**Released:** 5-Feb-26
+
+More sophisticated sig matchine and lookup -- but still asat defects to pin down
+
+---
+
 ## Version 1.4.6b
 **Released:** 4-Feb-26
 
