@@ -81,9 +81,9 @@ https://dagnet.vercel.app/?data=%7B%22nodes%22%3A%5B%7B%22id%22%3A%22a%22%2C%22d
 
 Opens a specific graph from the default repository by name.
 
-### `?retrieveall=<graph_name>` / `?graph=<graph_name>&retrieveall`
+### `?retrieveall=<graph_name>` / `?retrieveall` (daily-fetch mode)
 
-Runs a **headless daily automation** workflow for a specific graph:
+Runs a **headless daily automation** workflow:
 
 - Pull latest from git (**remote wins** for any merge conflicts)
 - Retrieve All Slices (headless; no Retrieve All modal)
@@ -93,27 +93,54 @@ This is intended for simple local schedulers (e.g. Windows Task Scheduler) on a 
 
 For a user-facing overview, see: `public/docs/automation-and-scheduling.md`.
 
+**Graph selection modes:**
+
+| URL | Behaviour |
+|-----|-----------|
+| `?retrieveall=graph-a` | Process single named graph |
+| `?retrieveall=graph-a,graph-b` | Process multiple named graphs (comma-separated) |
+| `?retrieveall=a&retrieveall=b` | Process multiple named graphs (repeated param) |
+| `?graph=name&retrieveall` | Process single graph (boolean flag with graph param) |
+| `?retrieveall` | **Daily-fetch mode**: enumerate all graphs with `dailyFetch: true` |
+
+**Daily-fetch mode details:**
+
+When `?retrieveall` is used without a graph name, DagNet:
+1. Waits for workspace to initialise (repo selected, credentials loaded)
+2. Queries IndexedDB for all graphs where `dailyFetch === true` (workspace-scoped)
+3. Processes matching graphs in alphabetical order (serialised, one at a time)
+4. Logs sequence progress: `[1/3] Starting: graph-a`, etc.
+
+If no graphs have `dailyFetch: true`, the automation logs a warning and exits.
+
+**To enable daily-fetch for a graph:**
+1. Open the graph
+2. Click the gear icon in the Context selector → "Pinned Data Interests"
+3. Check the "Fetch daily" checkbox
+4. Save
+
+Or use **Data** menu → **Automated Daily Fetches...** for bulk management.
+
 **Examples:**
 ```
+# Single graph (explicit)
 https://dagnet.vercel.app/?retrieveall=conversion-funnel
-https://dagnet.vercel.app/?graph=conversion-funnel&retrieveall
-https://dagnet.vercel.app/?retrieveall=conversion-funnel&pullalllatest
-```
 
-**Multiple graphs (serialised in one browser session):**
-```
+# Multiple graphs (explicit, serialised)
 https://dagnet.vercel.app/?retrieveall=graph-a,graph-b,graph-c
-https://dagnet.vercel.app/?retrieveall=graph-a&retrieveall=graph-b&retrieveall=graph-c
+
+# Daily-fetch mode (enumerate from workspace)
+https://dagnet.vercel.app/?retrieveall
 ```
 
 **How it works:**
 - The app opens the graph tab (same as `?graph=`).
 - After the graph loads, it runs the workflow via service-layer code (no UI prompts).
-- If multiple graphs are specified, DagNet processes them **one at a time** (serialised) within the same browser session.
+- If multiple graphs are specified (or enumerated), DagNet processes them **one at a time** (serialised) within the same browser session.
 - Merge conflicts during pull are automatically resolved by accepting the **remote** version.
 - A commit is made only if there are committable file changes.
 - The commit message includes a UK date (`d-MMM-yy`), e.g. `Daily data refresh (conversion-funnel) - 18-Dec-25`.
-- URL parameters are cleaned up after the automation starts (so refresh won’t repeatedly run it).
+- URL parameters are cleaned up after the automation starts (so refresh won't repeatedly run it).
 
 ### `?pullalllatest`
 

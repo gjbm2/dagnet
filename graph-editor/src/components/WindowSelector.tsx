@@ -1518,9 +1518,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       <PinnedQueryModal
         isOpen={showPinnedQueryModal}
         currentDSL={graph?.dataInterestsDSL || ''}
-        onSave={(newDSL) => {
+        dailyFetch={graph?.dailyFetch ?? false}
+        onSave={(newDSL, newDailyFetch) => {
           if (setGraph && graph) {
-            setGraph({ ...graph, dataInterestsDSL: newDSL });
+            setGraph({ ...graph, dataInterestsDSL: newDSL, dailyFetch: newDailyFetch });
             toast.success('Pinned query updated');
             // Non-blocking warnings on save
             validatePinnedDataInterestsDSL(newDSL)

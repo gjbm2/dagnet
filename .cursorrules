@@ -173,7 +173,7 @@ When modifying functionality:
    - **NO NEW TEST FILES** unless there is **manifestly no better place** for the test. Default to extending the most relevant existing suite.
 4. **Add new tests** - For new functionality or bug fixes
 5. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
-6. **Check integration tests** - Only if changes affect integration points
+6. **Write INTEGRATION tests, not unit tests** - See Testing Standards below. Unit tests with mocks don't catch real bugs.
 
 Test files are in:
 - `graph-editor/src/services/__tests__/` - Service integration tests
@@ -306,24 +306,60 @@ await repositoryOperationsService.commitFiles(
 
 7. **Don't create helper scripts for testing**
    - Use proper Vitest integration tests
-   - Mock external APIs (GitHub)
-   - Use real internal components (IndexedDB, FileRegistry)
+   - Mock **only** external APIs (GitHub, Amplitude)
+   - Prefer **real** internal components (IndexedDB via fake-indexeddb, FileRegistry, GraphStore) whenever behaviour crosses subsystem boundaries
+   - Avoid mocking IDB/FileRegistry/GraphStore for boundary tests — bugs live at their boundaries
 
 ## Testing Standards
 
-### Integration Test Structure
+### Prefer integration tests for subsystem boundaries (balanced judgement)
+
+Unit tests are still useful for **pure logic** (parsing, formatting, validation, small deterministic helpers).
+
+Most bugs occur at the **boundaries between subsystems** (IDB ↔ FileRegistry ↔ GraphStore ↔ UI). Unit tests that mock these dependencies will pass while the real integration is broken.
+
+For any behaviour that crosses boundaries, prefer integration tests that use real components:
+- Real IndexedDB (via `fake-indexeddb` — already configured in vitest setup)
+- Real FileRegistry
+- Real GraphStore
+- Real service layer
+
+**Mock external APIs** (GitHub, Amplitude) freely. Mocking internal components is OK only when you are explicitly testing isolated logic and not claiming end-to-end correctness.
+
+### Quick decision guide (choose the smallest test that still catches the real bug)
+- If the bug could be caused by **IDB prefixes, dirty state, registry sync, store sync, tab restore, or persistence format** → write an **integration** test (real IDB/registry/store).
+- If the behaviour is **UI flow timing** (e.g. “wait for graphs to load before enumerating dailyFetch”) → write an **E2E** test (Playwright) or a targeted integration test that exercises the real initialisation pipeline.
+- If it’s **pure logic** with no subsystem interaction → unit tests are fine.
+
+### What Integration Tests Catch That Unit Tests Miss
+
+Example bug pattern: A service updates IDB with prefixed fileIds (`repo-branch-graph-name`) but FileRegistry/GraphStore use unprefixed fileIds (`graph-name`). A unit test with mocked IDB and FileRegistry would pass. An integration test with real components would fail.
+
+### Integration Test Pattern
 ```typescript
 describe('Feature Integration Tests', () => {
   beforeEach(async () => {
-    // Setup mocks
-    vi.clearAllMocks();
-    // Reset state
+    // Clear REAL IndexedDB (fake-indexeddb)
+    await db.files.clear();
+    await db.workspaces.clear();
+    vi.clearAllMocks(); // Only for external API mocks
   });
 
-  it('should handle complete flow end-to-end', async () => {
-    // Arrange: Setup test data
-    // Act: Execute operation
-    // Assert: Verify all side effects
+  it('should sync data across IDB → FileRegistry → GraphStore', async () => {
+    // Setup: Add real data to IDB
+    await db.files.add({ fileId: 'graph-test', type: 'graph', data: {...} });
+    
+    // Act: Call the service
+    await myService.doOperation(...);
+    
+    // Assert: Verify REAL state in all systems
+    const idbFile = await db.files.get('graph-test');
+    const registryFile = fileRegistry.getFile('graph-test');
+    const storeState = getGraphStore('graph-test')?.getState();
+    
+    expect(idbFile.data.myField).toBe(expectedValue);
+    expect(registryFile.data.myField).toBe(expectedValue);
+    expect(storeState.graph.myField).toBe(expectedValue);
   });
 });
 ```
@@ -332,8 +368,9 @@ describe('Feature Integration Tests', () => {
 - Git operations (clone, pull, push, commit)
 - File operations (create, open, delete, dirty tracking)
 - Index operations (create, rebuild, add entries)
-- Data sync (file ↔ graph ↔ external sources)
+- Data sync (file ↔ graph ↔ external sources) — **must test real IDB/Registry/Store sync**
 - Merge conflicts (3-way merge, resolution)
+- **Cross-system state consistency** (IDB ↔ FileRegistry ↔ GraphStore)
 
 ## File Structure Requirements
 

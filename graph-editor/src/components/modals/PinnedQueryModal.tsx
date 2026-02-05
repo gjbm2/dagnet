@@ -17,22 +17,25 @@ import './Modal.css';
 interface PinnedQueryModalProps {
   isOpen: boolean;
   currentDSL: string;
-  onSave: (newDSL: string) => void;
+  dailyFetch: boolean;
+  onSave: (newDSL: string, dailyFetch: boolean) => void;
   onClose: () => void;
 }
 
-export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: PinnedQueryModalProps) {
+export function PinnedQueryModal({ isOpen, currentDSL, dailyFetch, onSave, onClose }: PinnedQueryModalProps) {
   const [draftDSL, setDraftDSL] = useState(currentDSL);
+  const [draftDailyFetch, setDraftDailyFetch] = useState(dailyFetch);
   const [impliedSlices, setImpliedSlices] = useState<string[]>([]);
   const [sliceCount, setSliceCount] = useState(0);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   
-  // Update draft when modal opens with new value
+  // Update drafts when modal opens with new values
   useEffect(() => {
     if (isOpen) {
       setDraftDSL(currentDSL);
+      setDraftDailyFetch(dailyFetch);
     }
-  }, [isOpen, currentDSL]);
+  }, [isOpen, currentDSL, dailyFetch]);
   
   // Calculate implied slices when draft changes
   useEffect(() => {
@@ -89,7 +92,7 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
   if (!isOpen) return null;
   
   const handleSave = () => {
-    onSave(draftDSL);
+    onSave(draftDSL, draftDailyFetch);
     onClose();
   };
   
@@ -174,6 +177,23 @@ export function PinnedQueryModal({ isOpen, currentDSL, onSave, onClose }: Pinned
                 </li>
               )}
             </ul>
+          </div>
+          
+          <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #E5E7EB' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={draftDailyFetch}
+                onChange={(e) => setDraftDailyFetch(e.target.checked)}
+                style={{ width: '16px', height: '16px' }}
+              />
+              <span style={{ fontSize: '13px', color: '#374151', fontWeight: 500 }}>
+                Fetch daily
+              </span>
+            </label>
+            <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', marginLeft: '24px' }}>
+              Include this graph in unattended nightly automation runs (when using <code style={{ background: '#F3F4F6', padding: '1px 4px', borderRadius: '2px' }}>?retrieveall</code> without specifying graph names)
+            </p>
           </div>
         </div>
         

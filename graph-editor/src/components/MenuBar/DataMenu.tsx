@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
+import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
 import { BatchOperationsModal, type SingleOperationTarget } from '../modals/BatchOperationsModal';
@@ -19,6 +20,7 @@ import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFe
 import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
 import { useRetrieveAllSlicesRequestListener } from '../../hooks/useRetrieveAllSlicesRequestListener';
 import { PinnedQueryModal } from '../modals/PinnedQueryModal';
+import { DailyFetchManagerModal } from '../modals/DailyFetchManagerModal';
 import { db } from '../../db/appDatabase';
 import { AutoUpdateChartsMenubarItem } from './AutoUpdateChartsMenubarItem';
 import { useLagHorizons } from '../../hooks/useLagHorizons';
@@ -35,8 +37,15 @@ import { useLagHorizons } from '../../hooks/useLagHorizons';
  */
 export function DataMenu() {
   const { activeTabId, tabs, operations } = useTabContext();
+  const { state: navState } = useNavigatorContext();
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-') && activeTab?.viewMode === 'interactive';
+  
+  // Daily Fetch Manager modal state
+  const [showDailyFetchManager, setShowDailyFetchManager] = useState(false);
+  const workspace = navState.selectedRepo && navState.selectedBranch
+    ? { repository: navState.selectedRepo, branch: navState.selectedBranch }
+    : null;
 
   // For global menu actions (like latency horizon recompute), we need a graph store even if the
   // *currently focused* tab is not the interactive graph tab (e.g. user is viewing a parameter file).
@@ -937,6 +946,15 @@ export function DataMenu() {
             Forecasting settings...
           </Menubar.Item>
 
+          {/* Automated Daily Fetches - workspace-level automation config */}
+          <Menubar.Item 
+            className="menubar-item" 
+            onSelect={() => setShowDailyFetchManager(true)}
+            disabled={!workspace}
+          >
+            Automated Daily Fetches...
+          </Menubar.Item>
+
           <Menubar.Separator className="menubar-separator" />
 
           <Menubar.Item
@@ -992,6 +1010,13 @@ export function DataMenu() {
     
     {/* Pinned Query Modal - shown if user tries to retrieve all slices without a pinned query */}
     <PinnedQueryModal {...pinnedQueryModalProps} />
+    
+    {/* Daily Fetch Manager Modal - bulk management of dailyFetch flags */}
+    <DailyFetchManagerModal
+      isOpen={showDailyFetchManager}
+      onClose={() => setShowDailyFetchManager(false)}
+      workspace={workspace}
+    />
   </>
   );
 }
