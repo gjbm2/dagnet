@@ -1121,19 +1121,19 @@ export function fireAsatWarnings(
     const hoursDiff = (asAtDateObj.getTime() - latestRetrievedObj.getTime()) / (1000 * 60 * 60);
     
     if (hoursDiff > 24) {
-      toast(`Historical data for ${entityLabel} uses snapshot from ${latestRetrievedAt.split('T')[0]} (${Math.floor(hoursDiff / 24)} days before requested asat date)`, {
+      batchableToast(`Historical data for ${entityLabel} uses snapshot from ${latestRetrievedAt.split('T')[0]} (${Math.floor(hoursDiff / 24)} days before requested asat date)`, {
         icon: '⏱️',
         duration: 6000,
       });
     }
   } else {
     // No snapshot data at all for this asat date
-    toast.error(`No snapshot data available for ${entityLabel} as-at ${asAtDate}`);
+    batchableToastError(`No snapshot data available for ${entityLabel} as-at ${asAtDate}`);
   }
   
   // Warn B: Missing anchor_to coverage
   if (!hasAnchorTo) {
-    toast(`Historical data for ${entityLabel} does not include the window end date ${anchorToStr}`, {
+    batchableToast(`Historical data for ${entityLabel} does not include the window end date ${anchorToStr}`, {
       icon: '⚠️',
       duration: 5000,
     });
@@ -1204,6 +1204,13 @@ class DataOperationsService {
       // Per §3.2 of 3-asat.md: Signature validation is MANDATORY.
       if (parsed.asat) {
         console.log(`[DataOperationsService] Detected asat(${parsed.asat}) in getParameterFromFile - routing to snapshot DB`);
+        const asatLogOpId = sessionLogService.startOperation(
+          'info',
+          'data-fetch',
+          'ASAT_FROM_FILE',
+          `As-at snapshot query (from-file): ${paramId}`,
+          { paramId, edgeId, fileId: `parameter-${paramId}`, dsl: targetSlice }
+        );
         
         // Build workspace-prefixed param_id from parameter file source metadata
         const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
@@ -1213,6 +1220,7 @@ class DataOperationsService {
         // If we can't form the workspace prefix, we can't query snapshots. Treat as "no data".
         if (!workspaceRepo || !workspaceBranch) {
           console.warn('[DataOperationsService] asat: missing parameter file source metadata (repository/branch); snapshot lookup skipped');
+          sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: missing workspace metadata (snapshot lookup skipped)');
           return { success: true, warning: 'No snapshot data (missing workspace metadata)' };
         }
         const dbParamId = `${workspaceRepo}-${workspaceBranch}-${paramId}`;
@@ -1235,6 +1243,7 @@ class DataOperationsService {
         
         if (!anchorFrom || !anchorTo) {
           console.warn('[DataOperationsService] asat query missing valid date range');
+          sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: missing valid window/cohort range (snapshot lookup skipped)');
           return { success: false, warning: 'Historical query requires a valid date range' };
         }
         
@@ -1253,131 +1262,99 @@ class DataOperationsService {
         const sliceKeyArray = sliceKeys ? [sliceKeys] : undefined;
         
         // ========================================================================
-        // MANDATORY: Compute query signature (core_hash) per §3.2
+        // MANDATORY: Signature integrity (do NOT recompute).
         // ========================================================================
-        // The signature MUST match what was stored when the data was fetched.
-        // We need to compute it the same way as the normal fetch path.
-        let coreHash: string | undefined;
-        
-        if (graph && edgeId) {
-          const targetEdge: any = graph.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
-          if (targetEdge) {
-            try {
-              // Build DSL without the asat clause (asat is a retrieval filter, not query identity)
-              const dslWithoutAsat = targetSlice.replace(/\.?(?:asat|at)\([^)]+\)/g, '').replace(/^\./, '');
-              const constraintsWithoutAsat = parseConstraints(dslWithoutAsat);
-              
-              // Get connection name from edge or default to 'amplitude'
-              const connectionName = targetEdge.p?.connection || 
-                                   targetEdge.cost_gbp?.connection || 
-                                   targetEdge.labour_cost?.connection ||
-                                   'amplitude';
-              
-              // Build query payload using the same path as normal fetch
-              const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
-              const eventLoader = async (eventId: string) => {
-                const fileId = `event-${eventId}`;
-
-                // Prefer hydrated in-memory fileRegistry.
-                const frFile: any = fileRegistry.getFile(fileId);
-                if (frFile?.data) return frFile.data;
-
-                // Fall back to IndexedDB so asat() works even when event files aren't
-                // currently in memory.
-                try {
-                  const dbFile: any = await db.files.get(fileId);
-                  if (dbFile?.data) return dbFile.data;
-                } catch {
-                  // ignore DB errors, will throw below
-                }
-
-                // HARD FAIL: Event files MUST be available. If not, this is a bug.
-                throw new Error(`[computeSignatureContext] Event file "${eventId}" not found in fileRegistry or IndexedDB. This indicates a workspace/clone issue.`);
-              };
-
-              const { queryPayload, eventDefinitions } = await buildDslFromEdge(
-                targetEdge,
-                graph,
-                connectionName,
-                eventLoader,
-                constraintsWithoutAsat
-              );
-              
-              // Compute signature (match the exact path used when data is stored)
-              //
-              // IMPORTANT:
-              // For uncontexted queries, we may still need a context-keyed signature if the
-              // cached snapshot data is stored as a MECE partition over pinned dimensions
-              // (e.g. channel). In that case, the context *definition* hash must be part of
-              // the signature so we can safely aggregate.
-              const contextKeys = (() => {
-                const explicit = constraintsWithoutAsat.context?.map((c) => c.key) || [];
-                if (explicit.length > 0) return explicit;
-                try {
-                  const pinned = (graph as any)?.dataInterestsDSL || '';
-                  if (!pinned) return [];
-                  return extractContextKeysFromConstraints(parseConstraints(pinned));
-                } catch {
-                  return [];
-                }
-              })();
-              const workspaceForSignature = {
-                repository: workspaceRepo,
-                branch: workspaceBranch,
-              };
-              const signature = await computeQuerySignature(
-                queryPayload,
-                connectionName,
-                graph,
-                targetEdge,
-                contextKeys,
-                workspaceForSignature,
-                eventDefinitions
-              );
-              
-              // Validate signature is well-formed and use the existing stored shape (serialised signature string).
-              // Sigs are mandatory; mismatch is fatal; do not change the stored representation here.
-              const sigParsed = parseSignature(signature);
-              if (!sigParsed.coreHash) {
-                throw new Error('Invalid signature (empty core hash)');
-              }
-              coreHash = signature;
-              
-              console.log('[DataOperationsService] asat query computed core_hash:', coreHash);
-            } catch (sigError) {
-              console.warn('[DataOperationsService] asat: failed to compute signature; snapshot lookup skipped', sigError);
-              return { success: true, warning: 'No snapshot data (could not compute signature)' };
-            }
-          }
+        // Snapshot reads MUST be keyed by the exact canonical signature that was written
+        // with the fetched data. Recomputing here is unsafe (context/pinned-dims and
+        // normalisation drift can produce a different signature and yield 0 rows).
+        const signatureStr = (() => {
+          const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
+          const withSig = values.filter(v => typeof v?.query_signature === 'string' && v.query_signature.trim());
+          if (withSig.length === 0) return undefined;
+          // Prefer the most recent signature by retrieved_at/window_to/window_from.
+          const getTs = (v: any) => String(v?.data_source?.retrieved_at || v?.window_to || v?.window_from || '');
+          withSig.sort((a, b) => getTs(b).localeCompare(getTs(a)));
+          return String(withSig[0].query_signature);
+        })();
+        if (!signatureStr) {
+          console.warn('[DataOperationsService] asat: missing query_signature in parameter file; snapshot lookup skipped');
+          sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: missing query_signature (snapshot lookup skipped)');
+          return { success: true, warning: 'No snapshot data (missing query signature)' };
         }
-        
-        if (!coreHash) {
-          console.warn('[DataOperationsService] asat: no signature available; snapshot lookup skipped');
-          return { success: true, warning: 'No snapshot data (missing signature)' };
+        const sigParsed = parseSignature(signatureStr);
+        if (!sigParsed.coreHash) {
+          console.warn('[DataOperationsService] asat: invalid query_signature in parameter file; snapshot lookup skipped');
+          sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: invalid query_signature (snapshot lookup skipped)');
+          return { success: true, warning: 'No snapshot data (invalid query signature)' };
         }
         
         console.log('[DataOperationsService] asat query params:', {
-          dbParamId, anchorFromISO, anchorToISO, asAtISO, sliceKeyArray, coreHash
+          dbParamId, anchorFromISO, anchorToISO, asAtISO, sliceKeyArray, coreHash: sigParsed.coreHash
         });
+        sessionLogService.addChild(
+          asatLogOpId,
+          'info',
+          'ASAT_QUERY',
+          `Querying virtual snapshot: ${anchorFromISO} to ${anchorToISO} as-at ${asatDateUK}`,
+          undefined,
+          {
+            param_id: dbParamId,
+            anchor_from: anchorFromISO,
+            anchor_to: anchorToISO,
+            as_at: asAtISO,
+            slice_keys: sliceKeyArray,
+            core_hash: sigParsed.coreHash,
+          }
+        );
         
-        // Call virtual snapshot query with MANDATORY core_hash
+        // Call virtual snapshot query with MANDATORY canonical_signature
         const virtualResult = await querySnapshotsVirtual({
           param_id: dbParamId,
           as_at: asAtISO,
           anchor_from: anchorFromISO,
           anchor_to: anchorToISO,
           slice_keys: sliceKeyArray,
-          core_hash: coreHash,
+          canonical_signature: signatureStr,
         });
         
         if (!virtualResult.success) {
           console.error('[DataOperationsService] Virtual snapshot query failed:', virtualResult.error);
+          sessionLogService.endOperation(asatLogOpId, 'error', `Virtual snapshot query failed: ${virtualResult.error}`);
           return { success: false, warning: `Snapshot query failed: ${virtualResult.error}` };
         }
         
         console.log('[DataOperationsService] Virtual snapshot returned', virtualResult.count, 'rows');
+        sessionLogService.addChild(
+          asatLogOpId,
+          'info',
+          'ASAT_RESULT',
+          `Virtual snapshot returned ${virtualResult.count} rows`,
+          undefined,
+          {
+            count: virtualResult.count,
+            latestRetrievedAt: virtualResult.latest_retrieved_at_used,
+            hasAnchorTo: virtualResult.has_anchor_to,
+            hasAnyRows: virtualResult.has_any_rows,
+            hasMatchingCoreHash: virtualResult.has_matching_core_hash,
+          }
+        );
+
+        if (virtualResult.count === 0) {
+          // Avoid spamming UI error toasts for every item in batch mode.
+          // Propagate as a failure so the batch summary + session log explains what happened.
+          const mismatchHint =
+            virtualResult.has_any_rows && virtualResult.has_matching_core_hash === false
+              ? 'Snapshot DB contains rows for this param/window, but none match the current query signature.'
+              : undefined;
+          const msg =
+            mismatchHint
+              ? `No snapshot rows matched signature as-at ${asatDateUK}. ${mismatchHint}`
+              : `No snapshot data available as-at ${asatDateUK}.`;
+          sessionLogService.endOperation(asatLogOpId, 'warning', msg);
+          return { success: false, warning: msg };
+        }
         
-        // Fire warnings per §6.3
+        // Fire warnings per §6.3 (batch-aware)
         const entityLabel = paramId;
         fireAsatWarnings(
           asatDateUK,
@@ -1427,6 +1404,11 @@ class DataOperationsService {
           }
         }
         
+        sessionLogService.endOperation(
+          asatLogOpId,
+          'success',
+          `Historical query complete: ${timeSeries.length} data points from snapshot as-at ${asatDateUK}`
+        );
         return { success: true };
       }
       // ============================================================================
@@ -4380,7 +4362,7 @@ class DataOperationsService {
           anchor_from: anchorFromISO,
           anchor_to: anchorToISO,
           slice_keys: sliceKeyArray,
-          core_hash: signatureStr,
+          canonical_signature: signatureStr,
         });
         
         if (!virtualResult.success) {
@@ -5634,10 +5616,31 @@ class DataOperationsService {
           undefined,
           { windows: actualFetchWindows.map((w) => ({ start: normalizeDate(w.start), end: normalizeDate(w.end) })) }
         );
+
+        // Coalesce contiguous windows to avoid pathological over-many requests.
+        // This preserves the exact date-set being fetched (union of inclusive ranges),
+        // but reduces HTTP calls when the plan splits adjacent windows (e.g. stale up to yesterday + missing today).
+        const beforeCount = actualFetchWindows.length;
+        const beforeWindows = actualFetchWindows.map((w) => ({ start: normalizeDate(w.start), end: normalizeDate(w.end) }));
+        actualFetchWindows = mergeFetchWindows(actualFetchWindows);
+        if (actualFetchWindows.length !== beforeCount) {
+          sessionLogService.addChild(
+            logOpId,
+            'info',
+            'FETCH_WINDOWS_COALESCED',
+            `Coalesced plan windows for execution: ${beforeCount} → ${actualFetchWindows.length}`,
+            undefined,
+            {
+              before: beforeWindows,
+              after: actualFetchWindows.map((w) => ({ start: normalizeDate(w.start), end: normalizeDate(w.end) })),
+            } as any
+          );
+        }
       }
 
-      const mergeFetchWindows = (windows: DateRange[]): DateRange[] => {
+      function mergeFetchWindows(windows: DateRange[]): DateRange[] {
         if (windows.length <= 1) return windows;
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
         const sorted = [...windows].sort((a, b) => {
           const as = parseDate(a.start).getTime();
           const bs = parseDate(b.start).getTime();
@@ -5652,7 +5655,8 @@ class DataOperationsService {
           const last = merged[merged.length - 1];
           const lastEnd = parseDate(last.end).getTime();
           const nextStart = parseDate(w.start).getTime();
-          if (nextStart <= lastEnd) {
+          // Ranges are inclusive: treat adjacent days as mergeable to avoid extra calls.
+          if (nextStart <= lastEnd + ONE_DAY_MS) {
             const nextEnd = parseDate(w.end).getTime();
             if (nextEnd > lastEnd) {
               last.end = w.end;
@@ -5662,7 +5666,7 @@ class DataOperationsService {
           }
         }
         return merged;
-      };
+      }
       let querySignature: string | undefined;
       let shouldSkipFetch = false;
       
@@ -7987,14 +7991,39 @@ class DataOperationsService {
                 
                 const result = await appendSnapshots({
                   param_id: dbParamId,
-                  // Store the serialised signature string as core_hash (existing storage format).
-                  // Signature integrity is enforced on read; do not change stored shape here.
-                  core_hash: typeof querySignature === 'string'
-                    ? querySignature
-                    : (querySignature as any).coreHash || querySignature,
-                  context_def_hashes: typeof querySignature === 'object'
-                    ? (querySignature as any).contextDefHashes
-                    : undefined,
+                  canonical_signature: String(querySignature || ''),
+                  inputs_json: (() => {
+                    // Minimal, human-diffable evidence blob (flexi_sigs.md §4.3).
+                    const canonical_signature = String(querySignature || '');
+                    let parsed: any = null;
+                    try {
+                      parsed = canonical_signature.trim().startsWith('{') ? JSON.parse(canonical_signature) : null;
+                    } catch {
+                      parsed = null;
+                    }
+                    const context_def_hashes = (parsed && typeof parsed.x === 'object' && parsed.x) ? parsed.x : {};
+                    const core = (parsed && typeof parsed.c === 'string') ? parsed.c : undefined;
+                    return {
+                      schema: 'flexi_sigs.inputs_json.v1',
+                      workspace,
+                      param_id: dbParamId,
+                      generated_at: new Date().toISOString(),
+                      canonical_signature,
+                      canonical_signature_parts: {
+                        core,
+                        context_def_hashes,
+                      },
+                      summary: {
+                        slice_key: sliceDSL || '',
+                        context_keys: Object.keys(context_def_hashes || {}).sort(),
+                      },
+                      provenance: {
+                        graph_name: (graph as any)?.name,
+                        graph_id: (graph as any)?.id ?? (graph as any)?.uuid,
+                      },
+                    };
+                  })(),
+                  sig_algo: 'sig_v1_sha256_trunc128_b64url',
                   slice_key: sliceDSL || '',
                   retrieved_at: new Date(),
                   rows: snapshotRows,
@@ -8268,14 +8297,38 @@ class DataOperationsService {
                 // Pass diagnostic flag so backend returns detailed info for session log
                 const result = await appendSnapshots({
                   param_id: dbParamId,
-                  // Store the serialised signature string as core_hash (existing storage format).
-                  // Signature integrity is enforced on read; do not change stored shape here.
-                  core_hash: typeof querySignature === 'string'
-                    ? querySignature
-                    : (querySignature as any).coreHash || querySignature,
-                  context_def_hashes: typeof querySignature === 'object'
-                    ? (querySignature as any).contextDefHashes
-                    : undefined,
+                  canonical_signature: String(querySignature || ''),
+                  inputs_json: (() => {
+                    const canonical_signature = String(querySignature || '');
+                    let parsed: any = null;
+                    try {
+                      parsed = canonical_signature.trim().startsWith('{') ? JSON.parse(canonical_signature) : null;
+                    } catch {
+                      parsed = null;
+                    }
+                    const context_def_hashes = (parsed && typeof parsed.x === 'object' && parsed.x) ? parsed.x : {};
+                    const core = (parsed && typeof parsed.c === 'string') ? parsed.c : undefined;
+                    return {
+                      schema: 'flexi_sigs.inputs_json.v1',
+                      workspace,
+                      param_id: dbParamId,
+                      generated_at: new Date().toISOString(),
+                      canonical_signature,
+                      canonical_signature_parts: {
+                        core,
+                        context_def_hashes,
+                      },
+                      summary: {
+                        slice_key: sliceDSL || '',
+                        context_keys: Object.keys(context_def_hashes || {}).sort(),
+                      },
+                      provenance: {
+                        graph_name: (graph as any)?.name,
+                        graph_id: (graph as any)?.id ?? (graph as any)?.uuid,
+                      },
+                    };
+                  })(),
+                  sig_algo: 'sig_v1_sha256_trunc128_b64url',
                   slice_key: sliceDSL || '',
                   retrieved_at: new Date(),
                   rows: snapshotRows,

@@ -134,7 +134,9 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
 
   return {
     param_id: dbParamId,
-    core_hash: signature,
+    // IMPORTANT: the backend expects the full canonical signature string.
+    // (It derives the short `core_hash` server-side.)
+    canonical_signature: signature,
     slice_keys,
     anchor_from: toISODate(anchorFromUK),
     anchor_to: toISODate(anchorToUK),

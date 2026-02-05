@@ -51,6 +51,22 @@ def extract_python_api_routes(content: str) -> set:
             routes.add('/api/snapshots/delete')
         elif endpoint == 'snapshots-query-full':
             routes.add('/api/snapshots/query-full')
+        elif endpoint == 'snapshots-query-virtual':
+            routes.add('/api/snapshots/query-virtual')
+        elif endpoint == 'snapshots-retrievals':
+            routes.add('/api/snapshots/retrievals')
+        elif endpoint == 'sigs-list':
+            routes.add('/api/sigs/list')
+        elif endpoint == 'sigs-get':
+            routes.add('/api/sigs/get')
+        elif endpoint == 'sigs-links-list':
+            routes.add('/api/sigs/links/list')
+        elif endpoint == 'sigs-links-create':
+            routes.add('/api/sigs/links/create')
+        elif endpoint == 'sigs-links-deactivate':
+            routes.add('/api/sigs/links/deactivate')
+        elif endpoint == 'sigs-resolve':
+            routes.add('/api/sigs/resolve')
         else:
             routes.add(f'/api/{endpoint}')
     return routes

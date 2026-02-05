@@ -22,10 +22,11 @@ import {
   Info,          // About
   FileType,      // Markdown
   ScrollText,    // Session Log
-  Image          // Image
+  Image,         // Image
+  Link2          // Signature Links
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'chart' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log' | 'image';
+export type ObjectType = 'graph' | 'chart' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log' | 'image' | 'signature-links';
 
 export interface ObjectTypeTheme {
   /** Light pastel background colour */
@@ -152,6 +153,13 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     icon: Image,
     label: 'Image',
     emoji: '🖼️'
+  },
+  'signature-links': {
+    lightColour: '#E0E7FF',  // light indigo
+    accentColour: '#6366F1', // indigo-500
+    icon: Link2,
+    label: 'Signature Links',
+    emoji: '🔗'
   }
 };
 

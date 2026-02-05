@@ -6,6 +6,7 @@ import { MarkdownViewer } from './MarkdownViewer';
 import { SessionLogViewer } from './SessionLogViewer';
 import { GraphIssuesViewer } from './GraphIssuesViewer';
 import { ChartViewer } from './ChartViewer';
+import { SignatureLinksViewer } from './SignatureLinksViewer';
 import { getFileTypeConfig } from '../../config/fileTypeRegistry';
 
 /**
@@ -48,6 +49,11 @@ export function getEditorComponent(type: ObjectType | 'settings' | 'session-log'
   // Special case for graph issues viewer
   if (type === 'issues') {
     return GraphIssuesViewer;
+  }
+
+  // Special case for signature links viewer
+  if (type === 'signature-links') {
+    return SignatureLinksViewer;
   }
   
   // Special case for markdown - always use MarkdownViewer for read-only display

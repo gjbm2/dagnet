@@ -87,7 +87,9 @@ vi.mock('../../../contexts/TabContext', () => ({
     ],
     activeTabId: 'tab-1',
   }),
-  fileRegistry: {},
+  fileRegistry: {
+    getFile: () => null,
+  },
 }));
 
 vi.mock('../../../contexts/NavigatorContext', () => ({
@@ -121,6 +123,7 @@ vi.mock('../../../services/snapshotWriteService', () => ({
             unique_slices: 1,
             unique_hashes: 1,
             unique_retrievals: 2,
+            unique_retrieved_days: 10,
           }
         : {
             has_data: false,
@@ -132,6 +135,46 @@ vi.mock('../../../services/snapshotWriteService', () => ({
             unique_slices: 0,
             unique_hashes: 0,
             unique_retrievals: 0,
+            unique_retrieved_days: 0,
+          };
+    }
+    return inv;
+  }),
+  getBatchInventoryV2: vi.fn(async (paramIds: string[]) => {
+    const inv: any = {};
+    for (const pid of paramIds) {
+      inv[pid] = pid.endsWith('-param-1')
+        ? {
+            param_id: pid,
+            overall_all_families: {
+              earliest_anchor_day: '2025-12-01',
+              latest_anchor_day: '2025-12-10',
+              row_count: 10,
+              unique_anchor_days: 10,
+              unique_retrievals: 2,
+              unique_retrieved_days: 10,
+              earliest_retrieved_at: null,
+              latest_retrieved_at: null,
+            },
+            current: null,
+            families: [],
+            unlinked_core_hashes: [],
+          }
+        : {
+            param_id: pid,
+            overall_all_families: {
+              earliest_anchor_day: null,
+              latest_anchor_day: null,
+              row_count: 0,
+              unique_anchor_days: 0,
+              unique_retrievals: 0,
+              unique_retrieved_days: 0,
+              earliest_retrieved_at: null,
+              latest_retrieved_at: null,
+            },
+            current: null,
+            families: [],
+            unlinked_core_hashes: [],
           };
     }
     return inv;

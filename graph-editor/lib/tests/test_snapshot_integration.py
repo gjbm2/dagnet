@@ -28,11 +28,39 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 
-from snapshot_service import append_snapshots, get_db_connection
+from snapshot_service import append_snapshots as append_snapshots_flexi, get_db_connection
 
 # Test prefix to identify and clean up test data
 TEST_PREFIX = 'pytest-snapshot-integration'
 TEST_TIMESTAMP = datetime.now(timezone.utc)
+SIG_ALGO = "sig_v1_sha256_trunc128_b64url"
+
+
+def append_snapshots(*, param_id: str, core_hash: str, context_def_hashes, slice_key: str, retrieved_at: datetime, rows, diagnostic: bool = False):
+    """
+    Compatibility wrapper for integration tests.
+
+    The flexi-sigs backend write contract is:
+      append_snapshots(param_id, canonical_signature, inputs_json, sig_algo, slice_key, retrieved_at, rows, ...)
+
+    These tests historically passed `core_hash` strings directly; we now treat them as the
+    canonical_signature input and let the backend derive the short DB core_hash.
+    """
+    assert context_def_hashes is None
+    return append_snapshots_flexi(
+        param_id=param_id,
+        canonical_signature=core_hash,
+        inputs_json={
+            "schema": "pytest_flexi_sigs_v1",
+            "param_id": param_id,
+            "canonical_signature": core_hash,
+        },
+        sig_algo=SIG_ALGO,
+        slice_key=slice_key,
+        retrieved_at=retrieved_at,
+        rows=rows,
+        diagnostic=diagnostic,
+    )
 
 # Path to Amplitude fixtures
 FIXTURE_ROOT = Path(__file__).parent.parent.parent.parent / 'param-registry' / 'test' / 'amplitude'
@@ -69,6 +97,8 @@ def cleanup_test_data(param_id: str):
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+        cur.execute("DELETE FROM signature_equivalence WHERE param_id = %s", (param_id,))
+        cur.execute("DELETE FROM signature_registry WHERE param_id = %s", (param_id,))
         cur.execute("DELETE FROM snapshots WHERE param_id = %s", (param_id,))
         deleted = cur.rowcount
         conn.commit()
@@ -84,6 +114,8 @@ def cleanup_all_test_data():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
+        cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
     finally:
@@ -95,6 +127,8 @@ def cleanup_all_test_data():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
+        cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
     finally:

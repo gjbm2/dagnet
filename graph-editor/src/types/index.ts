@@ -18,7 +18,8 @@ export type ObjectType =
   | 'settings'
   | 'about'
   | 'markdown'
-  | 'image';
+  | 'image'
+  | 'signature-links';
 
 /**
  * View modes for displaying content

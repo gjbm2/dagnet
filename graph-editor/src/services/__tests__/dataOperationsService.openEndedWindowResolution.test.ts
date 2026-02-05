@@ -191,6 +191,39 @@ describe('dataOperationsService window resolution regressions', () => {
     });
   });
 
+  it('coalesces contiguous overrideFetchWindows into one executed window (avoid over-many requests)', async () => {
+    const graph = createTestGraph('from(A).to(B)');
+
+    await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'E1',
+      graph,
+      setGraph: () => {},
+      currentDSL: 'window(-60d:)',
+      // Two adjacent single-day windows should execute as ONE request (inclusive ranges).
+      overrideFetchWindows: [
+        { start: '1-Dec-25', end: '1-Dec-25' },
+        { start: '2-Dec-25', end: '2-Dec-25' },
+      ],
+      dontExecuteHttp: true,
+    } as any);
+
+    expect(executeSpy).toHaveBeenCalledTimes(1);
+
+    const payload = executeSpy.mock.calls[0][1];
+    const opts = executeSpy.mock.calls[0][2];
+    expect(opts?.dryRun).toBe(true);
+
+    // Coalesced union of the two days.
+    expect(payload?.start).toBe('2025-12-01T00:00:00.000Z');
+    expect(payload?.end).toBe('2025-12-02T00:00:00.000Z');
+    expect(opts.window).toEqual({
+      start: '2025-12-01T00:00:00.000Z',
+      end: '2025-12-02T00:00:00.000Z',
+    });
+  });
+
   it('emits a DEFAULT_WINDOW_APPLIED warning when no explicit window/cohort range exists (never silent)', async () => {
     const graph = createTestGraph('from(A).to(B)');
 

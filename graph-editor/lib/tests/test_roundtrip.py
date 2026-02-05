@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 
-from snapshot_service import append_snapshots, query_snapshots, get_db_connection
+from snapshot_service import append_snapshots, query_snapshots, get_db_connection, short_core_hash_from_canonical_signature
 from runner.histogram_derivation import derive_lag_histogram
 from runner.daily_conversions_derivation import derive_daily_conversions
 from runner.mece_aggregation import aggregate_mece_slices
@@ -38,6 +38,24 @@ from runner.mece_aggregation import aggregate_mece_slices
 # Test prefix for cleanup
 TEST_PREFIX = 'pytest-roundtrip'
 TEST_TIMESTAMP = datetime.now(timezone.utc)
+SIG_ALGO = "sig_v1_sha256_trunc128_b64url"
+
+
+def append_snapshots_for_test(*, param_id: str, canonical_signature: str, slice_key: str, rows, diagnostic: bool = False):
+    return append_snapshots(
+        param_id=param_id,
+        canonical_signature=canonical_signature,
+        inputs_json={
+            "schema": "pytest_flexi_sigs_v1",
+            "param_id": param_id,
+            "canonical_signature": canonical_signature,
+        },
+        sig_algo=SIG_ALGO,
+        slice_key=slice_key,
+        retrieved_at=TEST_TIMESTAMP,
+        rows=rows,
+        diagnostic=diagnostic,
+    )
 
 
 def make_test_param_id(name: str) -> str:
@@ -50,6 +68,8 @@ def cleanup_test_data(param_id: str):
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+        cur.execute("DELETE FROM signature_equivalence WHERE param_id = %s", (param_id,))
+        cur.execute("DELETE FROM signature_registry WHERE param_id = %s", (param_id,))
         cur.execute("DELETE FROM snapshots WHERE param_id = %s", (param_id,))
         conn.commit()
     finally:
@@ -62,6 +82,8 @@ def cleanup_all_test_data():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
+        cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
     finally:
@@ -72,6 +94,8 @@ def cleanup_all_test_data():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
+        cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
     finally:
@@ -89,7 +113,8 @@ class TestRoundTrip:
         verify derived result matches expected.
         """
         param_id = make_test_param_id('rt001')
-        core_hash = 'rt001-simple-hash'
+        canonical_signature = 'rt001-simple-hash'
+        core_hash = short_core_hash_from_canonical_signature(canonical_signature)
         
         # Write 5 days of data with increasing Y
         rows = []
@@ -101,14 +126,7 @@ class TestRoundTrip:
             })
         
         # Write
-        result = append_snapshots(
-            param_id=param_id,
-            core_hash=core_hash,
-            context_def_hashes=None,
-            slice_key='',
-            retrieved_at=TEST_TIMESTAMP,
-            rows=rows,
-        )
+        result = append_snapshots_for_test(param_id=param_id, canonical_signature=canonical_signature, slice_key='', rows=rows)
         assert result['success'] is True
         assert result['inserted'] == 5
         
@@ -137,7 +155,8 @@ class TestRoundTrip:
         Verify all columns survive the roundtrip.
         """
         param_id = make_test_param_id('rt002')
-        core_hash = 'rt002-dual-hash'
+        canonical_signature = 'rt002-dual-hash'
+        core_hash = short_core_hash_from_canonical_signature(canonical_signature)
         
         rows = [
             {
@@ -161,14 +180,7 @@ class TestRoundTrip:
         ]
         
         # Write
-        result = append_snapshots(
-            param_id=param_id,
-            core_hash=core_hash,
-            context_def_hashes=None,
-            slice_key='',
-            retrieved_at=TEST_TIMESTAMP,
-            rows=rows,
-        )
+        result = append_snapshots_for_test(param_id=param_id, canonical_signature=canonical_signature, slice_key='', rows=rows)
         assert result['success'] is True
         
         # Read back
@@ -192,7 +204,8 @@ class TestRoundTrip:
         Verify synthesised Y values are correctly stored and retrieved.
         """
         param_id = make_test_param_id('rt003')
-        core_hash = 'rt003-composite-hash'
+        canonical_signature = 'rt003-composite-hash'
+        core_hash = short_core_hash_from_canonical_signature(canonical_signature)
         
         # Composite query result: Y = base - excluded
         rows = [
@@ -202,14 +215,7 @@ class TestRoundTrip:
         ]
         
         # Write
-        result = append_snapshots(
-            param_id=param_id,
-            core_hash=core_hash,
-            context_def_hashes=None,
-            slice_key='',
-            retrieved_at=TEST_TIMESTAMP,
-            rows=rows,
-        )
+        result = append_snapshots_for_test(param_id=param_id, canonical_signature=canonical_signature, slice_key='', rows=rows)
         assert result['success'] is True
         
         # Read back
@@ -227,7 +233,8 @@ class TestRoundTrip:
         Write MECE slices, read them back, aggregate, verify sum.
         """
         param_id = make_test_param_id('rt004')
-        core_hash = 'rt004-mece-hash'
+        canonical_signature = 'rt004-mece-hash'
+        core_hash = short_core_hash_from_canonical_signature(canonical_signature)
         
         mece_slices = [
             ('context(channel:google)', [
@@ -243,14 +250,7 @@ class TestRoundTrip:
         
         # Write each slice
         for slice_key, rows in mece_slices:
-            result = append_snapshots(
-                param_id=param_id,
-                core_hash=core_hash,
-                context_def_hashes=None,
-                slice_key=slice_key,
-                retrieved_at=TEST_TIMESTAMP,
-                rows=rows,
-            )
+            result = append_snapshots_for_test(param_id=param_id, canonical_signature=canonical_signature, slice_key=slice_key, rows=rows)
             assert result['success'] is True
         
         # Read all slices
@@ -280,7 +280,8 @@ class TestRoundTrip:
         Verify that querying with the same core_hash returns the same data.
         """
         param_id = make_test_param_id('rt005')
-        core_hash = 'rt005-stable-signature'
+        canonical_signature = 'rt005-stable-signature'
+        core_hash = short_core_hash_from_canonical_signature(canonical_signature)
         
         rows = [
             {'anchor_day': '2025-12-01', 'X': 100, 'Y': 15},
@@ -288,14 +289,7 @@ class TestRoundTrip:
         ]
         
         # Write
-        result = append_snapshots(
-            param_id=param_id,
-            core_hash=core_hash,
-            context_def_hashes=None,
-            slice_key='',
-            retrieved_at=TEST_TIMESTAMP,
-            rows=rows,
-        )
+        result = append_snapshots_for_test(param_id=param_id, canonical_signature=canonical_signature, slice_key='', rows=rows)
         assert result['success'] is True
         
         # Read with same signature - should get same data

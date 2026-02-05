@@ -1136,8 +1136,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                       </div>
 
                       <div className="asat-calendar-grid">
-                        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((label) => (
-                          <div key={label} className="asat-calendar-dow">{label}</div>
+                        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((label, idx) => (
+                          <div key={`${label}-${idx}`} className="asat-calendar-dow">{label}</div>
                         ))}
                         {calendarCells.map((c) => (
                           <button

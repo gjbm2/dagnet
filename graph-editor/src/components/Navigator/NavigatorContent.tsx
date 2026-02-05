@@ -278,7 +278,8 @@ export function NavigatorContent() {
       about: [],
       markdown: [],
       connections: [],
-      image: []
+      image: [],
+      'signature-links': [],
     };
     
     for (const entry of filteredAndSortedEntries) {

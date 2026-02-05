@@ -5,14 +5,14 @@ import { renderHook, act } from '@testing-library/react';
 // Mocks
 // ------------------------------------------------------------
 
-const getBatchInventoryRichMock = vi.fn();
+const getBatchInventoryV2Mock = vi.fn();
 const deleteSnapshotsMock = vi.fn();
 const querySnapshotsFullMock = vi.fn();
 const downloadTextFileMock = vi.fn();
 const showConfirmMock = vi.fn(async () => true);
 
 vi.mock('../../services/snapshotWriteService', () => ({
-  getBatchInventoryRich: (...args: any[]) => getBatchInventoryRichMock(...args),
+  getBatchInventoryV2: (...args: any[]) => getBatchInventoryV2Mock(...args),
   deleteSnapshots: (...args: any[]) => deleteSnapshotsMock(...args),
   querySnapshotsFull: (...args: any[]) => querySnapshotsFullMock(...args),
 }));
@@ -74,32 +74,36 @@ import { useSnapshotsMenu } from '../useSnapshotsMenu';
 describe('useSnapshotsMenu', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getBatchInventoryRichMock.mockResolvedValue({
+    getBatchInventoryV2Mock.mockResolvedValue({
       'r-b-param-a': {
-        overall: {
-          has_data: true,
-          param_id: 'r-b-param-a',
-          earliest: '2025-12-01',
-          latest: '2025-12-10',
+        overall_all_families: {
+          earliest_anchor_day: '2025-12-01',
+          latest_anchor_day: '2025-12-10',
           row_count: 10,
-          unique_days: 10,
-          unique_slices: 1,
-          unique_hashes: 1,
+          unique_anchor_days: 10,
           unique_retrievals: 2,
           unique_retrieved_days: 10,
         },
-        by_core_hash: [
+        current: {
+          matched_family_id: 'fam1',
+          match_mode: 'direct',
+        },
+        families: [
           {
-            core_hash: '{"c":"sig-core","x":{}}',
-            earliest: '2025-12-01',
-            latest: '2025-12-10',
-            row_count: 10,
-            unique_days: 10,
-            unique_slices: 1,
-            unique_retrieved_days: 10,
-            by_slice_key: [],
+            family_id: 'fam1',
+            overall: {
+              earliest_anchor_day: '2025-12-01',
+              latest_anchor_day: '2025-12-10',
+              row_count: 10,
+              unique_anchor_days: 10,
+              unique_retrievals: 2,
+              unique_retrieved_days: 10,
+            },
+            slices: [],
+            core_hashes: ['h1'],
           },
         ],
+        unlinked_core_hashes: [],
       },
     });
     deleteSnapshotsMock.mockResolvedValue({ success: true, deleted: 10 });
@@ -132,7 +136,10 @@ describe('useSnapshotsMenu', () => {
     // Allow effect to run
     await act(async () => {});
 
-    expect(getBatchInventoryRichMock).toHaveBeenCalledWith(['r-b-param-a']);
+    expect(getBatchInventoryV2Mock).toHaveBeenCalledWith(
+      ['r-b-param-a'],
+      { current_signatures: { 'r-b-param-a': '{"c":"sig-core","x":{}}' } },
+    );
     expect(result.current.snapshotCounts['param-a']).toBe(10);
     expect(result.current.inventories['param-a']?.row_count).toBe(10);
   });
