@@ -12,6 +12,19 @@ const hoisted = vi.hoisted(() => ({
   updateTabData: vi.fn(),
   openLogTab: vi.fn(async () => 'session-log-tab-1'),
   navState: { selectedRepo: 'repo-1', selectedBranch: 'main' as string },
+  toArray: vi.fn(),
+}));
+
+vi.mock('../../db/appDatabase', () => ({
+  db: {
+    files: {
+      where: vi.fn(() => ({
+        equals: vi.fn(() => ({
+          toArray: hoisted.toArray,
+        })),
+      })),
+    },
+  },
 }));
 
 vi.mock('../../contexts/NavigatorContext', () => ({
@@ -45,6 +58,7 @@ vi.mock('../../services/dailyRetrieveAllAutomationService', () => ({
 }));
 
 import { resetURLDailyRetrieveAllQueueProcessed, useURLDailyRetrieveAllQueue } from '../useURLDailyRetrieveAllQueue';
+import { automationRunService } from '../../services/automationRunService';
 
 describe('useURLDailyRetrieveAllQueue', () => {
   beforeEach(() => {
@@ -53,6 +67,7 @@ describe('useURLDailyRetrieveAllQueue', () => {
     hoisted.openTab.mockReset();
     hoisted.updateTabData.mockReset();
     hoisted.openLogTab.mockClear();
+    hoisted.toArray.mockReset();
     hoisted.navState = { selectedRepo: 'repo-1', selectedBranch: 'main' };
     resetURLDailyRetrieveAllQueueProcessed();
 
@@ -64,6 +79,13 @@ describe('useURLDailyRetrieveAllQueue', () => {
       data: { edges: [], nodes: [], dataInterestsDSL: 'context(channel:google)' },
     });
   });
+
+  // Make tests robust if a failure leaves automation state active.
+  // (automationRunService ignores finish() when runId mismatches.)
+  const forceFinishIfNeeded = () => {
+    const st = automationRunService.getState();
+    if (st.phase !== 'idle' && st.runId) automationRunService.finish(st.runId);
+  };
 
   it('runs daily automation once for ?retrieveall=<graph>, then cleans URL params', async () => {
     window.history.replaceState({}, document.title, '/?retrieveall=my-graph');
@@ -88,6 +110,7 @@ describe('useURLDailyRetrieveAllQueue', () => {
     await waitFor(() => {
       expect(window.location.search).toBe('');
     });
+    forceFinishIfNeeded();
   });
 
   it('serialises multiple graphs in one run (comma-separated)', async () => {
@@ -104,6 +127,7 @@ describe('useURLDailyRetrieveAllQueue', () => {
     await waitFor(() => {
       expect(window.location.search).toBe('');
     });
+    forceFinishIfNeeded();
   });
 
   it('serialises multiple graphs in one run (repeated params) and de-dupes', async () => {
@@ -120,6 +144,7 @@ describe('useURLDailyRetrieveAllQueue', () => {
     await waitFor(() => {
       expect(window.location.search).toBe('');
     });
+    forceFinishIfNeeded();
   });
 
   it('does not get stuck if repo becomes selected after mount (scheduler-style init)', async () => {
@@ -148,6 +173,41 @@ describe('useURLDailyRetrieveAllQueue', () => {
 
     expect(hoisted.run).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+    forceFinishIfNeeded();
+  });
+
+  it('enumeration mode (?retrieveall with no value) completes and returns automation state to idle', async () => {
+    window.history.replaceState({}, document.title, '/?retrieveall');
+
+    // One dailyFetch-enabled graph in the selected repo/branch.
+    hoisted.toArray.mockResolvedValue([
+      {
+        fileId: 'graph-enabled',
+        type: 'graph',
+        source: { repository: 'repo-1', branch: 'main' },
+        data: { edges: [], nodes: [], dailyFetch: true, metadata: { created: '1-Jan-25', modified: '1-Jan-25' } },
+      },
+      {
+        fileId: 'graph-disabled',
+        type: 'graph',
+        source: { repository: 'repo-1', branch: 'main' },
+        data: { edges: [], nodes: [], dailyFetch: false, metadata: { created: '1-Jan-25', modified: '1-Jan-25' } },
+      },
+    ]);
+
+    renderHook(() => useURLDailyRetrieveAllQueue());
+
+    await waitFor(() => {
+      expect(hoisted.run).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+
+    await waitFor(() => {
+      expect(automationRunService.getState().phase).toBe('idle');
+    });
   });
 });
 

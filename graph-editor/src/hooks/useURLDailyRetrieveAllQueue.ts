@@ -359,7 +359,9 @@ export function useURLDailyRetrieveAllQueue(): void {
       const maxWaitMs = 60_000;
       const pollMs = 250;
       
-      // For enumeration mode, create a placeholder runId; we'll update metadata after enumeration
+      // IMPORTANT: runId MUST remain stable for the lifetime of the run.
+      // automationRunService ignores updates where runId mismatches, so mutating runId mid-run
+      // causes the AutomationBanner to get stuck in "waiting" even while work proceeds.
       let runId = isEnumerationMode 
         ? `retrieveall-enumerate:${waitStartedAt}`
         : `retrieveall-queue:${explicitGraphNames.join(',')}:${waitStartedAt}`;
@@ -455,11 +457,6 @@ export function useURLDailyRetrieveAllQueue(): void {
             targetGraphNames.join(', '),
             { graphs: targetGraphNames }
           );
-
-          // Update runId and automation metadata now that we know the actual graphs
-          runId = `retrieveall-queue:${targetGraphNames.join(',')}:${waitStartedAt}`;
-          // Note: automationRunService.start was already called with placeholder;
-          // the existing run continues with the updated list
         }
 
         // Open Session Log early so the user sees progress immediately. Best-effort only.
