@@ -8,15 +8,17 @@
  * - `?retrieveall=<graph-a>,<graph-b>,<graph-c>` (comma-separated list)
  * - `?retrieveall=<graph-a>&retrieveall=<graph-b>` (repeated param)
  * - `?graph=<graph-name>&retrieveall` (boolean flag; single graph)
+ * - `?retrieveall` (no value) — **enumeration mode**: processes all graphs with `dailyFetch: true` in the workspace
  *
  * Behaviour:
  * - Opens/loads each graph tab (if needed) then runs pull → retrieve → commit sequentially.
+ * - In enumeration mode, queries IndexedDB for graphs with dailyFetch=true (workspace-scoped, deduped).
  * - Keeps Session Log as the primary UX for progress/diagnostics.
  * - Cleans URL params once after the whole queue completes.
  */
 
 import { useEffect, useRef } from 'react';
-import type { RepositoryItem } from '../types';
+import type { RepositoryItem, GraphData } from '../types';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { sessionLogService } from '../services/sessionLogService';
@@ -24,6 +26,7 @@ import { dailyRetrieveAllAutomationService } from '../services/dailyRetrieveAllA
 import { automationRunService } from '../services/automationRunService';
 import { isShareMode } from '../lib/shareBootResolver';
 import { countdownService } from '../services/countdownService';
+import { db } from '../db/appDatabase';
 
 interface URLDailyRetrieveAllQueueParams {
   retrieveAllValues: string[]; // raw values from ?retrieveall=... (can be empty strings)
@@ -175,6 +178,87 @@ function inferGraphNameFromFileId(fileId: string): string {
   return fileId.startsWith('graph-') ? fileId.slice('graph-'.length) : fileId;
 }
 
+/**
+ * Enumerate all graphs in IndexedDB that have `dailyFetch: true`.
+ * Returns graph names (without 'graph-' prefix), sorted alphabetically for determinism.
+ * 
+ * Scoped to the specified workspace (repo/branch) and dedupes prefixed/unprefixed fileIds.
+ */
+async function enumerateDailyFetchGraphsFromIDB(workspace: { repository: string; branch: string }): Promise<string[]> {
+  const allGraphFiles = await db.files
+    .where('type')
+    .equals('graph')
+    .toArray();
+
+  // Filter to workspace and dedupe prefixed vs unprefixed variants
+  // IDB can have both 'graph-x' and 'repo-branch-graph-x' for the same file
+  const seenCanonical = new Set<string>();
+  const candidates: Array<{ fileId: string; data: GraphData | null }> = [];
+
+  for (const file of allGraphFiles) {
+    // Only files from this workspace
+    if (file.source?.repository !== workspace.repository || file.source?.branch !== workspace.branch) {
+      continue;
+    }
+
+    // Extract canonical name (handle both prefixed and unprefixed)
+    let canonicalName: string;
+    if (file.fileId.includes('-graph-')) {
+      // Workspace-prefixed: 'repo-branch-graph-<name>'
+      const parts = file.fileId.split('-graph-');
+      canonicalName = parts[parts.length - 1];
+    } else if (file.fileId.startsWith('graph-')) {
+      // Unprefixed: 'graph-<name>'
+      canonicalName = file.fileId.slice(6);
+    } else {
+      canonicalName = file.fileId;
+    }
+
+    // Dedupe: prefer workspace-prefixed variant if both exist
+    if (seenCanonical.has(canonicalName)) {
+      // If this one is prefixed and previous wasn't, replace
+      if (file.fileId.includes('-graph-')) {
+        const idx = candidates.findIndex(c => {
+          const prevName = c.fileId.startsWith('graph-') ? c.fileId.slice(6) : c.fileId;
+          return prevName === canonicalName;
+        });
+        if (idx >= 0) {
+          candidates[idx] = { fileId: file.fileId, data: file.data as GraphData | null };
+        }
+      }
+      continue;
+    }
+
+    seenCanonical.add(canonicalName);
+    candidates.push({ fileId: file.fileId, data: file.data as GraphData | null });
+  }
+
+  // Filter to those with dailyFetch: true
+  const names: string[] = [];
+  for (const { fileId, data } of candidates) {
+    if (data?.dailyFetch) {
+      // Extract canonical name again for output
+      let name: string;
+      if (fileId.includes('-graph-')) {
+        const parts = fileId.split('-graph-');
+        name = parts[parts.length - 1];
+      } else if (fileId.startsWith('graph-')) {
+        name = fileId.slice(6);
+      } else {
+        name = fileId;
+      }
+      names.push(name);
+    }
+  }
+
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
+// Expose for E2E testing (dev mode only)
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as any).__dagnetEnumerateDailyFetchGraphs = enumerateDailyFetchGraphsFromIDB;
+}
+
 async function waitForGraphData(fileId: string, maxWaitMs: number, pollMs: number, shouldAbort: () => boolean): Promise<boolean> {
   const startedAt = Date.now();
   while (true) {
@@ -248,8 +332,16 @@ export function useURLDailyRetrieveAllQueue(): void {
     const params = paramsRef.current;
     if (!params?.hasRetrieveAllFlag) return;
 
-    const targetGraphNames = resolveTargetGraphNames(params);
-    if (targetGraphNames.length === 0) return;
+    // Get explicit graph names from URL (may be empty for enumeration mode)
+    const explicitGraphNames = resolveTargetGraphNames(params);
+    
+    // If no explicit graphs AND no retrieveall flag value, this is enumeration mode
+    // We allow this case now (will enumerate from IDB after workspace is ready)
+    const isEnumerationMode = explicitGraphNames.length === 0;
+    
+    // For explicit mode, we need at least one graph
+    // For enumeration mode, we proceed and will enumerate after workspace ready
+    if (!isEnumerationMode && explicitGraphNames.length === 0) return;
 
     processedRef.current = true;
     urlDailyRetrieveAllQueueProcessed = true;
@@ -266,14 +358,19 @@ export function useURLDailyRetrieveAllQueue(): void {
       const waitStartedAt = Date.now();
       const maxWaitMs = 60_000;
       const pollMs = 250;
-      const runId = `retrieveall-queue:${targetGraphNames.join(',')}:${waitStartedAt}`;
+      
+      // For enumeration mode, create a placeholder runId; we'll update metadata after enumeration
+      let runId = isEnumerationMode 
+        ? `retrieveall-enumerate:${waitStartedAt}`
+        : `retrieveall-queue:${explicitGraphNames.join(',')}:${waitStartedAt}`;
+      let targetGraphNames = [...explicitGraphNames];
 
       try {
         setAutomationTitle('starting');
         automationRunService.start({
           runId,
-          graphFileId: `graph-${targetGraphNames[0]}`,
-          graphName: targetGraphNames[0],
+          graphFileId: isEnumerationMode ? 'enumerate-pending' : `graph-${targetGraphNames[0]}`,
+          graphName: isEnumerationMode ? '(enumerating...)' : targetGraphNames[0],
         });
 
         // Wait for app context to settle: repo selection, tabOps, and TabContext init.
@@ -325,6 +422,46 @@ export function useURLDailyRetrieveAllQueue(): void {
         const repoFinal: string = latestNavStateRef.current.selectedRepo as string;
         const branchFinal: string = latestNavStateRef.current.selectedBranch || 'main';
 
+        // If enumeration mode, enumerate dailyFetch graphs from IDB now
+        if (isEnumerationMode) {
+          sessionLogService.info(
+            'session',
+            'DAILY_RETRIEVE_ALL_ENUMERATE',
+            'Enumerating graphs with dailyFetch=true from workspace',
+            undefined,
+            { repository: repoFinal, branch: branchFinal }
+          );
+
+          targetGraphNames = await enumerateDailyFetchGraphsFromIDB({
+            repository: repoFinal,
+            branch: branchFinal,
+          });
+
+          if (targetGraphNames.length === 0) {
+            sessionLogService.warning(
+              'session',
+              'DAILY_RETRIEVE_ALL_NO_GRAPHS',
+              'No graphs with dailyFetch=true found in workspace',
+              undefined,
+              { repository: repoFinal, branch: branchFinal }
+            );
+            return;
+          }
+
+          sessionLogService.info(
+            'session',
+            'DAILY_RETRIEVE_ALL_FOUND',
+            `Found ${targetGraphNames.length} graph(s) with dailyFetch=true`,
+            targetGraphNames.join(', '),
+            { graphs: targetGraphNames }
+          );
+
+          // Update runId and automation metadata now that we know the actual graphs
+          runId = `retrieveall-queue:${targetGraphNames.join(',')}:${waitStartedAt}`;
+          // Note: automationRunService.start was already called with placeholder;
+          // the existing run continues with the updated list
+        }
+
         // Open Session Log early so the user sees progress immediately. Best-effort only.
         try {
           const logTabIdEarly = await sessionLogService.openLogTab();
@@ -365,17 +502,29 @@ export function useURLDailyRetrieveAllQueue(): void {
         setAutomationTitle('running');
         automationRunService.setPhase(runId, 'running');
 
-        for (const graphName of targetGraphNames) {
+        const totalGraphs = targetGraphNames.length;
+        for (let idx = 0; idx < totalGraphs; idx++) {
+          const graphName = targetGraphNames[idx];
+          const sequenceInfo = `[${idx + 1}/${totalGraphs}]`;
+
           if (automationRunService.shouldStop(runId)) {
             sessionLogService.warning(
               'session',
               'DAILY_RETRIEVE_ALL_ABORTED',
-              'Daily automation aborted by user',
+              `${sequenceInfo} Daily automation aborted by user`,
               undefined,
-              { graphs: targetGraphNames, stoppedAt: graphName }
+              { graphs: targetGraphNames, stoppedAt: graphName, index: idx, total: totalGraphs }
             );
             return;
           }
+
+          sessionLogService.info(
+            'session',
+            'DAILY_RETRIEVE_ALL_GRAPH_START',
+            `${sequenceInfo} Starting: ${graphName}`,
+            undefined,
+            { graph: graphName, index: idx, total: totalGraphs }
+          );
 
           const graphFileId = `graph-${graphName}`;
           const graphItem: RepositoryItem = {
@@ -404,9 +553,9 @@ export function useURLDailyRetrieveAllQueue(): void {
             sessionLogService.warning(
               'session',
               'DAILY_RETRIEVE_ALL_SKIPPED',
-              'Daily automation skipped graph: graph did not load in time',
+              `${sequenceInfo} Daily automation skipped graph: graph did not load in time`,
               undefined,
-              { graph: graphName, fileId: graphFileId }
+              { graph: graphName, fileId: graphFileId, index: idx, total: totalGraphs }
             );
             continue;
           }
@@ -419,6 +568,14 @@ export function useURLDailyRetrieveAllQueue(): void {
             setGraph: (g) => latestTabOpsRef.current.updateTabData(graphFileId, g),
             shouldAbort: () => automationRunService.shouldStop(runId),
           });
+
+          sessionLogService.info(
+            'session',
+            'DAILY_RETRIEVE_ALL_GRAPH_COMPLETE',
+            `${sequenceInfo} Completed: ${graphName}`,
+            undefined,
+            { graph: graphName, index: idx, total: totalGraphs }
+          );
         }
       } catch (e) {
         // Error already logged by deeper services; keep this as a guardrail.
