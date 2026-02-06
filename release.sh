@@ -367,6 +367,13 @@ else
 fi
 
 # Stage changes
+# Pre-flight: clean up stale tag from a previous aborted release BEFORE committing
+if git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
+  STALE_TAG_SHA=$(git rev-parse --short "v${NEW_VERSION}")
+  print_yellow "  Stale tag v${NEW_VERSION} found at ${STALE_TAG_SHA} (from prior aborted release); removing..."
+  git tag -d "v${NEW_VERSION}" >/dev/null 2>&1
+fi
+
 print_blue "[4/7] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
   git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md
