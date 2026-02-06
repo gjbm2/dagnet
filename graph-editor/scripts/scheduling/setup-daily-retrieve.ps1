@@ -116,7 +116,11 @@ function Show-Menu {
                     
                     # Extract graphs - find retrieveall= and capture until ' or ; or end
                     # Use a more robust approach: find the URL first
-                    if ($decoded -match 'retrieveall=([a-zA-Z0-9_,\-]+)') {
+                    # Check for daily-fetch mode first (retrieveall without value)
+                    $isDailyFetchModeTask = $false
+                    if ($decoded -match '\?retrieveall[''"]?\s*$' -or $decoded -match '\?retrieveall[''"]?\s*;' -or ($decoded -match '\?retrieveall' -and $decoded -notmatch 'retrieveall=')) {
+                        $isDailyFetchModeTask = $true
+                    } elseif ($decoded -match 'retrieveall=([a-zA-Z0-9_,\-]+)') {
                         $rawGraphs = $Matches[1]
                         # IMPORTANT: force array even for a single graph (otherwise $graphs[0] returns first character)
                         $graphs = @($rawGraphs -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
@@ -166,18 +170,26 @@ function Show-Menu {
             }
             
             # Prefer showing the actual graph (decoded from action) rather than the task-name suffix.
-            $title = if (($graphs | Measure-Object).Count -ge 1) { $graphs[0] } else { $graphName }
+            if ($isDailyFetchModeTask) {
+                $title = "Daily Fetch (all enabled graphs)"
+            } else {
+                $title = if (($graphs | Measure-Object).Count -ge 1) { $graphs[0] } else { $graphName }
+            }
             Write-Host "  [$i] $title" -ForegroundColor White
             
-            # Show graphs if we decoded them
-            $graphCount = ($graphs | Measure-Object).Count
-            if ($graphCount -gt 1) {
-                Write-Host "      Graphs ($graphCount, run in sequence):" -ForegroundColor Cyan
-                foreach ($g in $graphs) {
-                    Write-Host "        - $g" -ForegroundColor White
+            # Show mode/graphs info
+            if ($isDailyFetchModeTask) {
+                Write-Host "      Mode: Daily-fetch (processes all graphs with 'Fetch daily' enabled)" -ForegroundColor Magenta
+            } else {
+                $graphCount = ($graphs | Measure-Object).Count
+                if ($graphCount -gt 1) {
+                    Write-Host "      Graphs ($graphCount, run in sequence):" -ForegroundColor Cyan
+                    foreach ($g in $graphs) {
+                        Write-Host "        - $g" -ForegroundColor White
+                    }
+                } elseif ($graphCount -eq 1) {
+                    Write-Host "      Graph: $($graphs[0])" -ForegroundColor Cyan
                 }
-            } elseif ($graphCount -eq 1) {
-                Write-Host "      Graph: $($graphs[0])" -ForegroundColor Cyan
             }
             
             Write-Host "      Runs daily at: $dailyTime" -ForegroundColor Cyan
@@ -197,9 +209,9 @@ function Show-Menu {
     }
     
     Write-Host "Options:"
-    Write-Host "  [A] Add new graph"
-    Write-Host "  [R] Remove a graph"
-    Write-Host "  [T] Trigger a graph now (run the scheduled task immediately)"
+    Write-Host "  [A] Add / update schedule (recommended: daily-fetch mode)"
+    Write-Host "  [R] Remove a schedule"
+    Write-Host "  [T] Trigger a schedule now (run immediately)"
     Write-Host "  [D] Debug - show all tasks"
     Write-Host "  [Q] Quit"
     Write-Host ""
@@ -207,40 +219,71 @@ function Show-Menu {
 
 function Add-Graph {
     Write-Host ""
-    Write-Host "=== Add New Graph ===" -ForegroundColor Cyan
+    Write-Host "=== Add New Schedule ===" -ForegroundColor Cyan
     Write-Host ""
     
-    Write-Host "Enter graph name(s). For multiple graphs (run sequentially), separate with commas." -ForegroundColor Gray
-    Write-Host "Example: conversion-funnel" -ForegroundColor Gray
-    Write-Host "Example: graph-a, graph-b, graph-c  (runs in order)" -ForegroundColor Gray
+    Write-Host "Schedule mode:" -ForegroundColor Gray
+    Write-Host "  [1] Specific graph(s) - you specify which graphs to run"
+    Write-Host "  [2] Daily-fetch mode  - run all graphs marked 'Fetch daily' in DagNet"
     Write-Host ""
-    $graphInput = Read-Host "Graph name(s)"
-    if ([string]::IsNullOrWhiteSpace($graphInput)) {
-        Write-Host "Cancelled." -ForegroundColor Yellow
-        return
-    }
+    $modeChoice = Read-Host "Choice (default: 1)"
+    if ([string]::IsNullOrWhiteSpace($modeChoice)) { $modeChoice = "1" }
     
-    # Parse and clean graph names
-    # IMPORTANT: force array even for a single graph (otherwise $graphNames[0] returns first character)
-    $graphNames = @($graphInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
-    $graphCount = ($graphNames | Measure-Object).Count
+    $isDailyFetchMode = ($modeChoice -eq "2")
     
-    if ($graphCount -eq 0) {
-        Write-Host "No valid graph names." -ForegroundColor Red
-        return
-    }
+    # Variables that differ by mode
+    $graphName = $null
+    $graphNames = @()
+    $graphCount = 0
+    $retrieveAllParam = $null
     
-    # For task naming, use first graph or "multi" indicator
-    $graphName = if ($graphCount -eq 1) { $graphNames[0] } else { "$($graphNames[0])_and_$($graphCount - 1)_more" }
-    $retrieveAllParam = $graphNames -join ","
-    
-    Write-Host ""
-    if ($graphCount -gt 1) {
-        Write-Host "Will run $graphCount graphs in sequence:" -ForegroundColor Cyan
-        foreach ($g in $graphNames) {
-            Write-Host "  - $g" -ForegroundColor White
-        }
+    if ($isDailyFetchMode) {
+        # Daily-fetch mode: no graph names needed
+        $graphName = "daily-fetch-all"
+        $retrieveAllParam = ""  # Empty = enumerate from IDB
+        
         Write-Host ""
+        Write-Host "Daily-fetch mode selected." -ForegroundColor Cyan
+        Write-Host "DagNet will process all graphs with 'Fetch daily' enabled." -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "IMPORTANT: Make sure to enable 'Fetch daily' in each graph's" -ForegroundColor Yellow
+        Write-Host "           Pinned Data Interests modal (or use Data > Automated Daily Fetches)." -ForegroundColor Yellow
+        Write-Host ""
+    } else {
+        # Specific graphs mode
+        Write-Host ""
+        Write-Host "Enter graph name(s). For multiple graphs (run sequentially), separate with commas." -ForegroundColor Gray
+        Write-Host "Example: conversion-funnel" -ForegroundColor Gray
+        Write-Host "Example: graph-a, graph-b, graph-c  (runs in order)" -ForegroundColor Gray
+        Write-Host ""
+        $graphInput = Read-Host "Graph name(s)"
+        if ([string]::IsNullOrWhiteSpace($graphInput)) {
+            Write-Host "Cancelled." -ForegroundColor Yellow
+            return
+        }
+        
+        # Parse and clean graph names
+        # IMPORTANT: force array even for a single graph (otherwise $graphNames[0] returns first character)
+        $graphNames = @($graphInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+        $graphCount = ($graphNames | Measure-Object).Count
+        
+        if ($graphCount -eq 0) {
+            Write-Host "No valid graph names." -ForegroundColor Red
+            return
+        }
+        
+        # For task naming, use first graph or "multi" indicator
+        $graphName = if ($graphCount -eq 1) { $graphNames[0] } else { "$($graphNames[0])_and_$($graphCount - 1)_more" }
+        $retrieveAllParam = $graphNames -join ","
+        
+        Write-Host ""
+        if ($graphCount -gt 1) {
+            Write-Host "Will run $graphCount graphs in sequence:" -ForegroundColor Cyan
+            foreach ($g in $graphNames) {
+                Write-Host "  - $g" -ForegroundColor White
+            }
+            Write-Host ""
+        }
     }
     
     $startTime = Read-Host "Daily start time (HH:MM, e.g. 02:00)"
@@ -374,11 +417,20 @@ function Add-Graph {
     Write-Host ""
     Write-Host "Creating scheduled task..." -ForegroundColor Yellow
     
-    $taskName = "DagNet_DailyRetrieve_$graphName"
-    $fullUrl = "$url/?retrieveall=$retrieveAllParam"
+    # Task name and URL differ by mode
+    if ($isDailyFetchMode) {
+        $taskName = "DagNet_DailyFetch_All"
+        $fullUrl = "$url/?retrieveall"  # No value = enumerate from IDB
+    } else {
+        $taskName = "DagNet_DailyRetrieve_$graphName"
+        $fullUrl = "$url/?retrieveall=$retrieveAllParam"
+    }
     
     Write-Host "  Task name: $taskName" -ForegroundColor Gray
     Write-Host "  URL: $fullUrl" -ForegroundColor Gray
+    if ($isDailyFetchMode) {
+        Write-Host "  Mode: Daily-fetch (processes all graphs with 'Fetch daily' enabled)" -ForegroundColor Magenta
+    }
     Write-Host "  Start time: $startTime daily" -ForegroundColor Gray
     Write-Host "  Browser open for: $timeout minutes" -ForegroundColor Gray
     Write-Host "  If PC off: $(if ($startWhenAvailable) { 'Catch up when PC wakes' } else { 'Skip missed runs' })" -ForegroundColor Gray

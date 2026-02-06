@@ -1,6 +1,6 @@
 #!/bin/bash
 # dev-start.sh - Start both frontend and Python servers in split tmux panes
-# Usage: ./dev-start.sh [--clean]
+# Usage: ./dev-start.sh [--clean] [--detach]
 
 set -e  # Exit on error
 
@@ -10,14 +10,98 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "${ROOT_DIR}"
+
+usage() {
+    echo "Usage: ./dev-start.sh [--clean] [--detach]"
+    echo ""
+    echo "  --clean   Remove caches/deps and reinstall before starting"
+    echo "  --detach  Start (or reuse) tmux session 'dagnet' without attaching; exits quickly (Task Scheduler-safe)"
+}
+
 CLEAN_MODE=false
-if [[ "$1" == "--clean" ]]; then
-    CLEAN_MODE=true
+DETACH_MODE=false
+
+for arg in "$@"; do
+    case "${arg}" in
+        --clean) CLEAN_MODE=true ;;
+        --detach) DETACH_MODE=true ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "ERROR: Unknown argument: ${arg}"
+            usage
+            exit 2
+            ;;
+    esac
+done
+
+if [[ "${CLEAN_MODE}" == "true" && "${DETACH_MODE}" == "true" ]]; then
+    echo "ERROR: --clean and --detach cannot be used together."
+    exit 2
 fi
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
 echo -e "${BLUE}  DagNet Development Environment Setup${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
+
+# Detached mode is intended for non-interactive startup (e.g. Task Scheduler):
+# - does not install dependencies
+# - does not attach to tmux
+# - idempotent: if 'dagnet' session exists, exit 0 without spawning duplicates
+if [[ "${DETACH_MODE}" == "true" ]]; then
+    if ! command -v tmux &> /dev/null; then
+        echo "ERROR: tmux not found. Install tmux before using --detach."
+        exit 1
+    fi
+
+    # Load environment variables from .env.local (priority) or .env (fallback)
+    if [ -f "graph-editor/.env.local" ]; then
+        # Avoid set -e abort if grep finds no matches
+        set +e
+        export $(grep -v '^#' graph-editor/.env.local | grep -E '^VITE_PORT=|^PYTHON_API_PORT=|^DB_CONNECTION=' | xargs)
+        set -e
+    elif [ -f "graph-editor/.env" ]; then
+        set +e
+        export $(grep -v '^#' graph-editor/.env | grep -E '^VITE_PORT=|^PYTHON_API_PORT=|^DB_CONNECTION=' | xargs)
+        set -e
+    fi
+
+    VITE_PORT=${VITE_PORT:-5173}
+    PYTHON_API_PORT=${PYTHON_API_PORT:-9000}
+
+    if tmux has-session -t dagnet 2>/dev/null; then
+        echo "DagNet already running (tmux session 'dagnet' exists)."
+        exit 0
+    fi
+
+    tmux new-session -d -s dagnet -n dev
+
+    if [[ -f "${ROOT_DIR}/.tmux.conf.dagnet" ]]; then
+        tmux source-file "${ROOT_DIR}/.tmux.conf.dagnet" || true
+    fi
+
+    # Pane 0: Frontend (Vite)
+    tmux send-keys -t dagnet:dev.0 "cd \"${ROOT_DIR}/graph-editor\"" C-m
+    tmux send-keys -t dagnet:dev.0 "export NVM_DIR=\"${NVM_DIR:-$HOME/.nvm}\"; [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"; if command -v nvm >/dev/null 2>&1; then nvm use \"\$(cat .nvmrc 2>/dev/null | tr -d '[:space:]' || echo 22)\"; fi; npm run dev" C-m
+
+    # Pane 1: Backend (Python API)
+    tmux split-window -h -t dagnet:dev
+    tmux send-keys -t dagnet:dev.1 "cd \"${ROOT_DIR}/graph-editor\"" C-m
+    tmux send-keys -t dagnet:dev.1 "source venv/bin/activate" C-m
+    tmux send-keys -t dagnet:dev.1 "export PYTHON_API_PORT=${PYTHON_API_PORT}" C-m
+    tmux send-keys -t dagnet:dev.1 "export VITE_PORT=${VITE_PORT}" C-m
+    tmux send-keys -t dagnet:dev.1 "export DB_CONNECTION=\"${DB_CONNECTION}\"" C-m
+    tmux send-keys -t dagnet:dev.1 "python dev-server.py" C-m
+
+    echo "Started DagNet in detached tmux session 'dagnet' (window 'dev', panes 0/1)."
+    echo "Frontend logs: dagnet:dev.0"
+    echo "Backend logs:  dagnet:dev.1"
+    exit 0
+fi
 
 # Check if tmux is installed
 if ! command -v tmux &> /dev/null; then
@@ -183,10 +267,10 @@ tmux kill-session -t dagnet 2>/dev/null || true
 tmux new-session -d -s dagnet -n dev
 
 # Load custom keybindings for this session
-tmux source-file $(pwd)/.tmux.conf.dagnet
+tmux source-file "${ROOT_DIR}/.tmux.conf.dagnet"
 
 # Left pane: Frontend
-tmux send-keys -t dagnet:dev.0 "cd $(pwd)/graph-editor" C-m
+tmux send-keys -t dagnet:dev.0 "cd \"${ROOT_DIR}/graph-editor\"" C-m
 tmux send-keys -t dagnet:dev.0 "clear" C-m
 tmux send-keys -t dagnet:dev.0 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
 tmux send-keys -t dagnet:dev.0 "echo '  🚀 VITE DEV SERVER (Frontend)'" C-m
@@ -200,7 +284,7 @@ tmux send-keys -t dagnet:dev.0 "npm run dev" C-m
 
 # Split window vertically and setup right pane: Python
 tmux split-window -h -t dagnet:dev
-tmux send-keys -t dagnet:dev.1 "cd $(pwd)/graph-editor" C-m
+tmux send-keys -t dagnet:dev.1 "cd \"${ROOT_DIR}/graph-editor\"" C-m
 tmux send-keys -t dagnet:dev.1 "source venv/bin/activate" C-m
 tmux send-keys -t dagnet:dev.1 "export PYTHON_API_PORT=${PYTHON_API_PORT}" C-m
 tmux send-keys -t dagnet:dev.1 "export VITE_PORT=${VITE_PORT}" C-m

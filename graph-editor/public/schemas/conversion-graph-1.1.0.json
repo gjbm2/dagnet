@@ -35,6 +35,11 @@
       "type": "boolean",
       "default": false,
       "description": "Optional. If true, the editor will automatically run Graph Issues checks while this graph is open and display an Issues indicator overlay."
+    },
+    "dailyFetch": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, this graph is included in unattended daily automation runs when ?retrieveall is used without an explicit graph list."
     }
   },
   "$defs": {

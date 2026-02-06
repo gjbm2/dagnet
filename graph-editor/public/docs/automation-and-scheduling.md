@@ -41,6 +41,57 @@ Reference: see `public/docs/dev/URL_PARAMS.md` (Developer Documentation).
 
 ---
 
+## Daily-fetch mode (recommended for multiple graphs)
+
+Instead of listing graphs explicitly in the URL, you can mark graphs for daily automation and let DagNet enumerate them automatically.
+
+### Enabling daily-fetch for a graph
+
+**Option A: Individual graph (via Pinned Data Interests)**
+
+1. Open the graph you want to include in automation
+2. Click the **gear icon** (⚙️) in the Context selector bar
+3. Select **"Pinned Data Interests"**
+4. Check the **"Fetch daily"** checkbox
+5. Click **Save**
+
+**Option B: Bulk management (via Data menu)**
+
+1. Go to **Data** menu → **Automated Daily Fetches...**
+2. In the modal, select graphs from the left panel ("Available Graphs")
+3. Click **[>]** to move them to the right panel ("Daily Fetch Enabled")
+4. Click **Save Changes**
+
+This is useful for enabling/disabling multiple graphs at once without opening each one individually.
+
+### Triggering daily-fetch mode
+
+Use `?retrieveall` **without** a graph name:
+
+```
+https://dagnet.vercel.app/?retrieveall
+```
+
+DagNet will:
+1. Wait for the workspace to initialise
+2. Find all graphs with "Fetch daily" enabled
+3. Process them one at a time in alphabetical order
+4. Log progress with sequence indicators: `[1/3] Starting: graph-a`
+
+### Benefits
+
+- **Centralised control**: enable/disable graphs from the UI without editing scheduled task URLs
+- **Self-documenting**: the graph itself records whether it's part of automation
+- **Simpler scheduling**: one scheduled task covers all daily-fetch graphs
+
+### Notes
+
+- Graphs must be cloned/loaded into the workspace before automation runs
+- If no graphs have "Fetch daily" enabled, the automation logs a warning and exits
+- You can still use explicit `?retrieveall=graph-a,graph-b` if you prefer URL-based control
+
+---
+
 ## Scheduling (Windows Task Scheduler)
 
 This repo includes scripts to create and manage scheduled tasks:
@@ -54,6 +105,14 @@ High-level workflow:
 - The script creates a Task Scheduler task that opens DagNet with the correct `?retrieveall=` URL.
 - For best reliability, use the **dedicated scheduler browser profile** option so credentials and IndexedDB state are stable.
 - Launch once interactively to ensure your Git credentials are available in that profile.
+
+**Daily-fetch mode option:**
+
+When adding a new schedule, the setup script offers two modes:
+1. **Specific graphs** — you specify which graphs to run (existing behaviour)
+2. **Daily-fetch mode** — runs all graphs marked "Fetch daily" in DagNet
+
+Daily-fetch mode uses `?retrieveall` (no graph names), so you can add/remove graphs from automation by toggling the "Fetch daily" checkbox in DagNet rather than editing the scheduled task.
 
 For the full operational guide (including serialisation gaps, timeouts, and troubleshooting), see:
 
