@@ -48,7 +48,18 @@ vi.mock('../../services/sessionLogService', () => ({
     openLogTab: hoisted.openLogTab,
     info: vi.fn(),
     warning: vi.fn(),
+    getEntries: vi.fn(() => []),
   },
+}));
+
+vi.mock('../../services/automationLogService', () => ({
+  automationLogService: {
+    persistRunLog: vi.fn(async () => {}),
+  },
+}));
+
+vi.mock('../../version', () => ({
+  APP_VERSION: '0.0.0-test',
 }));
 
 vi.mock('../../services/dailyRetrieveAllAutomationService', () => ({

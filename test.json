@@ -125,12 +125,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.2845
+      mean: 0.2928
       latency:
         anchor_node_id: household-created
-      'n': 94.87088334707244
+      'n': 2414.6605184925065
       forecast:
-        k: 26.990766312242105
+        k: 707.0125998146059
     query: from(switch-registered).to(post-registration-failure)
     description: ''
   - uuid: 76e0e0f8-133d-4065-9fab-56480063d9c9
@@ -140,23 +140,23 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1764
-      stdev: 0.0653829780870328
+      mean: 0.4098
+      stdev: 0.006506756586943836
       id: coffee-to-bds
       connection: amplitude-prod
       evidence:
-        'n': 34
-        k: 6
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.280Z'
+        'n': 5711
+        k: 2338
+        window_from: 8-Feb-16
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:10:31.734Z'
         source: amplitude
         full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
-        mean: 0.17647058823529413
-        stdev: 0.06537869767367192
+        mean: 0.40938539660304674
+        stdev: 0.006506720979437892
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.280Z'
+        retrieved_at: '2026-02-05T16:09:58.005Z'
         full_query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
       latency:
         anchor_node_id: household-created
@@ -167,12 +167,10 @@ edges:
         latency_parameter_overridden: false
         t95_overridden: false
         path_t95_overridden: false
-        t95: 5
-        path_t95: 5
       forecast:
-        mean: 0.3508824038647401
-        k: 1.4827478400000003
-      'n': 8.405600000000002
+        mean: 0.3496387529147811
+        k: 2282.6942691599997
+      'n': 5570.2642
     query: from(viewed-coffee-screen).to(gave-bds-in-onboarding)
     description: ''
     cost_gbp:
@@ -186,12 +184,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.4496
+      mean: 0.4605
       latency:
         anchor_node_id: household-created
-      'n': 1933
+      'n': 33337
       forecast:
-        k: 869.0768
+        k: 15351.6885
     query: from(household-created).to(abandonned-before-delegation)
     description: ''
   - uuid: 370dce1d-3a36-4109-9711-204c301478c8
@@ -201,40 +199,40 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.7155
-      stdev: 0.04841963297199657
+      mean: 0.7072
+      stdev: 0.011823087452921563
       id: registration-to-success
       evidence:
-        window_from: 17-Jan-26
+        window_from: 8-Feb-16
         source: amplitude
-        'n': 105
-        k: 59
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.315Z'
+        'n': 1688
+        k: 1044
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:10:28.447Z'
         full_query: from(switch-registered).to(switch-success)
-        mean: 0.5619047619047619
-        stdev: 0.048419574992087926
+        mean: 0.6184834123222749
+        stdev: 0.011823185937535976
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.315Z'
+        retrieved_at: '2026-02-05T16:10:26.697Z'
         full_query: from(switch-registered).to(switch-success)
       connection: amplitude-prod
       latency:
         anchor_node_id: household-created
         median_lag_days: 9.665
-        completeness: 2.494377149275806e-10
+        completeness: 0.827637341486178
         mean_lag_days: 6.809086584597634
         latency_parameter: true
         latency_parameter_overridden: false
         path_t95_overridden: false
         t95_overridden: false
-        onset_delta_days: 3
-        t95: 15.86
-        path_t95: 52.68
+        onset_delta_days: 6
+        t95: 14.12
+        path_t95: 52.5
       forecast:
-        mean: 0.7154894945282729
-        k: 67.88011703483033
-      'n': 94.87088334707244
+        mean: 0.7127722116854598
+        k: 1707.6479186779006
+      'n': 2414.6605184925065
     query: from(switch-registered).to(switch-success)
     description: ''
   - uuid: 3d0a0757-8224-4cf0-a841-4ad17cd48d91
@@ -244,23 +242,23 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.5504397309881014
+      mean: 0.5395206527281999
       id: household-delegation-rate
       connection: amplitude-prod
-      stdev: 0.01131452787913754
+      stdev: 0.0027299034303430426
       evidence:
-        'n': 1933
-        k: 1064
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.301Z'
+        'n': 33337
+        k: 17986
+        window_from: 8-Feb-16
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:10:32.208Z'
         source: amplitude
         full_query: from(household-created).to(household-delegated)
-        mean: 0.5504397309881014
-        stdev: 0.01131443628566686
+        mean: 0.5395206527281999
+        stdev: 0.002729894464008051
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.301Z'
+        retrieved_at: '2026-02-05T16:10:11.650Z'
         full_query: from(household-created).to(household-delegated)
       latency:
         anchor_node_id: household-created
@@ -268,9 +266,9 @@ edges:
         path_t95_overridden: false
       mean_overridden: false
       forecast:
-        mean: 0.537008963437167
-        k: 1064
-      'n': 1933
+        mean: 0.5392374949952555
+        k: 17986
+      'n': 33337
     query: from(household-created).to(household-delegated)
     description: ''
   - uuid: 9d2ebbef-d009-4043-80b1-b4ec43b728d0
@@ -280,12 +278,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.3331
+      mean: 0.2331
       latency:
         anchor_node_id: household-created
-      'n': 1.4827478400000003
+      'n': 2282.6942691599997
       forecast:
-        k: 0.4939033055040001
+        k: 532.0960341411959
     description: ''
     query: from(gave-bds-in-onboarding).to(no-recommendation-sent)
   - uuid: 1531873e-c92b-49e7-bdfc-a7d375bd8eab
@@ -295,12 +293,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.9044
+      mean: 0.9248
       latency:
         anchor_node_id: household-created
-      'n': 116.1888
+      'n': 3935.3368
       forecast:
-        k: 105.08115072
+        k: 3639.3994726399997
     description: ''
     query: from(mobile-or-broadband-first-rec).to(post-recommendation-failure)
   - uuid: 10e37cc7-0d37-4cd9-844b-653148025a51
@@ -310,40 +308,40 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1092
+      mean: 0.2188
       id: delegated-to-non-energy-rec
-      stdev: 0.008703681278436739
+      stdev: 0.00302318076339579
       connection: amplitude-prod
       evidence:
-        'n': 1121
-        k: 105
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.296Z'
+        'n': 17986
+        k: 3730
+        window_from: 8-Feb-16
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:10:28.839Z'
         source: amplitude
         full_query: from(household-delegated).to(mobile-or-broadband-first-rec)
-        mean: 0.0936663693131133
-        stdev: 0.00870228063726703
+        mean: 0.20738352051595685
+        stdev: 0.0030230920809163103
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.296Z'
+        retrieved_at: '2026-02-05T16:10:04.389Z'
         full_query: from(household-delegated).to(mobile-or-broadband-first-rec)
       latency:
         anchor_node_id: household-created
         median_lag_days: 2.0003125
-        completeness: 0.8977051661780354
+        completeness: 0.926596665377466
         latency_parameter: true
         latency_parameter_overridden: false
         mean_lag_days: 2.001517164351852
         t95_overridden: false
         path_t95_overridden: false
-        onset_delta_days: 2
-        t95: 23.79
-        path_t95: 27.52
+        onset_delta_days: 1.9
+        t95: 23.86
+        path_t95: 27.53
       forecast:
-        mean: 0.2195356829008668
-        k: 116.1888
-      'n': 1064
+        mean: 0.21992020873213852
+        k: 3935.3368
+      'n': 17986
     query: from(household-delegated).to(mobile-or-broadband-first-rec)
     description: ''
   - uuid: 259da2be-8149-40f2-ad9e-e2bea18bb1fb
@@ -353,12 +351,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.2845
+      mean: 0.0665
       latency:
         anchor_node_id: household-created
-      'n': 1064
+      'n': 17986
       forecast:
-        k: 302.70799999999997
+        k: 1196.069
     query: from(household-delegated).to(no-recommendation-sent).minus(viewed-coffee-screen)
     description: ''
     n_query: to(household-delegated)
@@ -369,40 +367,40 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.6669
+      mean: 0.7669
       id: bds-to-energy-rec
       connection: amplitude-prod
-      stdev: 0.1924452779363526
+      stdev: 0.016136598064692857
       evidence:
-        'n': 6
-        k: 4
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.270Z'
+        'n': 628
+        k: 480
+        window_from: 28-Oct-25
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:09:54.408Z'
         source: amplitude
         full_query: from(gave-bds-in-onboarding).to(energy-rec)
-        mean: 0.6666666666666666
-        stdev: 0.19245008972987526
+        mean: 0.7643312101910829
+        stdev: 0.01693604546103219
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.270Z'
+        retrieved_at: '2026-02-05T16:09:54.408Z'
         full_query: from(gave-bds-in-onboarding).to(energy-rec)
       latency:
         anchor_node_id: household-created
         median_lag_days: 0.005516624579124579
-        completeness: 0.9995683490647741
+        completeness: 0.9949897806181166
         mean_lag_days: 0.3673600526094276
         latency_parameter: true
         latency_parameter_overridden: false
         t95_overridden: false
         path_t95_overridden: false
-        onset_delta_days: 0.4
-        t95: 4.43
-        path_t95: 8.38
+        onset_delta_days: 0.5
+        t95: 6
+        path_t95: 9.03
       forecast:
-        mean: 0.8244502766188866
-        k: 0.9888445344960003
-      'n': 1.4827478400000003
+        mean: 0.7664424397420868
+        k: 1750.598235018804
+      'n': 2282.6942691599997
     query: from(gave-bds-in-onboarding).to(energy-rec)
     description: ''
   - uuid: 64f4529c-62b8-4e7e-8479-c5289d925e58
@@ -412,32 +410,32 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.0079
+      mean: 0.3097
       id: delegated-to-coffee
-      stdev: 0.0026607129493335267
+      stdev: 0.003471106761797044
       connection: amplitude-prod
       evidence:
-        'n': 1121
-        k: 9
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.289Z'
+        'n': 17985
+        k: 5711
+        window_from: 8-Feb-16
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:10:33.291Z'
         source: amplitude
         full_query: from(household-delegated).to(viewed-coffee-screen)
-        mean: 0.008028545941123996
-        stdev: 0.002665417405875223
+        mean: 0.317542396441479
+        stdev: 0.003471230685864716
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.289Z'
+        retrieved_at: '2026-02-05T16:10:01.195Z'
         full_query: from(household-delegated).to(viewed-coffee-screen)
       latency:
         anchor_node_id: household-created
         t95_overridden: false
         path_t95_overridden: false
       forecast:
-        mean: 0.21634730120937856
-        k: 8.405600000000002
-      'n': 1064
+        mean: 0.2091920269091783
+        k: 5570.2642
+      'n': 17986
     query: from(household-delegated).to(viewed-coffee-screen)
     description: ''
   - uuid: 13b5397f-9feb-453a-8e86-500c0693b4af
@@ -447,37 +445,37 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1475
+      mean: 0.5306
       id: no-bdos-to-rec
       connection: amplitude-prod
-      stdev: 0.06074575511676419
+      stdev: 0.00660346966311387
       evidence:
-        'n': 34
-        k: 5
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.307Z'
+        'n': 5711
+        k: 3033
+        window_from: 8-Feb-16
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:10:29.781Z'
         source: amplitude
         full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
-        mean: 0.14705882352941177
-        stdev: 0.06073871862125245
+        mean: 0.5310803712134478
+        stdev: 0.00660348584510236
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.307Z'
+        retrieved_at: '2026-02-05T16:10:16.753Z'
         full_query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
       latency:
         anchor_node_id: household-created
         median_lag_days: 5.085
-        completeness: 0.9996589650862804
+        completeness: 0.9994380797325833
         latency_parameter: true
         t95_overridden: false
         path_t95_overridden: false
-        t95: 4.48
-        path_t95: 4.74
+        t95: 4.53
+        path_t95: 4.79
       forecast:
-        mean: 0.5051916467189285
-        k: 1.239826
-      'n': 8.405600000000002
+        mean: 0.5053868509327929
+        k: 2955.5821845199994
+      'n': 5570.2642
     query: from(viewed-coffee-screen).to(energy-rec).exclude(gave-bds-in-onboarding)
     description: ''
     n_query: to(viewed-coffee-screen)
@@ -488,12 +486,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.6761
+      mean: 0.0596
       latency:
         anchor_node_id: household-created
-      'n': 8.405600000000002
+      'n': 5570.2642
       forecast:
-        k: 5.683026160000002
+        k: 331.98774632
     query: from(viewed-coffee-screen).to(no-recommendation-sent).minus(gave-bds-in-onboarding)
     description: ''
     n_query: to(viewed-coffee-screen)
@@ -504,37 +502,37 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.5984
+      mean: 0.405
       id: delegation-straight-to-energy-rec
-      stdev: 0.014566466444963207
+      stdev: 0.0036630303110557396
       connection: amplitude-prod
       evidence:
-        'n': 1121
-        k: 684
-        retrieved_at: '2026-02-04T10:14:55.299Z'
+        'n': 17986
+        k: 7318
+        retrieved_at: '2026-02-05T16:10:33.848Z'
         source: amplitude
         full_query: from(household-delegated).to(energy-rec).exclude(gave-bds-in-onboarding,viewed-coffee-screen)
-        mean: 0.6101694915254238
-        stdev: 0.014566672308330952
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
+        mean: 0.4068720115645502
+        stdev: 0.0036629907542857386
+        window_from: 8-Feb-16
+        window_to: 5-Feb-26
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.299Z'
+        retrieved_at: '2026-02-05T16:10:08.948Z'
         full_query: from(household-delegated).to(energy-rec).exclude(gave-bds-in-onboarding,viewed-coffee-screen)
       latency:
         anchor_node_id: household-created
         median_lag_days: 4.495
-        completeness: 0.9818956808576974
+        completeness: 0.9711882527193535
         latency_parameter: true
         t95_overridden: false
         path_t95_overridden: false
-        t95: 9.61
-        path_t95: 11
+        t95: 9.08
+        path_t95: 10.65
       forecast:
-        mean: 0.41167457484536557
-        k: 636.6976000000001
-      'n': 1064
+        mean: 0.41748095972697463
+        k: 7284.330000000001
+      'n': 17986
     query: from(household-delegated).to(energy-rec).exclude(gave-bds-in-onboarding,viewed-coffee-screen)
     description: ''
     n_query: to(household-delegated)
@@ -545,41 +543,41 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.0956
+      mean: 0.0752
       id: non-energy-rec-to-reg
-      stdev: 0.016807559186316337
+      stdev: 0.00411637545868815
       connection: amplitude-prod
       evidence:
-        'n': 393
-        k: 50
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.310Z'
+        'n': 3730
+        k: 253
+        window_from: 8-Feb-16
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:10:30.408Z'
         source: amplitude
         full_query: from(mobile-or-broadband-first-rec).to(switch-registered)
-        mean: 0.1272264631043257
-        stdev: 0.016809052616018085
+        mean: 0.067828418230563
+        stdev: 0.0041171752957327
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.310Z'
+        retrieved_at: '2026-02-05T16:10:19.648Z'
         full_query: from(mobile-or-broadband-first-rec).to(switch-registered)
       latency:
         anchor_node_id: household-created
         median_lag_days: 9.815
-        completeness: 0.6717483850822268
+        completeness: 0.869735618654366
         mean_lag_days: 7.818133111478886
         latency_parameter: true
         latency_parameter_overridden: false
         path_t95_overridden: false
         anchor_node_id_overridden: false
         t95_overridden: false
-        onset_delta_days: 1.5
-        t95: 18.61
-        path_t95: 42.19
+        onset_delta_days: 1.1
+        t95: 18.88
+        path_t95: 42.57
       forecast:
-        mean: 0.07437497712688575
-        k: 11.10764928
-      'n': 116.1888
+        mean: 0.07801945628861
+        k: 295.93732736000004
+      'n': 3935.3368
     description: ''
     query: from(mobile-or-broadband-first-rec).to(switch-registered)
   - uuid: b00b2e14-f795-46e6-96c5-f46bfedf458d
@@ -589,12 +587,12 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.8689
+      mean: 0.8233
       latency:
         anchor_node_id: household-created
-      'n': 638.9262705344961
+      'n': 11990.510419538805
       forecast:
-        k: 555.1630364674237
+        k: 9871.787228406298
     query: from(energy-rec).to(post-recommendation-failure)
     conditional_p:
       - condition: visited(gave-bds-in-onboarding)
@@ -624,41 +622,41 @@ edges:
     fromHandle: right-out
     toHandle: left
     p:
-      mean: 0.1311
+      mean: 0.1767
       id: rec-with-bdos-to-registration
       connection: amplitude-prod
-      stdev: 0.009938684172580982
+      stdev: 0.004249616129709502
       evidence:
-        'n': 1142
-        k: 148
-        window_from: 17-Jan-26
-        window_to: 23-Jan-26
-        retrieved_at: '2026-02-04T10:14:55.313Z'
+        'n': 2058
+        k: 337
+        window_from: 28-Oct-25
+        window_to: 5-Feb-26
+        retrieved_at: '2026-02-05T16:10:23.175Z'
         source: amplitude
         full_query: from(energy-rec).to(switch-registered)
-        mean: 0.1295971978984238
-        stdev: 0.009938592726836655
+        mean: 0.16375121477162294
+        stdev: 0.00815712899055378
       data_source:
         type: amplitude
-        retrieved_at: '2026-02-04T10:14:55.313Z'
+        retrieved_at: '2026-02-05T16:10:23.175Z'
         full_query: from(energy-rec).to(switch-registered)
       latency:
         anchor_node_id: household-created
         median_lag_days: 10.36
-        completeness: 0.8505006284500429
+        completeness: 0.8578327132998381
         mean_lag_days: 8.43778733145331
         latency_parameter: true
         latency_parameter_overridden: false
         t95_overridden: false
         path_t95_overridden: false
-        onset_delta_days: 1.4
-        t95: 14.77
-        path_t95: 23.92
+        onset_delta_days: 1.1
+        t95: 15.46
+        path_t95: 23.72
       stdev_overridden: false
       forecast:
-        mean: 0.13489017160421812
-        k: 83.76323406707243
-      'n': 638.9262705344961
+        mean: 0.14787842472954502
+        k: 2118.7231911325066
+      'n': 11990.510419538805
     description: ''
     query: from(energy-rec).to(switch-registered)
     query_overridden: false
@@ -701,10 +699,11 @@ metadata:
   name: conversion-flow-v0-ezra
   description: ''
   created_at: '2025-11-20T16:28:04.980Z'
-  updated_at: '2026-02-04T10:14:55.331Z'
+  updated_at: '2026-02-05T16:10:35.030Z'
   version: 1.0.0
-  last_retrieve_all_slices_success_at_ms: 1770196374468
-currentQueryDSL: window(17-Jan-26:23-Jan-26)
+  last_retrieve_all_slices_success_at_ms: 1770301739959
+currentQueryDSL: cohort(25-Jan-26:31-Jan-26)
 dataInterestsDSL: (window(-100d:);cohort(-100d:)).context(channel)
 baseDSL: window(1-Nov-25:10-Nov-25)
 debugging: true
+dailyFetch: true
