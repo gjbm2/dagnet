@@ -24,9 +24,11 @@ import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { sessionLogService } from '../services/sessionLogService';
 import { dailyRetrieveAllAutomationService } from '../services/dailyRetrieveAllAutomationService';
 import { automationRunService } from '../services/automationRunService';
+import { automationLogService } from '../services/automationLogService';
 import { isShareMode } from '../lib/shareBootResolver';
 import { countdownService } from '../services/countdownService';
 import { db } from '../db/appDatabase';
+import { APP_VERSION } from '../version';
 
 interface URLDailyRetrieveAllQueueParams {
   retrieveAllValues: string[]; // raw values from ?retrieveall=... (can be empty strings)
@@ -359,6 +361,13 @@ export function useURLDailyRetrieveAllQueue(): void {
       const maxWaitMs = 60_000;
       const pollMs = 250;
       
+      // Snapshot the current session-log length so we can capture only this run's entries later.
+      const logStartIndex = sessionLogService.getEntries().length;
+
+      // Track repo/branch outside try so the finally block can access them.
+      let repoForLog = 'unknown';
+      let branchForLog = 'unknown';
+
       // IMPORTANT: runId MUST remain stable for the lifetime of the run.
       // automationRunService ignores updates where runId mismatches, so mutating runId mid-run
       // causes the AutomationBanner to get stuck in "waiting" even while work proceeds.
@@ -423,6 +432,8 @@ export function useURLDailyRetrieveAllQueue(): void {
 
         const repoFinal: string = latestNavStateRef.current.selectedRepo as string;
         const branchFinal: string = latestNavStateRef.current.selectedBranch || 'main';
+        repoForLog = repoFinal;
+        branchForLog = branchFinal;
 
         // If enumeration mode, enumerate dailyFetch graphs from IDB now
         if (isEnumerationMode) {
@@ -581,6 +592,71 @@ export function useURLDailyRetrieveAllQueue(): void {
         document.title = originalTitle;
         cleanURLParams();
         automationRunService.finish(runId);
+
+        // ------------------------------------------------------------------
+        // Persist automation run log to IDB and conditionally close window
+        // ------------------------------------------------------------------
+        try {
+          const allEntries = sessionLogService.getEntries();
+          const runEntries = allEntries.slice(logStartIndex);
+
+          // Determine outcome by scanning for errors/warnings (including children)
+          const hasEntryLevel = (level: string) =>
+            runEntries.some(
+              (e) =>
+                e.level === level ||
+                e.children?.some((c) => c.level === level)
+            );
+
+          let outcome: 'success' | 'warning' | 'error' | 'aborted';
+          if (automationRunService.shouldStop(runId)) {
+            outcome = 'aborted';
+          } else if (hasEntryLevel('error')) {
+            outcome = 'error';
+          } else if (hasEntryLevel('warning')) {
+            outcome = 'warning';
+          } else {
+            outcome = 'success';
+          }
+
+          await automationLogService.persistRunLog({
+            runId,
+            timestamp: waitStartedAt,
+            graphs: targetGraphNames,
+            outcome,
+            appVersion: APP_VERSION,
+            repository: repoForLog,
+            branch: branchForLog,
+            durationMs: Date.now() - waitStartedAt,
+            entries: runEntries,
+          });
+
+          // Auto-close the browser window ONLY on a fully clean run.
+          // On errors/warnings the window stays open so the operator sees the problem.
+          if (outcome === 'success') {
+            sessionLogService.info(
+              'session',
+              'AUTOMATION_WINDOW_CLOSE',
+              'Automation completed cleanly — closing browser window in 10 seconds',
+              'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.'
+            );
+            await sleep(10_000);
+            try {
+              window.close();
+            } catch {
+              // window.close() may be blocked outside --app mode; best-effort only.
+            }
+          } else {
+            sessionLogService.info(
+              'session',
+              'AUTOMATION_WINDOW_KEPT_OPEN',
+              `Automation finished with ${outcome} — keeping window open for review`,
+              'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.'
+            );
+          }
+        } catch (persistErr) {
+          console.error('[useURLDailyRetrieveAllQueue] Failed to persist automation log:', persistErr);
+        }
       }
     })();
   }, [navState.selectedRepo, navState.selectedBranch, tabOps, tabs]);

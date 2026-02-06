@@ -44,12 +44,12 @@ The script will:
 Interactive management tool for DagNet daily scheduled retrievals.
 
 **Features:**
-- ✅ **View all scheduled graphs** - Numbered list with status, start time, last run
-- ✅ **Add new graphs** - Single or multiple, run in sequence
-- ✅ **Remove specific graphs** - By number from the list
-- ✅ **Browser profile option** - Dedicated scheduler profile to keep credentials stable
-- ✅ **Direct browser launch** - No hidden PowerShell window left running all day
-- ✅ **No pile-ups** - Missed runs do not spawn multiple concurrent instances
+- View all scheduled graphs - Numbered list with status, start time, last run
+- Add new graphs - Single or multiple, run in sequence
+- Remove specific graphs - By number from the list
+- Browser profile option - Dedicated scheduler profile to keep credentials stable
+- Direct browser launch - No hidden PowerShell window left running all day
+- No pile-ups - Missed runs do not spawn multiple concurrent instances
 
 **Requirements:**
 - Windows 10/11
@@ -120,6 +120,34 @@ Removal is built in: use the script menu options **Remove** (by number) or **Cle
 2. Right-click task → **Properties**
 3. Modify settings as needed
 
+## Auto-Close Behaviour and Run Logs
+
+### How auto-close works
+
+After each automation run, DagNet persists a complete diagnostic log to IndexedDB, then:
+
+- **Clean run** (no errors, no warnings): the browser window **closes itself** after a 10-second delay. This ensures the next day's scheduled trigger fires cleanly.
+- **Run with errors or warnings**: the browser window **stays open** so you can see the Session Log immediately. The next day's trigger may be blocked until you close the window manually.
+
+### Inspecting past automation run logs
+
+Even after the browser window has closed, you can review past runs at any time. Open the browser console (F12 → Console) in any DagNet session that uses the **same browser profile** as the scheduled task, then run:
+
+```js
+// Summary of the last 10 runs (newest first)
+await dagnetAutomationLogs()
+
+// Summary of the last 30 runs
+await dagnetAutomationLogs(30)
+
+// Full log entries for a specific run (copy the Run ID from the summary)
+await dagnetAutomationLogEntries("retrieveall-enumerate:1770310825981")
+```
+
+The last 30 runs are retained automatically.
+
+**Important**: If you use a dedicated scheduler browser profile (recommended), you must open DagNet in that profile to see its automation logs. To do this, launch the browser with the same `--user-data-dir` flag used by the scheduled task.
+
 ## Troubleshooting
 
 ### Task doesn't run
@@ -129,26 +157,39 @@ Removal is built in: use the script menu options **Remove** (by number) or **Cle
 3. Check **History** tab for errors
 
 **Common issues:**
-- PC was off/asleep at scheduled time (check "If missed" setting)
+- PC was off/asleep at scheduled time (check "If missed" setting; recommend `StartWhenAvailable = true`)
 - Browser path incorrect (verify in task properties)
 - Permissions issue (task must run as administrator)
 
-### Browser doesn't close
-The scheduled task sets an execution time limit that matches your chosen timeout. If the browser stays open:
-- Check the task's **Stop the task if it runs longer than** setting
-- Confirm the task action launches the browser directly (not PowerShell)
-- Manually close the browser (won't affect next run)
+### Browser window stayed open and blocked the next run
+This is the most common cause of "nothing happened". The previous run's browser window was still open, so Task Scheduler either:
+- Skipped the new trigger (`MultipleInstancesPolicy = IgnoreNew`), or
+- Launched a new `brave.exe` which delegated to the already-running instance (Chrome/Brave process model)
+
+**How to diagnose:**
+- Check `dagnetAutomationLogs()` in the console — if the previous run had warnings/errors, the window was intentionally kept open
+- Check Task Scheduler History for "instance already running" messages
+
+**How to fix:**
+- Close the old browser window, then either wait for the next trigger or right-click the task → **Run**
+- Fix the underlying issue that caused the warnings/errors
+- Consider setting `StartWhenAvailable` to `true` so missed triggers catch up
+
+### Browser doesn't close despite a clean run
+- `window.close()` requires `--app` mode (the setup script uses `--app=` by default)
+- If running in a normal browser tab, `window.close()` is blocked by the browser
+- Check the browser console for errors
 
 ### Task runs but retrieval fails
-**Check DagNet Session Log:**
-1. Open DagNet manually
-2. Session Log (bottom panel)
-3. Look for errors from previous run
+**Check DagNet Session Log or persisted logs:**
+1. Open DagNet in the same browser profile as the scheduled task
+2. Run `dagnetAutomationLogs()` in the console
+3. Run `dagnetAutomationLogEntries("<runId>")` for the failing run
 
 **Common issues:**
-- Git credentials not saved in browser
-- Network/internet connection issue
-- Graph name misspelled
+- Git credentials not saved in the scheduler browser profile
+- Network/internet connection issue during the run
+- Graph name misspelled or not marked for daily fetch
 
 ### Multiple browser windows open
 If you run multiple graphs at the same time, they will open multiple windows. This is expected.
@@ -289,10 +330,25 @@ Scheduled Graphs:
 # Quick overview of all scheduled tasks
 ```
 
+### Example 5: Review automation logs after the fact
+```js
+// In the browser console (F12) — same profile as the scheduled task:
+
+await dagnetAutomationLogs()
+// ✅ 6-Feb-26 06:02:15 | SUCCESS
+//    Graphs: conversion-flow-v2-recs-collapsed
+//    Duration: 45.2s | Version: 1.4.11-beta
+//    Run ID: retrieveall-enumerate:1770383535000
+
+await dagnetAutomationLogEntries("retrieveall-enumerate:1770383535000")
+// [full session log entries for that run]
+```
+
 ## Support
 
 For issues or questions:
 1. Check troubleshooting section above
 2. Review Task Scheduler history logs
-3. Check DagNet Session Log
-4. Review `graph-editor/public/docs/dev/URL_PARAMS.md`
+3. Run `dagnetAutomationLogs()` in the browser console (same profile as the scheduled task)
+4. Review `graph-editor/public/docs/automation-and-scheduling.md`
+5. Review `graph-editor/public/docs/dev/URL_PARAMS.md`

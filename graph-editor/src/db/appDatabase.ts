@@ -4,6 +4,19 @@ import { CredentialsData } from '../types/credentials';
 import { Scenario } from '../types/scenarios';
 import { getShareDbName } from '../lib/shareBootResolver';
 
+/** Persisted record for one automation run (pull → retrieve → commit cycle). */
+export interface AutomationRunLog {
+  runId: string;
+  timestamp: number;           // ms since epoch (run start)
+  graphs: string[];
+  outcome: 'success' | 'warning' | 'error' | 'aborted';
+  appVersion: string;
+  repository: string;
+  branch: string;
+  durationMs: number;
+  entries: any[];              // serialised LogEntry[] (Dates become ISO strings)
+}
+
 /** Default workspace DB name */
 export const DEFAULT_DB_NAME = 'DagNetGraphEditor';
 
@@ -32,6 +45,7 @@ export class AppDatabase extends Dexie {
   appState!: Table<AppState, string>;
   settings!: Table<SettingsData, string>;
   credentials!: Table<CredentialsData & { id: string; source: string; timestamp: number }, string>;
+  automationRunLogs!: Table<AutomationRunLog, string>;
 
   constructor(dbName: string = DEFAULT_DB_NAME) {
     super(dbName);
@@ -73,6 +87,20 @@ export class AppDatabase extends Dexie {
       scenarios: 'id, fileId, createdAt, updatedAt',
       
       // Keep existing tables
+      workspaces: 'id, repository, branch, lastSynced',
+      files: 'fileId, type, isDirty, source.repository, source.branch, lastModified',
+      tabs: 'id, fileId, viewMode',
+      appState: 'id, updatedAt',
+      settings: 'id',
+      credentials: 'id, source, timestamp'
+    });
+    
+    // Version 4: Add automationRunLogs table (persisted automation run diagnostics)
+    this.version(4).stores({
+      automationRunLogs: 'runId, timestamp',
+      
+      // Keep existing tables
+      scenarios: 'id, fileId, createdAt, updatedAt',
       workspaces: 'id, repository, branch, lastSynced',
       files: 'fileId, type, isDirty, source.repository, source.branch, lastModified',
       tabs: 'id, fileId, viewMode',
