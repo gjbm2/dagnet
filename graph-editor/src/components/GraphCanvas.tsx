@@ -4935,6 +4935,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       <div 
         ref={reactFlowWrapperRef} 
         style={{ height: '100%', position: 'relative' }}
+        onPointerDown={() => {
+          // Use activeTabIdContext (from context, always fresh) rather than the
+          // activeTabId prop which can be stale due to useMemo closure in GraphEditor.
+          if (tabId && activeTabIdContext !== tabId) {
+            void tabOperations.switchTab(tabId);
+          }
+        }}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >

@@ -33,17 +33,25 @@ function toLegacyInventory(dbParamId: string, inv: SnapshotInventoryV2Param | un
       unique_retrieved_days: 0,
     };
   }
+
+  // Prefer matched family when available.
+  const matchedFamilyId = inv?.current?.matched_family_id || null;
+  const families = Array.isArray(inv?.families) ? inv!.families : [];
+  const matchedFamily = matchedFamilyId ? families.find((f) => f.family_id === matchedFamilyId) : undefined;
+  const source = matchedFamily?.overall ?? overallAll;
+
   return {
-    has_data: overallAll.row_count > 0,
+    has_data: source.row_count > 0,
     param_id: dbParamId,
-    earliest: overallAll.earliest_anchor_day,
-    latest: overallAll.latest_anchor_day,
-    row_count: overallAll.row_count,
-    unique_days: overallAll.unique_anchor_days,
+    // Show retrieved_at range, not anchor_day range.
+    earliest: source.earliest_retrieved_at,
+    latest: source.latest_retrieved_at,
+    row_count: source.row_count,
+    unique_days: source.unique_anchor_days,
     unique_slices: 0,
     unique_hashes: 0,
-    unique_retrievals: overallAll.unique_retrievals,
-    unique_retrieved_days: overallAll.unique_retrieved_days,
+    unique_retrievals: source.unique_retrievals,
+    unique_retrieved_days: source.unique_retrieved_days,
   };
 }
 

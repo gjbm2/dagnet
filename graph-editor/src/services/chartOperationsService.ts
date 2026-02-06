@@ -252,10 +252,12 @@ class ChartOperationsService {
       const meta: any = analysis?.metadata || {};
       const metaA: any = meta?.scenario_a || null;
       const metaB: any = meta?.scenario_b || null;
+      // dimension_values.scenario_id contains metadata for ALL scenarios (not just bridge a/b)
+      const dvScenarios: any = analysis?.dimension_values?.scenario_id || {};
 
       const recipeScenarios = await Promise.all(
         recipeScenarioIds.map(async (scenarioId: string) => {
-          const scenarioMeta = metaA?.scenario_id === scenarioId ? metaA : metaB?.scenario_id === scenarioId ? metaB : null;
+          const scenarioMeta = metaA?.scenario_id === scenarioId ? metaA : metaB?.scenario_id === scenarioId ? metaB : dvScenarios[scenarioId] || null;
 
           // Best-effort load of scenario record for name/colour/isLive.
           const scenarioRecord: any = (() => {

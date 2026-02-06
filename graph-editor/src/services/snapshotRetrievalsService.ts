@@ -164,3 +164,98 @@ export async function getSnapshotRetrievalsForEdge(args: {
   return await querySnapshotRetrievals(query);
 }
 
+// ---------------------------------------------------------------------------
+// Aggregate coverage: snapshot availability across a set of edges (per-param)
+// ---------------------------------------------------------------------------
+
+/** Collect edge IDs (uuid) from the graph, limited to connected edges (those with a p.id). */
+function collectConnectedEdgeIds(graph: GraphData): string[] {
+  return (graph.edges || [])
+    .filter((e: any) => e?.p?.id || e?.p?.parameter_id)
+    .map((e: any) => e.uuid || e.id)
+    .filter(Boolean) as string[];
+}
+
+/** Check whether a specific edge has a connected parameter. */
+function edgeHasParam(graph: GraphData, edgeId: string): boolean {
+  const edge: any = (graph.edges || []).find((e: any) => e?.uuid === edgeId || e?.id === edgeId);
+  return !!(edge?.p?.id || edge?.p?.parameter_id);
+}
+
+export interface SnapshotCoverageResult {
+  success: boolean;
+  /** Map from ISO date → coverage fraction (0.0–1.0) */
+  coverageByDay: Record<string, number>;
+  /** Number of params considered (each edge contributes its p param) */
+  totalParams: number;
+  /** All retrieved_days across all params (sorted desc) */
+  allDays: string[];
+  error?: string;
+}
+
+/**
+ * Compute per-day snapshot coverage across params belonging to a set of edges.
+ *
+ * Uses `getSnapshotRetrievalsForEdge` per edge (signature-filtered) so results
+ * are consistent with what edge tooltips show.  Each edge contributes its
+ * primary `p` parameter to the coverage calculation.
+ *
+ * Coverage for a day = (params with at least one snapshot on that day) / totalParams.
+ *
+ * @param edgeIds - Edge UUIDs to query. If empty/undefined, queries ALL edges in the graph.
+ */
+export async function getSnapshotCoverageForEdges(args: {
+  graph: GraphData;
+  effectiveDSL: string;
+  workspace?: { repository: string; branch: string };
+  edgeIds?: string[];
+}): Promise<SnapshotCoverageResult> {
+  const { graph, effectiveDSL, workspace, edgeIds } = args;
+  // Only consider edges that actually have a connected parameter (p.id).
+  // Edges without a connection can never have snapshots, so including them
+  // would artificially deflate the coverage fraction.
+  const rawIds = edgeIds && edgeIds.length > 0 ? edgeIds : collectConnectedEdgeIds(graph);
+  const targetEdgeIds = edgeIds ? rawIds.filter((id) => edgeHasParam(graph, id)) : rawIds;
+
+  if (targetEdgeIds.length === 0) {
+    return { success: true, coverageByDay: {}, totalParams: 0, allDays: [] };
+  }
+
+  try {
+    // Fire all per-edge retrieval queries in parallel (each is signature-filtered).
+    // Each result represents one param (edge.p).
+    const results = await Promise.all(
+      targetEdgeIds.map((edgeId) =>
+        getSnapshotRetrievalsForEdge({ graph, edgeId, effectiveDSL, workspace })
+          .catch((): QuerySnapshotRetrievalsResult => ({
+            success: false, retrieved_at: [], retrieved_days: [],
+            latest_retrieved_at: null, count: 0, error: 'fetch failed',
+          }))
+      )
+    );
+
+    // Aggregate: for each day, count how many params have data.
+    const dayCounts: Record<string, number> = {};
+    const allDaysSet = new Set<string>();
+    for (const res of results) {
+      if (!res.success) continue;
+      for (const day of res.retrieved_days) {
+        dayCounts[day] = (dayCounts[day] || 0) + 1;
+        allDaysSet.add(day);
+      }
+    }
+
+    const totalParams = targetEdgeIds.length;
+    const coverageByDay: Record<string, number> = {};
+    for (const [day, count] of Object.entries(dayCounts)) {
+      coverageByDay[day] = count / totalParams;
+    }
+
+    const allDays = Array.from(allDaysSet).sort().reverse();
+    return { success: true, coverageByDay, totalParams, allDays };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { success: false, coverageByDay: {}, totalParams: targetEdgeIds.length, allDays: [], error: errorMessage };
+  }
+}
+

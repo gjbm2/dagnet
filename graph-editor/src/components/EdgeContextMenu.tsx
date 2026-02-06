@@ -192,7 +192,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const parameterObjectIds = dataOperationSections
     .filter(s => s.objectType === 'parameter')
     .map(s => s.objectId);
-  const { snapshotCounts, deleteSnapshots, downloadSnapshotData } = useSnapshotsMenu(parameterObjectIds);
+  const { snapshotCounts, matchedCoreHashes, deleteSnapshots, downloadSnapshotData } = useSnapshotsMenu(parameterObjectIds);
   
   // Centralized fetch hook - all fetch operations go through this
   // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
@@ -732,8 +732,8 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onClearDataFile={handleSectionClearDataFile}
               onOpenFile={handleSectionOpenFile}
               snapshotCount={section.objectType === 'parameter' ? snapshotCounts[section.objectId] : undefined}
-              onDownloadSnapshotData={section.objectType === 'parameter' ? (s) => { void downloadSnapshotData(s.objectId); onClose(); } : undefined}
-              onDeleteSnapshots={section.objectType === 'parameter' ? (s) => { void deleteSnapshots(s.objectId); onClose(); } : undefined}
+              onDownloadSnapshotData={section.objectType === 'parameter' ? (s) => { void downloadSnapshotData(s.objectId, matchedCoreHashes[s.objectId]); onClose(); } : undefined}
+              onDeleteSnapshots={section.objectType === 'parameter' ? (s) => { void deleteSnapshots(s.objectId, matchedCoreHashes[s.objectId]); onClose(); } : undefined}
             />
           ))}
         </>

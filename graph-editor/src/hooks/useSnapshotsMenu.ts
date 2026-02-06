@@ -27,19 +27,21 @@ export interface UseSnapshotsMenuResult {
   inventories: Record<string, SnapshotInventory>;
   /** Snapshot counts (distinct retrieval DAYS) keyed by objectId */
   snapshotCounts: Record<string, number>;
+  /** Matched core_hashes per objectId (from current signature's family). Empty array if no match. */
+  matchedCoreHashes: Record<string, string[]>;
   /** Whether a delete operation is in flight */
   isDeleting: boolean;
   /** Whether a download operation is in flight */
   isDownloading: boolean;
   /** Refresh all inventories and counts */
   refresh: () => Promise<void>;
-  /** Delete snapshots for a single objectId (with confirm) */
-  deleteSnapshots: (objectId: string) => Promise<boolean>;
-  /** Delete snapshots for multiple objectIds (single confirm) */
+  /** Delete snapshots for a single objectId, optionally scoped to core_hashes (with confirm) */
+  deleteSnapshots: (objectId: string, core_hashes?: string[]) => Promise<boolean>;
+  /** Delete snapshots for multiple objectIds param-wide (single confirm) */
   deleteSnapshotsMany: (objectIds: string[]) => Promise<boolean>;
-  /** Download a CSV containing FULL rows for an objectId */
-  downloadSnapshotData: (objectId: string) => Promise<boolean>;
-  /** Download a single CSV for multiple objectIds (concatenated rows) */
+  /** Download a CSV for an objectId, optionally scoped to core_hashes */
+  downloadSnapshotData: (objectId: string, core_hashes?: string[]) => Promise<boolean>;
+  /** Download a single CSV for multiple objectIds param-wide (concatenated rows) */
   downloadSnapshotDataMany: (objectIds: string[], filenameHint: string) => Promise<boolean>;
 }
 
@@ -100,7 +102,7 @@ function rowsToCsv(rows: SnapshotQueryRow[]): string {
   return [header, ...lines].join('\n');
 }
 
-async function queryAllRowsForParam(dbParamId: string, expectedRowCount: number): Promise<{
+async function queryAllRowsForParam(dbParamId: string, expectedRowCount: number, core_hash?: string): Promise<{
   ok: boolean;
   rows: SnapshotQueryRow[];
   truncated: boolean;
@@ -113,6 +115,7 @@ async function queryAllRowsForParam(dbParamId: string, expectedRowCount: number)
 
   const resp = await querySnapshotsFull({
     param_id: dbParamId,
+    core_hash,
     limit: limit > 0 ? limit : undefined,
   });
 
@@ -131,6 +134,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
 
   const [inventories, setInventories] = useState<Record<string, SnapshotInventory>>({});
   const [snapshotCounts, setSnapshotCounts] = useState<Record<string, number>>({});
+  const [matchedCoreHashes, setMatchedCoreHashes] = useState<Record<string, string[]>>({});
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
@@ -158,36 +162,45 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
       const invByDbParamId = await getBatchInventoryV2(dbParamIds, { current_signatures });
       const nextInventories: Record<string, SnapshotInventory> = {};
       const nextCounts: Record<string, number> = {};
+      const nextMatchedCoreHashes: Record<string, string[]> = {};
 
       for (const objectId of ids) {
         const dbParamId = buildDbParamId(objectId, repo, branch);
         const inv = invByDbParamId[dbParamId] as SnapshotInventoryV2Param | undefined;
         const overallAll = inv?.overall_all_families;
         if (overallAll) {
-          nextInventories[objectId] = {
-            has_data: overallAll.row_count > 0,
-            param_id: dbParamId,
-            earliest: overallAll.earliest_anchor_day,
-            latest: overallAll.latest_anchor_day,
-            row_count: overallAll.row_count,
-            unique_days: overallAll.unique_anchor_days,
-            unique_slices: 0,
-            unique_hashes: 0,
-            unique_retrievals: overallAll.unique_retrievals,
-            unique_retrieved_days: overallAll.unique_retrieved_days,
-          };
-
-          // User meaning of "snapshots": one per retrieved DAY, prefer the family matching current signature.
+          // Prefer the matched family (current query signature) over overall-all-families.
           const current = inv?.current;
           const matchedFamilyId = current?.matched_family_id || null;
           const families = Array.isArray(inv?.families) ? inv!.families : [];
           const matchedFamily = matchedFamilyId ? families.find((f) => f.family_id === matchedFamilyId) : undefined;
 
-          if (matchedFamily && matchedFamily.overall) {
+          // Source for inventory: matched family when available, otherwise overall.
+          const source = matchedFamily?.overall ?? overallAll;
+
+          nextInventories[objectId] = {
+            has_data: source.row_count > 0,
+            param_id: dbParamId,
+            // Show retrieved_at range (when snapshots were taken), not anchor_day range.
+            earliest: source.earliest_retrieved_at,
+            latest: source.latest_retrieved_at,
+            row_count: source.row_count,
+            unique_days: source.unique_anchor_days,
+            unique_slices: 0,
+            unique_hashes: 0,
+            unique_retrievals: source.unique_retrievals,
+            unique_retrieved_days: source.unique_retrieved_days,
+          };
+
+          // User meaning of "snapshots": one per retrieved DAY.
+          if (matchedFamily?.overall) {
             nextCounts[objectId] = matchedFamily.overall.unique_retrieved_days ?? 0;
+            // Expose the family's core_hashes for scoped delete/download.
+            nextMatchedCoreHashes[objectId] = Array.isArray(matchedFamily.member_core_hashes) ? matchedFamily.member_core_hashes : [];
           } else {
             // If we have history but current signature does not match, do NOT show 0.
             nextCounts[objectId] = overallAll.unique_retrieved_days ?? 0;
+            nextMatchedCoreHashes[objectId] = [];
           }
         } else {
           nextInventories[objectId] = {
@@ -202,11 +215,13 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
             unique_retrievals: 0,
           };
           nextCounts[objectId] = 0;
+          nextMatchedCoreHashes[objectId] = [];
         }
       }
 
       setInventories(nextInventories);
       setSnapshotCounts(nextCounts);
+      setMatchedCoreHashes(nextMatchedCoreHashes);
     } catch (error) {
       console.error('[useSnapshotsMenu] Failed to fetch inventory:', error);
     }
@@ -272,7 +287,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
             expectedCount: expected,
           });
 
-          const result = await deleteSnapshotsApi(dbParamId);
+          const result = await deleteSnapshotsApi(dbParamId); // param-wide: no core_hash filter
           if (!result.success) {
             sessionLogService.addChild(opId, 'error', 'SNAPSHOT_DELETE_PARAM_FAILED', `Failed to delete snapshots for ${objectId}`, result.error, {
               dbParamId,
@@ -310,10 +325,63 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
   );
 
   const deleteSnapshots = useCallback(
-    async (objectId: string): Promise<boolean> => {
-      return deleteSnapshotsMany([objectId]);
+    async (objectId: string, core_hashes?: string[]): Promise<boolean> => {
+      if (!repo) return false;
+      if (!objectId) return false;
+
+      const count = snapshotCounts[objectId] ?? 0;
+      if (count <= 0) return false;
+
+      const scoped = core_hashes && core_hashes.length > 0;
+      const confirmed = await showConfirm({
+        title: 'Delete Snapshots',
+        message:
+          `Delete ${count} snapshot retrieval${count !== 1 ? 's' : ''} for "${objectId}"${scoped ? ' (current signature)' : ''}?\n\n` +
+          `This removes historical time-series data and cannot be undone.`,
+        confirmLabel: 'Delete',
+        cancelLabel: 'Cancel',
+        confirmVariant: 'danger',
+      });
+
+      if (!confirmed) return false;
+
+      setIsDeleting(true);
+      const opId = sessionLogService.startOperation('info', 'data-update', 'SNAPSHOT_DELETE', `Deleting snapshots for ${objectId}`);
+
+      try {
+        const dbParamId = buildDbParamId(objectId, repo, branch);
+        sessionLogService.addChild(opId, 'info', 'SNAPSHOT_DELETE_PARAM', `Deleting snapshots for ${objectId}`, undefined, {
+          dbParamId,
+          scoped,
+          core_hashes: core_hashes ?? null,
+        });
+
+        const result = scoped
+          ? await deleteSnapshotsApi(dbParamId, core_hashes!)
+          : await deleteSnapshotsApi(dbParamId);
+        if (!result.success) {
+          sessionLogService.addChild(opId, 'error', 'SNAPSHOT_DELETE_PARAM_FAILED', `Failed to delete snapshots for ${objectId}`, result.error, { dbParamId });
+          toast.error(`Failed to delete snapshots for ${objectId}: ${result.error || 'unknown error'}`);
+          sessionLogService.endOperation(opId, 'error', result.error || 'unknown');
+          return false;
+        }
+
+        invalidateInventoryCache(dbParamId);
+        setSnapshotCounts((prev) => ({ ...prev, [objectId]: 0 }));
+        await refresh();
+        toast.success(`Deleted snapshots for ${objectId}`);
+        sessionLogService.endOperation(opId, 'success', `Deleted ${result.deleted || 0} snapshot row${(result.deleted || 0) !== 1 ? 's' : ''}`);
+        return true;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        sessionLogService.endOperation(opId, 'error', `Snapshot delete error: ${errorMessage}`);
+        toast.error(`Failed to delete snapshots: ${errorMessage}`);
+        return false;
+      } finally {
+        setIsDeleting(false);
+      }
     },
-    [deleteSnapshotsMany]
+    [repo, branch, snapshotCounts, showConfirm, refresh]
   );
 
   const downloadSnapshotDataMany = useCallback(
@@ -391,16 +459,90 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
   );
 
   const downloadSnapshotData = useCallback(
-    async (objectId: string): Promise<boolean> => {
-      const safeId = sanitiseFilenamePart(objectId) || 'param';
-      return downloadSnapshotDataMany([objectId], `snapshots-${safeId}`);
+    async (objectId: string, core_hashes?: string[]): Promise<boolean> => {
+      if (!repo) return false;
+      if (!objectId) return false;
+
+      const inv = inventories[objectId];
+      const expectedRows = inv?.row_count ?? 0;
+      if (expectedRows <= 0) return false;
+
+      const scoped = core_hashes && core_hashes.length > 0;
+
+      setIsDownloading(true);
+      const opId = sessionLogService.startOperation('info', 'data-fetch', 'SNAPSHOT_DOWNLOAD', `Downloading snapshots for ${objectId}`);
+
+      try {
+        const dbParamId = buildDbParamId(objectId, repo, branch);
+        const allRows: SnapshotQueryRow[] = [];
+        let anyTruncated = false;
+
+        if (scoped) {
+          // Download rows for each core_hash in the family separately (query-full takes single core_hash).
+          for (const ch of core_hashes!) {
+            sessionLogService.addChild(opId, 'info', 'SNAPSHOT_QUERY_FULL', `Querying snapshot rows for ${objectId} (core_hash=${ch.substring(0, 8)}…)`, undefined, {
+              dbParamId,
+              core_hash: ch,
+            });
+            const q = await queryAllRowsForParam(dbParamId, expectedRows, ch);
+            if (!q.ok) {
+              sessionLogService.addChild(opId, 'error', 'SNAPSHOT_QUERY_FULL_FAILED', `Query failed for ${objectId}`, q.error, { dbParamId });
+              toast.error(`Failed to download snapshots for ${objectId}: ${q.error || 'query failed'}`);
+              continue;
+            }
+            allRows.push(...q.rows);
+            anyTruncated = anyTruncated || q.truncated;
+          }
+        } else {
+          // Param-wide download: no core_hash filter.
+          sessionLogService.addChild(opId, 'info', 'SNAPSHOT_QUERY_FULL', `Querying all snapshot rows for ${objectId}`, undefined, {
+            dbParamId,
+            expectedRows,
+          });
+          const q = await queryAllRowsForParam(dbParamId, expectedRows);
+          if (!q.ok) {
+            sessionLogService.addChild(opId, 'error', 'SNAPSHOT_QUERY_FULL_FAILED', `Query failed for ${objectId}`, q.error, { dbParamId });
+            toast.error(`Failed to download snapshots for ${objectId}: ${q.error || 'query failed'}`);
+            sessionLogService.endOperation(opId, 'error', q.error || 'query failed');
+            return false;
+          }
+          allRows.push(...q.rows);
+          anyTruncated = q.truncated;
+        }
+
+        const safeId = sanitiseFilenamePart(objectId) || 'param';
+        const safeRepo = sanitiseFilenamePart(repo);
+        const safeBranch = sanitiseFilenamePart(branch);
+        const filename = `${safeRepo}-${safeBranch}-snapshots-${safeId}.csv`;
+
+        const csv = rowsToCsv(allRows);
+        downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+
+        if (anyTruncated) {
+          toast.error('Snapshot export truncated (too many rows)');
+          sessionLogService.addChild(opId, 'warning', 'SNAPSHOT_DOWNLOAD_TRUNCATED', 'Snapshot export truncated due to row cap');
+        } else {
+          toast.success('Downloaded snapshot CSV');
+        }
+
+        sessionLogService.endOperation(opId, 'success', `Downloaded ${allRows.length} row${allRows.length !== 1 ? 's' : ''}`);
+        return true;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        sessionLogService.endOperation(opId, 'error', `Snapshot download error: ${errorMessage}`);
+        toast.error(`Failed to download snapshot CSV: ${errorMessage}`);
+        return false;
+      } finally {
+        setIsDownloading(false);
+      }
     },
-    [downloadSnapshotDataMany]
+    [repo, branch, inventories]
   );
 
   return {
     inventories,
     snapshotCounts,
+    matchedCoreHashes,
     isDeleting,
     isDownloading,
     refresh,

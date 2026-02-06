@@ -1145,14 +1145,16 @@ def get_batch_inventory_v2(
 # decides what it considers "relevant" for display and debugging.
 
 
-def delete_snapshots(param_id: str) -> Dict[str, Any]:
+def delete_snapshots(param_id: str, core_hashes: Optional[List[str]] = None) -> Dict[str, Any]:
     """
-    Delete all snapshots for a specific parameter.
+    Delete snapshots for a specific parameter, optionally scoped to specific core_hashes.
     
-    Used by the "Delete snapshots (X)" UI feature.
+    When core_hashes is None, deletes ALL rows for the param_id (param-wide).
+    When core_hashes is provided, deletes only rows matching those core_hashes.
     
     Args:
         param_id: Exact workspace-prefixed parameter ID to delete
+        core_hashes: Optional list of core_hash values to scope the delete
     
     Returns:
         Dict with:
@@ -1163,7 +1165,13 @@ def delete_snapshots(param_id: str) -> Dict[str, Any]:
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM snapshots WHERE param_id = %s", (param_id,))
+        if core_hashes is not None and len(core_hashes) > 0:
+            cur.execute(
+                "DELETE FROM snapshots WHERE param_id = %s AND core_hash = ANY(%s)",
+                (param_id, core_hashes)
+            )
+        else:
+            cur.execute("DELETE FROM snapshots WHERE param_id = %s", (param_id,))
         deleted = cur.rowcount
         conn.commit()
         return {'success': True, 'deleted': deleted}
@@ -1297,6 +1305,62 @@ def query_snapshot_retrievals(
             'count': 0,
             'error': str(e),
         }
+    finally:
+        conn.close()
+
+
+# =============================================================================
+# Phase 2b: Batch Retrieval Days — per-param retrieved_day list in one query
+# =============================================================================
+
+def query_batch_retrieval_days(
+    param_ids: List[str],
+    limit_per_param: int = 200,
+) -> Dict[str, List[str]]:
+    """
+    Return distinct retrieved_day (UTC date) per param_id in a single query.
+
+    Used by the aggregate as-at calendar when no edge is selected: the frontend
+    computes per-day coverage = (params with data) / (total params).
+
+    No core_hash filtering — this gives the broadest "any snapshots exist?" view.
+
+    Args:
+        param_ids: Workspace-prefixed parameter IDs
+        limit_per_param: Hard cap on distinct days per param (default 200)
+
+    Returns:
+        Dict keyed by param_id → sorted list of ISO date strings (descending).
+    """
+    if not param_ids:
+        return {}
+
+    limit_per_param = max(1, min(int(limit_per_param or 200), 2000))
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT param_id,
+                   (retrieved_at AT TIME ZONE 'UTC')::date AS retrieved_day
+            FROM snapshots
+            WHERE param_id = ANY(%s)
+            GROUP BY param_id, (retrieved_at AT TIME ZONE 'UTC')::date
+            ORDER BY param_id, retrieved_day DESC
+            """,
+            (param_ids,),
+        )
+        result: Dict[str, List[str]] = {pid: [] for pid in param_ids}
+        for row in cur.fetchall():
+            pid = str(row[0])
+            day_iso = row[1].isoformat() if row[1] else None
+            if pid in result and day_iso and len(result[pid]) < limit_per_param:
+                result[pid].append(day_iso)
+        return result
+    except Exception as e:
+        print(f"[query_batch_retrieval_days] Error: {e}")
+        return {pid: [] for pid in param_ids}
     finally:
         conn.close()
 

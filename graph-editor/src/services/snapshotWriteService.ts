@@ -225,9 +225,9 @@ export interface SnapshotInventory {
   has_data: boolean;
   /** Parameter ID */
   param_id: string;
-  /** Earliest anchor_day (ISO date string) or null */
+  /** Earliest retrieved_at (ISO datetime string) or null — when snapshotting first ran */
   earliest: string | null;
-  /** Latest anchor_day (ISO date string) or null */
+  /** Latest retrieved_at (ISO datetime string) or null — when snapshotting last ran */
   latest: string | null;
   /** Total row count */
   row_count: number;
@@ -615,6 +615,43 @@ export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsPar
 }
 
 /**
+ * Batch-query distinct retrieved_day (UTC date) per param_id in a single request.
+ *
+ * Used by the aggregate as-at calendar when no edge is selected.
+ * No core_hash filtering — broadest "any snapshots exist?" view.
+ */
+export async function getBatchRetrievalDays(
+  paramIds: string[],
+  limitPerParam = 200,
+): Promise<Record<string, string[]>> {
+  if (!SNAPSHOTS_ENABLED || paramIds.length === 0) {
+    return {};
+  }
+
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/batch-retrieval-days`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        param_ids: paramIds,
+        limit_per_param: limitPerParam,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('[getBatchRetrievalDays] Failed:', response.status);
+      return {};
+    }
+
+    const data = await response.json();
+    return (data.days_by_param || {}) as Record<string, string[]>;
+  } catch (error) {
+    console.error('[getBatchRetrievalDays] Error:', error);
+    return {};
+  }
+}
+
+/**
  * Get snapshot inventory for multiple parameters in one request.
  *
  * Legacy wrapper maintained for existing call sites.
@@ -752,23 +789,29 @@ export async function getInventory(paramId: string): Promise<SnapshotInventory> 
 }
 
 /**
- * Delete all snapshots for a specific parameter.
+ * Delete snapshots for a specific parameter, optionally scoped to core_hashes.
  * 
- * Used by the "Delete snapshots (X)" UI feature.
+ * When core_hashes is omitted, deletes ALL rows for the param_id (param-wide).
+ * When core_hashes is provided, deletes only rows matching those core_hashes.
  * 
  * @param paramId - Exact workspace-prefixed parameter ID
+ * @param core_hashes - Optional list of core_hash values to scope the delete
  * @returns Result with deleted count
  */
-export async function deleteSnapshots(paramId: string): Promise<DeleteSnapshotsResult> {
+export async function deleteSnapshots(paramId: string, core_hashes?: string[]): Promise<DeleteSnapshotsResult> {
   if (!SNAPSHOTS_ENABLED) {
     return { success: true, deleted: 0 };
   }
   
   try {
+    const body: Record<string, unknown> = { param_id: paramId };
+    if (core_hashes && core_hashes.length > 0) {
+      body.core_hashes = core_hashes;
+    }
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ param_id: paramId }),
+      body: JSON.stringify(body),
     });
     
     if (!response.ok) {

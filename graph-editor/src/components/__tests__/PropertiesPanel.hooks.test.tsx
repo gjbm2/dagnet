@@ -140,8 +140,8 @@ vi.mock('../../hooks/useSnapshotsMenu', () => ({
       'param-1': {
         has_data: true,
         param_id: 'r-b-param-1',
-        earliest: '2025-12-01',
-        latest: '2025-12-10',
+        earliest: '2025-12-01T12:00:00Z',
+        latest: '2025-12-10T12:00:00Z',
         row_count: 10,
         unique_days: 10,
         unique_slices: 1,
@@ -172,8 +172,8 @@ describe('PropertiesPanelWrapper snapshots badge', () => {
 
     const rendered = render(<PropertiesPanelWrapper tabId="t" />);
 
-    // Badge tooltip should include date range.
-    const badge = rendered.container.querySelector('.properties-panel-header-badges .properties-panel-badge[title*="Snapshots in DB"]');
+    // Badge tooltip should include date range (retrieved_at dates).
+    const badge = rendered.container.querySelector('.properties-panel-header-badges .properties-panel-badge[title*="Snapshots (retrieved)"]');
     expect(badge).toBeTruthy();
     expect(badge!.getAttribute('title') || '').toContain('1-Dec-25 — 10-Dec-25');
 

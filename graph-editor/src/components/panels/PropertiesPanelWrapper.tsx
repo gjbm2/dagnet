@@ -68,15 +68,17 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
 
   const snapshotsTooltip = React.useMemo(() => {
     if (!selectedEdgeId || snapshotParamIdsWithData.length === 0) return 'No snapshots';
-    const lines: string[] = ['Snapshots in DB:'];
+    const lines: string[] = ['Snapshots (retrieved):'];
     for (const pid of snapshotParamIdsWithData) {
       const inv = snapshots.inventories[pid];
       if (!inv) continue;
+      const count = snapshots.snapshotCounts[pid] ?? 0;
       const range = inv.earliest && inv.latest ? `${fmtDate(inv.earliest)} — ${fmtDate(inv.latest)}` : '(range unknown)';
-      lines.push(`- ${pid}: ${range}`);
+      const countSuffix = count > 0 ? ` (${count}d)` : '';
+      lines.push(`- ${pid}: ${range}${countSuffix}`);
     }
     return lines.join('\n');
-  }, [selectedEdgeId, snapshotParamIdsWithData.join(','), snapshots.inventories]);
+  }, [selectedEdgeId, snapshotParamIdsWithData.join(','), snapshots.inventories, snapshots.snapshotCounts]);
 
   // Toast is shown only after the graph update succeeds (undoable).
   const pendingRemoveOverridesToastRef = React.useRef<number | null>(null);
