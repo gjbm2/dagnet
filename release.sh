@@ -246,7 +246,42 @@ case "${SCOPE_CHOICE^^}" in
 esac
 
 if [[ "$MERGE_TO_MAIN" == true ]]; then
+  # CRITICAL PRE-FLIGHT: Check that origin/main hasn't diverged from this branch.
+  # If main has commits we don't have, pushing branch:main would either fail (non-fast-forward)
+  # or — worse — silently lose those commits.
+  print_blue "Checking origin/main for divergence..."
+  git fetch origin main --quiet 2>/dev/null || {
+    print_red "✗ Could not fetch origin/main. Check your network/SSH."
+    print_red "Release aborted."
+    exit 1
+  }
+
+  # Is origin/main reachable from our HEAD? (i.e., is it an ancestor?)
+  if ! git merge-base --is-ancestor origin/main HEAD; then
+    echo ""
+    print_red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_red "✗ RELEASE BLOCKED: origin/main has commits not on this branch!"
+    print_red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    MERGE_BASE=$(git merge-base origin/main HEAD)
+    echo "  Branches diverged at: $(git log --oneline -1 "$MERGE_BASE")"
+    echo ""
+    echo "  Commits on origin/main that you're missing:"
+    git log --oneline "$MERGE_BASE"..origin/main | sed 's/^/    /'
+    echo ""
+    echo "  Commits on ${CURRENT_BRANCH} since divergence:"
+    git log --oneline "$MERGE_BASE"..HEAD | sed 's/^/    /'
+    echo ""
+    print_yellow "To fix: merge origin/main into your branch first, then re-run release.sh"
+    print_yellow "  git fetch origin main"
+    print_yellow "  git merge origin/main"
+    print_yellow "  # resolve any conflicts, then re-run ./release.sh"
+    echo ""
+    exit 1
+  fi
+  print_green "  ✓ origin/main is up-to-date (all its commits are on this branch)"
   echo ""
+
   print_yellow "⚠ This will:"
   echo "  1. Release ${NEW_DISPLAY} on ${CURRENT_BRANCH}"
   echo "  2. Merge ${CURRENT_BRANCH} → main"

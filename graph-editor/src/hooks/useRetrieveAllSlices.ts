@@ -33,7 +33,8 @@ export interface UseRetrieveAllSlicesReturn {
   pinnedQueryModalProps: {
     isOpen: boolean;
     currentDSL: string;
-    onSave: (newDSL: string) => void;
+    dailyFetch: boolean;
+    onSave: (newDSL: string, dailyFetch: boolean) => void;
     onClose: () => void;
   };
   
@@ -63,11 +64,11 @@ export function useRetrieveAllSlices(options: UseRetrieveAllSlicesOptions): UseR
   }, [hasPinnedQuery]);
   
   // Handle saving the pinned query from the modal
-  const handleSavePinnedQuery = useCallback(async (newDSL: string) => {
+  const handleSavePinnedQuery = useCallback(async (newDSL: string, newDailyFetch: boolean) => {
     if (!graph) return;
     
-    // Update graph with new pinned query
-    setGraph({ ...graph, dataInterestsDSL: newDSL });
+    // Update graph with new pinned query and dailyFetch setting
+    setGraph({ ...graph, dataInterestsDSL: newDSL, dailyFetch: newDailyFetch });
 
     // Close the pinned query modal
     setShowPinnedQueryModal(false);
@@ -110,6 +111,7 @@ export function useRetrieveAllSlices(options: UseRetrieveAllSlicesOptions): UseR
   const pinnedQueryModalProps = {
     isOpen: showPinnedQueryModal,
     currentDSL: graph?.dataInterestsDSL || '',
+    dailyFetch: graph?.dailyFetch ?? false,
     onSave: handleSavePinnedQuery,
     onClose: closePinnedQueryModal,
   };

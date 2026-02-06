@@ -67,6 +67,15 @@ class CountdownService {
   private onExpireByKey = new Map<string, () => void | Promise<void>>();
   private runIdByKey = new Map<string, number>();
   private auditByKey = new Map<string, CountdownAuditConfig>();
+  /**
+   * Countdown deadlines, in epoch milliseconds.
+   *
+   * IMPORTANT:
+   * We track the countdown by absolute time, not by "tick count".
+   * Browsers aggressively throttle timers in background tabs and during sleep,
+   * which can otherwise make long countdowns (e.g. 61 minutes) take hours.
+   */
+  private endsAtMsByKey = new Map<string, number>();
 
   subscribe(listener: CountdownListener): () => void {
     this.listeners.add(listener);
@@ -90,6 +99,10 @@ class CountdownService {
 
     const runId = (this.runIdByKey.get(key) ?? 0) + 1;
     this.runIdByKey.set(key, runId);
+
+    // Absolute deadline; resilient to timer throttling and sleep.
+    const endsAtMs = Date.now() + seconds * 1000;
+    this.endsAtMsByKey.set(key, endsAtMs);
 
     this.stateByKey.set(key, { key, secondsRemaining: seconds, isActive: seconds > 0 });
     if (options.onExpire) this.onExpireByKey.set(key, options.onExpire);
@@ -135,14 +148,23 @@ class CountdownService {
       const current = this.stateByKey.get(key);
       if (!current || !current.isActive) return;
 
-      const next = Math.max(0, current.secondsRemaining - 1);
+      const endsAtMs = this.endsAtMsByKey.get(key);
+      // If the deadline is missing, fall back to decrement semantics (should be rare).
+      const next =
+        typeof endsAtMs === 'number'
+          ? Math.max(0, Math.ceil((endsAtMs - Date.now()) / 1000))
+          : Math.max(0, current.secondsRemaining - 1);
+
       if (next <= 0) {
         void this.expireNow(key, runId);
         return;
       }
 
-      this.stateByKey.set(key, { key, secondsRemaining: next, isActive: true });
-      this.emit();
+      // Avoid unnecessary emits if value didn't change (can happen with coarse timer clamping).
+      if (next !== current.secondsRemaining) {
+        this.stateByKey.set(key, { key, secondsRemaining: next, isActive: true });
+        this.emit();
+      }
       this.scheduleTick(key, runId);
     }, 1000);
 
@@ -176,6 +198,7 @@ class CountdownService {
       this.timeoutByKey.delete(key);
     }
     this.onExpireByKey.delete(key);
+    this.endsAtMsByKey.delete(key);
 
     const hadState = this.stateByKey.has(key);
     const audit = this.auditByKey.get(key);

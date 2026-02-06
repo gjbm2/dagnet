@@ -883,6 +883,12 @@ export interface ConversionGraph {
    * @example "window(-90d:).context(channel:google)" — both window and context inherited
    */
   baseDSL?: string;
+  
+  /**
+   * If true, this graph is included in unattended daily automation runs
+   * when ?retrieveall is used without an explicit graph list.
+   */
+  dailyFetch?: boolean;
 }
 
 export type Graph = ConversionGraph;
