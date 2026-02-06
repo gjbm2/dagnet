@@ -508,6 +508,35 @@ async function seedWorkspaceForRegistryWarningRegression(page: Page, graphData: 
       fileIds: [],
     });
 
+    // Seed credentials into IDB so NavigatorContext can load the workspace even when
+    // the dev server wasn't started with VITE_CREDENTIALS_SECRET matching ?secret=.
+    // CredentialsManager falls back to IDB credentials when URL/env validation fails.
+    await db.files.put({
+      fileId: 'credentials-credentials',
+      type: 'credentials',
+      viewTabs: [],
+      data: {
+        version: '1.0.0',
+        defaultGitRepo: 'repo-1',
+        git: [
+          {
+            name: 'repo-1',
+            owner: 'owner-1',
+            repo: 'repo-1',
+            token: 'test-token',
+            branch: 'main',
+            basePath: '',
+          },
+        ],
+      },
+      source: { repository: 'repo-1', branch: 'main', path: 'credentials' },
+      isDirty: false,
+      isLoaded: true,
+      isLocal: false,
+      lastModified: Date.now(),
+      lastSynced: Date.now(),
+    });
+
     // Seed registry index file into IDB (this will later be loaded into fileRegistry memory).
     await db.files.put({
       fileId: 'parameter-index',
