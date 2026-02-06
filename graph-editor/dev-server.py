@@ -116,6 +116,23 @@ async def snapshots_inventory(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Snapshot batch retrieval days (aggregate as-at calendar)
+@app.post("/api/snapshots/batch-retrieval-days")
+async def snapshots_batch_retrieval_days(request: Request):
+    """Get distinct retrieved_day per param_id in a single query."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_batch_retrieval_days
+        return handle_snapshots_batch_retrieval_days(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/batch-retrieval-days] Error: {e}")
+        print(f"[snapshots/batch-retrieval-days] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Snapshot retrievals endpoint (Phase 2 @ UI)
 @app.post("/api/snapshots/retrievals")
 async def snapshots_retrievals(request: Request):

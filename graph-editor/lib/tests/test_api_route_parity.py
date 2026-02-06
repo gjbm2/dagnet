@@ -53,6 +53,8 @@ def extract_python_api_routes(content: str) -> set:
             routes.add('/api/snapshots/query-full')
         elif endpoint == 'snapshots-query-virtual':
             routes.add('/api/snapshots/query-virtual')
+        elif endpoint == 'snapshots-batch-retrieval-days':
+            routes.add('/api/snapshots/batch-retrieval-days')
         elif endpoint == 'snapshots-retrievals':
             routes.add('/api/snapshots/retrievals')
         elif endpoint == 'sigs-list':

@@ -490,12 +490,14 @@ export default function ConversionEdge({
     const snapshotParamsWithData = snapshotParamIds.filter((pid) => (snapshots.inventories[pid]?.row_count ?? 0) > 0);
     if (snapshotParamsWithData.length > 0) {
       lines.push('');
-      lines.push('snapshots:');
+      lines.push('snapshots (retrieved):');
       for (const pid of snapshotParamsWithData) {
         const inv = snapshots.inventories[pid];
         if (!inv) continue;
+        const count = snapshots.snapshotCounts[pid] ?? 0;
         const range = inv.earliest && inv.latest ? `${fmtDate(inv.earliest)} — ${fmtDate(inv.latest)}` : '(range unknown)';
-        lines.push(`  ${pid}: ${range}`);
+        const countSuffix = count > 0 ? ` (${count}d)` : '';
+        lines.push(`  ${pid}: ${range}${countSuffix}`);
       }
     }
     

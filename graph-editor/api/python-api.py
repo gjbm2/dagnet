@@ -103,6 +103,8 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/snapshots/health'
                 elif endpoint == 'snapshots-inventory':
                     path = '/api/snapshots/inventory'
+                elif endpoint == 'snapshots-batch-retrieval-days':
+                    path = '/api/snapshots/batch-retrieval-days'
                 elif endpoint == 'snapshots-retrievals':
                     path = '/api/snapshots/retrievals'
                 elif endpoint == 'snapshots-delete':
@@ -125,7 +127,7 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/sigs/resolve'
                 # If no endpoint param and no original path header, this is an error
                 elif not original_path:
-                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health, snapshots-inventory, snapshots-retrievals, snapshots-delete, snapshots-query-full, snapshots-query-virtual, sigs-list, sigs-get, sigs-links-list, sigs-links-create, sigs-links-deactivate, sigs-resolve")
+                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health, snapshots-inventory, snapshots-batch-retrieval-days, snapshots-retrievals, snapshots-delete, snapshots-query-full, snapshots-query-virtual, sigs-list, sigs-get, sigs-links-list, sigs-links-create, sigs-links-deactivate, sigs-resolve")
                     return
             
             if path == '/api/parse-query':
@@ -146,6 +148,8 @@ class handler(BaseHTTPRequestHandler):
                 self.handle_snapshots_health(data)
             elif path == '/api/snapshots/inventory':
                 self.handle_snapshots_inventory(data)
+            elif path == '/api/snapshots/batch-retrieval-days':
+                self.handle_snapshots_batch_retrieval_days(data)
             elif path == '/api/snapshots/retrievals':
                 self.handle_snapshots_retrievals(data)
             elif path == '/api/snapshots/delete':
@@ -264,6 +268,17 @@ class handler(BaseHTTPRequestHandler):
         """Handle snapshots/inventory endpoint - batch inventory query."""
         try:
             from api_handlers import handle_snapshots_inventory as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+
+    def handle_snapshots_batch_retrieval_days(self, data):
+        """Handle snapshots/batch-retrieval-days endpoint."""
+        try:
+            from api_handlers import handle_snapshots_batch_retrieval_days as handler_func
             response = handler_func(data)
             self.send_success_response(response)
         except ValueError as e:

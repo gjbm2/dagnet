@@ -37,6 +37,10 @@
       "destination": "/api/python-api?endpoint=snapshots-inventory"
     },
     {
+      "source": "/api/snapshots/batch-retrieval-days",
+      "destination": "/api/python-api?endpoint=snapshots-batch-retrieval-days"
+    },
+    {
       "source": "/api/snapshots/delete",
       "destination": "/api/python-api?endpoint=snapshots-delete"
     },

@@ -715,6 +715,35 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"success": True, "inventory_version": 2, "inventory": inventory}
 
 
+def handle_snapshots_batch_retrieval_days(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle batch retrieval days endpoint.
+
+    Return distinct retrieved_day per param_id in a single query.
+    Used by the aggregate as-at calendar when no edge is selected.
+
+    Args:
+        data: Request body containing:
+            - param_ids: List of parameter IDs (required)
+            - limit_per_param: Max days per param (optional, default 200)
+
+    Returns:
+        Response dict with per-param retrieved_days lists.
+    """
+    param_ids = data.get("param_ids")
+    if not param_ids:
+        raise ValueError("Missing 'param_ids' field")
+    if not isinstance(param_ids, list):
+        raise ValueError("'param_ids' must be a list")
+
+    from snapshot_service import query_batch_retrieval_days
+    days_by_param = query_batch_retrieval_days(
+        param_ids=param_ids,
+        limit_per_param=int(data.get("limit_per_param", 200)),
+    )
+    return {"success": True, "days_by_param": days_by_param}
+
+
 def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Handle snapshot retrievals endpoint.
@@ -768,12 +797,13 @@ def handle_snapshots_delete(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Handle snapshot delete endpoint.
     
-    Delete all snapshots for a specific parameter.
+    Delete snapshots for a specific parameter, optionally scoped to core_hashes.
     Used by "Delete snapshots (X)" UI feature.
     
     Args:
         data: Request body containing:
             - param_id: Exact parameter ID to delete (required)
+            - core_hashes: Optional list of core_hash values to scope the delete
     
     Returns:
         Response dict with deleted count
@@ -784,7 +814,11 @@ def handle_snapshots_delete(data: Dict[str, Any]) -> Dict[str, Any]:
     if not param_id:
         raise ValueError("Missing 'param_id' field")
     
-    return delete_snapshots(param_id)
+    core_hashes = data.get('core_hashes')
+    if core_hashes is not None and not isinstance(core_hashes, list):
+        raise ValueError("'core_hashes' must be a list of strings")
+    
+    return delete_snapshots(param_id, core_hashes=core_hashes)
 
 
 def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:

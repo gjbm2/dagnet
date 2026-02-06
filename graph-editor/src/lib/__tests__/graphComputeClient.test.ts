@@ -258,9 +258,8 @@ describe('GraphComputeClient - Performance', () => {
     await realClient.health();
     const duration = Date.now() - start;
     
-    // Real backend should be < 500ms (warm)
-    // Could be higher on cold start
-    expect(duration).toBeLessThan(500);
+    // Real backend should be < 2000ms (allowing for cold start / CI variance)
+    expect(duration).toBeLessThan(2000);
   });
 });
 

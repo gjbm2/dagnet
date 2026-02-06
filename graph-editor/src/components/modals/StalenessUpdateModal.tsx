@@ -81,6 +81,14 @@ export function StalenessUpdateModal({
   onDismiss,
   countdownSeconds,
 }: StalenessUpdateModalProps) {
+  const gitPullDueEarly = actions.some(a => a.key === 'git-pull' && a.due);
+  const hasCountdownEarly = countdownSeconds !== undefined && countdownSeconds > 0 && gitPullDueEarly;
+
+  // useEffect must be called unconditionally (Rules of Hooks)
+  useEffect(() => {
+    if (hasCountdownEarly) ensureCountdownStyles();
+  }, [hasCountdownEarly]);
+
   if (!isOpen) return null;
 
   const nowMs = Date.now();
@@ -139,11 +147,6 @@ export function StalenessUpdateModal({
     if (age > redAfter / 2) return '#b45309'; // amber
     return '#059669'; // green
   };
-
-  // Ensure countdown animation styles are injected
-  useEffect(() => {
-    if (hasCountdown) ensureCountdownStyles();
-  }, [hasCountdown]);
 
   const formatShaShort = (sha?: string) => {
     const s = typeof sha === 'string' ? sha.trim() : '';

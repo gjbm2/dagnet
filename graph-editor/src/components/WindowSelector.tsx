@@ -26,7 +26,8 @@ import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useBulkScenarioCreation } from '../hooks/useBulkScenarioCreation';
 import { windowFetchPlannerService, type PlannerResult } from '../services/windowFetchPlannerService';
 import { useIsReadOnlyShare } from '../contexts/ShareModeContext';
-import { getSnapshotRetrievalsForEdge } from '../services/snapshotRetrievalsService';
+import { getSnapshotRetrievalsForEdge, getSnapshotCoverageForEdges } from '../services/snapshotRetrievalsService';
+import { querySelectionUuids } from '../hooks/useQuerySelectionUuids';
 import { parseDate } from '../services/windowAggregationService';
 
 
@@ -111,7 +112,10 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const [isAsatDropdownOpen, setIsAsatDropdownOpen] = useState(false);
   const [isAsatLoading, setIsAsatLoading] = useState(false);
   const [asatDays, setAsatDays] = useState<string[]>([]);
+  const [asatCoverageByDay, setAsatCoverageByDay] = useState<Record<string, number>>({});
   const [asatError, setAsatError] = useState<string | null>(null);
+  /** Label describing what the calendar is showing (e.g. "for e.A->B.p" or "For 10 edges") */
+  const [asatScopeLabel, setAsatScopeLabel] = useState<string>('');
   const [asatMonthCursor, setAsatMonthCursor] = useState<Date>(() => {
     const d = new Date();
     d.setUTCDate(1);
@@ -145,11 +149,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const contextDropdownRef = useRef<HTMLDivElement>(null);
   const windowSelectorRef = useRef<HTMLDivElement>(null);
 
-  const selectedEdgeId = useMemo(() => {
-    if (!tabId) return null;
-    const tab = tabs.find((t) => t.id === tabId);
-    return (tab as any)?.editorState?.selectedEdgeId ?? null;
-  }, [tabId, tabs]);
+  // NOTE: editorState.selectedEdgeId is a stale "last clicked" value that
+  // persists after deselection.  We rely on querySelectionUuids() (ReactFlow
+  // .selected state) inside loadAsatDays instead — see comment there.
 
   const parsedAuthoritative = useMemo(() => {
     try {
@@ -295,29 +297,92 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   }, [isAsatDropdownOpen]);
 
   const loadAsatDays = useCallback(async () => {
-    if (!graph || !selectedEdgeId) return;
+    if (!graph) return;
     setIsAsatLoading(true);
     setAsatError(null);
     try {
-      const res = await getSnapshotRetrievalsForEdge({
-        graph,
-        edgeId: selectedEdgeId,
-        effectiveDSL: currentDSL || '',
-        workspace: workspaceForContextRegistry,
-      });
-      if (!res.success) {
-        setAsatDays([]);
-        setAsatError(res.error || 'Failed to load snapshots');
-        return;
+      // Determine which edges to query based on canvas selection state.
+      // querySelectionUuids() is the source of truth — it reflects ReactFlow's
+      // .selected property which correctly tracks single clicks AND clears on
+      // deselection.  Do NOT fall back to selectedEdgeId (stale "last clicked"
+      // value from editorState that persists after deselection).
+      const multiSel = querySelectionUuids();
+      const effectiveEdgeIds = multiSel.selectedEdgeUuids || [];
+
+      // Build a human-readable scope label.
+      // Helper: resolve a node reference (uuid or id) to its human-readable id/name.
+      const resolveNodeName = (ref: string | undefined): string => {
+        if (!ref) return '?';
+        const node = (graph.nodes || []).find((n: any) => n.uuid === ref || n.id === ref);
+        return node?.id || ref;
+      };
+
+      // Count only connected edges (those with p.id) — edges without a
+      // connection can never have snapshots so shouldn't inflate the count.
+      const connectedCount = (graph.edges || [])
+        .filter((e: any) => e?.p?.id || e?.p?.parameter_id).length;
+
+      if (effectiveEdgeIds.length === 1) {
+        const eid = effectiveEdgeIds[0];
+        const edge = graph.edges?.find((e: any) => e.uuid === eid || e.id === eid) as any;
+        const edgeName = edge
+          ? `e.${resolveNodeName(edge.from)}→${resolveNodeName(edge.to)}`
+          : eid;
+        setAsatScopeLabel(`for ${edgeName}`);
+      } else if (effectiveEdgeIds.length > 1) {
+        // Filter the selected set to connected edges for an accurate count.
+        const connectedSelected = effectiveEdgeIds.filter((eid) => {
+          const edge: any = graph.edges?.find((e: any) => e.uuid === eid || e.id === eid);
+          return edge?.p?.id || edge?.p?.parameter_id;
+        });
+        setAsatScopeLabel(`for ${connectedSelected.length} params`);
+      } else {
+        setAsatScopeLabel(`for all ${connectedCount} params`);
       }
-      setAsatDays(res.retrieved_days || []);
+
+      if (effectiveEdgeIds.length === 1) {
+        // Single edge: signature-filtered precision (existing path).
+        const res = await getSnapshotRetrievalsForEdge({
+          graph,
+          edgeId: effectiveEdgeIds[0],
+          effectiveDSL: currentDSL || '',
+          workspace: workspaceForContextRegistry,
+        });
+        if (!res.success) {
+          setAsatDays([]);
+          setAsatCoverageByDay({});
+          setAsatError(res.error || 'Failed to load snapshots');
+          return;
+        }
+        const fullCoverage: Record<string, number> = {};
+        for (const day of res.retrieved_days || []) fullCoverage[day] = 1.0;
+        setAsatDays(res.retrieved_days || []);
+        setAsatCoverageByDay(fullCoverage);
+      } else {
+        // Multiple or all edges: signature-filtered per-edge, then aggregate.
+        const res = await getSnapshotCoverageForEdges({
+          graph,
+          effectiveDSL: currentDSL || '',
+          workspace: workspaceForContextRegistry,
+          edgeIds: effectiveEdgeIds.length > 0 ? effectiveEdgeIds : undefined,
+        });
+        if (!res.success) {
+          setAsatDays([]);
+          setAsatCoverageByDay({});
+          setAsatError(res.error || 'Failed to load aggregate snapshots');
+          return;
+        }
+        setAsatDays(res.allDays);
+        setAsatCoverageByDay(res.coverageByDay);
+      }
     } catch (e) {
       setAsatDays([]);
+      setAsatCoverageByDay({});
       setAsatError(String(e));
     } finally {
       setIsAsatLoading(false);
     }
-  }, [graph, selectedEdgeId, currentDSL, workspaceForContextRegistry]);
+  }, [graph, currentDSL, workspaceForContextRegistry]);
 
   const openAsatDropdown = useCallback(async () => {
     if (isReadOnlyShare) return;
@@ -353,20 +418,22 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     const firstWeekday = firstOfMonth.getUTCDay(); // 0=Sun
     const start = new Date(Date.UTC(year, month, 1 - firstWeekday));
 
-    const cells: Array<{ iso: string; day: number; inMonth: boolean; hasSnapshot: boolean }> = [];
+    const cells: Array<{ iso: string; day: number; inMonth: boolean; hasSnapshot: boolean; coverage: number }> = [];
     for (let i = 0; i < 42; i++) {
       const d = new Date(start.getTime() + i * 86400000);
       const iso = d.toISOString().split('T')[0];
       const inMonth = d.getUTCMonth() === month;
+      const coverage = asatCoverageByDay[iso] ?? 0;
       cells.push({
         iso,
         day: d.getUTCDate(),
         inMonth,
-        hasSnapshot: asatDaysSet.has(iso),
+        hasSnapshot: inMonth && asatDaysSet.has(iso),
+        coverage,
       });
     }
     return cells;
-  }, [asatMonthCursor, asatDaysSet]);
+  }, [asatMonthCursor, asatDaysSet, asatCoverageByDay]);
 
   // DEBUG: Log core state whenever WindowSelector renders
   useEffect(() => {
@@ -1050,9 +1117,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
             title={
               isReadOnlyShare
                 ? 'Disabled in static share mode'
-                : selectedEdgeId
-                  ? (activeAsat ? `asat(${activeAsat})` : 'Choose as-at snapshot date')
-                  : 'Select an edge to show snapshot availability'
+                : activeAsat
+                  ? `asat(${activeAsat})`
+                  : 'Choose as-at snapshot date'
             }
             aria-pressed={!!activeAsat}
           >
@@ -1068,7 +1135,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
               onMouseDown={(e) => e.stopPropagation()}
             >
               <div className="asat-dropdown-header">
-                <div className="asat-dropdown-title">As-at snapshot</div>
+                <div className="asat-dropdown-title">
+                  As-at snapshot{asatScopeLabel ? ` ${asatScopeLabel}` : ''}
+                </div>
                 <div className="asat-dropdown-actions">
                   {activeAsat && (
                     <button
@@ -1088,14 +1157,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                 </div>
               </div>
 
-              {!selectedEdgeId && (
-                <div className="asat-dropdown-message">
-                  Select an edge to show available snapshot days.
-                </div>
-              )}
-
-              {selectedEdgeId && (
-                <>
+              <>
                   {isAsatLoading && <div className="asat-dropdown-message">Loading snapshot days…</div>}
                   {!isAsatLoading && asatError && (
                     <div className="asat-dropdown-error">{asatError}</div>
@@ -1139,7 +1201,13 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                         {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((label, idx) => (
                           <div key={`${label}-${idx}`} className="asat-calendar-dow">{label}</div>
                         ))}
-                        {calendarCells.map((c) => (
+                        {calendarCells.map((c) => {
+                          const coveragePct = Math.round(c.coverage * 100);
+                          const title = c.hasSnapshot
+                            ? (c.coverage >= 1 ? 'Snapshot available (all params)'
+                               : `Snapshot available (${coveragePct}% of params)`)
+                            : 'No snapshot recorded for this day';
+                          return (
                           <button
                             key={c.iso}
                             type="button"
@@ -1157,25 +1225,32 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                                 }
                               })(),
                             ].filter(Boolean).join(' ')}
+                            style={c.hasSnapshot && c.coverage < 1 ? {
+                              // Variable intensity via opacity on the background colour.
+                              // Coverage 0→1 maps to opacity 0.2→1.0 for visible gradient.
+                              '--snapshot-opacity': String(0.2 + c.coverage * 0.8),
+                            } as React.CSSProperties : undefined}
                             onClick={() => {
                               const selectedUK = formatDateUK(new Date(`${c.iso}T00:00:00Z`));
                               applyAsatToDSL(selectedUK);
                               setIsAsatDropdownOpen(false);
                             }}
-                            title={c.hasSnapshot ? 'Snapshot available' : 'No snapshot recorded for this day'}
+                            title={title}
                           >
                             {c.day}
                           </button>
-                        ))}
+                          );
+                        })}
                       </div>
 
                       <div className="asat-dropdown-footnote">
-                        Highlighted days have at least one snapshot for the selected edge under the current effective query.
+                        {asatScopeLabel.startsWith('for all') || asatScopeLabel.match(/for \d+ params/)
+                          ? 'Highlight intensity shows the fraction of params with snapshots on that day.'
+                          : 'Highlighted days have at least one snapshot under the current effective query.'}
                       </div>
                     </>
                   )}
-                </>
-              )}
+              </>
             </div>
           )}
         </div>

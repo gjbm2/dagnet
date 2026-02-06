@@ -360,7 +360,9 @@
 }
 
 .asat-calendar-day.out-month {
-  color: #9ca3af;
+  color: #d1d5db;
+  pointer-events: none;
+  opacity: 0.35;
 }
 
 .asat-calendar-day:hover {
@@ -368,8 +370,9 @@
 }
 
 .asat-calendar-day.has-snapshot {
-  background: #ecfeff;
-  border-color: #a5f3fc;
+  /* --snapshot-opacity is set inline when coverage < 100%; defaults to 1 (fully opaque). */
+  background: rgba(207, 250, 254, var(--snapshot-opacity, 1));
+  border-color: rgba(165, 243, 252, var(--snapshot-opacity, 1));
 }
 
 .asat-calendar-day.selected {

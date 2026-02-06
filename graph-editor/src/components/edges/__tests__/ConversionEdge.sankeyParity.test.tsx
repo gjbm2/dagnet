@@ -152,12 +152,35 @@ vi.mock('../../../services/snapshotWriteService', () => ({
               row_count: 10,
               unique_anchor_days: 10,
               unique_retrievals: 2,
-              unique_retrieved_days: 10,
-              earliest_retrieved_at: null,
-              latest_retrieved_at: null,
+              unique_retrieved_days: 2,
+              earliest_retrieved_at: '2025-12-01T12:00:00Z',
+              latest_retrieved_at: '2025-12-10T12:00:00Z',
             },
-            current: null,
-            families: [],
+            current: {
+              provided_signature: null,
+              provided_core_hash: 'abc123',
+              matched_family_id: 'abc123',
+              match_mode: 'strict',
+              matched_core_hashes: ['abc123'],
+            },
+            families: [{
+              family_id: 'abc123',
+              family_size: 1,
+              member_core_hashes: ['abc123'],
+              created_at_min: null,
+              created_at_max: null,
+              overall: {
+                row_count: 10,
+                unique_anchor_days: 10,
+                unique_retrievals: 2,
+                unique_retrieved_days: 2,
+                earliest_anchor_day: '2025-12-01',
+                latest_anchor_day: '2025-12-10',
+                earliest_retrieved_at: '2025-12-01T12:00:00Z',
+                latest_retrieved_at: '2025-12-10T12:00:00Z',
+              },
+              by_slice_key: [],
+            }],
             unlinked_core_hashes: [],
           }
         : {
@@ -347,8 +370,8 @@ describe('ConversionEdge Sankey parity', () => {
     });
 
     // Tooltip is rendered as a portal; assert the snapshot label exists.
-    expect(document.body.textContent || '').toContain('snapshots:');
-    // Date format: d-MMM-yy
+    expect(document.body.textContent || '').toContain('snapshots (retrieved):');
+    // Date format: d-MMM-yy (from retrieved_at timestamps)
     expect(document.body.textContent || '').toContain('1-Dec-25 — 10-Dec-25');
 
     vi.useRealTimers();
