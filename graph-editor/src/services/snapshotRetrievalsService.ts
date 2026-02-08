@@ -5,8 +5,47 @@ import { formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateForma
 import { extractSliceDimensions, hasContextAny } from './sliceIsolation';
 import { parseSignature } from './signatureMatchingService';
 import { computeQuerySignature } from './dataOperationsService';
-import { querySnapshotRetrievals, type QuerySnapshotRetrievalsParams, type QuerySnapshotRetrievalsResult } from './snapshotWriteService';
+import {
+  getBatchInventoryV2,
+  querySnapshotRetrievals,
+  type QuerySnapshotRetrievalsParams,
+  type QuerySnapshotRetrievalsResult
+} from './snapshotWriteService';
 import { db } from '../db/appDatabase';
+
+const providerByConnection = new Map<string, string>();
+
+async function resolveProviderForConnection(connectionName: string): Promise<string | undefined> {
+  const key = String(connectionName || '');
+  if (!key) return undefined;
+  if (providerByConnection.has(key)) return providerByConnection.get(key);
+
+  // Prefer connections.yaml (DAS runner) as the source of truth.
+  try {
+    const { createDASRunner } = await import('../lib/das');
+    const runner = createDASRunner();
+    const conn = await (runner as any).connectionProvider.getConnection(key);
+    const provider = conn?.provider;
+    if (provider) {
+      providerByConnection.set(key, provider);
+      return provider;
+    }
+  } catch {
+    // Ignore and fall back to inference (keeps Phase 2 UI working in test/dev environments).
+  }
+
+  // Conservative inference fallback (mirrors plannerQuerySignatureService behaviour).
+  const lower = key.toLowerCase();
+  const inferred =
+    lower.includes('amplitude') ? 'amplitude'
+    : lower.includes('sheets') || lower.includes('google') ? 'sheets'
+    : lower.includes('statsig') ? 'statsig'
+    : lower.includes('optimizely') ? 'optimizely'
+    : undefined;
+
+  if (inferred) providerByConnection.set(key, inferred);
+  return inferred;
+}
 
 function extractContextKeysFromConstraints(constraints?: {
   context?: Array<{ key: string }>;
@@ -58,13 +97,16 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   const anchorToUK = range?.end ? resolveRelativeDate(range.end) : todayUK;
 
   // Slice filter:
-  // - explicit single slice (context/case dimensions) → pass it through
-  // - uncontexted / contextAny → omit slice_keys (UI uses a superset highlight)
-  const sliceDims = extractSliceDimensions(dslWithoutAsat);
-  const slice_keys =
-    sliceDims && !hasContextAny(dslWithoutAsat)
-      ? [sliceDims]
-      : undefined;
+  // The DB stores `slice_key` as a FULL clause string including BOTH:
+  // - context dimensions, e.g. "context(channel:influencer)"
+  // - temporal mode + date-range template, e.g. ".window(-100d:)" or ".cohort(1-Nov-25:15-Dec-25)"
+  //
+  // So we MUST send EXACT `slice_key` strings that exist in the DB — not a derived DSL from the
+  // current query's date bounds (which often differ from what was written historically).
+  //
+  // The DB has sufficient information to do this: we query snapshot inventory V2 for the
+  // matched signature family, then filter its `by_slice_key[].slice_key` entries by context dims.
+  const contextDims = extractSliceDimensions(dslWithoutAsat);
 
   // Compute signature (core_hash) via the existing code path.
   // For uncontexted queries, include pinned context keys (graph.dataInterestsDSL) so
@@ -76,6 +118,7 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
     'amplitude';
 
   const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
+  const connectionProvider = await resolveProviderForConnection(connectionName);
   // IMPORTANT:
   // We must compute the signature using the same event-definition inputs as the write path,
   // otherwise `core_hash` won't match and the calendar will show no highlighted days even
@@ -102,7 +145,7 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   const { queryPayload, eventDefinitions } = await buildDslFromEdge(
     edge,
     graph,
-    connectionName,
+    connectionProvider,
     eventLoader,
     constraintsWithoutAsat
   );
@@ -131,6 +174,37 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
 
   const sigParsed = parseSignature(signature);
   if (!sigParsed.coreHash) return null;
+
+  let slice_keys: string[] | undefined;
+  const wantSliceFilter = !!contextDims && !hasContextAny(dslWithoutAsat);
+  if (wantSliceFilter) {
+    try {
+      const inv = await getBatchInventoryV2([dbParamId], {
+        current_signatures: { [dbParamId]: signature },
+        include_equivalents: true,
+        // We want a reliable slice listing for this family; clamp is 2000 server-side.
+        limit_families_per_param: 50,
+        limit_slices_per_family: 2000,
+      });
+
+      const pidInv = inv?.[dbParamId];
+      const matchedFamilyId = pidInv?.current?.matched_family_id;
+      const matchedFamily = matchedFamilyId
+        ? pidInv?.families?.find((f) => f.family_id === matchedFamilyId)
+        : undefined;
+
+      const candidates = (matchedFamily?.by_slice_key || [])
+        .map((s) => s.slice_key)
+        .filter((k) => extractSliceDimensions(k) === contextDims);
+
+      // If we have explicit context dims, we should be strict: no match → query returns none.
+      slice_keys = Array.from(new Set(candidates));
+    } catch {
+      // Fail-safe: if inventory is unavailable, do not attempt a fuzzy guess.
+      // (Returning undefined would incorrectly mix other contexts.)
+      slice_keys = [];
+    }
+  }
 
   return {
     param_id: dbParamId,

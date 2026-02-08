@@ -36,6 +36,7 @@ import {
   computeEffectiveParams,
   computeInheritedDSL,
   computeEffectiveFetchDSL,
+  deriveScenarioCreateDeltaDSL,
   isLiveScenario,
   deriveBaseDSLForRebase,
   LIVE_EMPTY_DIFF_DSL,
@@ -123,6 +124,12 @@ export interface ScenariosContextValue {
     colour?: string,
     idOverride?: string
   ) => Promise<Scenario>;
+  /**
+   * Create a live scenario from the CURRENT DSL as a MECE delta vs the currently VISIBLE stack.
+   *
+   * This is the semantic used by the "+" / New Scenario action.
+   */
+  createLiveScenarioFromCurrentDelta: (tabId: string, visibleOrder: string[]) => Promise<Scenario>;
   regenerateScenario: (
     id: string,
     scenarioOverride?: Scenario,
@@ -734,6 +741,39 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   }, [generateId, scenarios, baseParams, currentParams]);
 
   /**
+   * Create a live scenario from Current as a MECE delta vs the VISIBLE stack (excluding Current).
+   *
+   * This matches the intended "+" semantics:
+   * - Scenario queryDSL is the minimal delta such that (Base + visible scenarios + new scenario) yields Current DSL.
+   * - Axis classes are MECE: window/cohort, context/contextAny, asat.
+   */
+  const createLiveScenarioFromCurrentDelta = useCallback(async (tabId: string, visibleOrder: string[]): Promise<Scenario> => {
+    const currentDSL = graphStore?.getState().currentDSL || '';
+    if (!currentDSL || !currentDSL.trim()) {
+      throw new Error('No query DSL set. Select a window or context first.');
+    }
+
+    const effectiveBaseDSL = baseDSL || graph?.baseDSL || '';
+
+    // Compute S: effective fetch DSL of the currently-visible stack (excluding Current).
+    // visibleOrder is in visual order (top → bottom). Apply bottom → top for stacking.
+    let stackEffective = effectiveBaseDSL;
+    const ids = Array.isArray(visibleOrder) ? visibleOrder : [];
+    const scenarioIds = ids.filter((id) => id && id !== 'base' && id !== 'current');
+    for (const id of [...scenarioIds].reverse()) {
+      const s = scenarios.find(x => x.id === id);
+      if (!s?.meta?.isLive) continue;
+      stackEffective = computeEffectiveFetchDSL(stackEffective, s.meta.queryDSL);
+    }
+
+    // Δ(S → C)
+    const deltaDSL = deriveScenarioCreateDeltaDSL(stackEffective, currentDSL);
+    const scenarioQueryDSL = (deltaDSL && deltaDSL.trim()) ? deltaDSL : LIVE_EMPTY_DIFF_DSL;
+
+    return await createLiveScenario(scenarioQueryDSL, undefined, tabId);
+  }, [graphStore, baseDSL, graph, scenarios, createLiveScenario]);
+
+  /**
    * Regenerate a live scenario from its queryDSL.
    * 
    * This fetches fresh data and recomputes effective params with any what-if baked in.
@@ -1052,7 +1092,12 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           return;
         }
 
-        const effectiveBase = baseDSL || graphStore?.getState().currentDSL || '';
+        const effectiveBase =
+          baseDSL ||
+          (graphStore?.getState().graph as any)?.baseDSL ||
+          (graph as any)?.baseDSL ||
+          graphStore?.getState().currentDSL ||
+          '';
 
         // 0) Refresh Current from file cache so comparisons match live-share behaviour.
         // This is the piece missing in tmp.log: it regenerated the scenario, but did not
@@ -1166,7 +1211,13 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
    * @param visibleOrder - Optional: pass VISIBLE scenario IDs in visual order
    */
   const regenerateAllLive = useCallback(async (baseDSLOverride?: string, visibleOrder?: string[]): Promise<void> => {
-    const effectiveBase = baseDSLOverride || baseDSL || graphStore?.getState().currentDSL || '';
+    const effectiveBase =
+      baseDSLOverride ||
+      baseDSL ||
+      (graphStore?.getState().graph as any)?.baseDSL ||
+      (graph as any)?.baseDSL ||
+      graphStore?.getState().currentDSL ||
+      '';
     
     // Filter to only visible scenarios if visibleOrder provided
     let scenariosToProcess: Scenario[];
@@ -1630,6 +1681,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     deleteScenario,
     // Live scenario operations
     createLiveScenario,
+    createLiveScenarioFromCurrentDelta,
     regenerateScenario,
     regenerateAllLive,
     updateScenarioQueryDSL,
@@ -1664,6 +1716,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     updateScenarioColour,
     deleteScenario,
     createLiveScenario,
+    createLiveScenarioFromCurrentDelta,
     regenerateScenario,
     regenerateAllLive,
     updateScenarioQueryDSL,

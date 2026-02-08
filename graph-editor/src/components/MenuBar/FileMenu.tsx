@@ -8,6 +8,7 @@ import { usePullFile } from '../../hooks/usePullFile';
 import { usePullAll } from '../../hooks/usePullAll';
 import { useRenameFile } from '../../hooks/useRenameFile';
 import { useViewHistory } from '../../hooks/useViewHistory';
+import { useOpenHistorical } from '../../hooks/useOpenHistorical';
 import { useIntegrityCheck } from '../../hooks/useIntegrityCheck';
 import { useFileAudit } from '../../hooks/useFileAudit';
 import { useWhereUsed } from '../../hooks/useWhereUsed';
@@ -75,12 +76,22 @@ export function FileMenu() {
     loadHistory,
     getContentAtCommit,
     rollbackToCommit,
+    viewAtCommit,
     fileName: historyFileName,
     filePath: historyFilePath,
     isLoading: isHistoryLoading,
     history,
     currentContent
   } = useViewHistory(activeTab?.fileId);
+
+  // Historical version hook
+  const {
+    canOpenHistorical,
+    isLoading: isHistoricalLoading,
+    dateItems: historicalDateItems,
+    loadDates: loadHistoricalDates,
+    selectCommit: selectHistoricalCommit,
+  } = useOpenHistorical(activeTab?.fileId);
   
   // Integrity check hook
   const { runCheck: runIntegrityCheck, isChecking: isIntegrityChecking } = useIntegrityCheck();
@@ -604,6 +615,66 @@ export function FileMenu() {
             </Menubar.Item>
 
             <Menubar.Sub>
+              <Menubar.SubTrigger
+                className="menubar-item"
+                disabled={!canOpenHistorical}
+                onPointerEnter={() => { if (canOpenHistorical) loadHistoricalDates(); }}
+              >
+                Open Historical Version
+                <div className="menubar-right-slot">›</div>
+              </Menubar.SubTrigger>
+              <Menubar.Portal>
+                <Menubar.SubContent className="menubar-content" sideOffset={2} alignOffset={-5}>
+                  {isHistoricalLoading && (
+                    <Menubar.Item className="menubar-item" disabled>
+                      Loading…
+                    </Menubar.Item>
+                  )}
+                  {!isHistoricalLoading && (!historicalDateItems || historicalDateItems.length === 0) && (
+                    <Menubar.Item className="menubar-item" disabled>
+                      No historical versions
+                    </Menubar.Item>
+                  )}
+                  {!isHistoricalLoading && historicalDateItems && historicalDateItems.map((item) => (
+                    item.commits.length === 1 ? (
+                      <Menubar.Item
+                        key={item.dateISO}
+                        className="menubar-item"
+                        onSelect={() => selectHistoricalCommit(item.commits[0])}
+                      >
+                        {item.dateUK}
+                        <span className="menubar-right-slot" style={{ fontSize: '11px', opacity: 0.6 }}>
+                          {item.commits[0].shortSha}
+                        </span>
+                      </Menubar.Item>
+                    ) : (
+                      <Menubar.Sub key={item.dateISO}>
+                        <Menubar.SubTrigger className="menubar-item">
+                          {item.dateUK} ({item.commits.length})
+                          <div className="menubar-right-slot">›</div>
+                        </Menubar.SubTrigger>
+                        <Menubar.Portal>
+                          <Menubar.SubContent className="menubar-content" sideOffset={2} alignOffset={-5}>
+                            {item.commits.map((commit) => (
+                              <Menubar.Item
+                                key={commit.sha}
+                                className="menubar-item"
+                                onSelect={() => selectHistoricalCommit(commit)}
+                              >
+                                <span style={{ fontFamily: 'monospace', fontSize: '11px', marginRight: '8px', opacity: 0.6 }}>{commit.shortSha}</span>
+                                {commit.message}
+                              </Menubar.Item>
+                            ))}
+                          </Menubar.SubContent>
+                        </Menubar.Portal>
+                      </Menubar.Sub>
+                    )
+                  ))}
+                </Menubar.SubContent>
+              </Menubar.Portal>
+            </Menubar.Sub>
+
+            <Menubar.Sub>
               <Menubar.SubTrigger className="menubar-item" disabled={!activeTab}>
                 Export
                 <div className="menubar-right-slot">›</div>
@@ -745,6 +816,7 @@ export function FileMenu() {
         onLoadHistory={loadHistory}
         onGetContentAtCommit={getContentAtCommit}
         onRollback={rollbackToCommit}
+        onView={viewAtCommit}
       />
 
       {/* Merge Conflict Modal */}

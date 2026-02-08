@@ -11,7 +11,8 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import type { DateRange } from '../types';
 import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { DateRangePicker } from './DateRangePicker';
-import { AtSign, ChevronLeft, ChevronRight, FileText, X, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
+import { AtSign, FileText, X, Zap, ToggleLeft, ToggleRight } from 'lucide-react';
+import { CalendarGrid } from './CalendarGrid';
 import { parseConstraints } from '../lib/queryDSL';
 import { formatDateUK, resolveRelativeDate, normalizeToUK, parseUKDate, toISO } from '../lib/dateFormat';
 import toast from 'react-hot-toast';
@@ -53,6 +54,15 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     const repository = file?.source?.repository;
     const branch = file?.source?.branch;
     return repository && branch ? { repository, branch } : undefined;
+  }, [tabId, tabs]);
+
+  // Historical / temporary files should not trigger data retrieval nudging.
+  // Users can still manually fetch if they choose to, but the UI should not prompt.
+  const isTemporaryFile = useMemo(() => {
+    const tab = tabId ? tabs.find(t => t.id === tabId) : undefined;
+    if (!tab) return false;
+    const file = fileRegistry.getFile(tab.fileId);
+    return file?.source?.repository === 'temporary';
   }, [tabId, tabs]);
   
   // CRITICAL: These refs must be defined BEFORE useFetchData hook since it uses them
@@ -410,30 +420,15 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
 
   const asatDaysSet = useMemo(() => new Set(asatDays), [asatDays]);
 
-  const calendarCells = useMemo(() => {
-    // Build a 6x7 grid for the current UTC month cursor.
-    const year = asatMonthCursor.getUTCFullYear();
-    const month = asatMonthCursor.getUTCMonth();
-    const firstOfMonth = new Date(Date.UTC(year, month, 1));
-    const firstWeekday = firstOfMonth.getUTCDay(); // 0=Sun
-    const start = new Date(Date.UTC(year, month, 1 - firstWeekday));
-
-    const cells: Array<{ iso: string; day: number; inMonth: boolean; hasSnapshot: boolean; coverage: number }> = [];
-    for (let i = 0; i < 42; i++) {
-      const d = new Date(start.getTime() + i * 86400000);
-      const iso = d.toISOString().split('T')[0];
-      const inMonth = d.getUTCMonth() === month;
-      const coverage = asatCoverageByDay[iso] ?? 0;
-      cells.push({
-        iso,
-        day: d.getUTCDate(),
-        inMonth,
-        hasSnapshot: inMonth && asatDaysSet.has(iso),
-        coverage,
-      });
+  // Selected asat date as ISO string (for CalendarGrid selectedDate prop)
+  const selectedAsatISO = useMemo(() => {
+    if (!activeAsat) return null;
+    try {
+      return parseUKDate(resolveRelativeDate(activeAsat)).toISOString().split('T')[0];
+    } catch {
+      return null;
     }
-    return cells;
-  }, [asatMonthCursor, asatDaysSet, asatCoverageByDay]);
+  }, [activeAsat]);
 
   // DEBUG: Log core state whenever WindowSelector renders
   useEffect(() => {
@@ -694,6 +689,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (isExecutingPlanner || isAggregatingRef.current) return;
+    // Skip planner analysis for temporary/historical files — no nudging
+    if (isTemporaryFile) return;
     
     const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
     if (!authoritativeDSL || !graph) return;
@@ -722,7 +719,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         console.error('[WindowSelector] Planner analysis failed:', err);
       });
       
-  }, [graph, (graphStore as any).getState?.()?.currentDSL, isExecutingPlanner]);
+  }, [graph, (graphStore as any).getState?.()?.currentDSL, isExecutingPlanner, isTemporaryFile]);
   
   // Shimmer effect when button needs attention
   useEffect(() => {
@@ -1164,91 +1161,30 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
                   )}
 
                   {!isAsatLoading && !asatError && (
-                    <>
-                      <div className="asat-calendar-nav">
-                        <button
-                          type="button"
-                          className="asat-calendar-nav-btn"
-                          onClick={() => {
-                            const d = new Date(asatMonthCursor.getTime());
-                            d.setUTCMonth(d.getUTCMonth() - 1);
-                            d.setUTCDate(1);
-                            setAsatMonthCursor(d);
-                          }}
-                          title="Previous month"
-                        >
-                          <ChevronLeft size={14} />
-                        </button>
-                        <div className="asat-calendar-month">
-                          {asatMonthCursor.toLocaleString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' })}
-                        </div>
-                        <button
-                          type="button"
-                          className="asat-calendar-nav-btn"
-                          onClick={() => {
-                            const d = new Date(asatMonthCursor.getTime());
-                            d.setUTCMonth(d.getUTCMonth() + 1);
-                            d.setUTCDate(1);
-                            setAsatMonthCursor(d);
-                          }}
-                          title="Next month"
-                        >
-                          <ChevronRight size={14} />
-                        </button>
-                      </div>
-
-                      <div className="asat-calendar-grid">
-                        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((label, idx) => (
-                          <div key={`${label}-${idx}`} className="asat-calendar-dow">{label}</div>
-                        ))}
-                        {calendarCells.map((c) => {
-                          const coveragePct = Math.round(c.coverage * 100);
-                          const title = c.hasSnapshot
-                            ? (c.coverage >= 1 ? 'Snapshot available (all params)'
-                               : `Snapshot available (${coveragePct}% of params)`)
-                            : 'No snapshot recorded for this day';
-                          return (
-                          <button
-                            key={c.iso}
-                            type="button"
-                            data-testid={`asat-day-${c.iso}`}
-                            className={[
-                              'asat-calendar-day',
-                              c.inMonth ? 'in-month' : 'out-month',
-                              c.hasSnapshot ? 'has-snapshot' : '',
-                              activeAsat && (() => {
-                                try {
-                                  const iso = parseUKDate(resolveRelativeDate(activeAsat)).toISOString().split('T')[0];
-                                  return iso === c.iso ? 'selected' : '';
-                                } catch {
-                                  return '';
-                                }
-                              })(),
-                            ].filter(Boolean).join(' ')}
-                            style={c.hasSnapshot && c.coverage < 1 ? {
-                              // Variable intensity via opacity on the background colour.
-                              // Coverage 0→1 maps to opacity 0.2→1.0 for visible gradient.
-                              '--snapshot-opacity': String(0.2 + c.coverage * 0.8),
-                            } as React.CSSProperties : undefined}
-                            onClick={() => {
-                              const selectedUK = formatDateUK(new Date(`${c.iso}T00:00:00Z`));
-                              applyAsatToDSL(selectedUK);
-                              setIsAsatDropdownOpen(false);
-                            }}
-                            title={title}
-                          >
-                            {c.day}
-                          </button>
-                          );
-                        })}
-                      </div>
-
-                      <div className="asat-dropdown-footnote">
-                        {asatScopeLabel.startsWith('for all') || asatScopeLabel.match(/for \d+ params/)
+                    <CalendarGrid
+                      monthCursor={asatMonthCursor}
+                      setMonthCursor={setAsatMonthCursor}
+                      highlightedDates={asatDaysSet}
+                      coverage={asatCoverageByDay}
+                      selectedDate={selectedAsatISO}
+                      onDateClick={(isoDate) => {
+                        const selectedUK = formatDateUK(new Date(`${isoDate}T00:00:00Z`));
+                        applyAsatToDSL(selectedUK);
+                        setIsAsatDropdownOpen(false);
+                      }}
+                      getDayTitle={(iso, highlighted, coverage) => {
+                        if (!highlighted) return 'No snapshot recorded for this day';
+                        const pct = Math.round(coverage * 100);
+                        return coverage >= 1
+                          ? 'Snapshot available (all params)'
+                          : `Snapshot available (${pct}% of params)`;
+                      }}
+                      footer={
+                        asatScopeLabel.startsWith('for all') || asatScopeLabel.match(/for \d+ params/)
                           ? 'Highlight intensity shows the fraction of params with snapshots on that day.'
-                          : 'Highlighted days have at least one snapshot under the current effective query.'}
-                      </div>
-                    </>
+                          : 'Highlighted days have at least one snapshot under the current effective query.'
+                      }
+                    />
                   )}
               </>
             </div>
@@ -1560,8 +1496,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       
       {/* Fetch button column (right side) - spans full height */}
       {/* Always show when graph has parameter files. If there are no fetchable items,
-          clicking the button will surface an explicit toast instead of doing nothing. */}
-      {hasParameterFiles && (
+          clicking the button will surface an explicit toast instead of doing nothing.
+          Hidden for temporary/historical files to avoid irrelevant nudging. */}
+      {hasParameterFiles && !isTemporaryFile && (
         <div className="window-selector-fetch-column">
           <button
             onClick={handleFetchData}

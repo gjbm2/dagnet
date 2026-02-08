@@ -15,6 +15,8 @@ interface HistoryModalProps {
   onLoadHistory: () => Promise<HistoryCommit[]>;
   onGetContentAtCommit: (sha: string) => Promise<string | null>;
   onRollback: (sha: string) => Promise<boolean>;
+  /** Open the selected commit as a read-only temporary tab */
+  onView?: (sha: string) => Promise<void>;
 }
 
 /**
@@ -36,7 +38,8 @@ export function HistoryModal({
   currentContent,
   onLoadHistory,
   onGetContentAtCommit,
-  onRollback
+  onRollback,
+  onView,
 }: HistoryModalProps) {
   const [selectedCommit, setSelectedCommit] = useState<HistoryCommit | null>(null);
   const [compareCommit, setCompareCommit] = useState<HistoryCommit | null>(null);
@@ -105,6 +108,17 @@ export function HistoryModal({
     if (success) {
       onClose();
     }
+  };
+
+  const [isViewing, setIsViewing] = useState(false);
+
+  const handleView = async () => {
+    if (!selectedCommit || !onView) return;
+    
+    setIsViewing(true);
+    await onView(selectedCommit.sha);
+    setIsViewing(false);
+    onClose();
   };
 
   const formatDate = (dateStr: string) => {
@@ -281,25 +295,50 @@ export function HistoryModal({
                       />
                     </div>
 
-                    {/* Rollback section */}
-                    {selectedCommit && history[0]?.sha !== selectedCommit.sha && (
-                      <div className="conflict-summary-info" style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>
-                          ⚠️ Rolling back will replace current content with this version. Commit to save.
-                        </span>
-                        <button
-                          className="option-button"
-                          onClick={handleRollback}
-                          disabled={isRollingBack}
-                          style={{ 
-                            flex: 'none', 
-                            background: 'var(--color-primary, #2196f3)', 
-                            color: '#fff',
-                            border: 'none'
-                          }}
-                        >
-                          {isRollingBack ? 'Rolling back...' : `Rollback to ${selectedCommit.shortSha}`}
-                        </button>
+                    {/* Actions: View + Rollback */}
+                    {selectedCommit && (
+                      <div className="conflict-summary-info" style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                        {history[0]?.sha !== selectedCommit.sha ? (
+                          <span style={{ fontSize: '12px' }}>
+                            ⚠️ Rolling back will replace current content with this version. Commit to save.
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '12px', color: 'var(--color-text-secondary, #666)' }}>
+                            This is the latest committed version.
+                          </span>
+                        )}
+                        <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                          {onView && (
+                            <button
+                              className="option-button"
+                              onClick={handleView}
+                              disabled={isViewing || isRollingBack}
+                              style={{ 
+                                flex: 'none',
+                                background: 'var(--color-bg-secondary, #f5f5f5)',
+                                color: 'var(--color-text-primary, #333)',
+                                border: '1px solid var(--color-border, #ddd)',
+                              }}
+                            >
+                              {isViewing ? 'Opening...' : `View ${selectedCommit.shortSha}`}
+                            </button>
+                          )}
+                          {history[0]?.sha !== selectedCommit.sha && (
+                            <button
+                              className="option-button"
+                              onClick={handleRollback}
+                              disabled={isRollingBack || isViewing}
+                              style={{ 
+                                flex: 'none', 
+                                background: 'var(--color-primary, #2196f3)', 
+                                color: '#fff',
+                                border: 'none'
+                              }}
+                            >
+                              {isRollingBack ? 'Rolling back...' : `Rollback to ${selectedCommit.shortSha}`}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
                   </>

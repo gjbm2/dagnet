@@ -9,6 +9,7 @@
  * - NO MOCKING (except Git)
  */
 import { test, expect, Page, request } from '@playwright/test';
+import { e2eLog } from './e2eLog';
 
 test.describe.configure({ timeout: 30_000 });
 
@@ -137,7 +138,9 @@ async function seedSnapshots(signatureStr: string): Promise<void> {
             param_id: TEST_PARAM_ID,
           },
           sig_algo: 'sig_v1_sha256_trunc128_b64url',
-          slice_key: '',
+          // Mode is ALWAYS part of slice identity.
+          // This spec drives a window(...) query, so seed a window(...) slice_key.
+          slice_key: 'window(5-Jan-26:13-Jan-26)',
           retrieved_at,
           rows: [
             { anchor_day: '2026-01-05', X: 10, Y: 1, A: 5 },
@@ -210,12 +213,12 @@ test.describe('asat Phase 2: @ picker', () => {
       const msg = (await asatError.textContent())?.trim() || '(no message)';
       throw new Error(`@ dropdown retrievals error: ${msg}`);
     }
-    await expect(page.locator('.asat-calendar-nav-btn').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.calendar-grid-nav-btn').first()).toBeVisible({ timeout: 10_000 });
 
     // Go to Jan-26 (previous month once)
-    await page.locator('.asat-calendar-nav-btn').first().click();
+    await page.locator('.calendar-grid-nav-btn').first().click();
 
-    const day20 = page.getByTestId('asat-day-2026-01-20');
+    const day20 = page.getByTestId('calendar-day-2026-01-20');
     await expect(day20).toBeVisible();
     await expect(day20).toHaveClass(/has-snapshot/);
 

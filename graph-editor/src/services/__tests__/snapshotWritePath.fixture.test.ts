@@ -225,10 +225,14 @@ async function queryVirtualSnapshot(params: {
   as_at: string;
   slice_keys?: string[];
 }): Promise<any> {
+  // Frontend must provide core_hash (hash-fixes.md); compute it here for test callers
+  const { computeShortCoreHash } = await import('../coreHashService');
+  const core_hash = await computeShortCoreHash(params.canonical_signature);
+
   const resp = await undiciFetch('http://localhost:9000/api/snapshots/query-virtual', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    body: JSON.stringify({ ...params, core_hash }),
   });
   const text = await resp.text();
   if (!resp.ok) {

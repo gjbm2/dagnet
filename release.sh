@@ -113,7 +113,9 @@ if [[ "$RUN_TESTS" == true ]]; then
 
   # Run Playwright E2E tests
   print_yellow "[2/3] Running Playwright E2E tests..."
-  if ! (cd graph-editor && npm run e2e); then
+  # Keep Playwright output readable during release runs.
+  # To re-enable verbose per-test logs: E2E_VERBOSE=1 ./release.sh --runtests
+  if ! (cd graph-editor && E2E_VERBOSE=0 npm run e2e); then
     echo ""
     print_red "✗ Playwright tests failed!"
     print_red "Release aborted."
@@ -124,7 +126,8 @@ if [[ "$RUN_TESTS" == true ]]; then
   
   # Run Python tests
   print_yellow "[3/3] Running Python tests..."
-  if ! graph-editor/venv/bin/pytest --tb=short -q; then
+  # Run from graph-editor so pytest picks up graph-editor/pytest.ini (incl pythonpath=lib).
+  if ! (cd graph-editor && venv/bin/pytest --tb=short -q); then
     echo ""
     print_red "✗ Python tests failed!"
     print_red "Release aborted."

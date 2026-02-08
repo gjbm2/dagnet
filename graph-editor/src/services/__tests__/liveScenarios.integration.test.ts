@@ -151,6 +151,24 @@ describe('Live Scenarios Integration Tests', () => {
       expect(rebuiltWhatIf).toBe('');
     });
 
+    it('should split and rebuild fetch-only DSL with asat() correctly', () => {
+      const originalDSL = 'window(1-Nov-25:7-Nov-25).context(channel:google).asat(5-Jan-26)';
+
+      const { fetchParts, whatIfParts } = splitDSLParts(originalDSL);
+      const rebuiltFetch = buildFetchDSL(fetchParts);
+      const rebuiltWhatIf = buildWhatIfDSL(whatIfParts);
+
+      expect(fetchParts.window).toEqual({ start: '1-Nov-25', end: '7-Nov-25' });
+      expect(fetchParts.context).toContainEqual({ key: 'channel', value: 'google' });
+      expect(fetchParts.asat).toBe('5-Jan-26');
+
+      expect(whatIfParts.cases).toEqual([]);
+      expect(whatIfParts.visited).toEqual([]);
+
+      expect(rebuiltFetch).toBe(originalDSL);
+      expect(rebuiltWhatIf).toBe('');
+    });
+
     it('should split and rebuild what-if-only DSL correctly', () => {
       const originalDSL = 'case(my-case:treatment).visited(node-a,node-b)';
       
@@ -276,7 +294,7 @@ describe('Live Scenarios Integration Tests', () => {
       
       const effectiveDSL = computeEffectiveFetchDSL(inheritedDSL, scenarioQueryDSL);
       
-      // Should contain window from inherited and both contexts
+      // Context keys build up across layers; different keys should be preserved.
       expect(effectiveDSL).toContain('window(1-Nov-25:7-Nov-25)');
       expect(effectiveDSL).toContain('context(region:uk)');
       expect(effectiveDSL).toContain('context(channel:google)');
@@ -555,7 +573,7 @@ describe('Live Scenarios Integration Tests', () => {
       const inheritedForA = computeInheritedDSL(0, scenarios, baseDSL);
       const effectiveA = computeEffectiveFetchDSL(inheritedForA, 'context(channel:google)');
       
-      // A should have: window from base, region from C, channel from A
+      // A should have: window from base, region from C, channel from A (contexts build up by key)
       expect(effectiveA).toContain('window(1-Nov-25:7-Nov-25)');
       expect(effectiveA).toContain('context(channel:google)');
       expect(effectiveA).toContain('context(region:uk)');

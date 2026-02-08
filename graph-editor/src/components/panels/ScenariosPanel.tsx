@@ -133,7 +133,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     );
   }
   
-  const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour, createLiveScenario, regenerateScenario, regenerateAllLive, putToBase, baseDSL } = scenariosContext;
+  const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour, createLiveScenario, createLiveScenarioFromCurrentDelta, regenerateScenario, regenerateAllLive, putToBase, baseDSL } = scenariosContext;
   const currentTabForShare = tabs.find(t => t.id === tabId);
   const graphFileIdForShare = currentTabForShare?.fileId || '';
   const { canShareScenario, copyStaticScenarioShareLink, copyLiveScenarioShareLink } = useScenarioShareLink(graphFileIdForShare, tabId);
@@ -546,23 +546,23 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       return;
     }
     
-    // Get current DSL from graphStore
-    const currentDSL = graphStore?.getState().currentDSL || '';
-    
-    if (!currentDSL || !currentDSL.trim()) {
-      toast.error('No query DSL set. Select a window or context first.');
-      return;
-    }
-    
     try {
-      const effectiveBaseDSL = baseDSL || graph?.baseDSL || '';
-      let scenarioQueryDSL = currentDSL;
-      
-      if (mode === 'differences') {
-        scenarioQueryDSL = diffQueryDSLFromBase(effectiveBaseDSL, currentDSL);
+      let newScenario;
+      if (mode === 'everything') {
+        const scenarioState = operations.getScenarioState(tabId);
+        const visibleOrder = scenarioState?.visibleScenarioIds || ['base', 'current'];
+        newScenario = await createLiveScenarioFromCurrentDelta(tabId, visibleOrder);
+      } else {
+        // Differences: store diff(currentDSL vs baseDSL) as scenario queryDSL
+        const currentDSL = graphStore?.getState().currentDSL || '';
+        if (!currentDSL || !currentDSL.trim()) {
+          toast.error('No query DSL set. Select a window or context first.');
+          return;
+        }
+        const effectiveBaseDSL = baseDSL || graph?.baseDSL || '';
+        const scenarioQueryDSL = diffQueryDSLFromBase(effectiveBaseDSL, currentDSL);
+        newScenario = await createLiveScenario(scenarioQueryDSL || LIVE_EMPTY_DIFF_DSL, undefined, tabId);
       }
-      
-      const newScenario = await createLiveScenario(scenarioQueryDSL || LIVE_EMPTY_DIFF_DSL, undefined, tabId);
       
       // Make the new scenario visible by default
       await operations.toggleScenarioVisibility(tabId, newScenario.id);
@@ -574,7 +574,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       const errorMessage = error instanceof Error ? error.message : 'Failed to create live scenario';
       toast.error(errorMessage);
     }
-  }, [tabId, graphStore, createLiveScenario, operations, baseDSL, graph]);
+  }, [tabId, graphStore, createLiveScenario, createLiveScenarioFromCurrentDelta, operations, baseDSL, graph]);
   
   // Listen for new scenario event from legend
   useEffect(() => {

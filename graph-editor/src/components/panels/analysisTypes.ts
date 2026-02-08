@@ -21,8 +21,40 @@ import {
   Info,
   Database,
   Calendar,
+  TrendingUp,
   type LucideIcon,
 } from 'lucide-react';
+
+// ============================================================
+// Snapshot Contract — declares DB read requirements for an analysis type
+// See: docs/current/project-db/1-reads.md §7
+// ============================================================
+
+export type ScopeRule =
+  | 'selection_edge'
+  | 'selection_edges'
+  | 'funnel_path'
+  | 'reachable_from'
+  | 'all_graph_parameters';
+
+export type ReadMode = 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity';
+
+export type SlicePolicy = 'explicit' | 'mece_fulfilment_allowed';
+
+export type TimeBoundsSource = 'query_dsl_window' | 'analysis_arguments';
+
+export interface SnapshotContract {
+  /** Which parameters are in scope */
+  scopeRule: ScopeRule;
+  /** What DB query shape is needed */
+  readMode: ReadMode;
+  /** How slices are resolved for each subject */
+  slicePolicy: SlicePolicy;
+  /** How anchor_from/to are derived */
+  timeBoundsSource: TimeBoundsSource;
+  /** Whether per-scenario separation is needed */
+  perScenario: boolean;
+}
 
 export interface AnalysisTypeMeta {
   id: string;
@@ -30,6 +62,8 @@ export interface AnalysisTypeMeta {
   shortDescription: string;
   selectionHint: string;
   icon: LucideIcon;
+  /** If present, this analysis type requires snapshot DB data */
+  snapshotContract?: SnapshotContract;
 }
 
 /**
@@ -159,6 +193,13 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Conversion lag distribution from snapshots',
     selectionHint: 'Select a parameter edge with snapshot history',
     icon: Database,
+    snapshotContract: {
+      scopeRule: 'selection_edge',
+      readMode: 'raw_snapshots',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
   },
   {
     id: 'daily_conversions',
@@ -166,6 +207,27 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Conversion counts by calendar date',
     selectionHint: 'Select a parameter edge with snapshot history',
     icon: Calendar,
+    snapshotContract: {
+      scopeRule: 'selection_edge',
+      readMode: 'raw_snapshots',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
+  },
+  {
+    id: 'cohort_maturity',
+    name: 'Cohort Maturity',
+    shortDescription: 'How conversion rates evolved over time for a cohort range',
+    selectionHint: 'Select a parameter edge with snapshot history and a cohort/window range',
+    icon: TrendingUp,
+    snapshotContract: {
+      scopeRule: 'selection_edge',
+      readMode: 'cohort_maturity',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
   },
 ];
 

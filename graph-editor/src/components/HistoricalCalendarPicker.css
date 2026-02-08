@@ -1,0 +1,154 @@
+/* HistoricalCalendarPicker — popover wrapper around CalendarGrid
+ * for opening historical file versions from git.
+ */
+
+.historical-calendar-popover {
+  position: fixed;
+  z-index: 100000;
+  min-width: 280px;
+  max-width: min(420px, calc(100vw - 40px));
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 10px;
+}
+
+.historical-calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.historical-calendar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.historical-calendar-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #6b7280;
+}
+
+.historical-calendar-close:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+/* Commit submenu — floating popup positioned near the clicked day cell */
+.historical-calendar-submenu {
+  position: fixed;
+  z-index: 100001;
+  min-width: 200px;
+  max-width: 320px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 6px;
+}
+
+.historical-calendar-submenu-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  padding: 2px 6px 4px;
+}
+
+.historical-calendar-commit-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #374151;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.historical-calendar-commit-item:hover {
+  background: #f3f4f6;
+}
+
+.historical-calendar-commit-sha {
+  font-family: monospace;
+  font-size: 11px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.historical-calendar-commit-msg {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historical-calendar-commit-time {
+  font-size: 11px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .historical-calendar-popover {
+    background: #2d2d2d;
+    border-color: #404040;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  }
+
+  .historical-calendar-title {
+    color: #e0e0e0;
+  }
+
+  .historical-calendar-close {
+    color: #999;
+  }
+
+  .historical-calendar-close:hover {
+    background: #3d3d3d;
+    color: #e0e0e0;
+  }
+
+  .historical-calendar-submenu {
+    background: #2d2d2d;
+    border-color: #404040;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+
+  .historical-calendar-submenu-title {
+    color: #999;
+  }
+
+  .historical-calendar-commit-item {
+    color: #e0e0e0;
+  }
+
+  .historical-calendar-commit-item:hover {
+    background: #3d3d3d;
+  }
+
+  .historical-calendar-commit-sha {
+    color: #999;
+  }
+
+  .historical-calendar-commit-time {
+    color: #666;
+  }
+}

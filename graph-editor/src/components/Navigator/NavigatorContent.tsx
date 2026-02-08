@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
@@ -6,6 +6,9 @@ import { NavigatorControls, FilterMode, SortMode, GroupMode } from './NavigatorC
 import { ObjectTypeSection, NavigatorEntry } from './ObjectTypeSection';
 import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
 import { NavigatorSectionContextMenu } from '../NavigatorSectionContextMenu';
+import { HistoricalCalendarPicker } from '../HistoricalCalendarPicker';
+import { historicalFileService, type CommitDateMap, type HistoricalCommit } from '../../services/historicalFileService';
+import toast from 'react-hot-toast';
 import { RepositoryItem, ObjectType } from '../../types';
 import { registryService, RegistryItem } from '../../services/registryService';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
@@ -30,6 +33,91 @@ export function NavigatorContent() {
   const fileRegistry = useFileRegistry();
   const [contextMenu, setContextMenu] = useState<{ item: RepositoryItem; x: number; y: number } | null>(null);
   const [sectionContextMenu, setSectionContextMenu] = useState<{ type: ObjectType; x: number; y: number } | null>(null);
+
+  // Historical calendar — single instance shared across all navigator items
+  const [historicalCalState, setHistoricalCalState] = useState<{
+    fileId: string;
+    isLoading: boolean;
+    commitDates: CommitDateMap;
+  } | null>(null);
+  const historicalAnchorRef = useRef<HTMLElement | null>(null);
+
+  const handleHistoricalCommitSelected = useCallback(async (commit: HistoricalCommit) => {
+    if (!historicalCalState) return;
+    const toastId = toast.loading(`Opening at ${commit.dateUK}…`);
+    try {
+      const tabId = await historicalFileService.openHistoricalVersion(
+        historicalCalState.fileId,
+        commit,
+        state.selectedRepo,
+      );
+      if (tabId) {
+        toast.success(`Opened historical version (${commit.dateUK})`, { id: toastId });
+      } else {
+        toast.error('Failed to open historical version', { id: toastId });
+      }
+    } catch (error) {
+      toast.error(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: toastId });
+    }
+    setHistoricalCalState(null);
+    // Clean up virtual anchor
+    if (historicalAnchorRef.current) {
+      try { document.body.removeChild(historicalAnchorRef.current); } catch { /* ok */ }
+      historicalAnchorRef.current = null;
+    }
+  }, [historicalCalState, state.selectedRepo]);
+
+  // Listen for the dagnet:openHistoricalCalendar event from NavigatorItem @ buttons
+  useEffect(() => {
+    const handleOpenHistorical = async (event: CustomEvent<{ fileId: string; anchorRect: DOMRect | null }>) => {
+      const { fileId, anchorRect } = event.detail;
+
+      // Position the anchor
+      if (anchorRect) {
+        const virtualAnchor = document.createElement('div');
+        virtualAnchor.style.cssText = `position:fixed;left:${anchorRect.left}px;top:${anchorRect.top}px;width:${anchorRect.width}px;height:${anchorRect.height}px;pointer-events:none;`;
+        document.body.appendChild(virtualAnchor);
+        historicalAnchorRef.current = virtualAnchor;
+        // Keep it around until calendar closes (cleaned up below)
+      }
+
+      // Open with loading state
+      setHistoricalCalState({ fileId, isLoading: true, commitDates: new Map() });
+
+      try {
+        const dates = await historicalFileService.getCommitDates(
+          fileId,
+          state.selectedRepo,
+          state.selectedBranch,
+        );
+        if (dates.size === 0) {
+          toast('No historical versions found', { icon: 'ℹ️' });
+          setHistoricalCalState(null);
+          cleanupVirtualAnchor();
+          return;
+        }
+        setHistoricalCalState({ fileId, isLoading: false, commitDates: dates });
+      } catch (error) {
+        toast.error(`Failed to load history: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        setHistoricalCalState(null);
+        cleanupVirtualAnchor();
+      }
+    };
+
+    const cleanupVirtualAnchor = () => {
+      if (historicalAnchorRef.current) {
+        try { document.body.removeChild(historicalAnchorRef.current); } catch { /* already removed */ }
+        historicalAnchorRef.current = null;
+      }
+    };
+
+    const handler = ((event: Event) => handleOpenHistorical(event as CustomEvent<{ fileId: string; anchorRect: DOMRect | null }>)) as EventListener;
+    window.addEventListener('dagnet:openHistoricalCalendar', handler);
+    return () => {
+      window.removeEventListener('dagnet:openHistoricalCalendar', handler);
+      cleanupVirtualAnchor();
+    };
+  }, [state.selectedRepo, state.selectedBranch]);
   const [dirtyStateVersion, setDirtyStateVersion] = useState(0); // Force re-render on dirty state changes
   const [registryItems, setRegistryItems] = useState<{
     parameters: RegistryItem[];
@@ -577,6 +665,24 @@ export function NavigatorContent() {
           x={sectionContextMenu.x}
           y={sectionContextMenu.y}
           onClose={() => setSectionContextMenu(null)}
+        />
+      )}
+
+      {/* Historical calendar picker — single shared instance for all navigator items */}
+      {historicalCalState && (
+        <HistoricalCalendarPicker
+          commitDates={historicalCalState.commitDates}
+          isLoading={historicalCalState.isLoading}
+          onCommitSelected={handleHistoricalCommitSelected}
+          onClose={() => {
+            setHistoricalCalState(null);
+            // Clean up virtual anchor
+            if (historicalAnchorRef.current) {
+              try { document.body.removeChild(historicalAnchorRef.current); } catch { /* ok */ }
+              historicalAnchorRef.current = null;
+            }
+          }}
+          anchorRef={historicalAnchorRef}
         />
       )}
     </div>

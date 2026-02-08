@@ -492,6 +492,38 @@
   color: #666;
 }
 
+/* Actions container (@ icon + tab count) */
+.navigator-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+/* Hover-revealed @ icon for opening historical versions */
+.navigator-item-history-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  color: #9ca3af;
+  opacity: 0.5;
+  transition: opacity 0.15s ease, color 0.15s ease;
+  padding: 0;
+}
+
+.navigator-item-history-btn:hover {
+  opacity: 1;
+  color: #1976d2;
+  background: rgba(25, 118, 210, 0.08);
+}
+
 .navigator-item-status {
   display: flex;
   align-items: center;
@@ -662,6 +694,15 @@
 
   .navigator-item-name.in-index-only {
     color: #999;
+  }
+
+  .navigator-item-history-btn {
+    color: #666;
+  }
+
+  .navigator-item-history-btn:hover {
+    color: #90caf9;
+    background: rgba(144, 202, 249, 0.1);
   }
 
   .section-index-icon:hover {

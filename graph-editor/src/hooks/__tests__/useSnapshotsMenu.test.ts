@@ -39,6 +39,7 @@ vi.mock('../../contexts/DialogContext', () => ({
 vi.mock('../../contexts/TabContext', () => ({
   fileRegistry: {
     getFile: () => ({
+      source: { repository: 'r', branch: 'b' },
       data: {
         values: [
           { query_signature: '{"c":"sig-core","x":{}}', data_source: { retrieved_at: '2026-02-04T00:00:00Z' } },
@@ -254,6 +255,54 @@ describe('useSnapshotsMenu', () => {
     expect(result.current.matchedCoreHashes['param-a']).toEqual([]);
     // Count should fall back to overall_all_families
     expect(result.current.snapshotCounts['param-a']).toBe(10);
+  });
+
+  it('falls back to overall_all_families when matched family exists but has no data', async () => {
+    getBatchInventoryV2Mock.mockResolvedValue({
+      'r-b-param-a': {
+        overall_all_families: {
+          earliest_anchor_day: '2025-12-01',
+          latest_anchor_day: '2025-12-10',
+          row_count: 10,
+          unique_anchor_days: 10,
+          unique_retrievals: 2,
+          unique_retrieved_days: 10,
+          earliest_retrieved_at: '2025-12-11T00:00:00Z',
+          latest_retrieved_at: '2025-12-12T00:00:00Z',
+        },
+        current: {
+          matched_family_id: 'fam-empty',
+          match_mode: 'equivalent',
+        },
+        families: [
+          {
+            family_id: 'fam-empty',
+            overall: {
+              earliest_anchor_day: null,
+              latest_anchor_day: null,
+              row_count: 0,
+              unique_anchor_days: 0,
+              unique_retrievals: 0,
+              unique_retrieved_days: 0,
+              earliest_retrieved_at: null,
+              latest_retrieved_at: null,
+            },
+            slices: [],
+            member_core_hashes: ['h-new'],
+          },
+        ],
+        unlinked_core_hashes: [],
+      },
+    });
+
+    const { result } = renderHook(() => useSnapshotsMenu(['param-a']));
+    await act(async () => {});
+
+    // Should NOT show 0 just because current signature has no snapshots.
+    expect(result.current.snapshotCounts['param-a']).toBe(10);
+    expect(result.current.inventories['param-a']?.row_count).toBe(10);
+    // Should not scope to a non-existent family by default.
+    expect(result.current.matchedCoreHashes['param-a']).toEqual([]);
   });
 });
 

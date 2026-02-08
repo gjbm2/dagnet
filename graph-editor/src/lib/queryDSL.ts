@@ -77,6 +77,19 @@ export interface ParsedConstraints {
   window: { start?: string; end?: string } | null;  // Time window for data retrieval (X-anchored)
   cohort: { anchor?: string; start?: string; end?: string } | null;  // Cohort entry window (A-anchored for latency edges)
   asat: string | null;  // Historical query: snapshot retrieval as-at date (UK format: d-MMM-yy)
+
+  /**
+   * Clause presence flags.
+   *
+   * Why:
+   * - We need to distinguish "no clause provided" (inherit) from "clause provided but empty" (explicit clear),
+   *   e.g. `context()` means "clear context" for scenario delta DSL.
+   *
+   * These are optional for backward compatibility with older call sites that construct ParsedConstraints literals.
+   */
+  contextClausePresent?: boolean;
+  contextAnyClausePresent?: boolean;
+  asatClausePresent?: boolean;
 }
 
 export type ContextCombination = Record<string, string>; // NEW: e.g. {channel: 'google', 'browser-type': 'chrome'}
@@ -181,7 +194,10 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
       contextAny: [],
       window: null,
       cohort: null,
-      asat: null
+      asat: null,
+      contextClausePresent: false,
+      contextAnyClausePresent: false,
+      asatClausePresent: false,
     };
   }
   
@@ -195,6 +211,12 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
   let window: { start?: string; end?: string } | null = null;
   let cohort: { anchor?: string; start?: string; end?: string } | null = null;
   let asat: string | null = null;
+
+  // Clause presence flags (see interface docs).
+  // These allow expressing "explicit clear" via empty clauses like `context()` and `contextAny()`.
+  const contextClausePresent = /(?:^|\.)context\(/.test(constraint);
+  const contextAnyClausePresent = /(?:^|\.)contextAny\(/.test(constraint);
+  const asatClausePresent = /(?:^|\.)(?:asat|at)\(/.test(constraint);
   
   // Match visited(...) - can appear multiple times
   const visitedMatches = constraint.matchAll(/visited\(([^)]+)\)/g);
@@ -309,9 +331,10 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
   // Match asat(date) or at(date) - historical query snapshot retrieval date
   // Both forms are supported; normalisation emits asat() only
   // Order-indifferent: can appear anywhere in the constraint chain
-  const asatMatch = constraint.match(/(?:asat|at)\(([^)]+)\)/);
+  const asatMatch = constraint.match(/(?:asat|at)\(([^)]*)\)/);
   if (asatMatch) {
-    asat = asatMatch[1].trim();
+    const token = asatMatch[1].trim();
+    asat = token ? token : null;
   }
   
   // Deduplicate visited/exclude preserving order
@@ -363,7 +386,10 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
     contextAny,
     window,
     cohort,
-    asat
+    asat,
+    contextClausePresent,
+    contextAnyClausePresent,
+    asatClausePresent,
   };
 }
 
@@ -501,18 +527,26 @@ export function normalizeConstraintString(constraint: string): string {
       .map(({key, value}) => `case(${key}:${value})`);
     parts.push(...caseParts);
   }
-  if (parsed.context.length > 0) {
-    const contextParts = parsed.context
-      .sort((a, b) => a.key.localeCompare(b.key))
-      .map(({key, value}) => `context(${key}:${value})`);
-    parts.push(...contextParts);
+  if (parsed.contextClausePresent) {
+    if (parsed.context.length === 0) {
+      parts.push('context()');
+    } else {
+      const contextParts = parsed.context
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(({key, value}) => value ? `context(${key}:${value})` : `context(${key})`);
+      parts.push(...contextParts);
+    }
   }
-  if (parsed.contextAny.length > 0) {
-    for (const ca of parsed.contextAny) {
-      const pairStrs = ca.pairs
-        .map(p => `${p.key}:${p.value}`)
-        .sort();
-      parts.push(`contextAny(${pairStrs.join(',')})`);
+  if (parsed.contextAnyClausePresent) {
+    if (parsed.contextAny.length === 0) {
+      parts.push('contextAny()');
+    } else {
+      for (const ca of parsed.contextAny) {
+        const pairStrs = ca.pairs
+          .map(p => `${p.key}:${p.value}`)
+          .sort();
+        parts.push(`contextAny(${pairStrs.join(',')})`);
+      }
     }
   }
   if (parsed.window) {
@@ -557,17 +591,21 @@ export function normalizeConstraintString(constraint: string): string {
   }
   // asat: Always emit as asat(...) (never at(...)) for canonical form
   // Normalize date to d-MMM-yy format if it's an absolute date
-  if (parsed.asat) {
-    let normalizedAsatDate = parsed.asat;
-    // If not a relative offset, try to normalise to d-MMM-yy
-    if (!parsed.asat.match(/^-?\d+[dwmy]$/)) {
-      try {
-        normalizedAsatDate = formatDateUK(parsed.asat);
-      } catch {
-        // If parse fails, keep original
+  if (parsed.asatClausePresent) {
+    if (!parsed.asat) {
+      parts.push('asat()');
+    } else {
+      let normalizedAsatDate = parsed.asat;
+      // If not a relative offset, try to normalise to d-MMM-yy
+      if (!parsed.asat.match(/^-?\d+[dwmy]$/)) {
+        try {
+          normalizedAsatDate = formatDateUK(parsed.asat);
+        } catch {
+          // If parse fails, keep original
+        }
       }
+      parts.push(`asat(${normalizedAsatDate})`);
     }
-    parts.push(`asat(${normalizedAsatDate})`);
   }
   
   return parts.join('.');
@@ -609,16 +647,24 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   const mergedVisited = [...new Set([...existing.visited, ...newParsed.visited])];
   const mergedExclude = [...new Set([...existing.exclude, ...newParsed.exclude])];
   
-  // For context: new KEY replaces existing KEY (only one value per key)
-  // Start with existing, then override with new values for same keys
-  const contextMap = new Map<string, string>();
-  for (const kv of existing.context) {
-    contextMap.set(kv.key, kv.value);
-  }
-  for (const kv of newParsed.context) {
-    contextMap.set(kv.key, kv.value); // Overwrites existing key
-  }
-  const mergedContext = Array.from(contextMap.entries()).map(([key, value]) => ({ key, value }));
+  // For context:
+  // - Context keys can build up across layers.
+  // - A context with the SAME key overrides the inherited value for that key.
+  // - An explicit empty `context()` is a whole-axis clear (remove all context keys).
+  // - If the new constraint contains no context() clause, we inherit existing context unchanged.
+  const mergedContext = (() => {
+    if (!newParsed.contextClausePresent) return existing.context;
+    if (newParsed.context.length === 0) return []; // explicit clear
+
+    const map = new Map<string, { key: string; value: string }>();
+    for (const kv of existing.context) {
+      map.set(kv.key, { key: kv.key, value: kv.value });
+    }
+    for (const kv of newParsed.context) {
+      map.set(kv.key, { key: kv.key, value: kv.value });
+    }
+    return Array.from(map.values());
+  })();
   
   // For cases: new KEY replaces existing KEY (only one case value per case key)
   const casesMap = new Map<string, string>();
@@ -631,7 +677,9 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   const mergedCases = Array.from(casesMap.entries()).map(([key, value]) => ({ key, value }));
   
   const mergedVisitedAny = [...existing.visitedAny, ...newParsed.visitedAny];
-  const mergedContextAny = [...existing.contextAny, ...newParsed.contextAny];
+  // For contextAny: also a MECE fetch axis (whole-axis replace; empty means clear).
+  const mergedContextAny =
+    newParsed.contextAnyClausePresent ? newParsed.contextAny : existing.contextAny;
   // For window/cohort: date mode is MUTUALLY EXCLUSIVE.
   //
   // In scenario stacking, if an upper layer introduces a cohort(), it must override (and clear)
@@ -649,8 +697,15 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   const mergedCohort =
     hasNewCohort ? newParsed.cohort : (hasNewWindow ? null : existing.cohort);
   
-  // For asat: new layer overrides existing (same inheritance pattern as window/cohort)
-  const mergedAsat = newParsed.asat ?? existing.asat;
+  // For asat: MECE axis with explicit clear support via empty `asat()`.
+  const mergedAsat =
+    newParsed.asatClausePresent ? newParsed.asat : (newParsed.asat ?? existing.asat);
+  const mergedAsatClausePresent =
+    newParsed.asatClausePresent ? true : !!existing.asatClausePresent;
+
+  // Carry clause presence flags through so we can emit explicit clears (context()/contextAny()).
+  const mergedContextClausePresent = newParsed.contextClausePresent ? true : !!existing.contextClausePresent;
+  const mergedContextAnyClausePresent = newParsed.contextAnyClausePresent ? true : !!existing.contextAnyClausePresent;
   
   // Rebuild DSL using normalize (ensures canonical order)
   const merged: ParsedConstraints = {
@@ -662,7 +717,10 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
     contextAny: mergedContextAny,
     window: mergedWindow,
     cohort: mergedCohort,
-    asat: mergedAsat
+    asat: mergedAsat,
+    contextClausePresent: mergedContextClausePresent,
+    contextAnyClausePresent: mergedContextAnyClausePresent,
+    asatClausePresent: mergedAsatClausePresent,
   };
   
   // Use normalizeConstraintString to rebuild (ensures canonical order)
@@ -680,12 +738,20 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   if (merged.cases.length > 0) {
     parts.push(...merged.cases.sort((a,b) => a.key.localeCompare(b.key)).map(c => `case(${c.key}:${c.value})`));
   }
-  if (merged.context.length > 0) {
-    parts.push(...merged.context.sort((a,b) => a.key.localeCompare(b.key)).map(c => `context(${c.key}:${c.value})`));
+  if (merged.contextClausePresent) {
+    if (merged.context.length === 0) {
+      parts.push('context()');
+    } else {
+      parts.push(...merged.context.sort((a,b) => a.key.localeCompare(b.key)).map(c => c.value ? `context(${c.key}:${c.value})` : `context(${c.key})`));
+    }
   }
-  if (merged.contextAny.length > 0) {
-    for (const ca of merged.contextAny) {
-      parts.push(`contextAny(${ca.pairs.map(p => `${p.key}:${p.value}`).sort().join(',')})`);
+  if (merged.contextAnyClausePresent) {
+    if (merged.contextAny.length === 0) {
+      parts.push('contextAny()');
+    } else {
+      for (const ca of merged.contextAny) {
+        parts.push(`contextAny(${ca.pairs.map(p => `${p.key}:${p.value}`).sort().join(',')})`);
+      }
     }
   }
   if (merged.window) {
@@ -698,8 +764,9 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
       parts.push(`cohort(${merged.cohort.start || ''}:${merged.cohort.end || ''})`);
     }
   }
-  if (merged.asat) {
-    parts.push(`asat(${merged.asat})`);
+  if (merged.asatClausePresent) {
+    if (!merged.asat) parts.push('asat()');
+    else parts.push(`asat(${merged.asat})`);
   }
   
   return parts.join('.');

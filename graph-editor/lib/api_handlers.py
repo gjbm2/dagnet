@@ -178,24 +178,34 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     
     Args:
         data: Request body containing EITHER:
-            Scenario-based analysis:
+            Scenario-based analysis (with optional per-scenario snapshot_subjects):
                 - scenarios: List of scenario data (required)
+                  Each scenario may carry snapshot_subjects[] (per-scenario DB coordinates)
                 - query_dsl: DSL query string (optional)
                 - analysis_type: Override analysis type (optional)
             
-            Snapshot-based analysis:
+            Legacy snapshot-based analysis:
                 - snapshot_query: {param_id, core_hash, anchor_from, anchor_to, slice_keys?}
                 - analysis_type: 'lag_histogram' | 'daily_conversions'
     
     Returns:
         Analysis results
     """
-    # Check for snapshot-based analysis first
+    # New path: per-scenario snapshot_subjects
+    # Check if any scenario carries snapshot_subjects (per-scenario architecture)
+    scenarios_with_snapshots = [
+        s for s in data.get('scenarios', [])
+        if s.get('snapshot_subjects')
+    ]
+    if scenarios_with_snapshots:
+        return _handle_snapshot_analyze_subjects(data)
+
+    # Legacy path: snapshot_query (single subject)
     snapshot_query = data.get('snapshot_query')
     if snapshot_query:
-        return _handle_snapshot_analyze(data)
+        return _handle_snapshot_analyze_legacy(data)
     
-    # Standard scenario-based analysis
+    # Standard scenario-based analysis (no snapshot data needed)
     from runner import analyze
     from runner.types import AnalysisRequest, ScenarioData
     
@@ -227,9 +237,173 @@ def handle_runner_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
     return response.model_dump()
 
 
-def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
+def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Handle snapshot-based analysis within runner/analyze endpoint.
+    Handle snapshot-based analysis using per-scenario snapshot_subjects.
+    
+    Each scenario may carry its own `snapshot_subjects` array (derived from that
+    scenario's effective DSL).  The backend processes each scenario's subjects
+    independently and returns results grouped by scenario.
+    
+    See: docs/current/project-db/1-reads.md §9
+    """
+    from datetime import date, datetime
+    from snapshot_service import query_snapshots, query_snapshots_for_sweep
+    from runner.histogram_derivation import derive_lag_histogram
+    from runner.daily_conversions_derivation import derive_daily_conversions
+    from runner.cohort_maturity_derivation import derive_cohort_maturity
+
+    analysis_type = data.get('analysis_type', 'lag_histogram')
+    scenarios = data.get('scenarios', [])
+
+    per_scenario_results: List[Dict[str, Any]] = []
+    total_rows = 0
+
+    for scenario in scenarios:
+        scenario_id = scenario.get('scenario_id', 'unknown')
+        subjects = scenario.get('snapshot_subjects')
+        if not subjects:
+            # No snapshot subjects for this scenario — skip snapshot analysis
+            per_scenario_results.append({
+                "scenario_id": scenario_id,
+                "success": True,
+                "subjects": [],
+                "rows_analysed": 0,
+            })
+            continue
+
+        per_subject_results: List[Dict[str, Any]] = []
+        scenario_rows = 0
+
+        for subj in subjects:
+            # Validate required fields (all frontend-computed)
+            if not subj.get('param_id'):
+                raise ValueError(f"snapshot_subjects[].param_id required (scenario={scenario_id}, subject_id={subj.get('subject_id')})")
+            if not subj.get('core_hash'):
+                raise ValueError(f"snapshot_subjects[].core_hash required (scenario={scenario_id}, subject_id={subj.get('subject_id')})")
+            if not subj.get('anchor_from'):
+                raise ValueError(f"snapshot_subjects[].anchor_from required (scenario={scenario_id}, subject_id={subj.get('subject_id')})")
+            if not subj.get('anchor_to'):
+                raise ValueError(f"snapshot_subjects[].anchor_to required (scenario={scenario_id}, subject_id={subj.get('subject_id')})")
+
+            read_mode = subj.get('read_mode', 'raw_snapshots')
+
+            if read_mode == 'cohort_maturity':
+                # Cohort maturity: use sweep query
+                sweep_from = date.fromisoformat(subj['sweep_from']) if subj.get('sweep_from') else None
+                sweep_to = date.fromisoformat(subj['sweep_to']) if subj.get('sweep_to') else None
+
+                rows = query_snapshots_for_sweep(
+                    param_id=subj['param_id'],
+                    core_hash=subj['core_hash'],
+                    slice_keys=subj.get('slice_keys', ['']),
+                    anchor_from=date.fromisoformat(subj['anchor_from']),
+                    anchor_to=date.fromisoformat(subj['anchor_to']),
+                    sweep_from=sweep_from,
+                    sweep_to=sweep_to,
+                )
+
+                scenario_rows += len(rows)
+
+                if not rows:
+                    per_subject_results.append({
+                        "subject_id": subj.get('subject_id'),
+                        "success": False,
+                        "error": "No snapshot data found for sweep",
+                    })
+                    continue
+
+                result = derive_cohort_maturity(
+                    rows,
+                    sweep_from=subj.get('sweep_from'),
+                    sweep_to=subj.get('sweep_to'),
+                )
+            else:
+                # raw_snapshots / virtual_snapshot: existing query path
+                as_at = None
+                if subj.get('as_at'):
+                    as_at = datetime.fromisoformat(str(subj['as_at']).replace('Z', '+00:00'))
+
+                rows = query_snapshots(
+                    param_id=subj['param_id'],
+                    core_hash=subj['core_hash'],
+                    slice_keys=subj.get('slice_keys', ['']),
+                    anchor_from=date.fromisoformat(subj['anchor_from']),
+                    anchor_to=date.fromisoformat(subj['anchor_to']),
+                    as_at=as_at,
+                )
+
+                scenario_rows += len(rows)
+
+                if not rows:
+                    per_subject_results.append({
+                        "subject_id": subj.get('subject_id'),
+                        "success": False,
+                        "error": "No snapshot data found",
+                    })
+                    continue
+
+                # Route to appropriate derivation
+                if analysis_type == 'lag_histogram':
+                    result = derive_lag_histogram(rows)
+                elif analysis_type == 'daily_conversions':
+                    result = derive_daily_conversions(rows)
+                elif analysis_type == 'cohort_maturity':
+                    # Fallback: cohort_maturity without cohort_maturity read_mode
+                    result = derive_cohort_maturity(rows)
+                else:
+                    raise ValueError(f"Unknown analysis_type for snapshot: {analysis_type}")
+
+            per_subject_results.append({
+                "subject_id": subj.get('subject_id'),
+                "success": True,
+                "result": result,
+                "rows_analysed": len(rows),
+            })
+
+        total_rows += scenario_rows
+        per_scenario_results.append({
+            "scenario_id": scenario_id,
+            "success": any(s.get("success") for s in per_subject_results) if per_subject_results else True,
+            "subjects": per_subject_results,
+            "rows_analysed": scenario_rows,
+        })
+
+    # Simplify response for single-scenario / single-subject cases
+    if len(per_scenario_results) == 1:
+        single_scenario = per_scenario_results[0]
+        subjects_list = single_scenario.get("subjects", [])
+        if len(subjects_list) == 1:
+            # Single scenario, single subject — flatten fully
+            single = subjects_list[0]
+            return {
+                "success": single.get("success", False),
+                "result": single.get("result"),
+                "error": single.get("error"),
+                "rows_analysed": single.get("rows_analysed", 0),
+                "subject_id": single.get("subject_id"),
+                "scenario_id": single_scenario.get("scenario_id"),
+            }
+        # Single scenario, multiple subjects
+        return {
+            "success": single_scenario.get("success", False),
+            "scenario_id": single_scenario.get("scenario_id"),
+            "subjects": subjects_list,
+            "rows_analysed": single_scenario.get("rows_analysed", 0),
+        }
+
+    # Multi-scenario: return grouped by scenario
+    any_success = any(s.get("success") for s in per_scenario_results)
+    return {
+        "success": any_success,
+        "scenarios": per_scenario_results,
+        "rows_analysed": total_rows,
+    }
+
+
+def _handle_snapshot_analyze_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Legacy handler: snapshot_query (single-subject, used by older callers).
     
     Queries snapshot DB and derives analytics (histogram, daily conversions).
     """
@@ -284,6 +458,23 @@ def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
         "result": result,
         "rows_analysed": len(rows),
     }
+
+
+# ----------------------------------------------------------------------------
+# Test compatibility shim
+# ----------------------------------------------------------------------------
+def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Backwards-compatible helper retained for existing tests.
+
+    Historically tests imported `_handle_snapshot_analyze` directly and passed a legacy
+    `snapshot_query` payload. The production entrypoint is `handle_runner_analyze()`,
+    which now dispatches between per-scenario snapshot_subjects and the legacy single
+    snapshot_query format.
+
+    This wrapper preserves the older test import without changing runtime behaviour.
+    """
+    return _handle_snapshot_analyze_legacy(data)
 
 
 def handle_runner_available_analyses(data: Dict[str, Any]) -> Dict[str, Any]:

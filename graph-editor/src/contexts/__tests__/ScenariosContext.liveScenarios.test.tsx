@@ -100,6 +100,7 @@ import { fetchOrchestratorService } from '../../services/fetchOrchestratorServic
 import { db } from '../../db/appDatabase';
 import { recomputeOpenChartsForGraph } from '../../services/chartRecomputeService';
 import { autoUpdatePolicyService } from '../../services/autoUpdatePolicyService';
+import { LIVE_EMPTY_DIFF_DSL } from '../../services/scenarioRegenerationService';
 
 // Helper to create wrapper with provider - fileId is required for context to work correctly
 function createWrapper(fileId = 'test-file') {
@@ -382,6 +383,47 @@ describe('ScenariosContext - Live Scenarios', () => {
       expect(newScenario.meta?.queryDSL).toBe(queryDSL);
     });
 
+    it('should create live scenario as MECE delta vs visible stack (clear context + asat)', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      await waitForReady(result);
+
+      // Current DSL (from GraphStore mock) is: window(1-Nov-25:7-Nov-25)
+      // Make Base include extra fetch axes so the delta must explicitly clear them.
+      await act(() => {
+        result.current.setBaseDSL('window(1-Nov-25:7-Nov-25).context(region:uk).asat(5-Nov-25)');
+      });
+
+      let newScenario: any;
+      await act(async () => {
+        newScenario = await result.current.createLiveScenarioFromCurrentDelta('test-tab', ['base', 'current']);
+      });
+
+      expect(newScenario.meta?.isLive).toBe(true);
+      expect(newScenario.meta?.queryDSL).toBe('context().asat()');
+    });
+
+    it('should store LIVE_EMPTY_DIFF_DSL when Current equals visible stack effective DSL', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      await waitForReady(result);
+
+      await act(() => {
+        result.current.setBaseDSL('window(1-Nov-25:7-Nov-25)');
+      });
+
+      let newScenario: any;
+      await act(async () => {
+        newScenario = await result.current.createLiveScenarioFromCurrentDelta('test-tab', ['base', 'current']);
+      });
+
+      expect(newScenario.meta?.queryDSL).toBe(LIVE_EMPTY_DIFF_DSL);
+    });
+
     it('should generate smart label from queryDSL when no name provided', async () => {
       const { result } = renderHook(() => useScenariosContext(), {
         wrapper: createWrapper(),
@@ -504,6 +546,42 @@ describe('ScenariosContext - Live Scenarios', () => {
       // Stage-2 (LAG topo + inbound-n + evidence/forecast blending) must run unless explicitly disabled.
       expect((fetchOrchestratorService as any).refreshFromFilesWithRetries).toHaveBeenCalledWith(
         expect.objectContaining({ skipStage2: false })
+      );
+    });
+
+    it('should propagate asat() from baseDSL into the effective fetch DSL', async () => {
+      const { result } = renderHook(() => useScenariosContext(), {
+        wrapper: createWrapper(),
+      });
+
+      await waitForReady(result);
+
+      let scenario: any;
+      await act(async () => {
+        scenario = await result.current.createLiveScenario('context(channel:google)', undefined, 'test-tab');
+      });
+
+      await act(async () => {
+        result.current.setBaseDSL('window(1-Nov-25:7-Nov-25).asat(5-Jan-26)');
+      });
+
+      await waitFor(() => {
+        expect(result.current.scenarios.length).toBeGreaterThan(0);
+      });
+
+      await act(async () => {
+        await result.current.regenerateScenario(scenario.id, scenario);
+      });
+
+      expect((fetchOrchestratorService as any).buildPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dsl: expect.stringContaining('asat(5-Jan-26)'),
+        })
+      );
+      expect((fetchOrchestratorService as any).refreshFromFilesWithRetries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dsl: expect.stringContaining('asat(5-Jan-26)'),
+        })
       );
     });
 

@@ -1,6 +1,6 @@
 # Snapshot DB Reads: Design Specification
 
-**Status**: Draft (revised 8-Feb-26)  
+**Status**: Phase 1–4 complete; per-scenario refactor complete (8-Feb-26)  
 **Date**: 8-Feb-26  
 **Related**: `00-snapshot-db-design.md` §2, `hash-fixes.md`, `analysis-forecasting.md`
 
@@ -57,13 +57,17 @@ User triggers analysis (AnalyticsPanel)
     │    ├─ slice_keys (from DSL context + MECE resolution)
     │    └─ target.targetId (so backend can find authoritative t95 constraint from graph edge)
     │
-    ├─ Frontend: POST /api/runner/analyze
-    │    Body: { analysis_type, query_dsl, scenarios, snapshot_subjects }
+    ├─ Frontend: for EACH scenario, derive effective DSL and build scenario-specific
+    │    FetchPlan → snapshot_subjects (live scenarios have their own DSL)
     │
-    └─ Backend: for each subject, query DB using provided coordinates
+    ├─ Frontend: POST /api/runner/analyze
+    │    Body: { analysis_type, query_dsl, scenarios: [{ ..., snapshot_subjects }, ...] }
+    │    (snapshot_subjects are PER SCENARIO, not global)
+    │
+    └─ Backend: for each scenario's subjects, query DB using provided coordinates
          ├─ Uses core_hash directly (no derivation)
          ├─ Runs appropriate derivation function
-         └─ Returns analysis result
+         └─ Returns analysis result grouped by scenario
 ```
 
 ### 3.2 Single Trip
@@ -153,7 +157,9 @@ interface SnapshotContract {
   /** How anchor_from/to are derived */
   timeBoundsSource: 'query_dsl_window' | 'analysis_arguments';
 
-  /** Whether per_scenario separation is needed */
+  /** Whether per_scenario separation is needed (NOTE: snapshot_subjects are always
+      per-scenario at the wire level; this flag controls whether the *analysis type*
+      semantically requires scenario-specific results vs a single aggregated result) */
   perScenario: boolean;
 }
 
@@ -234,19 +240,26 @@ interface SnapshotSubjectRequest {
 ### 8.2 Analysis Request (extended)
 
 ```typescript
+interface ScenarioData {
+  scenario_id: string;
+  name?: string;
+  colour?: string;
+  visibility_mode?: 'f+e' | 'f' | 'e';
+  graph: any;
+  param_overrides?: Record<string, any>;
+
+  // Per-scenario snapshot DB coordinates (only for analysis types with snapshotContract)
+  snapshot_subjects?: SnapshotSubjectRequest[];
+}
+
 interface RunnerAnalyzeRequest {
   analysis_type: string;
   query_dsl?: string;
-
-  // Existing: scenario graphs for graph-based analyses
-  scenarios?: ScenarioData[];
-
-  // NEW: snapshot subjects for DB-backed analyses
-  snapshot_subjects?: SnapshotSubjectRequest[];
+  scenarios: ScenarioData[];
 }
 ```
 
-Note: `snapshot_subjects` is a flat list, not grouped by scenario. For `perScenario: true` analysis types, the `subject_id` includes the scenario context and the frontend emits subjects per scenario. The backend does not need to understand scenario grouping — it just queries each subject it's given.
+**Per-scenario architecture**: `snapshot_subjects` is carried on each `ScenarioData`, not at the top level. Each scenario (especially live scenarios) can have a different effective DSL and thus different snapshot subjects. The frontend builds a `FetchPlan` per scenario using that scenario's effective DSL (`meta.lastEffectiveDSL` for live scenarios, `queryDSL` for the current layer), then maps each plan to `SnapshotSubjectRequest[]`. Scenarios without snapshot data (e.g. non-live scenarios or analyses that don't need snapshots) simply omit `snapshot_subjects`.
 
 **Forecasting metadata**: The snapshot DB rows each carry per-anchor-day `median_lag_days`, `mean_lag_days`, and `onset_delta_days`. The backend aggregates these from the retrieved rows to fit the lognormal model. The graph edge's `edge.p.latency.t95` (located via `target.targetId`) is used as an **authoritative constraint** on the fit (one-way: can only widen sigma, never narrow). Note: `edge.p.latency.median_lag_days` and `edge.p.latency.mean_lag_days` are **display outputs** from the frontend's last enhancement pass, not primary fitting inputs — the backend computes aggregates from the actual snapshot data being analysed.
 
@@ -254,12 +267,14 @@ Note: `snapshot_subjects` is a flat list, not grouped by scenario. For `perScena
 
 ## 9. Resolver Algorithm
 
-The resolver is a new frontend service: `snapshotDependencyPlanService.ts`.
+The resolver is `snapshotDependencyPlanService.ts` — a thin mapper over the existing `FetchPlan`.
 
-**Inputs**:
+The resolver runs **once per scenario**. For multi-scenario requests, the `AnalyticsPanel` iterates over visible scenarios and calls the resolver for each, using that scenario's effective DSL.
+
+**Inputs (per scenario)**:
 - `analysis_type` (to look up the contract)
-- scenario graph(s)
-- `query_dsl`
+- scenario graph (the composed graph for this scenario)
+- effective DSL for this scenario (`meta.lastEffectiveDSL` for live scenarios, panel `queryDSL` for current layer)
 - selection (selectedEdgeUuids, selectedNodeUuids)
 - workspace (repo, branch)
 
@@ -281,7 +296,7 @@ The resolver is a new frontend service: `snapshotDependencyPlanService.ts`.
    - For `cohort_maturity` mode: set `sweep_from` = `anchor_from`, `sweep_to` = today (or as specified)
    - Convert UK dates to ISO at the API boundary
 
-5. **Resolve slice keys** for each subject:
+5. **Resolve slice keys** for each subject:d
    - Read the parameter file's persisted values
    - If `slicePolicy === 'explicit'`: use DSL context constraints to determine slice key, or `['']`
    - If `slicePolicy === 'mece_fulfilment_allowed'`: use `resolveMECEPartitionForImplicitUncontextedSync()` to find MECE partition keys when the semantic series is uncontexted
@@ -302,37 +317,33 @@ Note: lag fit metadata is NOT included in the subject request. The backend deriv
 
 ### 10.1 Handler Changes
 
-`_handle_snapshot_analyze` in `api_handlers.py` is extended to accept `snapshot_subjects`:
+`_handle_snapshot_analyze_subjects` in `api_handlers.py` processes `snapshot_subjects` **per scenario**:
 
 ```python
-def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
+def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     analysis_type = data.get('analysis_type')
-    subjects = data.get('snapshot_subjects', [])
 
-    # For each subject, query DB using frontend-provided coordinates
-    all_rows_by_subject = {}
-    for subject in subjects:
-        rows = query_snapshots(
-            param_id=subject['param_id'],
-            core_hash=subject['core_hash'],  # frontend-computed, used directly
-            slice_keys=subject.get('slice_keys', ['']),
-            anchor_from=date.fromisoformat(subject['anchor_from']),
-            anchor_to=date.fromisoformat(subject['anchor_to']),
-            as_at=parse_as_at(subject.get('as_at')),
-        )
-        all_rows_by_subject[subject['subject_id']] = rows
+    for scenario in data['scenarios']:
+        subjects = scenario.get('snapshot_subjects', [])
+        if not subjects:
+            continue  # no snapshot work for this scenario
 
-    # Route to appropriate derivation
-    if analysis_type == 'lag_histogram':
-        result = derive_lag_histogram(all_rows_by_subject, t95_constraints=extract_t95_constraints(subjects, scenarios))
-    elif analysis_type == 'daily_conversions':
-        result = derive_daily_conversions(all_rows_by_subject, t95_constraints=extract_t95_constraints(subjects, scenarios))
-    elif analysis_type == 'cohort_maturity':
-        result = derive_cohort_maturity(all_rows_by_subject, subjects, t95_constraints=extract_t95_constraints(subjects, scenarios))
-    # ... etc
+        for subject in subjects:
+            # query DB using frontend-provided coordinates
+            rows = query_snapshots(
+                param_id=subject['param_id'],
+                core_hash=subject['core_hash'],  # frontend-computed, used directly
+                slice_keys=subject.get('slice_keys', ['']),
+                anchor_from=date.fromisoformat(subject['anchor_from']),
+                anchor_to=date.fromisoformat(subject['anchor_to']),
+                as_at=parse_as_at(subject.get('as_at')),
+            )
+            # route to appropriate derivation per subject ...
 
-    return result
+    # return results grouped by scenario
 ```
+
+The response groups results by scenario. Single-scenario / single-subject cases are flattened for backward compatibility.
 
 ### 10.2 Cohort Maturity Execution
 
@@ -344,6 +355,19 @@ For `cohort_maturity` read mode, the backend:
 4. Returns a series of `{as_at_date, data_points: [{anchor_day, x, y, ...}]}` frames
 
 When forecasting is enabled (Phase 5), the backend fits the lognormal model from the snapshot rows' own `median_lag_days` and `mean_lag_days` (aggregated across anchor_days), constrained by `edge.p.latency.t95` from the scenario graph (located via `target.targetId`). Each frame's data points are then annotated with `completeness` (from CDF evaluation using cohort age at that retrieval date).
+
+### 10.3 Compute Caching Opportunities
+
+With per-scenario snapshot subjects, multiple scenarios may request overlapping data from the snapshot DB — for example, two live scenarios that cover the same edge parameter but with overlapping (or identical) anchor ranges. Several caching opportunities exist:
+
+| Layer | Opportunity | Status |
+|-------|-------------|--------|
+| **Backend: DB query deduplication** | When processing a multi-scenario request, the backend could build a set of unique `(param_id, core_hash, anchor_from, anchor_to, sweep_from, sweep_to)` tuples across all scenarios' subjects. Identical tuples need only be queried once, with results shared across scenarios. This is pure request-level deduplication (no persistent cache). | NOT YET IMPLEMENTED — straightforward optimisation when needed |
+| **Backend: LRU row cache** | A short-lived (per-request or TTL-based) cache keyed by `(param_id, core_hash, anchor_range, sweep_range)` avoiding duplicate DB round-trips within a single request. Useful when many scenarios share the same parameter but differ only in graph overrides (same raw data, different derivation context). | NOT YET IMPLEMENTED — evaluate if multi-scenario analysis becomes slow |
+| **Frontend: FetchPlan deduplication** | When building per-scenario FetchPlans, the frontend could detect scenarios whose effective DSL produces identical `(querySignature, sliceFamily)` tuples and share snapshot subjects rather than mapping each independently. The `computeShortCoreHash` call is the primary per-item cost. | NOT YET IMPLEMENTED — evaluate if per-scenario planning becomes a bottleneck |
+| **Frontend: GraphComputeClient cache** | The existing `analysisCache` in `graphComputeClient.ts` already caches analysis responses keyed by scenario graph signatures. This cache continues to work — if graphs and DSLs haven't changed, the cached response is reused and no snapshot resolution runs. | ALREADY IMPLEMENTED |
+
+**Recommendation**: The most impactful optimisation is backend DB query deduplication (first row), since the DB query is the slowest step. This should be implemented when multi-scenario cohort maturity analysis is tested with real data and latency is measured.
 
 ---
 
@@ -379,64 +403,68 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 | File | Change |
 |------|--------|
 | `analysisTypes.ts` | Add `snapshotContract` field to `AnalysisTypeMeta`; populate for `lag_histogram`, `daily_conversions` |
-| `snapshotDependencyPlanService.ts` (NEW) | Resolver: analysis scope → `SnapshotSubjectRequest[]` |
+| `snapshotDependencyPlanService.ts` (NEW) | Thin mapper: `FetchPlan` → `SnapshotSubjectRequest[]` (scope filtering + `core_hash` + `read_mode`). Reuses existing planner. Also exports graph traversal helpers. |
 | `coreHashService.ts` (NEW) | Frontend `computeShortCoreHash()` (see `hash-fixes.md`) |
-| `AnalyticsPanel.tsx` | When analysis type has `snapshotContract`, call resolver and include `snapshot_subjects` in request |
-| `graphComputeClient.ts` | Extend request types to carry `snapshot_subjects`; update `analyzeSnapshots()` or unify with `analyzeSelection()` |
+| `AnalyticsPanel.tsx` | When analysis type has `snapshotContract`, build `FetchPlan` **per scenario** (using each scenario's effective DSL), map to `snapshot_subjects`, include in each scenario entry |
+| `graphComputeClient.ts` | `snapshot_subjects` is per-scenario on `ScenarioData`, not top-level on `AnalysisRequest` |
 | `snapshotWriteService.ts` | Update all API calls to send frontend-computed `core_hash` (see `hash-fixes.md`) |
-| `api_handlers.py` | Extend `_handle_snapshot_analyze` to accept `snapshot_subjects`; use frontend `core_hash` directly |
+| `api_handlers.py` | `_handle_snapshot_analyze_subjects` processes per-scenario `snapshot_subjects`; use frontend `core_hash` directly |
 | `snapshot_service.py` | Accept `core_hash` as parameter (not derived); add cohort maturity query function |
 | `histogram_derivation.py` | Accept `t95_constraints` parameter (unused in Phase 1) |
 | `daily_conversions_derivation.py` | Accept `t95_constraints` parameter (unused in Phase 1) |
-| `cohort_maturity_derivation.py` (NEW) | Cohort maturity sweep derivation |
+| `cohort_maturity_derivation.py` (NEW) | Cohort maturity sweep derivation (virtual snapshot per retrieval date) |
+| `query_snapshots_for_sweep` in `snapshot_service.py` | Date-range filter on `retrieved_at` for sweep queries |
+| `test_cohort_maturity_derivation.py` (NEW) | 10 Python tests covering the derivation algorithm |
 
 ---
 
 ## 14. Implementation Phases
 
-### Phase 1: Hash Fix + Basic Plumbing
+### Phase 1: Hash Fix + Basic Plumbing — DONE
 
 **Goal**: Frontend computes all hashes. Basic `lag_histogram` and `daily_conversions` work end-to-end via the new `snapshot_subjects` path.
 
 **Tasks**:
-1. Implement `coreHashService.ts` with golden cross-language tests (`hash-fixes.md` Steps 1-2)
-2. Update frontend API calls to send `core_hash` (`hash-fixes.md` Steps 3-4)
-3. Define `SnapshotContract` type and add to `lag_histogram` / `daily_conversions` in `analysisTypes.ts`
-4. Create `snapshotDependencyPlanService.ts` (resolver for `selection_edge` scope rule)
-5. Wire `AnalyticsPanel.tsx` to call resolver when analysis type has `snapshotContract`
-6. Update `_handle_snapshot_analyze` to accept `snapshot_subjects`
-7. Remove backend hash derivation from production paths (`hash-fixes.md` Step 5)
+1. ~~Implement `coreHashService.ts` with golden cross-language tests (`hash-fixes.md` Steps 1-2)~~ — DONE
+2. ~~Update frontend API calls to send `core_hash` (`hash-fixes.md` Steps 3-4)~~ — DONE
+3. ~~Define `SnapshotContract` type and add to `lag_histogram` / `daily_conversions` in `analysisTypes.ts`~~ — DONE
+4. ~~Create `snapshotDependencyPlanService.ts` — thin mapper over existing `FetchPlan` (NOT a parallel planner)~~ — DONE (refactored: calls `buildFetchPlanProduction` then maps `FetchPlanItem[]` → `SnapshotSubjectRequest[]`)
+5. ~~Wire `AnalyticsPanel.tsx` to build a FetchPlan via the existing planner, then map to snapshot subjects~~ — DONE
+6. ~~Update `_handle_snapshot_analyze` to accept `snapshot_subjects`~~ — DONE (renamed to `_handle_snapshot_analyze_subjects`; legacy `_handle_snapshot_analyze_legacy` preserved)
+7. ~~Remove backend hash derivation from production paths (`hash-fixes.md` Step 5)~~ — DONE
+8. ~~Per-scenario snapshot subjects: move `snapshot_subjects` from top-level `AnalysisRequest` to per-`ScenarioData`~~ — DONE (live scenarios use `meta.lastEffectiveDSL` for their own FetchPlan; backend processes each scenario's subjects independently)
 
-### Phase 2: Cohort Maturity
+### Phase 2: Cohort Maturity — DONE (backend + plumbing; charting is Phase 5 / `2-time-series-charting.md`)
 
-**Goal**: The `cohort_maturity` read mode works. Users can see how a cohort's observed conversion rate evolved over time.
+**Goal**: The `cohort_maturity` read mode works. Backend can produce a time series of virtual snapshots showing how a cohort's observed conversion rate evolved.
 
 **Tasks**:
-1. Add `cohort_maturity` as a new analysis type with its contract
-2. Implement cohort maturity sweep query on backend
-3. Implement `cohort_maturity_derivation.py`
-4. Frontend chart component for maturity curves (solid/dashed by maturity)
+1. ~~Add `cohort_maturity` as a new analysis type with its contract~~ — DONE
+2. ~~Implement cohort maturity sweep query on backend (`query_snapshots_for_sweep`)~~ — DONE
+3. ~~Implement `cohort_maturity_derivation.py`~~ — DONE (with 10 Python tests)
+4. ~~Wire backend handler to route `cohort_maturity` via sweep query + derivation~~ — DONE
+5. Frontend chart component for maturity curves (solid/dashed by maturity) — deferred to `2-time-series-charting.md`
 
-### Phase 3: Multi-Subject Scope Rules
+### Phase 3: Multi-Subject Scope Rules — DONE
 
 **Goal**: `funnel_path`, `reachable_from`, and `all_graph_parameters` scope rules work.
 
 **Tasks**:
-1. Implement funnel path resolution (DSL from/to → edge traversal)
-2. Implement BFS reachable-from resolution
-3. Implement all-graph-parameters scope
-4. Backend handles multiple subjects in a single request, returns per-subject results
-5. Frontend aggregates/displays multi-subject results
+1. ~~Implement funnel path resolution (DSL from/to → edge traversal)~~ — DONE (forward+backward BFS intersection)
+2. ~~Implement BFS reachable-from resolution~~ — DONE (BFS from edge start nodes)
+3. ~~Implement all-graph-parameters scope~~ — DONE (was trivially implemented in Phase 1)
+4. ~~Backend handles multiple subjects in a single request, returns per-subject results~~ — DONE (was implemented in Phase 1)
+5. Frontend aggregates/displays multi-subject results — deferred (no UI consumer yet; will be used when `funnel_time_series` analysis type is added)
 
-### Phase 4: MECE Slice Resolution + Conditional Parameters
+### Phase 4: MECE Slice Resolution + Conditional Parameters — DONE (implicit)
 
 **Goal**: Uncontexted semantic series fulfilled by MECE partition slices. Conditional parameters are first-class.
 
-**Tasks**:
-1. Resolver correctly emits MECE slice keys for uncontexted series
-2. Resolver includes conditional parameters (`conditionalIndex`) in subjects
-3. Backend aggregates across MECE slices per subject
-4. Tests for MECE union and conditional parameter parity
+**Resolution**: These are already handled by the existing fetch planner. Since `snapshotDependencyPlanService` was refactored (Phase 1 fix) to be a thin mapper over `FetchPlan`, all MECE slice resolution, conditional parameter enumeration, and signature computation are inherited from the planner's existing, tested code paths. No separate implementation needed.
+
+- `FetchPlanItem.sliceFamily` already carries the resolved slice key (MECE or uncontexted)
+- `FetchPlanItem.conditionalIndex` already enumerates conditional parameters
+- `FetchPlanItem.querySignature` already carries the execution-grade signature
 
 ### Phase 5: Forecasting Integration
 
@@ -459,9 +487,10 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 
 ### Unit Tests
 
-- `snapshotDependencyPlanService.test.ts`: Given (graph + analysis_type + DSL + selection), emits correct `SnapshotSubjectRequest[]`
+- `snapshotDependencyPlanService.test.ts`: Given (FetchPlan + analysis_type + DSL + selection), maps to correct `SnapshotSubjectRequest[]` — tests the thin mapper, NOT the planner
 - `coreHashService.test.ts`: Frontend `computeShortCoreHash` matches golden fixtures
-- Scope rule tests: each rule correctly identifies subjects from test graphs
+- Scope rule tests: `resolveFunnelPathEdges` and `resolveReachableEdges` tested with graph topologies (BFS, diamond, disconnected)
+- Planner tests (existing): `fetchPlanBuilderService` tests cover target enumeration, MECE slice resolution, signature computation, staleness — all reused by the snapshot mapper
 
 ### Integration Tests
 
@@ -487,6 +516,7 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 | MECE slice enumeration differs from write-time | Same MECE resolution code used by both paths; explicit tests |
 | Conditional parameters missed | `enumerateFetchTargets` already includes them; add explicit tests |
 | Cohort maturity query is slow (many rows) | Date-bounded sweep range limits data volume; potential for query optimisation (materialised view) if needed |
+| Multi-scenario DB query duplication | Multiple scenarios may query same `(param_id, core_hash)` with overlapping ranges; see §10.3 for caching opportunities |
 | Forecasting model changes | Deferred to Phase 5; golden tests ensure TS/Python parity |
 
 ---
@@ -500,6 +530,7 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 5. MECE union is supported: multiple `slice_keys` per subject, backend aggregates
 6. Conditional parameters are first-class in subject enumeration
 7. Availability gating based on batch inventory for all subjects in scope
+8. Multi-scenario analysis: each scenario carries its own `snapshot_subjects` derived from its effective DSL; live scenarios use `meta.lastEffectiveDSL`
 
 ---
 

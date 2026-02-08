@@ -12,6 +12,11 @@ describe('deriveBaseDSLForRebase', () => {
     expect(dsl).toBe('window(17-Nov-25:16-Dec-25)');
   });
 
+  it('preserves asat() when deriving base DSL', () => {
+    const dsl = deriveBaseDSLForRebase('context(channel:influencer).cohort(17-Nov-25:16-Dec-25).asat(5-Jan-26)');
+    expect(dsl).toBe('cohort(17-Nov-25:16-Dec-25).asat(5-Jan-26)');
+  });
+
   it('returns empty when current DSL has no window/cohort', () => {
     const dsl = deriveBaseDSLForRebase('visited(foo).case(bar:baz)');
     expect(dsl).toBe('');
@@ -25,6 +30,14 @@ describe('diffQueryDSLFromBase', () => {
       'cohort(17-Nov-25:16-Dec-25).context(channel:influencer)'
     );
     expect(diff).toBe('context(channel:influencer)');
+  });
+
+  it('includes asat() when current adds it relative to base', () => {
+    const diff = diffQueryDSLFromBase(
+      'cohort(17-Nov-25:16-Dec-25)',
+      'cohort(17-Nov-25:16-Dec-25).asat(5-Jan-26)'
+    );
+    expect(diff).toBe('asat(5-Jan-26)');
   });
 
   it('returns empty diff when current equals base (for tracked parts)', () => {

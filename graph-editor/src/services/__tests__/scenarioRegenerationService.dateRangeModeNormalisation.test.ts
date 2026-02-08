@@ -11,6 +11,11 @@ describe('normaliseScenarioDateRangeDSL', () => {
     const out = normaliseScenarioDateRangeDSL('cohort(1-Nov-25:7-Nov-25).context(channel:google)', 'window');
     expect(out).toBe('window(1-Nov-25:7-Nov-25).context(channel:google)');
   });
+
+  it('preserves asat() while normalising date range mode', () => {
+    const out = normaliseScenarioDateRangeDSL('window(-7d:-1d).context(channel:google).asat(5-Jan-26)', 'cohort');
+    expect(out).toBe('cohort(-7d:-1d).context(channel:google).asat(5-Jan-26)');
+  });
 });
 
 describe('generateSmartLabel (cohort)', () => {
@@ -22,6 +27,12 @@ describe('generateSmartLabel (cohort)', () => {
   it('includes cohort anchor in label when present', () => {
     const label = generateSmartLabel('cohort(A,-7d:-1d)');
     expect(label).toBe('Cohort(A): 7d ago – 1d ago');
+  });
+
+  it('includes asat() in label when present', () => {
+    const label = generateSmartLabel('cohort(1-Nov-25:7-Nov-25).asat(5-Jan-26)');
+    expect(label).toContain('Cohort: 1-Nov – 7-Nov');
+    expect(label).toContain('As-at: 5-Jan');
   });
 });
 
