@@ -25,8 +25,8 @@ The snapshot DB **read path for analysis** is not wired into the production UI. 
 
 | Layer | Responsibility |
 |-------|----------------|
-| **Frontend** | DSL parsing, target enumeration, signature computation, `core_hash` derivation, slice resolution, MECE verification, date range extraction, building `snapshot_subjects` coordinates, including lag fit metadata when available |
-| **Backend** | DB query execution using frontend-provided coordinates, MECE aggregation (sum over slices), analysis derivation (histogram, daily conversions, cohort maturity, etc.) |
+| **Frontend** | DSL parsing, target enumeration, signature computation, `core_hash` derivation, slice resolution, MECE verification, date range extraction, building `snapshot_subjects` coordinates |
+| **Backend** | DB query execution using frontend-provided coordinates, MECE aggregation (sum over slices), lag statistics aggregation from retrieved rows, analysis derivation (histogram, daily conversions, cohort maturity, etc.) |
 
 The backend MUST NOT:
 - Derive hashes from signatures (see `hash-fixes.md`)
@@ -55,7 +55,7 @@ User triggers analysis (AnalyticsPanel)
     │    ├─ core_hash (frontend-computed, see hash-fixes.md)
     │    ├─ anchor_from / anchor_to (from DSL window/cohort clause)
     │    ├─ slice_keys (from DSL context + MECE resolution)
-    │    └─ lag_fit metadata (optional; for forecasting-enabled analyses)
+    │    └─ target.targetId (so backend can find authoritative t95 constraint from graph edge)
     │
     ├─ Frontend: POST /api/runner/analyze
     │    Body: { analysis_type, query_dsl, scenarios, snapshot_subjects }
@@ -153,9 +153,6 @@ interface SnapshotContract {
   /** How anchor_from/to are derived */
   timeBoundsSource: 'query_dsl_window' | 'analysis_arguments';
 
-  /** Whether to include lag fit metadata for forecasting (future) */
-  includeLagFit: boolean;
-
   /** Whether per_scenario separation is needed */
   perScenario: boolean;
 }
@@ -173,12 +170,12 @@ interface AnalysisTypeMeta {
 
 ### 7.1 Concrete Contracts for Initial Analysis Types
 
-| Analysis type | scopeRule | readMode | slicePolicy | timeBoundsSource | includeLagFit | perScenario |
-|---|---|---|---|---|---|---|
-| `lag_histogram` | `selection_edge` | `raw_snapshots` | `mece_fulfilment_allowed` | `query_dsl_window` | false (Phase 1) | false |
-| `daily_conversions` | `selection_edge` | `raw_snapshots` | `mece_fulfilment_allowed` | `query_dsl_window` | false (Phase 1) | false |
-| `cohort_maturity` (new) | `selection_edge` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | true (when available) | false |
-| `funnel_time_series` (future) | `funnel_path` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | true | true |
+| Analysis type | scopeRule | readMode | slicePolicy | timeBoundsSource | perScenario |
+|---|---|---|---|---|---|
+| `lag_histogram` | `selection_edge` | `raw_snapshots` | `mece_fulfilment_allowed` | `query_dsl_window` | false |
+| `daily_conversions` | `selection_edge` | `raw_snapshots` | `mece_fulfilment_allowed` | `query_dsl_window` | false |
+| `cohort_maturity` (new) | `selection_edge` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | false |
+| `funnel_time_series` (future) | `funnel_path` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | true |
 
 ---
 
@@ -224,22 +221,10 @@ interface SnapshotSubjectRequest {
   /** Slice keys: MECE union → N keys; uncontexted → [''] */
   slice_keys: string[];
 
-  // === Forecasting metadata (optional; for future use) ===
+  // === Provenance (used for logging AND for graph lookups) ===
 
-  /** Lognormal lag distribution fit for this parameter */
-  lag_fit?: {
-    mu: number;
-    sigma: number;
-    onset_delta_days: number;
-  };
-
-  /** t95 horizon in days */
-  t95_days?: number;
-
-  // === Provenance (logging only, not used for DB lookup) ===
-
-  target?: {
-    targetId: string;
+  target: {
+    targetId: string;  // edge UUID — backend uses this to find edge in scenario graph
     slot?: 'p' | 'cost_gbp' | 'labour_cost';
     conditionalIndex?: number;
   };
@@ -262,6 +247,8 @@ interface RunnerAnalyzeRequest {
 ```
 
 Note: `snapshot_subjects` is a flat list, not grouped by scenario. For `perScenario: true` analysis types, the `subject_id` includes the scenario context and the frontend emits subjects per scenario. The backend does not need to understand scenario grouping — it just queries each subject it's given.
+
+**Forecasting metadata**: The snapshot DB rows each carry per-anchor-day `median_lag_days`, `mean_lag_days`, and `onset_delta_days`. The backend aggregates these from the retrieved rows to fit the lognormal model. The graph edge's `edge.p.latency.t95` (located via `target.targetId`) is used as an **authoritative constraint** on the fit (one-way: can only widen sigma, never narrow). Note: `edge.p.latency.median_lag_days` and `edge.p.latency.mean_lag_days` are **display outputs** from the frontend's last enhancement pass, not primary fitting inputs — the backend computes aggregates from the actual snapshot data being analysed.
 
 ---
 
@@ -305,13 +292,9 @@ The resolver is a new frontend service: `snapshotDependencyPlanService.ts`.
    - `core_hash`: compute via `computeShortCoreHash(canonical_signature)` — **frontend-computed** (see `hash-fixes.md`)
    - `subject_id`: `buildItemKey({type, objectId, targetId, slot, conditionalIndex})`
 
-7. **Include lag fit metadata** (if `includeLagFit === true` and data available):
-   - Read from parameter file: `p.latency.median_lag_days`, `p.latency.mean_lag_days`
-   - Compute fit: `fitLagDistribution(median, mean, totalK)` → `{mu, sigma}`
-   - Read `onset_delta_days` from parameter file
-   - Include `lag_fit` and `t95_days` on the subject request
+7. **Emit** `SnapshotSubjectRequest[]`.
 
-8. **Emit** `SnapshotSubjectRequest[]`.
+Note: lag fit metadata is NOT included in the subject request. The backend derives lag statistics from the **snapshot rows it retrieves** (each row has `median_lag_days`, `mean_lag_days`, `onset_delta_days`). The graph edge (located via `target.targetId`) provides only the **authoritative `t95` constraint** (if set). The `edge.p.latency.median_lag_days`/`mean_lag_days` on the graph are display outputs from the frontend, not fitting inputs.
 
 ---
 
@@ -341,21 +324,17 @@ def _handle_snapshot_analyze(data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Route to appropriate derivation
     if analysis_type == 'lag_histogram':
-        result = derive_lag_histogram(all_rows_by_subject, lag_fits=extract_lag_fits(subjects))
+        result = derive_lag_histogram(all_rows_by_subject, t95_constraints=extract_t95_constraints(subjects, scenarios))
     elif analysis_type == 'daily_conversions':
-        result = derive_daily_conversions(all_rows_by_subject, lag_fits=extract_lag_fits(subjects))
+        result = derive_daily_conversions(all_rows_by_subject, t95_constraints=extract_t95_constraints(subjects, scenarios))
     elif analysis_type == 'cohort_maturity':
-        result = derive_cohort_maturity(all_rows_by_subject, subjects, lag_fits=extract_lag_fits(subjects))
+        result = derive_cohort_maturity(all_rows_by_subject, subjects, t95_constraints=extract_t95_constraints(subjects, scenarios))
     # ... etc
 
     return result
 ```
 
-### 10.2 Backward Compatibility
-
-The existing `snapshot_query` single-subject format continues to work (for the dead code path and tests). The handler checks for `snapshot_subjects` first, falls back to `snapshot_query`.
-
-### 10.3 Cohort Maturity Execution
+### 10.2 Cohort Maturity Execution
 
 For `cohort_maturity` read mode, the backend:
 
@@ -364,7 +343,7 @@ For `cohort_maturity` read mode, the backend:
 3. At each retrieval boundary, computes virtual snapshot (latest per anchor_day as-of that timestamp)
 4. Returns a series of `{as_at_date, data_points: [{anchor_day, x, y, ...}]}` frames
 
-If `lag_fit` is provided, each frame's data points are annotated with `completeness` (from lognormal CDF evaluation using cohort age at that retrieval date).
+When forecasting is enabled (Phase 5), the backend fits the lognormal model from the snapshot rows' own `median_lag_days` and `mean_lag_days` (aggregated across anchor_days), constrained by `edge.p.latency.t95` from the scenario graph (located via `target.targetId`). Each frame's data points are then annotated with `completeness` (from CDF evaluation using cohort age at that retrieval date).
 
 ---
 
@@ -407,8 +386,8 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 | `snapshotWriteService.ts` | Update all API calls to send frontend-computed `core_hash` (see `hash-fixes.md`) |
 | `api_handlers.py` | Extend `_handle_snapshot_analyze` to accept `snapshot_subjects`; use frontend `core_hash` directly |
 | `snapshot_service.py` | Accept `core_hash` as parameter (not derived); add cohort maturity query function |
-| `histogram_derivation.py` | Accept `lag_fit` parameter (unused in Phase 1) |
-| `daily_conversions_derivation.py` | Accept `lag_fit` parameter (unused in Phase 1) |
+| `histogram_derivation.py` | Accept `t95_constraints` parameter (unused in Phase 1) |
+| `daily_conversions_derivation.py` | Accept `t95_constraints` parameter (unused in Phase 1) |
 | `cohort_maturity_derivation.py` (NEW) | Cohort maturity sweep derivation |
 
 ---
@@ -468,10 +447,11 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 **Tasks**:
 1. Port `lagDistributionUtils.ts` to Python with golden tests
 2. Share latency constants via YAML
-3. Resolver includes `lag_fit` and `t95_days` in subject requests
-4. Backend derivation functions use lag fit for completeness annotation
-5. Cohort maturity results include `completeness` and `projected` fields
-6. Frontend charts render evidence/forecast distinction
+3. Backend aggregates lag stats from snapshot rows (`median_lag_days`, `mean_lag_days` per row) and fits lognormal model
+4. Backend reads authoritative `t95` constraint from graph edge (`edge.p.latency.t95`) via `target.targetId` — used as one-way sigma constraint only
+5. Backend derivation functions use fitted model for completeness annotation per anchor_day
+6. Cohort maturity results include `completeness` and `projected` fields
+7. Frontend charts render evidence/forecast distinction
 
 ---
 

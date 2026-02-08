@@ -1,14 +1,61 @@
 # Flexible signatures (`flexi_sigs`) — resilient archival identity for snapshots
 
-**Status**: Proposal  
-**Date**: 4-Feb-26  
-**Scope**: Snapshot DB write/read identity + operator override for “trivial” signature drift  
+**Status**: Implemented (tests incomplete; frontend signature matching needs rework)  
+**Date**: 4-Feb-26 (design) · 8-Feb-26 (status update)  
+**Scope**: Snapshot DB write/read identity + operator override for "trivial" signature drift  
+
+---
+
+### Implementation status (8-Feb-26)
+
+**Backend (Python)** — complete:
+
+| Area | Status | Location |
+|---|---|---|
+| DB tables (`signature_registry`, `signature_equivalence`) | Done | `snapshot_service.py` `_ensure_flexi_sig_tables()` |
+| `short_core_hash_from_canonical_signature()` | Done → transitioning to frontend | `snapshot_service.py` (backend, retained as fallback/test); `coreHashService.ts` `computeShortCoreHash()` (frontend, now sole producer). See `hash-fixes.md`. |
+| Write path (append + registry insert + validation) | Done | `snapshot_service.py` `append_snapshots()` |
+| New API routes (`/api/sigs/*`) | Done | `api_handlers.py` + `dev-server.py` / `python-api.py` |
+| Equivalence resolution (recursive CTE) | Done | `resolve_equivalent_hashes()` + inline in virtual/retrievals |
+| Inventory V2 (families, `overall_all_families`, `current` match) | Done | `get_batch_inventory_v2()` |
+| `/api/snapshots/query-virtual` with `include_equivalents` | Done | `handle_snapshots_query_virtual()` |
+| `/api/snapshots/retrievals` with `include_equivalents` | Done | `handle_snapshots_retrievals()` |
+| `/api/snapshots/query-full` with `include_equivalents` | Done | `handle_snapshots_query_full()` + `query_snapshots()` |
+
+**Frontend (TypeScript)** — feature-complete, but signature matching is a disaster:
+
+| Area | Status | Location |
+|---|---|---|
+| Canonical `query_signature` computation | Done | `dataOperationsService.ts` `computeQuerySignature()` |
+| Append sends `canonical_signature`, `inputs_json`, `sig_algo`, `core_hash` | Done | `snapshotWriteService.ts` `appendSnapshots()` — frontend now computes and sends `core_hash` (see `hash-fixes.md`) |
+| `inputs_json` builder (same service as signature) | Done | `dataOperationsService.ts` (inline, schema `flexi_sigs.inputs_json.v1`) |
+| Inventory V2 client (`getBatchInventoryV2()`) | Done | `snapshotWriteService.ts` |
+| `useSnapshotsMenu.ts` uses backend `current` field | Done | Uses `matched_family_id`, falls back to `overall_all_families` |
+| `useDeleteSnapshots.ts` uses `overall_all_families` | Done | Via legacy wrapper |
+| `useEdgeSnapshotInventory.ts` uses `overall_all_families` | Done | Direct access |
+| Signature Links operator tab | Done | `SignatureLinksViewer.tsx` + `signatureLinksTabService.ts` |
+
+> **WARNING — Frontend signature matching implementation**
+>
+> The frontend implementation of signature matching (the code in `dataOperationsService.ts` that computes `query_signature` and builds `inputs_json`) is an unusual mess and a complete disaster. It will need to be completely rethought and redone. The current code is sprawling, duplicated across window/cohort paths, and fragile. This is a known debt item, not a "polish later" issue — it is structurally unsound and must be redesigned before it can be trusted or maintained.
+
+**Test coverage** — significant gaps against the §9 test strategy:
+
+| Tier | Status | Notes |
+|---|---|---|
+| A — Deterministic hashing (golden cases) | Partial (~30%) | Basic tests exist; missing golden corpus, permutation/canonicalisation invariance, negative cases |
+| B — Signature-input completeness | Partial (~70%) | SI-001–SI-005 cover core cases; missing all-call-site sweep and deliberate-failure regression |
+| B.1 — Stability contract | Partial (~40%) | Indirectly tested; no explicit "contract law" golden corpus |
+| C — Backend contract (validation 4xx) | Done | C-001–C-008: missing fields → ValueError, idempotent registry, link create/deactivate/idempotent, self-link rejected |
+| D — Equivalence resolution correctness | Done | D-001–D-006: symmetry, multi-hop, deactivation, cycles, self-only, cross-param isolation |
+| E — End-to-end "no disappearance" | Done | E-001: full scenario — old sig → new sig → strict miss → link → all 3 read paths + inventory recover data |
+| F — UI workflow (Playwright e2e) | Missing (0%) | Components exist but no Playwright tests |
 
 ---
 
 ## 1. Problem statement (why strict hashes are brittle)
 
-The snapshot DB is intended to be **archival**: the cost of “losing” historical data (by failing to match it) is high.
+The snapshot DB is intended to be **archival**: the cost of "losing" historical data (by failing to match it) is high.
 
 Today we rely on a strict signature match (a single value, stored in `snapshots.core_hash`). This provides integrity, but is structurally brittle:
 
@@ -19,7 +66,7 @@ We want a mechanism that:
 
 - Preserves strict integrity (we never silently mix semantically different queries),
 - Preserves resilience (trivial changes should be recoverable),
-- Keeps writes safe (archival writes must never “make up” signatures silently),
+- Keeps writes safe (archival writes must never "make up" signatures silently),
 - Keeps storage cheap (avoid storing large signature payloads on every row).
 
 ---
@@ -65,13 +112,13 @@ This is achieved with `ON CONFLICT DO NOTHING` (no pre-read required).
 
 ### 4.1 Define the canonical signature (single concept)
 
-To avoid “two distinct signature concepts”, this proposal defines:
+To avoid "two distinct signature concepts", this proposal defines:
 
 - **Canonical signature**: the existing frontend-computed `query_signature` **string** (the compact `{c,x}` JSON produced by the current signature machinery).
 
 This remains the only semantic signature definition. Everything else is derived from it.
 
-This proposal additionally stores an **evidence blob** (`inputs_json`) once per unique signature in a registry table, for diffing and audit, but that blob is not “the signature”.
+This proposal additionally stores an **evidence blob** (`inputs_json`) once per unique signature in a registry table, for diffing and audit, but that blob is not "the signature".
 
 ### 4.2 Compute the short DB key as a content-address of the canonical signature
 
@@ -126,13 +173,13 @@ If we want belt-and-braces collision paranoia without bloating the `snapshots` t
 
 - All object keys are serialised in sorted order.
 - Arrays that are semantically sets are sorted (`event_ids`, context keys, provider_event_names keys, aliases arrays, etc.).
-- Any “human text” fields that are not semantic should be excluded (to avoid churn).
+- Any "human text" fields that are not semantic should be excluded (to avoid churn).
 - `generated_at` is explicitly excluded from any hashing/canonical signature.
 
 **Derivation rule:**
 
 - `inputs_json` must be built by the same single frontend service that produces `canonical_signature`.
-- There must not be multiple competing “inputs_json builders”.
+- There must not be multiple competing "inputs_json builders".
 
 ---
 
@@ -200,7 +247,7 @@ CREATE INDEX idx_sigeq_param_equiv
 Notes:
 
 - Treat equivalence edges as **undirected** (either store both directions, or treat the graph as undirected during traversal).
-- Prefer append-only semantics; “deleting” a link can be implemented as `active=false` (audit preserved).
+- Prefer append-only semantics; "deleting" a link can be implemented as `active=false` (audit preserved).
 
 ---
 
@@ -215,19 +262,20 @@ Proposed modifications:
 - Request includes:
   - `param_id`
   - `canonical_signature` (the frontend `query_signature` string; the only semantic signature)
+  - `core_hash` (frontend-computed content-address of `canonical_signature`; see `hash-fixes.md`)
   - `inputs_json` (evidence blob: canonical signature inputs used for audit/diff)
   - `sig_algo` (string)
   - (optional) `canonical_sig_hash_full`
   - `slice_key`, `retrieved_at`, `rows` (unchanged)
 - Handler behaviour:
-  1. Compute `core_hash = short_hash(canonical_signature)` (content-address).
+  1. Use frontend-provided `core_hash` directly (opaque DB key). During transition, fall back to `short_hash(canonical_signature)` if `core_hash` is absent; see `hash-fixes.md` Phase 3/5.
   2. `INSERT ... ON CONFLICT DO NOTHING` into `signature_registry` (store core_hash + canonical_signature + inputs_json).
   3. `INSERT` snapshot rows into `snapshots` keyed by the short `core_hash` (existing behaviour; `context_def_hashes` can be omitted/null).
 
 **Invariant**: Archival writes must never silently invent a signature.
 
 - If the request omits `canonical_signature` or `inputs_json`, the handler returns a **hard error** (4xx/5xx). This forces the issue to surface and prevents archival corruption.
-- The handler must **never** attempt to “repair” missing signature inputs by synthesising defaults, falling back to empty event definitions, or generating time-based placeholders.
+- The handler must **never** attempt to "repair" missing signature inputs by synthesising defaults, falling back to empty event definitions, or generating time-based placeholders.
 
 ### 6.2 Read path: resolve equivalence class before querying snapshots
 
@@ -261,7 +309,7 @@ Then the snapshot query uses those hashes.
 
 This proposal requires a subtle but important shift:
 
-- The frontend can only reliably supply `param_id`, `slice_key` (if applicable), and **optionally** a “current” signature for the *current* graph definition.
+- The frontend can only reliably supply `param_id`, `slice_key` (if applicable), and **optionally** a "current" signature for the *current* graph definition.
 - The backend must therefore handle the signature-equivalence expansion and inventory grouping, because it is the only place that can consult the equivalence tables.
 
 Concretely, the backend must support these patterns:
@@ -275,16 +323,16 @@ Concretely, the backend must support these patterns:
 
 - **Inventory**: frontend supplies `{ param_ids: [...] }` and (optionally) a mapping of `{ param_id -> current_sig }`.
   - Backend returns inventory grouped by **signature families** (see §6.3.2) and slice keys.
-  - This enables a robust UI: “you have data, but it’s under these signature families; current signature matches family X (or none)”.
+  - This enables a robust UI: "you have data, but it's under these signature families; current signature matches family X (or none)".
 
 #### 6.3.1 Signature family concept (what inventory groups by)
 
-To keep the UI simple without introducing heuristics, define a “signature family” as the **equivalence closure** under active links for a given `param_id`.
+To keep the UI simple without introducing heuristics, define a "signature family" as the **equivalence closure** under active links for a given `param_id`.
 
 - If there are no links, every signature is its own family (trivial).
 - If the user links new signatures to prior ones, they become one family (resilience).
 
-#### 6.3.2 What “equivalence” means (no hidden semantics)
+#### 6.3.2 What "equivalence" means (no hidden semantics)
 
 Equivalence is deliberately simple:
 
@@ -292,7 +340,7 @@ Equivalence is deliberately simple:
 - Active links define an undirected graph over hashes for a given `param_id`.
 - A **signature family** is the connected component (equivalence closure).
 
-There is no weighting, no “partial” equivalence, no heuristics, and no backend judgement: it is an explicit operator decision recorded with `created_by` + `reason`.
+There is no weighting, no "partial" equivalence, no heuristics, and no backend judgement: it is an explicit operator decision recorded with `created_by` + `reason`.
 
 ### 6.3 New API routes (minimal set)
 
@@ -312,7 +360,7 @@ Add routes to support the operator workflow:
   - `POST /api/sigs/links/create`
   - body: `{ "param_id": "...", "core_hash": "...", "equivalent_to": "...", "created_by": "...", "reason": "..." }`
 
-- **Deactivate link** (audit-friendly “delete”):
+- **Deactivate link** (audit-friendly "delete"):
   - `POST /api/sigs/links/deactivate`
   - body: `{ "param_id": "...", "core_hash": "...", "equivalent_to": "...", "created_by": "...", "reason": "..." }`
   - sets `active=false` (or inserts a tombstone row, depending on preference)
@@ -345,7 +393,7 @@ This keeps integrity transparent: callers can surface a warning when equivalence
 
 ## 7. Frontend impact (minimal)
 
-“Frontend doesn’t change much” is the right mental model.
+"Frontend doesn't change much" is the right mental model.
 
 Primary changes:
 
@@ -353,7 +401,7 @@ Primary changes:
 - Send `canonical_signature` (`query_signature`), `inputs_json`, and `sig_algo` alongside snapshot append requests.
 - Add a simple operator UI:
   - filter by `param_id`
-  - show “new signatures since X” (using `created_at`)
+  - show "new signatures since X" (using `created_at`)
   - show diffs between two `inputs_json` blobs
   - create/deactivate equivalence links
 
@@ -365,10 +413,10 @@ No other UI paths must change immediately; read queries can become resilient ser
 
 ### 8.1 Purpose
 
-`/api/snapshots/inventory` is the backend’s **index/summary** endpoint:
+`/api/snapshots/inventory` is the backend's **index/summary** endpoint:
 
 - It tells the UI what snapshot history exists for a set of `param_id`s.
-- Under `flexi_sigs`, it must also reveal **signature-family structure** so data does not “disappear” when strict signatures drift.
+- Under `flexi_sigs`, it must also reveal **signature-family structure** so data does not "disappear" when strict signatures drift.
 
 This endpoint is **not** a data retrieval endpoint; it does not return snapshot rows.
 
@@ -382,9 +430,9 @@ This endpoint is **not** a data retrieval endpoint; it does not return snapshot 
 - **R3**: Never require the frontend to understand equivalence closure logic.
 - **R4**: Stable grouping: the same DB state yields the same family IDs (no flapping).
 - **R5**: Provide enough metadata for UI to surface:
-  - “there are new signatures since your change”
-  - “your current signature matches family X (or none)”
-  - “these families have history”
+  - "there are new signatures since your change"
+  - "your current signature matches family X (or none)"
+  - "these families have history"
 - **R6**: Do not silently invent identities; if `current_core_hash` is missing, still return inventory for all families.
 
 ### 8.3 Request shape
@@ -414,9 +462,11 @@ Field semantics:
 
 - **`param_ids`** (required): list of exact workspace-prefixed parameter IDs.
 - **`current_signatures`** (optional): map `param_id -> canonical_signature` (`query_signature` string) for the current graph definition.
-  - Backend derives the short `core_hash` from this string.
-  - Used only to annotate which family is “current”.
+  - Used only to annotate which family is "current".
   - Inventory must remain correct if omitted or partially provided.
+- **`current_core_hashes`** (optional): map `param_id -> core_hash` (frontend-computed content-addresses of the corresponding `current_signatures` entries; see `hash-fixes.md`).
+  - When provided, the backend uses these directly instead of deriving from `current_signatures`.
+  - When absent, the backend falls back to deriving `core_hash` from `current_signatures` (transition path).
 - **`slice_keys`** (optional): map `param_id -> list[slice_key]` as a filter.
   - If omitted, include all slice keys.
   - If provided for a param, only include those slice keys for that param.
@@ -501,8 +551,8 @@ Notes:
 
 - The response intentionally includes **both**:
   - The family grouping (resilience), and
-  - The “current signature mapping” (so the UI can highlight when current doesn’t match any family).
-- `overall_all_families` exists because multiple frontend call sites need a cheap “total snapshots exist?” answer regardless of signature matching (e.g. deletion, tooltips). This prevents each client from having to re-sum families.
+  - The "current signature mapping" (so the UI can highlight when current doesn't match any family).
+- `overall_all_families` exists because multiple frontend call sites need a cheap "total snapshots exist?" answer regardless of signature matching (e.g. deletion, tooltips). This prevents each client from having to re-sum families.
 - Timestamps are returned as ISO (API boundary). Any UI display must format as `d-MMM-yy`.
 
 ### 8.5 Family ID selection (stability rule)
@@ -527,7 +577,7 @@ Given a set of `param_ids`:
    - pick a `family_id` using §8.5
    - aggregate per-slice and overall metrics across all member hashes
 5. If `current_signatures[param_id]` is provided:
-   - compute `provided_core_hash = short_hash(current_signatures[param_id])`
+   - use `provided_core_hash` from `current_core_hashes[param_id]` if available; otherwise fall back to `short_hash(current_signatures[param_id])` (see `hash-fixes.md`)
    - compute its equivalence closure (under active links) and find the matching component (if any)
    - set `current.match_mode`:
      - `"strict"` if provided hash is a member of the family directly
@@ -547,8 +597,8 @@ For a given group (family overall or slice):
 
 These metrics are sufficient for:
 
-- calendar highlighting (via `/retrievals`, but inventory can show “has snapshots”),
-- “how much history do we have?”,
+- calendar highlighting (via `/retrievals`, but inventory can show "has snapshots"),
+- "how much history do we have?",
 - and operator triage after a signature drift.
 
 ### 8.8 Frontend call sites that must be updated (and what to pass)
@@ -557,7 +607,7 @@ This is part of the project scope. All `/inventory` call sites must be updated t
 
 - call the V2 endpoint shape,
 - pass `current_signatures` where the call site can cheaply obtain it,
-- and rely on backend grouping/matching rather than client-side “pick a signature” logic.
+- and rely on backend grouping/matching rather than client-side "pick a signature" logic.
 
 #### 8.8.1 `graph-editor/src/services/snapshotWriteService.ts`
 
@@ -588,10 +638,10 @@ V2 behaviour (intelligent, resilient):
 - Pass `current_signatures` for each `param_id`:
   - source: parameter file `values[].query_signature` (already read today in this hook).
 - Use backend `current` field:
-  - if `current.match_mode != "none"`: use the matched family’s `overall.unique_retrieved_days` for “snapshot counts”
-  - if `"none"` but `overall_all_families.unique_retrieved_days > 0`: show count from `overall_all_families` and surface a “needs linking” indicator (menu badge or tooltip). Do not show 0.
+  - if `current.match_mode != "none"`: use the matched family's `overall.unique_retrieved_days` for "snapshot counts"
+  - if `"none"` but `overall_all_families.unique_retrieved_days > 0`: show count from `overall_all_families` and surface a "needs linking" indicator (menu badge or tooltip). Do not show 0.
 
-This is the core “no disappearance” guarantee for menu-level UX.
+This is the core "no disappearance" guarantee for menu-level UX.
 
 #### 8.8.3 `graph-editor/src/hooks/useDeleteSnapshots.ts` (delete confirmation counts)
 
@@ -602,7 +652,7 @@ Deletion is not signature-specific: it deletes all snapshots for the param.
 
 #### 8.8.4 `graph-editor/src/hooks/useEdgeSnapshotInventory.ts` (edge tooltips)
 
-Tooltips need a fast “does this edge have snapshots?” answer.
+Tooltips need a fast "does this edge have snapshots?" answer.
 
 - Optional: pass `current_signatures` for the edge param if available from parameter file (nice-to-have).
 - Minimum: omit `current_signatures` and use `overall_all_families.row_count` / `unique_retrieved_days` for display.
@@ -616,19 +666,19 @@ Any test that asserts the old inventory shape must be updated, including:
 - `graph-editor/src/services/__tests__/snapshotWritePath.fixture.test.ts` (if it inspects inventory)
 - `graph-editor/src/services/__tests__/cohortAxy.meceSum.vsAmplitude.local.e2e.test.ts` helper inventory query
 
-### 8.8 “Unlinked signatures” reporting
+### 8.8 "Unlinked signatures" reporting
 
-Inventory should help the “I changed a graph and 6 buckets broke” workflow.
+Inventory should help the "I changed a graph and 6 buckets broke" workflow.
 
 We define:
 
-- a hash is “unlinked” if it has **no active equivalence edges** in either direction for that `param_id`.
+- a hash is "unlinked" if it has **no active equivalence edges** in either direction for that `param_id`.
 
 Inventory can compute:
 
 - `unlinked_core_hashes` for each param (possibly capped for size).
 
-This gives the UI a very direct “action list”: signatures that need review/linking.
+This gives the UI a very direct "action list": signatures that need review/linking.
 
 ### 8.9 Backward compatibility and rollout
 
@@ -656,7 +706,7 @@ Flexible signatures are an integrity feature. The system needs tests at multiple
 - equivalence expansion behaves predictably and is auditably correct,
 - UI workflows surface new signatures and enable linking without foot-guns.
 
-### 9.1 Tier A — “pure” deterministic hashing tests (frontend)
+### 9.1 Tier A — "pure" deterministic hashing tests (frontend)
 
 Goal: prove that the short `core_hash` is a pure function of canonicalised `inputs_json`.
 
@@ -675,11 +725,11 @@ Tests:
 
 Failure policy:
 
-- Any failure in the hashing unit suite blocks merges; these tests are “signature contract law”.
+- Any failure in the hashing unit suite blocks merges; these tests are "signature contract law".
 
 ### 9.2 Tier B — signature-input completeness tests (frontend)
 
-Goal: prove we never reach “append snapshots” without a signature.
+Goal: prove we never reach "append snapshots" without a signature.
 
 Tests:
 
@@ -690,11 +740,11 @@ Tests:
 
 - Explicit regression test: a deliberate signature failure must surface as a loud error (UI/session log) and must not proceed to archival write.
 
-Important: “loud error” is not “console warn and carry on”; it must be a surfaced, diagnosable failure mode.
+Important: "loud error" is not "console warn and carry on"; it must be a surfaced, diagnosable failure mode.
 
 ### 9.2.1 Stability contract tests (this is the last break)
 
-The following must be locked by tests and treated as “contract law”:
+The following must be locked by tests and treated as "contract law":
 
 - `canonical_signature` format is stable (the `{c,x}` JSON string produced by the single frontend choke-point).
 - `core_hash` derivation from `canonical_signature` is stable (hash algo + truncation + encoding).
@@ -735,13 +785,13 @@ Tests:
 - Cycle robustness: cycles do not hang; results are deduped and stable.
 - Bounded traversal: impose a sane safety cap (e.g. max nodes/edges per resolution) and test cap behaviour (returns error vs truncation; must be explicit).
 
-### 9.5 Tier E — end-to-end “no disappearance” tests (integration)
+### 9.5 Tier E — end-to-end "no disappearance" tests (integration)
 
 Goal: prove the user story:
 
 - Start with snapshots under old signature.
 - Introduce a change producing a new signature.
-- Without equivalence, strict lookup shows “mismatch” (expected).
+- Without equivalence, strict lookup shows "mismatch" (expected).
 - After adding an equivalence link, retrievals/inventory and as-at reads include the historical data again (with explicit match_mode metadata).
 
 This is the structural-resilience guarantee you actually care about.
@@ -752,29 +802,29 @@ Goal: ensure linking workflow is usable and safe.
 
 Tests:
 
-- “New signatures appear” after a change.
+- "New signatures appear" after a change.
 - Selecting a new signature shows candidate relatives (via filters and/or grouping).
 - Creating a link updates the UI state and immediately affects retrieval/inventory responses.
 - Deactivating a link reverts the effect.
 
 ---
 
-## 10. UI design: “Signature Links” tab (operator workflow)
+## 10. UI design: "Signature Links" tab (operator workflow)
 
-This UI must make “brittle hash + override” safe, fast, and easy. It is an **operator tool**: it exists to restore continuity when strict signatures drift for trivial reasons, without weakening integrity.
+This UI must make "brittle hash + override" safe, fast, and easy. It is an **operator tool**: it exists to restore continuity when strict signatures drift for trivial reasons, without weakening integrity.
 
 ### 10.1 Design principles
 
-- **P1: Fast path first**: the default view should surface “what just broke” (new + unlinked) in one click.
+- **P1: Fast path first**: the default view should surface "what just broke" (new + unlinked) in one click.
 - **P2: Progressive disclosure**: show summaries for scanning; fetch/render full JSON only on selection.
 - **P3: Diff-first, not blob-first**: users should compare signatures via a structured diff view, with raw JSON as a fallback.
 - **P4: Faceted narrowing beats wizardry**: Graph/Param filters + chips + free-text; no mandatory step-by-step flow.
-- **P5: Deterministic suggestions**: “likely relatives” must be simple and predictable, not opaque heuristics.
+- **P5: Deterministic suggestions**: "likely relatives" must be simple and predictable, not opaque heuristics.
 - **P6: Explicitness over magic**: linking is never automatic; every link is an explicit act.
 - **P7: Auditability is non-negotiable**: create/deactivate requires `created_by` + free-text reason; history remains inspectable.
 - **P8: Safety banners**: whenever equivalence affects reads, the UI must say so clearly and persistently.
 - **P9: Debug escape hatch**: strict-only mode must be available to suppress equivalence for diagnosis.
-- **P10: Boundedness**: list views must remain responsive with caps and pagination; no “render 10k JSON blobs”.
+- **P10: Boundedness**: list views must remain responsive with caps and pagination; no "render 10k JSON blobs".
 
 ### 10.2 Concrete proposal (what we will build first)
 
@@ -788,13 +838,13 @@ This UI must make “brittle hash + override” safe, fast, and easy. It is an *
 
 **Top filter bar (progressive narrowing):**
 
-- **Graph** dropdown (optional; default “All graphs”).
+- **Graph** dropdown (optional; default "All graphs").
 - **Param** dropdown (optional; dependent on Graph; type-ahead by id/name).
 - **Chips**:
   - `New` (created in last N hours/days; N user-configurable)
   - `Unlinked` (no active links)
   - `Linked` (has active links)
-  - `StrictOnly` (suppresses equivalence usage in the tab’s preview queries)
+  - `StrictOnly` (suppresses equivalence usage in the tab's preview queries)
 - **Free-text search**:
   - searches across `param_id`, `core_hash`, plus selected summary fields derived from `inputs_json`.
 
@@ -812,7 +862,7 @@ Default state on open:
 
 - chips `New` + `Unlinked` on
 - graph/param unset
-- result list shows “what just appeared” immediately.
+- result list shows "what just appeared" immediately.
 
 **Right pane (detail + compare + actions):**
 
@@ -822,43 +872,43 @@ Default state on open:
 - Three layers:
   1. **Diff summary** (sections + counts of changed fields)
   2. **Structured diff** (field-level; collapse unchanged)
-  3. **Raw JSON tree** (collapsible) for A and B with “jump to next change”
+  3. **Raw JSON tree** (collapsible) for A and B with "jump to next change"
 
 #### 10.2.3 Comparator suggestion (deterministic)
 
-- Default comparator: “most recent other signature for the same `param_id`”.
+- Default comparator: "most recent other signature for the same `param_id`".
 - Optional refinement: prefer same `slice_key` / mode if present in `inputs_json`.
 
 #### 10.2.4 Link management UX (audited, reversible)
 
 - **Link as equivalent**:
   - requires comparator selection, `created_by`, and reason
-  - on success: refresh inventory state and show “equivalence now active” banner
+  - on success: refresh inventory state and show "equivalence now active" banner
 - **Deactivate link**:
   - requires reason (audit-preserving)
-  - allow “show inactive links” toggle for provenance
+  - allow "show inactive links" toggle for provenance
 
 #### 10.2.5 Backend support required (for responsiveness)
 
-- list signatures for graph/param scope (return small summaries; full `inputs_json` via a “get details” call)
+- list signatures for graph/param scope (return small summaries; full `inputs_json` via a "get details" call)
 - list links for scope
 - resolve family membership for a signature
-- inventory V2 (families + unlinked) for immediate “what broke” default view
+- inventory V2 (families + unlinked) for immediate "what broke" default view
 
 ---
 
 ## 11. Why this is structurally resilient
 
 - A brittle signature can change for trivial reasons.
-- But history does not “disappear”; it becomes **unlinked** until a link is created.
+- But history does not "disappear"; it becomes **unlinked** until a link is created.
 - Links are explicit, audited, and reversible.
 - Storage cost is controlled: large evidence is stored once per unique signature, not per snapshot row.
 
-This is an architectural mechanism that makes “integrity vs resilience” an explicit, operator-governed policy rather than an accidental property of a single hash.
+This is an architectural mechanism that makes "integrity vs resilience" an explicit, operator-governed policy rather than an accidental property of a single hash.
 
 ---
 
-## 12. Data cost estimates (typical nightly “Retrieve all”)
+## 12. Data cost estimates (typical nightly "Retrieve all")
 
 These are rough order-of-magnitude estimates for **roundtrip payload** (frontend→backend and backend→DB), assuming:
 
@@ -886,4 +936,3 @@ Derived counts:
 **Sensitivity note**:
 
 - If `inputs_json` includes full context definitions/values (large catalogues), the request size can jump from **single-digit KB** to **tens of KB** per append call.
-

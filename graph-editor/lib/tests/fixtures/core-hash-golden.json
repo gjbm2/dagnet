@@ -1,0 +1,52 @@
+[
+  {
+    "input": "{\"c\":\"abc\",\"x\":{}}",
+    "expected": "5ZaDqRVNMwdNC0ctENoQfg",
+    "description": "Minimal signature"
+  },
+  {
+    "input": "{\"c\":\"abc\",\"x\":{\"seg\":\"def\"}}",
+    "expected": "4-_3vGkz2g6lic-qgyQTBA",
+    "description": "Signature with one context hash"
+  },
+  {
+    "input": "{\"c\":\"f47ac10b-58cc-4372-a567-0e02b2c3d479_sha256_trunc128_b64url\",\"x\":{}}",
+    "expected": "o3DZEEjmHHkEEd0cdX6qmg",
+    "description": "Long UUID-style core hash"
+  },
+  {
+    "input": "{\"c\":\"myHash123\",\"x\":{\"country\":\"aaa\",\"platform\":\"bbb\",\"segment\":\"ccc\"}}",
+    "expected": "tYWh2ZfFdJofp7aE7Ga9xQ",
+    "description": "Multiple context keys"
+  },
+  {
+    "input": "  {\"c\":\"abc\",\"x\":{}}  ",
+    "expected": "5ZaDqRVNMwdNC0ctENoQfg",
+    "description": "Leading/trailing spaces — must match trimmed version"
+  },
+  {
+    "input": "\t{\"c\":\"abc\",\"x\":{}}\n",
+    "expected": "5ZaDqRVNMwdNC0ctENoQfg",
+    "description": "Tab and newline whitespace — must match trimmed version"
+  },
+  {
+    "input": "{\"c\":\"ñoño_über_café\",\"x\":{}}",
+    "expected": "NQhYlIGZklxRoKp--l2AXw",
+    "description": "Unicode characters in core hash"
+  },
+  {
+    "input": "{\"c\":\"ZmFrZS1oYXNoLXZhbHVl\",\"x\":{}}",
+    "expected": "-tkUpJ5NnWWxffUcqYKk2A",
+    "description": "Base64-like string as core hash value"
+  },
+  {
+    "input": "{\"c\":\"sig_v1_sha256_trunc128_b64url__amplitude__daily_conversion__step1__step2__7d__unique_users\",\"x\":{\"country_filter\":\"gb_hash_abc123\",\"platform_filter\":\"ios_hash_def456\"}}",
+    "expected": "EmOnaxGhEWrICqTC_wokLg",
+    "description": "Realistic production-style signature with long core and context hashes"
+  },
+  {
+    "input": "{\"c\":\"12345\",\"x\":{\"k\":\"67890\"}}",
+    "expected": "6tTTRWVaYXhH1e8k3nJnjQ",
+    "description": "Numeric-only values"
+  }
+]
