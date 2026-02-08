@@ -211,8 +211,10 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
           // - It's common for "current signature" to point at a hash that is not yet present in snapshots
           //   (e.g. user changes context/window before any snapshot write for that exact signature).
           // - In that case we MUST still show that snapshots exist for the parameter overall.
-          const matchedHasData = (matchedFamily?.overall?.row_count ?? 0) > 0;
-          const source = matchedHasData ? matchedFamily!.overall : overallAll;
+          const matchedFamilyWithData =
+            matchedFamily && (matchedFamily.overall?.row_count ?? 0) > 0 ? matchedFamily : undefined;
+          const matchedHasData = !!matchedFamilyWithData;
+          const source = matchedFamilyWithData ? matchedFamilyWithData.overall : overallAll;
 
           // DEV diagnostics: make it visible in console + session logs what inventory we see.
           // This is critical when users report "snapshots disappeared" after DSL/context changes.
@@ -259,9 +261,11 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
 
           // User meaning of "snapshots": one per retrieved DAY.
           if (matchedHasData) {
-            nextCounts[objectId] = matchedFamily.overall.unique_retrieved_days ?? 0;
+            nextCounts[objectId] = matchedFamilyWithData?.overall?.unique_retrieved_days ?? 0;
             // Expose the family's core_hashes for scoped delete/download.
-            nextMatchedCoreHashes[objectId] = Array.isArray(matchedFamily.member_core_hashes) ? matchedFamily.member_core_hashes : [];
+            nextMatchedCoreHashes[objectId] = Array.isArray(matchedFamilyWithData?.member_core_hashes)
+              ? matchedFamilyWithData!.member_core_hashes
+              : [];
           } else {
             // If we have history but current signature does not match, do NOT show 0.
             nextCounts[objectId] = overallAll.unique_retrieved_days ?? 0;
