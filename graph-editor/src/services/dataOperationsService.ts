@@ -4352,7 +4352,7 @@ class DataOperationsService {
         // This is the canonical signature produced by the normal fetch path.
         const signatureStr = (() => {
           const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
-          const mode: 'window' | 'cohort' = parsed.cohort ? 'cohort' : 'window';
+          const mode: 'window' | 'cohort' = parsedDSLForAsat.cohort ? 'cohort' : 'window';
           return selectQuerySignatureForAsat({ values, mode });
         })();
         if (!signatureStr) {
@@ -4462,7 +4462,7 @@ class DataOperationsService {
         
         // Convert virtual snapshot rows to time series format
         const sliceDims = extractSliceDimensions(effectiveDSL);
-        const modeClause = parsed.cohort ? 'cohort()' : (parsed.window ? 'window()' : '');
+        const modeClause = parsedDSLForAsat.cohort ? 'cohort()' : (parsedDSLForAsat.window ? 'window()' : '');
         const sliceFamilyKey = [sliceDims, modeClause].filter(Boolean).join('.');
         const targetSliceKey = sliceFamilyKey || '';
         const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {

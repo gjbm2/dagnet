@@ -1,10 +1,4 @@
 {
-  "builds": [
-    {
-      "src": "api/python-api.py",
-      "use": "@vercel/python@4.7.2"
-    }
-  ],
   "rewrites": [
     {
       "source": "/api/parse-query",

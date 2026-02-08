@@ -97,6 +97,12 @@ test('create live scenario uses MECE delta (clears context/asat)', async ({ page
 
   await expect(page.locator('.react-flow')).toBeVisible({ timeout: 10_000 });
 
+  // Ensure ScenariosPanel is mounted (it registers the dagnet:newScenario listener).
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('dagnet:openScenariosPanel'));
+  });
+  await expect(page.locator('.scenarios-panel')).toBeVisible({ timeout: 5_000 });
+
   // Trigger "+" semantics deterministically.
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('dagnet:newScenario', { detail: { tabId: 'tab-graph-live-delta' } }));
