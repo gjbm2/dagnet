@@ -1654,6 +1654,13 @@ export function QueryExpressionEditor({
   const handleOuterChipClick = (chip: ParsedQueryChip, e: React.MouseEvent) => {
     e.stopPropagation();
     if (readonly) return;
+
+    // Defensive: clicking the remove/dropdown buttons inside a chip should never enter edit mode.
+    // (We also stop propagation on those buttons, but this avoids flakiness from event ordering.)
+    const targetEl = e.target as unknown as HTMLElement | null;
+    if (targetEl?.closest?.('button')) {
+      return;
+    }
     
     console.log('[QueryExpressionEditor] Outer chip clicked:', { 
       chip: chip.rawText,
@@ -2013,6 +2020,11 @@ export function QueryExpressionEditor({
                 {!readonly && (chip.type === 'context' || chip.type === 'contextAny') && (
                   <button
                     type="button"
+                    onMouseDown={(e) => {
+                      // Prevent chip click (edit mode) from triggering.
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
                     onClick={(e) => {
                       const chipEl = chipRefs.current.get(index);
                       if (chipEl) {
@@ -2043,6 +2055,11 @@ export function QueryExpressionEditor({
                 {!readonly && (
                   <button
                     type="button"
+                    onMouseDown={(e) => {
+                      // Prevent chip click (edit mode) from triggering.
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
                     onClick={(e) => handleDeleteChip(chip, e)}
                     style={{
                       marginLeft: '2px',

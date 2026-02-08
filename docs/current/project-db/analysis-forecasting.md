@@ -100,203 +100,373 @@ Given the lognormal fit and current completeness:
 
 ---
 
-## 4. Architectural Options
+## 4. Required Architectural Change: Split Fitting from Application
 
-### Option A: Port Pure Maths to Python
+### 4.1 Why this split is necessary
 
-**What**: Create `graph-editor/lib/runner/lag_distribution_utils.py` as a direct port of `lagDistributionUtils.ts`.
+Today, the frontend topo/LAG pass effectively does two different jobs in one go:
 
-**Scope**: ~200 lines of Python. Pure functions, no dependencies beyond `math` stdlib.
+- **Fitting**: infer a stable lag distribution model for an edge (the “distro”) from accumulated cohort evidence.
+- **Application**: for a given query window/context/date, evaluate maturity/completeness and compute evidence/forecast blends.
 
-**Advantages**:
-- Backend is self-contained; no cross-language calls
-- Python is the natural home for numerical computation
-- Pure functions are trivial to port and verify
-- Golden tests can ensure parity (same inputs → same outputs to within floating-point tolerance)
+This coupling creates an unacceptable behavioural property:
 
-**Disadvantages**:
-- Two implementations to maintain (TS + Python)
-- Risk of drift if one side is updated and the other isn't
+> If the user changes `cohort()` / `window()` bounds or `context()` and then fetches, the same Stage‑2 pass can refit the model using a different slice/window selection. Model parameters can “move” for reasons unrelated to new data.
 
-**Mitigation**:
-- Golden test suite: a shared fixture file (JSON) with inputs and expected outputs, run by both TS and Python test suites
-- The pure maths layer changes extremely rarely (lognormal CDF doesn't evolve)
-- Constants shared via a single YAML/JSON file that both languages read
+For analysis and charting, this is worse:
 
-### Option B: Frontend Computes Forecasting Inputs, Sends to Backend
+- We must **not** rerun fitting/topo computations per analysis request (especially not per scenario).
+- We need **stable models** whose meaning does not depend on the current DSL.
 
-**What**: Frontend computes lognormal fits, completeness values, and blend inputs for each subject, and includes them in the `snapshot_dependencies` request alongside the DB coordinates.
+Therefore we explicitly split the pipeline:
 
-**Scope**: Frontend already has all the inputs (lag stats from parameter files, onset delta, t95). It would compute `{mu, sigma, onset_delta, completeness_at_now}` per subject and include it in the request.
+1. **Fit (in Python, master)**: recompute lag models only when underlying evidence changes, or when the user explicitly requests recomputation.
+2. **Apply (in Python, analysis-time)**: evaluate completeness/projections/blends for the analysis window without refitting.
 
-**Advantages**:
-- Single source of truth for statistical computation (frontend only)
-- Backend remains purely mechanical (aggregate + format)
-- No code duplication
+### 4.2 Canonical ownership: Python is master of fitting
 
-**Disadvantages**:
-- Frontend must compute forecasting inputs for every subject in every analysis request, even when not needed
-- Backend cannot do any projection logic that needs the CDF at arbitrary points (e.g. "what will completeness be in 7 days?")
-- Fan charts require CDF evaluation at many points per cohort — impractical to pre-compute all of them on the frontend
-- Tightly couples analysis request shape to forecasting model internals
+We explicitly move the lag model fitting and forecasting logic to Python and treat it as the single source of truth.
 
-### Option C: Shared WASM Module
+The frontend becomes a slave for:
 
-**What**: Compile the pure maths layer to WASM (or use a language that targets both JS and Python like Rust via wasm-bindgen + PyO3).
+- Showing fitted parameters and derived scalars on the graph UI.
+- Persisting those values to the graph/parameter files for offline use and reproducibility.
 
-**Advantages**:
-- Single source code, both runtimes use it
-- Guaranteed parity
+### 4.3 When fitting runs (and when it must NOT run)
 
-**Disadvantages**:
-- Massive engineering overhead for ~200 lines of arithmetic
-- Build complexity, deployment complexity
-- Over-engineered for the problem size
+Fitting runs only on **model update events**, not on query edits.
 
----
+**Must run**:
 
-## 5. Recommendation: Option A (Port Pure Maths to Python)
+- After a fetch from origin that writes new snapshot rows (evidence changed).
+- When the user explicitly triggers “Recompute lag models / horizons” (manual action).
 
-Option A is the clear winner for this scale of problem:
+**Must NOT run**:
 
-1. **The pure maths layer is small** (~200 lines), stable (lognormal CDF doesn't change), and dependency-free. Porting is a few hours of work.
+- When the user edits only the DSL (date range changes, `context()` changes, scenario DSL changes).
+- When the user runs an analysis request (including multi-scenario cohort maturity analysis).
 
-2. **Golden tests eliminate drift risk**. A shared fixture file (`tests/fixtures/lag-distribution-golden.json`) with input/output pairs, tested by both `lagDistribution.golden.test.ts` and `test_lag_distribution.py`, ensures the two implementations agree.
+### 4.4 Persisted model state (schema extension)
 
-3. **Constants can be shared** via a single YAML file (`constants/latency.yaml`) read by both TS and Python, eliminating the risk of constant drift.
+To apply forecasts later without refitting, we persist the model and its provenance onto the graph/parameter layer.
 
-4. **The backend gains full forecasting capability**: it can evaluate the CDF at any point, compute completeness for any cohort age, project forward, and generate fan chart quantiles — all without the frontend needing to pre-compute anything.
+We add a new persisted structure (name intentionally versioned):
 
-5. **Option B fails for fan charts**: fan charts require CDF evaluation at many points per cohort per subject. Pre-computing all of these on the frontend and sending them in the request is impractical and architecturally wrong (the frontend shouldn't need to know what analysis-specific computations the backend will perform).
+- `edge.p.latency.model_v1` (and similarly `edge.conditional_p[i].p.latency.model_v1`):
+  - `mu`: number
+  - `sigma`: number
+  - `onset_delta_days`: number
+  - `t95_days`: number (derived from the fit, used for horizons and maturity semantics)
+  - `trained_at`: ISO datetime (UTC)
+  - `training_window`: `{ anchor_from: ISO date, anchor_to: ISO date }` (the evidence window used for fitting)
+  - `settings_signature`: string (hash of the forecasting settings used for this fit)
+  - `quality_ok`: boolean (quality gates passed)
+  - `total_k`: number (converters used for fitting; audit and gating)
+  - `notes?`: optional string (human-readable failure reason when quality gates fail)
 
----
+This is the “one or two more modelling params” referenced in the requirement.
 
-## 6. Implementation Plan (When Forecasting is Needed)
+### 4.5 Forecasting settings: how Python gets them (and how parity is guaranteed)
 
-This work is **deferred** until the basic read path (Phase 1-2 of `1-reads.md`) is working. When forecasting is needed:
+The backend must have a deterministic, versioned settings input, otherwise fits are not reproducible.
 
-### 6.1 Port Pure Maths
+**Requirement**: there is exactly one canonical source for forecasting settings used by Python fitting.
 
-1. Create `graph-editor/lib/runner/lag_distribution_utils.py`:
-   - `erf(x)`, `standard_normal_cdf(x)`, `standard_normal_inverse_cdf(p)`
-   - `lognormal_cdf(t, mu, sigma)`, `lognormal_inverse_cdf(p, mu, sigma)`, `lognormal_survival(t, mu, sigma)`
-   - `fit_lag_distribution(median_lag, mean_lag, total_k)`
-   - `to_model_space(onset_delta, median, mean, t95, age)`
+Two acceptable mechanisms (both can coexist, but one must be authoritative):
 
-2. Create shared golden fixture: `tests/fixtures/lag-distribution-golden.json`
-   - Input/output pairs covering edge cases (zero sigma, extreme ratios, onset subtraction)
-   - Both TS and Python test suites consume this fixture
+1. **Backend reads settings from disk**: Python loads `settings/settings.yaml` (or equivalent repo settings) at runtime.
+   - Pros: one source; no API coupling.
+   - Cons: needs deployment discipline (the backend bundle must include the settings file).
 
-### 6.2 Share Constants
+2. **Frontend includes settings in the recompute request**: Python accepts an explicit settings object and uses it for that job.
+   - Pros: decouples the running backend from local filesystem.
+   - Cons: request must include a stable settings signature and must not drift per user unless that is desired.
 
-1. Create `constants/latency.yaml` with all tuning constants
-2. TS loader: read YAML at build time or import as JSON
-3. Python loader: read YAML at import time
-4. Remove hardcoded constants from `latency.ts` (replace with loader)
+**Parity guarantee** is achieved by:
 
-### 6.3 Backend Forecasting Functions
+- Python being the master implementation for fitting and application.
+- Persisting `settings_signature` with each model so analyses can be audited.
+- A golden fixture suite for the pure maths layer (CDF/inverse/fit) to lock behaviour.
 
-1. Create `graph-editor/lib/runner/forecasting_derivation.py`:
-   - `compute_completeness(anchor_day, retrieved_at, mu, sigma, onset_delta)` → float
-   - `compute_evidence_forecast_blend(observed_pct, baseline_pct, completeness, n_query, n_baseline, lambda_)` → float
-   - `derive_with_forecast(rows, lag_fit, baseline_pct)` → list of `{date, observed, projected, completeness, layer}`
-   - `derive_fan_chart(rows, lag_fit, confidence_levels)` → list of `{date, median, ci_50_low, ci_50_high, ci_90_low, ci_90_high}`
+### 4.6 What data Python needs to fit a model
 
-### 6.4 Lag Fit Data: Derived from Snapshot Rows, Not from the Graph
+Python fitting does not depend on frontend parameter files. It relies on snapshot DB evidence.
 
-**Important**: The `edge.p.latency` fields on the graph (`median_lag_days`, `mean_lag_days`, `completeness`) are **outputs** of the frontend's statistical enhancement service, written back after computation. They are NOT the primary inputs to fitting. The actual inputs are **per-cohort daily time-series data** from the parameter file.
+At minimum, for each subject (edge parameter), Python needs:
 
-For backend forecasting, the backend should **recompute lag statistics from the snapshot rows it just retrieved**, not read stale display values from the graph edge. This is more correct because the snapshot data being analysed may cover a different time range than what the graph's latency values reflect.
+- `param_id`, `core_hash`, `slice_keys` (to locate the correct semantic series)
+- A training anchor window: `training_anchor_from/to` (ISO dates)
+- Snapshot rows containing:
+  - counts (`X`, `Y`) per `anchor_day`
+  - per-anchor lag moments (as stored in the DB rows): `median_lag_days`, `mean_lag_days`
+  - optionally: `onset_delta_days` evidence if available in rows (else use model/onset policy)
+  - `retrieved_at` (to support recency weighting and to select the “latest known” evidence per anchor day)
 
-**What the backend derives from snapshot DB rows**:
-- Aggregate `median_lag_days` and `mean_lag_days` (weighted across anchor_days)
-- `totalK` (sum of Y values)
-- `onset_delta_days` (from rows, if available)
+The fitter must define a stable policy for:
 
-**What the backend reads from the graph edge** (optional authoritative constraints only):
-- `edge.p.latency.t95` — authoritative if user-overridden or derived from richer data. Used as a one-way constraint to widen the lognormal sigma (never narrows it).
-- `edge.p.latency.onset_delta_days` — authoritative if user-overridden.
+- How it chooses the “evidence snapshot” per anchor day (typically: latest `retrieved_at` for that anchor day within the training sweep).
+- How it aggregates moments across anchor days (recency weighting, and weighting by `X` or `Y` as appropriate).
+- Quality gates (minimum converters, mean/median ratio bounds, etc.).
 
-**Fitting sequence (backend)**:
-1. From snapshot rows: compute weighted aggregate `median_lag`, `mean_lag`, `totalK`
-2. `fit_lag_distribution(median, mean, totalK)` → `(mu, sigma)`
-3. If `edge.p.latency.t95` exists: apply one-way t95 constraint (may increase sigma)
-4. Evaluate CDF at required points for completeness/projection
+### 4.7 Offline behaviour
 
-This means:
-- No `lag_fit` field is needed on `SnapshotSubjectRequest`
-- The backend derives everything from the data it just retrieved
-- The graph provides only authoritative constraints (t95, onset if overridden)
-- The frontend does not pre-compute or duplicate lag fit parameters
+If the user is offline:
+
+- Analyses can still run against locally-available graphs and cached snapshot-derived results only if a backend is present (offline here means “no backend” in practice).
+- The UI remains usable; models and derived scalars persist on the graph/parameter files.
+- The user cannot recompute lag models (fitting is backend-owned) until reconnected.
+
+This is acceptable if model recomputation is an **occasional** operation (after real fetches or explicit user action), not an “every query change” operation.
 
 ---
 
-## 7. Risk Assessment
+## 5. Proposed Backend API: Recompute Lag Models
+
+### 5.1 New route
+
+Add a dedicated route that recomputes and returns lag models for a set of subjects:
+
+- `POST /api/lag/recompute-models`
+
+### 5.2 Request shape (conceptual)
+
+Inputs:
+
+- `workspace`: `{ repository, branch }`
+- `subjects`: array of `{ subject_id, param_id, core_hash, slice_keys, target: { targetId, slot?, conditionalIndex? } }`
+- `training_anchor_from/to`: ISO dates (explicit), OR a named policy e.g. `last_60d` (backend expands to dates)
+- `as_at` (optional): ISO datetime for “what did we know as of …” fitting (rare; default is latest)
+- `forecasting_settings` (optional): explicit settings object and/or settings signature
+
+### 5.3 Response shape (conceptual)
+
+For each subject:
+
+- `model_v1`: `{ mu, sigma, onset_delta_days, t95_days, trained_at, training_window, settings_signature, quality_ok, total_k, notes? }`
+- plus derived scalars to apply immediately:
+  - `t95`, `path_t95` (if computed here), `completeness` for “today” or for a given evaluation date (optional)
+  - `p_forecast` baseline (optional; can be computed during application)
+
+The frontend applies these values to the graph (and optionally persists to parameter files) as a separate, explicit step.
+
+---
+
+## 6. Application in Analysis: Completeness + Evidence/Forecast Output
+
+### 6.1 Completeness is mandatory output
+
+Every cohort-style analysis must emit completeness so the chart can be labelled correctly.
+
+For each anchor day (and for cohort maturity, for each frame), emit:
+
+- `completeness` \(c \in [0, 1]\)
+- `layer` classification:
+  - `layer: 'evidence'` for the observed component
+  - `layer: 'forecast'` for the projected component
+
+### 6.2 Evidence/forecast split for F+E visualisation
+
+For an anchor day with observed `y` conversions:
+
+- `projected_y = y / max(c, eps)` (simple projection)
+- `evidence_y = y`
+- `forecast_y = projected_y - evidence_y`
+
+The frontend can render:
+
+- solid bar for `evidence_y`
+- striped bar for `forecast_y` (immature portion)
+
+If the full blend is desired (baseline p∞ + λ etc), the backend computes:
+
+- a baseline probability from mature cohorts in the same analysis window (or from the persisted model metadata)
+- blended `projected_pct` and corresponding `projected_y`
+
+### 6.3 Fan chart outputs
+
+Fan charts can be computed from the model by evaluating completeness forward in time for chosen horizons (e.g. +7d, +14d, +30d) and translating into projected final conversion percentiles.
+
+Confidence bands require an explicit policy (initially model-based; later can incorporate empirical variance).
+
+---
+
+## 6.4 Can Python reproduce the frontend topo/LAG pass from DB + graph + slice plans?
+
+This section answers the key question:
+
+> What *other* data is the frontend using for the topo pass, and can Python compute the same results using only the snapshot DB + frontend-provided slice/signature plans + the scenario graph?
+
+### 6.4.1 What the frontend topo pass consumes today (inputs)
+
+The current topo/LAG computation in the frontend (`enhanceGraphLatencies` → `computeEdgeLatencyStats`) consumes four categories of inputs:
+
+1. **Snapshot-style evidence** (per anchor day):
+   - `X`, `Y` (denominator/trials and converters)
+   - lag moments: `median_lag_days`, `mean_lag_days`
+   - anchor-travel moments (for downstream edges): `anchor_median_lag_days`, `anchor_mean_lag_days`
+   - optional onset evidence: `onset_delta_days`
+   - `retrieved_at` (the “version boundary” of the evidence)
+
+2. **Scenario graph structure** (topology + edge metadata):
+   - nodes/edges connectivity (topological traversal)
+   - start node semantics (`entry.is_start`, `entry.entry_weight`)
+   - per-edge latency enablement and overrides:
+     - `latency_parameter` enablement flag(s)
+     - `t95_overridden`, `path_t95_overridden`, `onset_delta_days_overridden`
+     - `t95` / `path_t95` when present (as constraints and/or horizon sources)
+
+3. **Query semantics / mode**:
+   - “window-mode” vs “cohort-mode” maturity semantics
+   - optional “cohortWindow” scoping that defines which cohorts count for maturity/blend under the current query
+   - scenario-aware edge enablement (what-if / scenario layer)
+
+4. **Forecasting settings** (tuning constants + policies):
+   - `RECENCY_HALF_LIFE_DAYS`
+   - `FORECAST_BLEND_LAMBDA`
+   - `LATENCY_BLEND_COMPLETENESS_POWER`
+   - `LATENCY_MAX_MEAN_MEDIAN_RATIO`, quality gates, default horizons, onset aggregation settings, etc.
+
+### 6.4.2 What Python is allowed to use
+
+To keep the Python role clean and pure:
+
+- ✅ Python may use **only** the snapshot DB (primary evidence source) and the scenario graph embedded in the request.
+- ✅ Python may aggregate/transform DB rows deterministically.
+- ✅ Python may accept a frontend-provided plan that states *exactly* which semantic series to operate on (e.g. slice keys).
+- ❌ Python must not access parameter files or any other secondary storage.
+- ❌ Python must not *infer* slice partitions or MECE unions (that’s frontend planning).
+
+Importantly, “Python must not infer slice partitions” does **not** mean “Python cannot add numbers together”.
+It means Python must not decide what to add. The frontend provides `slice_keys[]` explicitly.
+
+### 6.4.3 Mapping: can Python reconstruct every frontend input?
+
+| Frontend topo input | Where it comes from today | Can Python get it from DB + graph + FE plan? | Notes |
+|---|---|---|---|
+| `X`, `Y` per `anchor_day` | Parameter value arrays | ✅ Yes | Stored per DB row in `snapshots` |
+| `median_lag_days`, `mean_lag_days` per `anchor_day` | Parameter value arrays | ✅ Yes | Stored per DB row in `snapshots` |
+| `anchor_*_lag_days` per `anchor_day` | Parameter value arrays | ✅ Yes | Stored per DB row in `snapshots` |
+| `onset_delta_days` evidence | Derived from histograms / stored | ✅ Yes (if stored in DB rows) or via override/settings | DB already has `onset_delta_days` column. If missing in practice, policy must define fallback. |
+| Evidence “version boundary” | Parameter value `data_source.retrieved_at` | ✅ Yes | DB has `retrieved_at` per row |
+| Which slices belong to the semantic series | Planner/MECE resolution in FE | ✅ Yes, if FE provides `slice_keys[]` | Py must treat `slice_keys[]` as authoritative; no inference. |
+| Graph topology (for topo traversal) | In-memory graph | ✅ Yes | Graph is already sent in analysis requests (`scenarios[].graph`). |
+| Start-node semantics / entry weights | Graph node metadata | ✅ Yes | Comes from graph. |
+| Active latency edges | Graph edge metadata | ✅ Yes | Determined from graph (same rules can be implemented in Python). |
+| Path horizon DP (`path_t95`) | Computed in FE | ✅ Yes | Can be recomputed in Python from graph + per-edge `t95`/defaults/overrides. |
+| Query mode (window vs cohort) | DSL + FE mode selection | ✅ Yes, if made explicit | For forecasting in analysis, mode must be explicit in request/contract; avoid implicit inference. |
+| Forecasting settings | FE service | ✅ Yes | Must be provided deterministically (backend authoritative load or request-supplied settings). |
+
+Conclusion: **Yes** — Python can reproduce the topo/LAG outputs using only snapshot DB rows + scenario graph + frontend-provided `slice_keys[]` + deterministic forecasting settings.
+
+The risk is not missing data; it is **policy drift** (row selection, weighting, and mode semantics). Therefore the policies must be explicit and tested.
+
+### 6.4.4 Evidence selection policy (must be explicit)
+
+The snapshot DB contains multiple “versions” per anchor day (different `retrieved_at`), and potentially multiple slice keys.
+Both fitting and application must define which rows are considered evidence.
+
+Python must implement these policies explicitly (and tests must lock them):
+
+- **Policy P1 (latest evidence)**:
+  - For each `anchor_day` and each `slice_key` in `slice_keys[]`, pick the row with the greatest `retrieved_at` within the allowed sweep.
+  - Then aggregate across slice keys (sum X/Y; and apply the chosen lag-moment aggregation policy).
+  - This corresponds to “use what we know now”.
+
+- **Policy P2 (as-at evidence)**:
+  - Same as P1, but restrict to rows with `retrieved_at <= as_at`.
+  - This corresponds to “what did we know as of time T”.
+
+- **Policy P3 (sweep frames)** (for cohort maturity):
+  - Identify a list of frame boundaries (distinct retrieval days/timestamps in `[sweep_from, sweep_to]`).
+  - For each frame boundary `t`, apply P2 with `as_at = t` to compute the virtual snapshot evidence for that frame.
+
+These policies are already conceptually present in the snapshot read modes; they are made explicit here because fitting/application must not silently “do something reasonable”.
+
+### 6.4.5 Lag-moment aggregation policy (slice_keys union)
+
+When `slice_keys[]` contains multiple keys (MECE union), Python must aggregate across them.
+This is allowed because the frontend explicitly provided the union set; Python is not inferring it.
+
+However, to match frontend semantics, the aggregation policy must be specified:
+
+- Counts:
+  - `X_total = Σ X_i`
+  - `Y_total = Σ Y_i`
+
+- Lag moments:
+  - The system currently treats lag moments as part of the evidence stream; therefore Python needs a deterministic rule to aggregate them across slices.
+  - (The exact rule must match the shipped frontend logic; initial implementation should mirror the existing mixture/aggregation approach used by FE.)
+
+If the frontend already has a definitive mixture aggregation implementation (e.g. a lognormal mixture helper), port that logic to Python and lock it with tests.
+
+### 6.4.6 Minimal data contract from frontend to Python (fit/apply)
+
+To keep Python free of inference, the frontend must provide:
+
+- The semantic subject identity: `param_id`, `core_hash`
+- The semantic slice plan: `slice_keys[]`
+- The query semantics:
+  - mode: `'window' | 'cohort'` (or an equivalent explicit flag)
+  - evaluation horizon / as-at or sweep range as required by the analysis read mode
+- The scenario graph (already in request)
+
+This is sufficient for Python to:
+
+- Query the DB for evidence rows
+- Select evidence by policy P1/P2/P3
+- Fit models (when asked) and/or apply models (always during analysis)
+- Return completeness and evidence/forecast outputs
+
+---
+
+## 7. Implementation Plan (Forecasting Phase)
+
+### 7.1 Build the Python modelling library
+
+- `lag_distribution_utils.py`: port pure maths (erf, Φ, Φ⁻¹, lognormal CDF/inverse, moment-fit).
+- `forecasting_settings.py`: load settings and produce a stable `settings_signature`.
+- `lag_model_fitter.py`: queries snapshot DB evidence and produces `model_v1`.
+- `forecast_application.py`: computes completeness, projections, layers, fan chart points.
+
+### 7.2 Add persistence fields on graph/parameter models
+
+- Extend the TypeScript types (`LatencyConfig`) to include `model_v1` so the graph can store fitted model parameters.
+- Extend YAML schema(s) / parameter file formats as needed.
+
+### 7.3 Wire recompute into the product workflow
+
+Two triggers:
+
+- **Automatic**: after a successful fetch-from-origin job that writes new snapshot rows, call `/api/lag/recompute-models` for affected subjects (bounded set).
+- **Manual**: a user action “Recompute lag models/horizons” that calls the same route for all latency edges.
+
+### 7.4 Ensure we do not refit on DSL edits
+
+- Query DSL changes should only affect application (which frames/anchor days are evaluated and displayed), not fitting.
+- Fitting uses the training window policy, not the current query window.
+
+---
+
+## 8. Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| TS/Python numerical drift | Low | Medium | Golden test suite with tight tolerances |
-| Constant drift | Low | High | Single YAML source, both languages read it |
-| Forecasting model changes (mu/sigma fitting) | Low | Medium | Changes go to both implementations; golden tests catch drift |
-| Onset delta semantics diverge | Medium | High | Shared golden fixtures include onset edge cases |
+| Behaviour drift between FE and BE | Low | High | Python is the single master; FE only persists and displays model outputs |
+| Settings mismatch | Medium | High | Stable settings signature persisted per model; backend authoritative settings load policy |
+| Insufficient DB evidence to fit | Medium | Medium | Quality gates + fallbacks; surface “quality_ok=false” and keep conservative defaults |
+| Performance of bulk model recompute | Medium | Medium | Batch DB queries + dedup; recompute only for affected subjects; cache within request |
 
 ---
 
-## 8. Resolved Questions
+## 9. What `reads.md` Must Anticipate
 
-1. **When does the backend need forecasting?** Only when analysis results include projected/forecast values (fan charts, evidence/forecast split, completeness overlays). Basic aggregation (lag histogram, daily conversions) does NOT need it. The design must anticipate forecasting from the start (request shape, per-subject metadata fields) even if the backend derivation functions are implemented later.
+The snapshot read path must support application-time forecasting outputs:
 
-2. **Should the frontend pre-compute lag fits per subject, or should the backend read them from the parameter file?** **Answer: Frontend provides `lag_fit` in the analysis request.** The backend does not access parameter files — that is an important architectural separation we have maintained throughout. If the backend is moved to a separate server, it will not have access to git-backed parameter files or the file registry. The frontend has everything it needs (parameter file is already loaded) and includes the fitted model parameters in the request payload. The backend evaluates the model at whatever points the analysis requires.
+- `completeness` per anchor day (and per frame for cohort maturity)
+- evidence/forecast split fields (`layer`, `projected_y`, etc.)
+- fan chart support (future)
 
-3. **SciPy vs pure Python?** Initial port uses pure Python (`math` stdlib only). NumPy will likely be needed in due course for more sophisticated statistics (kernel density estimation, bootstrap resampling for fan charts, matrix operations for multi-parameter joint projections). The pure maths module should be designed so that a NumPy-backed version can replace it without changing the interface.
-
----
-
-## 9. What `reads.md` Must Anticipate (Even Before Forecasting is Implemented)
-
-The snapshot read path (`1-reads.md`) must be designed so that forecasting can be added without restructuring the request shape or the backend execution model. Specifically:
-
-### 9.1 Lag Fit Data: Backend Derives from Snapshot Rows
-
-The `edge.p.latency` fields on the graph (`median_lag_days`, `mean_lag_days`, `completeness`) are **outputs** of the frontend enhancement service, not primary inputs to fitting. The actual inputs are per-cohort daily data.
-
-For backend forecasting, the backend recomputes lag statistics from the **snapshot rows it just retrieved from the DB** (each row has `median_lag_days`, `mean_lag_days`, `onset_delta_days`). The graph provides only **authoritative constraints**: `edge.p.latency.t95` (if set) and `edge.p.latency.onset_delta_days` (if user-overridden).
-
-No additional per-subject lag fit fields are needed on `SnapshotSubjectRequest`. The backend has everything it needs from the DB rows + the graph's authoritative constraints.
-
-### 9.2 Backend Derivation Functions Must Accept Lag Fit Parameters
-
-Even in Phase 1, the derivation function signatures should accept lag fit parameters (defaulting to None/unused). This avoids a signature-breaking change when forecasting is added:
-
-- `derive_lag_histogram(rows, lag_fit=None)` — Phase 1: ignores lag_fit. Phase N: annotates bins with completeness.
-- `derive_daily_conversions(rows, lag_fit=None)` — Phase 1: ignores lag_fit. Phase N: adds `completeness` and `projected` fields per day.
-- `derive_cohort_maturity(rows, lag_fit=None)` — New analysis type in Phase N: requires lag_fit to draw maturity curves.
-
-### 9.3 Result Shape Must Support Layered Data (Evidence + Forecast)
-
-The analysis result schema should from the start support a `layer` field on data points (even if all points are `layer: 'evidence'` in Phase 1). This enables the frontend chart components to distinguish solid (evidence) from dashed (forecast) rendering without result schema changes.
-
-### 9.4 The As-At Sweep Mode is the Foundation for Cohort Maturity
-
-The "as-at sweep" read mode (retrieve virtual snapshots at multiple points in time for the same anchor range) is the data foundation for both:
-- **Cohort maturity curves** (how did the observed conversion rate evolve as data arrived?)
-- **Forecast overlays** (given the current completeness at each as-at point, what was the projected final rate?)
-
-The sweep mode must be designed as a first-class read mode, not a special case. The backend should efficiently execute it (single query with multiple as-at boundaries, or a range-based approach, rather than N separate virtual snapshot queries).
-
-### 9.5 Backend Must Be Able to Extract Authoritative Constraints from the Graph
-
-The backend receives both `snapshot_subjects` (DB coordinates) and `scenarios[].graph`. For forecasting:
-
-**Primary inputs** (from snapshot DB rows): `median_lag_days`, `mean_lag_days`, `onset_delta_days` per row → backend aggregates these into fitting inputs.
-
-**Authoritative constraints** (from graph edge, via `target.targetId`):
-- `edge.p.latency.t95` — if set, used as one-way constraint on sigma (only widens, never narrows)
-- `edge.p.latency.onset_delta_days` — if user-overridden, used instead of row-level onset
-
-Note: `edge.p.latency.median_lag_days` and `edge.p.latency.mean_lag_days` are **display outputs** from the frontend's last enhancement pass, NOT primary fitting inputs. The backend should compute aggregates from the snapshot data being analysed, not read stale values from the graph.
-
-The backend Python code must include a utility to locate an edge in a scenario graph by UUID and extract its latency config. This is a simple graph traversal.
+`SnapshotSubjectRequest` does **not** need to carry a full lag fit if the model is persisted on the graph (`edge.p.latency.model_v1`) and the backend is responsible for applying it.
 
 ---
 

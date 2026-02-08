@@ -344,7 +344,8 @@ export class GraphComputeClient {
     scenarioName: string = 'Current',
     scenarioColour: string = '#3b82f6',
     analysisType?: string,
-    visibilityMode: 'f+e' | 'f' | 'e' = 'f+e'
+    visibilityMode: 'f+e' | 'f' | 'e' = 'f+e',
+    snapshotSubjects?: SnapshotSubjectPayload[]
   ): Promise<AnalysisResponse> {
     const bypassCache = (() => {
       try {
@@ -403,14 +404,17 @@ export class GraphComputeClient {
       return result;
     }
 
+    const scenarioEntry: ScenarioData = {
+      scenario_id: scenarioId,
+      name: scenarioName,
+      colour: scenarioColour,
+      visibility_mode: visibilityMode,
+      graph,
+      ...(snapshotSubjects?.length ? { snapshot_subjects: snapshotSubjects } : {}),
+    };
+
     const request: AnalysisRequest = {
-      scenarios: [{
-        scenario_id: scenarioId,
-        name: scenarioName,
-        colour: scenarioColour,
-        visibility_mode: visibilityMode,
-        graph,
-      }],
+      scenarios: [scenarioEntry],
       query_dsl: queryDsl,
       analysis_type: analysisType,
     };
@@ -457,9 +461,9 @@ export class GraphComputeClient {
    * @param analysisType - Optional analysis type override
    */
   async analyzeMultipleScenarios(
-    scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e' }>,
+    scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e'; snapshot_subjects?: SnapshotSubjectPayload[] }>,
     queryDsl?: string,
-    analysisType?: string
+    analysisType?: string,
   ): Promise<AnalysisResponse> {
     const bypassCache = (() => {
       try {
@@ -534,6 +538,7 @@ export class GraphComputeClient {
         colour: s.colour,
         visibility_mode: s.visibility_mode || 'f+e',
         graph: s.graph,
+        ...(s.snapshot_subjects?.length ? { snapshot_subjects: s.snapshot_subjects } : {}),
       })),
       query_dsl: queryDsl,
       analysis_type: analysisType,
@@ -734,12 +739,37 @@ export interface ScenarioData {
   visibility_mode?: 'f+e' | 'f' | 'e';
   graph: any;
   param_overrides?: Record<string, any>;
+  /** Per-scenario snapshot DB coordinates (only for analysis types with snapshotContract) */
+  snapshot_subjects?: SnapshotSubjectPayload[];
 }
 
 export interface AnalysisRequest {
   scenarios: ScenarioData[];
   query_dsl?: string;
   analysis_type?: string;
+}
+
+/**
+ * Wire-format for snapshot subjects sent to the backend.
+ * Mirrors SnapshotSubjectRequest from snapshotDependencyPlanService.
+ */
+export interface SnapshotSubjectPayload {
+  subject_id: string;
+  param_id: string;
+  canonical_signature: string;
+  core_hash: string;
+  read_mode: string;
+  anchor_from: string;
+  anchor_to: string;
+  as_at?: string;
+  sweep_from?: string;
+  sweep_to?: string;
+  slice_keys: string[];
+  target: {
+    targetId: string;
+    slot?: string;
+    conditionalIndex?: number;
+  };
 }
 
 export interface DimensionSpec {

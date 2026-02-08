@@ -12,6 +12,9 @@ import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { gitService } from '../services/gitService';
 import { credentialsManager } from '../lib/credentials';
 import { sessionLogService } from '../services/sessionLogService';
+import { historicalFileService } from '../services/historicalFileService';
+import type { HistoricalCommit } from '../services/historicalFileService';
+import { formatDateUK } from '../lib/dateFormat';
 
 export interface HistoryCommit {
   sha: string;
@@ -36,6 +39,8 @@ interface UseViewHistoryResult {
   getContentAtCommit: (commitSha: string) => Promise<string | null>;
   /** Rollback file to a specific commit */
   rollbackToCommit: (commitSha: string) => Promise<boolean>;
+  /** Open a historical version in a temporary read-only tab */
+  viewAtCommit: (commitSha: string) => Promise<void>;
   /** Current file's path */
   filePath: string | null;
   /** Current file's name */
@@ -240,6 +245,49 @@ export function useViewHistory(fileId: string | undefined): UseViewHistoryResult
     }
   }, [fileId, filePath, file?.type, getContentAtCommit]);
   
+  /** Open a historical version in a read-only temporary tab */
+  const viewAtCommit = useCallback(async (commitSha: string): Promise<void> => {
+    if (!fileId) return;
+
+    // Find the matching HistoryCommit to get its date
+    const commit = history.find(h => h.sha === commitSha);
+    if (!commit) {
+      toast.error('Commit not found in history');
+      return;
+    }
+
+    // Convert HistoryCommit → HistoricalCommit (the service's type)
+    const dateObj = new Date(commit.date);
+    const dateISO = dateObj.toISOString().split('T')[0];
+    const dateUK = formatDateUK(dateObj);
+
+    const historicalCommit: HistoricalCommit = {
+      sha: commit.sha,
+      shortSha: commit.shortSha,
+      message: commit.message,
+      author: commit.author,
+      date: commit.date,
+      dateISO,
+      dateUK,
+    };
+
+    const toastId = toast.loading(`Opening at ${dateUK}…`);
+    try {
+      const tabId = await historicalFileService.openHistoricalVersion(
+        fileId,
+        historicalCommit,
+        navState.selectedRepo,
+      );
+      if (tabId) {
+        toast.success(`Opened historical version (${dateUK})`, { id: toastId });
+      } else {
+        toast.error('Failed to open historical version', { id: toastId });
+      }
+    } catch (error) {
+      toast.error(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: toastId });
+    }
+  }, [fileId, history, navState.selectedRepo]);
+
   return {
     canViewHistory,
     showHistoryModal,
@@ -248,6 +296,7 @@ export function useViewHistory(fileId: string | undefined): UseViewHistoryResult
     loadHistory,
     getContentAtCommit,
     rollbackToCommit,
+    viewAtCommit,
     filePath,
     fileName,
     isLoading,

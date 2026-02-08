@@ -15,6 +15,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 from typing import List, Dict, Any, Optional
 from datetime import date, datetime
+import re
 
 
 def get_db_connection():
@@ -326,6 +327,89 @@ def health_check() -> Dict[str, Any]:
 # Phase 2: Read Path — Query Functions
 # =============================================================================
 
+_SLICE_TEMPORAL_ARGS_RE = re.compile(r"(?:^|\.)(window|cohort)\([^)]*\)")
+
+
+def normalise_slice_key_for_matching(slice_key: str) -> str:
+    """
+    Normalise a slice_key for *matching* purposes.
+
+    Historical data stores slice_key values that include date-range arguments inside
+    window(...) / cohort(...). Those args are not part of slice identity for reads:
+    the DB already carries time in anchor_day (what day) and retrieved_at (which version).
+
+    Matching rule:
+    - Replace window(<anything>) -> window()
+    - Replace cohort(<anything>) -> cohort()
+
+    We keep other clauses (context/case) unchanged, and we preserve the existing
+    clause ordering (our write path emits canonical ordering).
+    """
+    s = (slice_key or "").strip()
+    if not s:
+        return ""
+    s = _SLICE_TEMPORAL_ARGS_RE.sub(lambda m: f".{m.group(1)}()", s).lstrip(".")
+    return s
+
+
+def _slice_key_match_sql_expr() -> str:
+    """
+    SQL expression that normalises snapshots.slice_key for matching:
+    strips arguments from window(...) / cohort(...).
+    """
+    return r"regexp_replace(slice_key, '(window|cohort)\([^)]*\)', '\1()', 'g')"
+
+def _partition_key_match_sql_expr() -> str:
+    """
+    SQL expression used as the "logical slice family" partition key.
+
+    This is the same as the match expression: context/case dims are preserved,
+    and window/cohort arguments are stripped.
+    """
+    return _slice_key_match_sql_expr()
+
+
+def _split_slice_selectors(norm: List[str]) -> tuple[List[str], List[str]]:
+    """
+    Split normalised slice selector strings into:
+    - family selectors (include context/case dims, e.g. "context(x).cohort()")
+    - mode-only selectors ("window()" / "cohort()") which mean "any context, this mode"
+    """
+    mode_only = [s for s in norm if s in ("window()", "cohort()")]
+    families = [s for s in norm if s and s not in ("window()", "cohort()")]
+    return families, mode_only
+
+
+def _append_slice_filter_sql(*, sql_parts: List[str], params: List[Any], slice_keys: List[str]) -> None:
+    """
+    Append a slice filter to an existing SQL where clause builder.
+
+    Semantics:
+    - A selector with context/case dims matches by full normalised family equality.
+      e.g. "context(channel:google).cohort()"
+    - A selector of "cohort()" / "window()" is mode-only: match ANY contexted/uncontexted
+      slice whose normalised key ends with that mode.
+    """
+    norm = [normalise_slice_key_for_matching(sk) for sk in slice_keys]
+    # Back-compat: empty selector historically meant "no slice filter" (broad / MECE-capable).
+    if "" in norm:
+        return
+    families, mode_only = _split_slice_selectors(norm)
+
+    sub: List[str] = []
+    if families:
+        sub.append(f"{_slice_key_match_sql_expr()} = ANY(%s)")
+        params.append(families)
+    if mode_only:
+        # Match any slice family in the requested mode(s).
+        # Our canonical ordering places window()/cohort() at the end, so suffix match is safe.
+        sub.append(f"{_slice_key_match_sql_expr()} LIKE ANY(%s)")
+        params.append([f"%{m}" for m in mode_only])
+
+    if sub:
+        sql_parts.append("(" + " OR ".join(sub) + ")")
+
+
 def query_snapshots(
     param_id: str,
     core_hash: Optional[str] = None,
@@ -389,8 +473,10 @@ def query_snapshots(
                 params.append(core_hash)
         
         if slice_keys is not None:
-            query += " AND slice_key = ANY(%s)"
-            params.append(slice_keys)
+            parts: List[str] = []
+            _append_slice_filter_sql(sql_parts=parts, params=params, slice_keys=slice_keys)
+            if parts:
+                query += " AND " + " AND ".join(parts)
         
         if anchor_from is not None:
             query += " AND anchor_day >= %s"
@@ -420,6 +506,105 @@ def query_snapshots(
         
         return rows
         
+    finally:
+        conn.close()
+
+
+def query_snapshots_for_sweep(
+    param_id: str,
+    core_hash: str,
+    slice_keys: Optional[List[str]] = None,
+    anchor_from: Optional[date] = None,
+    anchor_to: Optional[date] = None,
+    sweep_from: Optional[date] = None,
+    sweep_to: Optional[date] = None,
+    include_equivalents: bool = True,
+    limit: int = 50000,
+) -> List[Dict[str, Any]]:
+    """
+    Query snapshot rows for cohort maturity sweep.
+
+    Returns ALL raw rows in the anchor range whose ``retrieved_at`` falls
+    between ``sweep_from`` and ``sweep_to`` (inclusive, date-level).  The
+    derivation layer uses these to reconstruct virtual snapshots at each
+    distinct retrieval boundary.
+
+    This is functionally identical to ``query_snapshots`` but:
+    - requires ``core_hash`` (never optional for sweep)
+    - filters ``retrieved_at`` by a **date range** (sweep window), not a
+      single ``as_at`` ceiling
+    - uses a higher default limit (sweep may span many retrieval dates)
+
+    See: docs/current/project-db/1-reads.md §5.1
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        query = """
+            SELECT 
+                param_id, core_hash, slice_key, anchor_day, retrieved_at,
+                A as a, X as x, Y as y,
+                median_lag_days, mean_lag_days,
+                anchor_median_lag_days, anchor_mean_lag_days,
+                onset_delta_days
+            FROM snapshots
+            WHERE param_id = %s
+        """
+        params: List[Any] = [param_id]
+
+        # core_hash is mandatory for sweep
+        if include_equivalents:
+            resolved = resolve_equivalent_hashes(
+                param_id=param_id,
+                core_hash=core_hash,
+                include_equivalents=True,
+            )
+            hashes = resolved.get("core_hashes", [core_hash])
+            query += " AND core_hash = ANY(%s)"
+            params.append(hashes)
+        else:
+            query += " AND core_hash = %s"
+            params.append(core_hash)
+
+        if slice_keys is not None:
+            parts: List[str] = []
+            _append_slice_filter_sql(sql_parts=parts, params=params, slice_keys=slice_keys)
+            if parts:
+                query += " AND " + " AND ".join(parts)
+
+        if anchor_from is not None:
+            query += " AND anchor_day >= %s"
+            params.append(anchor_from)
+        if anchor_to is not None:
+            query += " AND anchor_day <= %s"
+            params.append(anchor_to)
+
+        # Sweep date range on retrieved_at (date-level comparison)
+        if sweep_from is not None:
+            query += " AND retrieved_at >= %s"
+            params.append(datetime.combine(sweep_from, datetime.min.time()))
+        if sweep_to is not None:
+            query += " AND retrieved_at < %s"
+            # sweep_to is inclusive at date level: < start of next day
+            from datetime import timedelta
+            params.append(datetime.combine(sweep_to + timedelta(days=1), datetime.min.time()))
+
+        query += " ORDER BY anchor_day, slice_key, retrieved_at"
+        query += f" LIMIT {int(limit)}"
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+        # Convert date/datetime to ISO strings for JSON serialisation
+        for row in rows:
+            if row.get('anchor_day') and hasattr(row['anchor_day'], 'isoformat'):
+                row['anchor_day'] = row['anchor_day'].isoformat()
+            if row.get('retrieved_at') and hasattr(row['retrieved_at'], 'isoformat'):
+                row['retrieved_at'] = row['retrieved_at'].isoformat()
+
+        return rows
     finally:
         conn.close()
 
@@ -992,8 +1177,21 @@ def get_batch_inventory_v2(
                 continue
             # Apply per-param slice filter if provided.
             allowed = slice_keys_by_param.get(pid)
-            if allowed is not None and sk not in allowed:
-                continue
+            if allowed is not None:
+                allowed_norm = {normalise_slice_key_for_matching(a) for a in allowed}
+                # Back-compat: empty selector means "no slice filtering" for inventory.
+                if "" in allowed_norm:
+                    pass
+                else:
+                    mode_only = {a for a in allowed_norm if a in ("window()", "cohort()")}
+                    family_only = {a for a in allowed_norm if a and a not in ("window()", "cohort()")}
+                    sk_norm = normalise_slice_key_for_matching(sk)
+                    if sk_norm in family_only:
+                        pass
+                    elif mode_only and any(sk_norm.endswith(m) for m in mode_only):
+                        pass
+                    else:
+                        continue
             agg_by_param_hash_slice[(pid, ch, sk)] = {
                 "slice_key": sk,
                 "row_count": int(row[3] or 0),
@@ -1264,6 +1462,10 @@ def query_snapshot_retrievals(
     try:
         cur = conn.cursor()
 
+        # Defensive: treat inverted anchor bounds as unordered.
+        if anchor_from is not None and anchor_to is not None and anchor_from > anchor_to:
+            anchor_from, anchor_to = anchor_to, anchor_from
+
         where_clauses = ["param_id = %s"]
         params: List[Any] = [param_id]
 
@@ -1276,8 +1478,7 @@ def query_snapshot_retrievals(
                 params.append(core_hash)
 
         if slice_keys is not None:
-            where_clauses.append("slice_key = ANY(%s)")
-            params.append(slice_keys)
+            _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=slice_keys)
 
         if anchor_from is not None:
             where_clauses.append("anchor_day >= %s")
@@ -1440,6 +1641,10 @@ def query_virtual_snapshot(
         - has_anchor_to: bool (whether anchor_to is covered in the result)
         - error: str (if success=False)
     """
+    # Defensive: treat inverted anchor bounds as unordered.
+    if anchor_from > anchor_to:
+        anchor_from, anchor_to = anchor_to, anchor_from
+
     conn = get_db_connection()
     try:
         cur = conn.cursor()
@@ -1454,8 +1659,7 @@ def query_virtual_snapshot(
         params: List[Any] = [param_id, as_at, anchor_from, anchor_to]
 
         if slice_keys is not None:
-            where_clauses.append("slice_key = ANY(%s)")
-            params.append(slice_keys)
+            _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=slice_keys)
 
         where_sql = " AND ".join(where_clauses)
 
@@ -1466,7 +1670,12 @@ def query_virtual_snapshot(
             where_match_sql = where_sql + " AND core_hash = %s"
 
         # Single-query virtual snapshot + mismatch detection.
-        # ranked: latest row per (anchor_day, slice_key) as-of as_at.
+        # ranked: latest row per (anchor_day, LOGICAL slice family) as-of as_at.
+        #
+        # IMPORTANT:
+        # We match slice_keys by normalising window/cohort args, so the "latest wins" ranking
+        # must also be applied across that same logical slice key; otherwise multiple historic
+        # window/cohort argument variants can yield multiple rows for the same slice family.
         # We then select only rows matching the requested core_hash, but we also compute:
         # - has_any_rows: whether ANY virtual rows exist for this param/window (any core_hash)
         # - has_matching_core_hash: whether ANY virtual rows exist for the requested core_hash
@@ -1494,7 +1703,7 @@ def query_virtual_snapshot(
                     anchor_mean_lag_days,
                     onset_delta_days,
                     ROW_NUMBER() OVER (
-                        PARTITION BY anchor_day, slice_key
+                        PARTITION BY anchor_day, {_partition_key_match_sql_expr()}
                         ORDER BY retrieved_at DESC
                     ) AS rn
                 FROM snapshots
@@ -1527,7 +1736,7 @@ def query_virtual_snapshot(
                     anchor_mean_lag_days,
                     onset_delta_days,
                     ROW_NUMBER() OVER (
-                        PARTITION BY anchor_day, slice_key
+                        PARTITION BY anchor_day, {_partition_key_match_sql_expr()}
                         ORDER BY retrieved_at DESC
                     ) AS rn
                 FROM snapshots

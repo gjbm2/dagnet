@@ -89,7 +89,7 @@ body, body * {
   margin-right: 8px; /* Space for drop zones - don't make too small */
   clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); /* Notch on top-right */
   transition: border-bottom-color 0.2s ease; /* Animate underline color change */
-  max-width: 200px; /* Prevent tabs from getting too wide */
+  max-width: 500px; /* Allow tabs to be wide enough for historical titles like "name.asat(10-Jan-25)" */
 }
 
 /* Tab title container - ensure no wrapping */

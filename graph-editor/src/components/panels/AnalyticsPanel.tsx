@@ -24,9 +24,29 @@ import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code } from 'lucide-react';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
+import { querySelectionUuids } from '../../hooks/useQuerySelectionUuids';
+import { mapFetchPlanToSnapshotSubjects } from '../../services/snapshotDependencyPlanService';
+import { buildFetchPlanProduction } from '../../services/fetchPlanBuilderService';
+import { parseConstraints } from '../../lib/queryDSL';
+import { resolveRelativeDate, formatDateUK } from '../../lib/dateFormat';
+import { fileRegistry } from '../../contexts/TabContext';
 import CollapsibleSection from '../CollapsibleSection';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import './AnalyticsPanel.css';
+
+/** Extract DateRange from DSL window()/cohort() clause. Same logic as planner. */
+function extractDateRangeFromDSL(dsl: string): { start: string; end: string } | null {
+  try {
+    const constraints = parseConstraints(dsl);
+    const range = constraints.cohort || constraints.window;
+    if (!range || !('start' in range) || !range.start) return null;
+    const start = resolveRelativeDate(range.start);
+    const end = ('end' in range && range.end) ? resolveRelativeDate(range.end) : formatDateUK(new Date());
+    return { start, end };
+  } catch {
+    return null;
+  }
+}
 
 interface AnalyticsPanelProps {
   tabId?: string;
@@ -363,12 +383,79 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     try {
       let response: AnalysisResponse;
       
+      // === Per-scenario snapshot dependency resolution ===
+      // If the selected analysis type has a snapshotContract, we resolve DB coordinates
+      // *per scenario* so each scenario carries its own snapshot subjects (derived from
+      // that scenario's effective DSL, not a single global DSL).
+      const snapshotMeta = selectedAnalysisId
+        ? ANALYSIS_TYPES.find(t => t.id === selectedAnalysisId)
+        : undefined;
+      const needsSnapshots = !!snapshotMeta?.snapshotContract;
+      
+      // Workspace identity (shared across all scenarios)
+      const graphFile = currentTab?.fileId ? fileRegistry.getFile(currentTab.fileId) : undefined;
+      const repository = graphFile?.source?.repository;
+      const branch = graphFile?.source?.branch;
+      const workspace = (repository && branch) ? { repository, branch } : undefined;
+      
+      // Helper: resolve snapshot subjects for a given graph + DSL pair
+      const resolveSnapshotSubjectsForScenario = async (
+        scenarioGraph: any,
+        scenarioDsl: string,
+      ): Promise<import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined> => {
+        if (!needsSnapshots || !workspace || !selectedAnalysisId) return undefined;
+        const dslWindow = extractDateRangeFromDSL(scenarioDsl);
+        if (!dslWindow) {
+          console.warn('[AnalyticsPanel] No date range in DSL; snapshot resolution skipped for scenario');
+          return undefined;
+        }
+        const { plan } = await buildFetchPlanProduction(scenarioGraph, scenarioDsl, dslWindow);
+        const { selectedEdgeUuids } = querySelectionUuids();
+        const resolverResult = await mapFetchPlanToSnapshotSubjects({
+          plan,
+          analysisType: selectedAnalysisId,
+          graph: scenarioGraph,
+          selectedEdgeUuids,
+          workspace,
+          queryDsl: scenarioDsl,
+        });
+        if (resolverResult) {
+          if (resolverResult.skipped.length > 0) {
+            console.warn('[AnalyticsPanel] Snapshot subjects skipped:', resolverResult.skipped);
+          }
+          if (resolverResult.subjects.length > 0) {
+            console.log('[AnalyticsPanel] Resolved snapshot subjects:', resolverResult.subjects.length);
+            return resolverResult.subjects;
+          }
+          console.warn('[AnalyticsPanel] No snapshot subjects resolved');
+        }
+        return undefined;
+      };
+      
+      // Determine the effective DSL for a scenario layer
+      const getEffectiveDslForScenario = (scenarioId: string): string => {
+        if (scenarioId === 'current') return queryDSL;
+        if (scenarioId === 'base') {
+          const baseDsl = scenariosContext?.baseDSL || graph?.baseDSL;
+          return typeof baseDsl === 'string' ? baseDsl : queryDSL;
+        }
+        // Live scenario: use its lastEffectiveDSL or queryDSL, falling back to panel DSL
+        const scenario = scenariosContext?.scenarios?.find(s => s.id === scenarioId);
+        const meta: any = scenario?.meta;
+        if (meta?.isLive) {
+          const dsl = meta.lastEffectiveDSL || meta.queryDSL;
+          if (typeof dsl === 'string' && dsl.trim()) return dsl;
+        }
+        return queryDSL;
+      };
+      
       // Check if we have multiple visible scenarios for multi-scenario analysis
       const hasMultipleScenarios = orderedVisibleScenarios.length > 1 && scenariosContext;
       
       if (hasMultipleScenarios) {
         // Build scenario-modified graphs for each visible scenario (in legend order)
-        const scenarioGraphs = orderedVisibleScenarios.map(scenarioId => {
+        // with per-scenario snapshot subjects
+        const scenarioGraphs = await Promise.all(orderedVisibleScenarios.map(async (scenarioId) => {
           // Get visibility mode (F/E/F+E) for this scenario from tab state
           const visibilityMode = tabId 
             ? operations.getScenarioVisibilityMode(tabId, scenarioId)
@@ -388,19 +475,24 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           
           const colour = getScenarioColour(scenarioId);
           
+          // Resolve snapshot subjects using this scenario's effective DSL
+          const effectiveDsl = getEffectiveDslForScenario(scenarioId);
+          const snapshotSubjects = await resolveSnapshotSubjectsForScenario(scenarioGraph, effectiveDsl);
+          
           return {
             scenario_id: scenarioId,
             name: getScenarioName(scenarioId),
             graph: scenarioGraph,
             colour,
             visibility_mode: visibilityMode,
+            ...(snapshotSubjects?.length ? { snapshot_subjects: snapshotSubjects } : {}),
           };
-        });
+        }));
         
         response = await graphComputeClient.analyzeMultipleScenarios(
           scenarioGraphs,
           queryDSL || undefined,
-          selectedAnalysisId || undefined
+          selectedAnalysisId || undefined,
         );
       } else {
         // Single scenario analysis
@@ -433,6 +525,10 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           analysisGraph = applyWhatIfToGraph(graph, whatIfDSL);
         }
         
+        // Resolve snapshot subjects for this scenario's effective DSL
+        const effectiveDsl = getEffectiveDslForScenario(scenarioId);
+        const snapshotSubjects = await resolveSnapshotSubjectsForScenario(analysisGraph, effectiveDsl);
+        
         response = await graphComputeClient.analyzeSelection(
           analysisGraph,
           queryDSL || undefined,
@@ -440,7 +536,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           scenarioName,
           scenarioColour,
           selectedAnalysisId || undefined,
-          visibilityMode
+          visibilityMode,
+          snapshotSubjects
         );
       }
       

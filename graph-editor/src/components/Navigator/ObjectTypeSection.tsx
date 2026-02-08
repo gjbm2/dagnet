@@ -2,8 +2,9 @@ import React, { useState, useCallback, useRef, useEffect, createContext, useCont
 import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
-import { ChevronRight, FileText, TrendingUp, Coins, Clock, Package, LucideIcon } from 'lucide-react';
+import { AtSign, ChevronRight, FileText, TrendingUp, Coins, Clock, Package, LucideIcon } from 'lucide-react';
 import { WhereUsedService } from '../../services/whereUsedService';
+import { historicalFileService } from '../../services/historicalFileService';
 import '../../styles/file-state-indicators.css';
 
 /**
@@ -238,6 +239,24 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
     setTimeout(() => document.body.removeChild(dragIcon), 0);
   }, [entry, isDraggable]);
   
+  // Check if this file can show historical versions (lightweight — no hook needed)
+  const canShowHistory = useMemo(() => {
+    if (!entry || entry.isLocal || !entry.hasFile) return false;
+    return historicalFileService.canOpenHistorical(fileId);
+  }, [fileId, entry]);
+
+  const itemRef = useRef<HTMLDivElement>(null);
+
+  const handleHistoryClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    // Dispatch event for NavigatorContent to handle (single calendar instance)
+    const rect = itemRef.current?.getBoundingClientRect();
+    window.dispatchEvent(new CustomEvent('dagnet:openHistoricalCalendar', {
+      detail: { fileId, anchorRect: rect || null },
+    }));
+  }, [fileId]);
+
   // Early return AFTER all hooks
   if (!entry) {
     if (!missingEntryWarned.has(fileId)) {
@@ -254,6 +273,7 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
   
   return (
     <div
+      ref={itemRef}
       className={`navigator-item ${isActive ? 'active' : ''}`}
       data-file-id={fileId}
       draggable={isDraggable}
@@ -268,9 +288,21 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
       <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
         {entry.name}
       </span>
-      {tabCount > 1 && (
-        <span className="navigator-tab-count">{tabCount}</span>
-      )}
+      <span className="navigator-item-actions">
+        {isHovering && canShowHistory && (
+          <button
+            type="button"
+            className="navigator-item-history-btn"
+            onClick={handleHistoryClick}
+            title="Open historical version"
+          >
+            <AtSign size={13} />
+          </button>
+        )}
+        {tabCount > 1 && (
+          <span className="navigator-tab-count">{tabCount}</span>
+        )}
+      </span>
     </div>
   );
 }

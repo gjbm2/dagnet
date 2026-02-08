@@ -20,8 +20,28 @@ import { ScenarioParams, NodeParamDiff } from '../types/scenarios';
 export interface FetchParts {
   window: { start?: string; end?: string } | null;
   cohort: { start?: string; end?: string } | null;
+  /**
+   * Context axis (MECE).
+   * - inherit: no context clause emitted (inherit from below)
+   * - set: emit one or more context(key[:value]) entries
+   * - clear: emit explicit empty `context()` to clear inherited context
+   */
+  contextClause: 'inherit' | 'set' | 'clear';
   context: Array<{ key: string; value: string }>;
+  /**
+   * ContextAny axis (MECE).
+   * - inherit: no contextAny clause emitted (inherit from below)
+   * - set: emit one or more contextAny(...) entries
+   * - clear: emit explicit empty `contextAny()` to clear inherited contextAny
+   */
+  contextAnyClause: 'inherit' | 'set' | 'clear';
   contextAny: Array<{ pairs: Array<{ key: string; value: string }> }>;
+  /**
+   * Historical snapshot cut-off (UK date token, e.g. `5-Nov-25` or relative like `-7d`).
+   * Treated as a fetch-time clause (like window/cohort), not a what-if overlay.
+   */
+  asatClause: 'inherit' | 'set' | 'clear';
+  asat: string | null;
 }
 
 /**
@@ -74,7 +94,16 @@ export function splitDSLParts(queryDSL: string | null | undefined): SplitDSLResu
   // Treat the internal sentinel as an empty/no-op DSL.
   if (queryDSL === LIVE_EMPTY_DIFF_DSL) {
     return {
-      fetchParts: { window: null, cohort: null, context: [], contextAny: [] },
+      fetchParts: {
+        window: null,
+        cohort: null,
+        contextClause: 'inherit',
+        context: [],
+        contextAnyClause: 'inherit',
+        contextAny: [],
+        asatClause: 'inherit',
+        asat: null,
+      },
       whatIfParts: { cases: [], visited: [], visitedAny: [], exclude: [] },
     };
   }
@@ -84,8 +113,18 @@ export function splitDSLParts(queryDSL: string | null | undefined): SplitDSLResu
     fetchParts: {
       window: parsed.window,
       cohort: parsed.cohort,
+      contextClause: parsed.contextClausePresent
+        ? (parsed.context.length > 0 ? 'set' : 'clear')
+        : 'inherit',
       context: parsed.context,
+      contextAnyClause: parsed.contextAnyClausePresent
+        ? (parsed.contextAny.length > 0 ? 'set' : 'clear')
+        : 'inherit',
       contextAny: parsed.contextAny,
+      asatClause: parsed.asatClausePresent
+        ? (parsed.asat ? 'set' : 'clear')
+        : 'inherit',
+      asat: parsed.asat,
     },
     whatIfParts: {
       cases: parsed.cases,
@@ -123,20 +162,37 @@ export function buildFetchDSL(parts: FetchParts): string {
     segments.push(`cohort(${start}:${end})`);
   }
   
-  // Context (each key:value pair)
-  for (const ctx of parts.context) {
-    if (ctx.value) {
-      segments.push(`context(${ctx.key}:${ctx.value})`);
-    } else {
-      // Bare key (no value) - still valid
-      segments.push(`context(${ctx.key})`);
+  // Context (MECE axis)
+  if (parts.contextClause === 'clear') {
+    segments.push('context()');
+  } else if (parts.contextClause === 'set') {
+    for (const ctx of parts.context) {
+      if (ctx.value) {
+        segments.push(`context(${ctx.key}:${ctx.value})`);
+      } else {
+        // Bare key (no value) - still valid
+        segments.push(`context(${ctx.key})`);
+      }
     }
   }
   
-  // ContextAny
-  for (const ctxAny of parts.contextAny) {
-    const pairStrs = ctxAny.pairs.map(p => `${p.key}:${p.value}`);
-    segments.push(`contextAny(${pairStrs.join(',')})`);
+  // ContextAny (MECE axis)
+  if (parts.contextAnyClause === 'clear') {
+    segments.push('contextAny()');
+  } else if (parts.contextAnyClause === 'set') {
+    for (const ctxAny of parts.contextAny) {
+      const pairStrs = ctxAny.pairs.map(p => `${p.key}:${p.value}`);
+      segments.push(`contextAny(${pairStrs.join(',')})`);
+    }
+  }
+
+  // asat() (historical cut-off) — MECE axis with explicit clear support via empty `asat()`.
+  if (parts.asatClause === 'clear') {
+    segments.push('asat()');
+  } else if (parts.asatClause === 'set') {
+    if (parts.asat && String(parts.asat).trim()) {
+      segments.push(`asat(${String(parts.asat).trim()})`);
+    }
   }
   
   return segments.join('.');
@@ -351,8 +407,12 @@ export function deriveBaseDSLForRebase(currentDSL: string | null | undefined): s
   const windowCohortOnly: FetchParts = {
     window: fetchParts.window,
     cohort: fetchParts.cohort,
+    contextClause: 'inherit',
     context: [],
+    contextAnyClause: 'inherit',
     contextAny: [],
+    asatClause: fetchParts.asat ? 'set' : 'inherit',
+    asat: fetchParts.asat,
   };
   return buildFetchDSL(windowCohortOnly);
 }
@@ -385,8 +445,12 @@ export function diffQueryDSLFromBase(
   const deltaFetch: FetchParts = {
     window: null,
     cohort: null,
+    contextClause: 'inherit',
     context: [],
+    contextAnyClause: 'inherit',
     contextAny: [],
+    asatClause: 'inherit',
+    asat: null,
   };
 
   // Window/cohort: include only if changed relative to base.
@@ -414,6 +478,7 @@ export function diffQueryDSLFromBase(
     const key = `${c.key}:${c.value || ''}`;
     if (!baseCtxSet.has(key)) deltaFetch.context.push(c);
   }
+  if (deltaFetch.context.length > 0) deltaFetch.contextClause = 'set';
 
   // ContextAny: best-effort compare by serialised pair list.
   const normaliseCtxAny = (x: FetchParts['contextAny'][number]) =>
@@ -422,6 +487,20 @@ export function diffQueryDSLFromBase(
   for (const grp of cur.fetchParts.contextAny || []) {
     const key = normaliseCtxAny(grp);
     if (!baseCtxAnySet.has(key)) deltaFetch.contextAny.push(grp);
+  }
+  if (deltaFetch.contextAny.length > 0) deltaFetch.contextAnyClause = 'set';
+
+  // asat(): include only if present in current and changed relative to base.
+  // Note: We currently do not represent "removal" (base has asat, current does not) as a diff.
+  const baseAsat = base.fetchParts.asat;
+  const curAsat = cur.fetchParts.asat;
+  if (cur.fetchParts.asatClause === 'set' && curAsat && curAsat !== baseAsat) {
+    deltaFetch.asatClause = 'set';
+    deltaFetch.asat = curAsat;
+  }
+  if (cur.fetchParts.asatClause === 'clear' && base.fetchParts.asat) {
+    deltaFetch.asatClause = 'clear';
+    deltaFetch.asat = null;
   }
 
   const deltaWhatIf: WhatIfParts = {
@@ -459,6 +538,137 @@ export function diffQueryDSLFromBase(
   if (fetchDSL && whatIfDSL) return `${fetchDSL}.${whatIfDSL}`;
   const out = fetchDSL || whatIfDSL || '';
   return out.trim().length > 0 ? out : LIVE_EMPTY_DIFF_DSL;
+}
+
+/**
+ * Compute the query DSL fragment for "create live scenario from Current".
+ *
+ * Design:
+ * - When the user clicks "+", we create a scenario whose queryDSL is the MECE delta between:
+ *   - S: the effective fetch DSL of the currently-visible stack (Base + visible live scenarios, excluding Current)
+ *   - C: the Current DSL
+ *
+ * The delta includes only the axes that differ:
+ * A) window/cohort (mutually exclusive)
+ * B) context/contextAny (MECE axis; empty `context()` / `contextAny()` means explicit clear)
+ * C) asat (MECE axis; empty `asat()` means explicit clear)
+ *
+ * Clause order is irrelevant.
+ */
+export function deriveScenarioCreateDeltaDSL(
+  stackEffectiveFetchDSL: string | null | undefined,
+  currentDSL: string | null | undefined
+): string {
+  const s = splitDSLParts(stackEffectiveFetchDSL).fetchParts;
+  const c = splitDSLParts(currentDSL).fetchParts;
+
+  const delta: FetchParts = {
+    window: null,
+    cohort: null,
+    contextClause: 'inherit',
+    context: [],
+    contextAnyClause: 'inherit',
+    contextAny: [],
+    asatClause: 'inherit',
+    asat: null,
+  };
+
+  // === Axis A: window/cohort (mutually exclusive) ===
+  const sMode: QueryDateMode | null = s.cohort ? 'cohort' : (s.window ? 'window' : null);
+  const cMode: QueryDateMode | null = c.cohort ? 'cohort' : (c.window ? 'window' : null);
+
+  if (cMode === 'cohort' && c.cohort) {
+    const changed =
+      sMode !== 'cohort' ||
+      !s.cohort ||
+      s.cohort.start !== c.cohort.start ||
+      s.cohort.end !== c.cohort.end;
+    if (changed) delta.cohort = c.cohort;
+  } else if (cMode === 'window' && c.window) {
+    const changed =
+      sMode !== 'window' ||
+      !s.window ||
+      s.window.start !== c.window.start ||
+      s.window.end !== c.window.end;
+    if (changed) delta.window = c.window;
+  }
+
+  // === Axis B: context ===
+  const normaliseContext = (x: FetchParts['context']) => {
+    const m = new Map<string, string>();
+    for (const kv of x || []) m.set(kv.key, kv.value || '');
+    return m;
+  };
+  const ctxS = normaliseContext(s.context);
+  const ctxC = normaliseContext(c.context);
+  const ctxSEmpty = ctxS.size === 0;
+  const ctxCEmpty = ctxC.size === 0;
+  const ctxEqual = (() => {
+    if (ctxSEmpty && ctxCEmpty) return true;
+    if (ctxS.size !== ctxC.size) return false;
+    for (const [k, v] of ctxC.entries()) {
+      if (ctxS.get(k) !== v) return false;
+    }
+    return true;
+  })();
+
+  if (!ctxEqual) {
+    if (ctxCEmpty) {
+      // Current has no context; if stack has any, we must explicitly clear.
+      if (!ctxSEmpty) delta.contextClause = 'clear';
+    } else {
+      delta.contextClause = 'set';
+      delta.context = Array.from(ctxC.entries()).map(([key, value]) => ({ key, value }));
+    }
+  }
+
+  // === Axis B: contextAny ===
+  const normaliseContextAny = (x: FetchParts['contextAny']) => {
+    const set = new Set<string>();
+    for (const grp of x || []) {
+      const key = (grp.pairs || []).map(p => `${p.key}:${p.value}`).sort().join(',');
+      if (key) set.add(key);
+    }
+    return set;
+  };
+  const caS = normaliseContextAny(s.contextAny);
+  const caC = normaliseContextAny(c.contextAny);
+  const caSEmpty = caS.size === 0;
+  const caCEmpty = caC.size === 0;
+  const caEqual = (() => {
+    if (caSEmpty && caCEmpty) return true;
+    if (caS.size !== caC.size) return false;
+    for (const k of caC.values()) if (!caS.has(k)) return false;
+    return true;
+  })();
+
+  if (!caEqual) {
+    if (caCEmpty) {
+      if (!caSEmpty) delta.contextAnyClause = 'clear';
+    } else {
+      delta.contextAnyClause = 'set';
+      delta.contextAny = Array.from(caC.values()).map((keyStr) => ({
+        pairs: keyStr.split(',').map((kv) => {
+          const i = kv.indexOf(':');
+          return { key: kv.slice(0, i), value: kv.slice(i + 1) };
+        }),
+      }));
+    }
+  }
+
+  // === Axis C: asat ===
+  const sAsat = s.asat ? String(s.asat).trim() : '';
+  const cAsat = c.asat ? String(c.asat).trim() : '';
+  if (sAsat !== cAsat) {
+    if (!cAsat) {
+      if (sAsat) delta.asatClause = 'clear';
+    } else {
+      delta.asatClause = 'set';
+      delta.asat = cAsat;
+    }
+  }
+
+  return buildFetchDSL(delta);
 }
 
 /**
@@ -536,6 +746,12 @@ export function generateSmartLabel(dsl: string | null | undefined): string {
       parts.push(prefix);
     }
   }
+
+  // Format asat() (historical cut-off)
+  if (parsed.asat) {
+    const asatLabel = formatWindowDate(parsed.asat);
+    parts.push(`As-at: ${asatLabel}`);
+  }
   
   // Format context(s)
   for (const ctx of parsed.context) {
@@ -612,8 +828,12 @@ export function normaliseScenarioDateRangeDSL(candidateDSL: string, mode: QueryD
   const nextFetch: FetchParts = {
     window: fetchParts.window,
     cohort: fetchParts.cohort,
+    contextClause: fetchParts.contextClause,
     context: fetchParts.context,
+    contextAnyClause: fetchParts.contextAnyClause,
     contextAny: fetchParts.contextAny,
+    asatClause: fetchParts.asatClause,
+    asat: fetchParts.asat,
   };
 
   if (mode === 'cohort') {

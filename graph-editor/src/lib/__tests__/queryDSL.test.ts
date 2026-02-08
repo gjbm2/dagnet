@@ -348,7 +348,10 @@ describe('DSL Parsing Functions', () => {
         contextAny: [],
         window: null,
         cohort: null,
-        asat: null
+        asat: null,
+        contextClausePresent: false,
+        contextAnyClausePresent: false,
+        asatClausePresent: false,
       });
       expect(parseConstraints(undefined)).toEqual({
         visited: [],
@@ -359,7 +362,10 @@ describe('DSL Parsing Functions', () => {
         contextAny: [],
         window: null,
         cohort: null,
-        asat: null
+        asat: null,
+        contextClausePresent: false,
+        contextAnyClausePresent: false,
+        asatClausePresent: false,
       });
     });
 
@@ -557,6 +563,21 @@ describe('DSL Parsing Functions', () => {
     it('should normalize context constraints', () => {
       const result = normalizeConstraintString('context(browser:chrome).context(device:mobile)');
       expect(result).toBe('context(browser:chrome).context(device:mobile)');
+    });
+
+    it('should preserve explicit context clear (context())', () => {
+      const result = normalizeConstraintString('context()');
+      expect(result).toBe('context()');
+    });
+
+    it('should preserve explicit contextAny clear (contextAny())', () => {
+      const result = normalizeConstraintString('contextAny()');
+      expect(result).toBe('contextAny()');
+    });
+
+    it('should preserve explicit asat clear (asat())', () => {
+      const result = normalizeConstraintString('asat()');
+      expect(result).toBe('asat()');
     });
 
     it('should normalize case constraints', () => {
@@ -778,7 +799,6 @@ describe('DSL Parsing Functions', () => {
 
       expect(out).toContain('cohort(-1w:)');
       expect(out).not.toContain('window(1-Nov-25:10-Nov-25)');
-      expect(out).toContain('context(region:uk)');
       expect(out).toContain('context(channel:paid-search)');
     });
 
@@ -790,8 +810,23 @@ describe('DSL Parsing Functions', () => {
 
       expect(out).toContain('window(1-Nov-25:10-Nov-25)');
       expect(out).not.toContain('cohort(1-Nov-25:14-Nov-25)');
-      expect(out).toContain('context(region:uk)');
       expect(out).toContain('context(channel:paid-search)');
+    });
+
+    it('should allow explicit context clear via empty context()', () => {
+      const existing = 'window(1-Nov-25:10-Nov-25).context(region:uk)';
+      const next = 'context()';
+      const out = augmentDSLWithConstraint(existing, next);
+      expect(out).not.toContain('context(region:uk)');
+      expect(out).toContain('context()');
+    });
+
+    it('should allow explicit asat clear via empty asat()', () => {
+      const existing = 'window(1-Nov-25:10-Nov-25).asat(5-Nov-25)';
+      const next = 'asat()';
+      const out = augmentDSLWithConstraint(existing, next);
+      expect(out).toContain('asat()');
+      expect(out).not.toContain('asat(5-Nov-25)');
     });
   });
 

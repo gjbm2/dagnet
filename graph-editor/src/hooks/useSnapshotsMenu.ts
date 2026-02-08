@@ -57,6 +57,17 @@ function buildDbParamId(objectId: string, repo: string, branch: string): string 
   return `${repo}-${branch}-${objectId}`;
 }
 
+function resolveWorkspaceForParam(objectId: string, fallbackRepo: string, fallbackBranch: string): { repo: string; branch: string } {
+  // Source of truth: parameter file source (matches snapshot write path in dataOperationsService).
+  const pf = fileRegistry.getFile(`parameter-${objectId}`) as any;
+  const repo = String(pf?.source?.repository || fallbackRepo || '').trim();
+  const branch = String(pf?.source?.branch || fallbackBranch || '').trim();
+  return {
+    repo,
+    branch: branch || 'main',
+  };
+}
+
 function latestQuerySignatureForParam(objectId: string): string | undefined {
   const pf = fileRegistry.getFile(`parameter-${objectId}`) as any;
   const values: any[] = Array.isArray(pf?.data?.values) ? pf.data.values : [];
@@ -144,17 +155,34 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
   const branch = navState.selectedBranch || 'main';
 
   const refresh = useCallback(async () => {
-    if (!repo || ids.length === 0) {
+    if (ids.length === 0) {
       setInventories({});
       setSnapshotCounts({});
       return;
     }
 
-    const dbParamIds = ids.map((id) => buildDbParamId(id, repo, branch));
+    const workspaceById = Object.fromEntries(
+      ids.map((id) => [id, resolveWorkspaceForParam(id, repo, branch)] as const)
+    ) as Record<string, { repo: string; branch: string }>;
+
+    const dbParamIds = ids
+      .map((id) => {
+        const ws = workspaceById[id];
+        return ws?.repo ? buildDbParamId(id, ws.repo, ws.branch) : null;
+      })
+      .filter(Boolean) as string[];
+
+    if (dbParamIds.length === 0) {
+      setInventories({});
+      setSnapshotCounts({});
+      return;
+    }
     try {
       const current_signatures: Record<string, string> = {};
       for (const objectId of ids) {
-        const dbParamId = buildDbParamId(objectId, repo, branch);
+        const ws = workspaceById[objectId] || resolveWorkspaceForParam(objectId, repo, branch);
+        if (!ws?.repo) continue;
+        const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
         const sig = latestQuerySignatureForParam(objectId);
         if (sig) current_signatures[dbParamId] = sig;
       }
@@ -165,7 +193,9 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
       const nextMatchedCoreHashes: Record<string, string[]> = {};
 
       for (const objectId of ids) {
-        const dbParamId = buildDbParamId(objectId, repo, branch);
+        const ws = workspaceById[objectId] || resolveWorkspaceForParam(objectId, repo, branch);
+        if (!ws?.repo) continue;
+        const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
         const inv = invByDbParamId[dbParamId] as SnapshotInventoryV2Param | undefined;
         const overallAll = inv?.overall_all_families;
         if (overallAll) {
@@ -175,8 +205,43 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
           const families = Array.isArray(inv?.families) ? inv!.families : [];
           const matchedFamily = matchedFamilyId ? families.find((f) => f.family_id === matchedFamilyId) : undefined;
 
-          // Source for inventory: matched family when available, otherwise overall.
-          const source = matchedFamily?.overall ?? overallAll;
+          // Source for inventory: matched family *only when it actually has data*.
+          //
+          // Rationale:
+          // - It's common for "current signature" to point at a hash that is not yet present in snapshots
+          //   (e.g. user changes context/window before any snapshot write for that exact signature).
+          // - In that case we MUST still show that snapshots exist for the parameter overall.
+          const matchedHasData = (matchedFamily?.overall?.row_count ?? 0) > 0;
+          const source = matchedHasData ? matchedFamily!.overall : overallAll;
+
+          // DEV diagnostics: make it visible in console + session logs what inventory we see.
+          // This is critical when users report "snapshots disappeared" after DSL/context changes.
+          try {
+            const debugPayload = {
+              objectId,
+              dbParamId,
+              workspace: { repo: ws.repo, branch: ws.branch },
+              current: inv?.current || null,
+              overall_all_families: overallAll,
+              matched_family_id: inv?.current?.matched_family_id || null,
+              matched_family_overall: matchedFamily?.overall || null,
+              matchedHasData,
+              chosen: matchedHasData ? 'matched_family' : 'overall_all_families',
+              chosen_row_count: source.row_count,
+              chosen_unique_retrieved_days: source.unique_retrieved_days,
+            };
+            // eslint-disable-next-line no-console
+            console.log('[SnapshotsMenu] inventory', debugPayload);
+            sessionLogService.info(
+              'data-fetch',
+              'SNAPSHOT_INVENTORY_MENU',
+              `Snapshot inventory: ${objectId} → ${source.unique_retrieved_days ?? 0} day(s)`,
+              undefined,
+              debugPayload as any
+            );
+          } catch {
+            // ignore
+          }
 
           nextInventories[objectId] = {
             has_data: source.row_count > 0,
@@ -193,7 +258,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
           };
 
           // User meaning of "snapshots": one per retrieved DAY.
-          if (matchedFamily?.overall) {
+          if (matchedHasData) {
             nextCounts[objectId] = matchedFamily.overall.unique_retrieved_days ?? 0;
             // Expose the family's core_hashes for scoped delete/download.
             nextMatchedCoreHashes[objectId] = Array.isArray(matchedFamily.member_core_hashes) ? matchedFamily.member_core_hashes : [];
@@ -281,7 +346,8 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
           const expected = snapshotCounts[objectId] ?? 0;
           if (!expected) continue;
 
-          const dbParamId = buildDbParamId(objectId, repo, branch);
+          const ws = resolveWorkspaceForParam(objectId, repo, branch);
+          const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
           sessionLogService.addChild(opId, 'info', 'SNAPSHOT_DELETE_PARAM', `Deleting snapshots for ${objectId}`, undefined, {
             dbParamId,
             expectedCount: expected,
@@ -349,7 +415,8 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
       const opId = sessionLogService.startOperation('info', 'data-update', 'SNAPSHOT_DELETE', `Deleting snapshots for ${objectId}`);
 
       try {
-        const dbParamId = buildDbParamId(objectId, repo, branch);
+        const ws = resolveWorkspaceForParam(objectId, repo, branch);
+        const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
         sessionLogService.addChild(opId, 'info', 'SNAPSHOT_DELETE_PARAM', `Deleting snapshots for ${objectId}`, undefined, {
           dbParamId,
           scoped,
@@ -409,7 +476,8 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
         for (const objectId of candidates) {
           const inv = inventories[objectId];
           const expectedRows = inv?.row_count ?? 0;
-          const dbParamId = buildDbParamId(objectId, repo, branch);
+          const ws = resolveWorkspaceForParam(objectId, repo, branch);
+          const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
 
           sessionLogService.addChild(opId, 'info', 'SNAPSHOT_QUERY_FULL', `Querying snapshot rows for ${objectId}`, undefined, {
             dbParamId,
@@ -473,7 +541,8 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
       const opId = sessionLogService.startOperation('info', 'data-fetch', 'SNAPSHOT_DOWNLOAD', `Downloading snapshots for ${objectId}`);
 
       try {
-        const dbParamId = buildDbParamId(objectId, repo, branch);
+        const ws = resolveWorkspaceForParam(objectId, repo, branch);
+        const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
         const allRows: SnapshotQueryRow[] = [];
         let anyTruncated = false;
 

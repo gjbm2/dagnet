@@ -229,43 +229,107 @@ interface SnapshotRow {
 }
 
 async function querySnapshotsFromDb(paramId: string): Promise<SnapshotRow[]> {
+  // Keep a small compatibility wrapper; tests should generally use strict + wait helpers.
+  return querySnapshotsFromDbStrict(paramId);
+}
+
+async function querySnapshotsFromDbStrict(paramId: string): Promise<SnapshotRow[]> {
   const baseUrl = process.env.DAGNET_PYTHON_API_URL || process.env.VITE_PYTHON_API_URL || 'http://localhost:9000';
-  
+
   const response = await undiciFetch(`${baseUrl}/api/snapshots/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ param_id: paramId }),
   });
-  
+
+  const raw = await response.text();
   if (!response.ok) {
-    console.warn(`[Snapshot Query] Failed: ${response.status}`);
-    return [];
+    throw new Error(`[Snapshot Query] HTTP ${response.status}: ${raw}`);
   }
-  
-  const result = await response.json() as any;
-  return result.rows || [];
+
+  let body: any;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    throw new Error(`[Snapshot Query] Non-JSON response (HTTP ${response.status}): ${raw}`);
+  }
+  return Array.isArray(body?.rows) ? body.rows : [];
+}
+
+async function waitForSnapshotRowCount(args: {
+  paramId: string;
+  expected: number;
+  timeoutMs?: number;
+}): Promise<SnapshotRow[]> {
+  const { paramId, expected } = args;
+  const timeoutMs = args.timeoutMs ?? 1500;
+
+  const start = Date.now();
+  let lastRows: SnapshotRow[] = [];
+  let lastError: unknown = undefined;
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      lastRows = await querySnapshotsFromDbStrict(paramId);
+      lastError = undefined;
+      if (lastRows.length === expected) return lastRows;
+    } catch (e) {
+      lastError = e;
+    }
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  if (lastError) throw lastError;
+  throw new Error(`[Snapshot Query] Timed out waiting for ${expected} rows; got ${lastRows.length}`);
+}
+
+async function waitForAnySnapshotRows(args: {
+  paramId: string;
+  timeoutMs?: number;
+}): Promise<SnapshotRow[]> {
+  const { paramId } = args;
+  const timeoutMs = args.timeoutMs ?? 1500;
+
+  const start = Date.now();
+  let lastRows: SnapshotRow[] = [];
+  let lastError: unknown = undefined;
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      lastRows = await querySnapshotsFromDbStrict(paramId);
+      lastError = undefined;
+      if (lastRows.length > 0) return lastRows;
+    } catch (e) {
+      lastError = e;
+    }
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  if (lastError) throw lastError;
+  throw new Error(`[Snapshot Query] Timed out waiting for any rows; got ${lastRows.length}`);
 }
 
 async function deleteTestSnapshots(paramIdPrefix: string): Promise<number> {
   const baseUrl = process.env.DAGNET_PYTHON_API_URL || process.env.VITE_PYTHON_API_URL || 'http://localhost:9000';
-  
-  try {
-    const response = await undiciFetch(`${baseUrl}/api/snapshots/delete-test`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ param_id_prefix: paramIdPrefix }),
-    });
-    
-    if (!response.ok) {
-      console.warn(`[Snapshot Delete] Failed: ${response.status}`);
-      return 0;
-    }
-    
-    const result = await response.json() as any;
-    return result.deleted || 0;
-  } catch {
-    return 0;
+
+  const response = await undiciFetch(`${baseUrl}/api/snapshots/delete-test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ param_id_prefix: paramIdPrefix }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`[Snapshot Delete] HTTP ${response.status}: ${raw}`);
   }
+
+  let body: any;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    throw new Error(`[Snapshot Delete] Non-JSON response (HTTP ${response.status}): ${raw}`);
+  }
+  return typeof body?.deleted === 'number' ? body.deleted : 0;
 }
 
 function makeTestParamId(baseName: string): string {
@@ -757,7 +821,7 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     expect(result.inserted).toBe(31);
     
     // Verify by querying back
-    const rows = await querySnapshotsFromDb(testParamId);
+    const rows = await waitForSnapshotRowCount({ paramId: testParamId, expected: 31, timeoutMs: 2500 });
     expect(rows.length).toBe(31);
   }, 15_000);
 
@@ -789,12 +853,9 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
       const result = await fetchItem(abItem, { mode: 'versioned', bustCache: true }, currentGraph as Graph, setGraph, windowDsl);
       expect(result.success).toBe(true);
 
-      // Wait for shadow-write to complete (fire-and-forget, typically <500ms)
-      await new Promise(r => setTimeout(r, 500));
-
       // Query the snapshot DB - dbParamId is constructed from file source + objectId
       const dbParamId = getDbParamId('ab-smooth-lag');
-      const rows = await querySnapshotsFromDb(dbParamId);
+      const rows = await waitForSnapshotRowCount({ paramId: dbParamId, expected: 31, timeoutMs: 3000 });
       
       // Should have 31 days of July data
       expect(rows.length).toBe(31);
@@ -842,11 +903,9 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
       const result = await fetchItem(bcItem, { mode: 'versioned' }, currentGraph as Graph, setGraph, cohortDsl);
       expect(result.success).toBe(true);
 
-      await new Promise(r => setTimeout(r, 500));
-
       // Query BC param rows - should have anchor (A) values in cohort mode
       const dbParamId = getDbParamId('bc-smooth-lag');
-      const rows = await querySnapshotsFromDb(dbParamId);
+      const rows = await waitForAnySnapshotRows({ paramId: dbParamId, timeoutMs: 3000 });
       
       expect(rows.length).toBeGreaterThan(0);
       
@@ -890,9 +949,7 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     // First fetch
     const r1 = await fetchItem(abItem, { mode: 'versioned', bustCache: true }, currentGraph as Graph, setGraph, windowDsl);
     expect(r1.success).toBe(true);
-    await new Promise(r => setTimeout(r, 500)); // Wait for shadow-write
-
-    const rowsAfterFirst = await querySnapshotsFromDb(dbParamId);
+    const rowsAfterFirst = await waitForSnapshotRowCount({ paramId: dbParamId, expected: 10, timeoutMs: 3000 });
     expect(rowsAfterFirst.length).toBe(10); // 10 days of data
     
     // Record the first timestamp
@@ -909,9 +966,7 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     
     const r2 = await fetchItem(abItem, { mode: 'versioned', bustCache: true }, freshCurrentGraph as Graph, setFreshGraph, windowDsl);
     expect(r2.success).toBe(true);
-    await new Promise(r => setTimeout(r, 500)); // Wait for shadow-write
-
-    const rowsAfterSecond = await querySnapshotsFromDb(dbParamId);
+    const rowsAfterSecond = await waitForSnapshotRowCount({ paramId: dbParamId, expected: 20, timeoutMs: 3000 });
     
     // 20 rows: 10 from first fetch + 10 from second (different retrieved_at)
     expect(rowsAfterSecond.length).toBe(20);
@@ -926,16 +981,18 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     
     // The second timestamp should be different from the first
     expect(uniqueTimestamps).toContain(firstTimestamp);
-    const secondTimestamp = uniqueTimestamps.find(t => t !== firstTimestamp);
-    expect(secondTimestamp).toBeDefined();
-    expect(new Date(secondTimestamp!).getTime()).toBeGreaterThan(new Date(firstTimestamp).getTime());
+    const tsMs = uniqueTimestamps.map((t) => new Date(t).getTime()).sort((a, b) => a - b);
+    expect(tsMs.length).toBe(2);
+    // Order is not guaranteed by DB/query; assert monotonicity via min/max.
+    expect(tsMs[1]).toBeGreaterThan(tsMs[0]);
   }, 15_000);
 
   it('DB upsert prevents exact duplicates (same timestamp)', async () => {
     // Direct DB test: ON CONFLICT (param_id, core_hash, slice_key, anchor_day, retrieved_at) DO NOTHING
     const { appendSnapshots } = await import('../snapshotWriteService');
     
-    const testParamId = getDbParamId('upsert-test');
+    // Use a pytest-prefixed param_id so per-test cleanup reliably deletes it.
+    const testParamId = makeTestParamId('upsert-test');
     const fixedTimestamp = new Date('2025-07-15T12:00:00Z');
     const testRows = Array.from({ length: 10 }, (_, i) => ({
       anchor_day: `2025-07-${String(i + 1).padStart(2, '0')}`,
@@ -956,7 +1013,7 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     expect(r1.success).toBe(true);
     expect(r1.inserted).toBe(10);
     
-    const rowsAfterFirst = await querySnapshotsFromDb(testParamId);
+    const rowsAfterFirst = await waitForSnapshotRowCount({ paramId: testParamId, expected: 10 });
     expect(rowsAfterFirst.length).toBe(10);
 
     // Second write with SAME timestamp - should be idempotent
@@ -972,7 +1029,7 @@ describePython('E2E: Amplitude fetch → Snapshot DB writes', () => {
     expect(r2.success).toBe(true);
     expect(r2.inserted).toBe(0); // All duplicates
 
-    const rowsAfterSecond = await querySnapshotsFromDb(testParamId);
+    const rowsAfterSecond = await waitForSnapshotRowCount({ paramId: testParamId, expected: 10 });
     expect(rowsAfterSecond.length).toBe(10); // Still 10, not 20
   }, 15_000);
 });

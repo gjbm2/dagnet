@@ -1010,6 +1010,32 @@ function applyChanges(target: any, changes: Array<{ field: string; newValue: any
 // asat() Historical Query Support
 // =============================================================================
 
+export function selectQuerySignatureForAsat(args: {
+  values: any[];
+  mode: 'window' | 'cohort';
+}): string | undefined {
+  const { values, mode } = args;
+  const withSig = (Array.isArray(values) ? values : []).filter(
+    (v) => typeof v?.query_signature === 'string' && v.query_signature.trim()
+  );
+  if (withSig.length === 0) return undefined;
+
+  // Prefer signatures from values matching the requested mode (window vs cohort).
+  const modeFiltered = withSig.filter((v) => (mode === 'cohort' ? isCohortModeValue(v) : !isCohortModeValue(v)));
+  if (modeFiltered.length === 0) return undefined;
+  const candidates = modeFiltered;
+
+  // Prefer the most recent signature by retrieved_at / relevant window/cohort bounds.
+  const getTs = (v: any) => String(
+    v?.data_source?.retrieved_at ||
+    (mode === 'cohort' ? (v?.cohort_to || v?.cohort_from) : (v?.window_to || v?.window_from)) ||
+    v?.window_to || v?.cohort_to || v?.window_from || v?.cohort_from ||
+    ''
+  );
+  candidates.sort((a, b) => getTs(b).localeCompare(getTs(a)));
+  return String(candidates[0].query_signature);
+}
+
 /**
  * Convert virtual snapshot rows to TimeSeriesPoint format.
  * Virtual snapshot rows come from the DB with lowercase column names (x, y, a).
@@ -1020,6 +1046,16 @@ export function convertVirtualSnapshotToTimeSeries(
   sliceKey: string,
   options?: { workspace?: { repository: string; branch: string } }
 ): TimeSeriesPoint[] {
+  const normalise = (sk: string): string => {
+    const s = String(sk || '').trim();
+    if (!s) return '';
+    return s
+      .replace(/(^|\.)((?:window|cohort))\([^)]*\)/g, (_m, p1, fn) => `${p1}${fn}()`)
+      .replace(/^\./, '');
+  };
+
+  const requestedNorm = normalise(sliceKey);
+
   // 1) Exact slice match (normal path)
   const exact = rows.filter((row) => row.slice_key === sliceKey);
   const toPoints = (filtered: VirtualSnapshotRow[]): TimeSeriesPoint[] => {
@@ -1044,12 +1080,25 @@ export function convertVirtualSnapshotToTimeSeries(
 
   if (exact.length > 0) return toPoints(exact);
 
+  // 1b) Normalised slice-family match (ignore window/cohort args)
+  if (requestedNorm) {
+    const normMatch = rows.filter((row) => normalise(row.slice_key) === requestedNorm);
+    if (normMatch.length > 0) return toPoints(normMatch);
+  }
+
   // 2) Implicit uncontexted aggregation:
   // If query sliceKey is '' (uncontexted) but DB returns only contexted MECE slices,
   // attempt to aggregate across slices (sum X/Y per day) after MECE validation.
-  if (sliceKey !== '') return [];
+  const modeOnly = requestedNorm === 'window()' || requestedNorm === 'cohort()';
+  const allowImplicitAggregation = sliceKey === '' || modeOnly;
+  if (!allowImplicitAggregation) return [];
 
-  const nonEmptyRows = rows.filter((r) => typeof r.slice_key === 'string' && r.slice_key.trim().length > 0);
+  // If caller requested a mode-only selector, restrict to that mode.
+  const rowsForAggregation = modeOnly
+    ? rows.filter((r) => normalise(r.slice_key).endsWith(requestedNorm))
+    : rows;
+
+  const nonEmptyRows = rowsForAggregation.filter((r) => typeof r.slice_key === 'string' && r.slice_key.trim().length > 0);
   if (nonEmptyRows.length === 0) return [];
 
   // Determine the implied context key (support single-dimension MECE only).
@@ -1247,9 +1296,13 @@ class DataOperationsService {
           return { success: false, warning: 'Historical query requires a valid date range' };
         }
         
-        // Convert UK dates to ISO for API
-        const anchorFromISO = parseUKDate(anchorFrom).toISOString().split('T')[0];
-        const anchorToISO = parseUKDate(anchorTo).toISOString().split('T')[0];
+        // Convert UK dates to ISO for API (defensive: treat inverted bounds as unordered)
+        const aFromDate = parseUKDate(anchorFrom);
+        const aToDate = parseUKDate(anchorTo);
+        const fromISO = aFromDate.toISOString().split('T')[0];
+        const toISO = aToDate.toISOString().split('T')[0];
+        const anchorFromISO = fromISO <= toISO ? fromISO : toISO;
+        const anchorToISO = fromISO <= toISO ? toISO : fromISO;
         
         // Convert asat date to ISO datetime (end of day, UTC)
         const asatDateUK = resolveRelativeDate(parsed.asat);
@@ -1257,9 +1310,18 @@ class DataOperationsService {
         asatDateObj.setUTCHours(23, 59, 59, 999);
         const asAtISO = asatDateObj.toISOString();
         
-        // Extract slice_keys from context
-        const sliceKeys = extractSliceDimensions(targetSlice);
-        const sliceKeyArray = sliceKeys ? [sliceKeys] : undefined;
+        // Extract slice_keys (slice-family selectors):
+        // slice identity = context/case dims + temporal mode (window vs cohort).
+        // We intentionally ignore window/cohort *arguments* for matching.
+        const sliceDims = extractSliceDimensions(targetSlice);
+        const modeClause = parsed.cohort ? 'cohort()' : (parsed.window ? 'window()' : '');
+        const sliceFamilyKey = [sliceDims, modeClause].filter(Boolean).join('.');
+
+        // IMPORTANT:
+        // If the DSL is uncontexted (no explicit context dims), do NOT apply a slice filter.
+        // Uncontexted reads must be able to aggregate across MECE context slices. Slice filtering
+        // here is unnecessary and can incorrectly return 0 rows depending on how slice_key was written.
+        const sliceKeyArray = sliceDims ? (sliceFamilyKey ? [sliceFamilyKey] : undefined) : undefined;
         
         // ========================================================================
         // MANDATORY: Signature integrity (do NOT recompute).
@@ -1269,16 +1331,19 @@ class DataOperationsService {
         // normalisation drift can produce a different signature and yield 0 rows).
         const signatureStr = (() => {
           const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
-          const withSig = values.filter(v => typeof v?.query_signature === 'string' && v.query_signature.trim());
-          if (withSig.length === 0) return undefined;
-          // Prefer the most recent signature by retrieved_at/window_to/window_from.
-          const getTs = (v: any) => String(v?.data_source?.retrieved_at || v?.window_to || v?.window_from || '');
-          withSig.sort((a, b) => getTs(b).localeCompare(getTs(a)));
-          return String(withSig[0].query_signature);
+          const mode: 'window' | 'cohort' = parsed.cohort ? 'cohort' : 'window';
+          return selectQuerySignatureForAsat({ values, mode });
         })();
         if (!signatureStr) {
-          console.warn('[DataOperationsService] asat: missing query_signature in parameter file; snapshot lookup skipped');
-          sessionLogService.endOperation(asatLogOpId, 'warning', 'asat: missing query_signature (snapshot lookup skipped)');
+          const modeLabel = parsed.cohort ? 'cohort' : 'window';
+          console.warn(
+            `[DataOperationsService] asat: no query_signature matching mode=${modeLabel} in parameter file; snapshot lookup skipped`
+          );
+          sessionLogService.endOperation(
+            asatLogOpId,
+            'warning',
+            `asat: no mode-matching query_signature (${modeLabel}) (snapshot lookup skipped)`
+          );
           return { success: true, warning: 'No snapshot data (missing query signature)' };
         }
         const sigParsed = parseSignature(signatureStr);
@@ -1365,7 +1430,9 @@ class DataOperationsService {
         );
         
         // Convert to time series and apply to graph
-        const targetSliceKey = sliceKeys || '';
+        // Use the slice-family key (dims + mode), or mode-only key for uncontexted queries.
+        // (convertVirtualSnapshotToTimeSeries handles normalised matching + implicit aggregation.)
+        const targetSliceKey = sliceDims ? (sliceFamilyKey || '') : '';
         const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {
           workspace: { repository: workspaceRepo, branch: workspaceBranch },
         });
@@ -4285,16 +4352,20 @@ class DataOperationsService {
         // This is the canonical signature produced by the normal fetch path.
         const signatureStr = (() => {
           const values: any[] = Array.isArray((paramFile as any)?.data?.values) ? (paramFile as any).data.values : [];
-          const withSig = values.filter(v => typeof v?.query_signature === 'string' && v.query_signature.trim());
-          if (withSig.length === 0) return undefined;
-          // Prefer the most recent signature by retrieved_at/window_to/window_from.
-          const getTs = (v: any) => String(v?.data_source?.retrieved_at || v?.window_to || v?.window_from || '');
-          withSig.sort((a, b) => getTs(b).localeCompare(getTs(a)));
-          return String(withSig[0].query_signature);
+          const mode: 'window' | 'cohort' = parsed.cohort ? 'cohort' : 'window';
+          return selectQuerySignatureForAsat({ values, mode });
         })();
         if (!signatureStr) {
           // No signature available → cannot form lookup key → no-data.
-          sessionLogService.endOperation(logOpId, 'warning', 'asat: missing query_signature (snapshot lookup skipped)');
+          const modeLabel = parsedDSLForAsat.cohort ? 'cohort' : 'window';
+          console.warn(
+            `[DataOperationsService] asat: no query_signature matching mode=${modeLabel} in parameter file; snapshot lookup skipped`
+          );
+          sessionLogService.endOperation(
+            logOpId,
+            'warning',
+            `asat: no mode-matching query_signature (${modeLabel}) (snapshot lookup skipped)`
+          );
           return errorResult;
         }
         const parsedSig = parseSignature(signatureStr);
@@ -4390,7 +4461,10 @@ class DataOperationsService {
         );
         
         // Convert virtual snapshot rows to time series format
-        const targetSliceKey = sliceKeys || '';
+        const sliceDims = extractSliceDimensions(effectiveDSL);
+        const modeClause = parsed.cohort ? 'cohort()' : (parsed.window ? 'window()' : '');
+        const sliceFamilyKey = [sliceDims, modeClause].filter(Boolean).join('.');
+        const targetSliceKey = sliceFamilyKey || '';
         const timeSeries = convertVirtualSnapshotToTimeSeries(virtualResult.rows, targetSliceKey, {
           workspace: { repository: workspaceRepo, branch: workspaceBranch },
         });

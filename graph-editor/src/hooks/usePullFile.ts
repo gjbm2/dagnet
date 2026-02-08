@@ -28,7 +28,8 @@ export function usePullFile(fileId: string | undefined): UsePullFileResult {
   const { state: navState } = useNavigatorContext();
   
   const file = fileId ? fileRegistry.getFile(fileId) : null;
-  const canPull = !!(file?.source?.path && !file?.isLocal);
+  // Temporary/historical files cannot be pulled from remote
+  const canPull = !!(file?.source?.path && !file?.isLocal && file?.source?.repository !== 'temporary');
   
   const pullFile = useCallback(async () => {
     if (!fileId || !canPull) return;

@@ -577,6 +577,12 @@ async function buildContextFilters(
   
   // Process context(...) constraints (single value per key)
   for (const ctx of constraints.context) {
+    // IMPORTANT (MECE / pinned interest keys):
+    // We allow key-only context clauses like `context(channel)` to express
+    // "this dimension matters" (e.g. pinned dataInterestsDSL), NOT "filter by a value".
+    //
+    // These must NOT be compiled into provider filter objects.
+    if (!ctx.value) continue;
     const filter = await buildFilterObjectForContextValue(ctx.key, ctx.value, source);
     if (filter === null) {
       // otherPolicy: null means query all data (no filtering)

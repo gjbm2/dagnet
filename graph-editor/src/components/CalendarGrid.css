@@ -1,0 +1,102 @@
+/* CalendarGrid — reusable calendar grid component
+ * Extracted from the @ asat picker in WindowSelector.
+ * Used by both the asat snapshot picker and the historical file picker.
+ */
+
+.calendar-grid-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.calendar-grid-month {
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.calendar-grid-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  cursor: pointer;
+  color: #374151;
+}
+
+.calendar-grid-nav-btn:hover {
+  background: #f9fafb;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.calendar-grid-dow {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  padding: 2px 0;
+}
+
+.calendar-grid-day {
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #111827;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.calendar-grid-day.out-month {
+  color: #d1d5db;
+  pointer-events: none;
+  opacity: 0.35;
+}
+
+.calendar-grid-day:hover {
+  background: #f3f4f6;
+}
+
+.calendar-grid-day.highlighted {
+  /* --highlight-opacity is set inline when coverage < 100%; defaults to 1 (fully opaque). */
+  background: rgba(207, 250, 254, var(--highlight-opacity, 1));
+  border-color: rgba(165, 243, 252, var(--highlight-opacity, 1));
+}
+
+.calendar-grid-day.selected {
+  background: #e3f2fd;
+  border-color: #90caf9;
+}
+
+/* Loading / error / footer */
+.calendar-grid-message {
+  font-size: 12px;
+  color: #6b7280;
+  padding: 8px 4px;
+}
+
+.calendar-grid-error {
+  font-size: 12px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.calendar-grid-footer {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #6b7280;
+}

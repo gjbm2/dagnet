@@ -69,6 +69,46 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       }));
     });
 
+    it('should IGNORE key-only context(channel) (pinned MECE interest key) when compiling context filters', async () => {
+      // This is critical: `context(channel)` is used as a pinned interest key (MECE),
+      // and must not be treated as a value filter (there is no mapping for empty value).
+      const channelContext: ContextDefinition = {
+        id: 'channel',
+        name: 'Channel',
+        description: 'Marketing channel',
+        type: 'categorical',
+        values: [
+          { id: 'google', label: 'Google', sources: { amplitude: { filter: "utm_source == 'google'" } } },
+          { id: 'meta', label: 'Meta', sources: { amplitude: { filter: "utm_source == 'facebook'" } } }
+        ],
+        metadata: { created_at: '2025-01-01T00:00:00Z', version: '1.0.0', status: 'active' }
+      };
+
+      vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(channelContext);
+
+      const edge = {
+        id: 'test-edge',
+        from: 'a',
+        to: 'b',
+        p: { mean: 0.5 },
+        query: 'from(a).to(b)'
+      };
+
+      const graph = {
+        nodes: [
+          { id: 'a', label: 'A', event_id: 'event_a' },
+          { id: 'b', label: 'B', event_id: 'event_b' }
+        ],
+        edges: [edge]
+      };
+
+      const constraints = parseConstraints('context(channel)');
+
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+
+      expect(result.context_filters).toBeUndefined();
+    });
+
     it('should handle otherPolicy: null (no filter for "other")', async () => {
       const channelContext: ContextDefinition = {
         id: 'channel',

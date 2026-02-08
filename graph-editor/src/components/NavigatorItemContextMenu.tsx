@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import YAML from 'yaml';
 import { useTabContext } from '../contexts/TabContext';
@@ -20,6 +20,7 @@ import { usePullFile } from '../hooks/usePullFile';
 import { usePullAll } from '../hooks/usePullAll';
 import { useRenameFile } from '../hooks/useRenameFile';
 import { useViewHistory } from '../hooks/useViewHistory';
+import { useOpenHistorical } from '../hooks/useOpenHistorical';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
 import { useWhereUsed } from '../hooks/useWhereUsed';
@@ -80,12 +81,31 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     loadHistory,
     getContentAtCommit,
     rollbackToCommit,
+    viewAtCommit,
     fileName: historyFileName,
     filePath: historyFilePath,
     isLoading: isHistoryLoading,
     history,
     currentContent
   } = useViewHistory(fileId);
+
+  // Historical version hook
+  const {
+    canOpenHistorical,
+    isLoading: isHistoricalLoading,
+    dateItems: historicalDateItems,
+    loadDates: loadHistoricalDates,
+    selectCommit: selectHistoricalCommit,
+  } = useOpenHistorical(fileId);
+
+  // Pre-load historical dates when the context menu mounts so they're ready when the
+  // user hovers "Open Historical Version".  The onHover callback on the menu item acts
+  // as a fallback trigger.
+  useEffect(() => {
+    if (canOpenHistorical) {
+      loadHistoricalDates();
+    }
+  }, [canOpenHistorical, loadHistoricalDates]);
 
   // Clear data file hook
   const { clearDataFile, canClearData } = useClearDataFile();
@@ -276,6 +296,41 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
         showHistoryModal();
       },
       keepMenuOpen: true
+    });
+  }
+  console.log(`[NavigatorItemContextMenu] canOpenHistorical=${canOpenHistorical}, isHistoricalLoading=${isHistoricalLoading}, historicalDateItems=${historicalDateItems === null ? 'null' : `array(${historicalDateItems?.length})`}`);
+  if (canOpenHistorical) {
+    // Build submenu items from loaded date items
+    const historicalSubmenu: ContextMenuItem[] = [];
+    if (isHistoricalLoading || !historicalDateItems) {
+      historicalSubmenu.push({ label: 'Loading…', onClick: () => {}, disabled: true });
+    } else if (historicalDateItems.length === 0) {
+      historicalSubmenu.push({ label: 'No historical versions', onClick: () => {}, disabled: true });
+    } else {
+      for (const dateItem of historicalDateItems) {
+        if (dateItem.commits.length === 1) {
+          const commit = dateItem.commits[0];
+          historicalSubmenu.push({
+            label: `${dateItem.dateUK}  ${commit.shortSha}`,
+            onClick: () => { selectHistoricalCommit(commit); },
+          });
+        } else {
+          historicalSubmenu.push({
+            label: `${dateItem.dateUK} (${dateItem.commits.length})`,
+            onClick: () => {},
+            submenu: dateItem.commits.map((commit) => ({
+              label: `${commit.shortSha}  ${commit.message}`,
+              onClick: () => { selectHistoricalCommit(commit); },
+            })),
+          });
+        }
+      }
+    }
+    menuItems.push({
+      label: 'Open Historical Version',
+      onClick: () => {},
+      onHover: () => loadHistoricalDates(),
+      submenu: historicalSubmenu,
     });
   }
 
@@ -522,8 +577,9 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
         onLoadHistory={loadHistory}
         onGetContentAtCommit={getContentAtCommit}
         onRollback={rollbackToCommit}
+        onView={viewAtCommit}
       />
-      
+
       {/* Pull all conflict modal - managed by usePullAll hook */}
       {pullAllConflictModal}
     </>

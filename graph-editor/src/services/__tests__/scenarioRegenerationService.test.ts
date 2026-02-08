@@ -17,6 +17,7 @@ import {
   buildWhatIfDSL,
   computeInheritedDSL,
   computeEffectiveFetchDSL,
+  deriveScenarioCreateDeltaDSL,
   isLiveScenario,
   generateSmartLabel,
   prepareScenariosForBatch,
@@ -34,8 +35,10 @@ describe('splitDSLParts', () => {
     const result = splitDSLParts(null);
     
     expect(result.fetchParts.window).toBeNull();
+    expect(result.fetchParts.cohort).toBeNull();
     expect(result.fetchParts.context).toEqual([]);
     expect(result.fetchParts.contextAny).toEqual([]);
+    expect(result.fetchParts.asat).toBeNull();
     expect(result.whatIfParts.cases).toEqual([]);
     expect(result.whatIfParts.visited).toEqual([]);
     expect(result.whatIfParts.visitedAny).toEqual([]);
@@ -56,9 +59,16 @@ describe('splitDSLParts', () => {
     expect(result.whatIfParts.cases).toEqual([]);
   });
 
+  it('should extract asat() into fetch parts', () => {
+    const result = splitDSLParts('window(-30d:-1d).asat(5-Jan-26)');
+    expect(result.fetchParts.asat).toBe('5-Jan-26');
+    expect(result.whatIfParts.cases).toEqual([]);
+  });
+
   it('should extract context into fetch parts', () => {
     const result = splitDSLParts('context(channel:google)');
     
+    expect(result.fetchParts.contextClause).toBe('set');
     expect(result.fetchParts.context).toEqual([{ key: 'channel', value: 'google' }]);
     expect(result.fetchParts.window).toBeNull();
   });
@@ -66,7 +76,26 @@ describe('splitDSLParts', () => {
   it('should extract bare context key into fetch parts', () => {
     const result = splitDSLParts('context(channel)');
     
+    expect(result.fetchParts.contextClause).toBe('set');
     expect(result.fetchParts.context).toEqual([{ key: 'channel', value: '' }]);
+  });
+
+  it('should treat empty context() as explicit clear', () => {
+    const result = splitDSLParts('context()');
+    expect(result.fetchParts.contextClause).toBe('clear');
+    expect(result.fetchParts.context).toEqual([]);
+  });
+
+  it('should treat empty contextAny() as explicit clear', () => {
+    const result = splitDSLParts('contextAny()');
+    expect(result.fetchParts.contextAnyClause).toBe('clear');
+    expect(result.fetchParts.contextAny).toEqual([]);
+  });
+
+  it('should treat empty asat() as explicit clear', () => {
+    const result = splitDSLParts('asat()');
+    expect(result.fetchParts.asatClause).toBe('clear');
+    expect(result.fetchParts.asat).toBeNull();
   });
 
   it('should extract case into what-if parts', () => {
@@ -124,7 +153,16 @@ describe('splitDSLParts', () => {
 
 describe('buildFetchDSL', () => {
   it('should return empty string for empty parts', () => {
-    const parts: FetchParts = { window: null, context: [], contextAny: [] };
+    const parts: FetchParts = {
+      window: null,
+      cohort: null,
+      contextClause: 'inherit',
+      context: [],
+      contextAnyClause: 'inherit',
+      contextAny: [],
+      asatClause: 'inherit',
+      asat: null,
+    };
     
     expect(buildFetchDSL(parts)).toBe('');
   });
@@ -132,18 +170,43 @@ describe('buildFetchDSL', () => {
   it('should build window-only DSL', () => {
     const parts: FetchParts = {
       window: { start: '-30d', end: '-1d' },
+      cohort: null,
+      contextClause: 'inherit',
       context: [],
+      contextAnyClause: 'inherit',
       contextAny: [],
+      asatClause: 'inherit',
+      asat: null,
     };
     
     expect(buildFetchDSL(parts)).toBe('window(-30d:-1d)');
   });
 
+  it('should build window + asat() DSL', () => {
+    const parts: FetchParts = {
+      window: { start: '1-Nov-25', end: '30-Nov-25' },
+      cohort: null,
+      contextClause: 'inherit',
+      context: [],
+      contextAnyClause: 'inherit',
+      contextAny: [],
+      asatClause: 'set',
+      asat: '5-Jan-26',
+    };
+
+    expect(buildFetchDSL(parts)).toBe('window(1-Nov-25:30-Nov-25).asat(5-Jan-26)');
+  });
+
   it('should build context-only DSL', () => {
     const parts: FetchParts = {
       window: null,
+      cohort: null,
+      contextClause: 'set',
       context: [{ key: 'channel', value: 'google' }],
+      contextAnyClause: 'inherit',
       contextAny: [],
+      asatClause: 'inherit',
+      asat: null,
     };
     
     expect(buildFetchDSL(parts)).toBe('context(channel:google)');
@@ -152,18 +215,56 @@ describe('buildFetchDSL', () => {
   it('should build bare context key DSL', () => {
     const parts: FetchParts = {
       window: null,
+      cohort: null,
+      contextClause: 'set',
       context: [{ key: 'channel', value: '' }],
+      contextAnyClause: 'inherit',
       contextAny: [],
+      asatClause: 'inherit',
+      asat: null,
     };
     
     expect(buildFetchDSL(parts)).toBe('context(channel)');
   });
 
+  it('should build explicit context clear DSL (context())', () => {
+    const parts: FetchParts = {
+      window: null,
+      cohort: null,
+      contextClause: 'clear',
+      context: [],
+      contextAnyClause: 'inherit',
+      contextAny: [],
+      asatClause: 'inherit',
+      asat: null,
+    };
+    expect(buildFetchDSL(parts)).toBe('context()');
+  });
+
+  it('should build explicit asat clear DSL (asat())', () => {
+    const parts: FetchParts = {
+      window: null,
+      cohort: null,
+      contextClause: 'inherit',
+      context: [],
+      contextAnyClause: 'inherit',
+      contextAny: [],
+      asatClause: 'clear',
+      asat: null,
+    };
+    expect(buildFetchDSL(parts)).toBe('asat()');
+  });
+
   it('should build combined window + context DSL', () => {
     const parts: FetchParts = {
       window: { start: '1-Nov-25', end: '30-Nov-25' },
+      cohort: null,
+      contextClause: 'set',
       context: [{ key: 'channel', value: 'google' }],
+      contextAnyClause: 'inherit',
       contextAny: [],
+      asatClause: 'inherit',
+      asat: null,
     };
     
     const result = buildFetchDSL(parts);
@@ -174,11 +275,16 @@ describe('buildFetchDSL', () => {
   it('should build multiple contexts DSL', () => {
     const parts: FetchParts = {
       window: null,
+      cohort: null,
+      contextClause: 'set',
       context: [
         { key: 'channel', value: 'google' },
         { key: 'browser', value: 'chrome' },
       ],
+      contextAnyClause: 'inherit',
       contextAny: [],
+      asatClause: 'inherit',
+      asat: null,
     };
     
     const result = buildFetchDSL(parts);
@@ -189,11 +295,74 @@ describe('buildFetchDSL', () => {
   it('should handle empty window start/end', () => {
     const parts: FetchParts = {
       window: { start: '', end: '-1d' },
+      cohort: null,
+      contextClause: 'inherit',
       context: [],
+      contextAnyClause: 'inherit',
       contextAny: [],
+      asatClause: 'inherit',
+      asat: null,
     };
     
     expect(buildFetchDSL(parts)).toBe('window(:-1d)');
+  });
+});
+
+// ==========================================================================
+// deriveScenarioCreateDeltaDSL tests
+// ==========================================================================
+
+describe('deriveScenarioCreateDeltaDSL', () => {
+  it('should emit only the changed MECE axes vs the visible stack', () => {
+    const stack = 'window(1-Nov-25:30-Nov-25).context(region:uk).asat(5-Nov-25)';
+    const current = 'window(1-Nov-25:30-Nov-25).context(channel:paid-search).asat(5-Nov-25)';
+
+    const delta = deriveScenarioCreateDeltaDSL(stack, current);
+
+    // Window/asat unchanged; context differs (whole-axis replace).
+    expect(delta).toBe('context(channel:paid-search)');
+  });
+
+  it('should emit context() when Current has no context but stack does', () => {
+    const stack = 'window(1-Nov-25:30-Nov-25).context(region:uk)';
+    const current = 'window(1-Nov-25:30-Nov-25)';
+    const delta = deriveScenarioCreateDeltaDSL(stack, current);
+    expect(delta).toBe('context()');
+  });
+
+  it('should emit asat() when Current has no asat but stack does', () => {
+    const stack = 'window(1-Nov-25:30-Nov-25).asat(5-Nov-25)';
+    const current = 'window(1-Nov-25:30-Nov-25)';
+    const delta = deriveScenarioCreateDeltaDSL(stack, current);
+    expect(delta).toBe('asat()');
+  });
+
+  it('should be empty when stack and Current fetch DSL are equal (order-irrelevant)', () => {
+    const stack = 'context(channel:google).window(1-Nov-25:30-Nov-25)';
+    const current = 'window(1-Nov-25:30-Nov-25).context(channel:google)';
+    const delta = deriveScenarioCreateDeltaDSL(stack, current);
+    expect(delta).toBe('');
+  });
+
+  it('should emit cohort() when Current switches date mode from window → cohort', () => {
+    const stack = 'window(1-Nov-25:30-Nov-25)';
+    const current = 'cohort(-7d:)';
+    const delta = deriveScenarioCreateDeltaDSL(stack, current);
+    expect(delta).toBe('cohort(-7d:)');
+  });
+
+  it('should treat contextAny equality as order-irrelevant', () => {
+    const stack = 'contextAny(a:1,b:2)';
+    const current = 'contextAny(b:2,a:1)';
+    const delta = deriveScenarioCreateDeltaDSL(stack, current);
+    expect(delta).toBe('');
+  });
+
+  it('should emit contextAny() clear when Current has no contextAny but stack does', () => {
+    const stack = 'window(1-Nov-25:30-Nov-25).contextAny(a:1,b:2)';
+    const current = 'window(1-Nov-25:30-Nov-25)';
+    const delta = deriveScenarioCreateDeltaDSL(stack, current);
+    expect(delta).toBe('contextAny()');
   });
 });
 
@@ -415,15 +584,26 @@ describe('computeEffectiveFetchDSL', () => {
   it('should strip what-if parts from scenario DSL', () => {
     const result = computeEffectiveFetchDSL(
       'window(-30d:-1d)',
-      'context(channel:google).case(my-case:treatment)'
+      'context(channel:google).case(my-case:treatment).asat(5-Jan-26)'
     );
     
     // Should contain fetch parts merged
     expect(result).toContain('window(-30d:-1d)');
     expect(result).toContain('context(channel:google)');
+    expect(result).toContain('asat(5-Jan-26)');
     // Should NOT contain what-if parts
     expect(result).not.toContain('case(');
     expect(result).not.toContain('treatment');
+  });
+
+  it('should preserve inherited asat() when scenario does not override it', () => {
+    const result = computeEffectiveFetchDSL(
+      'window(-30d:-1d).asat(5-Jan-26)',
+      'context(channel:google)'
+    );
+    expect(result).toContain('window(-30d:-1d)');
+    expect(result).toContain('context(channel:google)');
+    expect(result).toContain('asat(5-Jan-26)');
   });
 
   it('should override same-type constraints (window)', () => {
@@ -648,7 +828,6 @@ describe('prepareScenariosForBatch', () => {
     
     // Top: inherits from base + bottom + middle
     const topResult = result.find(r => r.id === 'top')!;
-    expect(topResult.inheritedDSL).toContain('context(channel:google)');
     expect(topResult.inheritedDSL).toContain('context(device:mobile)');
     expect(topResult.effectiveFetchDSL).toContain('context(region:uk)');
   });

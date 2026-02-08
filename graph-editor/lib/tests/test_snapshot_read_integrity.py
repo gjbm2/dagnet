@@ -105,7 +105,9 @@ class TestReadIntegrity:
         
         append_snapshots_for_test(
             param_id=self.param_id,
-            slice_key='',
+            # Uncontexted refers to "no context dims" (context axis only).
+            # Slice identity still includes temporal mode; args are incidental.
+            slice_key='cohort(1-Oct-25:5-Oct-25)',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
             canonical_signature=self.canonical_signature,
             rows=rows_uncontexted,
@@ -119,7 +121,7 @@ class TestReadIntegrity:
         
         append_snapshots_for_test(
             param_id=self.param_id,
-            slice_key='context(channel:google)',
+            slice_key='context(channel:google).cohort(1-Oct-25:5-Oct-25)',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
             canonical_signature=self.canonical_signature,
             rows=rows_google,
@@ -132,7 +134,7 @@ class TestReadIntegrity:
         
         append_snapshots_for_test(
             param_id=self.param_id,
-            slice_key='context(channel:facebook)',
+            slice_key='context(channel:facebook).cohort(1-Oct-25:5-Oct-25)',
             retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
             canonical_signature=self.canonical_signature,
             rows=rows_facebook,
@@ -218,14 +220,14 @@ class TestReadIntegrity:
         """
         rows = query_snapshots(
             param_id=self.param_id,
-            slice_keys=['context(channel:google)']
+            slice_keys=['context(channel:google).cohort()']
         )
         
         # Should only return google slice rows
         assert len(rows) == 2
         
         for row in rows:
-            assert row['slice_key'] == 'context(channel:google)'
+            assert row['slice_key'].startswith('context(channel:google).cohort(')
     
     def test_read_inventory(self):
         """
@@ -234,7 +236,7 @@ class TestReadIntegrity:
         inv = get_batch_inventory_v2(
             param_ids=[self.param_id],
             current_signatures={self.param_id: self.canonical_signature},
-            slice_keys_by_param={self.param_id: ['', 'context(channel:google)', 'context(channel:facebook)']},
+            slice_keys_by_param={self.param_id: ['cohort()', 'context(channel:google).cohort()', 'context(channel:facebook).cohort()']},
             include_equivalents=True,
             limit_families_per_param=10,
             limit_slices_per_family=10,
@@ -245,6 +247,88 @@ class TestReadIntegrity:
         assert overall["row_count"] == 9
         assert overall["unique_anchor_days"] == 5  # Oct 1-5
         assert overall["unique_retrievals"] == 1  # All inserted with same retrieved_at
+
+    def test_ri006_virtual_snapshot_latest_wins_across_slice_family_variants(self):
+        """
+        RI-006: virtual_snapshot_latest_wins_across_variants
+
+        Multiple stored slice_key strings can represent the same logical slice family
+        (e.g. different cohort(...) args). Virtual snapshot must apply "latest wins"
+        across the *normalised* slice family key, not per raw slice_key string.
+        """
+        # Insert a later retrieval for the SAME logical family, but with different cohort args.
+        rows_google_newer = [
+            {'anchor_day': '2025-10-01', 'X': 500, 'Y': 50},
+            {'anchor_day': '2025-10-02', 'X': 600, 'Y': 60},
+        ]
+        append_snapshots_for_test(
+            param_id=self.param_id,
+            slice_key='context(channel:google).cohort(-100d:)',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            canonical_signature=self.canonical_signature,
+            rows=rows_google_newer,
+        )
+
+        res = query_virtual_snapshot(
+            param_id=self.param_id,
+            as_at=datetime(2025, 10, 12, 12, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 2),
+            core_hash=self.core_hash,
+            slice_keys=['context(channel:google).cohort()'],
+            include_equivalents=True,
+        )
+
+        assert res["success"] is True
+        assert res["count"] == 2
+        # Ensure we took the newer retrieval boundary across the family.
+        assert res.get("latest_retrieved_at_used") is not None
+        assert "2025-10-11" in str(res.get("latest_retrieved_at_used"))
+
+        # Verify values came from the newer write
+        xs = [r.get("x") for r in res.get("rows", [])]
+        ys = [r.get("y") for r in res.get("rows", [])]
+        assert xs == [500, 600]
+        assert ys == [50, 60]
+
+    def test_ri007_mode_only_selector_matches_contexted_slices(self):
+        """
+        RI-007: mode_only_selector_matches_contexted_slices
+
+        When the frontend is uncontexted (no explicit context dims) but the DB contains only
+        contexted MECE slices, it may send a mode-only selector like "cohort()" to avoid
+        mixing window/cohort modes. Backend must interpret this as "any context, this mode".
+        """
+        res = query_virtual_snapshot(
+            param_id=self.param_id,
+            as_at=datetime(2025, 10, 12, 12, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 2),
+            core_hash=self.core_hash,
+            slice_keys=['cohort()'],
+            include_equivalents=True,
+        )
+        assert res["success"] is True
+        assert res["count"] > 0
+
+    def test_ri008_inverted_anchor_bounds_are_treated_as_unordered(self):
+        """
+        RI-008: inverted_anchor_bounds
+
+        Frontend UI bugs can occasionally produce anchor_from > anchor_to.
+        Read path must be defensive and treat bounds as unordered.
+        """
+        res = query_virtual_snapshot(
+            param_id=self.param_id,
+            as_at=datetime(2025, 10, 12, 12, 0, 0),
+            anchor_from=date(2025, 10, 2),
+            anchor_to=date(2025, 10, 1),
+            core_hash=self.core_hash,
+            slice_keys=['cohort()'],
+            include_equivalents=True,
+        )
+        assert res["success"] is True
+        assert res["count"] > 0
 
     def test_ri005_signature_is_part_of_key(self):
         """
@@ -987,6 +1071,7 @@ class TestTierE_NoDisappearance:
         inv = get_batch_inventory_v2(
             param_ids=[pid],
             current_signatures={pid: sig_new},
+            current_core_hashes={pid: short_core_hash_from_canonical_signature(sig_new)},
             slice_keys_by_param={pid: ['']},
             include_equivalents=True,
             limit_families_per_param=10,
