@@ -9,7 +9,10 @@
  * This follows the codebase pattern where low-level services don't log, callers do.
  * 
  * Design reference: docs/current/project-db/snapshot-db-design.md
+ * Hash architecture: docs/current/project-db/hash-fixes.md
  */
+
+import { computeShortCoreHash } from './coreHashService';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -41,7 +44,7 @@ export interface AppendSnapshotsParams {
   param_id: string;
   /**
    * Canonical semantic signature string (frontend `query_signature`).
-   * Backend derives the short `core_hash` content-address from this.
+   * The frontend computes `core_hash` from this and sends both to the backend.
    */
   canonical_signature: string;
   /** Evidence blob for audit + diff UI (must be a JSON object). */
@@ -152,12 +155,16 @@ export async function appendSnapshots(params: AppendSnapshotsParams): Promise<Ap
   }
   
   try {
+    // Frontend computes core_hash — backend uses it as an opaque DB key (hash-fixes.md)
+    const core_hash = await computeShortCoreHash(params.canonical_signature);
+
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/append`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         param_id: params.param_id,
         canonical_signature: params.canonical_signature,
+        core_hash,
         inputs_json: params.inputs_json,
         sig_algo: params.sig_algo,
         slice_key: params.slice_key,
@@ -363,6 +370,8 @@ export interface QuerySnapshotsFullParams {
   /** Exact workspace-prefixed parameter ID */
   param_id: string;
   core_hash?: string;
+  /** Canonical signature for audit provenance (optional; sent alongside core_hash) */
+  canonical_signature?: string;
   slice_keys?: string[];
   anchor_from?: string; // ISO date
   anchor_to?: string; // ISO date
@@ -396,6 +405,7 @@ export async function querySnapshotsFull(params: QuerySnapshotsFullParams): Prom
       body: JSON.stringify({
         param_id: params.param_id,
         core_hash: params.core_hash,
+        canonical_signature: params.canonical_signature,
         slice_keys: params.slice_keys,
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
@@ -522,6 +532,9 @@ export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams)
   }
 
   try {
+    // Frontend computes core_hash — backend uses it as an opaque DB key (hash-fixes.md)
+    const core_hash = await computeShortCoreHash(params.canonical_signature);
+
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/query-virtual`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -531,6 +544,7 @@ export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams)
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
         canonical_signature: params.canonical_signature,
+        core_hash,
         slice_keys: params.slice_keys,
         include_equivalents: true,
         limit: params.limit,
@@ -578,12 +592,18 @@ export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsPar
   }
 
   try {
+    // Frontend computes core_hash when canonical_signature is present (hash-fixes.md)
+    const core_hash = params.canonical_signature
+      ? await computeShortCoreHash(params.canonical_signature)
+      : undefined;
+
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/retrievals`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         param_id: params.param_id,
         canonical_signature: params.canonical_signature,
+        core_hash,
         slice_keys: params.slice_keys,
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
@@ -752,12 +772,31 @@ export async function getBatchInventoryV2(
   }
 
   try {
+    // Pre-compute core_hashes for all current_signatures (hash-fixes.md)
+    let current_core_hashes: Record<string, string> | undefined;
+    if (options?.current_signatures) {
+      const entries = Object.entries(options.current_signatures);
+      const hashPromises = entries.map(async ([pid, sig]) => {
+        try {
+          const ch = await computeShortCoreHash(sig);
+          return [pid, ch] as const;
+        } catch {
+          return null; // Skip entries with invalid signatures
+        }
+      });
+      const results = (await Promise.all(hashPromises)).filter(Boolean) as Array<readonly [string, string]>;
+      if (results.length > 0) {
+        current_core_hashes = Object.fromEntries(results);
+      }
+    }
+
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/inventory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         param_ids: paramIds,
         current_signatures: options?.current_signatures,
+        current_core_hashes,
         slice_keys: options?.slice_keys,
         include_equivalents: options?.include_equivalents ?? true,
         limit_families_per_param: options?.limit_families_per_param,

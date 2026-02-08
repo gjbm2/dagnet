@@ -33,10 +33,18 @@ def get_db_connection():
 
 def short_core_hash_from_canonical_signature(canonical_signature: str) -> str:
     """
-    Compute the short DB core_hash (content-address) from the canonical signature string.
+    TEST-ONLY. Compute core_hash from canonical_signature.
 
-    Algorithm (must match docs/current/project-db/flexi_sigs.md):
-    - sha256(UTF-8 bytes of canonical_signature)
+    The frontend is the sole producer of core_hash in production (hash-fixes.md).
+    This function is retained ONLY for:
+    - Golden parity tests (test_core_hash_parity.py)
+    - Test helpers that need to compute expected hashes
+    - Legacy test-compat fallback in append_snapshots()
+
+    DO NOT call this from production code paths.
+
+    Algorithm (must match coreHashService.ts):
+    - sha256(UTF-8 bytes of canonical_signature.strip())
     - take first 16 bytes (128 bits)
     - base64url encode (no padding) -> ~22 chars
     """
@@ -101,6 +109,17 @@ def _ensure_flexi_sig_tables(cur) -> None:
     )
 
 
+def _require_core_hash(core_hash: Optional[str], context: str = "") -> str:
+    """
+    Require frontend-provided core_hash. The backend NEVER derives hashes.
+
+    See hash-fixes.md: frontend is the sole producer of core_hash.
+    """
+    if core_hash and isinstance(core_hash, str) and core_hash.strip():
+        return core_hash.strip()
+    raise ValueError(f"core_hash is required (frontend must provide it) ({context})")
+
+
 def append_snapshots(
     param_id: str,
     canonical_signature: str,
@@ -109,7 +128,8 @@ def append_snapshots(
     slice_key: str,
     retrieved_at: datetime,
     rows: List[Dict[str, Any]],
-    diagnostic: bool = False
+    diagnostic: bool = False,
+    core_hash: Optional[str] = None,  # Required in production; Optional only for test compat
 ) -> Dict[str, Any]:
     """
     Append snapshot rows to the database.
@@ -183,7 +203,12 @@ def append_snapshots(
         if not sig_algo or not isinstance(sig_algo, str):
             raise ValueError("sig_algo is required and must be a string")
 
-        core_hash = short_core_hash_from_canonical_signature(canonical_signature)
+        # Frontend must provide core_hash. Fall back to derivation ONLY for legacy test callers.
+        if core_hash and isinstance(core_hash, str) and core_hash.strip():
+            core_hash = core_hash.strip()
+        else:
+            # Legacy test compat only — production callers MUST provide core_hash
+            core_hash = short_core_hash_from_canonical_signature(canonical_signature)
         canonical_sig_hash_full = hashlib.sha256(canonical_signature.strip().encode("utf-8")).hexdigest()
 
         # Insert registry row once per unique (param_id, core_hash).
@@ -308,6 +333,7 @@ def query_snapshots(
     anchor_from: Optional[date] = None,
     anchor_to: Optional[date] = None,
     as_at: Optional[datetime] = None,
+    include_equivalents: bool = True,
     limit: int = 10000
 ) -> List[Dict[str, Any]]:
     """
@@ -320,6 +346,7 @@ def query_snapshots(
         anchor_from: Start of anchor date range (optional)
         anchor_to: End of anchor date range (optional)
         as_at: If provided, only return snapshots retrieved before this timestamp
+        include_equivalents: If True, expand core_hash via equivalence links (default True)
         limit: Maximum rows to return (default 10000)
     
     Returns:
@@ -347,8 +374,19 @@ def query_snapshots(
         params: List[Any] = [param_id]
         
         if core_hash is not None:
-            query += " AND core_hash = %s"
-            params.append(core_hash)
+            if include_equivalents:
+                # Expand via equivalence closure before filtering
+                resolved = resolve_equivalent_hashes(
+                    param_id=param_id,
+                    core_hash=core_hash,
+                    include_equivalents=True,
+                )
+                hashes = resolved.get("core_hashes", [core_hash])
+                query += " AND core_hash = ANY(%s)"
+                params.append(hashes)
+            else:
+                query += " AND core_hash = %s"
+                params.append(core_hash)
         
         if slice_keys is not None:
             query += " AND slice_key = ANY(%s)"
@@ -792,6 +830,7 @@ def get_batch_inventory_v2(
     *,
     param_ids: List[str],
     current_signatures: Optional[Dict[str, str]] = None,
+    current_core_hashes: Optional[Dict[str, str]] = None,
     slice_keys_by_param: Optional[Dict[str, List[str]]] = None,
     include_equivalents: bool = True,
     limit_families_per_param: int = 50,
@@ -936,17 +975,12 @@ def get_batch_inventory_v2(
                 uf.union(a, b)
 
         # Add current signature nodes
+        # Frontend MUST provide current_core_hashes — backend never derives hashes (hash-fixes.md)
+        current_core_hashes = current_core_hashes or {}
         current_core_hash_by_param: Dict[str, Optional[str]] = {}
         for pid in param_ids:
-            sig = current_signatures.get(pid)
-            if sig:
-                try:
-                    ch = short_core_hash_from_canonical_signature(sig)
-                except Exception:
-                    ch = None
-            else:
-                ch = None
-            current_core_hash_by_param[pid] = ch
+            ch = current_core_hashes.get(pid)
+            current_core_hash_by_param[pid] = ch if ch else None
             if ch:
                 uf_by_param[pid].add(ch)
 

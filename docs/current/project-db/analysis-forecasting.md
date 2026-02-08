@@ -202,16 +202,32 @@ This work is **deferred** until the basic read path (Phase 1-2 of `1-reads.md`) 
    - `derive_with_forecast(rows, lag_fit, baseline_pct)` → list of `{date, observed, projected, completeness, layer}`
    - `derive_fan_chart(rows, lag_fit, confidence_levels)` → list of `{date, median, ci_50_low, ci_50_high, ci_90_low, ci_90_high}`
 
-### 6.4 Extend Analysis Request
+### 6.4 Lag Fit Data: Derived from Snapshot Rows, Not from the Graph
 
-When the frontend requests a forecasting-enabled analysis, it includes **per-subject latency metadata** in the `snapshot_dependencies`:
+**Important**: The `edge.p.latency` fields on the graph (`median_lag_days`, `mean_lag_days`, `completeness`) are **outputs** of the frontend's statistical enhancement service, written back after computation. They are NOT the primary inputs to fitting. The actual inputs are **per-cohort daily time-series data** from the parameter file.
 
-- `lag_fit`: `{mu, sigma, onset_delta_days}` — the lognormal fit for this parameter
-- `t95_days`: the parameter's t95 horizon
+For backend forecasting, the backend should **recompute lag statistics from the snapshot rows it just retrieved**, not read stale display values from the graph edge. This is more correct because the snapshot data being analysed may cover a different time range than what the graph's latency values reflect.
 
-The frontend already has these values (from the parameter file's persisted latency stats). It just needs to include them in the request so the backend can use them for projection.
+**What the backend derives from snapshot DB rows**:
+- Aggregate `median_lag_days` and `mean_lag_days` (weighted across anchor_days)
+- `totalK` (sum of Y values)
+- `onset_delta_days` (from rows, if available)
 
-This is a clean separation: the **frontend provides the fitted model parameters** (which it already computes during the normal fetch path), and the **backend evaluates the model** at whatever points it needs for the specific analysis type.
+**What the backend reads from the graph edge** (optional authoritative constraints only):
+- `edge.p.latency.t95` — authoritative if user-overridden or derived from richer data. Used as a one-way constraint to widen the lognormal sigma (never narrows it).
+- `edge.p.latency.onset_delta_days` — authoritative if user-overridden.
+
+**Fitting sequence (backend)**:
+1. From snapshot rows: compute weighted aggregate `median_lag`, `mean_lag`, `totalK`
+2. `fit_lag_distribution(median, mean, totalK)` → `(mu, sigma)`
+3. If `edge.p.latency.t95` exists: apply one-way t95 constraint (may increase sigma)
+4. Evaluate CDF at required points for completeness/projection
+
+This means:
+- No `lag_fit` field is needed on `SnapshotSubjectRequest`
+- The backend derives everything from the data it just retrieved
+- The graph provides only authoritative constraints (t95, onset if overridden)
+- The frontend does not pre-compute or duplicate lag fit parameters
 
 ---
 
@@ -240,15 +256,13 @@ This is a clean separation: the **frontend provides the fitted model parameters*
 
 The snapshot read path (`1-reads.md`) must be designed so that forecasting can be added without restructuring the request shape or the backend execution model. Specifically:
 
-### 9.1 Request Shape Must Include Per-Subject Latency Metadata (Optional Fields)
+### 9.1 Lag Fit Data: Backend Derives from Snapshot Rows
 
-Each `SnapshotSubjectRequest` in the analysis request must include optional fields for:
+The `edge.p.latency` fields on the graph (`median_lag_days`, `mean_lag_days`, `completeness`) are **outputs** of the frontend enhancement service, not primary inputs to fitting. The actual inputs are per-cohort daily data.
 
-- `lag_fit`: `{mu, sigma, onset_delta_days}` — the lognormal fit for this parameter's conversion lag distribution
-- `t95_days`: the parameter's t95 horizon (days by which 95% of conversions have occurred)
-- `forecasting_model`: optional string identifying which forecasting model to apply (future extensibility)
+For backend forecasting, the backend recomputes lag statistics from the **snapshot rows it just retrieved from the DB** (each row has `median_lag_days`, `mean_lag_days`, `onset_delta_days`). The graph provides only **authoritative constraints**: `edge.p.latency.t95` (if set) and `edge.p.latency.onset_delta_days` (if user-overridden).
 
-These fields are **optional** in Phase 1 (basic aggregation). When present in a later phase, the backend uses them to annotate results with completeness estimates, evidence/forecast splits, and projections.
+No additional per-subject lag fit fields are needed on `SnapshotSubjectRequest`. The backend has everything it needs from the DB rows + the graph's authoritative constraints.
 
 ### 9.2 Backend Derivation Functions Must Accept Lag Fit Parameters
 
@@ -270,14 +284,19 @@ The "as-at sweep" read mode (retrieve virtual snapshots at multiple points in ti
 
 The sweep mode must be designed as a first-class read mode, not a special case. The backend should efficiently execute it (single query with multiple as-at boundaries, or a range-based approach, rather than N separate virtual snapshot queries).
 
-### 9.5 Frontend Must Include Lag Fit When Available
+### 9.5 Backend Must Be Able to Extract Authoritative Constraints from the Graph
 
-The snapshot dependency plan resolver (`snapshotDependencyPlanService`) should extract lag fit parameters from the parameter file (where they are already persisted by the normal fetch/LAG pipeline) and include them in the request. This is a read-only operation — the resolver does not compute or fit; it reads the persisted values.
+The backend receives both `snapshot_subjects` (DB coordinates) and `scenarios[].graph`. For forecasting:
 
-The relevant fields in the parameter file are:
-- `p.latency.median_lag_days`, `p.latency.mean_lag_days` — inputs to `fitLagDistribution()`
-- `p.latency.t95_days` — the t95 horizon
-- `p.onset_delta_days` — the onset dead-time correction
+**Primary inputs** (from snapshot DB rows): `median_lag_days`, `mean_lag_days`, `onset_delta_days` per row → backend aggregates these into fitting inputs.
+
+**Authoritative constraints** (from graph edge, via `target.targetId`):
+- `edge.p.latency.t95` — if set, used as one-way constraint on sigma (only widens, never narrows)
+- `edge.p.latency.onset_delta_days` — if user-overridden, used instead of row-level onset
+
+Note: `edge.p.latency.median_lag_days` and `edge.p.latency.mean_lag_days` are **display outputs** from the frontend's last enhancement pass, NOT primary fitting inputs. The backend should compute aggregates from the snapshot data being analysed, not read stale values from the graph.
+
+The backend Python code must include a utility to locate an edge in a scenario graph by UUID and extract its latency config. This is a simple graph traversal.
 
 ---
 

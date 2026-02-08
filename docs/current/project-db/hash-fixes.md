@@ -1,6 +1,6 @@
 # Hash Architecture Fix: Frontend Must Be Sole Producer of All Hashes
 
-**Status**: Critical Fix Required  
+**Status**: COMPLETE. All phases done. Backend never derives hashes.  
 **Date**: 8-Feb-26  
 **Related**: `1-reads.md`, `00-snapshot-db-design.md`, flexi_sigs.md
 
@@ -16,19 +16,13 @@ The backend must NEVER derive, compute, or transform hash values. It must receiv
 
 ## 2. Diagnosis: What Went Wrong
 
-### 2.1 The Problem
+### 2.1 The Problem (now resolved — see §5 implementation status)
 
-The backend currently computes the DB column `core_hash` from the frontend's `canonical_signature` via `short_core_hash_from_canonical_signature()` in `snapshot_service.py`:
+The backend previously computed the DB column `core_hash` from the frontend's `canonical_signature` via `short_core_hash_from_canonical_signature()` in `snapshot_service.py`. The algorithm is: SHA-256 the UTF-8 bytes of the signature string, take the first 16 bytes, and base64url-encode without padding.
 
-```python
-def short_core_hash_from_canonical_signature(canonical_signature: str) -> str:
-    digest = hashlib.sha256(sig.encode("utf-8")).digest()[:16]
-    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-```
-
-This means **two different services produce hashes**:
-- Frontend produces `canonical_signature` (containing `coreHash` and `contextDefHashes`)
-- Backend produces `core_hash` (the DB lookup key) by hashing the frontend's signature string
+This meant **two different services produced hashes**:
+- Frontend produced `canonical_signature` (containing `coreHash` and `contextDefHashes`)
+- Backend produced `core_hash` (the DB lookup key) by hashing the frontend's signature string
 
 ### 2.2 Where the Backend Hashes
 
@@ -55,21 +49,7 @@ This means **two different services produce hashes**:
 
 ### 3.1 Port `short_core_hash_from_canonical_signature` to TypeScript
 
-Create a function in the frontend that produces identical output to the Python function:
-
-```typescript
-// graph-editor/src/services/coreHashService.ts
-
-export async function computeShortCoreHash(canonicalSignature: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(canonicalSignature.trim());
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const first16Bytes = new Uint8Array(hashBuffer).slice(0, 16);
-  // base64url encode, no padding
-  const base64 = btoa(String.fromCharCode(...first16Bytes));
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-```
+Create `computeShortCoreHash()` in `graph-editor/src/services/coreHashService.ts` that produces identical output to the Python function. The algorithm: trim whitespace, UTF-8 encode, SHA-256 digest, take first 16 bytes, base64url-encode without padding. Use `crypto.subtle.digest` in browser / Node 18+, with a `crypto.createHash` fallback for older environments.
 
 **Verification**: Write a cross-language golden test with known inputs and expected outputs. Both the TypeScript and Python implementations must produce identical `core_hash` values. This test exists before any migration begins.
 
@@ -415,15 +395,47 @@ The "compare frontend vs backend hash" assertion in `resolve_core_hash()` is no 
 
 ### Phase Summary Table
 
-| Phase | Files Changed | Risk | Reversible |
-|-------|--------------|------|------------|
-| 0 — Golden fixture | `tests/fixtures/core-hash-golden.json`, `lib/tests/test_core_hash_parity.py`, `src/services/__tests__/coreHashService.test.ts` | None (test-only) | Yes |
-| 1 — Frontend hash function | `src/services/coreHashService.ts` | None (new file, not yet called) | Yes |
-| 2 — Frontend sends `core_hash` | `src/services/snapshotWriteService.ts` (4 functions + types) | Low (additive — backend ignores unknown fields) | Yes (remove the new field from request bodies) |
-| 3 — Backend accepts `core_hash` | `lib/api_handlers.py` (4 handlers), `lib/snapshot_service.py` (2 functions) | Medium (backend behaviour change, mitigated by fallback) | Yes (remove `resolve_core_hash`, restore inline derivation) |
-| 4 — Verify | No code changes; testing only | None | N/A |
-| 5 — Cleanup | `lib/api_handlers.py`, `lib/snapshot_service.py` | Low (removes fallback; frontend already sends required field) | Revert to Phase 3 state |
+| Phase | Files Changed | Risk | Status |
+|-------|--------------|------|--------|
+| 0 — Golden fixture | `lib/tests/fixtures/core-hash-golden.json`, `lib/tests/test_core_hash_parity.py`, `src/services/__tests__/coreHashService.test.ts` | None (test-only) | **DONE** |
+| 1 — Frontend hash function | `src/services/coreHashService.ts` | None (new file, not yet called) | **DONE** |
+| 2 — Frontend sends `core_hash` | `src/services/snapshotWriteService.ts` (5 call sites + types) | Low (additive) | **DONE** |
+| 3 — Backend accepts `core_hash` | `lib/api_handlers.py` (4 handlers), `lib/snapshot_service.py` (`_resolve_core_hash`, `append_snapshots`, `query_snapshots`, `get_batch_inventory_v2`) | Medium (mitigated by fallback + parity check) | **DONE** |
+| 4 — Verify | Golden parity tests (both languages) | None | **DONE** |
+| 5 — Cleanup | `lib/snapshot_service.py` (remove fallback + parity check), `lib/api_handlers.py` (use `_require_core_hash`) | Low | **DONE** |
 
 ### Deployment / Rollout Order
 
 Phases 0–2 can be deployed independently (frontend-only changes; backend ignores the extra field). Phase 3 can be deployed at any time after Phase 2. Phase 5 should only be deployed after Phase 4 confirms zero parity mismatches in logs. There is no requirement to deploy all phases simultaneously — each phase is independently safe.
+
+---
+
+## 10. Implementation Record (Phases 0–3)
+
+Completed 8-Feb-26. All changes are in a single commit on `feature/snapshot-db-phase0`.
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `src/services/coreHashService.ts` | Frontend `computeShortCoreHash()` — sole producer of `core_hash`. Handles browser (`crypto.subtle`) and Node (`crypto.createHash`) environments. |
+| `src/services/__tests__/coreHashService.test.ts` | Golden parity test — loads shared fixture, verifies TS output matches Python. |
+| `lib/tests/fixtures/core-hash-golden.json` | 10 golden test vectors (minimal, contexts, unicode, whitespace, production-style). |
+| `lib/tests/test_core_hash_parity.py` | Python golden parity test — same fixture, same assertions. |
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `src/services/snapshotWriteService.ts` | All 5 API call sites now compute `core_hash` via `computeShortCoreHash()` and send it alongside `canonical_signature`: `appendSnapshots`, `querySnapshotsVirtual`, `querySnapshotRetrievals`, `querySnapshotsFull`, `getBatchInventoryV2`. |
+| `lib/snapshot_service.py` | New `_resolve_core_hash()` transition helper (prefer FE value, fall back with deprecation warning, parity check when both present). `append_snapshots()` accepts `core_hash` parameter. `query_snapshots()` gains `include_equivalents` parameter with closure expansion. `get_batch_inventory_v2()` accepts `current_core_hashes`. |
+| `lib/api_handlers.py` | All 4 handlers updated to use `_resolve_core_hash()`: `handle_snapshots_append`, `handle_snapshots_query_virtual`, `handle_snapshots_retrievals`, `handle_snapshots_inventory`. `handle_snapshots_query_full` gains `include_equivalents` passthrough. |
+| `lib/tests/test_snapshot_read_integrity.py` | New test tiers: C (backend contract — validation, idempotency), D (equivalence resolution — symmetry, multi-hop, deactivation, cycles, isolation), E (end-to-end no-disappearance scenario). Plus RI-008b (equivalence closure in `query_snapshots`). |
+
+### Phase 5 Cleanup (DONE)
+
+- `_resolve_core_hash()` removed entirely — replaced by `_require_core_hash()` which raises `ValueError` if `core_hash` is absent
+- All parity validation / deprecation logging removed
+- `short_core_hash_from_canonical_signature()` marked TEST-ONLY in docstring; no production code path calls it
+- `get_batch_inventory_v2()` no longer falls back to backend derivation — uses `current_core_hashes` from frontend only
+- `api_handlers.py` imports `_require_core_hash` (not `_resolve_core_hash`); no import of `short_core_hash_from_canonical_signature`

@@ -217,7 +217,10 @@ describe('Snapshot Write Service', () => {
       
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(body.canonical_signature).toBe(canonicalSignature);
-      expect(body.core_hash).toBeUndefined(); // backend derives short hash; frontend must not send it
+      // Frontend now computes and sends core_hash (hash-fixes.md Phase 2)
+      expect(body.core_hash).toBeDefined();
+      expect(typeof body.core_hash).toBe('string');
+      expect(body.core_hash.length).toBeGreaterThan(0);
     });
 
     it('SI-002: cohort vs window should have different canonical_signature', async () => {

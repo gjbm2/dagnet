@@ -25,6 +25,8 @@ from snapshot_service import (
     get_batch_inventory_v2,
     short_core_hash_from_canonical_signature,
     create_equivalence_link,
+    deactivate_equivalence_link,
+    resolve_equivalent_hashes,
 )
 
 # Skip all tests if DB_CONNECTION not available
@@ -497,6 +499,65 @@ class TestReadIntegrity:
         assert closure_r["retrieved_at"][0].startswith("2025-10-11")
         assert closure_r["retrieved_at"][1].startswith("2025-10-10")
 
+    def test_ri008b_equivalence_closure_affects_query_full(self):
+        """
+        RI-008b: equivalence closure affects query_snapshots (query-full route).
+
+        This is the test that was MISSING — the gap that allowed query-full
+        to ship without equivalence support.
+
+        - With include_equivalents=False, query_snapshots returns only exact core_hash rows.
+        - With include_equivalents=True, linked signatures are included.
+        """
+        pid = f'{TEST_PREFIX}param-eq-full'
+        sig_a = '{"c":"eq-full-A","x":{}}'
+        sig_b = '{"c":"eq-full-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        append_snapshots_for_test(
+            param_id=pid,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+        append_snapshots_for_test(
+            param_id=pid,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-02', 'X': 999, 'Y': 99}],
+        )
+
+        # Strict: only sig_a's row
+        strict = query_snapshots(param_id=pid, core_hash=hash_a, include_equivalents=False)
+        assert len(strict) == 1
+        assert strict[0]['x'] == 1
+        assert strict[0]['core_hash'] == hash_a
+
+        # Link A ≡ B
+        res_link = create_equivalence_link(
+            param_id=pid,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="query-full equivalence test",
+        )
+        assert res_link["success"] is True
+
+        # With equivalents: both rows returned
+        closure = query_snapshots(param_id=pid, core_hash=hash_a, include_equivalents=True)
+        assert len(closure) == 2
+        hashes_returned = {r['core_hash'] for r in closure}
+        assert hash_a in hashes_returned
+        assert hash_b in hashes_returned
+
+        # Verify strict still only returns sig_a
+        strict_after = query_snapshots(param_id=pid, core_hash=hash_a, include_equivalents=False)
+        assert len(strict_after) == 1
+        assert strict_after[0]['core_hash'] == hash_a
+
     def test_ri009_inventory_v2_groups_equivalent_signatures_into_one_family(self):
         """
         RI-009: inventory V2 groups equivalence closure into a signature family.
@@ -555,3 +616,395 @@ class TestReadIntegrity:
         assert fam["family_size"] == 2
         # Total row_count across both signatures: 2 + 1 = 3
         assert fam["overall"]["row_count"] == 3
+
+
+class TestTierC_BackendContract:
+    """
+    Tier C — backend contract tests.
+
+    Ensure the backend enforces invariants: no silent acceptance of bad writes,
+    idempotent registry inserts, link create/deactivate behaviour.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self):
+        yield
+        cleanup_test_data()
+
+    def test_c001_append_missing_canonical_signature_rejected(self):
+        """Missing canonical_signature must raise ValueError."""
+        with pytest.raises(ValueError, match="canonical_signature"):
+            append_snapshots(
+                param_id=f'{TEST_PREFIX}c001',
+                canonical_signature=None,
+                inputs_json={"schema": "test"},
+                sig_algo=SIG_ALGO,
+                slice_key='',
+                retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+                rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+            )
+
+    def test_c002_append_missing_inputs_json_rejected(self):
+        """Missing inputs_json must raise ValueError."""
+        with pytest.raises(ValueError, match="inputs_json"):
+            append_snapshots(
+                param_id=f'{TEST_PREFIX}c002',
+                canonical_signature='{"c":"c002","x":{}}',
+                inputs_json=None,
+                sig_algo=SIG_ALGO,
+                slice_key='',
+                retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+                rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+            )
+
+    def test_c003_append_malformed_inputs_json_rejected(self):
+        """inputs_json that is not a dict must raise ValueError."""
+        with pytest.raises(ValueError, match="inputs_json"):
+            append_snapshots(
+                param_id=f'{TEST_PREFIX}c003',
+                canonical_signature='{"c":"c003","x":{}}',
+                inputs_json="not a dict",
+                sig_algo=SIG_ALGO,
+                slice_key='',
+                retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+                rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+            )
+
+    def test_c004_append_missing_sig_algo_rejected(self):
+        """Missing sig_algo must raise ValueError."""
+        with pytest.raises(ValueError, match="sig_algo"):
+            append_snapshots(
+                param_id=f'{TEST_PREFIX}c004',
+                canonical_signature='{"c":"c004","x":{}}',
+                inputs_json={"schema": "test"},
+                sig_algo=None,
+                slice_key='',
+                retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+                rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+            )
+
+    def test_c005_registry_insert_is_idempotent(self):
+        """Repeated append with same signature must not duplicate registry rows."""
+        pid = f'{TEST_PREFIX}c005'
+        sig = '{"c":"c005-idem","x":{}}'
+        core_hash = short_core_hash_from_canonical_signature(sig)
+
+        for i in range(3):
+            append_snapshots_for_test(
+                param_id=pid,
+                canonical_signature=sig,
+                slice_key='',
+                retrieved_at=datetime(2025, 10, 10 + i, 12, 0, 0),
+                rows=[{'anchor_day': f'2025-10-0{i+1}', 'X': i, 'Y': i}],
+            )
+
+        # Check registry: should have exactly 1 row for this (param_id, core_hash)
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT count(*) FROM signature_registry WHERE param_id = %s AND core_hash = %s",
+                (pid, core_hash),
+            )
+            count = cur.fetchone()[0]
+            assert count == 1, f"Expected 1 registry row, got {count}"
+        finally:
+            conn.close()
+
+    def test_c006_link_create_and_deactivate(self):
+        """Create a link, verify it's active, deactivate it, verify it's inactive."""
+        pid = f'{TEST_PREFIX}c006'
+        hash_a = "AAAA"
+        hash_b = "BBBB"
+
+        # Create link
+        res = create_equivalence_link(
+            param_id=pid, core_hash=hash_a, equivalent_to=hash_b,
+            created_by="pytest", reason="test create",
+        )
+        assert res["success"] is True
+
+        # Verify active
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT active FROM signature_equivalence WHERE param_id=%s AND core_hash=%s AND equivalent_to=%s",
+                (pid, hash_a, hash_b),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] is True
+        finally:
+            conn.close()
+
+        # Deactivate
+        res2 = deactivate_equivalence_link(
+            param_id=pid, core_hash=hash_a, equivalent_to=hash_b,
+            created_by="pytest", reason="test deactivate",
+        )
+        assert res2["success"] is True
+
+        # Verify inactive
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT active FROM signature_equivalence WHERE param_id=%s AND core_hash=%s AND equivalent_to=%s",
+                (pid, hash_a, hash_b),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] is False
+        finally:
+            conn.close()
+
+    def test_c007_link_create_idempotent(self):
+        """Creating the same link twice should succeed (upsert) without error."""
+        pid = f'{TEST_PREFIX}c007'
+        res1 = create_equivalence_link(
+            param_id=pid, core_hash="X1", equivalent_to="X2",
+            created_by="pytest", reason="first",
+        )
+        assert res1["success"] is True
+
+        res2 = create_equivalence_link(
+            param_id=pid, core_hash="X1", equivalent_to="X2",
+            created_by="pytest", reason="second (idempotent)",
+        )
+        assert res2["success"] is True
+
+    def test_c008_self_link_rejected(self):
+        """Linking a hash to itself must fail."""
+        pid = f'{TEST_PREFIX}c008'
+        res = create_equivalence_link(
+            param_id=pid, core_hash="SAME", equivalent_to="SAME",
+            created_by="pytest", reason="self link",
+        )
+        assert res["success"] is False
+
+
+class TestTierD_EquivalenceResolution:
+    """
+    Tier D — equivalence resolution correctness tests.
+
+    Symmetry, multi-hop closure, deactivation, cycle robustness.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self):
+        yield
+        cleanup_test_data()
+
+    def _resolve(self, pid, core_hash):
+        """Helper: resolve equivalence closure."""
+        from snapshot_service import resolve_equivalent_hashes
+        return resolve_equivalent_hashes(
+            param_id=pid, core_hash=core_hash, include_equivalents=True,
+        )
+
+    def test_d001_symmetry(self):
+        """Linking A→B: resolving from A includes B, and resolving from B includes A."""
+        pid = f'{TEST_PREFIX}d001'
+        create_equivalence_link(
+            param_id=pid, core_hash="A", equivalent_to="B",
+            created_by="pytest", reason="symmetry test",
+        )
+
+        res_a = self._resolve(pid, "A")
+        assert set(res_a["core_hashes"]) == {"A", "B"}
+
+        res_b = self._resolve(pid, "B")
+        assert set(res_b["core_hashes"]) == {"A", "B"}
+
+    def test_d002_multi_hop(self):
+        """A↔B, B↔C: resolving A should yield {A, B, C}."""
+        pid = f'{TEST_PREFIX}d002'
+        create_equivalence_link(
+            param_id=pid, core_hash="A", equivalent_to="B",
+            created_by="pytest", reason="hop 1",
+        )
+        create_equivalence_link(
+            param_id=pid, core_hash="B", equivalent_to="C",
+            created_by="pytest", reason="hop 2",
+        )
+
+        res = self._resolve(pid, "A")
+        assert set(res["core_hashes"]) == {"A", "B", "C"}
+
+        # Also from C
+        res_c = self._resolve(pid, "C")
+        assert set(res_c["core_hashes"]) == {"A", "B", "C"}
+
+    def test_d003_deactivated_edges_ignored(self):
+        """Deactivated links must not be traversed."""
+        pid = f'{TEST_PREFIX}d003'
+        create_equivalence_link(
+            param_id=pid, core_hash="A", equivalent_to="B",
+            created_by="pytest", reason="will deactivate",
+        )
+        # Verify link works
+        assert set(self._resolve(pid, "A")["core_hashes"]) == {"A", "B"}
+
+        # Deactivate
+        deactivate_equivalence_link(
+            param_id=pid, core_hash="A", equivalent_to="B",
+            created_by="pytest", reason="deactivate test",
+        )
+
+        # Now resolution should be just {A}
+        res = self._resolve(pid, "A")
+        assert set(res["core_hashes"]) == {"A"}
+
+    def test_d004_cycle_robustness(self):
+        """A↔B, B↔C, C↔A: cycles must not hang; result is {A, B, C} deduplicated."""
+        pid = f'{TEST_PREFIX}d004'
+        create_equivalence_link(param_id=pid, core_hash="A", equivalent_to="B", created_by="pytest", reason="cycle")
+        create_equivalence_link(param_id=pid, core_hash="B", equivalent_to="C", created_by="pytest", reason="cycle")
+        create_equivalence_link(param_id=pid, core_hash="C", equivalent_to="A", created_by="pytest", reason="cycle")
+
+        res = self._resolve(pid, "A")
+        assert res["success"] is True
+        assert set(res["core_hashes"]) == {"A", "B", "C"}
+
+    def test_d005_no_links_resolves_to_self(self):
+        """A hash with no links resolves to just itself."""
+        pid = f'{TEST_PREFIX}d005'
+        res = self._resolve(pid, "LONELY")
+        assert res["success"] is True
+        assert res["core_hashes"] == ["LONELY"]
+
+    def test_d006_cross_param_isolation(self):
+        """Links for param X must not affect resolution for param Y."""
+        pid_x = f'{TEST_PREFIX}d006-x'
+        pid_y = f'{TEST_PREFIX}d006-y'
+        create_equivalence_link(param_id=pid_x, core_hash="A", equivalent_to="B", created_by="pytest", reason="x only")
+
+        res_x = self._resolve(pid_x, "A")
+        assert set(res_x["core_hashes"]) == {"A", "B"}
+
+        res_y = self._resolve(pid_y, "A")
+        assert set(res_y["core_hashes"]) == {"A"}
+
+
+class TestTierE_NoDisappearance:
+    """
+    Tier E — end-to-end "no disappearance" test.
+
+    Proves the full user story: old snapshots under old signature,
+    new signature appears, equivalence link restores visibility.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self):
+        yield
+        cleanup_test_data()
+
+    def test_e001_full_no_disappearance_scenario(self):
+        """
+        1. Write snapshots under old signature.
+        2. New signature appears (different hash).
+        3. Strict query with new hash: sees nothing (mismatch).
+        4. Create equivalence link old↔new.
+        5. Query with new hash + include_equivalents=True: sees old data.
+        6. Inventory shows both in one family, current matches.
+        """
+        pid = f'{TEST_PREFIX}e001'
+        sig_old = '{"c":"old-query","x":{}}'
+        sig_new = '{"c":"new-query-after-trivial-change","x":{}}'
+        hash_old = short_core_hash_from_canonical_signature(sig_old)
+        hash_new = short_core_hash_from_canonical_signature(sig_new)
+
+        # 1. Write 5 days of history under old signature
+        append_snapshots_for_test(
+            param_id=pid,
+            canonical_signature=sig_old,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[
+                {'anchor_day': f'2025-10-0{d}', 'X': d * 10, 'Y': d}
+                for d in range(1, 6)
+            ],
+        )
+
+        # 2. Verify old signature has data
+        old_rows = query_snapshots(param_id=pid, core_hash=hash_old, include_equivalents=False)
+        assert len(old_rows) == 5
+
+        # 3. Strict query with NEW hash: nothing (this is the "disappearance")
+        new_strict = query_snapshots(param_id=pid, core_hash=hash_new, include_equivalents=False)
+        assert len(new_strict) == 0
+
+        # Virtual query also sees nothing with new hash
+        virtual_strict = query_virtual_snapshot(
+            param_id=pid,
+            as_at=datetime(2025, 10, 12, 0, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 5),
+            core_hash=hash_new,
+            slice_keys=[''],
+            include_equivalents=False,
+        )
+        assert virtual_strict["count"] == 0
+        assert virtual_strict["has_any_rows"] is True
+        assert virtual_strict["has_matching_core_hash"] is False
+
+        # 4. Operator links old ≡ new
+        link_res = create_equivalence_link(
+            param_id=pid,
+            core_hash=hash_new,
+            equivalent_to=hash_old,
+            created_by="pytest",
+            reason="trivial graph change; semantically identical query",
+        )
+        assert link_res["success"] is True
+
+        # 5a. query_snapshots with equivalents: old data reappears
+        new_equiv = query_snapshots(param_id=pid, core_hash=hash_new, include_equivalents=True)
+        assert len(new_equiv) == 5
+        assert all(r['core_hash'] == hash_old for r in new_equiv)  # data is under old hash
+
+        # 5b. query_virtual_snapshot with equivalents: old data reappears
+        virtual_equiv = query_virtual_snapshot(
+            param_id=pid,
+            as_at=datetime(2025, 10, 12, 0, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 5),
+            core_hash=hash_new,
+            slice_keys=[''],
+            include_equivalents=True,
+        )
+        assert virtual_equiv["count"] == 5
+
+        # 5c. retrievals with equivalents: sees the retrieval
+        retrievals_equiv = query_snapshot_retrievals(
+            param_id=pid, core_hash=hash_new, include_equivalents=True, limit=10,
+        )
+        assert retrievals_equiv["count"] == 1
+        assert retrievals_equiv["retrieved_at"][0].startswith("2025-10-10")
+
+        # 6. Inventory: one family containing both hashes, current matches
+        inv = get_batch_inventory_v2(
+            param_ids=[pid],
+            current_signatures={pid: sig_new},
+            slice_keys_by_param={pid: ['']},
+            include_equivalents=True,
+            limit_families_per_param=10,
+            limit_slices_per_family=10,
+        )
+        pid_inv = inv[pid]
+
+        # Overall should show the 5 rows
+        assert pid_inv["overall_all_families"]["row_count"] == 5
+
+        # Current signature should match
+        current = pid_inv.get("current")
+        assert current is not None
+        assert current["match_mode"] in ("strict", "equivalent")
+
+        # One family with both hashes
+        families = pid_inv.get("families") or []
+        assert len(families) == 1
+        members = set(families[0]["member_core_hashes"])
+        assert hash_old in members
+        assert hash_new in members or current["match_mode"] == "strict"

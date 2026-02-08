@@ -525,7 +525,8 @@ def handle_snapshots_append(data: Dict[str, Any]) -> Dict[str, Any]:
         slice_key=slice_key,
         retrieved_at=retrieved_at,
         rows=rows,
-        diagnostic=diagnostic
+        diagnostic=diagnostic,
+        core_hash=data.get('core_hash'),  # Frontend-computed (hash-fixes.md)
     )
     
     return result
@@ -641,6 +642,7 @@ def handle_snapshots_query_full(data: Dict[str, Any]) -> Dict[str, Any]:
             - anchor_from: Start date ISO string (optional)
             - anchor_to: End date ISO string (optional)
             - as_at: Timestamp ISO string for point-in-time query (optional)
+            - include_equivalents: bool (optional; default True)
             - limit: Max rows (optional, default 10000)
     
     Returns:
@@ -673,6 +675,7 @@ def handle_snapshots_query_full(data: Dict[str, Any]) -> Dict[str, Any]:
         anchor_from=anchor_from,
         anchor_to=anchor_to,
         as_at=as_at,
+        include_equivalents=bool(data.get('include_equivalents', True)),
         limit=data.get('limit', 10000)
     )
     
@@ -707,6 +710,7 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
     inventory = get_batch_inventory_v2(
         param_ids=param_ids,
         current_signatures=data.get("current_signatures") or None,
+        current_core_hashes=data.get("current_core_hashes") or None,  # Frontend-computed (hash-fixes.md)
         slice_keys_by_param=data.get("slice_keys") or None,
         include_equivalents=bool(data.get("include_equivalents", True)),
         limit_families_per_param=int(data.get("limit_families_per_param", 50)),
@@ -765,7 +769,7 @@ def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
         Response dict with retrieved_at + derived retrieved_days.
     """
     from datetime import date
-    from snapshot_service import query_snapshot_retrievals, short_core_hash_from_canonical_signature
+    from snapshot_service import query_snapshot_retrievals, _require_core_hash
 
     param_id = data.get('param_id')
     if not param_id:
@@ -779,8 +783,9 @@ def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
     if data.get('anchor_to'):
         anchor_to = date.fromisoformat(data['anchor_to'])
 
-    canonical_signature = data.get('canonical_signature')
-    core_hash = short_core_hash_from_canonical_signature(canonical_signature) if canonical_signature else None
+    # Frontend must provide core_hash. None means "query all hashes for this param" (hash-fixes.md)
+    req_core_hash = data.get('core_hash')
+    core_hash = _require_core_hash(req_core_hash, context="retrievals") if req_core_hash else None
 
     return query_snapshot_retrievals(
         param_id=param_id,
@@ -852,7 +857,7 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
         - error: str (if failed)
     """
     from datetime import date, datetime
-    from snapshot_service import query_virtual_snapshot, short_core_hash_from_canonical_signature
+    from snapshot_service import query_virtual_snapshot, _require_core_hash
     
     param_id = data.get('param_id')
     if not param_id:
@@ -862,7 +867,8 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
     canonical_signature = data.get('canonical_signature')
     if not canonical_signature:
         raise ValueError("Missing 'canonical_signature' field (required for semantic integrity)")
-    core_hash = short_core_hash_from_canonical_signature(canonical_signature)
+    # Frontend must provide core_hash — backend never derives hashes (hash-fixes.md)
+    core_hash = _require_core_hash(data.get('core_hash'), context="query-virtual")
     
     as_at_str = data.get('as_at')
     if not as_at_str:
