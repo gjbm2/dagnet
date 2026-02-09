@@ -84,6 +84,36 @@ analyses:
       has_to: true
     runner: path_runner
 
+  # from(A).to(B) - cohort maturity (snapshot DB analysis)
+  - id: cohort_maturity
+    name: "Cohort Maturity"
+    description: "How conversion rates evolved over time for a cohort range"
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
+
+  # from(A).to(B) - lag histogram (snapshot DB analysis)
+  - id: lag_histogram
+    name: "Lag Histogram"
+    description: "Conversion lag distribution from snapshots"
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
+
+  # from(A).to(B) - daily conversions (snapshot DB analysis)
+  - id: daily_conversions
+    name: "Daily Conversions"
+    description: "Conversion counts by calendar date from snapshots"
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
+
   # visitedAny(A,B) absorbing - outcome comparison
   # NOTE: Must come before branch_comparison to match when all are absorbing
   - id: outcome_comparison

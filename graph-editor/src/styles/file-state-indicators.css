@@ -116,11 +116,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 2px 12px 2px 20px;
   cursor: pointer;
-  border-radius: 4px;
-  margin: 2px 8px 2px 0;
+  border-radius: 3px;
+  margin: 0px 6px;
   transition: background-color 0.15s ease;
+  min-height: 22px;
 }
 
 .navigator-item:hover {

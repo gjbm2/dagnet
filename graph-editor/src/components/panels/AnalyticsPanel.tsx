@@ -22,10 +22,11 @@ import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
-import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code } from 'lucide-react';
+import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code, RefreshCw } from 'lucide-react';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
 import { querySelectionUuids } from '../../hooks/useQuerySelectionUuids';
 import { mapFetchPlanToSnapshotSubjects } from '../../services/snapshotDependencyPlanService';
+import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/scenarioRegenerationService';
 import { buildFetchPlanProduction } from '../../services/fetchPlanBuilderService';
 import { parseConstraints } from '../../lib/queryDSL';
 import { resolveRelativeDate, formatDateUK } from '../../lib/dateFormat';
@@ -46,6 +47,54 @@ function extractDateRangeFromDSL(dsl: string): { start: string; end: string } | 
   } catch {
     return null;
   }
+}
+
+/**
+ * Compose a DSL for snapshot analysis by merging:
+ *   - from/to from the analytics panel DSL (defines what to analyse)
+ *   - window/cohort/asat/context from the query DSL (defines the data scope)
+ *
+ * If the analytics DSL already contains temporal or context clauses, those
+ * take priority (user override).  Otherwise they are inherited from the
+ * authoritative query DSL.
+ */
+function composeSnapshotDsl(analyticsDsl: string, queryDsl: string): string {
+  if (!queryDsl) return analyticsDsl;
+  if (!analyticsDsl) return queryDsl;
+
+  const ap = parseConstraints(analyticsDsl);
+  const qp = parseConstraints(queryDsl);
+
+  // Start from the analytics DSL (preserves from/to)
+  const parts: string[] = [analyticsDsl];
+
+  // Inherit window/cohort from query DSL if analytics DSL lacks one
+  if (!ap.window && !ap.cohort) {
+    if (qp.cohort) {
+      const anchor = (qp.cohort as any).anchor;
+      const start = qp.cohort.start ?? '';
+      const end = qp.cohort.end ?? '';
+      parts.push(anchor ? `cohort(${anchor},${start}:${end})` : `cohort(${start}:${end})`);
+    } else if (qp.window) {
+      const start = qp.window.start ?? '';
+      const end = qp.window.end ?? '';
+      parts.push(`window(${start}:${end})`);
+    }
+  }
+
+  // Inherit asat from query DSL if analytics DSL lacks one
+  if (!ap.asatClausePresent && qp.asat) {
+    parts.push(`asat(${qp.asat})`);
+  }
+
+  // Inherit context from query DSL if analytics DSL lacks context clauses
+  if (!ap.contextClausePresent && qp.context && qp.context.length > 0) {
+    for (const ctx of qp.context) {
+      parts.push(ctx.value ? `context(${ctx.key}:${ctx.value})` : `context(${ctx.key})`);
+    }
+  }
+
+  return parts.join('.');
 }
 
 interface AnalyticsPanelProps {
@@ -184,22 +233,20 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const graphRef = useRef(graph);
   graphRef.current = graph;
   
-  // Track selected nodes from React Flow (via custom event)
-  // These are human-readable IDs, not UUIDs
+  // Track selected nodes and edges from React Flow (via custom event)
+  // Node IDs are human-readable; edge UUIDs are raw ReactFlow UUIDs.
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [selectedEdgeUuids, setSelectedEdgeUuids] = useState<string[]>([]);
   
   // Query React Flow's selection state and convert UUIDs to human-readable IDs
   // Uses graphRef to avoid dependency on graph changing
-  const querySelection = useCallback(() => {
+  const querySelection = useCallback((): { nodeIds: string[]; edgeUuids: string[] } | null => {
     const detail = {
       selectedNodeUuids: [] as string[],
       selectedEdgeUuids: [] as string[]
     };
     // Dispatch synchronous event - GraphCanvas listener will populate detail with UUIDs
     window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
-    
-    const selectionUuids = detail.selectedNodeUuids;
-    if (selectionUuids.length === 0) return [];
     
     // Access graph from ref to get current value without dependency
     const currentNodes = graphRef.current?.nodes;
@@ -208,18 +255,16 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       return null;
     }
     
-    // Convert UUIDs to human-readable IDs
+    // Convert node UUIDs to human-readable IDs
     const humanReadableIds: string[] = [];
-    for (const uuid of selectionUuids) {
-      // Match by uuid (primary) or id (fallback for edge cases)
+    for (const uuid of detail.selectedNodeUuids) {
       const node = currentNodes.find((n: any) => n.uuid === uuid || n.id === uuid);
       if (node) {
         humanReadableIds.push(node.id);
       }
-      // Silently skip unresolved nodes (don't spam console)
     }
     
-    return humanReadableIds;
+    return { nodeIds: humanReadableIds, edgeUuids: detail.selectedEdgeUuids };
   }, []); // No dependencies - uses refs
   
   // Poll for selection changes (since there's no direct callback from React Flow)
@@ -230,18 +275,19 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     const handleSelectionChange = () => {
       if (!mounted) return;
       
-      const newIds = querySelection();
+      const sel = querySelection();
       // Skip if graph not ready (null return)
-      if (newIds === null) return;
+      if (sel === null) return;
       
       setSelectedNodeIds(prev => {
-        // Only update if actually changed
         const prevStr = prev.slice().sort().join(',');
-        const newStr = newIds.slice().sort().join(',');
-        if (prevStr !== newStr) {
-          return newIds;
-        }
-        return prev;
+        const newStr = sel.nodeIds.slice().sort().join(',');
+        return prevStr !== newStr ? sel.nodeIds : prev;
+      });
+      setSelectedEdgeUuids(prev => {
+        const prevStr = prev.slice().sort().join(',');
+        const newStr = sel.edgeUuids.slice().sort().join(',');
+        return prevStr !== newStr ? sel.edgeUuids : prev;
       });
     };
     
@@ -265,9 +311,28 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   
   // Compute auto-generated DSL
   const autoGeneratedDSL = useMemo(() => {
-    if (selectedNodeIds.length === 0) return '';
-    return constructQueryDSL(selectedNodeIds, nodes as any[], edges as any[]);
-  }, [selectedNodeIds, nodes, edges]);
+    // Node selection takes priority
+    if (selectedNodeIds.length > 0) {
+      return constructQueryDSL(selectedNodeIds, nodes as any[], edges as any[]);
+    }
+
+    // Single edge selected (no nodes): derive from(A).to(B)
+    if (selectedEdgeUuids.length === 1) {
+      const edgeUuid = selectedEdgeUuids[0];
+      const graphEdge = edges.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
+      if (graphEdge) {
+        const fromUuid = (graphEdge as any).from || (graphEdge as any).source;
+        const toUuid = (graphEdge as any).to || (graphEdge as any).target;
+        const fromNode = nodes.find((n: any) => n.uuid === fromUuid || n.id === fromUuid);
+        const toNode = nodes.find((n: any) => n.uuid === toUuid || n.id === toUuid);
+        if (fromNode && toNode) {
+          return `from(${(fromNode as any).id}).to(${(toNode as any).id})`;
+        }
+      }
+    }
+
+    return '';
+  }, [selectedNodeIds, selectedEdgeUuids, nodes, edges]);
   
   // Auto-construct DSL when selection changes (only if not overridden)
   useEffect(() => {
@@ -333,11 +398,14 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         console.log('[AnalyticsPanel] Got analyses:', normalizedAnalyses.map(a => a.id));
         setAvailableAnalyses(normalizedAnalyses);
         
-        // Auto-select primary analysis
-        const primary = normalizedAnalyses.find(a => a.is_primary);
-        if (primary) {
-          setSelectedAnalysisId(primary.id);
-        }
+        // Preserve current selection if it's still available; otherwise fall back to primary
+        setSelectedAnalysisId(prev => {
+          if (prev && normalizedAnalyses.some(a => a.id === prev)) {
+            return prev; // current selection is still valid — keep it
+          }
+          const primary = normalizedAnalyses.find(a => a.is_primary);
+          return primary ? primary.id : null;
+        });
       } catch (err) {
         console.warn('Failed to fetch available analyses:', err);
         setAvailableAnalyses([]);
@@ -398,55 +466,144 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       const branch = graphFile?.source?.branch;
       const workspace = (repository && branch) ? { repository, branch } : undefined;
       
-      // Helper: resolve snapshot subjects for a given graph + DSL pair
+      // DEV diagnostic: trace snapshot analysis resolution
+      console.error('[AnalyticsPanel] SNAPSHOT DIAG:', {
+        selectedAnalysisId,
+        needsSnapshots,
+        hasSnapshotMeta: !!snapshotMeta,
+        hasSnapshotContract: !!snapshotMeta?.snapshotContract,
+        hasWorkspace: !!workspace,
+        workspace: workspace ? `${repository}/${branch}` : null,
+        currentDSL,
+        queryDSL,
+        tabId,
+        hasCurrentTab: !!currentTab,
+        fileId: currentTab?.fileId,
+        hasGraphFile: !!graphFile,
+        hasSource: !!graphFile?.source,
+      });
+      
+      // Get the FULL composited query DSL for a scenario.
+      // Live scenarios MUST go through the composition machinery — a raw
+      // scenario DSL (e.g. just "context(channel:paid-search)") is
+      // meaningless without the inherited base/window context.
+      const getQueryDslForScenario = (scenarioId: string): string => {
+        if (scenarioId === 'current') return currentDSL || '';
+        if (scenarioId === 'base') {
+          const baseDsl = scenariosContext?.baseDSL || graph?.baseDSL;
+          return typeof baseDsl === 'string' ? baseDsl : currentDSL || '';
+        }
+        const scenario = scenariosContext?.scenarios?.find(s => s.id === scenarioId);
+        const meta: any = scenario?.meta;
+        if (meta?.isLive) {
+          // Prefer the pre-computed composited DSL from the regeneration pass
+          if (typeof meta.lastEffectiveDSL === 'string' && meta.lastEffectiveDSL.trim()) {
+            return meta.lastEffectiveDSL;
+          }
+          // Fallback: compute on-the-fly using the compositor machinery.
+          // This covers scenarios that were just created and haven't been
+          // regenerated yet.
+          const visibleScenarios = orderedVisibleScenarios
+            .map(id => scenariosContext?.scenarios?.find(s => s.id === id))
+            .filter(Boolean) as Array<{ id: string; meta?: any }>;
+          const scenarioIndex = visibleScenarios.findIndex(s => s.id === scenarioId);
+          if (scenarioIndex >= 0) {
+            const baseDsl = currentDSL || scenariosContext?.baseDSL || graph?.baseDSL || '';
+            const inheritedDSL = computeInheritedDSL(scenarioIndex, visibleScenarios as any, baseDsl);
+            return computeEffectiveFetchDSL(inheritedDSL, meta.queryDSL || '');
+          }
+        }
+        return currentDSL || '';
+      };
+      
+      // Helper: resolve snapshot subjects for a given scenario.
+      //
+      // Composes a FULL snapshot DSL by merging:
+      //   - from/to from the analytics panel DSL (what path to analyse)
+      //   - window/cohort/asat/context from the query DSL (data scope)
+      // If the analytics DSL already has temporal or context clauses, those
+      // take priority (user override).
+      //
+      // IMPORTANT: This THROWS on failure rather than silently returning undefined.
+      // Snapshot analysis types MUST NOT silently fall back to standard analysis.
       const resolveSnapshotSubjectsForScenario = async (
         scenarioGraph: any,
-        scenarioDsl: string,
-      ): Promise<import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined> => {
-        if (!needsSnapshots || !workspace || !selectedAnalysisId) return undefined;
-        const dslWindow = extractDateRangeFromDSL(scenarioDsl);
-        if (!dslWindow) {
-          console.warn('[AnalyticsPanel] No date range in DSL; snapshot resolution skipped for scenario');
-          return undefined;
+        analyticsDsl: string,
+        scenarioId: string,
+      ): Promise<import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[]> => {
+        if (!workspace) {
+          throw new Error('Snapshot analysis requires a git-backed graph (no workspace found). Ensure the graph file is associated with a repository.');
         }
-        const { plan } = await buildFetchPlanProduction(scenarioGraph, scenarioDsl, dslWindow);
-        const { selectedEdgeUuids } = querySelectionUuids();
+        if (!selectedAnalysisId) {
+          throw new Error('No analysis type selected.');
+        }
+        
+        // Compose: analytics DSL (from/to) + query DSL (window/cohort/asat/context)
+        // getQueryDslForScenario returns the COMPOSITED effective DSL (not raw)
+        const scenarioQueryDsl = getQueryDslForScenario(scenarioId);
+        const snapshotDsl = composeSnapshotDsl(analyticsDsl, scenarioQueryDsl);
+        
+        console.log('[AnalyticsPanel] Snapshot DSL composed:', snapshotDsl, 'from analyticsDsl:', analyticsDsl, 'queryDsl:', scenarioQueryDsl);
+        
+        const dslWindow = extractDateRangeFromDSL(snapshotDsl);
+        if (!dslWindow) {
+          throw new Error(`No date range for snapshot analysis. The query DSL must include a window() or cohort() clause.\n\nAnalytics DSL: ${analyticsDsl}\nQuery DSL: ${scenarioQueryDsl}\nComposed: ${snapshotDsl}`);
+        }
+        
+        console.log('[AnalyticsPanel] Snapshot DSL window:', dslWindow);
+        
+        const { plan } = await buildFetchPlanProduction(scenarioGraph, snapshotDsl, dslWindow);
+        console.log('[AnalyticsPanel] Fetch plan built:', plan.items.length, 'items, types:', plan.items.map(i => `${i.type}:${i.itemKey}:sig=${!!i.querySignature}`).join(', '));
+        
+        const edgeUuids = querySelectionUuids();
         const resolverResult = await mapFetchPlanToSnapshotSubjects({
           plan,
           analysisType: selectedAnalysisId,
           graph: scenarioGraph,
-          selectedEdgeUuids,
+          selectedEdgeUuids: edgeUuids.selectedEdgeUuids,
           workspace,
-          queryDsl: scenarioDsl,
+          queryDsl: snapshotDsl,
         });
-        if (resolverResult) {
-          if (resolverResult.skipped.length > 0) {
-            console.warn('[AnalyticsPanel] Snapshot subjects skipped:', resolverResult.skipped);
-          }
-          if (resolverResult.subjects.length > 0) {
-            console.log('[AnalyticsPanel] Resolved snapshot subjects:', resolverResult.subjects.length);
-            return resolverResult.subjects;
-          }
-          console.warn('[AnalyticsPanel] No snapshot subjects resolved');
+        
+        if (!resolverResult) {
+          throw new Error(`Snapshot subject resolution returned nothing. The analysis type "${selectedAnalysisId}" may not have a valid snapshotContract.`);
         }
-        return undefined;
+        
+        if (resolverResult.skipped.length > 0) {
+          console.warn('[AnalyticsPanel] Snapshot subjects skipped:', resolverResult.skipped);
+        }
+        
+        if (resolverResult.subjects.length === 0) {
+          const skipReasons = resolverResult.skipped.map(s => `${s.subjectId}: ${s.reason}`).join('\n');
+          throw new Error(`No snapshot subjects resolved for analysis.\n\nSkipped:\n${skipReasons || '(none)'}\n\nPlan items: ${plan.items.length}\nComposed DSL: ${snapshotDsl}`);
+        }
+        
+        console.log('[AnalyticsPanel] Resolved snapshot subjects:', resolverResult.subjects.length);
+        // DEV: log full subject payloads so we can trace core_hash / param_id / sweep range
+        for (const subj of resolverResult.subjects) {
+          console.log('[AnalyticsPanel] Snapshot subject:', {
+            subject_id: subj.subject_id,
+            param_id: subj.param_id,
+            core_hash: subj.core_hash,
+            read_mode: subj.read_mode,
+            anchor_from: subj.anchor_from,
+            anchor_to: subj.anchor_to,
+            sweep_from: subj.sweep_from,
+            sweep_to: subj.sweep_to,
+            slice_keys: subj.slice_keys,
+            sig_preview: subj.canonical_signature?.substring(0, 80) + '...',
+          });
+        }
+        return resolverResult.subjects;
       };
       
-      // Determine the effective DSL for a scenario layer
+      // Determine the effective analytics DSL for a scenario layer.
+      // For non-snapshot analyses this is the composited DSL; for snapshot
+      // analyses we override this with the panel's queryDSL (see below).
       const getEffectiveDslForScenario = (scenarioId: string): string => {
-        if (scenarioId === 'current') return queryDSL;
-        if (scenarioId === 'base') {
-          const baseDsl = scenariosContext?.baseDSL || graph?.baseDSL;
-          return typeof baseDsl === 'string' ? baseDsl : queryDSL;
-        }
-        // Live scenario: use its lastEffectiveDSL or queryDSL, falling back to panel DSL
-        const scenario = scenariosContext?.scenarios?.find(s => s.id === scenarioId);
-        const meta: any = scenario?.meta;
-        if (meta?.isLive) {
-          const dsl = meta.lastEffectiveDSL || meta.queryDSL;
-          if (typeof dsl === 'string' && dsl.trim()) return dsl;
-        }
-        return queryDSL;
+        // For live scenarios, delegate to the compositor-aware function
+        // which returns the full composited DSL (not the raw scenario DSL).
+        return getQueryDslForScenario(scenarioId);
       };
       
       // Check if we have multiple visible scenarios for multi-scenario analysis
@@ -475,9 +632,17 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           
           const colour = getScenarioColour(scenarioId);
           
-          // Resolve snapshot subjects using this scenario's effective DSL
-          const effectiveDsl = getEffectiveDslForScenario(scenarioId);
-          const snapshotSubjects = await resolveSnapshotSubjectsForScenario(scenarioGraph, effectiveDsl);
+          // Resolve snapshot subjects if this analysis type requires them
+          // For snapshot analyses, analyticsDsl MUST be the panel's queryDSL
+          // (the user's edge selection — from/to), not the scenario's own DSL
+          // which may only contain window/cohort dates. The scenario's date
+          // range is picked up separately via getQueryDslForScenario inside
+          // resolveSnapshotSubjectsForScenario.
+          const analyticsDsl = needsSnapshots ? queryDSL : getEffectiveDslForScenario(scenarioId);
+          let snapshotSubjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined;
+          if (needsSnapshots) {
+            snapshotSubjects = await resolveSnapshotSubjectsForScenario(scenarioGraph, analyticsDsl, scenarioId);
+          }
           
           return {
             scenario_id: scenarioId,
@@ -525,9 +690,14 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           analysisGraph = applyWhatIfToGraph(graph, whatIfDSL);
         }
         
-        // Resolve snapshot subjects for this scenario's effective DSL
-        const effectiveDsl = getEffectiveDslForScenario(scenarioId);
-        const snapshotSubjects = await resolveSnapshotSubjectsForScenario(analysisGraph, effectiveDsl);
+        // Resolve snapshot subjects if this analysis type requires them
+        // See multi-scenario path comment: for snapshots, always use panel's
+        // queryDSL to preserve the from/to edge selection.
+        const analyticsDsl = needsSnapshots ? queryDSL : getEffectiveDslForScenario(scenarioId);
+        let snapshotSubjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined;
+        if (needsSnapshots) {
+          snapshotSubjects = await resolveSnapshotSubjectsForScenario(analysisGraph, analyticsDsl, scenarioId);
+        }
         
         response = await graphComputeClient.analyzeSelection(
           analysisGraph,
@@ -545,8 +715,11 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       if (analysisRequestRef.current === requestId) {
         setResults(response);
         
-        if (!response.success && response.error) {
-          setError(response.error.message);
+        if (!response.success) {
+          const errMsg = typeof response.error === 'string'
+            ? response.error
+            : response.error?.message || 'Analysis returned success=false';
+          setError(errMsg);
         }
       }
     } catch (err) {
@@ -579,6 +752,9 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     visibilityModesKey,
     tabId,
     operations,
+    // currentDSL is used by getQueryDslForScenario for snapshot analysis date range.
+    // Must be in deps to avoid stale closure when WindowSelector updates the DSL.
+    currentDSL,
   ]);
   
   // Store runAnalysis in a ref to avoid effect re-triggers
@@ -706,6 +882,12 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     return obj;
   }, [scenarioDslSubtitleById]);
   
+  // Refresh: clear cache and re-run analysis
+  const handleRefresh = useCallback(() => {
+    graphComputeClient.clearCache();
+    runAnalysis();
+  }, [runAnalysis]);
+  
   return (
     <div className="analytics-panel">
       {/* Header */}
@@ -713,6 +895,17 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         <div className="analytics-header">
           <BarChart3 size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
           <h3 className="analytics-title">Analytics</h3>
+          <button
+            className="analytics-refresh-btn"
+            onClick={handleRefresh}
+            disabled={isLoading}
+            title="Clear cache and re-run analysis"
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 4, display: 'flex', alignItems: 'center', opacity: isLoading ? 0.4 : 0.6 }}
+            onMouseEnter={e => { if (!isLoading) (e.currentTarget.style.opacity = '1'); }}
+            onMouseLeave={e => { (e.currentTarget.style.opacity = isLoading ? '0.4' : '0.6'); }}
+          >
+            <RefreshCw size={13} strokeWidth={2} className={isLoading ? 'analytics-spin' : ''} />
+          </button>
         </div>
       )}
       

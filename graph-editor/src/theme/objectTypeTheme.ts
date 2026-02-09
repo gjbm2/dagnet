@@ -9,7 +9,7 @@
 
 import { LucideIcon } from 'lucide-react';
 import { 
-  FileJson,      // Graph
+  Network,       // Graph
   LineChart,     // Chart
   Box,           // Node
   Layers,        // Case
@@ -45,7 +45,7 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
   graph: {
     lightColour: '#F3F4F6',  // light grey
     accentColour: '#9CA3AF', // grey
-    icon: FileJson,
+    icon: Network,
     label: 'Graph',
     emoji: '📊'
   },
@@ -158,7 +158,7 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     lightColour: '#E0E7FF',  // light indigo
     accentColour: '#6366F1', // indigo-500
     icon: Link2,
-    label: 'Signature Links',
+    label: 'Snapshot Manager',
     emoji: '🔗'
   }
 };

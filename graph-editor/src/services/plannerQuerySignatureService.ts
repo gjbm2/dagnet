@@ -345,14 +345,20 @@ export async function computePlannerQuerySignaturesForGraph(input: {
         return repo && branch ? { repository: repo, branch } : undefined;
       })();
 
-      // NOTE: Signature candidates (e.g. per-MECE-key) were previously explored here.
-      // For now we return a single execution-grade signature per item.
+      // Merge DSL-explicit context keys with candidate keys discovered from cached
+      // parameter file values.  The executor (dataOperationsService) always includes
+      // context keys via the per-slice targetSlice DSL, so the planner must do the
+      // same — otherwise the signature (and therefore core_hash) will diverge from
+      // what was written to the snapshot DB, causing lookup failures.
+      const effectiveContextKeys = [
+        ...new Set([...baseSignatureContextKeys, ...candidateContextKeys]),
+      ].sort();
       const sig = await computeQuerySignature(
         queryPayload,
         connectionName,
         graph as any,
         edgeForDsl,
-        baseSignatureContextKeys,
+        effectiveContextKeys,
         workspaceForSignature,
         buildResult.eventDefinitions  // Pass event definitions for hashing
       );

@@ -481,7 +481,14 @@ from(homepage).asat(15-Oct-25).to(checkout).window(1-Oct-25:31-Oct-25)
 ### Behaviour
 
 - **Read-only**: `asat(...)` queries do not write to files, IndexedDB, or the snapshot DB.
-- **Signature integrity**: historical reads are keyed by the query signature; if the query definition has changed since snapshots were stored, DagNet will not return mismatched data.
+- **Signature integrity**: historical reads are keyed by the query signature; if the query definition has changed since snapshots were stored, DagNet will not return mismatched data. Use the **Snapshot Manager** to create equivalence links between old and new signatures if you need historical continuity after a query change.
+
+### From the Snapshot Manager
+
+The Snapshot Manager's **"View graph at DATE"** button combines historical file viewing with `asat()`:
+1. Opens the graph file as it was at the git commit closest to the selected signature's creation date
+2. Automatically injects `asat(DATE)` into the graph's DSL query
+3. This lets you see the historical graph structure with the data as it was known at that time
 
 ---
 

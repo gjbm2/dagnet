@@ -29,7 +29,7 @@ Design reference: docs/current/project-db/1-reads.md §5.1, §10.2
 
 from collections import defaultdict
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 
 def derive_cohort_maturity(
@@ -42,11 +42,13 @@ def derive_cohort_maturity(
 
     Algorithm:
     1. Parse all rows; group by (anchor_day, slice_key) — one "series" per group.
-    2. Identify distinct retrieval dates across all rows → these become frames.
-    3. For each retrieval date (in chronological order), compute the virtual
+    2. Build a daily grid spanning sweep_from..sweep_to (inclusive).
+       One frame per calendar day, even if no data was retrieved that day.
+    3. For each day (in chronological order), compute the virtual
        snapshot: latest Y per (anchor_day, slice_key) as-of that date.
-    4. Emit one frame per retrieval date containing data_points for each
-       anchor_day (Y aggregated across slices).
+    4. Emit one frame per day containing data_points for each
+       anchor_day (Y aggregated across slices).  Days before the
+       earliest retrieval produce empty frames.
 
     Args:
         rows: Raw snapshot rows (from query_snapshots_for_sweep) with
@@ -74,9 +76,28 @@ def derive_cohort_maturity(
         parsed_rows.append(_parse_row(row))
 
     # ------------------------------------------------------------------
-    # 2. Identify distinct retrieval dates (date-level granularity)
+    # 2. Build the full daily sweep grid.
+    #
+    # We emit one frame per calendar day in the sweep range (not just
+    # days where data was actually retrieved).  The virtual-snapshot
+    # logic already handles carry-forward: for days between retrievals
+    # the latest-known values are used.  Days before the earliest
+    # retrieval will produce empty frames (correct — no data existed
+    # yet).
     # ------------------------------------------------------------------
-    retrieval_dates = sorted({r.retrieved_date for r in parsed_rows})
+    retrieval_dates_from_data = sorted({r.retrieved_date for r in parsed_rows})
+
+    if sweep_from is not None and sweep_to is not None:
+        sf = date.fromisoformat(sweep_from) if isinstance(sweep_from, str) else sweep_from
+        st = date.fromisoformat(sweep_to) if isinstance(sweep_to, str) else sweep_to
+        retrieval_dates: List[date] = []
+        d = sf
+        while d <= st:
+            retrieval_dates.append(d)
+            d += timedelta(days=1)
+    else:
+        # Fallback: sweep bounds not provided, use actual retrieval dates
+        retrieval_dates = retrieval_dates_from_data
 
     # ------------------------------------------------------------------
     # 3. Group rows by series key (anchor_day, slice_key)

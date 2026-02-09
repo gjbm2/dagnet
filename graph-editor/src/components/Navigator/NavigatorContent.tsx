@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
-import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
+import { useTabContext, useFileRegistry, fileRegistry } from '../../contexts/TabContext';
 import { NavigatorHeader } from './NavigatorHeader';
-import { NavigatorControls, FilterMode, SortMode, GroupMode } from './NavigatorControls';
+import { NavigatorControls, FilterMode, SortMode } from './NavigatorControls';
 import { ObjectTypeSection, NavigatorEntry } from './ObjectTypeSection';
 import { NavigatorItemContextMenu } from '../NavigatorItemContextMenu';
 import { NavigatorSectionContextMenu } from '../NavigatorSectionContextMenu';
@@ -12,6 +12,7 @@ import toast from 'react-hot-toast';
 import { RepositoryItem, ObjectType } from '../../types';
 import { registryService, RegistryItem } from '../../services/registryService';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
+import { Tag } from 'lucide-react';
 import './Navigator.css';
 
 // NavigatorEntry is imported from ObjectTypeSection
@@ -259,6 +260,7 @@ export function NavigatorContent() {
           isDirty: file?.isDirty || false,
           isOpen: itemTabs.length > 0,
           isOrphan: false,
+          tags: file?.data?.metadata?.tags || file?.data?.tags,
           path: item.path,
           lastModified: file?.lastModified,
           lastOpened: file?.lastOpened
@@ -351,6 +353,39 @@ export function NavigatorContent() {
     return filtered;
   }, [navigatorEntries, state.viewMode, state.showLocalOnly, state.showDirtyOnly, state.showOpenOnly, state.searchQuery, state.sortBy]);
 
+  // --- Tag selection (persisted in NavigatorState) ---
+  const selectedTags = state.selectedTags || [];
+
+  const availableTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    try {
+      for (const file of fileRegistry.getAllFiles?.() ?? []) {
+        const data = file?.data as any;
+        data?.tags?.forEach?.((t: string) => tagSet.add(t));
+        data?.metadata?.tags?.forEach?.((t: string) => tagSet.add(t));
+      }
+    } catch { /* ignore */ }
+    return Array.from(tagSet).sort();
+  }, [filteredAndSortedEntries]);
+
+  const handleTagToggle = useCallback((tag: string) => {
+    const current = state.selectedTags || [];
+    operations.setSelectedTags(
+      current.includes(tag) ? current.filter(t => t !== tag) : [...current, tag]
+    );
+  }, [state.selectedTags, operations]);
+
+  const handleTagsClear = useCallback(() => {
+    operations.setSelectedTags([]);
+  }, [operations]);
+
+  const tagFilteredEntries = useMemo(() => {
+    if (selectedTags.length === 0) return filteredAndSortedEntries;
+    return filteredAndSortedEntries.filter(entry =>
+      entry.tags?.some(t => selectedTags.includes(t))
+    );
+  }, [filteredAndSortedEntries, selectedTags]);
+
   // Group by type
   const groupedEntries = useMemo(() => {
     const groups: Record<ObjectType, NavigatorEntry[]> = {
@@ -370,7 +405,7 @@ export function NavigatorContent() {
       'signature-links': [],
     };
     
-    for (const entry of filteredAndSortedEntries) {
+    for (const entry of tagFilteredEntries) {
       if (groups[entry.type]) {
         groups[entry.type].push(entry);
       } else {
@@ -379,7 +414,7 @@ export function NavigatorContent() {
     }
     
     return groups;
-  }, [filteredAndSortedEntries]);
+  }, [tagFilteredEntries]);
 
   // Convert NavigatorEntry to RepositoryItem for compatibility
   const convertToRepositoryItem = (entry: NavigatorEntry): RepositoryItem => {
@@ -479,11 +514,7 @@ export function NavigatorContent() {
     : 'all';
   
   const sortMode: SortMode = (state.sortBy || 'name') as SortMode;
-  
-  const groupMode: GroupMode = state.groupByTags ? 'tags' 
-    : state.groupBySubCategories ? 'type' 
-    : 'none';
-  
+
   // Handlers for control changes
   const handleFilterChange = (filter: FilterMode) => {
     operations.setShowDirtyOnly(filter === 'dirty');
@@ -494,26 +525,40 @@ export function NavigatorContent() {
   const handleSortChange = (sort: SortMode) => {
     operations.setSortBy(sort);
   };
-  
-  const handleGroupChange = (group: GroupMode) => {
-    operations.setGroupByTags(group === 'tags');
-    operations.setGroupBySubCategories(group === 'type');
-  };
 
   return (
     <div className="navigator-content">
       {/* Header with search and filters */}
       <NavigatorHeader />
       
-      {/* Filter/Sort/Group Controls */}
+      {/* Filter / Sort / Tags controls */}
       <NavigatorControls
         filter={filterMode}
         sortBy={sortMode}
-        groupBy={groupMode}
         onFilterChange={handleFilterChange}
         onSortChange={handleSortChange}
-        onGroupChange={handleGroupChange}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onTagToggle={handleTagToggle}
+        onTagsClear={handleTagsClear}
       />
+
+      {/* Active tag filter bar — only when tags are selected */}
+      {selectedTags.length > 0 && (
+        <div className="navigator-tag-bar">
+          <Tag size={11} strokeWidth={2} className="navigator-tag-bar-icon" />
+          {selectedTags.map(tag => (
+            <span
+              key={tag}
+              className="tag-filter-chip active"
+              onClick={() => handleTagToggle(tag)}
+              title={`Remove filter: ${tag}`}
+            >
+              {tag} ×
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Object tree */}
       <div className="navigator-tree">
@@ -538,6 +583,7 @@ export function NavigatorContent() {
               onEntryClick={handleItemClick}
               onEntryContextMenu={handleItemContextMenu}
               onSectionContextMenu={handleSectionContextMenu}
+
             />
 
             <ObjectTypeSection
@@ -560,6 +606,7 @@ export function NavigatorContent() {
               onIndexClick={() => handleIndexClick('parameter')}
               indexIsDirty={getIndexIsDirty('parameter')}
               groupBySubCategories={state.groupBySubCategories}
+
             />
 
             <ObjectTypeSection
@@ -581,6 +628,7 @@ export function NavigatorContent() {
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('context')}
               indexIsDirty={getIndexIsDirty('context')}
+
             />
 
             <ObjectTypeSection
@@ -602,6 +650,7 @@ export function NavigatorContent() {
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('case')}
               indexIsDirty={getIndexIsDirty('case')}
+
             />
 
             <ObjectTypeSection
@@ -623,6 +672,7 @@ export function NavigatorContent() {
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('node')}
               indexIsDirty={getIndexIsDirty('node')}
+
             />
 
             <ObjectTypeSection
@@ -644,6 +694,7 @@ export function NavigatorContent() {
               onSectionContextMenu={handleSectionContextMenu}
               onIndexClick={() => handleIndexClick('event')}
               indexIsDirty={getIndexIsDirty('event')}
+
             />
           </>
         )}

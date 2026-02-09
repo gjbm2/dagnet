@@ -293,6 +293,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 sweep_from = date.fromisoformat(subj['sweep_from']) if subj.get('sweep_from') else None
                 sweep_to = date.fromisoformat(subj['sweep_to']) if subj.get('sweep_to') else None
 
+                print(f"[snapshot_analyze] cohort_maturity query: "
+                      f"param_id={subj['param_id']}, core_hash={subj['core_hash']}, "
+                      f"slice_keys={subj.get('slice_keys', [''])}, "
+                      f"anchor_from={subj['anchor_from']}, anchor_to={subj['anchor_to']}, "
+                      f"sweep_from={sweep_from}, sweep_to={sweep_to}")
+
                 rows = query_snapshots_for_sweep(
                     param_id=subj['param_id'],
                     core_hash=subj['core_hash'],
@@ -302,6 +308,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     sweep_from=sweep_from,
                     sweep_to=sweep_to,
                 )
+
+                print(f"[snapshot_analyze] cohort_maturity result: {len(rows)} rows")
 
                 scenario_rows += len(rows)
 
@@ -858,6 +866,17 @@ def handle_snapshots_query_full(data: Dict[str, Any]) -> Dict[str, Any]:
     as_at = None
     if data.get('as_at'):
         as_at = datetime.fromisoformat(data['as_at'].replace('Z', '+00:00'))
+
+    retrieved_ats = None
+    if data.get('retrieved_ats') is not None:
+        if not isinstance(data.get('retrieved_ats'), list):
+            raise ValueError("'retrieved_ats' must be a list of ISO datetime strings")
+        parsed = []
+        for ts in data.get('retrieved_ats') or []:
+            if not isinstance(ts, str) or not ts:
+                continue
+            parsed.append(datetime.fromisoformat(ts.replace('Z', '+00:00')))
+        retrieved_ats = parsed
     
     rows = query_snapshots(
         param_id=param_id,
@@ -866,6 +885,7 @@ def handle_snapshots_query_full(data: Dict[str, Any]) -> Dict[str, Any]:
         anchor_from=anchor_from,
         anchor_to=anchor_to,
         as_at=as_at,
+        retrieved_ats=retrieved_ats,
         include_equivalents=bool(data.get('include_equivalents', True)),
         limit=data.get('limit', 10000)
     )
@@ -985,6 +1005,7 @@ def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
         anchor_from=anchor_from,
         anchor_to=anchor_to,
         include_equivalents=bool(data.get('include_equivalents', True)),
+        include_summary=bool(data.get('include_summary', False)),
         limit=data.get('limit', 200)
     )
 
@@ -1004,6 +1025,7 @@ def handle_snapshots_delete(data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Response dict with deleted count
     """
+    from datetime import datetime
     from snapshot_service import delete_snapshots
     
     param_id = data.get('param_id')
@@ -1013,8 +1035,19 @@ def handle_snapshots_delete(data: Dict[str, Any]) -> Dict[str, Any]:
     core_hashes = data.get('core_hashes')
     if core_hashes is not None and not isinstance(core_hashes, list):
         raise ValueError("'core_hashes' must be a list of strings")
-    
-    return delete_snapshots(param_id, core_hashes=core_hashes)
+
+    retrieved_ats = data.get('retrieved_ats')
+    if retrieved_ats is not None:
+        if not isinstance(retrieved_ats, list):
+            raise ValueError("'retrieved_ats' must be a list of ISO datetime strings")
+        parsed = []
+        for ts in retrieved_ats:
+            if not isinstance(ts, str) or not ts:
+                continue
+            parsed.append(datetime.fromisoformat(ts.replace('Z', '+00:00')))
+        retrieved_ats = parsed
+
+    return delete_snapshots(param_id, core_hashes=core_hashes, retrieved_ats=retrieved_ats)
 
 
 def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1096,14 +1129,30 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_sigs_list(data: Dict[str, Any]) -> Dict[str, Any]:
-    """List signature registry rows for a param_id."""
+    """List signature registry rows for a param_id, or list distinct param_ids.
+
+    Modes:
+    - param_id set: list signatures for that param (original behaviour)
+    - list_params=True: list distinct param_ids with summary counts
+    Filters: param_id_prefix (workspace scoping), graph_name (provenance)
+    """
     from snapshot_service import list_signatures
     param_id = data.get("param_id")
-    if not param_id:
-        raise ValueError("Missing 'param_id' field")
+    list_params = bool(data.get("list_params", False))
+    if not param_id and not list_params:
+        raise ValueError("Either 'param_id' or 'list_params' must be provided")
     limit = data.get("limit", 200)
     include_inputs = bool(data.get("include_inputs", False))
-    return list_signatures(param_id=param_id, limit=limit, include_inputs=include_inputs)
+    param_id_prefix = data.get("param_id_prefix")
+    graph_name = data.get("graph_name")
+    return list_signatures(
+        param_id=param_id,
+        param_id_prefix=param_id_prefix,
+        graph_name=graph_name,
+        list_params=list_params,
+        limit=limit,
+        include_inputs=include_inputs,
+    )
 
 
 def handle_sigs_get(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1138,24 +1187,23 @@ def handle_sigs_links_create(data: Dict[str, Any]) -> Dict[str, Any]:
     param_id = data.get("param_id")
     core_hash = data.get("core_hash")
     equivalent_to = data.get("equivalent_to")
-    created_by = data.get("created_by")
-    reason = data.get("reason")
+    created_by = data.get("created_by", "user")
+    reason = data.get("reason", "")
     if not param_id:
         raise ValueError("Missing 'param_id' field")
     if not core_hash:
         raise ValueError("Missing 'core_hash' field")
     if not equivalent_to:
         raise ValueError("Missing 'equivalent_to' field")
-    if not created_by:
-        raise ValueError("Missing 'created_by' field")
-    if not reason:
-        raise ValueError("Missing 'reason' field")
     return create_equivalence_link(
         param_id=param_id,
         core_hash=core_hash,
         equivalent_to=equivalent_to,
         created_by=created_by,
         reason=reason,
+        operation=data.get("operation", "equivalent"),
+        weight=float(data.get("weight", 1.0)),
+        source_param_id=data.get("source_param_id"),
     )
 
 
@@ -1165,18 +1213,14 @@ def handle_sigs_links_deactivate(data: Dict[str, Any]) -> Dict[str, Any]:
     param_id = data.get("param_id")
     core_hash = data.get("core_hash")
     equivalent_to = data.get("equivalent_to")
-    created_by = data.get("created_by")
-    reason = data.get("reason")
+    created_by = data.get("created_by", "user")
+    reason = data.get("reason", "")
     if not param_id:
         raise ValueError("Missing 'param_id' field")
     if not core_hash:
         raise ValueError("Missing 'core_hash' field")
     if not equivalent_to:
         raise ValueError("Missing 'equivalent_to' field")
-    if not created_by:
-        raise ValueError("Missing 'created_by' field")
-    if not reason:
-        raise ValueError("Missing 'reason' field")
     return deactivate_equivalence_link(
         param_id=param_id,
         core_hash=core_hash,

@@ -101,6 +101,21 @@ interface CacheEntry<T> {
   timestamp: number;
 }
 
+/**
+ * Derive a human-readable display name from a raw subject_id (itemKey).
+ * Format: `parameter:objectId:targetUUID:slot:condIdx`
+ * Returns objectId with hyphens replaced by spaces, e.g. "registration to success".
+ * Falls back to the raw id if parsing fails.
+ */
+function humaniseSubjectId(rawId: string): string {
+  const parts = rawId.split(':');
+  // parts[0] = type, parts[1] = objectId (human-readable slug), parts[2] = UUID, ...
+  if (parts.length >= 3 && parts[1]) {
+    return parts[1].replace(/-/g, ' ');
+  }
+  return rawId;
+}
+
 export class GraphComputeClient {
   private baseUrl: string;
   private useMock: boolean;
@@ -192,6 +207,228 @@ export class GraphComputeClient {
     }
   }
   
+  /**
+   * Snapshot cohort maturity responses are not returned in the standard AnalysisResponse/AnalysisResult
+   * shape (and multi-scenario snapshot reads return `scenarios[]` rather than `result`).
+   *
+   * For UI charting we normalise them into a single AnalysisResult with tabular `data` rows.
+   */
+  private normaliseSnapshotCohortMaturityResponse(
+    raw: any,
+    request: AnalysisRequest,
+  ): AnalysisResponse | null {
+    try {
+      // If it already looks like a standard AnalysisResponse with tabular data, leave it alone.
+      if (raw && typeof raw === 'object' && raw.success === true && raw.result && Array.isArray(raw.result.data)) {
+        return null;
+      }
+
+      const requestedType = request?.analysis_type;
+
+      // Helper to detect a cohort maturity "result-like" payload.
+      const isCohortMaturityResult = (r: any): boolean => {
+        if (!r || typeof r !== 'object') return false;
+        if (r.analysis_type === 'cohort_maturity') return true;
+        // Some snapshot paths may omit analysis_type but include frames.
+        return Array.isArray(r.frames) && r.frames.length >= 0;
+      };
+
+      // Extract all scenario/subject blocks regardless of response shape.
+      type ScenarioSubjectBlock = { scenario_id: string; subject_id: string; result: any };
+      const blocks: ScenarioSubjectBlock[] = [];
+
+      // Multi-scenario snapshot shape: { success, scenarios: [{scenario_id, subjects:[{subject_id, success, result}]}] }
+      if (raw && typeof raw === 'object' && Array.isArray(raw.scenarios)) {
+        for (const sc of raw.scenarios) {
+          const scenarioId = sc?.scenario_id;
+          if (!scenarioId || !Array.isArray(sc?.subjects)) continue;
+          for (const sub of sc.subjects) {
+            if (sub?.success !== true) continue;
+            blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'subject', result: sub?.result });
+          }
+        }
+      } else if (raw && typeof raw === 'object' && Array.isArray(raw.subjects)) {
+        // Single scenario, multiple subjects: { success, scenario_id, subjects: [{subject_id, success, result}] }
+        const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'base';
+        for (const sub of raw.subjects) {
+          if (sub?.success !== true) continue;
+          blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'subject', result: sub?.result });
+        }
+      } else if (raw && typeof raw === 'object' && raw.result && isCohortMaturityResult(raw.result)) {
+        // Single subject flattened shape: { success, scenario_id, subject_id, result: {...frames...} }
+        const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'base';
+        const subjectId = raw.subject_id || 'subject';
+        blocks.push({ scenario_id: scenarioId, subject_id: subjectId, result: raw.result });
+      } else if (raw && typeof raw === 'object' && isCohortMaturityResult(raw)) {
+        // Extremely flattened: { analysis_type, frames, ... } (rare)
+        const scenarioId = request?.scenarios?.[0]?.scenario_id || 'base';
+        blocks.push({ scenario_id: scenarioId, subject_id: 'subject', result: raw });
+      }
+
+      if (blocks.length === 0) return null;
+
+      // Only normalise when the request intends cohort maturity (or payload looks like it).
+      const anyCohort = blocks.some(b => isCohortMaturityResult(b.result));
+      if (!anyCohort && requestedType !== 'cohort_maturity') return null;
+
+      // Build dimension values from request scenarios (names/colours/visibility modes).
+      const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
+      for (const s of request.scenarios || []) {
+        if (!s?.scenario_id) continue;
+        scenarioDimensionValues[s.scenario_id] = {
+          name: s.name || s.scenario_id,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+        };
+      }
+
+      // Aggregate to tabular rows for charting:
+      // One row per (scenario_id, subject_id, as_at_date)
+      const data: Array<Record<string, any>> = [];
+
+      // Prefer metadata from the first valid block.
+      const firstMeta = (() => {
+        const b = blocks.find(bb => isCohortMaturityResult(bb.result));
+        return b?.result || null;
+      })();
+
+      for (const b of blocks) {
+        const r = b.result;
+        if (!isCohortMaturityResult(r)) continue;
+        const frames: any[] = Array.isArray(r.frames) ? r.frames : [];
+        if (import.meta.env.DEV) {
+          console.log('[GraphComputeClient] cohort_maturity block:', {
+            scenario_id: b.scenario_id,
+            subject_id: b.subject_id,
+            framesCount: frames.length,
+            frame0Keys: frames[0] ? Object.keys(frames[0]) : [],
+            frame0DataPointsCount: frames[0]?.data_points?.length ?? 'N/A',
+            frame0Sample: frames[0]?.data_points?.[0],
+          });
+        }
+        for (const f of frames) {
+          const asAt = f?.as_at_date || f?.retrieved_at_date || f?.date;
+          if (!asAt) continue;
+          const points: any[] = Array.isArray(f?.data_points) ? f.data_points : [];
+          let xTotal = 0;
+          let yTotal = 0;
+          for (const p of points) {
+            const x = Number(p?.x ?? 0);
+            const y = Number(p?.y ?? 0);
+            if (Number.isFinite(x)) xTotal += x;
+            if (Number.isFinite(y)) yTotal += y;
+          }
+          const rate = xTotal > 0 ? yTotal / xTotal : null;
+          if (import.meta.env.DEV) {
+            console.log('[GraphComputeClient] cohort_maturity frame:', {
+              asAt, pointsCount: points.length, xTotal, yTotal, rate,
+            });
+          }
+          data.push({
+            analysis_type: 'cohort_maturity',
+            scenario_id: b.scenario_id,
+            subject_id: b.subject_id,
+            as_at_date: asAt,
+            x: xTotal,
+            y: yTotal,
+            rate,
+          });
+        }
+      }
+
+      if (data.length === 0) {
+        // Return a proper empty cohort maturity result (not null) so the chart
+        // component receives the correct shape and can show a "no data" message
+        // instead of silently falling back to the raw frames-format response.
+        console.warn('[GraphComputeClient] Cohort maturity normalisation: 0 data rows from', blocks.length, 'blocks. Raw frames may be empty.');
+        const emptyResult: AnalysisResult = {
+          analysis_type: 'cohort_maturity',
+          analysis_name: 'Cohort Maturity',
+          analysis_description: 'No snapshot data found for this query and date range',
+          metadata: {
+            anchor_from: firstMeta?.anchor_range?.from ?? firstMeta?.anchor_from,
+            anchor_to: firstMeta?.anchor_range?.to ?? firstMeta?.anchor_to,
+            sweep_from: firstMeta?.sweep_range?.from ?? firstMeta?.sweep_from,
+            sweep_to: firstMeta?.sweep_range?.to ?? firstMeta?.sweep_to,
+            source: 'snapshot_db',
+            empty: true,
+          },
+          semantics: {
+            dimensions: [],
+            metrics: [],
+            chart: { recommended: 'cohort_maturity', alternatives: [] },
+          },
+          dimension_values: { scenario_id: scenarioDimensionValues },
+          data: [],
+        };
+        return { success: true, result: emptyResult, query_dsl: request.query_dsl };
+      }
+
+      const dimensionValues: Record<string, Record<string, DimensionValueMeta>> = {
+        scenario_id: scenarioDimensionValues,
+      };
+
+      // Add subject dimension values using human-readable labels from the request.
+      // Build a lookup from subject_id → subject_label provided by the frontend.
+      const subjectLabelLookup = new Map<string, string>();
+      for (const sc of request.scenarios || []) {
+        for (const subj of sc.snapshot_subjects || []) {
+          if (subj.subject_label) {
+            subjectLabelLookup.set(subj.subject_id, subj.subject_label);
+          }
+        }
+      }
+      dimensionValues.subject_id = Object.fromEntries(
+        Array.from(new Set(data.map(d => String(d.subject_id)))).map((id, i) => [
+          id,
+          { name: subjectLabelLookup.get(id) || humaniseSubjectId(id), order: i },
+        ])
+      );
+
+      const result: AnalysisResult = {
+        analysis_type: 'cohort_maturity',
+        analysis_name: 'Cohort Maturity',
+        analysis_description: 'How conversion rates evolved over time for a cohort range',
+        metadata: {
+          // Preserve raw-ish metadata for debugging and future richer UI.
+          anchor_from: firstMeta?.anchor_from,
+          anchor_to: firstMeta?.anchor_to,
+          sweep_from: firstMeta?.sweep_from,
+          sweep_to: firstMeta?.sweep_to,
+          // Hint to UIs that this came from snapshot reads.
+          source: 'snapshot_db',
+        },
+        semantics: {
+          dimensions: [
+            { id: 'as_at_date', name: 'As-at date', type: 'time', role: 'primary' },
+            { id: 'scenario_id', name: 'Scenario', type: 'scenario', role: 'secondary' },
+            { id: 'subject_id', name: 'Subject', type: 'categorical', role: 'filter' },
+          ],
+          metrics: [
+            { id: 'rate', name: 'Conversion rate', type: 'ratio', format: 'percent', role: 'primary' },
+            { id: 'x', name: 'Cohort size', type: 'count', format: 'number', role: 'secondary' },
+            { id: 'y', name: 'Conversions', type: 'count', format: 'number', role: 'secondary' },
+          ],
+          chart: {
+            recommended: 'cohort_maturity',
+            alternatives: ['table'],
+          },
+        },
+        dimension_values: dimensionValues,
+        data,
+      };
+
+      return {
+        success: true,
+        result,
+        query_dsl: request.query_dsl,
+      };
+    } catch (err) {
+      console.error('[GraphComputeClient] Cohort maturity normalisation CRASHED:', err);
+      return null;
+    }
+  }
+
   /**
    * Clear all caches (useful for testing or forced refresh)
    */
@@ -435,7 +672,51 @@ export class GraphComputeClient {
       }
     }
 
-    const result = await response.json();
+    const raw = await response.json();
+
+    // DEV diagnostic: log the raw backend response shape for snapshot analysis debugging
+    if (import.meta.env.DEV && request.analysis_type === 'cohort_maturity') {
+      const frames = Array.isArray(raw?.result?.frames) ? raw.result.frames : [];
+      console.log('[GraphComputeClient] RAW cohort_maturity response:', {
+        success: raw?.success,
+        hasResult: !!raw?.result,
+        resultKeys: raw?.result ? Object.keys(raw.result) : null,
+        resultAnalysisType: raw?.result?.analysis_type,
+        framesCount: frames.length,
+        hasScenarios: Array.isArray(raw?.scenarios),
+        scenariosCount: Array.isArray(raw?.scenarios) ? raw.scenarios.length : 0,
+        rowsAnalysed: raw?.rows_analysed,
+        error: raw?.error,
+        subjectId: raw?.subject_id,
+        scenarioId: raw?.scenario_id,
+      });
+      // Log first frame contents so we can see actual data values
+      if (frames.length > 0) {
+        const f0 = frames[0];
+        const pts = Array.isArray(f0?.data_points) ? f0.data_points : [];
+        console.log('[GraphComputeClient] cohort_maturity frame[0]:', {
+          as_at_date: f0?.as_at_date,
+          total_y: f0?.total_y,
+          dataPointsCount: pts.length,
+          dataPointsKeys: pts[0] ? Object.keys(pts[0]) : [],
+          firstPoint: pts[0],
+          sampleValues: pts.slice(0, 3).map((p: any) => ({ x: p?.x, y: p?.y, rate: p?.rate, anchor_day: p?.anchor_day })),
+        });
+      }
+    }
+
+    const normalised = this.normaliseSnapshotCohortMaturityResponse(raw, request);
+
+    if (import.meta.env.DEV && request.analysis_type === 'cohort_maturity') {
+      console.log('[GraphComputeClient] Normalisation result:', {
+        didNormalise: !!normalised,
+        normalisedAnalysisType: normalised?.result?.analysis_type,
+        normalisedDataCount: Array.isArray(normalised?.result?.data) ? normalised.result.data.length : 'N/A',
+        fallbackAnalysisType: !normalised ? raw?.result?.analysis_type : 'N/A',
+      });
+    }
+
+    const result = normalised ?? raw;
     
     // Cache the result unless bypassed.
     if (!bypassCache) {
@@ -574,7 +855,9 @@ export class GraphComputeClient {
       throw new Error(`Analysis failed: ${error.detail || error.error || response.statusText}`);
     }
 
-    const result = await response.json();
+    const raw = await response.json();
+    const normalised = this.normaliseSnapshotCohortMaturityResponse(raw, request);
+    const result = normalised ?? raw;
 
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       try {
@@ -755,6 +1038,8 @@ export interface AnalysisRequest {
  */
 export interface SnapshotSubjectPayload {
   subject_id: string;
+  /** Human-readable label for display (e.g. "registration → success") */
+  subject_label?: string;
   param_id: string;
   canonical_signature: string;
   core_hash: string;

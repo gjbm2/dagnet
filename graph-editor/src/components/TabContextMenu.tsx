@@ -9,6 +9,7 @@ import { fileOperationsService } from '../services/fileOperationsService';
 import { useViewHistory } from '../hooks/useViewHistory';
 import { useOpenHistorical } from '../hooks/useOpenHistorical';
 import { useShareLink } from '../hooks/useShareLink';
+import { useManageSnapshots } from '../hooks/useManageSnapshots';
 
 interface TabContextMenuProps {
   tabId: string;
@@ -77,6 +78,12 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     copyLiveShareLink,
     liveShareUnavailableReason,
   } = useShareLink(tab?.fileId);
+
+  // Snapshot Manager hook (parameters and graphs)
+  const tabFileType = tab?.fileId.startsWith('parameter-') ? 'parameter'
+    : tab?.fileId.startsWith('graph-') ? 'graph'
+    : undefined;
+  const { canManage: canManageSnapshots, openSnapshotManager } = useManageSnapshots(tab?.fileId, tabFileType);
 
   const menuItems: ContextMenuItem[] = useMemo(() => {
     if (!tab) return [];
@@ -211,6 +218,17 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
         submenu: historicalSubmenu,
       });
     }
+    // Snapshot Manager (for parameter and graph tabs)
+    if (canManageSnapshots) {
+      items.push({
+        label: 'Snapshot Manager...',
+        onClick: () => {
+          openSnapshotManager();
+          onClose();
+        },
+      });
+    }
+
     items.push({ label: '', onClick: () => {}, divider: true });
     
     // Danger actions (not for temporary/historical files)
@@ -284,7 +302,7 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     });
     
     return items;
-  }, [tab, tabId, tabs, operations, isTemporaryFile, canViewHistory, showHistoryModal, canOpenHistorical, isHistoricalLoading, historicalDateItems, loadHistoricalDates, selectHistoricalCommit, canShare, canShareStatic, canShareLive, copyStaticShareLink, copyLiveShareLink, liveShareUnavailableReason, onClose]);
+  }, [tab, tabId, tabs, operations, isTemporaryFile, canViewHistory, showHistoryModal, canOpenHistorical, isHistoricalLoading, historicalDateItems, loadHistoricalDates, selectHistoricalCommit, canManageSnapshots, openSnapshotManager, canShare, canShareStatic, canShareLive, copyStaticShareLink, copyLiveShareLink, liveShareUnavailableReason, onClose]);
   
   const handleDuplicate = async (name: string, type: ObjectType) => {
     if (!tab) return;

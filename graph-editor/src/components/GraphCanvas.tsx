@@ -310,6 +310,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const { graph, setGraph: setGraphDirect, setAutoUpdating } = store;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
+
+  // Authoritative graph fileId for this canvas/tab (e.g. "graph-my-graph")
+  // NOTE: Do not rely on graph.metadata.* here — it can be stale after duplication/rename.
+  const graphFileId = useMemo(() => {
+    if (!tabId) return null;
+    return tabs.find(t => t.id === tabId)?.fileId ?? null;
+  }, [tabId, tabs]);
   
   // Initialize lastSavedViewportRef from tab state to avoid unnecessary saves
   React.useEffect(() => {
@@ -5349,6 +5356,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           edgeData={contextMenuLocalData}
           edges={edges}
           graph={graph}
+          graphFileId={graphFileId}
               onClose={() => {
                 setEdgeContextMenu(null);
                 setContextMenuLocalData(null);

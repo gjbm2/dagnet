@@ -29,6 +29,8 @@ interface DataSectionSubmenuProps {
   onDownloadSnapshotData?: (section: DataOperationSection) => void;
   /** Handler to delete snapshots (optional) */
   onDeleteSnapshots?: (section: DataOperationSection) => void;
+  /** Handler to open Snapshot Manager for this param (optional) */
+  onManageSnapshots?: (section: DataOperationSection) => void;
 }
 
 export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
@@ -48,13 +50,14 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
   snapshotCount,
   onDownloadSnapshotData,
   onDeleteSnapshots,
+  onManageSnapshots,
 }) => {
   const [isSnapshotsSubmenuOpen, setIsSnapshotsSubmenuOpen] = useState(false);
   const closeTimeoutRef = useRef<number | null>(null);
   const snapshotsTriggerRef = useRef<HTMLDivElement>(null);
   const snapshotsMenuRef = useRef<HTMLDivElement>(null);
   const [snapshotsMenuPos, setSnapshotsMenuPos] = useState<{ left: number; top: number } | null>(null);
-  const hasSnapshotsActions = !!onDeleteSnapshots || !!onDownloadSnapshotData;
+  const hasSnapshotsActions = !!onDeleteSnapshots || !!onDownloadSnapshotData || !!onManageSnapshots;
   const hasSnapshots = (snapshotCount ?? 0) > 0;
   const pointerMoveListenerInstalledRef = useRef(false);
 
@@ -515,6 +518,31 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
                       </span>
                       <Database size={12} style={{ color: hasSnapshots ? '#dc2626' : '#999' }} />
                     </div>
+                  )}
+
+                  {/* Manage in Snapshot Manager */}
+                  {onManageSnapshots && (
+                    <>
+                      <div style={{ borderTop: '1px solid #eee', margin: '4px 0' }} />
+                      <div
+                        onClick={() => onManageSnapshots(section)}
+                        style={{
+                          padding: '6px 12px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          borderRadius: '2px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '16px',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span>Manage…</span>
+                        <Folders size={12} style={{ color: '#666' }} />
+                      </div>
+                    </>
                   )}
                 </div>
               )}

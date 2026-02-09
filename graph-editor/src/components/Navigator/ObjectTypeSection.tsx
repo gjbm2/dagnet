@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, createContext, useContext, useMemo } from 'react';
 import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
+import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
 import { AtSign, ChevronRight, FileText, TrendingUp, Coins, Clock, Package, LucideIcon } from 'lucide-react';
 import { WhereUsedService } from '../../services/whereUsedService';
@@ -129,6 +130,7 @@ const missingEntryWarned = new Set<string>();
 
 function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
   const { getEntry, onItemClick, onItemContextMenu } = useEntriesRegistry();
+  const { operations: navOps } = useNavigatorContext();
   const [tooltip, setTooltip] = useState<string | null>(null);
   const [isHovering, setIsHovering] = useState(false);
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -287,6 +289,21 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
     >
       <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
         {entry.name}
+        {entry.tags && entry.tags.length > 0 && (
+          <span className="navigator-item-tags">
+            {entry.tags.slice(0, 2).map(t => (
+              <span
+                key={t}
+                className="navigator-tag-chip navigator-tag-clickable"
+                onClick={(e) => { e.stopPropagation(); navOps.setSearchQuery(t); }}
+                title={`Filter by tag: ${t}`}
+              >{t}</span>
+            ))}
+            {entry.tags.length > 2 && (
+              <span className="navigator-tag-chip navigator-tag-overflow">+{entry.tags.length - 2}</span>
+            )}
+          </span>
+        )}
       </span>
       <span className="navigator-item-actions">
         {isHovering && canShowHistory && (
@@ -324,6 +341,7 @@ interface ObjectTypeSectionProps {
   onIndexClick?: () => void;
   indexIsDirty?: boolean;
   groupBySubCategories?: boolean;
+  groupByTags?: boolean;
 }
 
 // Sub-category configuration for parameters
@@ -347,9 +365,30 @@ export function ObjectTypeSection({
   onIndexClick,
   indexIsDirty,
   groupBySubCategories = false,
+  groupByTags = false,
 }: ObjectTypeSectionProps) {
   const { tabs, activeTabId } = useTabContext();
   const [expandedSubCategories, setExpandedSubCategories] = useState<Set<string>>(new Set(['probability', 'cost_gbp', 'labour_cost', 'standard_deviation']));
+  
+  // Auto-expand tag groups when they first appear
+  const prevTagGroupsRef = useRef<string[]>([]);
+  useEffect(() => {
+    if (!groupByTags) return;
+    const tagKeys = entries
+      .flatMap(e => e.tags || [])
+      .filter((v, i, a) => a.indexOf(v) === i)
+      .map(t => `tag:${t}`);
+    tagKeys.push('tag:Untagged');
+    const newKeys = tagKeys.filter(k => !prevTagGroupsRef.current.includes(k));
+    if (newKeys.length > 0) {
+      setExpandedSubCategories(prev => {
+        const next = new Set(prev);
+        newKeys.forEach(k => next.add(k));
+        return next;
+      });
+      prevTagGroupsRef.current = tagKeys;
+    }
+  }, [groupByTags, entries]);
   
   const theme = getObjectTypeTheme(sectionType);
   
@@ -389,6 +428,26 @@ export function ObjectTypeSection({
         return acc;
       }, {} as Record<string, NavigatorEntry[]>)
     : null;
+
+  // Group entries by tag if enabled (works for all section types)
+  const groupedByTag = useMemo(() => {
+    if (!groupByTags || groupedBySubCategory) return null; // sub-categories take precedence
+    const tagGroups: Record<string, NavigatorEntry[]> = {};
+    let hasAnyTag = false;
+    for (const entry of entries) {
+      if (entry.tags && entry.tags.length > 0) {
+        hasAnyTag = true;
+        for (const tag of entry.tags) {
+          if (!tagGroups[tag]) tagGroups[tag] = [];
+          tagGroups[tag].push(entry);
+        }
+      } else {
+        if (!tagGroups['Untagged']) tagGroups['Untagged'] = [];
+        tagGroups['Untagged'].push(entry);
+      }
+    }
+    return hasAnyTag ? tagGroups : null;
+  }, [groupByTags, groupedBySubCategory, entries]);
   
   return (
     <div 
@@ -468,6 +527,47 @@ export function ObjectTypeSection({
                   {isSubCatExpanded && (
                     <div className="sub-category-items">
                       {subCatEntries.map(entry => {
+                        const tabCount = getTabCount(entry);
+                        const isActive = activeFileId === entry.fileId;
+                        
+                        return (
+                          <NavigatorItem
+                            key={entry.fileId}
+                            fileId={entry.fileId}
+                            isActive={isActive}
+                            tabCount={tabCount}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : groupedByTag ? (
+            // Render grouped by tags
+            Object.entries(groupedByTag).sort(([a], [b]) => a === 'Untagged' ? 1 : b === 'Untagged' ? -1 : a.localeCompare(b)).map(([tagKey, tagEntries]) => {
+              if (tagEntries.length === 0) return null;
+              const isTagExpanded = expandedSubCategories.has(`tag:${tagKey}`);
+              
+              return (
+                <div key={`tag-${tagKey}`} className="sub-category">
+                  <div 
+                    className="sub-category-header"
+                    onClick={() => toggleSubCategory(`tag:${tagKey}`)}
+                  >
+                    <ChevronRight 
+                      size={12} 
+                      className={`chevron ${isTagExpanded ? 'expanded' : ''}`}
+                      style={{ color: theme.accentColour, opacity: 0.7 }}
+                    />
+                    <span className="navigator-tag-chip" style={{ marginRight: '4px' }}>{tagKey}</span>
+                    <span className="section-count">{tagEntries.length}</span>
+                  </div>
+                  
+                  {isTagExpanded && (
+                    <div className="sub-category-items">
+                      {tagEntries.map(entry => {
                         const tabCount = getTabCount(entry);
                         const isActive = activeFileId === entry.fileId;
                         

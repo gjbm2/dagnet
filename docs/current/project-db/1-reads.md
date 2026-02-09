@@ -1,7 +1,7 @@
 # Snapshot DB Reads: Design Specification
 
-**Status**: Phase 1–4 complete; per-scenario refactor complete (8-Feb-26)  
-**Date**: 8-Feb-26  
+**Status**: Phase 1–4 complete; edge-selection DSL + subject labels done (9-Feb-26); Phase 5 (forecasting) and additional analysis types outstanding  
+**Date**: 9-Feb-26  
 **Related**: `00-snapshot-db-design.md` §2, `hash-fixes.md`, `analysis-forecasting.md`
 
 ---
@@ -174,14 +174,36 @@ interface AnalysisTypeMeta {
 }
 ```
 
-### 7.1 Concrete Contracts for Initial Analysis Types
+### 7.1 Concrete Contracts for Implemented Analysis Types
 
-| Analysis type | scopeRule | readMode | slicePolicy | timeBoundsSource | perScenario |
-|---|---|---|---|---|---|
-| `lag_histogram` | `selection_edge` | `raw_snapshots` | `mece_fulfilment_allowed` | `query_dsl_window` | false |
-| `daily_conversions` | `selection_edge` | `raw_snapshots` | `mece_fulfilment_allowed` | `query_dsl_window` | false |
-| `cohort_maturity` (new) | `selection_edge` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | false |
-| `funnel_time_series` (future) | `funnel_path` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | true |
+| Analysis type | scopeRule | readMode | slicePolicy | timeBoundsSource | perScenario | Status |
+|---|---|---|---|---|---|---|
+| `lag_histogram` | `funnel_path` | `raw_snapshots` | `mece_fulfilment_allowed` | `query_dsl_window` | false | DONE |
+| `daily_conversions` | `funnel_path` | `raw_snapshots` | `mece_fulfilment_allowed` | `query_dsl_window` | false | DONE |
+| `cohort_maturity` | `funnel_path` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | false | DONE |
+
+### 7.2 Outstanding Analysis Types (Not Yet Implemented)
+
+| Analysis type | scopeRule | readMode | slicePolicy | timeBoundsSource | perScenario | Notes |
+|---|---|---|---|---|---|---|
+| `funnel_time_series` | `funnel_path` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | true | Multi-edge time series along a path; requires multi-subject charting |
+| `context_comparison` | `funnel_path` | `raw_snapshots` | `explicit` | `query_dsl_window` | false | Compare conversion rates across different context slices for the same edge |
+| `cohort_completeness` | `selection_edge` | `cohort_maturity` | `mece_fulfilment_allowed` | `query_dsl_window` | false | Requires forecasting machinery (Phase 5) — annotates each cohort with estimated completeness |
+
+These types require either additional backend derivation functions, forecasting support (see §7.3), or multi-subject charting in the frontend.
+
+### 7.3 Forecasting Dependency
+
+Several planned analysis features cannot be meaningfully delivered without the forecasting machinery described in `analysis-forecasting.md`. Without forecasting:
+
+- **Cohort maturity** shows raw observed rates but cannot indicate which cohorts are immature or project their final values
+- **Evidence/forecast split** is impossible — all data appears as "evidence" even when cohorts are clearly incomplete
+- **Fan charts** and confidence bands require lognormal model projection
+- **Completeness overlay** (solid vs dashed rendering) has no completeness signal to drive it
+
+**Current state**: the read pipeline (Phases 1–4) correctly retrieves and charts snapshot data. But the data is presented without statistical context — the user cannot distinguish mature from immature cohorts, and projections are not available.
+
+**Next step**: implement `analysis-forecasting.md` §7 (Python modelling library, model persistence, recompute API) to unlock Phase 5 of this document.
 
 ---
 
@@ -195,6 +217,10 @@ interface SnapshotSubjectRequest {
 
   /** Stable ID for joining results back to analysis scope */
   subject_id: string;  // buildItemKey({type, objectId, targetId, slot, conditionalIndex})
+
+  /** Human-readable label for display (e.g. "registration → success").
+   *  Derived from the graph edge's from/to node IDs. Never contains UUIDs. */
+  subject_label?: string;
 
   /** Workspace-prefixed DB parameter identity */
   param_id: string;  // `${repo}-${branch}-${objectId}`
@@ -306,6 +332,7 @@ The resolver runs **once per scenario**. For multi-scenario requests, the `Analy
    - `canonical_signature`: read from parameter file's persisted values (most recent `query_signature`)
    - `core_hash`: compute via `computeShortCoreHash(canonical_signature)` — **frontend-computed** (see `hash-fixes.md`)
    - `subject_id`: `buildItemKey({type, objectId, targetId, slot, conditionalIndex})`
+   - `subject_label`: look up the edge by `targetId` UUID in the graph, resolve from/to node IDs, format as `"from → to"` (e.g. `"registration → success"`). Never contains UUIDs.
 
 7. **Emit** `SnapshotSubjectRequest[]`.
 
@@ -400,21 +427,21 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 
 ## 13. File Changes Summary
 
-| File | Change |
-|------|--------|
-| `analysisTypes.ts` | Add `snapshotContract` field to `AnalysisTypeMeta`; populate for `lag_histogram`, `daily_conversions` |
-| `snapshotDependencyPlanService.ts` (NEW) | Thin mapper: `FetchPlan` → `SnapshotSubjectRequest[]` (scope filtering + `core_hash` + `read_mode`). Reuses existing planner. Also exports graph traversal helpers. |
-| `coreHashService.ts` (NEW) | Frontend `computeShortCoreHash()` (see `hash-fixes.md`) |
-| `AnalyticsPanel.tsx` | When analysis type has `snapshotContract`, build `FetchPlan` **per scenario** (using each scenario's effective DSL), map to `snapshot_subjects`, include in each scenario entry |
-| `graphComputeClient.ts` | `snapshot_subjects` is per-scenario on `ScenarioData`, not top-level on `AnalysisRequest` |
-| `snapshotWriteService.ts` | Update all API calls to send frontend-computed `core_hash` (see `hash-fixes.md`) |
-| `api_handlers.py` | `_handle_snapshot_analyze_subjects` processes per-scenario `snapshot_subjects`; use frontend `core_hash` directly |
-| `snapshot_service.py` | Accept `core_hash` as parameter (not derived); add cohort maturity query function |
-| `histogram_derivation.py` | Accept `t95_constraints` parameter (unused in Phase 1) |
-| `daily_conversions_derivation.py` | Accept `t95_constraints` parameter (unused in Phase 1) |
-| `cohort_maturity_derivation.py` (NEW) | Cohort maturity sweep derivation (virtual snapshot per retrieval date) |
-| `query_snapshots_for_sweep` in `snapshot_service.py` | Date-range filter on `retrieved_at` for sweep queries |
-| `test_cohort_maturity_derivation.py` (NEW) | 10 Python tests covering the derivation algorithm |
+| File | Change | Phase |
+|------|--------|-------|
+| `analysisTypes.ts` | Add `snapshotContract` field to `AnalysisTypeMeta`; populate for `lag_histogram`, `daily_conversions`, `cohort_maturity` | 1–2 |
+| `snapshotDependencyPlanService.ts` (NEW) | Thin mapper: `FetchPlan` → `SnapshotSubjectRequest[]` (scope filtering + `core_hash` + `read_mode` + `subject_label`). Reuses existing planner. Also exports graph traversal helpers. | 1 |
+| `coreHashService.ts` (NEW) | Frontend `computeShortCoreHash()` (see `hash-fixes.md`) | 1 |
+| `AnalyticsPanel.tsx` | When analysis type has `snapshotContract`, build `FetchPlan` **per scenario** (using each scenario's effective DSL), map to `snapshot_subjects`, include in each scenario entry. Edge selection populates `from(a).to(b)` DSL. | 1, 4.5 |
+| `graphComputeClient.ts` | `snapshot_subjects` is per-scenario on `ScenarioData`, not top-level on `AnalysisRequest`. `SnapshotSubjectPayload` carries `subject_label`. `normaliseSnapshotCohortMaturityResponse` uses `subject_label` for chart dimension display names with `humaniseSubjectId()` fallback. | 1, 4.5 |
+| `snapshotWriteService.ts` | Update all API calls to send frontend-computed `core_hash` (see `hash-fixes.md`) | 1 |
+| `api_handlers.py` | `_handle_snapshot_analyze_subjects` processes per-scenario `snapshot_subjects`; use frontend `core_hash` directly | 1 |
+| `snapshot_service.py` | Accept `core_hash` as parameter (not derived); add cohort maturity query function | 1–2 |
+| `histogram_derivation.py` | Accept `t95_constraints` parameter (unused in Phase 1) | 1 |
+| `daily_conversions_derivation.py` | Accept `t95_constraints` parameter (unused in Phase 1) | 1 |
+| `cohort_maturity_derivation.py` (NEW) | Cohort maturity sweep derivation (virtual snapshot per retrieval date) | 2 |
+| `query_snapshots_for_sweep` in `snapshot_service.py` | Date-range filter on `retrieved_at` for sweep queries | 2 |
+| `test_cohort_maturity_derivation.py` (NEW) | 10 Python tests covering the derivation algorithm | 2 |
 
 ---
 
@@ -466,11 +493,23 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 - `FetchPlanItem.conditionalIndex` already enumerates conditional parameters
 - `FetchPlanItem.querySignature` already carries the execution-grade signature
 
-### Phase 5: Forecasting Integration
+### Phase 4.5: Edge Selection DSL + Subject Labels — DONE (9-Feb-26)
 
-**Goal**: Backend can annotate results with completeness estimates and projections.
+**Goal**: Selecting an edge on the graph canvas auto-populates the Analytics panel's query DSL with `from(a).to(b)`. Chart headers display human-readable edge labels instead of internal IDs/UUIDs.
 
-**Prerequisite**: `analysis-forecasting.md` §6 (port pure maths to Python)
+**Tasks**:
+1. ~~AnalyticsPanel tracks `selectedEdgeUuids` alongside `selectedNodeIds`~~ — DONE
+2. ~~`autoGeneratedDSL` produces `from(A).to(B)` when a single edge is selected (no nodes)~~ — DONE
+3. ~~`SnapshotSubjectRequest` and `SnapshotSubjectPayload` carry `subject_label` (human-readable, e.g. "registration → success")~~ — DONE
+4. ~~`snapshotDependencyPlanService` resolves edge UUID → from/to node IDs from graph to derive `subject_label`~~ — DONE
+5. ~~`normaliseSnapshotCohortMaturityResponse` uses `subject_label` for chart dimension display names~~ — DONE
+6. ~~Fallback `humaniseSubjectId()` extracts readable slug from itemKey format when label is missing~~ — DONE
+
+### Phase 5: Forecasting Integration — NOT YET STARTED
+
+**Goal**: Backend can annotate results with completeness estimates and projections. This is the critical missing piece that makes snapshot analysis actually useful for decision-making.
+
+**Prerequisite**: `analysis-forecasting.md` §6–7 (port pure maths to Python, model persistence, recompute API)
 
 **Tasks**:
 1. Port `lagDistributionUtils.ts` to Python with golden tests
@@ -479,7 +518,17 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 4. Backend reads authoritative `t95` constraint from graph edge (`edge.p.latency.t95`) via `target.targetId` — used as one-way sigma constraint only
 5. Backend derivation functions use fitted model for completeness annotation per anchor_day
 6. Cohort maturity results include `completeness` and `projected` fields
-7. Frontend charts render evidence/forecast distinction
+7. Frontend charts render evidence/forecast distinction (solid vs dashed/striped bars)
+8. Add `cohort_completeness` analysis type (depends on forecasting output)
+
+### Phase 6: Additional Analysis Types — NOT YET STARTED
+
+**Goal**: Broader coverage of snapshot-powered analysis beyond the initial three types.
+
+**Tasks**:
+1. `funnel_time_series`: multi-edge time series along a from/to path, per scenario — requires multi-subject charting
+2. `context_comparison`: compare conversion rates across context slices for same edge — requires explicit slice enumeration
+3. Frontend multi-subject chart rendering (currently only single-subject selector exists)
 
 ---
 
@@ -505,6 +554,26 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 - `core-hash-golden.json`: shared fixture for `computeShortCoreHash` parity
 - `lag-distribution-golden.json` (Phase 5): shared fixture for statistical function parity
 
+### Live Share Mode Testing
+
+The full snapshot read pipeline must be verified in **live share mode** (read-only shared links served from Vercel). This is a distinct deployment context with different constraints:
+
+- **Backend routing**: Vercel serverless functions handle `/api/*` routes. Snapshot DB queries (`/api/snapshots/*`, `/api/runner/analyze`) must work from the Vercel deployment, not just local dev.
+- **DB connectivity**: The Vercel serverless backend must reach the snapshot PostgreSQL instance. Connection pooling, timeouts, and cold-start latency may differ from local dev.
+- **Auth / CORS**: Shared links are unauthenticated and served from a different origin. Snapshot API calls must not be blocked by CORS or auth gates.
+- **Graph + workspace context**: In share mode, the graph is embedded in the shared payload (no git workspace). The frontend must still build valid `snapshot_subjects` (including `param_id`, `core_hash`, `slice_keys`) from the embedded graph. Workspace identity (`repository`/`branch`) must be available in the share payload.
+- **Edge selection → DSL**: Verify that `from(a).to(b)` DSL auto-population works when an edge is selected in the shared graph viewer.
+- **Chart rendering**: Cohort maturity charts, lag histograms, and daily conversions must render correctly with human-readable `subject_label` (not raw IDs/UUIDs).
+- **Error handling**: If DB is unreachable or snapshot data is missing, the UI must degrade gracefully (clear error messages, no blank panels).
+
+**Test plan**:
+1. Create a live share link for a graph with snapshot data
+2. Open the share link in a clean browser session (no local state)
+3. Select an edge → verify `from(a).to(b)` populates the analytics DSL
+4. Run each snapshot analysis type (`lag_histogram`, `daily_conversions`, `cohort_maturity`) → verify results render with human-readable labels
+5. Verify multi-scenario analysis works if the share includes scenario state
+6. Test with a graph that has no snapshot data → verify graceful error messaging
+
 ---
 
 ## 16. Risk Assessment
@@ -518,6 +587,7 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 | Cohort maturity query is slow (many rows) | Date-bounded sweep range limits data volume; potential for query optimisation (materialised view) if needed |
 | Multi-scenario DB query duplication | Multiple scenarios may query same `(param_id, core_hash)` with overlapping ranges; see §10.3 for caching opportunities |
 | Forecasting model changes | Deferred to Phase 5; golden tests ensure TS/Python parity |
+| Live share mode untested | Snapshot DB queries, workspace identity resolution, and chart rendering have not been verified in Vercel-served share links; must be tested end-to-end before relying on shared analysis views |
 
 ---
 

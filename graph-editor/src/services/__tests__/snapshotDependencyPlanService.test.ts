@@ -98,15 +98,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('returns ResolverResult for lag_histogram', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result).toBeDefined();
@@ -115,15 +115,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('returns ResolverResult for daily_conversions', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'daily_conversions',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result).toBeDefined();
@@ -136,32 +136,32 @@ describe('snapshotDependencyPlanService', () => {
   // ─────────────────────────────────────────────────────────
 
   describe('scope rules', () => {
-    it('selection_edge: only includes matching edge', async () => {
+    it('funnel_path: only includes edges on from/to path', async () => {
       const plan = makePlan([
         { targetId: 'e1', objectId: 'p1' },
         { targetId: 'e2', objectId: 'p2' },
       ]);
       const graph = makeGraph([
-        { uuid: 'e1', from: 'A', to: 'B' },
-        { uuid: 'e2', from: 'B', to: 'C' },
+        { uuid: 'e1', from: 'node-a', to: 'node-b' },
+        { uuid: 'e2', from: 'node-b', to: 'node-c' },
       ]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects.length).toBe(1);
       expect(result!.subjects[0].target.targetId).toBe('e1');
     });
 
-    it('selection_edge: no subjects if no edge selected', async () => {
+    it('funnel_path: no subjects if DSL has no from/to', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
@@ -175,23 +175,23 @@ describe('snapshotDependencyPlanService', () => {
       expect(result!.subjects.length).toBe(0);
     });
 
-    it('multiple selected edges: includes all', async () => {
+    it('funnel_path: includes all edges on multi-hop path', async () => {
       const plan = makePlan([
         { targetId: 'e1', objectId: 'p1' },
         { targetId: 'e2', objectId: 'p2' },
       ]);
       const graph = makeGraph([
-        { uuid: 'e1', from: 'A', to: 'B' },
-        { uuid: 'e2', from: 'B', to: 'C' },
+        { uuid: 'e1', from: 'node-a', to: 'node-b' },
+        { uuid: 'e2', from: 'node-b', to: 'node-c' },
       ]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1', 'e2'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(C).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects.length).toBe(2);
@@ -316,15 +316,15 @@ describe('snapshotDependencyPlanService', () => {
   describe('time bounds', () => {
     it('derives anchor_from/to from window() clause', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       const subject = result!.subjects[0];
@@ -334,15 +334,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('derives anchor_from/to from cohort() clause', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'cohort(1-Oct-25:31-Oct-25)',
+        queryDsl: 'from(A).to(B).cohort(1-Oct-25:31-Oct-25)',
       });
 
       const subject = result!.subjects[0];
@@ -352,13 +352,13 @@ describe('snapshotDependencyPlanService', () => {
 
     it('returns empty subjects when DSL has no window/cohort', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
         queryDsl: 'from(A).to(B)',
       });
@@ -376,15 +376,15 @@ describe('snapshotDependencyPlanService', () => {
   describe('identity mapping', () => {
     it('builds workspace-prefixed param_id from plan item objectId', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'my-param' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: { repository: 'owner/repo', branch: 'develop' },
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects[0].param_id).toBe('owner/repo-develop-my-param');
@@ -392,15 +392,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('computes core_hash from plan item querySignature', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1', querySignature: VALID_SIG }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       const subject = result!.subjects[0];
@@ -414,15 +414,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('read_mode comes from analysis type contract', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects[0].read_mode).toBe('raw_snapshots');
@@ -432,15 +432,15 @@ describe('snapshotDependencyPlanService', () => {
       const plan = makePlan([
         { targetId: 'e1', objectId: 'p1', sliceFamily: 'context(channel:google)' },
       ]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects[0].slice_keys).toEqual(['context(channel:google).window()']);
@@ -448,15 +448,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('empty sliceFamily produces uncontexted slice key', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1', sliceFamily: '' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects[0].slice_keys).toEqual(['window()']);
@@ -466,15 +466,15 @@ describe('snapshotDependencyPlanService', () => {
       const plan = makePlan([
         { targetId: 'e1', objectId: 'p1', slot: 'cost_gbp' as const, conditionalIndex: 2 },
       ]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects[0].target.targetId).toBe('e1');
@@ -490,15 +490,15 @@ describe('snapshotDependencyPlanService', () => {
   describe('skipped subjects', () => {
     it('skips plan items with empty querySignature', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1', querySignature: '' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects.length).toBe(0);
@@ -512,17 +512,17 @@ describe('snapshotDependencyPlanService', () => {
         { targetId: 'e2', objectId: 'p2', querySignature: '' },
       ]);
       const graph = makeGraph([
-        { uuid: 'e1', from: 'A', to: 'B' },
-        { uuid: 'e2', from: 'B', to: 'C' },
+        { uuid: 'e1', from: 'node-a', to: 'node-b' },
+        { uuid: 'e2', from: 'node-b', to: 'node-c' },
       ]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1', 'e2'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(C).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects.length).toBe(1);
@@ -538,15 +538,15 @@ describe('snapshotDependencyPlanService', () => {
   describe('subject_id', () => {
     it('uses plan item itemKey as subject_id (deterministic)', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const args = {
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       };
 
       const r1 = await mapFetchPlanToSnapshotSubjects(args);
@@ -565,15 +565,15 @@ describe('snapshotDependencyPlanService', () => {
   describe('cohort_maturity', () => {
     it('resolves with read_mode cohort_maturity and sweep bounds', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'cohort_maturity',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'cohort(1-Oct-25:31-Oct-25)',
+        queryDsl: 'from(A).to(B).cohort(1-Oct-25:31-Oct-25)',
       });
 
       expect(result).toBeDefined();
@@ -589,15 +589,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('sweep_to respects asat() date when present', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'cohort_maturity',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'cohort(1-Oct-25:31-Oct-25).asat(15-Dec-25)',
+        queryDsl: 'from(A).to(B).cohort(1-Oct-25:31-Oct-25).asat(15-Dec-25)',
       });
 
       const subject = result!.subjects[0];
@@ -608,15 +608,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('sweep_to defaults to today when no asat()', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'cohort_maturity',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'cohort(1-Oct-25:31-Oct-25)',
+        queryDsl: 'from(A).to(B).cohort(1-Oct-25:31-Oct-25)',
       });
 
       const subject = result!.subjects[0];
@@ -627,15 +627,15 @@ describe('snapshotDependencyPlanService', () => {
 
     it('window() also works as cohort range for cohort_maturity', async () => {
       const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'cohort_maturity',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       expect(result!.subjects.length).toBe(1);
@@ -684,15 +684,15 @@ describe('snapshotDependencyPlanService', () => {
           },
         ],
       };
-      const graph = makeGraph([{ uuid: 'e1', from: 'A', to: 'B' }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
 
       const result = await mapFetchPlanToSnapshotSubjects({
         plan,
         analysisType: 'lag_histogram',
         graph,
-        selectedEdgeUuids: ['e1'],
+        selectedEdgeUuids: [],
         workspace: WORKSPACE,
-        queryDsl: 'window(1-Nov-25:30-Nov-25)',
+        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
       // Only the parameter item should be included

@@ -147,10 +147,17 @@ export function groupItems<T extends ItemBase>(
         }
         break;
       
-      case 'tags':
-        // Group by first tag, or 'Untagged'
-        groupKey = item.tags && item.tags.length > 0 ? item.tags[0] : 'Untagged';
-        break;
+      case 'tags': {
+        // Group by ALL tags — item appears in every tag group it belongs to
+        const itemTags = item.tags && item.tags.length > 0 ? item.tags : ['Untagged'];
+        for (const tag of itemTags) {
+          if (!groups.has(tag)) {
+            groups.set(tag, []);
+          }
+          groups.get(tag)!.push(item);
+        }
+        return; // Skip the common push below — we've already added to groups
+      }
       
       default:
         groupKey = 'Unknown';

@@ -1,67 +1,45 @@
 # DagNet Release Notes
-## Version 1.4.14b
-**Released:** 8-Feb-26
+## Version 1.4.15b
+**Released:** 9-Feb-26
 
-Updates ahead of forecasting
+### Time-series analysis from snapshot data
 
----
+Snapshot data now powers genuine time-series analysis. Every data retrieval is stored with its retrieval timestamp, cohort anchor dates, slice context, and conversion counts — building a longitudinal record that grows richer with each fetch.
 
-## Version 1.4.10b
-**Released:** 6-Feb-26
+- **Cohort Maturity charting**: new analysis type plotting conversion rate against retrieval date, showing how metrics evolve over time. One line per scenario; subject selector; full multi-scenario support.
+- **`asat(...)` historical queries**: add `asat(5-Nov-25)` to any DSL query to read snapshot data as it was known at that date. Read-only; no side-effects.
+- **Lag histogram and daily conversions**: distributions and daily volumes drawn directly from the snapshot database.
+- **Multi-graph Retrieve All**: fetch and store data across all open graphs in one operation, building the snapshot archive faster.
 
-VArious fixes
+### Historical file viewing
 
----
+Open any file — graph, parameter, case, event, node, or context — as it was at a past git commit.
 
-## Version 1.4.8b
-**Released:** 5-Feb-26
+- Hover the `@` icon in the Navigator, or right-click → Open Historical Version, or use File menu
+- Calendar picker highlights dates with commits; historical tabs open as read-only with `.asat(d-MMM-yy)` naming
+- Combine with `asat()` queries to see old graph structure with old data in a single view
 
-Multi-graph retrieve all
+### Snapshot Manager
 
----
+A diagnostic and management tool for the snapshot archive. Open via **Data > Snapshot Manager** or right-click any parameter/edge → **Manage...**.
 
-## Version 1.4.7b
-**Released:** 5-Feb-26
+- Browse parameters, see which signatures exist and how much data each holds
+- Inspect, diff, download, or delete snapshot data at any granularity (by retrieval batch and slice)
+- Create equivalence links between old and new signatures to preserve data continuity when query definitions change
+- "View graph at DATE" opens the historical graph version and injects `asat()` automatically
 
-More sophisticated sig matchine and lookup -- but still asat defects to pin down
+### Other improvements
 
----
-
-## Version 1.4.6b
-**Released:** 4-Feb-26
-
-Basic .asat() functionality working...UI additions to follow
-
----
-
-## Version 1.4.4b
-**Released:** 4-Feb-26
-
-Fix to widnow() completeness logic
-
----
-
-## Version 1.4.5b
-**Released:** 4-Feb-26
-
-Historical queries via `asat(...)` / `at(...)`
-
-- Added `asat(...)` / `at(...)` DSL support for point-in-time snapshot reads (read-only)
-- Added `POST /api/snapshots/query-virtual` for latest-per-day virtual snapshots as-of `as_at`
-
----
-
-## Version 1.4.1b
-**Released:** 3-Feb-26
-
-Routes fix. Added health indicator.
+- Flexible signature matching via `core_hash` for resilient archival identity
+- Window completeness fix
+- Health indicator
 
 ---
 
 ## Version 1.4.0b
 **Released:** 3-Feb-26
 
-DBS added; data snapshots, and improveemnet to onset / lognormal distro fitting.
+DBS added; data snapshots, and improvement to onset / lognormal distro fitting.
 
 ---
 

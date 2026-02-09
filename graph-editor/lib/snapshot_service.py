@@ -98,6 +98,9 @@ def _ensure_flexi_sig_tables(cur) -> None:
           created_by     TEXT,
           reason         TEXT,
           active         BOOLEAN NOT NULL DEFAULT true,
+          operation      TEXT NOT NULL DEFAULT 'equivalent',
+          weight         DOUBLE PRECISION DEFAULT 1.0,
+          source_param_id TEXT,
           UNIQUE (param_id, core_hash, equivalent_to)
         )
         """
@@ -106,6 +109,30 @@ def _ensure_flexi_sig_tables(cur) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_sigeq_param_active
           ON signature_equivalence (param_id, created_at DESC)
+        """
+    )
+
+    # ── Schema migration: add columns if missing (idempotent) ────────────
+    for col, typedef in [
+        ("operation", "TEXT NOT NULL DEFAULT 'equivalent'"),
+        ("weight", "DOUBLE PRECISION DEFAULT 1.0"),
+        ("source_param_id", "TEXT"),
+    ]:
+        try:
+            cur.execute(
+                f"""
+                ALTER TABLE signature_equivalence
+                  ADD COLUMN IF NOT EXISTS {col} {typedef}
+                """
+            )
+        except Exception:
+            pass  # Column already exists or not supported — safe to ignore
+
+    # Extended unique index including source_param_id for cross-param transforms
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sigeq_unique_v2
+          ON signature_equivalence (param_id, core_hash, equivalent_to, COALESCE(source_param_id, param_id))
         """
     )
 
@@ -417,6 +444,7 @@ def query_snapshots(
     anchor_from: Optional[date] = None,
     anchor_to: Optional[date] = None,
     as_at: Optional[datetime] = None,
+    retrieved_ats: Optional[List[datetime]] = None,
     include_equivalents: bool = True,
     limit: int = 10000
 ) -> List[Dict[str, Any]]:
@@ -489,6 +517,10 @@ def query_snapshots(
         if as_at is not None:
             query += " AND retrieved_at <= %s"
             params.append(as_at)
+
+        if retrieved_ats is not None and len(retrieved_ats) > 0:
+            query += " AND retrieved_at = ANY(%s)"
+            params.append(retrieved_ats)
         
         query += " ORDER BY anchor_day, slice_key, retrieved_at"
         query += f" LIMIT {int(limit)}"
@@ -1109,7 +1141,7 @@ def get_batch_inventory_v2(
                 """
                 SELECT param_id, core_hash, equivalent_to
                 FROM signature_equivalence
-                WHERE param_id = ANY(%s) AND active = true
+                WHERE param_id = ANY(%s) AND active = true AND operation = 'equivalent'
                 """,
                 (param_ids,),
             )
@@ -1377,7 +1409,11 @@ def get_batch_inventory_v2(
 # decides what it considers "relevant" for display and debugging.
 
 
-def delete_snapshots(param_id: str, core_hashes: Optional[List[str]] = None) -> Dict[str, Any]:
+def delete_snapshots(
+    param_id: str,
+    core_hashes: Optional[List[str]] = None,
+    retrieved_ats: Optional[List[datetime]] = None,
+) -> Dict[str, Any]:
     """
     Delete snapshots for a specific parameter, optionally scoped to specific core_hashes.
     
@@ -1397,13 +1433,19 @@ def delete_snapshots(param_id: str, core_hashes: Optional[List[str]] = None) -> 
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+        where = ["param_id = %s"]
+        params: List[Any] = [param_id]
+
         if core_hashes is not None and len(core_hashes) > 0:
-            cur.execute(
-                "DELETE FROM snapshots WHERE param_id = %s AND core_hash = ANY(%s)",
-                (param_id, core_hashes)
-            )
-        else:
-            cur.execute("DELETE FROM snapshots WHERE param_id = %s", (param_id,))
+            where.append("core_hash = ANY(%s)")
+            params.append(core_hashes)
+
+        if retrieved_ats is not None and len(retrieved_ats) > 0:
+            where.append("retrieved_at = ANY(%s)")
+            params.append(retrieved_ats)
+
+        sql = "DELETE FROM snapshots WHERE " + " AND ".join(where)
+        cur.execute(sql, tuple(params))
         deleted = cur.rowcount
         conn.commit()
         return {'success': True, 'deleted': deleted}
@@ -1424,6 +1466,7 @@ def query_snapshot_retrievals(
     anchor_from: Optional[date] = None,
     anchor_to: Optional[date] = None,
     include_equivalents: bool = True,
+    include_summary: bool = False,
     limit: int = 200
 ) -> Dict[str, Any]:
     """
@@ -1491,6 +1534,30 @@ def query_snapshot_retrievals(
         where_sql = " AND ".join(where_clauses)
 
         if core_hash and include_equivalents:
+            if include_summary:
+                select_sql = f"""
+                SELECT
+                  retrieved_at,
+                  slice_key,
+                  MIN(anchor_day) AS anchor_from,
+                  MAX(anchor_day) AS anchor_to,
+                  COUNT(*) AS row_count,
+                  COALESCE(SUM(X), 0) AS sum_x,
+                  COALESCE(SUM(Y), 0) AS sum_y
+                FROM snapshots
+                WHERE {where_sql}
+                GROUP BY retrieved_at, slice_key
+                ORDER BY retrieved_at DESC, slice_key
+                LIMIT %s
+                """
+            else:
+                select_sql = f"""
+                SELECT DISTINCT retrieved_at
+                FROM snapshots
+                WHERE {where_sql}
+                ORDER BY retrieved_at DESC
+                LIMIT %s
+                """
             query = f"""
             WITH RECURSIVE eq(core_hash) AS (
               SELECT %s::text
@@ -1498,39 +1565,77 @@ def query_snapshot_retrievals(
               SELECT CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END
               FROM signature_equivalence e
               JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
-              WHERE e.param_id = %s AND e.active = true
+              WHERE e.param_id = %s AND e.active = true AND e.operation = 'equivalent'
             )
-            SELECT DISTINCT retrieved_at
-            FROM snapshots
-            WHERE {where_sql}
-            ORDER BY retrieved_at DESC
-            LIMIT %s
+            {select_sql}
             """
             params2 = [core_hash, param_id] + params + [limit_i]
             cur.execute(query, tuple(params2))
         else:
-            # Distinct retrievals bounded by limit, most recent first.
-            cur.execute(
-                f"""
-                SELECT DISTINCT retrieved_at
-                FROM snapshots
-                WHERE {where_sql}
-                ORDER BY retrieved_at DESC
-                LIMIT %s
-                """,
-                tuple(params + [limit_i])
-            )
+            if include_summary:
+                cur.execute(
+                    f"""
+                    SELECT
+                      retrieved_at,
+                      slice_key,
+                      MIN(anchor_day) AS anchor_from,
+                      MAX(anchor_day) AS anchor_to,
+                      COUNT(*) AS row_count,
+                      COALESCE(SUM(X), 0) AS sum_x,
+                      COALESCE(SUM(Y), 0) AS sum_y
+                    FROM snapshots
+                    WHERE {where_sql}
+                    GROUP BY retrieved_at, slice_key
+                    ORDER BY retrieved_at DESC, slice_key
+                    LIMIT %s
+                    """,
+                    tuple(params + [limit_i])
+                )
+            else:
+                # Distinct retrievals bounded by limit, most recent first.
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT retrieved_at
+                    FROM snapshots
+                    WHERE {where_sql}
+                    ORDER BY retrieved_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params + [limit_i])
+                )
 
-        retrieved_ats = [row[0].isoformat() for row in cur.fetchall() if row and row[0] is not None]
+        rows = cur.fetchall()
+        if include_summary:
+            summary = []
+            for r in rows:
+                if not r or r[0] is None:
+                    continue
+                summary.append({
+                    "retrieved_at": r[0].isoformat(),
+                    "slice_key": r[1] or '',
+                    "anchor_from": r[2].isoformat() if r[2] else None,
+                    "anchor_to": r[3].isoformat() if r[3] else None,
+                    "row_count": int(r[4] or 0),
+                    "sum_x": int(r[5] or 0),
+                    "sum_y": int(r[6] or 0),
+                })
+            retrieved_ats = [s["retrieved_at"] for s in summary]
+        else:
+            retrieved_ats = [r[0].isoformat() for r in rows if r and r[0] is not None]
+            summary = None
+
         retrieved_days = sorted({ts.split('T')[0] for ts in retrieved_ats}, reverse=True)
 
-        return {
+        out = {
             'success': True,
             'retrieved_at': retrieved_ats,
             'retrieved_days': retrieved_days,
             'latest_retrieved_at': retrieved_ats[0] if retrieved_ats else None,
             'count': len(retrieved_ats),
         }
+        if summary is not None:
+            out["summary"] = summary
+        return out
     except Exception as e:
         return {
             'success': False,
@@ -1688,7 +1793,7 @@ def query_virtual_snapshot(
               SELECT CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END
               FROM signature_equivalence e
               JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
-              WHERE e.param_id = %s AND e.active = true
+              WHERE e.param_id = %s AND e.active = true AND e.operation = 'equivalent'
             ),
             ranked_match AS (
                 SELECT
@@ -1838,36 +1943,97 @@ def query_virtual_snapshot(
 
 def list_signatures(
     *,
-    param_id: str,
+    param_id: Optional[str] = None,
+    param_id_prefix: Optional[str] = None,
+    graph_name: Optional[str] = None,
+    list_params: bool = False,
     limit: int = 200,
     include_inputs: bool = False
 ) -> Dict[str, Any]:
-    """List signature_registry rows for a param_id (newest first)."""
+    """List signature_registry rows for a param_id (newest first).
+
+    Extended modes:
+    - list_params=True: return distinct param_ids with summary counts instead of individual rows.
+      Supports param_id_prefix for workspace scoping and graph_name for provenance filtering.
+    - graph_name: filter by inputs_json->'provenance'->>'graph_name' (JSONB).
+    """
     limit_i = max(1, min(int(limit or 200), 2000))
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+
+        # ── Mode: list distinct param_ids ────────────────────────────────────
+        if list_params:
+            where_clauses: List[str] = []
+            params_list: List[Any] = []
+
+            if param_id_prefix:
+                where_clauses.append("param_id LIKE %s")
+                params_list.append(param_id_prefix + "%")
+            if graph_name:
+                where_clauses.append("inputs_json->'provenance'->>'graph_name' = %s")
+                params_list.append(graph_name)
+
+            where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            cur.execute(
+                f"""
+                SELECT param_id,
+                       COUNT(*) AS signature_count,
+                       MAX(created_at) AS latest_created_at,
+                       MIN(created_at) AS earliest_created_at
+                FROM signature_registry
+                {where_sql}
+                GROUP BY param_id
+                ORDER BY MAX(created_at) DESC
+                LIMIT %s
+                """,
+                tuple(params_list + [limit_i]),
+            )
+            rows = cur.fetchall()
+            out = []
+            for (pid, sig_count, latest, earliest) in rows:
+                out.append({
+                    "param_id": str(pid),
+                    "signature_count": int(sig_count),
+                    "latest_created_at": latest.isoformat().replace("+00:00", "Z") if hasattr(latest, "isoformat") else str(latest),
+                    "earliest_created_at": earliest.isoformat().replace("+00:00", "Z") if hasattr(earliest, "isoformat") else str(earliest),
+                })
+            return {"success": True, "params": out, "count": len(out)}
+
+        # ── Mode: list signatures for a specific param_id ────────────────────
+        if not param_id:
+            raise ValueError("Either param_id or list_params=True is required")
+
+        where_clauses = ["param_id = %s"]
+        params_list = [param_id]
+
+        if graph_name:
+            where_clauses.append("inputs_json->'provenance'->>'graph_name' = %s")
+            params_list.append(graph_name)
+
+        where_sql = " AND ".join(where_clauses)
+
         if include_inputs:
             cur.execute(
-                """
+                f"""
                 SELECT param_id, core_hash, created_at, canonical_signature, canonical_sig_hash_full, sig_algo, inputs_json
                 FROM signature_registry
-                WHERE param_id = %s
+                WHERE {where_sql}
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (param_id, limit_i),
+                tuple(params_list + [limit_i]),
             )
         else:
             cur.execute(
-                """
+                f"""
                 SELECT param_id, core_hash, created_at, canonical_signature, canonical_sig_hash_full, sig_algo
                 FROM signature_registry
-                WHERE param_id = %s
+                WHERE {where_sql}
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (param_id, limit_i),
+                tuple(params_list + [limit_i]),
             )
         rows = cur.fetchall()
         out = []
@@ -1956,7 +2122,8 @@ def list_equivalence_links(
         where_sql = " AND ".join(where)
         cur.execute(
             f"""
-            SELECT param_id, core_hash, equivalent_to, created_at, created_by, reason, active
+            SELECT param_id, core_hash, equivalent_to, created_at, created_by, reason, active,
+                   operation, weight, source_param_id
             FROM signature_equivalence
             WHERE {where_sql}
             ORDER BY created_at DESC
@@ -1966,7 +2133,8 @@ def list_equivalence_links(
         )
         rows = cur.fetchall()
         out = []
-        for (pid, ch, eq, created_at, created_by, reason, active) in rows:
+        for row in rows:
+            pid, ch, eq, created_at, created_by, reason, active, operation, weight, source_pid = row
             out.append(
                 {
                     "param_id": str(pid),
@@ -1976,6 +2144,9 @@ def list_equivalence_links(
                     "created_by": created_by,
                     "reason": reason,
                     "active": bool(active),
+                    "operation": str(operation) if operation else "equivalent",
+                    "weight": float(weight) if weight is not None else 1.0,
+                    "source_param_id": str(source_pid) if source_pid else None,
                 }
             )
         return {"success": True, "rows": out, "count": len(out)}
@@ -1991,10 +2162,20 @@ def create_equivalence_link(
     core_hash: str,
     equivalent_to: str,
     created_by: str,
-    reason: str
+    reason: str,
+    operation: str = "equivalent",
+    weight: float = 1.0,
+    source_param_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Create/activate an equivalence link (idempotent)."""
-    if core_hash == equivalent_to:
+    """Create/activate an equivalence or transform link (idempotent).
+
+    Args:
+        operation: 'equivalent' (default, undirected identity), 'sum', 'average',
+                   'weighted_average', 'first', 'last'.
+        weight: For weighted operations; ignored for 'equivalent'.
+        source_param_id: For cross-param transforms; NULL means same as param_id.
+    """
+    if core_hash == equivalent_to and (source_param_id is None or source_param_id == param_id):
         return {"success": False, "error": "self_link_not_allowed"}
     conn = get_db_connection()
     try:
@@ -2002,12 +2183,13 @@ def create_equivalence_link(
         cur.execute(
             """
             INSERT INTO signature_equivalence
-              (param_id, core_hash, equivalent_to, created_by, reason, active)
-            VALUES (%s, %s, %s, %s, %s, true)
+              (param_id, core_hash, equivalent_to, created_by, reason, active, operation, weight, source_param_id)
+            VALUES (%s, %s, %s, %s, %s, true, %s, %s, %s)
             ON CONFLICT (param_id, core_hash, equivalent_to)
-            DO UPDATE SET active = true, reason = EXCLUDED.reason, created_by = EXCLUDED.created_by
+            DO UPDATE SET active = true, reason = EXCLUDED.reason, created_by = EXCLUDED.created_by,
+                          operation = EXCLUDED.operation, weight = EXCLUDED.weight, source_param_id = EXCLUDED.source_param_id
             """,
-            (param_id, core_hash, equivalent_to, created_by, reason),
+            (param_id, core_hash, equivalent_to, created_by, reason, operation, weight, source_param_id),
         )
         conn.commit()
         return {"success": True}
@@ -2067,7 +2249,7 @@ def resolve_equivalent_hashes(
               SELECT CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END
               FROM signature_equivalence e
               JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
-              WHERE e.param_id = %s AND e.active = true
+              WHERE e.param_id = %s AND e.active = true AND e.operation = 'equivalent'
             )
             SELECT DISTINCT core_hash FROM eq
             """,

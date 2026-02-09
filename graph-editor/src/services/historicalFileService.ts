@@ -278,7 +278,8 @@ class HistoricalFileService {
     }
 
     // Build the display name and temporary file ID
-    const displayName = file.name || fileId.replace(/^(graph|parameter|case|event|node|context)-/, '');
+    const displayName = (file.name || fileId.replace(/^(graph|parameter|case|event|node|context)-/, ''))
+      .replace(/\.(json|yaml|yml)$/i, '');
     const tabTitle = `${displayName}.asat(${commit.dateUK})`;
     const tempFileId = `temp-historical-${file.type}-${displayName}-${commit.shortSha}`;
 

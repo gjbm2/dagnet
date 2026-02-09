@@ -215,7 +215,19 @@ You can see snapshot availability in several places:
 
 ### Managing Snapshots
 
-**Delete snapshots**: Right-click an edge or parameter file and select "Delete snapshots (X)" to remove all stored snapshot data for that parameter.
+**Snapshot Manager**: Open via **Data > Snapshot Manager**, or right-click an edge/parameter and select **Manage...** from the snapshots submenu. The Snapshot Manager is a parameter-first diagnostic tool with three columns:
+
+1. **Parameter list** (left): Browse all parameters with snapshot data. Optionally filter by graph using the dropdown at the top.
+2. **Signature timeline** (centre): After selecting a parameter, see all its signatures listed chronologically. Each card shows the signature hash, creation date, query mode (cohort/window), snapshot count, date range, and total rows. Click to select; shift-click a second signature to compare.
+3. **Detail / Links / Data** (right): Three tabs for working with the selected signature:
+   - **Detail**: View `inputs_json` in a Monaco editor (or diff two signatures side-by-side). Action buttons let you view the historical graph at the signature's date, download or delete snapshot data, or create a new link.
+   - **Links**: View existing signature equivalence links and create new ones. Use the "Same parameter" shortcut or search for a different parameter to link across.
+   - **Data**: Table of retrieval batches grouped by `(retrieved_at, slice_key)`, showing anchor date range, row count, Σ n, Σ k, and slice ID. Select rows to download or delete specific batches.
+
+**Quick actions from context menus**:
+- **Delete snapshots**: Right-click an edge or parameter → Delete snapshots to remove all stored data
+- **Download snapshots**: Right-click an edge or parameter → Download snapshots to export as CSV
+- **Manage...**: Right-click an edge or parameter → Manage... to open the Snapshot Manager pointing at that parameter
 
 ### Gap Warnings
 
@@ -248,10 +260,11 @@ The Analytics panel shows the current query as a DSL expression. You can:
 | **Path Comparison** | Compare conversion rates across different paths |
 | **Lag Histogram** | Distribution of conversion lag days from snapshot history |
 | **Daily Conversions** | Conversion counts by calendar date from snapshot history |
+| **Cohort Maturity** | How conversion rates evolve over time for a cohort range |
 
 ### Snapshot-Based Analyses
 
-The **Lag Histogram** and **Daily Conversions** analyses work differently from other analysis types — they query historical snapshot data rather than computing from the current graph state.
+The **Lag Histogram**, **Daily Conversions**, and **Cohort Maturity** analyses work differently from other analysis types — they query historical snapshot data rather than computing from the current graph state.
 
 #### Lag Histogram
 
@@ -276,6 +289,19 @@ Use this to understand:
 - Daily conversion volumes over time
 - Seasonality and trends
 - Impact of campaigns or changes
+
+#### Cohort Maturity
+
+Shows how conversion rates evolve over successive snapshot retrieval dates:
+- **X-axis**: Snapshot retrieval dates (when data was fetched)
+- **Y-axis**: Conversion rate for the selected cohort range
+- **Lines**: One line per visible scenario
+- **Subject selector**: Choose which parameter/edge to chart
+
+Use this to understand:
+- Whether conversion rates are improving or declining over time
+- How stable your funnel metrics are
+- Differences between scenarios at each point in time
 
 #### Gap Warnings
 
@@ -329,6 +355,28 @@ When scenarios have different visibility modes, the probability label will diffe
 - **Pull Latest**: Get the latest changes from remote repositories
 - **Commit Changes**: Save your changes to the repository
 - **Branch Management**: Create and switch between branches
+
+### Viewing Historical Versions
+
+You can open any file (graph, parameter, case, event, node, or context) as it was at a past git commit. This is useful for understanding how a graph or parameter has changed over time, or for comparing current state against a historical baseline.
+
+**Three ways to access historical versions:**
+
+1. **Navigator @ icon**: Hover over any file in the Navigator to reveal an `@` icon. Click it to open a calendar picker with commit dates highlighted. Click a date to open that version.
+
+2. **Context menus**: Right-click a file in the Navigator or a tab → select "Open Historical Version". A submenu shows dates with commits — select one to open.
+
+3. **File menu**: File → Open Historical Version provides the same date-based submenu for the active file.
+
+**How it works:**
+- Historical versions open in a temporary read-only tab
+- Tab titles use the `.asat()` convention: e.g. `conversion-flow.asat(4-Feb-26)`
+- The tab is cleaned up automatically when you close it
+- Only files that have been committed to git can be viewed historically (local-only files cannot)
+
+**From the Snapshot Manager:**
+- The "View graph at DATE" button opens the historical version of the graph closest to a signature's creation date
+- It also injects an `asat(DATE)` clause into the graph's DSL query, so you see historical data with the historical graph structure
 
 ## Tips and Best Practices
 

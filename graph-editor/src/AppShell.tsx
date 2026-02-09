@@ -29,6 +29,7 @@ import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
 import { getObjectTypeTheme } from './theme/objectTypeTheme';
+import { History } from 'lucide-react';
 import { DashboardModeProvider } from './contexts/DashboardModeContext';
 import { ShareModeProvider } from './contexts/ShareModeContext';
 import { useDashboardMode } from './hooks/useDashboardMode';
@@ -630,11 +631,28 @@ function MainAppShellContent() {
               data-object-type={objectType}
               onClick={() => tabOperations.switchTab(tab.id)}
             >
-              <IconComponent 
-                size={14} 
-                strokeWidth={2}
-                style={{ color: theme.accentColour, flexShrink: 0 }}
-              />
+              <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+                <IconComponent 
+                  size={14} 
+                  strokeWidth={2}
+                  style={{ color: theme.accentColour }}
+                />
+                {tab.fileId.startsWith('temp-historical-') && (
+                  <History 
+                    size={8} 
+                    strokeWidth={2.5}
+                    style={{ 
+                      position: 'absolute', 
+                      bottom: -2, 
+                      right: -4, 
+                      color: theme.accentColour,
+                      background: 'var(--tab-bg, #1e1e1e)',
+                      borderRadius: '50%',
+                      padding: '0.5px'
+                    }}
+                  />
+                )}
+              </span>
               <span style={{ 
                 flex: 1, 
                 minWidth: 0, 
@@ -701,11 +719,28 @@ function MainAppShellContent() {
               onClick={() => tabOperations.switchTab(tab.id)}
               style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
             >
-              <IconComponent 
-                size={14} 
-                strokeWidth={2}
-                style={{ color: theme.accentColour, flexShrink: 0 }}
-              />
+              <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+                <IconComponent 
+                  size={14} 
+                  strokeWidth={2}
+                  style={{ color: theme.accentColour }}
+                />
+                {tab.fileId.startsWith('temp-historical-') && (
+                  <History 
+                    size={8} 
+                    strokeWidth={2.5}
+                    style={{ 
+                      position: 'absolute', 
+                      bottom: -2, 
+                      right: -4, 
+                      color: theme.accentColour,
+                      background: 'var(--tab-bg, #1e1e1e)',
+                      borderRadius: '50%',
+                      padding: '0.5px'
+                    }}
+                  />
+                )}
+              </span>
               <span style={{ 
                 flex: 1, 
                 minWidth: 0, 
@@ -1126,11 +1161,28 @@ function MainAppShellContent() {
             }}
             style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-            <IconComponent 
-              size={14} 
-              strokeWidth={2}
-              style={{ color: theme.accentColour, flexShrink: 0 }}
-            />
+            <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+              <IconComponent 
+                size={14} 
+                strokeWidth={2}
+                style={{ color: theme.accentColour }}
+              />
+              {tab.fileId.startsWith('temp-historical-') && (
+                <History 
+                  size={8} 
+                  strokeWidth={2.5}
+                  style={{ 
+                    position: 'absolute', 
+                    bottom: -2, 
+                    right: -4, 
+                    color: theme.accentColour,
+                    background: 'var(--tab-bg, #1e1e1e)',
+                    borderRadius: '50%',
+                    padding: '0.5px'
+                  }}
+                />
+              )}
+            </span>
             <span style={{ 
               flex: 1, 
               minWidth: 0, 

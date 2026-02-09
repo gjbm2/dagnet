@@ -23,9 +23,11 @@ import { useViewHistory } from '../hooks/useViewHistory';
 import { useOpenHistorical } from '../hooks/useOpenHistorical';
 import { useClearDataFile } from '../hooks/useClearDataFile';
 import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
+import { useManageSnapshots } from '../hooks/useManageSnapshots';
 import { useWhereUsed } from '../hooks/useWhereUsed';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { HistoryModal } from './modals/HistoryModal';
+import { TagEditorPopover } from './TagEditorPopover';
 
 interface NavigatorItemContextMenuProps {
   item: RepositoryItem;
@@ -119,6 +121,9 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   const snapshotRowCount = item.type === 'parameter' ? inventories[item.id]?.row_count : undefined;
   const hasSnapshots = (snapshotRowCount ?? 0) > 0;
 
+  // Snapshot Manager hook (parameters and graphs)
+  const { canManage: canManageSnapshots, openSnapshotManager } = useManageSnapshots(fileId, item.type);
+
   // Where used hook
   const { findWhereUsed, isSearching: isSearchingWhereUsed, canSearch: canSearchWhereUsed } = useWhereUsed(fileId);
 
@@ -151,6 +156,9 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
   
   // Duplicate modal state
   const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+
+  // Tag editor popover state
+  const [tagEditorPos, setTagEditorPos] = useState<{ x: number; y: number } | null>(null);
 
   const handleDeleteFile = async (message: string) => {
     try {
@@ -263,6 +271,13 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     label: 'Duplicate...',
     onClick: () => {
       setIsDuplicateModalOpen(true);
+    },
+    keepMenuOpen: true
+  });
+  menuItems.push({
+    label: 'Edit Tags…',
+    onClick: () => {
+      setTagEditorPos({ x: x + 160, y });
     },
     keepMenuOpen: true
   });
@@ -387,7 +402,6 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     menuItems.push({
       label: 'Snapshots',
       onClick: () => {},
-      disabled: !hasSnapshots,
       submenu: [
         {
           label: 'Download snapshot data',
@@ -405,7 +419,26 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
             onClose();
           },
         },
+        { label: '', onClick: () => {}, divider: true },
+        {
+          label: 'Manage...',
+          onClick: () => {
+            openSnapshotManager();
+            onClose();
+          },
+        },
       ],
+    });
+  }
+
+  // Snapshot Manager (for graphs)
+  if (item.type === 'graph' && canManageSnapshots) {
+    menuItems.push({
+      label: 'Snapshot Manager...',
+      onClick: () => {
+        openSnapshotManager();
+        onClose();
+      },
     });
   }
 
@@ -501,7 +534,7 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
 
   return (
     <>
-      <ContextMenu x={x} y={y} items={menuItems} onClose={onClose} />
+      {!tagEditorPos && <ContextMenu x={x} y={y} items={menuItems} onClose={onClose} />}
       
       {/* Commit Modal */}
       <CommitModal
@@ -579,6 +612,19 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
         onRollback={rollbackToCommit}
         onView={viewAtCommit}
       />
+
+      {/* Tag Editor Popover */}
+      {tagEditorPos && (
+        <TagEditorPopover
+          fileId={fileId}
+          x={tagEditorPos.x}
+          y={tagEditorPos.y}
+          onClose={() => {
+            setTagEditorPos(null);
+            onClose();
+          }}
+        />
+      )}
 
       {/* Pull all conflict modal - managed by usePullAll hook */}
       {pullAllConflictModal}

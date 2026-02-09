@@ -19,10 +19,12 @@ import {
   FileText
 } from 'lucide-react';
 import { dataOperationsService } from '../services/dataOperationsService';
-import { fileRegistry } from '../contexts/TabContext';
+import { fileRegistry, useTabContext } from '../contexts/TabContext';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
 import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
+import { signatureLinksTabService } from '../services/signatureLinksTabService';
+import { useNavigatorContext } from '../contexts/NavigatorContext';
 import './LightningMenu.css';
 import type { BatchOperationType, SingleOperationTarget } from './modals/BatchOperationsModal';
 
@@ -37,6 +39,8 @@ interface DataOperationsMenuProps {
   
   // Context
   graph: any;
+  /** File-level graph ID, e.g. "graph-my-graph" — authoritative, unlike graph.metadata.name */
+  graphFileId?: string | null;
   setGraph: (graph: any) => void;
   /**
    * AUTHORITATIVE DSL from graphStore - the SINGLE source of truth.
@@ -68,6 +72,7 @@ export function DataOperationsMenu({
   paramSlot,
   conditionalIndex,
   graph,
+  graphFileId,
   setGraph,
   currentDSL,
   mode,
@@ -197,6 +202,8 @@ export function DataOperationsMenu({
   
   // Open file hook
   const { openFile } = useOpenFile();
+  const { state: navState } = useNavigatorContext();
+  const { tabs, activeTabId } = useTabContext();
   
   // Snapshot menu hook (only for parameters)
   const paramIds = objectType === 'parameter' && objectId ? [objectId] : [];
@@ -609,6 +616,40 @@ export function DataOperationsMenu({
                 <span>Delete {snapshotCount ?? 0} snapshot{(snapshotCount ?? 0) !== 1 ? 's' : ''}</span>
                 <div className={pathwayClassName}>
                   <Database size={12} style={{ color: hasSnapshots ? '#dc2626' : '#999' }} />
+                </div>
+              </button>
+
+              <div style={{ borderTop: '1px solid #eee', margin: '4px 0' }} />
+              <button
+                className={itemClassName}
+                onClick={() => {
+                  const repo = navState.selectedRepo;
+                  const branch = navState.selectedBranch || 'main';
+                  const activeTabFileId = activeTabId
+                    ? tabs.find(t => t.id === activeTabId)?.fileId ?? null
+                    : null;
+                  const effectiveGraphFileId =
+                    graphFileId
+                    ?? (activeTabFileId?.startsWith('graph-') ? activeTabFileId : null);
+                  const bareGraphId =
+                    effectiveGraphFileId?.replace(/^graph-/, '')
+                    || graph?.metadata?.id
+                    || graph?.metadata?.name
+                    || '';
+                  void signatureLinksTabService.openSignatureLinksTab({
+                    graphId: bareGraphId,
+                    graphName: bareGraphId,
+                    paramId: objectId,
+                    dbParamId: `${repo}-${branch}-${objectId}`,
+                    paramSlot: paramSlot || 'p',
+                  });
+                  if (onClose) onClose();
+                }}
+                title="Open Snapshot Manager for this parameter"
+              >
+                <span>Manage…</span>
+                <div className={pathwayClassName}>
+                  <Folders size={12} />
                 </div>
               </button>
             </div>

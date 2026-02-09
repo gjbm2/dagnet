@@ -27,6 +27,8 @@ import { useOpenFile } from '../hooks/useOpenFile';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { fileRegistry } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
+import { signatureLinksTabService } from '../services/signatureLinksTabService';
+import { useNavigatorContext } from '../contexts/NavigatorContext';
 import toast from 'react-hot-toast';
 
 interface EdgeContextMenuProps {
@@ -36,6 +38,8 @@ interface EdgeContextMenuProps {
   edgeData: any;
   edges: any[]; // ReactFlow edges to check for selection
   graph: any;
+  /** File-level graph ID, e.g. "graph-my-graph" — authoritative, unlike graph.metadata.name */
+  graphFileId?: string | null;
   onClose: () => void;
   onUpdateGraph: (graph: any, historyLabel?: string, nodeId?: string) => void;
   onDeleteEdge: (edgeId: string) => void;
@@ -48,6 +52,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   edgeData,
   edges,
   graph,
+  graphFileId,
   onClose,
   onUpdateGraph,
   onDeleteEdge,
@@ -60,6 +65,10 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   const graphStore = useGraphStore();
   const { window, currentDSL } = graphStore;
   const viewPrefs = useViewPreferencesContext();
+  const { state: navState } = useNavigatorContext();
+
+  // Authoritative graph ID (stripped of "graph-" prefix) — avoids stale metadata.name
+  const bareGraphId = graphFileId ? graphFileId.replace(/^graph-/, '') : '';
 
   // Calculate constrained position on mount
   useEffect(() => {
@@ -734,6 +743,16 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               snapshotCount={section.objectType === 'parameter' ? snapshotCounts[section.objectId] : undefined}
               onDownloadSnapshotData={section.objectType === 'parameter' ? (s) => { void downloadSnapshotData(s.objectId, matchedCoreHashes[s.objectId]); onClose(); } : undefined}
               onDeleteSnapshots={section.objectType === 'parameter' ? (s) => { void deleteSnapshots(s.objectId, matchedCoreHashes[s.objectId]); onClose(); } : undefined}
+              onManageSnapshots={section.objectType === 'parameter' ? (s) => {
+                void signatureLinksTabService.openSignatureLinksTab({
+                  graphId: bareGraphId,
+                  graphName: bareGraphId,
+                  paramId: s.objectId,
+                  dbParamId: `${navState.selectedRepo}-${navState.selectedBranch || 'main'}-${s.objectId}`,
+                  paramSlot: s.paramSlot || 'p',
+                });
+                onClose();
+              } : undefined}
             />
           ))}
         </>
@@ -926,6 +945,36 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       )}
 
       <RemoveOverridesMenuItem graph={graph} onUpdateGraph={onUpdateGraph} edgeId={edgeId} onClose={onClose} />
+
+      {/* Snapshot Manager */}
+      {edgeData?.p?.id && (
+        <div
+          onClick={() => {
+            const repo = navState.selectedRepo;
+            const branch = navState.selectedBranch || 'main';
+            const paramId = edgeData.p.id;
+            const graphName = graph?.metadata?.name;
+            void signatureLinksTabService.openSignatureLinksTab({
+              graphId: graph?.metadata?.name,
+              graphName: graphName,
+              paramId: paramId,
+              dbParamId: `${repo}-${branch}-parameter-${paramId}`,
+              paramSlot: 'p',
+            });
+            onClose();
+          }}
+          style={{
+            padding: '8px 12px',
+            cursor: 'pointer',
+            fontSize: '13px',
+            borderRadius: '2px',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        >
+          Snapshot Manager
+        </div>
+      )}
 
       <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
 

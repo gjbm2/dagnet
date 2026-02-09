@@ -103,10 +103,28 @@ The live, working state of the graph in the editor. It is the result of composin
 **Flatten**
 The action of merging the "Current" state down into the "Base" layer, effectively making the current scenario the new default.
 
-**Snapshot**
+**Snapshot (scenario)**
 Saving the current parameter state as a new scenario.
 - **Full Snapshot**: Saves all parameters.
 - **Diff Snapshot**: Saves only the parameters that differ from the baseline.
+
+**Snapshot (data)**
+A stored record of conversion data retrieved from an external source (e.g. Amplitude). Each snapshot captures cohort anchor dates, conversion counts (n/k), retrieval timestamp, and slice key. Snapshots accumulate in the snapshot database and enable historical analysis, lag histograms, and cohort maturity charting.
+
+**Snapshot Manager**
+A parameter-first diagnostic tool for browsing, comparing, linking, and managing snapshot data. Accessible via **Data > Snapshot Manager** or by right-clicking parameters/edges and selecting **Manage...**. Displays signatures, their snapshot statistics, and allows creating equivalence links between signatures.
+
+**Signature (query signature / canonical signature)**
+A content-addressed identifier computed from a parameter's query definition (events, contexts, graph structure). When the query definition changes, the signature changes, which means old snapshot data is stored under the old signature and new data under the new one. The Snapshot Manager lets you link old and new signatures together.
+
+**Core Hash**
+A short hash derived from the canonical signature. Used as the primary key for grouping snapshot data and linking equivalent signatures.
+
+**Signature Equivalence Link**
+An explicit relationship between two signatures, declaring that snapshot data stored under one signature should be considered equivalent to the other. Created in the Snapshot Manager's Links tab. Enables continuity of historical data when query definitions change.
+
+**Historical Version**
+A read-only view of a file (graph, parameter, etc.) as it was at a past git commit. Opened via the Navigator `@` icon, context menus, or File menu. Historical tabs use the `.asat(d-MMM-yy)` naming convention.
 
 **HRN (Human Readable Name)**
 The text-based key used to identify parameters in scenarios and overrides (e.g., `e.checkout-to-purchase.p.mean`).

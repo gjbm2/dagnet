@@ -37,6 +37,9 @@ export interface SnapshotSubjectRequest {
   /** Stable ID for joining results back to analysis scope */
   subject_id: string;
 
+  /** Human-readable label for display (e.g. "registration → success") */
+  subject_label?: string;
+
   /** Workspace-prefixed DB parameter identity */
   param_id: string;
 
@@ -154,8 +157,21 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
     const sliceKey = item.sliceFamily ? `${item.sliceFamily}.${modeClause}` : modeClause;
     const sliceKeys = [sliceKey];
 
+    // Derive a human-readable label from the graph edge (from → to node IDs).
+    // item.targetId is the edge UUID; look it up in the graph.
+    let subjectLabel: string | undefined;
+    const edge = graph.edges.find((e: any) => e.uuid === item.targetId);
+    if (edge) {
+      const fromNode = graph.nodes.find((n: any) => n.uuid === edge.from);
+      const toNode = graph.nodes.find((n: any) => n.uuid === edge.to);
+      if (fromNode && toNode) {
+        subjectLabel = `${fromNode.id} → ${toNode.id}`;
+      }
+    }
+
     subjects.push({
       subject_id: item.itemKey,
+      subject_label: subjectLabel,
       param_id: paramId,
       canonical_signature: item.querySignature,
       core_hash: coreHash,
