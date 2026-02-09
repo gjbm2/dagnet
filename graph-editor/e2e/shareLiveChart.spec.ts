@@ -1992,8 +1992,9 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
         hide_current: false,
       },
       graph_state: {
-        base_dsl: 'window(1-Jan-26:2-Jan-26)',
-        current_query_dsl: 'window(1-Jan-26:2-Jan-26)',
+        // Relative cohort: must be recomputed in viewer-now semantics.
+        base_dsl: 'cohort(-30d:)',
+        current_query_dsl: 'cohort(-30d:)',
       },
     };
 
@@ -2004,6 +2005,22 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
     const guards = attachShareBootConsoleGuards(page);
     const fx = installShareForensics({ page, testInfo, phase: 'snapshot-daily-conversions' });
     await installShareLiveStubs(page, state);
+    // Freeze "now" so relative cohort() windows resolve deterministically (viewer-now semantics).
+    await page.addInitScript(() => {
+      const fixed = new Date('2026-02-09T12:00:00.000Z').getTime();
+      const OriginalDate = Date;
+      class MockDate extends OriginalDate {
+        constructor(...args: any[]) {
+          if (args.length === 0) super(fixed);
+          else super(...args);
+        }
+        static now() {
+          return fixed;
+        }
+      }
+      // @ts-ignore
+      (window as any).Date = MockDate;
+    });
 
     try {
       await page.goto(new URL(shareUrl, baseURL).toString(), { waitUntil: 'domcontentloaded' });
@@ -2038,10 +2055,18 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
         for (const subj of s.snapshot_subjects) {
           expect(subj.param_id, 'snapshot subject must have param_id').toBeTruthy();
           expect(subj.core_hash, 'snapshot subject must have core_hash').toBeTruthy();
+          expect(subj.canonical_signature, 'snapshot subject must have canonical_signature').toBeTruthy();
           expect(subj.anchor_from, 'snapshot subject must have anchor_from').toBeTruthy();
           expect(subj.anchor_to, 'snapshot subject must have anchor_to').toBeTruthy();
+          // Viewer-now semantics for relative cohort(-30d:) (frozen via addInitScript above).
+          expect(subj.anchor_to).toBe('2026-02-09');
+          expect(subj.anchor_from).toBe('2026-01-10');
         }
       }
+
+      // Robustness: event definitions must be fetched in live share so signature computation is stable.
+      expect(state.counts['github:blob:events/from.yaml'] || 0).toBeGreaterThan(0);
+      expect(state.counts['github:blob:events/to.yaml'] || 0).toBeGreaterThan(0);
 
       await guards.assertNoStabilityErrors();
       await fx.recordJson('lastAnalyzeRequest.json', state.lastAnalyzeRequest || null);
@@ -2071,8 +2096,8 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
         hide_current: false,
       },
       graph_state: {
-        base_dsl: 'window(1-Jan-26:2-Jan-26)',
-        current_query_dsl: 'window(1-Jan-26:2-Jan-26)',
+        base_dsl: 'cohort(-30d:)',
+        current_query_dsl: 'cohort(-30d:)',
       },
     };
 
@@ -2083,6 +2108,22 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
     const guards = attachShareBootConsoleGuards(page);
     const fx = installShareForensics({ page, testInfo, phase: 'snapshot-cohort-maturity' });
     await installShareLiveStubs(page, state);
+    // Freeze "now" so relative cohort() windows resolve deterministically (viewer-now semantics).
+    await page.addInitScript(() => {
+      const fixed = new Date('2026-02-09T12:00:00.000Z').getTime();
+      const OriginalDate = Date;
+      class MockDate extends OriginalDate {
+        constructor(...args: any[]) {
+          if (args.length === 0) super(fixed);
+          else super(...args);
+        }
+        static now() {
+          return fixed;
+        }
+      }
+      // @ts-ignore
+      (window as any).Date = MockDate;
+    });
 
     try {
       await page.goto(new URL(shareUrl, baseURL).toString(), { waitUntil: 'domcontentloaded' });
@@ -2106,6 +2147,24 @@ test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
         hasSnapshotSubjects,
         `Expected at least one scenario to have snapshot_subjects. Scenarios: ${JSON.stringify(scenarios.map((s: any) => ({ id: s.scenario_id, has_subjects: !!s.snapshot_subjects?.length })))}`
       ).toBe(true);
+
+      // Each snapshot subject should have the required fields
+      for (const s of scenarios) {
+        if (!s.snapshot_subjects?.length) continue;
+        for (const subj of s.snapshot_subjects) {
+          expect(subj.param_id, 'snapshot subject must have param_id').toBeTruthy();
+          expect(subj.core_hash, 'snapshot subject must have core_hash').toBeTruthy();
+          expect(subj.canonical_signature, 'snapshot subject must have canonical_signature').toBeTruthy();
+          expect(subj.anchor_from, 'snapshot subject must have anchor_from').toBeTruthy();
+          expect(subj.anchor_to, 'snapshot subject must have anchor_to').toBeTruthy();
+          expect(subj.anchor_to).toBe('2026-02-09');
+          expect(subj.anchor_from).toBe('2026-01-10');
+        }
+      }
+
+      // Robustness: event definitions must be fetched in live share so signature computation is stable.
+      expect(state.counts['github:blob:events/from.yaml'] || 0).toBeGreaterThan(0);
+      expect(state.counts['github:blob:events/to.yaml'] || 0).toBeGreaterThan(0);
 
       await guards.assertNoStabilityErrors();
       await fx.recordJson('lastAnalyzeRequest.json', state.lastAnalyzeRequest || null);

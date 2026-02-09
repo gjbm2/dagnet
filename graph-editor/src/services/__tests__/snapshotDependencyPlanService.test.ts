@@ -9,16 +9,28 @@
  *
  * Graph traversal helpers (funnel_path, reachable_from) are also tested here.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Mock snapshot retrieval preflight for cohort_maturity epochs.
+// IMPORTANT: must be declared before importing the module under test.
+vi.mock('../snapshotWriteService', async () => {
+  const actual: any = await vi.importActual('../snapshotWriteService');
+  return {
+    ...actual,
+    querySnapshotRetrievals: vi.fn(),
+  };
+});
+
+import { querySnapshotRetrievals } from '../snapshotWriteService';
+import { contextRegistry } from '../contextRegistry';
+import { computeShortCoreHash } from '../coreHashService';
+import type { FetchPlan, FetchPlanItem } from '../fetchPlanTypes';
 import {
   mapFetchPlanToSnapshotSubjects,
   resolveFunnelPathEdges,
   resolveReachableEdges,
   type SnapshotSubjectRequest,
 } from '../snapshotDependencyPlanService';
-import type { FetchPlan, FetchPlanItem } from '../fetchPlanTypes';
-import { computeShortCoreHash } from '../coreHashService';
 
 // ============================================================
 // Helpers
@@ -74,6 +86,12 @@ function makeGraph(edges: Array<{ uuid: string; from: string; to: string }>) {
 // ============================================================
 
 describe('snapshotDependencyPlanService', () => {
+  beforeEach(() => {
+    // Ensure a clean in-memory context registry for tests that rely on MECE checks.
+    contextRegistry.clearCache();
+    // Also clear any pre-existing mock call history.
+    (querySnapshotRetrievals as any).mockReset?.();
+  });
 
   // ─────────────────────────────────────────────────────────
   // Contract lookup
@@ -459,7 +477,9 @@ describe('snapshotDependencyPlanService', () => {
         queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
       });
 
-      expect(result!.subjects[0].slice_keys).toEqual(['window()']);
+      // For slicePolicy=mece_fulfilment_allowed, uncontexted MUST be representable as a broad read ("no slice filter"),
+      // so the frontend can still use MECE fulfilment when only contexted slices exist historically.
+      expect(result!.subjects[0].slice_keys).toEqual(['']);
     });
 
     it('target includes slot and conditionalIndex from plan item', async () => {
@@ -698,6 +718,81 @@ describe('snapshotDependencyPlanService', () => {
       // Only the parameter item should be included
       expect(result!.subjects.length).toBe(1);
       expect(result!.subjects[0].target.targetId).toBe('e1');
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────
+  // cohort_maturity epochs (preflight + least-aggregation selection)
+  // ─────────────────────────────────────────────────────────
+
+  describe('cohort_maturity epochs', () => {
+    beforeEach(() => {
+      // Seed an in-memory context definition for key "b" so MECE checks are deterministic.
+      // detectMECEPartitionSync expects the definition to already be in memory.
+      (contextRegistry as any).cache.set('myrepo/main:b', {
+        id: 'b',
+        name: 'b',
+        description: 'test',
+        type: 'categorical',
+        otherPolicy: 'computed',
+        values: [
+          { id: '1', label: '1' },
+          { id: '2', label: '2' },
+          { id: 'other', label: 'Other' },
+        ],
+        metadata: { created_at: '9-Feb-26', version: 'test', status: 'active' },
+      });
+    });
+
+    it('splits into epochs when representation changes, and carries regime across non-retrieval days', async () => {
+      // Retrieval summary: day 1 has an already-aggregated context(a) slice; day 2 has only a MECE-complete b partition.
+      (querySnapshotRetrievals as any).mockResolvedValue({
+        success: true,
+        retrieved_at: ['2025-10-02T12:00:00Z', '2025-10-01T12:00:00Z'],
+        retrieved_days: ['2025-10-02', '2025-10-01'],
+        latest_retrieved_at: '2025-10-02T12:00:00Z',
+        count: 2,
+        summary: [
+          // Day 1: least-aggregation candidate exists (|E|=0)
+          { retrieved_at: '2025-10-01T12:00:00Z', slice_key: 'context(a:foo).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 1, sum_y: 1 },
+          // Day 2: only partition over b (|E|=1) exists, but it is MECE-complete.
+          { retrieved_at: '2025-10-02T12:00:00Z', slice_key: 'context(a:foo).context(b:1).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 1, sum_y: 1 },
+          { retrieved_at: '2025-10-02T12:00:00Z', slice_key: 'context(a:foo).context(b:2).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 1, sum_y: 1 },
+          { retrieved_at: '2025-10-02T12:00:00Z', slice_key: 'context(a:foo).context(b:other).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 1, sum_y: 1 },
+        ],
+      });
+
+      const plan = makePlan([{ targetId: 'e1', objectId: 'p1', mode: 'cohort', sliceFamily: 'context(a:foo)' }]);
+      const graph = { ...makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]), dataInterestsDSL: 'context(a:foo).context(b)' } as any;
+
+      const result = await mapFetchPlanToSnapshotSubjects({
+        plan,
+        analysisType: 'cohort_maturity',
+        graph,
+        selectedEdgeUuids: [],
+        workspace: WORKSPACE,
+        queryDsl: 'from(A).to(B).cohort(1-Oct-25:3-Oct-25).asat(3-Oct-25)',
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.subjects.length).toBe(2);
+
+      const [e1, e2] = result!.subjects;
+
+      // Epoch 1: day 1 only (already-aggregated)
+      expect(e1.read_mode).toBe('cohort_maturity');
+      expect(e1.sweep_from).toBe('2025-10-01');
+      expect(e1.sweep_to).toBe('2025-10-01');
+      expect(e1.slice_keys).toEqual(['context(a:foo).cohort()']);
+
+      // Epoch 2: starts on the next retrieval day and carries across day 3 (no retrieval)
+      expect(e2.sweep_from).toBe('2025-10-02');
+      expect(e2.sweep_to).toBe('2025-10-03');
+      expect(e2.slice_keys.sort()).toEqual([
+        'context(a:foo).context(b:1).cohort()',
+        'context(a:foo).context(b:2).cohort()',
+        'context(a:foo).context(b:other).cohort()',
+      ].sort());
     });
   });
 });

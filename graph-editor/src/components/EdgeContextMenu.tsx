@@ -25,6 +25,7 @@ import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
 import { useCopyPaste } from '../hooks/useCopyPaste';
+import { useOpenSnapshotManagerForEdge } from '../hooks/useOpenSnapshotManagerForEdge';
 import { fileRegistry } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { signatureLinksTabService } from '../services/signatureLinksTabService';
@@ -209,6 +210,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
     graph,
     setGraph,
     currentDSL,  // AUTHORITATIVE DSL from graphStore
+  });
+
+  const openSnapshotManagerForEdge = useOpenSnapshotManagerForEdge({
+    graph,
+    graphFileId,
+    currentDsl: currentDSL || '',
   });
   
   // Copy-paste hook for paste parameter functionality
@@ -744,12 +751,10 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onDownloadSnapshotData={section.objectType === 'parameter' ? (s) => { void downloadSnapshotData(s.objectId, matchedCoreHashes[s.objectId]); onClose(); } : undefined}
               onDeleteSnapshots={section.objectType === 'parameter' ? (s) => { void deleteSnapshots(s.objectId, matchedCoreHashes[s.objectId]); onClose(); } : undefined}
               onManageSnapshots={section.objectType === 'parameter' ? (s) => {
-                void signatureLinksTabService.openSignatureLinksTab({
-                  graphId: bareGraphId,
-                  graphName: bareGraphId,
+                void openSnapshotManagerForEdge({
+                  edgeId: s.targetId,
                   paramId: s.objectId,
-                  dbParamId: `${navState.selectedRepo}-${navState.selectedBranch || 'main'}-${s.objectId}`,
-                  paramSlot: s.paramSlot || 'p',
+                  slot: s.paramSlot || 'p',
                 });
                 onClose();
               } : undefined}
@@ -950,17 +955,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       {edgeData?.p?.id && (
         <div
           onClick={() => {
-            const repo = navState.selectedRepo;
-            const branch = navState.selectedBranch || 'main';
-            const paramId = edgeData.p.id;
-            const graphName = graph?.metadata?.name;
-            void signatureLinksTabService.openSignatureLinksTab({
-              graphId: graph?.metadata?.name,
-              graphName: graphName,
-              paramId: paramId,
-              dbParamId: `${repo}-${branch}-parameter-${paramId}`,
-              paramSlot: 'p',
-            });
+            void openSnapshotManagerForEdge({ edgeId, paramId: edgeData.p.id, slot: 'p' });
             onClose();
           }}
           style={{

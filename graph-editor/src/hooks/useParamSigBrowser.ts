@@ -97,6 +97,15 @@ export function useParamSigBrowser(options: ParamSigBrowserOptions): ParamSigBro
   const [queryModeFilter, setQueryModeFilter] = useState<'all' | 'cohort' | 'window'>('all');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'most-data'>('newest');
 
+  // If a "current core hash" is provided (e.g. opening Snapshot Manager from an edge),
+  // auto-select it once rows are available.
+  useEffect(() => {
+    if (!currentCoreHash) return;
+    if (selectedHash) return; // Don't override an explicit user selection
+    const match = registryRows.find((r) => r.core_hash === currentCoreHash);
+    if (match) setSelectedHash(match.core_hash);
+  }, [currentCoreHash, registryRows, selectedHash]);
+
   // Pending hash (for selecting a hash after a param switch triggers a reload)
   const pendingSelectHash = useRef<string | null>(null);
   const setPendingHash = useCallback((hash: string) => { pendingSelectHash.current = hash; }, []);

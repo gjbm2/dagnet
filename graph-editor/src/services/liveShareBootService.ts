@@ -24,6 +24,7 @@ import { parseConstraints } from '../lib/queryDSL';
 import YAML from 'yaml';
 
 type ParameterIndexEntry = { id: string; file_path?: string };
+type EventIndexEntry = { id: string; file_path?: string };
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -75,11 +76,17 @@ export interface LiveBootResult {
   // Fetched parameter files (on success)
   parameters?: Map<string, { data: any; sha?: string; path: string }>;
 
+  // Fetched event definition files (on success)
+  events?: Map<string, { data: any; sha?: string; path: string }>;
+
   // Fetched context files (on success)
   contexts?: Map<string, { data: any; sha?: string; path: string }>;
 
   // Fetched shared settings file (on success)
   settings?: { data: any; sha?: string; path: string };
+
+  // Fetched repo connections file (on success; optional)
+  connections?: { data: any; sha?: string; path: string };
   
   // Identity info for tab creation
   identity?: {
@@ -254,6 +261,7 @@ export async function fetchLiveShareBundle(
     // Step 4: Compute dependency closure
     const deps = collectGraphDependencies(graphData);
     const parameterIds = Array.from(deps.parameterIds);
+    const eventIds = Array.from(deps.eventIds);
     const contextKeysFromGraph = Array.from(deps.contextKeys);
 
     // Share payload can introduce additional context() requirements that are not detectable
@@ -282,7 +290,7 @@ export async function fetchLiveShareBundle(
 
     const contextKeys = Array.from(new Set([...contextKeysFromGraph, ...contextKeysFromShare]));
     sessionLogService.addChild(logOpId, 'info', 'DEPENDENCY_CLOSURE', 
-      `Dependency closure: ${parameterIds.length} parameters, ${contextKeys.length} contexts`);
+      `Dependency closure: ${parameterIds.length} parameters, ${eventIds.length} events, ${contextKeys.length} contexts`);
 
     // Step 4.5+: Fetch supporting files. These are independent and safe to parallelise.
     // NOTE: This doesn't reduce blob *count*, but it materially reduces wall-clock time.
@@ -326,6 +334,53 @@ export async function fetchLiveShareBundle(
 
       sessionLogService.addChild(logOpId, 'success', 'PARAMETER_FETCH_SUCCESS', `Fetched ${parameters.size}/${parameterIds.length} parameters`);
       return parameters;
+    };
+
+    const fetchEvents = async () => {
+      const events = new Map<string, { data: any; sha?: string; path: string }>();
+      if (eventIds.length === 0) return events;
+
+      // Fetch events-index.yaml for path resolution (mirrors workspace cloning logic).
+      let eventsIndex: any | null = null;
+      try {
+        const indexPath = toRepoPath('events-index.yaml');
+        if (pathToBlob.has(indexPath)) {
+          sessionLogService.addChild(logOpId, 'info', 'EVENT_INDEX_FETCH', 'Fetching events-index.yaml...');
+          const indexRes = await readTextFileFromTree('events-index.yaml');
+          eventsIndex = YAML.parse(indexRes.content);
+          sessionLogService.addChild(logOpId, 'success', 'EVENT_INDEX_FETCH_SUCCESS', 'Fetched events-index.yaml');
+        } else {
+          sessionLogService.addChild(logOpId, 'warning', 'EVENT_INDEX_FETCH_MISSING', 'No events-index.yaml (falling back to conventional paths)');
+        }
+      } catch {
+        sessionLogService.addChild(logOpId, 'warning', 'EVENT_INDEX_FETCH_ERROR', 'Failed to fetch events-index.yaml (falling back to conventional paths)');
+      }
+
+      const resolveEventPathFromIndex = (eventId: string, index: any | null | undefined, fallback: string): string => {
+        const entries: EventIndexEntry[] = (index && Array.isArray((index as any).events)) ? (index as any).events : [];
+        const match = entries.find((e) => e?.id === eventId);
+        const p = match?.file_path;
+        if (typeof p === 'string' && p.trim()) return p.trim();
+        return fallback;
+      };
+
+      sessionLogService.addChild(logOpId, 'info', 'EVENT_FETCH', `Fetching ${eventIds.length} event definitions...`);
+      await mapWithConcurrency(eventIds, CONCURRENCY_FILES, async (eventId) => {
+        const eventsDir = (gitCreds as any)?.eventsPath ? String((gitCreds as any).eventsPath) : 'events';
+        const fallbackPath = `${eventsDir}/${eventId}.yaml`;
+        const rawEventPath = resolveEventPathFromIndex(eventId, eventsIndex, fallbackPath);
+        const repoEventPath = toRepoPath(rawEventPath);
+        try {
+          const result = await readTextFileFromTree(repoEventPath);
+          const data = YAML.parse(result.content);
+          events.set(eventId, { data, sha: result.sha, path: result.path });
+        } catch (e) {
+          console.warn(`[LiveShareBoot] Failed to fetch event ${eventId}:`, e);
+        }
+      });
+
+      sessionLogService.addChild(logOpId, 'success', 'EVENT_FETCH_SUCCESS', `Fetched ${events.size}/${eventIds.length} events`);
+      return events;
     };
 
     const fetchContexts = async () => {
@@ -374,6 +429,23 @@ export async function fetchLiveShareBundle(
       return contexts;
     };
 
+    const fetchConnections = async () => {
+      // Repo connections file is critical for deterministic provider resolution (signature computation).
+      // In non-share flows this is seeded from defaults; in live share we prefer repo truth when present.
+      try {
+        const repoPath = toRepoPath('connections.yaml');
+        if (!pathToBlob.has(repoPath)) return undefined;
+        sessionLogService.addChild(logOpId, 'info', 'CONNECTIONS_FETCH', 'Fetching connections.yaml...');
+        const res = await readTextFileFromTree('connections.yaml');
+        const data = YAML.parse(res.content);
+        sessionLogService.addChild(logOpId, 'success', 'CONNECTIONS_FETCH_SUCCESS', 'Fetched connections.yaml');
+        return { data, sha: res.sha, path: res.path };
+      } catch {
+        sessionLogService.addChild(logOpId, 'warning', 'CONNECTIONS_FETCH_ERROR', 'Failed to fetch connections.yaml (falling back to defaults)');
+        return undefined;
+      }
+    };
+
     const fetchSettings = async () => {
       // Fetch shared forecasting settings (repo-committed: settings/settings.yaml)
       // This is required so live share analytics match authoring (e.g. RECENCY_HALF_LIFE_DAYS).
@@ -398,8 +470,10 @@ export async function fetchLiveShareBundle(
     // Fetch parameters FIRST so we can extract additional context keys from their sliceDSLs.
     // This is necessary because parameter data can reference contexts that aren't visible
     // in the graph DSL or share payload scenario DSLs.
-    const [parameters, settings, remoteHeadSha] = await Promise.all([
+    const [parameters, events, connections, settings, remoteHeadSha] = await Promise.all([
       fetchParameters(),
+      fetchEvents(),
+      fetchConnections(),
       fetchSettings(),
       remoteHeadShaPromise,
     ]);
@@ -477,7 +551,7 @@ export async function fetchLiveShareBundle(
     const contexts = await fetchContextsWithKeys(allContextKeys);
     
     sessionLogService.endOperation(logOpId, 'success', 
-      `Live boot complete: graph + ${parameters.size} parameters + ${contexts.size} contexts`);
+      `Live boot complete: graph + ${parameters.size} parameters + ${events.size} events + ${contexts.size} contexts`);
     
     return {
       success: true,
@@ -486,6 +560,8 @@ export async function fetchLiveShareBundle(
       graphPath,
       remoteHeadSha,
       parameters,
+      events,
+      connections,
       contexts,
       settings,
       identity: { repo, branch, graph },

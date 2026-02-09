@@ -377,11 +377,16 @@ def _split_slice_selectors(norm: List[str]) -> tuple[List[str], List[str]]:
     """
     Split normalised slice selector strings into:
     - family selectors (include context/case dims, e.g. "context(x).cohort()")
-    - mode-only selectors ("window()" / "cohort()") which mean "any context, this mode"
+    - mode-only selectors (legacy; no longer used)
+
+    IMPORTANT CONTRACT (context-epochs.md §3.5):
+    - "cohort()" / "window()" MUST mean *uncontexted-only* (no context/case dims),
+      not "any context in this mode".
+    - Broad reads across all slices remain available via the empty selector "" which
+      means "no slice filter" (back-compat).
     """
-    mode_only = [s for s in norm if s in ("window()", "cohort()")]
-    families = [s for s in norm if s and s not in ("window()", "cohort()")]
-    return families, mode_only
+    families = [s for s in norm if s]
+    return families, []
 
 
 def _append_slice_filter_sql(*, sql_parts: List[str], params: List[Any], slice_keys: List[str]) -> None:
@@ -391,8 +396,9 @@ def _append_slice_filter_sql(*, sql_parts: List[str], params: List[Any], slice_k
     Semantics:
     - A selector with context/case dims matches by full normalised family equality.
       e.g. "context(channel:google).cohort()"
-    - A selector of "cohort()" / "window()" is mode-only: match ANY contexted/uncontexted
-      slice whose normalised key ends with that mode.
+    - A selector of "cohort()" / "window()" matches the uncontexted-only family (no dims).
+
+    Broad reads (all slices) are expressed by including "" in slice_keys (back-compat).
     """
     norm = [normalise_slice_key_for_matching(sk) for sk in slice_keys]
     # Back-compat: empty selector historically meant "no slice filter" (broad / MECE-capable).
@@ -404,11 +410,6 @@ def _append_slice_filter_sql(*, sql_parts: List[str], params: List[Any], slice_k
     if families:
         sub.append(f"{_slice_key_match_sql_expr()} = ANY(%s)")
         params.append(families)
-    if mode_only:
-        # Match any slice family in the requested mode(s).
-        # Our canonical ordering places window()/cohort() at the end, so suffix match is safe.
-        sub.append(f"{_slice_key_match_sql_expr()} LIKE ANY(%s)")
-        params.append([f"%{m}" for m in mode_only])
 
     if sub:
         sql_parts.append("(" + " OR ".join(sub) + ")")
@@ -1197,14 +1198,8 @@ def get_batch_inventory_v2(
                 if "" in allowed_norm:
                     pass
                 else:
-                    mode_only = {a for a in allowed_norm if a in ("window()", "cohort()")}
-                    family_only = {a for a in allowed_norm if a and a not in ("window()", "cohort()")}
                     sk_norm = normalise_slice_key_for_matching(sk)
-                    if sk_norm in family_only:
-                        pass
-                    elif mode_only and any(sk_norm.endswith(m) for m in mode_only):
-                        pass
-                    else:
+                    if sk_norm not in allowed_norm:
                         continue
             agg_by_param_hash_slice[(pid, ch, sk)] = {
                 "slice_key": sk,

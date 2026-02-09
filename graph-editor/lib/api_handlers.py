@@ -314,10 +314,20 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 scenario_rows += len(rows)
 
                 if not rows:
+                    # IMPORTANT:
+                    # Cohort maturity sweep may intentionally yield no rows for an epoch
+                    # (e.g. a planned "gap" epoch, or days before the first retrieval).
+                    # This must be treated as a successful empty result, not an error.
+                    result = derive_cohort_maturity(
+                        [],
+                        sweep_from=subj.get('sweep_from'),
+                        sweep_to=subj.get('sweep_to'),
+                    )
                     per_subject_results.append({
                         "subject_id": subj.get('subject_id'),
-                        "success": False,
-                        "error": "No snapshot data found for sweep",
+                        "success": True,
+                        "result": result,
+                        "rows_analysed": 0,
                     })
                     continue
 

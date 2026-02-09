@@ -52,6 +52,27 @@ describe('GitService Integration Tests', () => {
       name: 'test-repo',
       repo: 'test-repo',
     };
+
+    // Default mock returns for the commit pipeline
+    octokitMock.git.getRef.mockResolvedValue({ data: { object: { sha: 'base-commit' } } });
+    octokitMock.git.getCommit.mockResolvedValue({ data: { tree: { sha: 'base-tree' } } });
+    // getTree (recursive) — return a tree that contains common test paths
+    // so delete validation works. Tests can override this if needed.
+    octokitMock.git.getTree.mockResolvedValue({
+      data: {
+        tree: [
+          { path: 'graphs/test.json', type: 'blob' },
+          { path: 'parameters/old-param.yaml', type: 'blob' },
+          { path: 'parameters/new-param.yaml', type: 'blob' },
+          { path: 'parameters-index.yaml', type: 'blob' },
+          { path: 'nodes/images/test.png', type: 'blob' },
+        ],
+      },
+    });
+    octokitMock.git.createBlob.mockResolvedValue({ data: { sha: 'new-blob-sha' } });
+    octokitMock.git.createTree.mockResolvedValue({ data: { sha: 'new-tree-sha' } });
+    octokitMock.git.createCommit.mockResolvedValue({ data: { sha: 'new-commit-sha' } });
+    octokitMock.git.updateRef.mockResolvedValue({});
   });
 
   afterEach(() => {

@@ -272,20 +272,77 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
         const graphObj =
           state.version === 'v1'
             ? {
-                nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
-                edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.5 } }],
+                nodes: [
+                  { uuid: 'n1', id: 'from', event_id: 'from' },
+                  { uuid: 'n2', id: 'to', event_id: 'to' },
+                ],
+                edges: [
+                  {
+                    uuid: 'e1',
+                    id: 'edge-1',
+                    from: 'n1',
+                    to: 'n2',
+                    p: { id: 'param-1', mean: 0.5, connection: 'amplitude-prod' },
+                    query: 'from(from).to(to)',
+                  },
+                ],
                 currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
                 baseDSL: 'window(1-Jan-26:2-Jan-26)',
                 metadata: { name: 'test-graph', e2e_marker: 'v1' },
               }
             : {
-                nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
-                edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.9 } }],
+                nodes: [
+                  { uuid: 'n1', id: 'from', event_id: 'from' },
+                  { uuid: 'n2', id: 'to', event_id: 'to' },
+                ],
+                edges: [
+                  {
+                    uuid: 'e1',
+                    id: 'edge-1',
+                    from: 'n1',
+                    to: 'n2',
+                    p: { id: 'param-1', mean: 0.9, connection: 'amplitude-prod' },
+                    query: 'from(from).to(to)',
+                  },
+                ],
                 currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
                 baseDSL: 'window(1-Jan-26:2-Jan-26)',
                 metadata: { name: 'test-graph', e2e_marker: 'v2' },
               };
         add('graphs/test-graph.json', JSON.stringify(graphObj));
+
+        // events-index.yaml + two event defs (required for deterministic signature computation)
+        add(
+          'events-index.yaml',
+          [
+            'events:',
+            '  - id: from',
+            '    file_path: events/from.yaml',
+            '  - id: to',
+            '    file_path: events/to.yaml',
+            '',
+          ].join('\n')
+        );
+        add(
+          'events/from.yaml',
+          [
+            'id: from',
+            'name: from',
+            'provider_event_names:',
+            '  amplitude: from',
+            '',
+          ].join('\n')
+        );
+        add(
+          'events/to.yaml',
+          [
+            'id: to',
+            'name: to',
+            'provider_event_names:',
+            '  amplitude: to',
+            '',
+          ].join('\n')
+        );
 
         // parameters-index.yaml minimal
         add(
@@ -303,6 +360,8 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
             'id: param-1',
             'name: Param 1',
             'type: probability',
+            'connection: amplitude-prod',
+            'query: from(from).to(to)',
             'query_overridden: true',
             'values:',
             // Cohort slice used by share-live scenario regeneration (cohort(-1w:)).
@@ -494,20 +553,76 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
         const graphObj =
           state.version === 'v1'
             ? {
-                nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
-                edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.5 } }],
+                nodes: [
+                  { uuid: 'n1', id: 'from', event_id: 'from' },
+                  { uuid: 'n2', id: 'to', event_id: 'to' },
+                ],
+                edges: [
+                  {
+                    uuid: 'e1',
+                    id: 'edge-1',
+                    from: 'n1',
+                    to: 'n2',
+                    p: { id: 'param-1', mean: 0.5, connection: 'amplitude-prod' },
+                    query: 'from(from).to(to)',
+                  },
+                ],
                 currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
                 baseDSL: 'window(1-Jan-26:2-Jan-26)',
                 metadata: { name: 'test-graph', e2e_marker: 'v1' },
               }
             : {
-                nodes: [{ uuid: 'n1', id: 'from' }, { uuid: 'n2', id: 'to' }],
-                edges: [{ uuid: 'e1', id: 'edge-1', from: 'n1', to: 'n2', p: { id: 'param-1', mean: 0.9 } }],
+                nodes: [
+                  { uuid: 'n1', id: 'from', event_id: 'from' },
+                  { uuid: 'n2', id: 'to', event_id: 'to' },
+                ],
+                edges: [
+                  {
+                    uuid: 'e1',
+                    id: 'edge-1',
+                    from: 'n1',
+                    to: 'n2',
+                    p: { id: 'param-1', mean: 0.9, connection: 'amplitude-prod' },
+                    query: 'from(from).to(to)',
+                  },
+                ],
                 currentQueryDSL: 'window(1-Jan-26:2-Jan-26)',
                 baseDSL: 'window(1-Jan-26:2-Jan-26)',
                 metadata: { name: 'test-graph', e2e_marker: 'v2' },
               };
         addKnown('graphs/test-graph.json', JSON.stringify(graphObj));
+
+        addKnown(
+          'events-index.yaml',
+          [
+            'events:',
+            '  - id: from',
+            '    file_path: events/from.yaml',
+            '  - id: to',
+            '    file_path: events/to.yaml',
+            '',
+          ].join('\n')
+        );
+        addKnown(
+          'events/from.yaml',
+          [
+            'id: from',
+            'name: from',
+            'provider_event_names:',
+            '  amplitude: from',
+            '',
+          ].join('\n')
+        );
+        addKnown(
+          'events/to.yaml',
+          [
+            'id: to',
+            'name: to',
+            'provider_event_names:',
+            '  amplitude: to',
+            '',
+          ].join('\n')
+        );
         addKnown(
           'parameters-index.yaml',
           [
@@ -523,6 +638,8 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
             'id: param-1',
             'name: Param 1',
             'type: probability',
+            'connection: amplitude-prod',
+            'query: from(from).to(to)',
             'query_overridden: true',
             'values:',
             // Cohort slice used by share-live scenario regeneration (cohort(-1w:)).
@@ -974,6 +1091,21 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
   // Some environments use localhost while others use 127.0.0.1 (env-driven). Stub both to avoid CORS failures.
   const handleCompute = async (route: Route) => {
     const url = route.request().url();
+
+    if (url.endsWith('/api/snapshots/retrievals')) {
+      inc(state, 'compute:snapshots:retrievals');
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          retrieved_at: [],
+          retrieved_days: [],
+          latest_retrieved_at: null,
+          count: 0,
+        }),
+      });
+    }
 
     if (url.endsWith('/api/runner/analyze')) {
       inc(state, 'compute:analyze');

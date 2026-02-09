@@ -911,12 +911,26 @@ class FileRegistry {
     }
 
     // 2. Collect DELETE ops from in-memory array (deletes remove from IDB, so can't query there)
+    //    ONLY emit a delete if there's no corresponding upload in this batch.
+    //    If we uploaded-then-deleted in the same session without committing,
+    //    the file was never pushed to git, so deleting it would cause a 422 error.
     for (const op of this.pendingImageOps) {
       if (op.type === 'delete') {
-        filesToCommit.push({
-          path: op.path,
-          delete: true
-        });
+        // Skip if this same path is being uploaded in this batch (never made it to git)
+        if (!coveredPaths.has(op.path)) {
+          filesToCommit.push({
+            path: op.path,
+            delete: true
+          });
+        } else {
+          // Image was uploaded then deleted in same session — just remove the upload
+          const idx = filesToCommit.findIndex(f => f.path === op.path && !f.delete);
+          if (idx >= 0) {
+            filesToCommit.splice(idx, 1);
+            coveredPaths.delete(op.path);
+            console.log(`FileRegistry: Skipped upload+delete for ${op.path} (never committed to git)`);
+          }
+        }
       } else if (op.type === 'upload' && !coveredPaths.has(op.path)) {
         // Fallback: if IDB scan missed it (shouldn't happen, but belt-and-braces)
         filesToCommit.push({
@@ -1275,11 +1289,31 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
             // best-effort: settings defaults are still seeded during TabProvider initialisation
           }
           try {
+            await fileRegistry.restoreFile('connections-connections');
+          } catch {
+            // best-effort: default connections are still seeded during TabProvider initialisation
+          }
+          try {
             const ctxFiles = await db.files.where('type').equals('context' as any).toArray();
             for (const f of ctxFiles) {
               if (!f?.fileId || typeof f.fileId !== 'string') continue;
               // Prefer unprefixed runtime IDs; prefixed variants are written for workspace compatibility.
               if (f.fileId.startsWith('context-')) {
+                try {
+                  await fileRegistry.restoreFile(f.fileId);
+                } catch {
+                  // ignore per-file failures
+                }
+              }
+            }
+          } catch {
+            // best-effort
+          }
+          try {
+            const evFiles = await db.files.where('type').equals('event' as any).toArray();
+            for (const f of evFiles) {
+              if (!f?.fileId || typeof f.fileId !== 'string') continue;
+              if (f.fileId.startsWith('event-')) {
                 try {
                   await fileRegistry.restoreFile(f.fileId);
                 } catch {
@@ -1323,6 +1357,25 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
           // immediately (e.g. share chart bootstrap). We must ensure dependent files
           // (parameters + contexts) are seeded first, otherwise regeneration can race and
           // fail to resolve contexts or read parameter caches.
+          if ((result as any).connections?.data) {
+            try {
+              const c = (result as any).connections;
+              await fileRegistry.upsertFileClean(
+                'connections-connections',
+                'connections' as any,
+                {
+                  repository: identity.repo,
+                  path: c.path || 'connections.yaml',
+                  branch: identity.branch,
+                },
+                c.data,
+                { sha: c.sha, lastSynced: Date.now() }
+              );
+            } catch (e) {
+              console.warn('[TabContext] Live share: failed to seed connections.yaml from repo (falling back to defaults)', e);
+            }
+          }
+
           if (result.parameters) {
             for (const [paramId, paramData] of result.parameters) {
               const paramFileId = `parameter-${paramId}`;
@@ -1336,6 +1389,23 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
                 },
                 paramData.data,
                 { sha: paramData.sha, lastSynced: Date.now() }
+              );
+            }
+          }
+
+          if ((result as any).events) {
+            for (const [eventId, evData] of (result as any).events) {
+              const eventFileId = `event-${eventId}`;
+              await fileRegistry.upsertFileClean(
+                eventFileId,
+                'event' as any,
+                {
+                  repository: identity.repo,
+                  path: evData.path,
+                  branch: identity.branch,
+                },
+                evData.data,
+                { sha: evData.sha, lastSynced: Date.now() }
               );
             }
           }
